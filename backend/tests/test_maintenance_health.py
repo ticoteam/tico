@@ -1285,7 +1285,8 @@ def _part_approved_cap(api, runner, monkeypatch, hq=None, comments=None, clock=N
             "WHERE h.signature=?",
             (waiting,),
         ).fetchone()
-        assert row["ticket_id"] is None and row["used_at"] is None
+        # The owner's click claimed it (support.ok_given): it waits in the queue, claimed, for a day with room.
+        assert row["ticket_id"] is None and row["used_at"] is not None
     assert MH.file_reports(store, auth, store.settings, support, []) == {
         waiting: {"signature": waiting, "deferred": "support_busy"}
     }
@@ -1810,6 +1811,83 @@ def test_a_copy_run_from_source_files_no_automatic_report_until_it_names_an_hq(
         c.execute("DELETE FROM health_reports")
         c.execute("DELETE FROM support_tickets")
     assert file_due(api, run(api))[sig]["ticket"] and len(hq.tickets) == 2
+
+
+def _claimed_count(api):
+    """The Health page's number of OK'd sends a click claimed and Maintenance has not delivered (this file stubs the
+    page's view, so its check is read directly)."""
+    with api.app.state.store.read() as c:
+        return health._claimed_oks_check(c)["counts"]["claimed_not_delivered"]
+
+
+def _part_claimed_on_click(api, runner, monkeypatch, hq=None, comments=None, clock=None):
+    """The lead's rule on Codex's upkeep review, item 2: a background job never claims an OK. The owner's click claims
+    a report's OK and queues it in the same transaction; Maintenance only delivers what a click claimed, rechecking
+    who gave the OK before the first send, and a retry goes under the same Idempotency-Key, delivered once."""
+    from backend import support as support_queue
+
+    code_findings = _code_findings(monkeypatch)
+    store, support, auth, settings = (
+        api.app.state.store,
+        api.app.state.support,
+        api.app.state.auth,
+        api.app.state.store.settings,
+    )
+    set_rule(api, False)
+    checks = ("push_stuck", "worktree_error", "queue_idle")
+    code_findings[:] = [item(check, key=check + ":A", kind=MH.BUG) for check in checks]
+    now = datetime.now(timezone.utc)
+    file_due(api, run(api, now))
+    file_due(api, run(api, now + timedelta(minutes=1)))  # queue_idle is noisy: asked on its second sighting
+    with store.read() as c:
+        unclaimed, claimed, lost = (
+            c.execute("SELECT approval_id FROM health_reports WHERE signature=?", (MH.signature(check),)).fetchone()[0]
+            for check in checks
+        )
+    # An OK given without its claim (the click as it was before: no ON_OK step for a report): Maintenance never
+    # claims it, and neither does a send.
+    with monkeypatch.context() as old_click:
+        old_click.setattr(task_asks, "ON_OK", {k: v for k, v in task_asks.ON_OK.items() if k != "support"})
+        answer_report(api, unclaimed)
+    with store.read() as c:
+        assert task_asks.standing(c, unclaimed) == task_asks.OK
+    assert MH.file_reports(store, auth, settings, support, []) == {} and hq.seen == []
+    with pytest.raises(Problem, match="not claimed"):
+        support.file_approved(SimpleNamespace(actor="bot:botops"), unclaimed)
+    with store.read() as c:
+        assert task_asks.grant(c, unclaimed)["used_at"] is None
+    assert _claimed_count(api) == 0
+    # The click claims it and queues it: used in the click's transaction, waiting for Maintenance.
+    answer_report(api, claimed)
+    with store.read() as c:
+        assert task_asks.standing(c, claimed) == task_asks.USED
+        assert [r["requirement_id"] for r in support_queue.claimed(c)] == [claimed]
+    assert _claimed_count(api) == 1 and hq.seen == []
+    # HQ out of reach: it stays claimed and queued. Then it goes once, under the same key.
+    hq.down = True
+    assert "deferred" in MH.file_reports(store, auth, settings, support, [])[MH.signature("worktree_error")]
+    assert _claimed_count(api) == 1
+    hq.down = False
+    sent = MH.file_reports(store, auth, settings, support, [])
+    assert sent[MH.signature("worktree_error")]["ticket"] and len(hq.tickets) == 1
+    keys = {r.headers.get("idempotency-key") for r in hq.seen if r.url.path == "/v1/support"}
+    assert keys == {"tico-support:" + claimed}, keys
+    assert MH.file_reports(store, auth, settings, support, []) == {} and len(hq.tickets) == 1
+    assert _claimed_count(api) == 0
+    # Claimed, and whoever gave it may no longer give it before it first leaves: it is given up on, never sent.
+    answer_report(api, lost)
+    assert _claimed_count(api) == 1
+    real = task_asks._authority
+    monkeypatch.setattr(task_asks, "_authority", lambda c, person, row: "Ana can no longer OK this")
+    answer = MH.file_reports(store, auth, settings, support, [])[MH.signature("queue_idle")]
+    assert answer["deferred"] == "approval" and len(hq.tickets) == 1
+    monkeypatch.setattr(task_asks, "_authority", real)
+    assert MH.file_reports(store, auth, settings, support, []) == {} and len(hq.tickets) == 1
+    assert _claimed_count(api) == 0
+
+
+def test_a_reports_ok_is_claimed_by_the_click_and_maintenance_only_delivers_it(environment, monkeypatch, hq, clock):
+    _story(environment, monkeypatch, [_part_claimed_on_click], hq=hq, clock=clock)
 
 
 def test_with_the_team_rule_off_an_ok_sent_back_given_and_sent_as_whoever_asked(environment, monkeypatch, hq, clock):

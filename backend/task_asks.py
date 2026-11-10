@@ -38,7 +38,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core
 
@@ -79,6 +79,13 @@ def _finance_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -
     from .finance import actions
 
     module: Any = actions  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
+def _support_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import support
+
+    module: Any = support  # its functions are typed loosely
     return module.ok_given(conn, grant, ctx)
 
 
@@ -180,6 +187,7 @@ ON_OK: dict[str, Callable[..., object]] = {
     "finance": _finance_ok,
     "letter": _letter_ok,
     "proposal": _proposal_ok,
+    "support": _support_ok,
 }
 
 # Subject kinds whose module asks and uses its OKs itself: a bot's generic ask (POST /api/v2/tasks/{id}/oks) and use
@@ -584,8 +592,8 @@ def event_hidden(conn: "sqlite3.Connection", principals: object, target: object)
     row = grant(conn, target)
     if not row:
         return False
-    many: Any = principals
-    viewers: list[object] = list(many) if isinstance(many, (tuple, list, set)) else [many]  # pyright: ignore[reportUnknownArgumentType]
+    many = isinstance(principals, (tuple, list, set))
+    viewers = list(cast("tuple[object, ...]", principals)) if many else [principals]
     return any(not party(conn, viewer, row) for viewer in viewers)
 
 
@@ -622,8 +630,7 @@ def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row
                     shown = json.loads(shown or "null")
                 except ValueError:
                     shown = None
-            listed: list[Any] = shown if isinstance(shown, list) else []  # pyright: ignore[reportUnknownVariableType]
-            shows_of[rid] = [str(ref) for ref in listed]
+            shows_of[rid] = [str(ref) for ref in cast("list[object]", shown)] if isinstance(shown, list) else []
         if shows_of[rid]:
             event["body_sources"] = shows_of[rid]
     return events
@@ -765,6 +772,18 @@ def _authority(conn: "sqlite3.Connection", person: str, row: Row) -> str | None:
     if kind not in CHECKS_ITSELF and named and named != person:
         return f"Only {H.actor_name(conn, named)}, who it was asked of, may OK this"
     return None
+
+
+def claimed_problem(conn: "sqlite3.Connection", requirement_id: str, *, authority: bool = True) -> str | None:
+    """Why an OK its click claimed (used) may not be delivered now, or None when it may: it was not given up on
+    (not_done), and, with `authority` (rule C, rechecked before the first delivery of an act queued on the click, such
+    as a report to Tico support), the person who gave it is still here and still entitled to give it."""
+    row = grant(conn, requirement_id)
+    if not row or not row.get("used_at") or not row.get("ok_by_id"):
+        return "No OK claimed this"
+    if conn.execute("SELECT 1 FROM events WHERE action='ok.not_done' AND target=?", (requirement_id,)).fetchone():
+        return "It was given up on"
+    return _authority(conn, str(row["ok_by_id"]), row) if authority else None
 
 
 def passes(conn: "sqlite3.Connection", requirement_id: str, subject: str, content: object, by: str) -> bool:

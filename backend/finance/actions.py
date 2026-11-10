@@ -5,7 +5,8 @@ in the same transaction. Callers outside backend/finance write only through here
 An approval is an OK bound to exactly what was shown (backend/task_asks.py, subject `finance:<action id>`), asked of
 one person on a task of its own; the action's `approval_id` is the OK's requirement id. A bot never gives one: only the
 named person's own click on its preview in Tico does, and never the person who asked (`_approver`). Once the OK is
-given (`ok_given`, and the hourly `ok_sweep` for anything it missed), `approval_decided` checks the OK is the one
+given (`ok_given`, in the click's own transaction; the hourly `ok_sweep` only ends what was sent back or withdrawn and
+never claims an OK), `approval_decided` checks the OK is the one
 Finance asked for, given by that person, for exactly the payload about to run, re-checks rights, view and budgets, uses
 it, and commits, all in one transaction."""
 
@@ -917,13 +918,15 @@ def ok_given(c: sqlite3.Connection, grant: Mapping[str, object], ctx: object = N
 
 
 def ok_sweep(c: sqlite3.Connection, at: str | None = None, most: int = 200) -> list[ActionResult]:
-    """Finish waiting actions whose OK was given, sent back, withdrawn or is gone: what a scheduler job runs, and what
-    catches an OK no route handed over."""
+    """End waiting actions whose OK was sent back, withdrawn or is gone: what a scheduler job runs. It never claims
+    an OK: a given one is claimed and the action committed only by the person's click, in its own transaction
+    (`ok_given`, task_asks.ON_OK); a given OK whose action still waits (given before that step, or by a path without
+    it) is left for a new ask, never committed from here."""
     out: list[ActionResult] = []
     for approval_id in SX.waits(c):
         if len(out) >= most:
             break
-        if tico.ok_standing(c, approval_id) == "waiting":
+        if tico.ok_standing(c, approval_id) in ("waiting", "ok"):
             continue
         done = approval_decided(c, approval_id, at)
         if done is not None:

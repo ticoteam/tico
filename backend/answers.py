@@ -17,7 +17,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core
 from . import task_engine as E
@@ -220,8 +220,7 @@ def _wake(
     may no longer open one of them reads none of the words (files.readable_page_refs)."""
     if not is_bot(target) or row["status"] != "open" or row.get("snooze"):
         return None
-    shown: list[Any] = shows if isinstance(shows, list) else []  # pyright: ignore[reportUnknownVariableType]
-    sources = [str(ref) for ref in shown]
+    sources = [str(ref) for ref in cast("list[object]", shows)] if isinstance(shows, list) else []
     _, refs = _h().sourced_text(lead, sources)
     return task_wakes.add(
         conn, row, target, row["visit"], task_wakes.body(conn, row, lead), wake_key=wake_key, refs=refs or None

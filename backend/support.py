@@ -376,6 +376,29 @@ def seal_plaintext_secrets(store, vault):
     return len(rows)
 
 
+def ok_given(c, grant, ctx=None):
+    """In the transaction of the person's click on a report's OK (task_asks.ON_OK "support"): the click claims the OK
+    for whoever asked (task_asks.use, authority checked once more) and so queues the report. A claimed report with no
+    ticket yet is the queue (CLAIMED_SQL): Maintenance delivers it (maintenance_health._send_approved), and nothing in
+    the background ever claims an OK itself."""
+    task_asks.use(c, grant["requirement_id"], grant["subject"], grant["content"], grant["asked_by_id"])
+
+
+# Reports a person's click claimed that have no ticket yet and were not given up on (task_asks.not_done): what
+# Maintenance still has to deliver, and the number Health shows.
+CLAIMED_SQL = (
+    "SELECT g.requirement_id, g.asked_by_id FROM ok_grants g WHERE g.subject LIKE 'support:%' "
+    "AND g.used_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM support_tickets t WHERE t.request_key IN "
+    "('approval:' || g.requirement_id, 'draft:' || g.requirement_id)) AND NOT EXISTS (SELECT 1 FROM events e "
+    "WHERE e.action='ok.not_done' AND e.target=g.requirement_id) ORDER BY g.used_at"
+)
+
+
+def claimed(c):
+    """[{requirement_id, asked_by_id}] of the reports claimed and not delivered yet (CLAIMED_SQL)."""
+    return [dict(r) for r in c.execute(CLAIMED_SQL).fetchall()]
+
+
 def _key_of(by, payload):
     """One report by one asker: the same message drafted again is the same report."""
     return hashlib.sha256((str(by) + "\n" + str(payload.get("content_sha256") or "")).encode()).hexdigest()[:32]
@@ -714,24 +737,32 @@ class Support:
                     (found["ok_by_id"], key),
                 ).fetchone()
 
-        if standing == task_asks.USED:
-            done = kept()
-            if done:
-                return {"ticket": view(done), "approval": rid, "filed_as": found["ok_by_id"], "again": True}
-            if found["used_by_id"] != who.actor or not person:
-                raise Problem("approval", f"This OK was already used at {found['used_at']}.", 409)
-            # Claimed, and the send never came back (a crash, HQ out of reach): the same report goes again under the
-            # same Idempotency-Key, and HQ answers with the ticket the first send made.
-        elif standing != task_asks.OK or not person:
-            state = {task_asks.WAITING: "waiting for a person", task_asks.SENT_BACK: "sent back"}.get(
-                str(standing), "not asked any more"
-            )
-            raise Problem("approval", f"This report is {state}: only a report a person OK'd is sent.", 409)
-        else:
-            # Claim, then send: the OK is used (authority checked again, once) and committed before anything leaves,
-            # so nothing is refused after HQ has the report, and a crash after the send is a retry, not a second OK.
-            with self.store.transaction() as c:
-                task_asks.use(c, rid, found["subject"], payload, who.actor)
+        if standing != task_asks.USED or not person:
+            # The person's click claims the OK (ok_given); a report it did not claim is never sent from here.
+            state = {
+                task_asks.WAITING: "waiting for a person",
+                task_asks.SENT_BACK: "sent back",
+                task_asks.OK: "OK'd but not claimed by its click",
+            }.get(str(standing), "not asked any more")
+            raise Problem("approval", f"This report is {state}: only a report a person's OK claimed is sent.", 409)
+        done = kept()
+        if done:
+            return {"ticket": view(done), "approval": rid, "filed_as": found["ok_by_id"], "again": True}
+        if found["used_by_id"] != who.actor:
+            raise Problem("approval", f"This OK was already used at {found['used_at']}.", 409)
+        # Claimed, with no ticket yet: the first send, or a retry after a crash or HQ out of reach, under the same
+        # Idempotency-Key (HQ answers a retry with the ticket the first send made). Before the first send, whoever gave
+        # the OK must still be here and still entitled to give it (rule C); if not, it is given up on and never sent.
+        # Once a send has begun (`ok.sending`) HQ may have it, so a retry is never refused for that.
+        with self.store.transaction() as c:
+            started = c.execute("SELECT 1 FROM events WHERE action='ok.sending' AND target=?", (rid,)).fetchone()
+            refused = task_asks.claimed_problem(c, rid, authority=not started)
+            if refused:
+                task_asks.not_done(c, rid, refused)
+            elif not started:
+                H.event(c, who.actor, "ok.sending", rid, {"task": task_asks.task_of(c, rid)})
+        if refused:
+            raise Problem("approval", f"{refused}: the report was not sent.", 409)
 
         def settle(c, _ticket_id=None):
             task_asks.settle(c, rid, "Sent the report to Tico support.")
