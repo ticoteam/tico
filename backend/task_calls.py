@@ -19,6 +19,7 @@ engine's modules reach back to hubdb and the store.
 """
 
 import functools
+import json
 from collections.abc import Callable, Iterable
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
@@ -605,30 +606,87 @@ def _readable(conn: "sqlite3.Connection", viewer: str | None, task_id: object, v
 
 
 def _readable_rows(
-    conn: "sqlite3.Connection", viewer: str | None, task_ids: list[str], visible_sql: str | None = None
+    conn: "sqlite3.Connection", viewer: str | None, task_ids: Iterable[str], visible_sql: str | None = None
 ) -> dict[str, Row]:
-    """`_readable` for many tasks at once, read together so a task that filed many costs what one that filed few
-    does: {id: its row} for each of `task_ids` that `viewer` may read."""
+    """`_readable` for many tasks at once, two statements however many: {id: its row} of those `viewer` may read."""
     H = _h()
-    ids = list(dict.fromkeys(str(t) for t in task_ids if t))
+    ids = sorted({str(task_id) for task_id in task_ids if task_id})
     if not ids:
         return {}
-    marks = ",".join("?" * len(ids))
+    listed = (json.dumps(ids),)
     rows: dict[str, Row] = {
-        str(r["id"]): dict(r) for r in conn.execute(f"SELECT * FROM tasks WHERE id IN ({marks})", ids).fetchall()
+        str(found["id"]): found
+        for found in H._rows(conn.execute("SELECT * FROM tasks WHERE id IN (SELECT value FROM json_each(?))", listed))
     }
     if viewer is None:
         return rows
     if viewer == ON_RECORD:
-        return {i: r for i, r in rows.items() if not H.task_private(conn, r)}
-    rows = {i: r for i, r in rows.items() if H.task_private_readable(conn, viewer, r)}
+        return {task_id: found for task_id, found in rows.items() if not H.task_private(conn, found)}
+    rows = {task_id: found for task_id, found in rows.items() if H.task_private_readable(conn, viewer, found)}
     if visible_sql is None or not rows:
         return rows
-    marks = ",".join("?" * len(rows))
     seen = {
-        str(r[0]) for r in conn.execute(f"SELECT id FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", list(rows))
+        str(found[0])
+        for found in conn.execute(
+            f"SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND ({visible_sql})",
+            (json.dumps(sorted(rows)),),
+        )
     }
-    return {i: r for i, r in rows.items() if i in seen}
+    return {task_id: found for task_id, found in rows.items() if task_id in seen}
+
+
+# The links and asks a task's read names, keyed by their first column, each read once in a snapshot (or for many
+# tasks together by `prime_views`), so a list of tasks' views costs what one task's does.
+_FILED_ON_VISIT = "SELECT visit_id, to_task_id FROM links WHERE visit_id IN (%s) ORDER BY rowid"
+_FILED_BY = "SELECT to_task_id, from_task_id FROM links WHERE to_task_id IN (%s) ORDER BY rowid"
+_FILED = "SELECT from_task_id, to_task_id, kind FROM links WHERE from_task_id IN (%s) ORDER BY created_at, id"
+_DECIDED = (
+    "SELECT r.visit_id, r.id FROM requirements r WHERE r.visit_id IN (%s) AND r.by_bot=1 "
+    "AND r.withdrawn_at IS NOT NULL AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' "
+    "AND e.subject_id=(SELECT v.task_id FROM visits v WHERE v.id=r.visit_id) AND e.kind='requirement_withdrawn' "
+    "AND e.old=r.id AND e.note='Asked again') ORDER BY r.created_at, r.id"
+)
+
+
+def _keyed(conn: "sqlite3.Connection", sql: str, keys: list[str]) -> dict[str, list[tuple[Any, ...]]]:
+    """{key: the rest of each row} of `sql` over many keys, one statement (the keys go in as one JSON list)."""
+    out: dict[str, list[tuple[Any, ...]]] = {key: [] for key in keys}
+    if keys:
+        for found in conn.execute(sql % "SELECT value FROM json_each(?)", (json.dumps(keys),)).fetchall():
+            out[str(found[0])].append(tuple(found)[1:])
+    return out
+
+
+def _cached(conn: "sqlite3.Connection", sql: str, key: str) -> list[tuple[Any, ...]]:
+    from . import read_cache
+
+    return read_cache.value(conn, (sql, key), lambda: _keyed(conn, sql, [key])[key], shared=True)
+
+
+def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str | None = None) -> None:
+    """Read what `task_view` reads of each of many tasks together, a few statements in all, for the views that follow
+    in this snapshot (Needs you reads one for each ask on it). Without a read snapshot it reads nothing: each view
+    then reads for itself. A write discards it all (read_cache)."""
+    from . import read_cache
+    from . import task_engine as E
+    from . import task_relations
+    from . import waiting_on as W
+
+    TR: Any = task_relations
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    rows = W.prime(conn, task_ids)
+    ids = sorted(rows)
+    visits = sorted({str(row["visit"]["id"]) for row in rows.values() if row.get("visit")})
+    for sql, keys in ((_FILED_ON_VISIT, visits), (_DECIDED, visits), (_FILED_BY, ids), (_FILED, ids)):
+        unread = [key for key in keys if (sql, key) not in values]
+        for key, found in _keyed(conn, sql, unread).items():
+            values.setdefault((sql, key), found)
+    E.prime_stages(conn, [str(row["pipeline_id"]) for row in rows.values() if row.get("pipeline_id")])
+    TR.prime_ancestry(conn, ids)
+    if viewer:
+        _h().prime_task_delegated(conn, ids, viewer)
 
 
 def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None) -> list[str]:
@@ -638,7 +696,7 @@ def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visib
     visit: Row = row.get("visit") or {}
     if row.get("status") != "open" or not visit:
         return []
-    filed = [str(found[0]) for found in conn.execute("SELECT to_task_id FROM links WHERE visit_id=?", (visit["id"],))]
+    filed = [str(found[0]) for found in _cached(conn, _FILED_ON_VISIT, str(visit["id"]))]
     if viewer is None or not filed:
         return []
     readable = _readable_rows(conn, viewer, filed, visible_sql)
@@ -678,12 +736,7 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
     from . import task_requirements as R
 
     out: list[Row] = []
-    for (requirement_id,) in conn.execute(
-        "SELECT r.id FROM requirements r WHERE r.visit_id=? AND r.by_bot=1 AND r.withdrawn_at IS NOT NULL "
-        "AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=? "
-        "AND e.kind='requirement_withdrawn' AND e.old=r.id AND e.note='Asked again') ORDER BY r.created_at, r.id",
-        (visit_id, task_id),
-    ).fetchall():
+    for (requirement_id,) in _cached(conn, _DECIDED, visit_id):
         requirement = R.get(conn, str(requirement_id)) or {}
         answer = R.newest_answers(conn, visit_id).get(str(requirement_id))
         if not answer or (requirement.get("kind") == "ok" and answer["answer"] != "ok"):
@@ -780,17 +833,15 @@ def task_view(
             wait["line"], wait["fix"] = held["cause"], held["fix"]
     # The task that filed this one, and the tasks this one filed, only as far as `viewer` may read them
     # (`_readable`): one they may not read is left out whole, its id, status and that it exists at all.
-    above = conn.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (task_id,)).fetchone()
-    filed_by = above[0] if above and _readable(conn, viewer, above[0], visible_sql) else None
-    links = conn.execute(
-        "SELECT to_task_id, kind FROM links WHERE from_task_id=? ORDER BY created_at, id", (task_id,)
-    ).fetchall()
-    children = _readable_rows(conn, viewer, [str(link[0]) for link in links], visible_sql)
-    filed: list[Row] = [
-        {"id": child_id, "kind": kind, "status": children[child_id]["status"], "title": children[child_id]["title"]}
-        for child_id, kind in ((str(link[0]), link[1]) for link in links)
-        if child_id in children
-    ]
+    above = _cached(conn, _FILED_BY, task_id)
+    filed_by = above[0][0] if above and _readable(conn, viewer, above[0][0], visible_sql) else None
+    links = _cached(conn, _FILED, task_id)
+    children = _readable_rows(conn, viewer, [str(child_id) for child_id, _kind in links], visible_sql)
+    filed: list[Row] = []
+    for child_id, kind in links:
+        child = children.get(str(child_id))
+        if child:
+            filed.append({"id": child_id, "kind": kind, "status": child["status"], "title": child["title"]})
     snooze: Row | None = row.get("snooze")
     late = None
     if live and visit.get("late_told_at"):

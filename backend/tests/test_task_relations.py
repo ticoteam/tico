@@ -1,7 +1,7 @@
-"""Every task-to-task relationship lives in task_relations: the migration moves parent_id and blocked_by
-into it and drops both columns, the table keeps one parent a task and `related` stored once, the write path
-takes only related, duplicate_of and follow_up (a parent is set when a sub-task is filed, and no task waits on a
-relation), and a bot's run sees the relations it may read and nothing of the ones it may not."""
+"""Every task-to-task relationship lives in task_relations: the migration drops the old parent_id and blocked_by
+columns (a database that kept them has no tasks), the table keeps one parent a task and `related` stored once, the
+write path takes only related, duplicate_of and follow_up (a parent is set when a sub-task is filed, and no task
+waits on a relation), and a bot's run sees the relations it may read and nothing of the ones it may not."""
 
 import gzip
 import shutil
@@ -39,28 +39,31 @@ def old_columns(c):
     c.execute("CREATE INDEX tasks_blocked_by ON tasks(blocked_by)")
 
 
-def test_the_migration_backfills_both_columns_drops_them_and_runs_twice(tmp_path):
+def test_the_migration_drops_both_old_columns_and_runs_twice(tmp_path):
+    """A database that still has `tasks.parent_id` and `tasks.blocked_by` has no tasks (one with tasks from before the
+    cut-over is refused), so the step only drops them, with their indexes and Draft #110's related-only table."""
     path = tmp_path / "hub.db"
     c = hub(path)
-    parent = H.task_create(c, "human:ana", "Plan the launch", "", "bot:cmo", lint=False)
-    child = H.task_create(c, "human:ana", "Write the launch post", "", "bot:cmo", lint=False)
-    blocker = H.task_create(c, "human:ana", "Pick the launch date", "", "bot:cmo", lint=False)
-    orphan = H.task_create(c, "human:ana", "Pick the photo", "", "bot:cmo", lint=False)
-    c.execute("DELETE FROM task_relations")
     old_columns(c)
-    c.execute("UPDATE tasks SET parent_id=?, blocked_by=? WHERE id=?", (parent["id"], blocker["id"], child["id"]))
-    c.execute("UPDATE tasks SET parent_id='gone' WHERE id=?", (orphan["id"],))  # a parent purged long ago
+    c.execute("ALTER TABLE task_relations RENAME TO kept")
+    c.execute("CREATE TABLE task_relations(task_id TEXT, related_id TEXT, added_by TEXT, created_at TEXT)")
+    c.execute("CREATE INDEX task_relations_related ON task_relations(related_id)")
+    c.execute("DROP TABLE kept")
     c.execute("PRAGMA user_version=30")
     c.close()
     c = H.connect(path)
     assert c.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
     assert not {"parent_id", "blocked_by"} & columns(c)
-    rows = {tuple(r) for r in c.execute("SELECT from_task,to_task,kind FROM task_relations")}
-    assert rows == {(child["id"], parent["id"], "parent"), (blocker["id"], child["id"], "blocks")}
-    assert TR.parent_of(c, child["id"]) == parent["id"] and TR.child_ids(c, parent["id"]) == [child["id"]]
+    assert {"from_task", "to_task", "kind"} <= columns(c, "task_relations")
+    indexes = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    assert not {"tasks_parent", "tasks_blocked_by", "task_relations_related"} & indexes
+    assert not columns(c, "task_relations_v110")
     H.migrate(c)
     TR.migrate(c)
-    assert {tuple(r) for r in c.execute("SELECT from_task,to_task,kind FROM task_relations")} == rows
+    # The table works as a fresh one does.
+    parent = H.task_create(c, "human:ana", "Plan the launch", "", "bot:cmo", lint=False)
+    child = H.task_create(c, "human:ana", "Write the launch post", "", "bot:cmo", parent_id=parent["id"], lint=False)
+    assert TR.parent_of(c, child["id"]) == parent["id"] and TR.child_ids(c, parent["id"]) == [child["id"]]
     assert c.execute("PRAGMA foreign_key_check").fetchall() == []
     c.close()
 

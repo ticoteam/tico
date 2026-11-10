@@ -1393,19 +1393,33 @@ def _readable_held_for(c, who, auth, bots):
             marks = ",".join("?" * len(part))
             for a in c.execute(f"SELECT id, started_at, finished_at FROM attempts WHERE id IN ({marks})", part):
                 attempt_times[a["id"]] = a
-    out = {bot: [] for bot in bots}
+    named = []
     for row in kept:
         job = jobs.get(row["job_id"])
         if not job or quiet_source_wait(c, job, started_counts=started_counts, attempt_times=attempt_times):
             continue
         message = H.message(c, row["id"])  # parsed refs: a comment or notice names its task there
-        task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
-        task = H.task(c, task_id) if task_id else None
-        readable = bool(
-            task
-            and H.task_private_readable(c, actor, task)
-            and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone()
-        )
+        if not message:
+            named.append((row, None))
+            continue
+        named.append((row, H.message_task_id(message, H.conversation(c, message["conversation_id"]))))
+    # The tasks the runs name, read together (with their tags, as H.task reads one), and which of them `who` may
+    # read: three statements however many runs.
+    tasks, fenced = {}, set()
+    ids = sorted({str(task_id) for _row, task_id in named if task_id})
+    for part in H.chunks(ids):
+        marks = ",".join("?" * len(part))
+        found = [dict(r) for r in c.execute(f"SELECT * FROM tasks tasks WHERE id IN ({marks})", part)]
+        H.hydrate_task_tags(c, found)
+        tasks.update({r["id"]: r for r in found})
+    private_ok = [task_id for task_id, task in tasks.items() if H.task_private_readable(c, actor, task)]
+    for part in H.chunks(private_ok):
+        marks = ",".join("?" * len(part))
+        fenced.update(r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({marks}) AND {fence}", part))
+    out = {bot: [] for bot in bots}
+    for row, task_id in named:
+        task = tasks.get(str(task_id)) if task_id else None
+        readable = bool(task and task["id"] in fenced)
         if task and not readable:
             out[row["held_bot"]].append((row, None, False))
         else:

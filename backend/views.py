@@ -2118,6 +2118,10 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     if not count_only:
         # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do.
         views = {}
+        from . import task_calls
+
+        # Every ask's task read together: the list costs what one task's view does.
+        task_calls.prime_views(c, {item["task_id"] for item in items if item["kind"] == "ask"}, who.actor)
         for item in items:
             if item["kind"] != "ask":
                 continue

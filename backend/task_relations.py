@@ -54,44 +54,23 @@ def _columns(conn, table):
 
 
 def migrate(conn):
-    """Create the table, move `tasks.parent_id` and `tasks.blocked_by` into it, and drop both columns.
+    """Create the table, and drop `tasks.parent_id`, `tasks.blocked_by` and Draft #110's related-only table where an
+    old database still has them. Nothing is moved: a database that kept them has no tasks, since one from before the
+    Pipelines v3 cut-over that has tasks is refused before any migration runs (migrations.refuse_old_tasks).
 
-    Idempotent: a database that already has the table and lacks the columns is left as it is. A
-    column pointing at a task that no longer exists is dropped with nothing to move. Draft #110's
-    related-only table (`task_id`, `related_id`) is converted to `related` rows."""
+    Idempotent: a database that already has the table and lacks the columns is left as it is."""
     if "task_id" in _columns(conn, "task_relations"):
         conn.execute("ALTER TABLE task_relations RENAME TO task_relations_v110")
-        for index in ("task_relations_related",):
-            conn.execute(f"DROP INDEX IF EXISTS {index}")
+        conn.execute("DROP INDEX IF EXISTS task_relations_related")
     for statement in SCHEMA.split(";"):
         if statement.strip():
             conn.execute(statement)
-    if _columns(conn, "task_relations_v110"):
-        conn.execute(
-            "INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
-            "SELECT min(task_id,related_id),max(task_id,related_id),'related',added_by,created_at "
-            "FROM task_relations_v110 WHERE task_id<>related_id"
-        )
-        conn.execute("DROP TABLE task_relations_v110")
+    conn.execute("DROP TABLE IF EXISTS task_relations_v110")
     columns = _columns(conn, "tasks")
-    if "parent_id" in columns:
-        conn.execute(
-            "INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
-            "SELECT t.id,t.parent_id,'parent',NULL,coalesce(t.updated_at,t.created_at,'') FROM tasks t "
-            "WHERE t.parent_id IS NOT NULL AND t.parent_id<>t.id "
-            "AND t.parent_id IN (SELECT id FROM tasks)"
-        )
-        conn.execute("DROP INDEX IF EXISTS tasks_parent")
-        conn.execute("ALTER TABLE tasks DROP COLUMN parent_id")
-    if "blocked_by" in columns:
-        conn.execute(
-            "INSERT OR IGNORE INTO task_relations(from_task,to_task,kind,created_by,created_at) "
-            "SELECT t.blocked_by,t.id,'blocks',NULL,coalesce(t.updated_at,t.created_at,'') FROM tasks t "
-            "WHERE t.blocked_by IS NOT NULL AND t.blocked_by<>t.id "
-            "AND t.blocked_by IN (SELECT id FROM tasks)"
-        )
-        conn.execute("DROP INDEX IF EXISTS tasks_blocked_by")
-        conn.execute("ALTER TABLE tasks DROP COLUMN blocked_by")
+    for column, index in (("parent_id", "tasks_parent"), ("blocked_by", "tasks_blocked_by")):
+        if column in columns:
+            conn.execute(f"DROP INDEX IF EXISTS {index}")
+            conn.execute(f"ALTER TABLE tasks DROP COLUMN {column}")
 
 
 # ----------------------------------------------------------------------------- reads
