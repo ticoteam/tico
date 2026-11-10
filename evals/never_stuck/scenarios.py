@@ -689,13 +689,13 @@ def s12(r: Rig) -> None:
 def s13(r: Rig) -> None:
     from backend import task_asks as K
 
-    spend = {"usd": 40, "what": "Launch ads"}
+    raise_ = {"usd": 40, "what": "Launch ads budget"}
     asked = r.ok(
         WRITER,
         lambda c: K.ask_ok(
-            c, WRITER, ANA, "Spend $40 on launch ads?", shows=spend, subject="spend:launch-ads", content=spend
+            c, WRITER, ANA, "Raise the launch ads budget by $40?", shows=raise_, subject="budget_raise:launch-ads", content=raise_
         ),
-        "the writer asks Ana before it spends",
+        "the writer asks Ana, an owner, for a budget raise",
     )
     task, rid = str(asked["task_id"]), str(asked["requirement_id"])
     row = r.row(task)
@@ -706,14 +706,14 @@ def s13(r: Rig) -> None:
     # The bot never OKs its own ask, and asking again with the same content is the same ask.
     r.refused(
         WRITER,
-        lambda c: K.give_ok(c, WRITER, rid, K.content_hash(spend), own_click=True),
+        lambda c: K.give_ok(c, WRITER, rid, K.content_hash(raise_), own_click=True),
         "identity",
-        "the writer OKs its own spend",
+        "the writer OKs its own budget raise",
     )
     again = r.ok(
         WRITER,
         lambda c: K.ask_ok(
-            c, WRITER, ANA, "Spend $40 on launch ads?", shows=spend, subject="spend:launch-ads", content=spend
+            c, WRITER, ANA, "Raise the launch ads budget by $40?", shows=raise_, subject="budget_raise:launch-ads", content=raise_
         ),
         "the writer asks again",
     )
