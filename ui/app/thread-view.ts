@@ -55,6 +55,8 @@ interface ThvRefs {
   /** The runner's notices (backend/execution.py split_runner_notices): plain lines. */
   warnings?: string[];
   turn_id?: string | null;
+  /** The call a message belongs to; `card` marks the call's own card (ui/app/thread-call.ts callCardHTML). */
+  call?: { id?: string; card?: boolean; meeting_id?: string };
   [key: string]: unknown;
 }
 // A message in the timeline as this view holds it: the server's row, with the fields the stream and this file add.
@@ -533,8 +535,7 @@ function thvActsHTML(view: ThvView) {
   const people = members && list ? `<button type="button" class="thv-people" data-thv-members aria-label="Members, ${n}${more}" title="Members">${
       list.slice(0, 3).map(m => actorAvatar(m.actor, 22)).join('')}<span class="thv-people-n">${n}${more}</span></button>`
     : members ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : '';
-  return `${callHeadHTML(view)}
-      ${people}${thvArchiveHTML(t)}${thvDeleteHTML(t)}
+  return `${people}${callHeadHTML(view)}${thvArchiveHTML(t)}${thvDeleteHTML(t)}
       ${view.opts.menu === false ? '' : `<button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="dialog" aria-label="Thread settings" title="Thread settings"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>`}`;
 }
 // The viewer's own pin, on a thread the rail lists (a server with pins says `me.pinned`).
@@ -734,6 +735,7 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
   let body;
   if (m.deleted) body = '<div class="th-body muted">Deleted</div>';
   else if (thvIsUpdateCard(m)) body = thvUpdateHTML(m);
+  else if (m.refs?.call?.card) body = callCardHTML(m);
   // A met or stopped goal: the one line the chat showed (chat-goal.js).
   else if (m.refs?.chat_goal && m.refs?.goal_status) body = chatGoalNoticeHTML(m, view.goals?.goal);
   // A card a bot left for you fills in from its action or request (ui/assistant.ts, ui/credential-card.ts).

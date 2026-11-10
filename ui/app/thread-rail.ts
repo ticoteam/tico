@@ -128,7 +128,7 @@ function railRowHTML(t: ThreadRow, cur: string) {
   const n = threadUnread(t), bold = n > 0 || !!t.me?.activity, here = t.id === cur;
   const arch = t.me?.can_manage ? `<button type="button" class="tr-arch" data-tr-arch="${esc(t.id)}" aria-label="Archive" title="Archive"><span class="nav-icon" aria-hidden="true">archive</span></button>` : '';
   return `<li class="tr-item"><a class="tr-row${bold ? ' unread' : ''}${here ? ' cur' : ''}" href="${esc(threadHref(t))}" data-thread="${esc(t.id)}"${here ? ' aria-current="page"' : ''}>
-    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a>${arch}</li>`;
+    ${threadHashHTML(t)}<span class="tr-title">${esc(threadTitle(t))}</span>${t.live_call ? `<span class="tr-call" title="Call">${CALL_SVG}</span>` : ''}${n ? `<span class="tr-count" aria-label="${n} unread">${esc(threadsCountText(n))}</span>` : ''}</a>${arch}</li>`;
 }
 function railRender() {
   const rail = $('#thread-rail'); if (!rail?.isConnected) return;
