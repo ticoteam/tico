@@ -575,6 +575,20 @@ def hidden_from(conn: "sqlite3.Connection", viewer: object, requirement_id: str)
     return bool(row) and not party(conn, viewer, row)
 
 
+def event_hidden(conn: "sqlite3.Connection", principals: object, target: object) -> bool:
+    """Whether an audit event about a bound OK (its target is the OK's requirement: ok.asked, ok.given, ok.used,
+    ok.not_done) is hidden from the reader: every one of `principals` (one actor, or a person and whom they act as)
+    must be a party of the OK. Reading its task is not enough, as for the OK's line (party)."""
+    if not isinstance(target, str) or not target:
+        return False
+    row = grant(conn, target)
+    if not row:
+        return False
+    many: Any = principals
+    viewers: list[object] = list(many) if isinstance(many, (tuple, list, set)) else [many]  # pyright: ignore[reportUnknownArgumentType]
+    return any(not party(conn, viewer, row) for viewer in viewers)
+
+
 def bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
     """Whether a requirement is a bound OK (has a grant)."""
     return conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone() is not None
@@ -782,7 +796,7 @@ def use(conn: "sqlite3.Connection", requirement_id: str, subject: str, content: 
     ).rowcount
     if not spent:
         _refuse(conn, by, "consumed", "This OK was already used")
-    H.event(conn, by, "ok.used", requirement_id, {"subject": subject})
+    H.event(conn, by, "ok.used", requirement_id, {"subject": subject, "task": task_of(conn, requirement_id)})
 
 
 def revoke(conn: "sqlite3.Connection", requirement_id: str) -> None:
@@ -816,8 +830,8 @@ def not_done(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
     row = grant(conn, requirement_id)
     if not row or not row.get("used_at"):
         return
-    H.event(conn, SYSTEM, "ok.not_done", requirement_id, {"subject": row["subject"], "why": why[:300]})
     task_id = task_of(conn, requirement_id)
+    H.event(conn, SYSTEM, "ok.not_done", requirement_id, {"subject": row["subject"], "why": why[:300], "task": task_id})
     if row.get("filed") and task_id and _task_status(conn, task_id) == "open":
         H.attempt(conn, H.task_close, SYSTEM, task_id, why)
 
