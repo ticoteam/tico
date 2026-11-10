@@ -140,7 +140,7 @@ People without an active branch reach the original. Selecting another person's b
 Existing task threads keep their participants and history.
 
 A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status and its **Profile**;
-change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything. A subtask someone else files under the bot's task continues that task's session (one the bot files for itself gets its own) unless `subtask_session: own` (`hub bot update <slug> --subtask-session own`) gives each its own ([Sessions](sessions.md), [Tasks](tasks.md#subtasks-and-prs)).
+change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything. A subtask someone else files under the bot's task continues that task's session (one the bot files for itself gets its own) unless `subtask_session: own` (`hub bot update <slug> --subtask-session own`) gives each its own ([Sessions](sessions.md), [Tasks](tasks.md#sub-tasks)).
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
 Turning off **Allow branches** preserves existing branches but stops automatic routing; their pages say **branches off**.

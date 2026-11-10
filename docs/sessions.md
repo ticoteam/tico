@@ -2,7 +2,7 @@
 
 A **session** is one model conversation a bot resumes: a Claude Code or Codex thread on its computer.
 A bot has more than one. Its Home is one session, and every task it owns is another.
-This page explains how they fit together. [Tasks](tasks.md#subtasks-and-prs) has the exact rules.
+This page explains how they fit together. [Tasks](tasks.md#sub-tasks) has the exact rules.
 
 ## The main chat and task sessions
 
@@ -173,7 +173,7 @@ The task's ⋯ menu has **Copy session ID** for the primary session, to resume i
 | `session` | unset (default), `task`, `bot` | Unset and `task`: each task and each thread is its own session. `bot`: one shared session for public threads and non-private tasks; private tasks and private threads keep their own. See [the table above](#the-main-chat-and-task-sessions). |
 | `subtask_session` | `parent` (default), `own` | Whether a subtask someone else files continues its parent's session or gets its own; one the bot files for itself always gets its own. |
 | `task_goal` | `off` (default), `on` | Work each task as a native goal until it is met. |
-| `review_model` | `own` (default), `check` | Run a subtask handed to it under another's task on the company's check model ([Tasks](tasks.md#a-subtask-on-a-check-model)). |
+| `review_model` | `own` (default), `check` | Run a subtask handed to it under another's task on the company's check model ([Tasks](tasks.md#a-sub-task-on-a-check-model)). |
 | `goal:on`, `goal:off` | task labels | Override `task_goal` for one task. |
 | `capture_stream` | `off` (default), `on` | Keep each run's raw provider stream, both ways, for a week (owner only; see below). |
 
