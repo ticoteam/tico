@@ -380,8 +380,9 @@ def task_ask(
         # person who handed it the task is always in it). Refused before anything is written.
         from types import SimpleNamespace
 
-        from . import reach
+        from . import reach as reach_module
 
+        reach: Any = reach_module
         reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id)
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):

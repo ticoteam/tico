@@ -77,7 +77,9 @@ def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     manager bot, else the owner of the bot that has the task, else whoever asked for it, else the company owner, else
     the person who has been here longest. Anyone on the way who left, was removed or cannot sign in is skipped, and on
     a private task anyone who cannot read it. None only when nobody can sign in, or nobody who can reads it."""
-    H = task_wakes._h()
+    from . import hubdb
+
+    H: Any = hubdb
     if not H.task_private(conn, row):
         return next(_people_for(conn, row), None)
     # A private task falls only to a person who may read it already: the engine never adds a reader. None when no
@@ -90,7 +92,7 @@ def _people_for(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:
     visit: Row = row.get("visit") or {}
     pipe: Row = row.get("pipeline") or {}
     for found in (visit.get("person_id"), row.get("owner_id"), pipe.get("owner_id"), pipe.get("manager_id")):
-        if R.active_person(conn, found):
+        if found and R.active_person(conn, found):
             yield found
     for bot in (pipe.get("manager_id"), row.get("owner_id")):
         owner = _bot_owner(conn, bot)

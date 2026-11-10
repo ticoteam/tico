@@ -177,7 +177,7 @@ def flush_wakes(c):
                 continue
             task = H.task(c, row["key"].split(":", 1)[1])
             live = bool(task and task["status"] == "open")
-            if live:
+            if live and task:
                 # Through the engine: one keyed wake per part of the burst, a run only on the owner bot's turn.
                 at = H.now()
                 if burst.get("items"):
@@ -205,7 +205,7 @@ def flush_wakes(c):
                         trigger="pr_checks",
                     )
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
-            if live:
+            if live and task:
                 sent.append(task["id"])
     return sent
 

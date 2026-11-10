@@ -144,7 +144,7 @@ def write_registry(settings):
 
 def version(c, task_id):
     """The task's version now: what whoever acts on it next in this transaction was just shown."""
-    return hubdb.task(c, task_id)["version"]
+    return (hubdb.task(c, task_id) or {}).get("version")
 
 
 def say_done(c, actor, task_id, note):

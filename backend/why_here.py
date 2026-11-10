@@ -40,7 +40,7 @@ def show(c, auth, who, ref):
         made_by, created, cause = item["requester_id"], item["created_at"], task_cause(c, item, see)
         title, siblings, stops = item["title"] or "", *siblings_and_stops(c, item, cause)
         task_id = item["id"]
-    elif kind == "message":
+    else:  # a message: resolve answers one of the two or refuses
         made_by, created, title, task_id = item["sender_id"], item["created_at"], (item["body"] or "")[:80], None
         row = H.task(c, H.message_task_id(item)) if H.message_task_id(item) else None
         cause = task_cause(c, row, see) if row else {"type": "message", "conversation_id": item["conversation_id"]}

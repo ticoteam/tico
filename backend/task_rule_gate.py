@@ -78,7 +78,7 @@ def note_first(c, who, task_id, gate, version=None, mover=None):
     line goes before the task's note, which stays whole. Returns the version to send the write itself with."""
     if not (gate and gate.get("warn")):
         return version
-    row = H.task(c, task_id)
+    row = H.task(c, task_id) or {}
     H.task_update(
         c,
         who.actor,
@@ -87,7 +87,7 @@ def note_first(c, who, task_id, gate, version=None, mover=None):
         mover=mover,
         seen_version=version,
     )
-    return H.task(c, task_id)["version"] if version is not None else None
+    return (H.task(c, task_id) or {}).get("version") if version is not None else None
 
 
 def held(gate):

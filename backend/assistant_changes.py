@@ -382,11 +382,14 @@ def restore_task(c, who, row):
     """Take a move or a hand-over back, through the task calls: a move back to the stage the task was in, a reopen
     undone by finishing or closing it again, a hand-over undone by giving it back. Always with a why."""
     task_id = row["subject_id"]
+    old: str | None = row["old"]  # the stage id or owner the change replaced
+    if not old:
+        raise Problem("not_undoable", "it does not say where the task was before", 409)
     if row["kind"] == "reassign":
-        H.task_reassign(c, who.actor, task_id, row["old"], UNDO_WHY)
+        H.task_reassign(c, who.actor, task_id, old, UNDO_WHY)
         return
-    stage = c.execute("SELECT kind FROM stages WHERE id=?", (row["old"],)).fetchone()
-    to = {"done": H.TASK_DONE, "closed": H.TASK_CLOSED}.get(stage["kind"] if stage else "", row["old"])
+    stage = c.execute("SELECT kind FROM stages WHERE id=?", (old,)).fetchone()
+    to = {"done": H.TASK_DONE, "closed": H.TASK_CLOSED}.get(stage["kind"] if stage else "", old)
     if (H.task(c, task_id) or {}).get("status") != "open" and to not in (H.TASK_DONE, H.TASK_CLOSED):
         to = H.TASK_REOPEN  # a done or closed task goes back to work by a reopen, which lands where it left
     H.task_move(c, who.actor, task_id, to, UNDO_WHY)

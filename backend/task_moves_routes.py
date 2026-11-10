@@ -195,6 +195,8 @@ def register(
         work to and reach, within the caller's task cap for them, and ask ingest's verdict on a bot handing its own
         task to a person."""
         row = H.task(c, task_id)
+        if not row:
+            raise Problem("not_found", "No such task", 404)
         target = auth.target(c, who, body.owner, need="write")
         if target == row["owner_id"]:
             return None
@@ -439,7 +441,10 @@ def register(
         from . import lifecycle, task_engine
 
         lifecycle.refuse_send(c, who, H.resolve_actor(c, body.to) or body.to, what="an ask for an OK")
-        task_engine.check_version(c, who.actor, H.task(c, task_id), body.version)
+        row = H.task(c, task_id)
+        if not row:
+            raise Problem("not_found", "No such task", 404)
+        task_engine.check_version(c, who.actor, row, body.version)
         # The OK's line and content are exactly what is OK'd: a warning line goes before the task's note instead.
         task_rule_gate.note_first(c, who, task_id, gate, body.version, mover(c, who) or None)
         asked = task_asks.ask_ok(
