@@ -245,6 +245,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-menu-q,.tl-menu-new input{width:100%;height:28px;margin:0 0 4px;padding:0 8px;font-size:var(--t-base);border:1px solid var(--line);border-radius:6px;background:var(--bg)}
 .tl-menu-new{margin:0}
 .tl-menu-list{display:flex;flex-direction:column}
+.tl-menu-rows{display:contents}
 .tl-opt,.tl-mi{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:6px;background:none;color:var(--ink);font:var(--t-base)/var(--lh-tight) var(--sans);text-align:left;cursor:pointer}
 .tl-opt:hover,.tl-mi:hover,.tl-mi:focus-visible,.tl-opt:focus-within{background:var(--surface2);outline:0}
 .tl-opt[hidden],.tl-mi[hidden]{display:none}

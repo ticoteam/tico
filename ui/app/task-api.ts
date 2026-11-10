@@ -209,6 +209,31 @@ function taskFeedLanded(feed: TaskFeed, ticket: number, cursor?: string | null):
 function taskFeedFailed(feed: TaskFeed, ticket: number): void {
   if (ticket === feed.ticket) feed.held = null;
 }
+/** A list row as a list of its own kind holds it: the server's rows are those rows (TaskBrief), read untyped. */
+const taskAsRow = <T extends TaskLiveRow>(t: TaskBriefV3): T => t as unknown as T;
+/** A list read page by page (GET /v2/tasks `offset`): whether the server holds more, and the last row it gave. */
+interface TaskPaging<T extends TaskLiveRow> { more: boolean; edge: T | null }
+/** The next page of a list held in `rows` (kept by `has`, in `order`, the order its `query` asks the server for). It
+ * reads on from the held rows that sort at or before the last row the server gave, so a task that came or left while
+ * the list was open shifts nothing; the page goes in by `has` and `order`, and `paging` moves on. Answers the events
+ * that came while the read was out (to put over the rows), 'left' when `still()` says the list is no longer wanted,
+ * or null when a newer read is out. A failed read throws. */
+async function taskPageNext<T extends TaskLiveRow>(paging: TaskPaging<T>, rows: T[], query: TaskBriefQuery, feed: TaskFeed,
+  has: (t: T) => boolean, order: TaskRowOrder, still: () => boolean): Promise<LiveTaskEvent[] | 'left' | null> {
+  const edge = paging.edge;
+  if (!paging.more || !edge) return [];
+  const offset = rows.filter(t => order(t, edge) <= 0).length, ticket = taskFeedRead(feed);
+  let page: Awaited<ReturnType<typeof taskBriefsPage>>;
+  try { page = await taskBriefsPage({...query, offset}); } catch (e) { taskFeedFailed(feed, ticket); throw e; }
+  if (!still()) { taskFeedFailed(feed, ticket); return 'left'; }
+  const held = taskFeedLanded(feed, ticket, page.cursor);
+  if (!held) return null;
+  for (const t of page.tasks) taskRowsPut(rows, taskAsRow<T>(t), String(t.id), has, order);
+  const last = page.tasks.at(-1);
+  paging.more = page.more && !!page.tasks.length;
+  paging.edge = last ? taskAsRow<T>(last) : null;
+  return held;
+}
 /** Catches `rows` up from `cursor` (taskChanges under the list's own `query`): the rows that changed go through
  * taskRowsPut, the ones `gone` come out, then the events that came meanwhile go over them again (`feed`). `still()` is
  * asked once the answer is in: false drops it (the page was left). Answers the next cursor (`again` when a held event
@@ -225,7 +250,7 @@ async function taskRowsCatchUp<T extends TaskLiveRow>(rows: T[], cursor: string,
   if (!held) return null;
   let moved = false;
   for (const id of out.gone) moved = taskRowsPut(rows, null, id, has) || moved;
-  for (const t of out.tasks) moved = taskRowsPut(rows, t as unknown as T, String(t.id), has, order) || moved;
+  for (const t of out.tasks) moved = taskRowsPut(rows, taskAsRow<T>(t), String(t.id), has, order) || moved;
   const after = taskRowsLive(rows, held, has, order);
   return {cursor: out.cursor || cursor, moved: moved || after === true, ...(after === 'bulk' ? {again: true} : {})};
 }

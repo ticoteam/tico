@@ -352,10 +352,12 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   if (addRelated) addRelated.onclick = () => propMenu(d, addRelated, {label: 'Relation', items: TASK_REL_ADD.map(([kind, text]) => ({value: kind, text, html: `<span>${esc(text)}</span>`})),
     onPick: kind => setTimeout(async () => {
       const have = new Set(Object.values(task.relations || {}).flat().map(r => String(r.id)));
-      const rows = (await taskPropCandidates(task)).filter(x => !have.has(String(x.id)));
+      const pick = (rows: PropCandidate[]) => rows.filter(x => !have.has(String(x.id))).map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
+        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`}));
+      const first = await taskPropCandidates(task);
       if (!addRelated.isConnected) return;
-      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
-        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`})),
+      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: pick(first.rows),
+        ...(first.more ? {search: async (q: string) => pick((await taskPropCandidates(task, q)).rows)} : {}),
         onPick: it => taskRelate(d, task, {task: it.value, kind: kind.value})});
     }, 0)});
   d.querySelectorAll<HTMLElement>('[data-drop-rel]').forEach(b => b.onclick = () => {
