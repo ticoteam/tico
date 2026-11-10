@@ -4792,7 +4792,7 @@ class Execution:
             return {"attempt": None}
         from . import task_wakes
 
-        if not task_wakes.may_start(c, msg):
+        if not task_wakes.may_start(c, row["message_id"]):
             # The engine canceled its wake: the bot has no turn on the task now, or the visit started its 7 runs since
             # it last changed. Under this write lock, so two claims never both take the seventh. The never-stuck check
             # writes a lost wake again for a bot that still has a turn, and hands a task at 7 runs to a person.
