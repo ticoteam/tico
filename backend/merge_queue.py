@@ -10,9 +10,11 @@ the Engineering pipeline's Merge stage). Track C owns this file.
   `removed_at`, `removed_reason`, `failing_check`, `failing_check_url`). "PR merged" stands NOT_MET on the stage owner
   with "Dropped from the merge queue: <reason>", and the owner gets ONE wake (`removed`), keyed
   `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself.
-- The owner then queues it again (`requeue`: CLI `tico task queue <task>`, MCP `hub_task_queue` {task, seen_version},
-  `POST /api/v2/tasks/{tid}/queue`), or sends the task back to Fixes 2 with the ordinary move (`tico task move <task>
-  --to "Fixes 2"`), where the Builder owns it again.
+- The owner (Release Manager, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
+  `tico task queue <task>`, MCP `hub_task_queue` {task, seen_version}, `POST /api/v2/tasks/{tid}/queue`); or pushes
+  its own fix commits to the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
+  (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
+  Merge: nothing sends it back through Review; the merge queue's checks are the gate.
 - The task is closed or sent back while a PR is queued: `pull` owes `dequeue_pr` (`dequeue_pr:<visit>:<ref>`), carried
   out with `dequeuePullRequest` (auto-merge off). A PR GitHub merged first stays merged ("merged anyway" wake, keyed
   `<task>:<visit>:merged_anyway:<ref>`).
@@ -57,9 +59,10 @@ def queue(conn: "sqlite3.Connection", task: Row, by: str) -> list[Row]:
 
 def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: int | None = None) -> list[Row]:
     """Queue again: the stage owner's action on the Merge stage after GitHub removed a PR. Owes a new `queue_pr` for
-    each removed PR (its key carries the head, and the old effect for that head is moot first). Refuses `task_stage`
-    (not on a stage whose on_enter queues PRs), `task_requirement` (no PR was removed), `task_changed` (a bot's stale
-    `seen_version`), `task_ended`. Who may: the stage owner, the pipeline's manager, any person. Track C."""
+    each removed PR at its newest saved head (its key carries the head, and the old effect for that head is moot
+    first). Refuses `task_stage` (not on a stage whose on_enter queues PRs), `task_requirement` when no PR was removed,
+    and also while the PR's own checks on its newest commit are running ("The checks on <ref> are still running")
+    or failing ("Checks failed on <ref>: <names>"), `task_changed` (a bot's stale `seen_version`), `task_ended`. Who may: the stage owner, the pipeline's manager, any person. Track C."""
     raise NotImplementedError("merge_queue.requeue: track C")
 
 

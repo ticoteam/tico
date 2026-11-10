@@ -632,7 +632,10 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built. Jev checks it, then **a
   person OKs it**. Expected time: 4 hours.
 - **Merge.** Owner: Release Manager. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
-  time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again or sends the task back to Fixes 2.
+  time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
+  PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
+  back to Fixes 2 when the fault needs the Builder. A commit pushed in Merge does not send the task back through Review:
+  the merge queue's checks are the gate.
 - **Release.** Owner: Release Manager. To leave: In a release. Can't be pushed past. Expected time: 1 day.
 
 Also:
@@ -805,8 +808,10 @@ late. Nothing depends on the exact 10 seconds.
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
   commit), Tico saves why and which check failed, PR merged says "Dropped from the merge queue: <reason>", and the
-  owner is told once. Tico never queues it again by itself: the owner queues it again (`tico task queue`) or sends the
-  task back to Fixes 2.
+  owner is told once. Tico never queues it again by itself. The owner (the Release Manager, who may push to PR
+  branches) queues it again (`tico task queue`), after pushing its own fix if one is needed, or sends the task back to
+  Fixes 2. Queuing again is refused while the PR's own checks on its newest commit are running or failing, with the
+  reason. A commit pushed in Merge keeps the task in Merge: the reviews of the earlier commit stand for this visit.
 - **A commit after the person's OK** still merges once it is green. The task shows "Changed after OK" and the manager bot
   is told once (C22).
 - **Leaving Merge backwards, or closing,** takes the PRs out of the queue. That call doesn't exist today and gets built.
