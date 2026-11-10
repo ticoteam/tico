@@ -514,6 +514,50 @@ def test_a_run_that_never_started_is_not_a_run_and_its_wake_is_written_again_onc
     assert any(line.startswith("builder stopped 3 times") for line in _said(c, task_id, MANAGER))
 
 
+def _reads_its_inbox(c, slug):
+    """The bot is run by an outside agent that reads its own inbox: its wakes queue no job."""
+    c.execute("UPDATE bot_settings SET harness='hermes' WHERE bot_id=?", (slug,))
+
+
+def _read(c, task_id, actor):
+    """The bot reads its wakes about the task, as an outside agent does through its inbox."""
+    c.execute(
+        "UPDATE messages SET read_at=? WHERE wake_key LIKE ? AND recipient_id=? AND read_at IS NULL",
+        (H.now(), task_id + ":%", actor),
+    )
+
+
+def test_a_bot_that_reads_its_own_inbox_is_on_its_way_until_it_reads_its_wake(c, general, later):
+    _reads_its_inbox(c, "builder")
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    assert _queued(c, task_id) == [] and len(_said(c, task_id, BUILDER)) == 1  # its start, in its inbox
+    assert later(minutes=30) == {} and _ladder(c, task_id) == ("owner", 0)  # not read yet: nothing more is sent
+    assert len(_said(c, task_id, BUILDER)) == 1
+    _read(c, task_id, BUILDER)  # it read its wake, and did nothing
+    assert later(seconds=119) == {}
+    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)  # a try, not a free wake
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
+    assert _runs_since_change(c, task_id) == 0  # nothing ran
+    # It never reads again: the ladder waits on it, and Late takes the task to its manager bot and then a person.
+    assert later(hours=23) == {}
+    assert later(hours=1) == {"late": 1, "to_manager": 1, "woken": 1} and _ladder(c, task_id) == ("manager", 1)
+    assert later(days=2) == {"to_person": 1}
+
+
+def test_a_bot_that_runs_jobs_gets_one_free_wake_per_change_and_then_its_try(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)  # its start
+    E.add_requirement(c, task_id, ANA, "ok", "human:ben", "OK the wording")  # a change, and no run since
+    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)
+    assert _said(c, task_id, BUILDER)[-1] == "This task is not finished. Carry on."
+    _lose(c, task_id)
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 0)  # lost: written again
+    _lose(c, task_id)
+    assert later(seconds=10) == {}  # lost twice: the try is spent, at its time
+    assert later(seconds=100) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert _said(c, task_id, BUILDER).count("This task is not finished. Carry on.") == 2  # the free one, and again
+
+
 def test_a_second_wake_for_one_bot_and_task_folds_into_one(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
     first = task_wakes.add(c, row, BUILDER, row["visit"], "First words.", wake_key=f"{row['id']}:a")

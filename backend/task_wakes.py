@@ -337,6 +337,27 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None
     return None if taken else {"id": str(found[0]), "body": str(found[1] or "")}
 
 
+def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:
+    """The newest wake about this task in this visit since it last changed (by order), when `actor` is a bot that reads
+    its own inbox (an outside agent: its wakes queue no job). `id`, and `read_at`: None while it has not read it. An
+    intact wake it has not read is on its way, as a queued one is; once read, the bot took it. None for a bot whose
+    wakes queue a run, or when nothing was written for it since the change."""
+    from . import enqueue
+
+    H = _h()
+    if not H.is_bot(actor):
+        return None
+    visit: Row = task.get("visit") or {}
+    reads_inbox: str = cast("Any", enqueue).external_bot_sql("m.recipient_id")
+    found = conn.execute(
+        "SELECT m.id, m.read_at FROM messages m WHERE m.rowid > ? AND m.wake_key LIKE ? ESCAPE '\\' "
+        "AND m.recipient_id=? AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 "
+        f"AND json_extract(m.refs, '$.job') IS NULL AND {reads_inbox} ORDER BY m.rowid DESC LIMIT 1",
+        (_marks(task)[1], _like(f"{task['id']}:{visit.get('id')}"), actor),
+    ).fetchone()
+    return {"id": str(found[0]), "read_at": found[1]} if found else None
+
+
 def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:
     """A wake for this task is waiting for this bot: queued or just claimed, held ones included."""
     H = _h()

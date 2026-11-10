@@ -177,6 +177,12 @@ def _ladder(
         return
     if task_wakes.live_run(conn, row, target, at) or task_wakes.queued(conn, row["id"], target):
         return
+    inbox = task_wakes.inbox(conn, row, target)
+    if inbox and not inbox["read_at"]:
+        # A bot that reads its own inbox has not read its wake yet: it is on its way, as a queued one is. Nothing more
+        # is written; if it never reads, Late takes the task on.
+        return
+    read: str | None = inbox["read_at"] if inbox else None  # it took its wake then, and nothing ran on the engine
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
     tries = int(visit.get("tries") or 0)
     spent = False  # its wake for this try was lost twice: the try is spent
@@ -195,16 +201,17 @@ def _ladder(
         conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=gap), visit["id"]))
         return
     last = task_wakes.last_run(conn, row, target)
-    if last and last.get("finished_at") and not _snoozed_since(conn, visit, str(last["finished_at"])):
-        due = max(due, str(H.shift(last["finished_at"], seconds=gap)))  # the gap runs from when the bot stopped
+    stopped: str | None = (last or {}).get("finished_at") or read
+    if stopped and not _snoozed_since(conn, visit, stopped):
+        due = max(due, str(H.shift(stopped, seconds=gap)))  # the gap runs from when the bot stopped, or read its wake
     if at < due:
         return
     runs = task_wakes.runs_since(conn, row)
     cut_off = bool(last) and (last or {}).get("state") in CUT_OFF
-    if level == "owner" and tries == 0 and not runs and not spent:
-        # No run has started since the task last changed (it changed during a run, and nothing announced it): this
-        # wake starts it again and is not a try. A try is counted only after a run that started since the change
-        # ended without one (R3).
+    if level == "owner" and tries == 0 and not runs and not read and not spent:
+        # Nothing has taken a wake since the task last changed (it changed during a run, and nothing announced it):
+        # this wake starts it again and is not a try. A try is counted only after a run that started since the change
+        # ended without one, or a wake the bot read in its own inbox (R3). The count of runs stays what really ran.
         lead = "Your last run on this task was cut off." if cut_off else "This task is not finished. Carry on."
         if _wake(conn, row, target, lead, level, 0, epoch):
             conn.execute("UPDATE visits SET next_try_at=? WHERE id=?", (H.shift(at, seconds=GAPS[0]), visit["id"]))
