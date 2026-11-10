@@ -298,7 +298,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
     try {
       await post(`/v2/tasks/${encodeURIComponent(task.id)}/links`, {url});
       const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       if (linkCurrent() && data.task) taskModalShow(data.task, d);
     } catch (e) { toast(errorMessage(e, ''), true); }
   };
@@ -454,7 +454,7 @@ function taskRunModelBind(d: ModalDialog, task: ModalTask) {
       const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
       if (saved.warning) toast(saved.warning);
       const data = await get(`/v2/tasks/${encodeURIComponent(id)}`);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       if (d.open && String(d.dataset.task) === id && data.task) void taskModalShow(data.task, d);
     } catch (e) { toast(errorMessage(e, ''), true); apply.disabled = same(); }
   };
@@ -468,7 +468,7 @@ async function taskRelate(d: ModalDialog, task: ModalTask, body: PropPatch, on =
   try {
     await post(`/v2/tasks/${encodeURIComponent(on)}/relations`, body);
     const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
   } catch (e) { toast(errorMessage(e, ''), true); }
 }
@@ -535,7 +535,7 @@ async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then:
     if (body.close) toast('Closed', false, {label: 'Undo', run: () => taskMove(id, 'reopen', task.version).then(r => { if (here()) void taskModalShow(r.task, d); }, e => toast(errorMessage(e, ''), true))});
     if (BOT) void loadBotTasksV2(BOT.slug);
     void personTasksReload();
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     roadmapRankingRefresh();
     return true;
   } catch (e) {
@@ -955,7 +955,7 @@ async function taskChatRead(state: TaskChatState) {
       state.stopped = true; clearInterval(state.poll); state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
       if (state.dialog.taskLive) taskLiveGone(state.dialog, state.dialog.taskLive);
-      else if (TASKS_ST) void tasksLoad(TASKS_ST);
+      else if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       state.dialog.close(); state.dialog.innerHTML = '';
       return;
     }

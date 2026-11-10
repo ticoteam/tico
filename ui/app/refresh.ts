@@ -40,7 +40,7 @@ async function refresh(force = false): Promise<void> {
   // written in).
   const reviewing = $('#main .req[open]') || [...document.querySelectorAll('#main .issue-compose:not([hidden])')].some(form => !form.closest('details:not([open])'));
   if (force || !reviewing) {
-    if (TASKS_ST && isTasksRoute(S.route)) void tasksLoad(TASKS_ST);
+    if (TASKS_ST && isTasksRoute(S.route)) void (force ? tasksLoad(TASKS_ST) : tasksCatchUp(TASKS_ST));   // a delta from the list's cursor
     // The Active column beside the chat was loaded once and never again, so a task the bot closed
     // stayed listed until a reload. The poll redraws it too.
     if (BOT && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
@@ -79,8 +79,8 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
     else chat.dialog.querySelector<HTMLElement>('[data-modal-close]')?.click();
     taskChatStop();
   }
-  // The Tasks page reads its view again (tasks-page.ts): a few seconds after the last change, not per event.
-  if (events.length) tasksLive();
+  // The Tasks page puts each event's task in place (tasks-page.ts); it reads nothing.
+  if (events.length) tasksLiveApply(events);
   // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
   if (BOT) {
     const me = 'bot:' + BOT.slug;
@@ -121,7 +121,7 @@ function liveWire(): void {
     liveSoon('needs', () => {
       renderTree();
       if (OVERVIEW_PAGE) overviewNeedsDraw();
-      tasksLive();
+      tasksNeedsLive();
       if (BOT) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
@@ -137,7 +137,7 @@ const TASKS_AWAY_MS = 10 * 60e3;
 let tasksHiddenAt = 0;
 function tasksBack(away: number): void {
   if (away > TASKS_AWAY_MS) liveResume();
-  if (away > 30000 && TASKS_ST && isTasksRoute(S.route)) void tasksLoad(TASKS_ST);
+  if (away > 30000 && TASKS_ST && isTasksRoute(S.route)) void tasksCatchUp(TASKS_ST);
 }
 window.addEventListener('online', () => tasksBack(Infinity));
 document.addEventListener('visibilitychange', () => {

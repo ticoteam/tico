@@ -89,17 +89,33 @@ const withVersion = (version: number | null | undefined, body: Record<string, un
 // ---- reads
 const taskGet = (id: string): Promise<TaskV3> => get<TaskV3>(taskPath(id), {fresh: true});
 interface TaskBriefQuery {
-  owner?: string; status?: string; ids?: string[]; snoozed?: string; q?: string;
+  owner?: string; status?: string; ids?: string[]; snoozed?: string; q?: string; pipeline?: string;
   sort?: 'queue' | 'finished'; limit?: number; offset?: number;
 }
-async function taskBriefs(query: TaskBriefQuery = {}): Promise<TaskBriefV3[]> {
+const taskBriefParams = (query: TaskBriefQuery): URLSearchParams => {
   const p = new URLSearchParams({brief: '1'});
   for (const [k, v] of Object.entries(query)) {
     if (v == null || v === '') continue;
     p.set(k, Array.isArray(v) ? v.join(',') : String(v));
   }
-  const res = await get<{tasks?: TaskBriefV3[]} | TaskBriefV3[]>(`/v2/tasks?${p}`);
-  return Array.isArray(res) ? res : res.tasks || [];
+  return p;
+};
+/** One page of list rows and the cursor a later `taskChanges` resumes from. */
+async function taskBriefsPage(query: TaskBriefQuery = {}): Promise<{tasks: TaskBriefV3[]; cursor: string}> {
+  const res = await get<{tasks?: TaskBriefV3[]; cursor?: string} | TaskBriefV3[]>(`/v2/tasks?${taskBriefParams(query)}`);
+  return Array.isArray(res) ? {tasks: res, cursor: ''} : {tasks: res.tasks || [], cursor: res.cursor || ''};
+}
+async function taskBriefs(query: TaskBriefQuery = {}): Promise<TaskBriefV3[]> {
+  return (await taskBriefsPage(query)).tasks;
+}
+/** What changed since `cursor` under the same filters (GET /v2/tasks?changed_after): the changed rows that still match,
+ * the ids that left the filters or became unreadable (`gone`), the next cursor; `reset` when only a full read will do. */
+interface TaskChanges { tasks: TaskBriefV3[]; gone: string[]; cursor: string; reset?: boolean }
+async function taskChanges(query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sort'>, cursor: string): Promise<TaskChanges> {
+  const p = taskBriefParams(query);
+  p.set('changed_after', cursor);
+  const res = await get<Partial<TaskChanges>>(`/v2/tasks?${p}`, {fresh: true});
+  return {tasks: res.tasks || [], gone: (res.gone || []).map(String), cursor: res.cursor || '', reset: !!res.reset};
 }
 async function needsYou(): Promise<NeedsEntry[]> {
   const res = await get<{items?: NeedsEntry[]}>('/v2/needs-you', {fresh: true});

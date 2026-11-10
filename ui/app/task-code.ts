@@ -302,7 +302,7 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
         catch (e) { if (![404, 405].includes(errorStatus(e) ?? 0)) throw e; await post(base, {remove: drop.dataset.codeDrop}); }   // an older server
         if ('codeRetry' in drop.dataset) toast('Cleanup asked again. The worktree goes once its computer saves and removes it.');
         const data = await get<{task: CodeTask}>(`/v2/tasks/${encodeURIComponent(t.id)}`);
-        if (TASKS_ST) void tasksLoad(TASKS_ST);
+        if (TASKS_ST) void tasksCatchUp(TASKS_ST);
         if (d.open && d.dataset.task === String(t.id)) { if (d.taskRail) d.taskRail.full = data.task; taskModalShow(data.task, d); }
       } catch (e) { toast(errorMessage(e, ''), true); drop.disabled = false; }
     }
@@ -322,7 +322,7 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
       await post('/v2/tasks', {title, body: title, owner: owner.includes(':') ? owner : 'bot:' + owner, relations: [{task: t.id, kind: 'parent'}]});
       input.value = '';
       const data = await get<{task: CodeTask}>(`/v2/tasks/${encodeURIComponent(t.id)}`);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       if (d.open && d.dataset.task === String(t.id)) {
         if (d.taskRail) d.taskRail.focus = true;
         taskModalShow(data.task, d);
