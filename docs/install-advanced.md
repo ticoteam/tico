@@ -92,11 +92,26 @@ tags for `--name` (or the domain's name), the prefix and `--aws-region` (default
 
 With a saved install id, destroy reads each resource again right before deleting it, in order, and deletes it only while
 it carries the install's tags and is the one the install recorded; anything else is left alone and named. It refuses to
-terminate an instance that would take with it a volume or network interface someone attached without the install's
-tags (DeleteOnTermination on), leaves an Elastic IP since attached to another server (setup never moves one off another
-server), and finishes an install interrupted before its role got its inline policy. IAM and SSM have no conditional
-writes or deletes: that re-read right before each call is the bar, and a replacement made in the instant after it is
-not caught.
+terminate an instance that would take with it any volume or network interface (DeleteOnTermination on) other than the
+root volume and primary interface its launch made, releases an Elastic IP only when a fresh read shows it associated
+with nothing (otherwise it says to release it by hand), and finishes an install interrupted before its role got its
+inline policy.
+
+#### What setup cannot guarantee
+
+Under another `--asset-prefix`, setup reads a resource right before each change and refuses on any doubt, but AWS
+leaves a few gaps a read cannot close:
+
+- IAM, SSM, S3 bucket settings and Elastic IP release have no conditional writes. A resource deleted and made again
+  (with the same name and tags) in the instant after setup's last read is not caught.
+- In us-east-1, CreateBucket answers success for a bucket this account already owns. A bucket made under the same name
+  between setup's existence check and its create is not told apart; the names carry the install's random id, so only
+  someone who knows that id can make one.
+- With versioning off on the starter plan bucket, the plan object is deleted only while its ETag is unchanged, and an
+  ETag ignores metadata: the same bytes written again over it are deleted too.
+- What is this install's is known only from its saved state on this computer (`~/.config/tico-setup`). If it is lost,
+  cannot be read or was edited, setup stops: check by hand in the AWS console which resources the install made before
+  restoring the state or deleting anything.
 
 Destroy deletes the instance and its data with it, and leaves your DNS records alone. With `--dns` (and `--domain`) it
 first deletes the domain's A and AAAA records in Route 53 too, but only a record set exactly equal to one this install
