@@ -497,6 +497,30 @@ def _verify(io: IO, shell: remote.Shell, url: str, token: str, label: str) -> in
     return 1
 
 
+def prove_runner(ec2, account: str, r: dict) -> None:
+    """Strict mode, before any remote shell on a runner: its record has an install id and account, and the instance,
+    read now, carries that install's tags, is the one the record says it made, in that account (owned.prove_server)."""
+    what = f"Runner {r.get('name') or r.get('label', '')}"
+    if not r.get("install_id") or not r.get("aws_account_id"):
+        raise MissingInput(
+            f"{what}'s saved record has no install id or AWS account, so setup cannot prove EC2 instance "
+            f"{r['instance_id']} is its box; refusing to run anything on it. Check it by hand in the EC2 console."
+        )
+    owned.prove_server(
+        ec2,
+        account,
+        st.Settings(
+            domain=what,
+            aws_instance_id=r["instance_id"],
+            asset_prefix=r["asset_prefix"],
+            install_id=r["install_id"],
+            aws_account_id=r["aws_account_id"],
+            aws_name=r.get("name", ""),
+            aws_ids=dict(r.get("aws_ids") or {}),
+        ),
+    )
+
+
 def doctor_runners(io: IO, deps: Deps, server_url: str) -> bool:
     saved = state.load_runners(server_url)
     if not saved:
@@ -512,7 +536,14 @@ def doctor_runners(io: IO, deps: Deps, server_url: str) -> bool:
                 io.say("  not launched yet: its setup stopped before the box started; run `tico setup runner` again")
                 ok = False
                 continue
-            _, _, ssm, _ = deps.aws_clients(r["aws_region"], r.get("aws_profile", ""))
+            ec2, _, ssm, account = deps.aws_clients(r["aws_region"], r.get("aws_profile", ""))
+            if owned.strict(r.get("asset_prefix", "")):  # its box, read now, before any shell on it
+                try:
+                    prove_runner(ec2, account, r)
+                except MissingInput as e:
+                    io.say(f"  {e}")
+                    ok = False
+                    continue
             sh = remote.SSMShell(ssm, r["instance_id"], deps.sleep)
         else:
             io.say("  Set up with the paste command; check it on the box: docker ps --filter name=tico-runner")

@@ -2999,3 +2999,43 @@ def test_every_command_that_changes_a_strict_install_must_name_its_prefix_again(
     assert (len(log), opened) == (before, [])  # refused before any AWS client or call
     code, out = go(["doctor", "--domain", DOMAIN, "--non-interactive"], deps=d)  # reads only: the saved prefix
     assert "--asset-prefix" not in out, out
+
+
+def test_runner_doctor_proves_the_runners_box_before_any_shell_on_it(monkeypatch):
+    # Codex review 6, part 2, case 2: server doctor and owner-link proved their instance first, but runner doctor sent a
+    # shell to whatever instance id the record named, in whatever account the credentials were for. A strict runner's
+    # box is now read first: the install's tags, the instance it recorded making, the account it recorded.
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://other.example"]
+    assert go([*argv, "--label", "b1", "--aws-region", "us-west-2", "--asset-prefix", "hub"], deps=d)[0] == 0
+    (good,) = state.load_runners()
+    base = len(ssm.commands)  # the runner's own setup
+    key = runner_setup.runner_key(
+        Settings(server_url=good["server_url"], aws_region="us-west-2", asset_prefix="hub"), good["name"]
+    )
+    ec2.instances.append({"InstanceId": "i-prod", "Tags": PRODUCTION, "State": {"Name": "running"}})
+    sent = lambda: len(ssm.commands) - base  # noqa: E731
+    io = fakes.CaptureIO()
+    runner_setup.doctor_runners(io, d, "https://other.example")
+    checked = sent()
+    assert checked, io.text  # its own box: a shell runs the check
+    clients = d.aws_clients
+    for edit, account in (
+        ({"instance_id": "i-prod"}, HOTMIC_ACCOUNT),  # another actor's box named in the record
+        ({}, "999999999999"),  # the credentials are another account's
+        ({"instance_id": "i-prod", "aws_account_id": "999999999999"}, "999999999999"),  # both edited to match
+        ({"install_id": ""}, HOTMIC_ACCOUNT),  # nothing to prove it with
+    ):
+        state.save_runner(key, {**good, **edit})
+        d.aws_clients = lambda r, p, account=account: (*clients(r, p)[:3], account)
+        io = fakes.CaptureIO()
+        assert not runner_setup.doctor_runners(io, d, "https://other.example"), (edit, io.text)
+        assert "refusing to" in io.text and sent() == checked, (edit, io.text)
+    state.save_runner(key, good)
+    d.aws_clients = clients
+    ec2.instances[0]["Tags"] = [t for t in ec2.instances[0]["Tags"] if "install" not in t["Key"]]  # re-tagged
+    io = fakes.CaptureIO()
+    assert not runner_setup.doctor_runners(io, d, "https://other.example") and sent() == checked, io.text
+    assert "refusing to" in io.text, io.text
