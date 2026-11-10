@@ -195,6 +195,12 @@ def answer(c, row, requirement_id, value, by, notes=None):
     return aid
 
 
+def ask_key(c, requirement_id):
+    """A batch item's key for an ask on a task's own visit: "ask:" + waiting_on.ask_id (its visit, the requirement)."""
+    visit = c.execute("SELECT visit_id FROM requirements WHERE id=?", (requirement_id,)).fetchone()[0]
+    return f"ask:{visit}:{requirement_id}"
+
+
 def wakes(c, task_id, actor=None):
     """The engine's wakes for a task, oldest first: (wake_key, recipient)."""
     rows = c.execute(

@@ -172,7 +172,8 @@ write carries the same fields.
   A task never waits on an @.
 
 Each item has `kind` (`task`, `ask`, `paused`, `mention`), the brief task, and for an ask the fields of `to_leave`
-below.
+below. An ask's `id` is `<visit>:<requirement>`: a stage's requirement is on every task in the stage, so each task's
+ask is its own item. `requirement_id` answers it.
 
 Routes that go: approvals (all), task questions, check-back, later/defer, qa-waiver, waits, change parent, pipeline
 review actions, stage-requirement routes, task types, stuck, flow, and `status`, `step`, `type`, `owner`, `waiting_on`,

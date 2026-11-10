@@ -33,6 +33,12 @@ def _sent(log):
     return send
 
 
+def _ask_id(c, task, asked):
+    """An ask's batch key past "ask:": the task's visit and the requirement (waiting_on.ask_id)."""
+    visit = c.execute("SELECT id FROM visits WHERE task_id=? AND left_at IS NULL", (task["id"],)).fetchone()[0]
+    return f"{visit}:{asked['requirement_id']}"
+
+
 def _start(c):
     return B.start(c, ANA.actor, {}, reader=ANA.actor)
 
@@ -55,10 +61,10 @@ def test_a_batch_holds_what_bots_ask_and_commit_applies_it_through_the_task_call
     chore = H.task_create(c, FINANCE, "Sign the lease", "Sign it today.", "human:ana", lint=False)
     batch = _start(c)
     keys = [B._items(c.execute("SELECT * FROM batches WHERE id=?", (batch["id"],)).fetchone())]
-    assert batch["total"] == 3 and batch["item"]["key"] == "ask:" + ok["requirement_id"]
+    assert batch["total"] == 3 and batch["item"]["key"] == "ask:" + _ask_id(c, ads, ok)
     assert {i["key"] for i in keys[0]} == {
-        "ask:" + ok["requirement_id"],
-        "ask:" + question["requirement_id"],
+        "ask:" + _ask_id(c, ads, ok),
+        "ask:" + _ask_id(c, other, question),
         "task:" + chore["id"],
     }
     B.respond(c, ANA.actor, batch["id"], "decide", "Go ahead.", n=1, decision="ok")
@@ -92,6 +98,30 @@ def test_send_back_needs_notes_and_an_ok_or_a_close_only_fits_its_kind(c):
         r for r in H.task_view(c, ads["id"], "human:ana")["to_leave"] if r["requirement_id"] == ok["requirement_id"]
     )
     assert (found["met"], found["answer"]["value"], found["answer"]["note"]) == (False, "no", "Halve it.")
+
+
+def test_a_stage_ok_on_two_tasks_is_two_items_each_answered_on_its_own_task(c):
+    """A stage's OK is one requirement on every task in the stage, each task's own ask through its visit: two tasks
+    there are two items, and each decision answers its own task."""
+    stage_ok = X.requirement(c, "general-todo", "ok", person="human:ana", line="OK the spend")
+    ads, launch = _work(c), _work(c, "Run the launch ads")
+    batch = _start(c)
+    rows = B._items(c.execute("SELECT * FROM batches WHERE id=?", (batch["id"],)).fetchone())
+    asks = [r for r in rows if r["key"].startswith("ask:")]
+    assert sorted(r["task"] for r in asks) == sorted([ads["id"], launch["id"]]) and len({r["key"] for r in asks}) == 2
+    for n, row in enumerate(rows, 1):
+        if row["task"] == ads["id"] and row["key"].startswith("ask:"):
+            B.respond(c, ANA.actor, batch["id"], "decide", "", n=n, decision="ok")
+        elif row["key"].startswith("ask:"):
+            B.respond(c, ANA.actor, batch["id"], "decide", "Halve it.", n=n, decision="send_back")
+    out = B.commit(c, ANA, batch["id"], _sent([]))
+    assert out["errors"] == []
+
+    def mine(task):
+        return next(r for r in H.task_view(c, task["id"], "human:ana")["to_leave"] if r["requirement_id"] == stage_ok)
+
+    assert mine(ads)["met"] and mine(ads)["answer"]["value"] == "ok"
+    assert (mine(launch)["met"], mine(launch)["answer"]["value"]) == (False, "no")
 
 
 def test_a_bound_ok_is_never_given_on_a_walk(c):

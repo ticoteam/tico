@@ -486,6 +486,17 @@ def all_met(waits: list[Wait]) -> bool:
     return bool(waits) and all(wait.state == ROOM for wait in waits)
 
 
+def _visit_id(row: Row) -> str | None:
+    visit: Row = row.get("visit") or {}
+    return str(visit["id"]) if visit.get("id") else None
+
+
+def ask_id(entry: Row) -> str:
+    """The id of one ask in Needs you: its task's visit and the requirement. A stage's requirement is the same on every
+    task in the stage, so the requirement alone names no one ask; `requirement_id` is still what answers it."""
+    return f"{entry['visit_id']}:{entry['requirement_id']}"
+
+
 def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     """Needs you, for one person, oldest first. A task whose work is theirs is listed once (`kind` "task"), however many
     requirements are missing. Each OK or answer that names them is its own entry (`kind` "ask"). A bot that cannot run
@@ -527,6 +538,7 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
                         "pipeline_id": row["pipeline_id"],
                         "stage_id": row["stage_id"],
                         "requirement_id": wait.requirement_id if wait.ask else None,
+                        "visit_id": _visit_id(row) if wait.ask else None,
                         "line": wait.line,
                         "missing": [each.line for each in (work if not wait.ask else [wait])],
                         "since": min((each.since or "" for each in work), default="") if not wait.ask else wait.since,
