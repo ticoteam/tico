@@ -1171,7 +1171,10 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
     status = str(was.get("status") or "open")
     assignee = was.get("assignee_id") or was.get("owner_id")
     if status == "open":
-        target = _restore_stage(conn, by, {**row, "assignee_id": assignee}, work, was.get("stage_id"))
+        # Judged with the owner it had: coming back to that owner makes nobody a new owner or reader of it.
+        target = _restore_stage(
+            conn, by, {**row, "assignee_id": assignee, "owner_id": was.get("owner_id")}, work, was.get("stage_id")
+        )
     else:
         target = next((s for s in order if s["kind"] == status), None)
     if not pipe or not target:
