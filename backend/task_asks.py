@@ -64,7 +64,6 @@ ON_OK: dict[str, str] = {
     "email_send": "backend.email_sending:ok_given",
     "letter": "backend.letters:ok_given",
     "proposal": "backend.proposals:ok_given",
-    "task_cap": "backend.proposals:ok_given",
 }
 
 # Set while give_ok answers its own requirement, so the engine's refusal of a plain OK lets that one through.
