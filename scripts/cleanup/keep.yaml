@@ -39,9 +39,6 @@ names:
   backend/tests/test_hubdb.py: [payload_json]   # the documents table as it was before 0008 dropped it
   ui/app/router.js: [finished]          # a view transition's own `finished` promise
   ui/app/live.js: [started]             # the live connection's started flag
-  ui/app/task-board.js: [finished]      # the board's folded-column choices
-  ui/app/task-pipelines.js: [finished]
-  ui/tests/task-pipelines.cts: [finished]   # the board's folded-column choices, as stored
   ui/tests/bot-pause-strip.cts: [finished]  # a held request's own finished promise
   ui/app/settings-billing.ts: [expires]   # Tico HQ's billing credits (backend/company_billing.py), another system's fields
   ui/tests/settings-billing.cts: [expires]
@@ -181,10 +178,6 @@ sites:
     - "const t = Date.parse(r.started || r.created || ''); if (!Number.isFinite(t)) return Infinity;"
     - "const when = meetWhen(r.started || r.created), working = meetWorking(r), proposed = meetProposed(r);"
     - "const meta = [meetWhen(rec.started), rec.duration_ms ? mmss(rec.duration_ms) : '', owner, meetSourceLabel(rec.source)].filter(Boolean).map(esc).join(' · ');"
-  ui/app/task-stats.js:
-    - "<td>${esc(actorLabel(p.actor))}</td><td class=\"tnum\">${p.created || 0}</td>${cols.map(([k]) => `<td class=\"tnum\">${p[k] || 0}</td>`).join('')}</tr>`).join('');"
-  ui/tests/task-board.cts:
-    - "people: [{actor: 'bot:cmo', created: 30, done: 22,"
   ui/tests/meetings-granola.cts:
     - "const meeting = (id, title, minutes) => ({id, title, source: 'granola', kind: 'meeting', status: 'done', started: ago(minutes), created: ago(minutes),"
   ui/tests/meetings-review.cjs:

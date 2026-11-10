@@ -121,5 +121,16 @@ function taskFilterMatch(t: TaskAny, q: string, f: TaskFilters = {}): boolean {
   if (f.pushed && !('to_leave' in t && (t.to_leave || []).some(r => /pushed past/i.test(r.standing)))) return false;
   return true;
 }
+/** How a pipeline is drawn on the Tasks page (task-pipelines.ts sets it as it loads). The page (tasks-page.ts) owns the
+    header, reading the pipeline and its open tasks, search, filter, the archive and opening a task (any [data-task]);
+    it calls `html` again whenever it has read again. `bind` wires the root once drawn, `rail` draws the manager's rail
+    into its host, `edit` opens the pipeline's settings. */
+interface PipelineViewHooks {
+  html(p: PipelineRec, tasks: TaskAny[], opts: {layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters}): string;
+  bind?(root: HTMLElement, p: PipelineRec): void;
+  rail?(host: HTMLElement, p: PipelineRec): void;
+  edit?(p: PipelineRec): void;
+}
+const TASK_PAGE_HOOKS: {pipeline?: PipelineViewHooks} = {};
 const taskFiltersOn = (f: TaskFilters | null | undefined) =>
   !!f && Object.values(f).some(v => Array.isArray(v) ? v.length > 0 : !!v);
