@@ -19,7 +19,8 @@ interface SettingsReleaseSchedule {
   can_change?: boolean;
   can_release?: boolean;
 }
-// What POST /v2/release/now answers: whether a task was filed or woken, and why not when neither.
+// What POST /v2/release/now answers: whether a task was filed, and why not when it was not. `tasks` counts only the
+// waiting tasks the caller may read; an open Release task's id (`already_open`) comes only to someone who may read it.
 interface SettingsReleaseNowAnswer { sent?: boolean; tasks?: number; reason?: string | null; task?: string | null; }
 
 // The daily release (docs/pipelines-v3.md D13): on or off, one or two company times, the Release Manager and
@@ -28,7 +29,7 @@ interface SettingsReleaseNowAnswer { sent?: boolean; tasks?: number; reason?: st
 let RELEASE_VIEW: SettingsReleaseSchedule | null = null, RELEASE_AT = 0;
 // The last answer under the card (Saved, or what Release now did) survives the repaint the fresh schedule causes.
 let RELEASE_NOTE = {text: '', failed: false};
-const RELEASE_REASONS: Record<string, string> = {nothing_pending: 'No tasks wait for a release', already_open: 'A release task is open', no_release_manager: 'No Release Manager'};
+const RELEASE_REASONS: Record<string, string> = {already_open: 'A release task is open', no_release_manager: 'No Release Manager'};
 const releaseTasks = (n: number | undefined) => `${n ?? 0} task${n === 1 ? '' : 's'}`;
 async function releaseScheduleLoad(force?: boolean): Promise<SettingsReleaseSchedule> {
   if (!force && RELEASE_VIEW && Date.now() - RELEASE_AT < 60000) return RELEASE_VIEW;
@@ -51,10 +52,10 @@ function releaseBotPick(name: string, chosen: string | null | undefined, found: 
 }
 function releaseNowButtonHTML(v: SettingsReleaseSchedule | null | undefined, cls = 'ghost'): string {
   if (!v?.can_release) return '';
-  return `<button type="button" class="${cls}" data-release-now${v.pending ? '' : ' disabled title="No tasks wait for a release"'}>Release now</button>`;
+  return `<button type="button" class="${cls}" data-release-now>Release now</button>`;
 }
-// With a note the server asks even when no task waits for a release, so the
-// card's field lights the button; the board's button has no field and stays off while nothing waits.
+// The request is filed whether or not anything waits (the count shows only what the caller may read, so it never
+// decides the button); the Release Manager closes it when nothing does. The note goes with it.
 function releaseNoteHTML(v: SettingsReleaseSchedule): string {
   return v.can_release ? '<input type="text" data-release-note maxlength="1000" placeholder="Note" aria-label="Release note">' : '';
 }
@@ -104,11 +105,6 @@ function releaseCardPaint(): void {
   if (formBusy(el)) return;
   card.hidden = false;
   el.innerHTML = releaseCardHTML(RELEASE_VIEW);
-  el.oninput = ev => {
-    const now = el.querySelector<HTMLButtonElement>('[data-release-now]');
-    const note = ev.target;
-    if (note instanceof HTMLInputElement && note.matches('[data-release-note]') && now && RELEASE_VIEW) now.disabled = !RELEASE_VIEW.pending && !note.value.trim();
-  };
   el.onchange = ev => {
     const t = ev.target;
     if (!(t instanceof HTMLInputElement || t instanceof HTMLSelectElement)) return;
@@ -134,7 +130,7 @@ function releaseCardPaint(): void {
     if (now && !now.disabled) {
       const box = el.querySelector<HTMLInputElement>('[data-release-note]');
       const out = await releaseNow(now, box?.value.trim());
-      if (box?.isConnected && !out.failed) { box.value = ''; now.disabled = !RELEASE_VIEW?.pending; }
+      if (box?.isConnected && !out.failed) box.value = '';
       releaseStatus(out.text, out.failed);
     }
   };

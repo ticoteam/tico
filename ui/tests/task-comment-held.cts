@@ -16,23 +16,23 @@ const HOLD = {id: 'h-task', operation: 'comment', author: 'human:ana', author_na
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined
     ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
-    const {page, errors} = await open(browser);
+    const {page, errors} = await open(browser, {hash: '#/task/t-3', comments: {'t-3': [{id: 'm1', kind: 'say', sender_id: 'human:sam',
+      body: 'Any Friday works.', created_at: new Date().toISOString(), refs: {task: 't-3', comment: true}}]}});
     // Later routes win: the comment POST is held, anything else falls through to the fixtures.
     await page.route('**/api/v2/tasks/*/comments', async route => {
       if (route.request().method() !== 'POST') return route.fallback();
       return route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({held: HOLD})});
     });
-    const peek = page.locator('#task-peek');
-    await page.locator('[data-task-key="tt-inbox"] .tl-title').click();
-    await peek.locator('.task-comments .tcomment').first().waitFor();
-    await peek.locator('.task-chat textarea').fill(TEXT);
-    await peek.locator('.task-chat button[type=submit]').click();
-    await peek.locator('[data-rule-holds] [data-hold="h-task"]').waitFor();
-    assert.equal(await peek.locator('.task-chat textarea').inputValue(), TEXT, 'the held text stays in the box');
-    assert.equal((await peek.locator('[data-task-chat-status]').innerText()).includes('Saved'), false, 'no "Saved" line');
-    assert.equal(await peek.locator('[data-rule-holds]').isVisible(), true, 'the hold list shows the card');
-    assert.match(await peek.locator('[data-hold="h-task"] .rh-msg').innerText(), /favorite color is gold/);
-    assert.equal(await peek.locator('[data-hold="h-task"] [data-hold-edit]').count(), 1, 'Edit and resend is offered');
+    const win = page.locator('#task-modal');
+    await win.locator('.task-comments .tcomment').first().waitFor();
+    await win.locator('.task-chat textarea').fill(TEXT);
+    await win.locator('.task-chat button[type=submit]').click();
+    await win.locator('[data-rule-holds] [data-hold="h-task"]').waitFor();
+    assert.equal(await win.locator('.task-chat textarea').inputValue(), TEXT, 'the held text stays in the box');
+    assert.equal((await win.locator('[data-task-chat-status]').innerText()).includes('Saved'), false, 'no "Saved" line');
+    assert.equal(await win.locator('[data-rule-holds]').isVisible(), true, 'the hold list shows the card');
+    assert.match(await win.locator('[data-hold="h-task"] .rh-msg').innerText(), /favorite color is gold/);
+    assert.equal(await win.locator('[data-hold="h-task"] [data-hold-edit]').count(), 1, 'Edit and resend is offered');
     assert.deepEqual(errors, [], 'no page errors');
     console.log('task comment held: ok');
     await page.context().close();
