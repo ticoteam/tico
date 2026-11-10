@@ -448,3 +448,20 @@ def test_an_answer_reaches_whoever_asked_and_a_rule_with_them_holds_it(ruled):
     )
     assert r.status_code == 200 and r.json()["held"], r.text
     assert sql(api, "SELECT 1 FROM answers WHERE requirement_id=?", (asked["requirement_id"],)) == []
+
+
+def test_a_warned_answer_with_no_note_carries_the_line_without_editing_the_task(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    asked = ops(api, f"tasks/{task['id']}/asks", {"to": "cara", "line": "Which color do we use?", "version": 1})
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
+    before = row(api, task["id"])
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks/{asked['requirement_id']}/answer",
+        json={"value": "Our favorite color is red."},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 200 and r.json()["rule_warning"], r.text
+    [answer] = sql(api, "SELECT notes FROM answers WHERE requirement_id=?", (asked["requirement_id"],))
+    assert answer["notes"].startswith("Warning:")
+    assert row(api, task["id"])["note"] == before["note"]

@@ -374,8 +374,10 @@ def register(
         refused = task_asks.refuses_ok_by(c, who, asked, body.value)
         if refused:
             raise Problem("ok_not_yours", refused, 403)
-        note, version = carry(c, who, task_id, gate, body.note, body.version)
-        done = H.task_answer(c, who.actor, task_id, asked, body.value, note, version)
+        # A warned answer carries the line in its own notes, with or without a note of its own: answering never needs
+        # the right to edit the task.
+        note = task_rule_gate.warn_on(gate, body.note) if body.note else org_rule_check.warn_line(gate) or body.note
+        done = H.task_answer(c, who.actor, task_id, asked, body.value, note, body.version)
         # An answer on the Strategy Bot's merged item goes to each original it stands for.
         strategy_merge.on_answer(c, who.actor, task_id, body.value)
         return {"answer_id": done.get("answer_id")}
