@@ -1,13 +1,15 @@
 """The Pipelines v3 cut-over migration (backend/migrations/20261110054000_pipelines_v3_cutover.py), on a database of
 the shape it meets: the old `tasks` table with its type and step, and the v3 tables the earlier migration made."""
 
+import gzip
 import importlib
+import shutil
 import sqlite3
 
 import pytest
 
 from backend import migrations
-from backend.tests.helpers.migrations import boot, snapshot
+from backend.tests.helpers.migrations import FIXTURES, PIPELINES_V3, boot, snapshot
 
 CUTOVER = importlib.import_module("backend.migrations.20261110054000_pipelines_v3_cutover")
 V3 = importlib.import_module("backend.migrations.20261110010000_pipelines_v3")
@@ -228,3 +230,101 @@ def test_a_database_on_this_release_with_tasks_starts(tmp_path):
         c.execute("INSERT INTO tasks (id, title, status) VALUES ('t1', 'New', 'open')")
     migrations.preflight(path)
     boot(path)
+
+
+# A Tico v0.5.216 database with no tasks: `backend.manage initialize`-style Store.initialize, then one start of that
+# release's app (its lifespan), then two people, two bots, a thread with a member and a message, an automation and the
+# company profile written into its tables (raw SQL in the 0.5 shape). VACUUM INTO, gzip -9 -n. Its vision column only
+# follows the strategy versions (strategy.sync_vision, in 0.5 too), so its description is what is checked.
+V05 = FIXTURES / "hub-v0.5.216-no-tasks.sqlite.gz"
+V05_DATA = {
+    "SELECT id, email FROM humans ORDER BY id": [("morgan", "morgan@acme.example"), ("riley", "riley@acme.example")],
+    "SELECT id, state FROM bots ORDER BY id": [("botops", "active"), ("librarian", "active")],
+    "SELECT body FROM messages WHERE id='m1'": [("Hello team",)],
+    "SELECT actor, role FROM thread_members WHERE thread_id='c1'": [("human:morgan", "owner")],
+    "SELECT name FROM automations WHERE id='a1'": [("Weekly note",)],
+    "SELECT description FROM company_profile": [("Acme makes anvils",)],
+}
+
+
+def _v05(tmp_path):
+    path = tmp_path / "hub.sqlite"
+    with gzip.open(V05) as source, open(path, "wb") as target:
+        shutil.copyfileobj(source, target)
+    return path
+
+
+def _dangling(c):
+    """Every trigger, view and index that names a table or column that is not there. The schema re-check SQLite runs on
+    an ALTER TABLE (migrations.schema_errors), and each one walked on its own: a view is prepared, an index's and a
+    trigger's table must be there, and an index's columns too."""
+    found = [f"{kind} {name}: {error}" for kind, name, error in migrations.schema_errors(c)]
+    tables = _tables(c)
+    for kind, name, table in c.execute(
+        "SELECT type, name, tbl_name FROM sqlite_master WHERE type IN ('view', 'index', 'trigger') AND sql IS NOT NULL"
+    ).fetchall():
+        if kind == "view":
+            try:
+                c.execute(f'SELECT * FROM "{name}" LIMIT 0').fetchall()
+            except sqlite3.OperationalError as exc:
+                found.append(f"view {name}: {exc}")
+            continue
+        if table not in tables | (_views(c) if kind == "trigger" else set()):
+            found.append(f"{kind} {name}: no table {table}")
+        elif kind == "index":
+            columns = _columns(c, table)
+            named = [row[2] for row in c.execute(f'PRAGMA index_info("{name}")') if row[2]]
+            found += [f"index {name}: no column {column}" for column in named if column not in columns]
+    return found
+
+
+def _views(c):
+    return {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='view'")}
+
+
+def test_the_dangling_check_finds_a_trigger_on_another_table_that_reads_a_gone_column(tmp_path):
+    c = sqlite3.connect(tmp_path / "x.sqlite", isolation_level=None)
+    c.executescript(
+        "CREATE TABLE a(x, y); CREATE TABLE b(z);"
+        "CREATE TRIGGER reads_y AFTER INSERT ON b BEGIN SELECT y FROM a; END;"
+        "CREATE TRIGGER reads_gone AFTER INSERT ON b BEGIN SELECT * FROM gone; END;"
+        "CREATE VIEW sees_y AS SELECT y FROM a; DROP TABLE a; CREATE TABLE a(x);"
+    )
+    assert sorted(migrations.schema_errors(c)) == [
+        ("trigger", "reads_gone", "no such table: main.gone"),
+        ("trigger", "reads_y", "no such column: y"),
+        ("view", "sees_y", "no such column: y"),
+    ]
+    assert len(c.execute("SELECT * FROM sqlite_master").fetchall()) == 5  # nothing was changed
+
+
+def test_a_tico_05_database_with_no_tasks_starts_and_keeps_everything_but_the_old_engine(tmp_path, monkeypatch):
+    """The 0.5 change feed left changes_attempts_carried on attempts, reading tasks.carried_by: the cut-over failed on
+    it ("error in trigger changes_attempts_carried: no such column: carried_by") and the server could not start. Now
+    every migration from Pipelines v3 on leaves nothing in the schema that names something gone, and the start leaves
+    nothing either."""
+    path = _v05(tmp_path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == 0
+        assert "carried_by" in _columns(c)
+        assert _dangling(c) == []
+    run, after = migrations._run, {}
+
+    def checked(conn, migration):
+        run(conn, migration)
+        if migration.version >= PIPELINES_V3:
+            after[migration.version] = _dangling(conn)
+
+    monkeypatch.setattr(migrations, "_run", checked)
+    boot(path)
+    assert migrations.CUTOVER in after
+    assert {version: found for version, found in after.items() if found} == {}
+    with sqlite3.connect(path, isolation_level=None) as c:
+        assert _dangling(c) == []
+        assert not _columns(c) & set(CUTOVER.DEAD_COLUMNS)
+        assert not _tables(c) & set(CUTOVER.OLD_TABLES)
+        for query, rows in V05_DATA.items():
+            assert c.execute(query).fetchall() == rows, query
+        assert c.execute("SELECT id FROM pipelines").fetchall() == [("general",)]
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+    boot(path)  # and it starts again

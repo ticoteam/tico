@@ -226,6 +226,38 @@ def refuse_old_tasks(conn):
         raise MigrationError(OLD_TASKS)
 
 
+SCHEMA_ERROR = re.compile(r"error in (trigger|view|index) (.+?)(?: after rename)?: (.+)")
+PROBE = "schema_probe"
+
+
+def schema_errors(conn):
+    """Each trigger, view and index in `main` that names a table or column that is not there, as (type, name, error),
+    for example ("trigger", "changes_attempts_carried", "no such column: carried_by"). Nothing is changed.
+
+    SQLite checks a trigger's or view's names only when it runs, or when an ALTER TABLE ... RENAME or DROP COLUMN
+    re-checks the whole schema, which then fails on the first broken one. So that re-check is what finds them: a column
+    rename on a probe table, inside a savepoint that is rolled back, taking each object it names out of the way until
+    it passes."""
+    found = []
+    conn.execute("SAVEPOINT schema_errors")
+    try:
+        conn.execute(f"CREATE TABLE main.{PROBE}(a)")
+        while True:
+            try:
+                conn.execute(f"ALTER TABLE main.{PROBE} RENAME COLUMN a TO b")
+                break
+            except sqlite3.OperationalError as exc:
+                match = SCHEMA_ERROR.fullmatch(str(exc))
+                if not match or (match.group(1), match.group(2)) in {(kind, name) for kind, name, _ in found}:
+                    raise
+                found.append((match.group(1), match.group(2), match.group(3)))
+                conn.execute(f'DROP {match.group(1).upper()} main."{match.group(2)}"')
+    finally:
+        conn.execute("ROLLBACK TO schema_errors")
+        conn.execute("RELEASE schema_errors")
+    return found
+
+
 def _record_legacy(conn):
     """Each history the database already has, recorded as applied when it first gets schema_migrations: its
     user_version and its newest cloud step. A new file has no cloud steps yet at that point (they run after the
