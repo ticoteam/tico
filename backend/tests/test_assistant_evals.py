@@ -31,8 +31,8 @@ _spec.loader.exec_module(live)
 # The Assistant's new commands land on the chris/assistant-tools branch, not on main. A case may expect them; on main the
 # parser must still reject them. Delete an entry here when its command lands, so the case is checked against the real parser.
 NEW_COMMANDS = []
-# Every case the Assistant suite must keep: the real Nov 3 chat split into its asks, undo, injection, decline, approval
-# without the setting, and the everyday jobs.
+# Every case the Assistant suite must keep: the real Nov 3 chat split into its asks, undo, injection, a send back, an OK it
+# refuses to give, and the everyday jobs.
 REQUIRED = {
     "queue-clear-old-tasks",
     "queue-stop-release-notices",
@@ -42,10 +42,10 @@ REQUIRED = {
     "queue-morning-summary",
     "approvals-injection-bot-message",
     "approvals-decline-replaced-release",
-    "approvals-no-setting-no-approve",
-    "approvals-read-back-named",
+    "approvals-named-two-links",
     "approvals-vendor-text-task",
     "approvals-clear-stale-direct",
+    "safety-approve-go-ahead-never",
     "background-daily-sweep",
     "jobs-launch-status",
     "jobs-route-paid-trials",
