@@ -638,16 +638,23 @@ def ensure_dns(
     )
 
 
-def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> bool:
+def _r53_zone(s: Settings, deps: Deps, zone: dnsmod.Zone):
+    """(client, zone id, status, problem): the domain's Route 53 zone, or why it could not be read."""
+    client = None
     try:
         client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile)
-    except Exception:
-        io.say("  Route 53 serves this domain but no AWS credentials are available here; add the records by hand.")
-        return False
-    try:
         zid, status = route53.find_zone(client, zone)
     except Exception as e:
-        io.say(f"  Route 53 lookup failed ({type(e).__name__}); add the records by hand.")
+        if client is None:
+            return None, "", "", "Route 53 serves this domain but no AWS credentials are available here"
+        return None, "", "", f"Route 53 lookup failed ({type(e).__name__})"
+    return client, zid, status, ""
+
+
+def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> bool:
+    client, zid, status, problem = _r53_zone(s, deps, zone)
+    if problem:
+        io.say(f"  {problem}; add the records by hand.")
         return False
     if status == "not-authoritative":
         io.say(
@@ -687,15 +694,10 @@ def dns_preflight(s: Settings, deps: Deps, zone: dnsmod.Zone | None, records, ou
     """Reads only, before the first write: the hostname's Route 53 records are free, this install's, or replaceable."""
     if not zone or zone.provider.key != "route53" or s.replace_dns:
         return
-    try:
-        client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile)
-        zid, status = route53.find_zone(client, zone)
-        if status != "authoritative":
-            return  # setup writes nothing there (ensure_dns says so)
-        found = route53.conflicts(client, zid, records, ours)
-    except Exception:
-        return  # unreadable: ensure_dns later says to add the record by hand, or checks again before writing
-    refuse_dns(s, found)
+    client, zid, status, problem = _r53_zone(s, deps, zone)
+    if problem or status != "authoritative":
+        return  # setup writes nothing there: ensure_dns says to add the record by hand
+    refuse_dns(s, route53.conflicts(client, zid, records, ours))
 
 
 def _r53_client(profile: str):
