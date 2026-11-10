@@ -314,12 +314,13 @@ def maintenance_bucket(api, at, schedule=None):
         c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key='update'", (start,))
 
 
-@pytest.mark.parametrize("schedule,hour,days", [(None, 12, 1), ("6h", 12, 1), ("daily", 4, 0)])
-def test_maintenance_sets_the_wake_despite_a_retired_routines_frozen_last_run(api, hq, schedule, hour, days):
+@pytest.mark.parametrize("schedule,hour,days,due", [(None, 12, 1, 5), ("6h", 12, 1, 6), ("daily", 4, 0, 5)])
+def test_maintenance_sets_the_wake_despite_a_retired_routines_frozen_last_run(api, hq, schedule, hour, days, due):
     from backend import system_routines as SR
 
     at = datetime(2026, 11, 4, hour, 20, tzinfo=maintenance.ZONE)
-    wake = (at.replace(hour=5, minute=0) + timedelta(days=days)).timestamp()  # Update's next day
+    # Update's next day: the first run at or after 05:00, which every six hours is 06:00
+    wake = (at.replace(hour=due, minute=0) + timedelta(days=days)).timestamp()
     hq.clock[0] = at.timestamp()
     system_jobs(api, auto_dream=("daily", "02:00"))  # an old saved switch survives the timer's retirement
     maintenance_bucket(api, at, schedule)

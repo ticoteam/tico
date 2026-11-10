@@ -23,7 +23,7 @@ from backend.scheduler import Scheduler
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
 from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
-QUESTIONS = "1. Should weekly reports go to Ana or the team? Suggested: the team"
+QUESTIONS = "Should weekly reports go to Ana or the team?"
 LEARNINGS = "memory/learnings.md"
 
 
@@ -98,7 +98,7 @@ def close(api, bot):
         owner = owner_of(c, bot)
         row = dream._open(c, [owner])
         assert row is not None, "there is an open dream to close"
-        H.task_update(c, owner, row["id"], status="done", note="Merged the release rules.")
+        H.task_update(c, owner, row["id"], status="done", note="Merged the release rules.", seen_version=row["version"])
 
 
 def five_due(api):
