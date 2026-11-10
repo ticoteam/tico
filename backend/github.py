@@ -608,7 +608,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             detail["merged_wake"] = True
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if merge_wake:
-            merged.append(link)
+            # One wake per merge per task: an armed link's last result rides on the merge's own wake.
+            merged.append({**link, "no_ship": wake_once})
+            wake_once = False
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         changed = [
             field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)
@@ -668,7 +670,10 @@ def _merge_wakes(c, links, url):
         if pr_key in woke:
             continue
         save_metadata(c, key, {"prs": [*woke, pr_key]})
-        queue_wake(c, row, f"{link['title']} merged: {url}. Carry this task on: say it is done, or close it.")
+        said = f"{link['title']} merged: {url}. Carry this task on: say it is done, or close it."
+        if link.get("no_ship"):
+            said += " It is not in the repository Tico releases, so no shipped wake follows."
+        queue_wake(c, row, said)
 
 
 def release(c, payload, release_repo=""):

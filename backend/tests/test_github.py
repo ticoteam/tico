@@ -671,9 +671,9 @@ def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
     elsewhere = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the site', 'body': 'x', 'links': [other]})
     _arm(api, elsewhere['id'], url=other)
     hook(api, 'pull_request', pr_event('closed', html_url=other, merged=True, merge_commit_sha='c' * 40))
+    # One wake per merge per task: the merge's own, saying no shipped wake follows.
     assert _burst(api, elsewhere['id']) == [
-        f"Merged: site#9; it is not in the repository Tico releases, so no shipped wake follows {other}",
-        merged('site#9', other),
+        merged('site#9', other) + " It is not in the repository Tico releases, so no shipped wake follows."
     ]
     # Arming it again has nothing left to wake on, and neither has a shipped PR.
     r = api.post(
