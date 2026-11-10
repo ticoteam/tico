@@ -337,7 +337,7 @@ def give_to(
 
 
 def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
-    """Take an answer back: whoever gave it, or any person. While the task is still in that visit the answer is marked
+    """Take an answer back: only whoever gave it (task_calls.may_handle_ask). While the task is still in that visit the answer is marked
     undone. If the task moved on because of it, and has not moved since, it goes back to that stage: an ordinary move
     back."""
     H = _h()
@@ -349,8 +349,8 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
     task_id = row["id"]
     if found["answer"] == PUSHED_PAST:
         _refuse(conn, by, "task_requirement", "A push past is a move. Move the task back instead.", task_id)
-    if found["by_id"] != str(by) and not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only who answered, or a person, takes it back", task_id)
+    if not _tc().may_handle_ask(conn, by, row, R.get(conn, found["requirement_id"]) or {}, answered_by=found["by_id"]):
+        _refuse(conn, by, "identity", "Only who gave the answer takes it back", task_id)
     if found.get("undone_at"):
         return row
     now = _part(row, "visit")

@@ -460,7 +460,7 @@ def task_give(
 
 @_task_write("answer")
 def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> Row:
-    """Take an answer back: whoever gave it, or any person."""
+    """Take an answer back: only whoever gave it (may_handle_ask)."""
     from . import answers as A
 
     found = conn.execute(

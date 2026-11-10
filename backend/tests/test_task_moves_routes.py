@@ -344,3 +344,22 @@ def test_a_reader_who_was_not_asked_cannot_send_a_bots_ask_back(api):
     assert show(api, tid) == before
     post(api, thumbs, {"up": False, "note": "We already picked June"}, token="ben-test")
     assert show(api, tid)["status"] == "done"
+
+
+def test_only_who_gave_an_answer_takes_it_back(api):
+    """Codex review 2, 3: Cara cannot take back Ben's "done" (and so reopen his finished task), nor can Ana, who works
+    the task but did not say it. Ben can."""
+    made = task(api, owner="ben")
+    tid = made["id"]
+    [own] = show(api, tid, token="ben-test")["to_leave"]
+    said = api.post(
+        f"/api/v2/tasks/{tid}/asks/{own['requirement_id']}/answer", json={"value": "done"}, headers=headers("ben-test")
+    )
+    assert said.status_code == 200, said.text
+    aid = said.json()["answer_id"]
+    before = show(api, tid)
+    assert before["status"] == "done"
+    for token in ("cara-test", "ana-test"):
+        assert refused(api, f"answers/{aid}/undo", {}, token=token, status=403)["error"]["code"] == "identity"
+        assert show(api, tid) == before
+    assert post(api, f"answers/{aid}/undo", {}, token="ben-test")["status"] == "open"
