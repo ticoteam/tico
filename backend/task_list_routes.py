@@ -1,4 +1,4 @@
-"""Task list routes: task filters, notes, labels, stuck tasks, task flow."""
+"""Task list routes: task filters, notes, labels."""
 
 from .store import H
 from . import models as M
@@ -300,69 +300,3 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 return reads.not_modified(tag)
             response.headers["ETag"] = tag
             return {"labels": keys, "tags": tags}
-
-    @app.get("/api/v2/tasks/stuck")
-    def tasks_stuck(request: Request, hours: int = H.STUCK_HOURS):
-        """Every bot's stuck work, for the fleet maintainer's sweep and for people."""
-        who = request.state.identity
-        if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER):
-            raise Problem("forbidden", "The stuck-task sweep is BotOps's and people's", 403)
-        principal = who.task_actor or who.actor
-        with store.read() as c:
-            hidden = pipeline_rights.hidden_pipeline_ids(c, principal)
-            return {
-                "tasks": [
-                    t
-                    for t in H.stuck_tasks(c, hours=max(1, hours), hidden=auth.unreadable_bots(c, who))
-                    if privacy.task_readable(c, who, H.task(c, t["id"]))
-                    and not pipeline_rights.left_out(hidden, principal, H.task(c, t["id"]) or {})
-                ]
-            }
-
-    @app.get("/api/v2/tasks/flow")
-    def tasks_flow(
-        request: Request,
-        days: int = 30,
-        tz: int = 0,
-        owner: str | None = None,
-        requester: str | None = None,
-        owner_kind: str | None = None,
-        label: str | None = None,
-        recurring: bool | None = None,
-        type: str | None = None,
-    ):
-        """Status changes over time for the Tasks page's stats: counts by day, time in each stage."""
-        who = request.state.identity
-        if who.role not in ("human", "owner"):
-            raise Problem("forbidden", "Task stats are for humans", 403)
-        if days < 1 or days > 365:
-            raise Problem("days", "days is between 1 and 365", 422)
-        if owner_kind not in (None, "", "bot", "human"):
-            raise Problem("owner_kind", "owner_kind is bot or human", 422)
-        with store.read() as c:
-            owner = H.resolve_actor(c, owner) if owner else None
-            requester = H.resolve_actor(c, requester) if requester else None
-            typ = H.type_get(c, type) if type else None
-            # A members-only pipeline is no type to someone outside it: refused as an unknown one is.
-            if typ and not pipeline_rights.may_see(c, who.task_actor or who.actor, typ["id"]):
-                typ = None
-            if type and not typ:
-                raise Problem("type", "No task type " + type, 422)
-            tz = max(-840, min(840, tz))  # minutes east of UTC; days are the viewer's days
-            today = H.shift(H.now(), minutes=tz)[:10] + "T00:00:00.000000Z"
-            since = H.shift(today, days=1 - days, minutes=-tz)
-            return {
-                "since": since,
-                **H.task_flow(
-                    c,
-                    since,
-                    tz_minutes=tz,
-                    visible=pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who)),
-                    owner=owner,
-                    requester=requester,
-                    owner_kind=owner_kind or None,
-                    label=label,
-                    recurring=recurring,
-                    type_id=typ["id"] if typ else None,
-                ),
-            }
