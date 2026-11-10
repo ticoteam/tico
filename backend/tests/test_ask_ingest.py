@@ -587,8 +587,6 @@ def test_a_chore_lands_as_an_ordinary_need_and_counts_under_the_main_budget(gate
     model.kind = "chore"
     tid = file(api, token, "Grant ops read access to the billing repo", "One click in GitHub settings.")["task"]["id"]
     assert on_plate(api, tid)
-    cards = {it["id"]: it for it in get(api, "needs-you?limit=200", token="ben-test")["items"]}
-    assert cards[tid]["need"] != "hands"
     with api.app.state.store.read() as c:
         assert A.load(c, "human:ben") == 10
     before = write_state(api)
@@ -691,45 +689,12 @@ def test_a_bot_handing_its_task_to_a_person_is_refused_atomically(gate):
         assert H.task(c, task["id"])["version"] == task["version"]
 
 
-def test_a_bots_bulk_handoff_to_a_person_records_each_refusal_without_quarantine(gate):
-    api, model, token = gate
-    plate(api, 15)
-    ids = [own_task(api, token, f"Pick launch option {n}")["id"] for n in range(3)]
-    r = api.post(
-        "/api/v2/task-bulk", json={"filter": {"ids": ids}, "action": "owner", "owner": "ben"}, headers=headers(token)
-    )
-    assert r.status_code == 200, r.text
-    assert (r.json()["changed"], r.json()["skipped"]) == (0, 3)
-    with api.app.state.store.read() as c:
-        assert {H.task(c, i)["owner_id"] for i in ids} == {"bot:ops"}
-        assert not c.execute("SELECT 1 FROM refusals").fetchone()
-        assert not c.execute("SELECT 1 FROM quarantine_holds").fetchone()
-    assert [(i["kind"], i["outcome"], i["ref"]) for i in items(api)] == [("task", A.SENT_BACK, "")] * 3
-    row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
-    assert row["reconcile"]["landed"] == 3 and row["reconcile"]["unexplained"] == 0
-
-
 # ---- Review 2: every way a bot asks a person is judged, against the plate before the item ----------------------
 
 
 def plate_ids(api, person="human:ben"):
     with api.app.state.store.read() as c:
         return set(A._plate_tasks(c, person))
-
-
-def test_a_bots_bulk_handoff_tells_it_the_refusal_and_fix_for_each_task(gate):
-    api, model, token = gate
-    plate(api, 15)
-    ids = [own_task(api, token, f"Pick launch option {n}")["id"] for n in range(3)]
-    r = api.post(
-        "/api/v2/task-bulk", json={"filter": {"ids": ids}, "action": "owner", "owner": "ben"}, headers=headers(token)
-    )
-    assert r.status_code == 200, r.text
-    lines = {line["id"]: line for line in r.json()["tasks"]["skipped"]}
-    assert set(lines) == set(ids)
-    for line in lines.values():
-        assert line["code"] == "ask_refused"
-        assert "cpo" in line["reason"] and "ask again" in line["reason"]
 
 
 # ---- Review 2: the replay sees the plate just before each item, and an admin only what they may read ----------

@@ -862,8 +862,9 @@ def growth_channels(ctx, s):
     month = ctx.month
     cal = months_between(nums["months"][0], month) if nums["months"] else [month]
     tasks = {}
-    rank = {"scaling": 0, "testing": 1, "measuring": 2, "building": 3, "idea": 4, "paused": 5}
-    for task in sorted(marketing_tasks(ctx), key=lambda t: rank[t["stage"]]):
+    # A channel's open tests, most advanced first; paused ones are left out.
+    rank = {"scaling": 0, "testing": 1, "measuring": 2, "building": 3, "idea": 4}
+    for task in sorted((t for t in marketing_tasks(ctx) if t["stage"] in rank), key=lambda t: rank[t["stage"]]):
         for slug in task["channels"]:
             tasks.setdefault(slug, []).append({"id": task["id"], "title": task["title"], "stage": task["stage"]})
     shown = live[: s["count"]]

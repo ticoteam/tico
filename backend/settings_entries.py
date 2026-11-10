@@ -63,13 +63,8 @@ HOOKS_IN, HOOKS_OUT, HOOKS_GW = (
 )
 HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
 INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
-# System's other cards moved to the built-in bots' own Settings and to Settings > Security. Releases is on whichever bot
-# is the Release Manager: its address reads the schedule and opens that bot (ui/app/settings.ts settingsMovedOut).
-RELEASES, TASK_MANAGER, SECURITY = (
-    "Release Manager > Settings > Releases",
-    "Task Manager > Settings",
-    "Settings > Security",
-)
+# System's other cards moved to the built-in bots' own Settings and to Settings > Security.
+TASK_MANAGER, SECURITY = ("Task Manager > Settings", "Settings > Security")
 SYSTEM_JOBS = "#/automations/system-jobs"
 INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
 MODELS = "Settings > Models"
@@ -1189,58 +1184,6 @@ ENTRIES = TEAM_RULES + [
         value="json",
         card=SYSTEM_JOBS,
     ),
-    S(
-        "release.on",
-        "Daily release",
-        RELEASES,
-        "admin",
-        "direct",
-        "PATCH",
-        "release-schedule",
-        "on",
-        card=_card("releases"),
-        read="release-schedule#on",
-    ),
-    S(
-        "release.times",
-        "Release times",
-        RELEASES,
-        "admin",
-        "direct",
-        "PATCH",
-        "release-schedule",
-        "times",
-        "list",
-        _card("releases"),
-        "release-schedule#times",
-        words="release schedule",
-    ),
-    S(
-        "release.bot",
-        "Release bot",
-        RELEASES,
-        "admin",
-        "direct",
-        "PATCH",
-        "release-schedule",
-        "bot",
-        "text",
-        _card("releases"),
-        "release-schedule#bot",
-    ),
-    S(
-        "release.writer",
-        "Release notes writer",
-        RELEASES,
-        "admin",
-        "direct",
-        "PATCH",
-        "release-schedule",
-        "writer",
-        "text",
-        _card("releases"),
-        "release-schedule#writer",
-    ),
     *[
         S(
             "screening." + source,
@@ -1433,40 +1376,6 @@ ENTRIES = TEAM_RULES + [
         card=_card("listening"),
     ),
     # Tasks
-    S(
-        "tasks.type",
-        "Task type",
-        TASKS + " > Task types",
-        "mover",
-        "direct",
-        "POST",
-        "task-types/{id}",
-        value="json",
-        card=_card("tasks", "settings-types"),
-        words="steps pipeline",
-    ),
-    S(
-        "tasks.type.create",
-        "New task type",
-        TASKS + " > Task types",
-        "mover",
-        "direct",
-        "POST",
-        "task-types",
-        value="json",
-        card=_card("tasks", "settings-types"),
-    ),
-    S(
-        "tasks.type.delete",
-        "Delete a task type",
-        TASKS + " > Task types",
-        "mover",
-        "confirm",
-        "POST",
-        "task-types/{id}/delete",
-        value="json",
-        card=_card("tasks", "settings-types"),
-    ),
     S(
         "roadmap.public",
         "Public roadmap",

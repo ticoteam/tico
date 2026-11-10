@@ -415,7 +415,7 @@ def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(a
             "body": "Read it.",
             "check_model": "grok",
             "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
