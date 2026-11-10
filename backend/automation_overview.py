@@ -31,7 +31,7 @@ STATUSES = {
     "held": ("held",),
 }
 JOB_PREFIX = "tico.builtin.job."
-TASK_RULE = "tico.builtin.task_rule"  # a task rule's read-only mirror (redesign_migration `_builtins`)
+TASK_RULE = "tico.builtin.task_rule"  # a task rule's mirror, from before 0.6: retired (automations.sync_system_mirrors)
 SYSTEM_RUN = "sys_"  # a system job's run id, so it never meets an automation run's
 MAINT = "maintenance"  # the Maintenance row's id and the run's owner: Tico itself
 MAINT_RUN = "mnt_"  # a Maintenance run's id here
@@ -89,17 +89,11 @@ def window(rng):
 
 
 def system_key(flow):
-    """The `system_runs` job a read-only built-in shows, else None: a system job's key, or a task rule's id (each task
-    rule records its runs under its id, backend/task_rules.py `tick`)."""
+    """The `system_runs` job a read-only built-in shows, else None: a system job's key."""
     if not flow.get("readonly"):
         return None
     name = str((flow.get("trigger") or {}).get("name") or "")
-    if name.startswith(JOB_PREFIX):
-        return name[len(JOB_PREFIX) :]
-    source = flow.get("source") if isinstance(flow.get("source"), dict) else {}
-    if name == TASK_RULE and source.get("kind") == "task_rule" and source.get("id"):
-        return str(source["id"])
-    return None
+    return name[len(JOB_PREFIX) :] if name.startswith(JOB_PREFIX) else None
 
 
 def hidden_jobs(c, settings):
@@ -157,22 +151,6 @@ def system_jobs(c, settings=None):
             "next": SR._stamp(following) if following else None,
             "last": _system_last(row) if row else None,
         }
-    if H._has_table(c, "task_rules"):
-        from . import task_rules
-
-        for rule in c.execute("SELECT id, enabled, preset, daily_at FROM task_rules").fetchall():
-            cfg, row = task_rules.config(rule), last.get(rule["id"])
-            try:
-                following = SR.next_due(cfg, H.parse_ts(row["started_at"]) if row else None, now) if cfg["on"] else None
-                schedule = SR.PRESETS[cfg["preset"]][0].format(at=cfg["daily_at"] or "")
-            except Exception:  # noqa: BLE001 - a rule saved with a preset this release does not know
-                following, schedule = None, None
-            out[rule["id"]] = {
-                "schedule": schedule,
-                "on": cfg["on"],
-                "next": SR._stamp(following) if following else None,
-                "last": _system_last(row) if row else None,
-            }
     return out
 
 

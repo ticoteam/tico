@@ -771,7 +771,7 @@ def test_a_turn_moving_its_own_task_does_not_start_its_automation_again(api):
     aid = make(
         api,
         [{"id": "work", "type": "bot_turn", "bot": "ops", "prompt": "Handle it"}],
-        trigger={"type": "event", "name": "task.state_changed"},
+        trigger={"type": "event", "name": "task.step_changed"},
     )
     post(api, f"automations/{aid}/run", {})
     finish(api, r)  # the turn ends, and the task its run started changes state
