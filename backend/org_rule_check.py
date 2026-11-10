@@ -1190,7 +1190,6 @@ def _review_task(c, hold_id, author, rule, reviewer):
         labels=[REVIEW_LABEL],
         lint=False,
         deduplicate=False,
-        quiet_notice=True,
     )
     return task["id"]
 
@@ -1878,8 +1877,8 @@ def _finish_task(c, hold):
         return
     left = c.execute("SELECT 1 FROM org_rule_holds WHERE task_id=? AND state='held' LIMIT 1", (tid,)).fetchone()
     task = H.task(c, tid)
-    if not left and task and task["status"] not in ("done", "closed"):
-        H.task_close(c, H.KEEPER, tid, "Every hold on this task is decided.", quiet=True, strict=False)
+    if not left and task and task["status"] == "open":
+        H.attempt(c, H.task_close, H.KEEPER, tid, "Every hold on this task is decided.")
 
 
 def _decide(c, who, hold, state, event=""):
