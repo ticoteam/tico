@@ -83,6 +83,13 @@ MAY_OK: dict[str, str] = {
 }
 CHECKS_ITSELF = ("email_send", "letter")
 
+# Subjects whose module pins what is asked about before it is shown: "<module>:<function>", called as
+# fn(conn, by, subject, content, shows) -> (subject, content, shows). A file ref that names no version, or a path,
+# becomes the exact version and digest there are when it is asked, so an OK never reaches a version nobody saw.
+FREEZE: dict[str, str] = {
+    "file": "backend.file_reviews:freeze",
+}
+
 
 def generic(subject: str) -> bool:
     """Whether a bot may ask for and use an OK of this subject through the generic routes: any kind but OWNED."""
@@ -307,6 +314,13 @@ def ask_ok(
     subject = str(subject or "").strip()
     if not kind_of(subject) or ":" not in subject:
         _refuse(conn, by, "validation", "Say what the OK is for, as kind:id")
+    pin = FREEZE.get(kind_of(subject))
+    if pin:
+        import importlib
+
+        module, _, name = pin.partition(":")
+        frozen: Callable[..., tuple[str, object, object]] = getattr(importlib.import_module(module), name)
+        subject, content, shows = frozen(conn, by, subject, content, shows)
     target = H.resolve_actor(conn, person) or person
     from . import task_requirements as R
 

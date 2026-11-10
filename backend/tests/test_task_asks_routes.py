@@ -261,3 +261,48 @@ def test_the_assistant_and_botops_never_answer_ok_to_an_ok_even_a_plain_one(api)
         api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ana-assistant-confirmed", {"value": "no", "note": "Not now."}
     )
     assert status == 200
+
+
+# ----------------------------------------------------------------------------- the generic use (hub ok use)
+def test_the_generic_use_lets_only_the_asker_act_once_on_exactly_what_was_okd(api):
+    """`hub ok use <rid> --for KIND:ID --content JSON` (POST /api/v2/oks/{rid}/use), as the Video Producer uses a
+    `budget_raise:<slug>` OK: refused for an OK that does not exist, still waits, is for other content or another
+    subject, or is used by anyone but the bot that asked; used once; and an OK whose task was closed lets nothing go."""
+    bot, other = as_bot(api), as_bot(api, "video")
+    subject, content = "budget_raise:video", {"cap_usd": 400}
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid, content=content, subject=subject)
+    assert use(api, "nope", bot, content, subject)[0] == 404
+    assert use(api, rid, bot, content, subject)[:2] == (409, "task_ok_missing")  # still waits
+    # The OK is bound to what she was shown: a hash of anything else is refused, and so is a preview never opened.
+    status, code, _, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/ok", "ben-test", {"shown_hash": "0" * 64})
+    assert status == 409 and standing(api, rid) == K.WAITING, code
+    assert give(api, tid, rid)[0] == 200
+    assert use(api, rid, bot, {"cap_usd": 4000}, subject)[:2] == (409, "task_ok_changed")
+    assert use(api, rid, bot, content, "budget_raise:ops")[:2] == (403, "identity")
+    assert use(api, rid, other, content, subject)[0] in (403, 404)
+    assert standing(api, rid) == K.OK
+    assert use(api, rid, bot, content, subject)[0] == 200
+    assert use(api, rid, bot, content, subject)[:2] == (422, "consumed")
+    # Closed before use: withdrawn, nothing goes.
+    tid2 = bots_task(api, bot)
+    rid2 = ask(api, bot, tid2, content=content, subject=subject + "-2")
+    assert give(api, tid2, rid2)[0] == 200
+    with api.app.state.store.transaction() as c:
+        H.task_close(c, "human:ana", tid2, "Not needed.")
+    assert use(api, rid2, bot, content, subject + "-2")[:2] == (409, "task_ok_missing")
+
+
+def test_the_assistant_and_botops_never_give_a_bound_ok_from_its_preview(api):
+    bot = as_bot(api)
+    ids = api.app.state.auth.settings.test_identities
+    ids["ben-assistant"] = Identity("human:ben", "human", "ben@acme.example", via="assistant", confirmed=True)
+    ids["ben-botops"] = Identity("human:ben", "human", "ben@acme.example", via="botops", confirmed=True)
+    ids["ben-token"] = Identity("human:ben", "human", "ben@acme.example", via_token=True)
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid)
+    for token in ("ben-assistant", "ben-botops", "ben-token"):
+        shown = api.get(f"/api/v2/oks/{rid}", headers=headers("ben-test")).json()["shown_hash"]
+        status, _, _, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/ok", token, {"shown_hash": shown})
+        assert status in (403, 409), token
+    assert standing(api, rid) == K.WAITING
