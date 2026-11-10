@@ -37,6 +37,8 @@ const fixtures = () => [
     relations: {parent: [{id: null, title: 'a private task', status: null, owner_id: null, direction: 'out', private: true}]}}),
   task('t-14', 'Proof the copy', 'spec', {owner_id: 'bot:writer',
     relations: {parent: [{id: 't-12', title: 'Write the copy', status: 'open', owner_id: 'bot:writer', direction: 'out'}]}}),
+  // Postal mail filed it on Ana's rights (backend/sources.py filers): she stays its requester.
+  task('t-15', 'Answer the summons', 'spec', {owner_id: 'bot:writer', private: true, filer: 'postal-mail'}),
 ];
 const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => ({name, display_name, host: 'keeper', status: 'active',
   state: 'active', can_chat: true, private_tasks_default: name === 'pm', update_subscriptions: name === 'pm' ? ['templates'] : []}));
@@ -126,6 +128,15 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     // No parent: nothing to add one with (backend/task_relations.py relate refuses a parent).
     assert.equal(await win.locator('[data-prop-row="parent"] [data-prop="parent"]').count(), 0, 'no Add parent');
     assert.match(await win.locator('[data-prop-row="parent"]').innerText(), /None/);
+
+    // Filed by Postal mail on Ana's rights: Asked by names Postal mail; Who can see still lists Ana, not Postal mail.
+    await page.evaluate(() => { location.hash = '#/task/t-15'; });
+    const filed = page.locator('#task-modal[open][data-task="t-15"]');
+    await filed.locator('[data-prop-row="asker"]').waitFor();
+    assert.match(await filed.locator('[data-prop-row="asker"]').innerText(), /Postal mail/);
+    const filedSeen = await filed.locator('[data-prop-row="readers"]').innerText();
+    assert.doesNotMatch(filedSeen, /Postal mail/, 'the filer is not someone who can see it');
+    assert.match(filedSeen, /You/, 'the requester still can');
 
     // A parent the reader can open: a link to it, nothing to change or take off.
     await page.evaluate(() => { location.hash = '#/task/t-14'; });

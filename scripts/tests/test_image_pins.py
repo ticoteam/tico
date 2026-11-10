@@ -8,6 +8,8 @@ image does, and check the apt packages and the Python pins against Debian's and 
 
 import json
 import re
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -192,17 +194,72 @@ def test_wheel_tags_match_only_the_images_python_and_platforms(wheel, x86_64, aa
 
 FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_wheels.json'
 REQUIRES_PYTHON_FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_requires_python.json'
+PYPI_ATTEMPTS = 4
+PYPI_RETRY_BACKOFF = 0.25
+RECORD_WORKERS = 8
 
 
 def pins(requirements):
     return re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
 
 
+def pypi_json(name, version):
+    """One pinned version's PyPI metadata, retrying a brief network failure (a reset or a refused connection)."""
+    url = f'https://pypi.org/pypi/{name}/{version}/json'
+    for attempt in range(PYPI_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                return json.load(response)
+        except (urllib.error.URLError, ConnectionError):
+            if attempt + 1 == PYPI_ATTEMPTS:
+                raise
+            time.sleep(PYPI_RETRY_BACKOFF * 2**attempt)
+
+
+def test_pypi_json_retries_a_brief_network_failure(monkeypatch):
+    from io import BytesIO
+
+    answers = iter(
+        [
+            urllib.error.URLError(ConnectionResetError('reset')),
+            ConnectionResetError('reset'),
+            BytesIO(b'{"info": {"requires_python": ">=3.12"}, "urls": []}'),
+        ]
+    )
+    calls, delays = [], []
+
+    def urlopen(url, timeout):
+        calls.append(url)
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(time, 'sleep', delays.append)
+    assert pypi_json('demo', '1.2.3')['info']['requires_python'] == '>=3.12'
+    assert calls == ['https://pypi.org/pypi/demo/1.2.3/json'] * 3
+    assert delays == [0.25, 0.5]
+
+
+def test_pypi_json_still_fails_after_its_retries(monkeypatch):
+    calls, delays = [], []
+
+    def urlopen(url, timeout):
+        calls.append(url)
+        raise urllib.error.URLError('unreachable')
+
+    monkeypatch.setattr(urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(time, 'sleep', delays.append)
+    with pytest.raises(urllib.error.URLError, match='unreachable'):
+        pypi_json('demo', '1.2.3')
+    assert len(calls) == PYPI_ATTEMPTS
+    assert delays == [0.25, 0.5, 1.0]
+
+
 def wheels_on_pypi(pin):
     """The wheel tags (python-abi-platform) PyPI lists for one pinned version."""
-    name, version = pin
-    with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
-        files = json.load(response)['urls']
+    files = pypi_json(*pin)['urls']
     return sorted({'-'.join(f['filename'][:-4].split('-')[-3:]) for f in files if f['filename'].endswith('.whl')})
 
 
@@ -235,9 +292,7 @@ def test_every_pin_has_a_wheel_for_the_images_python(requirements):
 
 def requires_python_on_pypi(pin):
     """The Requires-Python PyPI lists for one pinned version ('' when it names none)."""
-    name, version = pin
-    with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
-        return json.load(response)['info'].get('requires_python') or ''
+    return pypi_json(*pin)['info'].get('requires_python') or ''
 
 
 @pytest.mark.slow
@@ -269,13 +324,13 @@ if __name__ == '__main__':
             '(asks PyPI for the wheels and Requires-Python of every pin)'
         )
     found = pins('backend/requirements.txt')
-    with ThreadPoolExecutor(16) as pool:
+    with ThreadPoolExecutor(RECORD_WORKERS) as pool:
         recorded = dict(zip((f'{name}=={version}' for name, version in found), pool.map(wheels_on_pypi, found)))
     FIXTURE.parent.mkdir(parents=True, exist_ok=True)
     FIXTURE.write_text(json.dumps(dict(sorted(recorded.items())), indent=1) + '\n')
     print(f'recorded {len(recorded)} pins to {FIXTURE.relative_to(ROOT)}')
     found = sorted({pin for name in ('backend/requirements.txt', 'backend/requirements-dev.txt') for pin in pins(name)})
-    with ThreadPoolExecutor(16) as pool:
+    with ThreadPoolExecutor(RECORD_WORKERS) as pool:
         versions = dict(
             zip((f'{name}=={version}' for name, version in found), pool.map(requires_python_on_pypi, found))
         )

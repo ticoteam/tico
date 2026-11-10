@@ -571,8 +571,8 @@ def test_a_second_chat_resolution_in_a_transaction_costs_less_than_the_first(api
         first, second = Recorded(c), Recorded(c)
         assert bot_home_merge.home_for_chat(first, "human:ben", "ops") == ops_rooms["home"]
         assert bot_home_merge.home_for_chat(second, "human:ben", "ops") == ops_rooms["home"]
-    # Measured on RunsOn at 18 for the first resolution: the bot and its config, the open Home, the person's viewer, the
-    # federation check and the readable check. A second resolution in the same transaction reads the repeated rows from
+    # Measured on RunsOn at 18 for the first resolution (with a federation check since removed): the bot and its config,
+    # the open Home, the person's viewer and the readable check. A second resolution in the same transaction reads the repeated rows from
     # the read cache (backend/read_cache.py), so it costs fewer statements.
     assert len(first.statements) <= 18, first.statements
     assert len(second.statements) < len(first.statements), second.statements
@@ -776,18 +776,6 @@ def test_an_owner_whose_viewer_is_refused_the_home_keeps_none_and_is_not_moved(a
         assert bot_home_merge.home_for_chat(c, "human:cara", "ops", create=False) is None
         assert seqs(c, cara_room) == [cara_message]
         assert not c.execute("SELECT 1 FROM home_merges WHERE conversation_id=?", (cara_room,)).fetchone()
-
-
-def test_the_federated_check_still_applies_to_an_owner_with_no_viewer(api, ops_rooms, fay_room):
-    """Federation's tables were dropped by migration 0058; a stand-in table with the column the check reads stands for a
-    Home linked to another install."""
-    merge(api)
-    home = ops_rooms["home"]
-    with store(api).transaction() as c:
-        assert bot_home_merge.home_for_chat(c, "human:fay", "ops", create=False) == home
-        c.execute("CREATE TABLE federation_threads(thread_id TEXT NOT NULL)")
-        c.execute("INSERT INTO federation_threads(thread_id) VALUES(?)", (home,))
-        assert bot_home_merge.home_for_chat(c, "human:fay", "ops", create=False) is None
 
 
 def test_an_actor_that_is_not_a_person_with_no_viewer_keeps_none(api, ops_rooms):

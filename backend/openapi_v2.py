@@ -2542,6 +2542,11 @@ SCHEMAS = {
         ],
         owner_name={"type": "string", "description": "Display name of owner (`owner_id` stays the actor id)"},
         requester_name={"type": "string", "description": "Display name of requester"},
+        filer={
+            "type": "string",
+            "description": "Who really filed it, when not its requester: a bot id (BotOps on a person's rights) or a "
+            "built-in source key (check-health, postal-mail). Display only; absent otherwise",
+        },
         snoozed={"type": "boolean", "description": "On a list row: whether the task is set aside"},
         pipeline={
             "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],

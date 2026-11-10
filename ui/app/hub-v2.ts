@@ -58,6 +58,7 @@ interface SourceLineOptions {
 interface HubTask {
   requester_id?: string | null | undefined;
   origin_actor?: string | null | undefined;
+  filer?: string | null | undefined;
   owner_id?: string | null | undefined;
   title?: string | null | undefined;
   body?: string | null | undefined;
@@ -124,7 +125,9 @@ const actorLabel = (a: unknown): string => {
 const plainActors = (text: unknown) => String(text ?? '').replace(/\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])/g,
   (all, kind) => { const pid = actorPerson(all); return pid && pid === S.me?.id ? 'you' : actorLabel(all); });
 const taskAddedBy = (t: HubTask) => {
-  const who = taskRequester(t);
+  const builtin = taskFiledByBuiltin(t);
+  if (builtin) return {kind: 'other', label: builtin};
+  const who = taskAsker(t);
   const pid = actorPerson(who);
   if (pid && pid === S.me?.id) return {kind: 'you', label: 'You'};
   if (pid) return {kind: 'human', label: personDisplay(pid)};
@@ -138,6 +141,11 @@ const taskSourceLine = (t: HubTask) => {
   return 'Added by ' + src.label;
 };
 const taskRequester = (t: HubTask) => t.requester_id === 'keeper' ? t.origin_actor || t.requester_id : t.requester_id;
+// Who asked, as people see it: who really filed it (filer: BotOps on a person's rights, or a built-in such as Health
+// check) over the requester whose rights it carries. Display only: rights and readers go by taskRequester.
+const taskFiledByBuiltin = (t: HubTask) => SOURCE_BUILTINS[String(t.filer || '')] || '';
+const taskAsker = (t: HubTask) => t.filer || taskRequester(t);
+const taskAskerLabel = (t: HubTask) => taskFiledByBuiltin(t) || actorLabel(taskAsker(t));
 // Hide the generated attachment trailer and rename the schedule footer; authored text stays intact.
 const taskBody = (t: HubTask) => {
   const raw = String(t.body || '');
@@ -152,7 +160,7 @@ const taskBody = (t: HubTask) => {
 // row's `data`, an event's `detail`), so every surface draws alike.
 // Only an `assistant_for` row ever shows the Assistant's name or face; the gray kinds have no avatar or sender row.
 const SOURCE_BUILTINS: Record<string, string> = {'follow-up-timer': 'Follow-up timer', 'earlier-messages': 'Earlier messages', 'task-roundup': 'Task roundup', 'stuck-check': 'Stuck check',
-  'rule-check': 'Rule check', 'check-health': 'Health check', maintenance: 'Maintenance'};
+  'rule-check': 'Rule check', 'check-health': 'Health check', 'postal-mail': 'Postal mail', maintenance: 'Maintenance'};
 const SOURCE_LINES = new Set(['task_update', 'builtin', 'automation', 'system']);
 // "Chris's Assistant": the person's first name and the install's name for the Assistant.
 const assistantForName = (person: unknown) => {

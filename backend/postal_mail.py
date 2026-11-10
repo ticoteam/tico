@@ -46,6 +46,7 @@ from clients.gateway import user_agent
 from . import hubdb as H
 from . import outbound_tls
 from . import outbox as O
+from . import sources as SRC
 from .auth import validate_identity
 from .models import Contract
 from .store import Problem
@@ -832,6 +833,7 @@ class PostalMail:
 
             personal_alerts.legal_mail(c, self.auth, task_id, ident)
 
+    @SRC.scoped("postal-mail")  # the task shows it came from Postal mail, not the owner it may be filed for
     def task(self, c, title, body, to, due, private=None, *, inform_owner=False):
         """The letter's task for `to`; a bot that cannot take it (paused, gone) hands it to the owner."""
         private = True if private else None
