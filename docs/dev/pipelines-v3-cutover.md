@@ -16,6 +16,12 @@ cut-over, this file wins.
   of deleted behaviour.
 - 0.6.0-rc.1 has one pipeline, General. Product and Engineering come after (spec phases 2 and 3). Code that only
   serves the old Engineering pipeline is deleted now, not kept for later.
+- The public roadmap is off in 0.6.0-rc.1: it was built on task types and steps. It comes back with the Product
+  pipeline, on its stages.
+- Growth ideas are General tasks with labels in 0.6.0-rc.1. A Growth pipeline comes with Product in phase 2, as a third
+  preset: Ideas (by hand), On deck, Running, Measuring. A result question (Succeeded, Failed, Inconclusive, with one
+  line of evidence) must be answered to leave Measuring. A person OKs an idea before Running only when it spends
+  money or publishes. A dropped idea is Closed.
 
 ## What a task is after the cut-over
 
