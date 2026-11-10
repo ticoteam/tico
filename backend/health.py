@@ -942,9 +942,14 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         if not where:
             return {}
         if where[0] not in documents:
-            documents[where[0]] = readiness_document(where[2]).get("bots") or {}
-        report = documents[where[0]].get(slug)
-        return report if isinstance(report, dict) else {}
+            documents[where[0]] = readiness_document(where[2])
+        document = documents[where[0]]
+        report = (document.get("bots") or {}).get(slug)
+        if not isinstance(report, dict):
+            return {}
+        # A sign-in the Tico AI Gateway covers does not hold the turn (the claim's rule, models_preset.waiting): the
+        # report reads ready, so an old queue is named with the claim's own reason below, not "login required".
+        return models_preset.as_served(c, slug, document, report, settings) if report.get("ready") is False else report
 
     holding = {}
 
