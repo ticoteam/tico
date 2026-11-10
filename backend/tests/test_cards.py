@@ -19,14 +19,14 @@ def cards_of(view):
 
 def test_the_dashboard_starts_with_its_defaults_and_counts_only_what_each_reader_may_read(api):
     task(api, "bot:ops", "Ops work")
-    task(api, "bot:inbox", "Mail work", status="doing")  # inbox is Ana's alone
+    task(api, "bot:inbox", "Mail work")  # inbox is Ana's alone
     view = place(api, "dashboard", "cara-test")
     assert view["saved"] is False and view["can_edit"] is False
     assert cards_of(view) == [("tasks_by_status", ""), ("done_per_week", ""), ("needs_you", ""), ("latest_pages", "")]
     assert all(p["id"] is None for p in view["pins"])
     counts = lambda v: v["pins"][0]["card"]["data"]["counts"]  # noqa: E731
-    assert counts(view)["open"] == 1 and counts(view)["doing"] == 0
-    assert counts(place(api, "dashboard"))["doing"] == 1
+    assert counts(view) == {"open": 1, "done": 0}
+    assert counts(place(api, "dashboard"))["open"] == 2
     assert len(view["pins"][1]["card"]["data"]["weeks"]) == 8
     # Saving makes the defaults real; a member arranges nothing.
     put(api, "places/dashboard", {}, "cara-test", expected=403)

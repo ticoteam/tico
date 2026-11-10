@@ -5,7 +5,6 @@ from fastapi import Request
 from . import (
     agents,
     app_delivery,
-    auto_tasks,
     lifecycle,
     profiles,
     report_managers,
@@ -111,7 +110,6 @@ def register(app, auth, settings, settings_admin, store):
                     "compact_at": compact_at_of(declared),
                     # What its tasks run on: a model (empty: its own), effort and context length; null is all the same.
                     "task_model": task_models.stored(declared),
-                    "keep_tasks_going": auto_tasks.of(json.loads(config["config"]) or {}),
                     "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
                     # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                     "task_model_warning": task_models.warning(
@@ -159,7 +157,6 @@ def register(app, auth, settings, settings_admin, store):
             and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60)
         )
         row["queued"] = rows.queued[slug]
-        row["next_run"] = sum(privacy.task_readable(c, who, t) for t in rows.next_run[slug])
         row["notes"] = rows.notes[slug]
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None

@@ -1035,11 +1035,9 @@ class Auth:
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
-            # On a person's own Assistant turn, the person's own question tasks too (hubdb.own_question_for_assistant).
-            own = f" OR (questions IS NOT NULL AND owner_id={me})" if H.assistant_turn_person(who) else ""
             audience += (
                 f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}){own})"
+                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}))"
             )
         from . import counsel
 
@@ -1305,19 +1303,7 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
-        from . import pipeline_rights
-
-        # A members-only pipeline's tickets are its owner's, manager's and members' whatever the ticket's own privacy says
-        # (pipeline_rights.may_see). A person's Assistant reads them as the person it acts for.
-        principal = who.task_actor or who.actor
-        # The ticket's own owner and requester read it whatever its pipeline: a bot that owns a ticket on a private pipeline
-        # it is not on still reads its own work.
-        own = principal in (row.get("owner_id"), row.get("requester_id"))
-        if row.get("type_id") and not own and not pipeline_rights.may_see(c, principal, row["type_id"]):
-            raise Problem("not_found", "Task not found", 404)
-        if who.task_actor and not (
-            H.task_private_readable(c, who.task_actor, row) or H.own_question_for_assistant(who, row)
-        ):
+        if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (
@@ -1428,41 +1414,6 @@ class Auth:
         """Every task except those that involve a bot this caller may not read."""
         hidden = ["bot:" + slug for slug in sorted(self.unreadable_bots(c, who))]
         return ("NOT (owner_id IN %s OR requester_id IN %s)" % ((A.qlist(hidden),) * 2)) if hidden else "1"
-
-    def approval(self, c, who, approval_id, decide=False):
-        self.domain(who)
-        row = H.approval(c, approval_id)
-        if not row:
-            raise Problem("not_found", "Approval not found", 404)
-        if row["kind"] == "send" and (row.get("payload") or {}).get("email_send_id"):
-            from .email_sending import can_ok, effective
-
-            send = c.execute("SELECT * FROM email_sends WHERE id=?", (row["payload"]["email_send_id"],)).fetchone()
-            permitted = send and can_ok(
-                c, self, who.actor, send["mailbox"], send["bot"], effective(c, send["mailbox"], send["bot"])
-            )
-            if permitted or (not decide and who.actor == row["requested_by_id"]):
-                return row
-            raise Problem("forbidden", "This send follows its inbox's approval rule", 403)
-        msg = H.message(c, row["message_id"])
-        if decide:
-            allowed = who.role in ("owner", "human") and msg["recipient_id"] == who.actor
-        else:
-            allowed = who.role == "owner" or who.actor in (row["requested_by_id"], msg["recipient_id"])
-        if row["kind"] == "letter":
-            from . import letters
-
-            letter = c.execute("SELECT * FROM letters WHERE approval_id=?", (approval_id,)).fetchone()
-            allowed = False
-            if letter:
-                may_decide = who.role in ("owner", "human") and (
-                    letters.admin(self, who)
-                    or (letter["acting_bot_id"] and self.bot_manager(c, who, letter["acting_bot_id"]))
-                )
-                allowed = letters.readable(c, self, who, letter) and (not decide or may_decide)
-        if not allowed:
-            raise Problem("forbidden", "This approval is not yours", 403)
-        return row
 
 
 def actor_reads_task(c, actor, row):

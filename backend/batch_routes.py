@@ -78,11 +78,10 @@ def register(app, auth, mutate, send, store, task_view):
                         "text": batch._clip(m["body"] or "", 240),
                     }
                 )
-            stuck = [
-                t
-                for t in H.stuck_tasks(c, hidden=auth.unreadable_bots(c, who))
-                if privacy.task_readable(c, who, H.task(c, t["id"]))
-            ]
+            # A bot that cannot run, which this person can fix (waiting_on: a Paused cause).
+            from . import waiting_on
+
+            stuck = [n for n in waiting_on.needs(c, who.actor) if n["kind"] == "paused"]
             open_ = batch.current(c, who.actor)
             return {
                 "now": H.now(),

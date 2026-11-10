@@ -3945,14 +3945,15 @@ _SUBTREE = "conversations s LEFT JOIN thread_followers f ON f.thread_id=s.id AND
 _SUBTREE_OPEN = "s.archived_at IS NULL AND s.closed_at IS NULL"
 
 
-FINISHED_TASKS = "'done','closed','declined'"
+FINISHED_TASKS = "'done','closed'"
 
 
 def _finish_sql(t="t"):
-    """SQL: when the task `t` last finished: its latest status event to done, closed or declined, else its timestamps."""
+    """SQL: when the task `t` last finished: its latest move into a Done or Closed stage, else its timestamps."""
     return (
         f"COALESCE((SELECT MAX(h.created_at) FROM history_events h WHERE h.subject_type='task' "
-        f"AND h.subject_id={t}.id AND h.kind='status' AND h.new IN ({FINISHED_TASKS})),"
+        f"AND h.subject_id={t}.id AND h.kind='move' "
+        f"AND h.new IN (SELECT id FROM stages WHERE kind IN ('done','closed'))),"
         f"{t}.closed_at,{t}.done_at,{t}.updated_at)"
     )
 
@@ -3983,9 +3984,9 @@ def revived_roots(c, v, roots=None):
 
 
 def task_open_sql(c, v, r="r", revived=frozenset()):
-    """SQL: a thread on a task is open unless its task is done, closed or declined and no post the viewer reads has come
+    """SQL: a thread on a task is open unless its task is done or closed and no post the viewer reads has come
     since: a plain post in its subtree (readable_sql on the sub-thread), or a root in `revived` (revived_roots). A notice
-    (what the task's own changes write into its thread) is not a post. The finish is the task's latest status event, so
+    (what the task's own changes write into its thread) is not a post. The finish is the task's latest move to Done or Closed, so
     a later edit to the task neither hides a thread someone posted in nor brings a finished one back."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     plain = (

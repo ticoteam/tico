@@ -7,7 +7,6 @@ from backend.tests.helpers.api import post  # noqa: F401  (fixture)
 from backend import bot_settings as BS
 
 CONFIGS = BS.ROW_SQL
-STEPS = "SELECT * FROM task_steps ORDER BY position,id"
 
 
 def snapshot_rows(store, statement=CONFIGS):
@@ -85,40 +84,6 @@ def test_reads_outside_a_transaction_share_the_roster_too(api):
         c.set_trace_callback(None)
         assert not c.in_transaction
     assert first == second and ran == []
-
-
-def test_task_steps_are_shared_until_a_step_changes(api):
-    store = api.app.state.store
-    found, ran = snapshot_rows(store, STEPS)
-    assert found and ran == 1
-    assert snapshot_rows(store, STEPS) == (found, 0)
-    with store.transaction() as c:
-        c.execute("UPDATE task_steps SET name='Renamed step' WHERE id=?", (found[0]["id"],))
-    changed, ran = snapshot_rows(store, STEPS)
-    assert ran == 1 and changed[0]["name"] == "Renamed step"
-    assert snapshot_rows(store, STEPS) == (changed, 0)
-
-
-def test_type_list_reads_task_steps_from_the_shared_rows(api):
-    store = api.app.state.store
-    ran = []
-    with store.transaction() as c:
-        c.execute(
-            "UPDATE task_steps SET name='Listed step' WHERE id=(SELECT id FROM task_steps ORDER BY position,id LIMIT 1)"
-        )
-    with store.read() as c:
-        c.set_trace_callback(lambda sql: ran.append(sql) if sql == STEPS else None)
-        listed = H.type_list(c)
-        H.type_list(c)
-        c.set_trace_callback(None)
-    assert any(s["name"] == "Listed step" for t in listed for s in t["steps"])
-    assert len(ran) <= 1
-    ran.clear()
-    with store.read() as c:
-        c.set_trace_callback(lambda sql: ran.append(sql) if sql == STEPS else None)
-        H.type_list(c)
-        c.set_trace_callback(None)
-    assert ran == []
 
 
 def test_entries_are_built_once_across_snapshots_and_rebuilt_after_a_bot_config_write(api, monkeypatch):

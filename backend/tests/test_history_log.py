@@ -16,8 +16,8 @@ from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa:
 
 
 def seed(api):
-    """One row of every kind: a run of ops, Cara's public task for ops, a private one of Ana's, ops' two send approvals
-    (one granted, one denied), a credential the inbox revealed, an automation send kept as a draft, a permission change, and Cara's answer to ops (an old ask and answer, as an older file holds them)."""
+    """One row of every kind: a run of ops, Cara's public task for ops (made, then done), a private one of Ana's, a
+    credential the inbox revealed, an automation send kept as a draft, a permission change, and Cara's answer to ops (an old ask and answer, as an older file holds them)."""
     store = api.app.state.store
     setup_attempt(api)  # ana's chat with ops, its run under way
     with store.transaction() as c:
@@ -25,35 +25,7 @@ def seed(api):
             c, "human:cara", "Refresh the Acme pricing page", "", "bot:ops", lint=False, private=False
         )
         secret = H.task_create(c, "human:ana", "Acme layoffs plan", "", "human:ben", lint=False, private=True)
-        H.task_update(c, "bot:ops", public["id"], status="doing", note="On it")
-        asked = H.approval_request(
-            c,
-            "bot:ops",
-            "send",
-            {
-                "to": "ben@acme.example",
-                "cc": [],
-                "subject": "Report",
-                "body_sha256": "a" * 64,
-                "mailbox": "ops@acme.example",
-            },
-            task_id=secret["id"],
-        )
-        H.approval_decide(c, "human:ana", asked["id"], "approved")
-        other = H.approval_request(
-            c,
-            "bot:ops",
-            "send",
-            {
-                "to": "cara@acme.example",
-                "cc": [],
-                "subject": "Invoice",
-                "body_sha256": "b" * 64,
-                "mailbox": "ops@acme.example",
-            },
-            task_id=public["id"],
-        )
-        H.approval_decide(c, "human:ana", other["id"], "declined")
+        H.task_done(c, "bot:ops", public["id"], "Refreshed it", H.task(c, public["id"])["version"])
         c.execute(
             "INSERT INTO credentials(id,name,kind,created_at,updated_at,updated_by) VALUES('k1','=Stripe key','token',?,?,'ana')",
             (H.now(), H.now()),
@@ -89,7 +61,8 @@ def test_the_log_shows_every_recorded_kind_and_a_member_only_what_sql_shows_them
     stamps = [(i["at"], i["id"]) for i in owner["items"]]
     assert stamps == sorted(stamps, reverse=True)
     by_kind = {i["kind"]: i for i in owner["items"]}
-    assert by_kind["approval.granted"]["actor"] == "human:ana" and by_kind["approval.granted"]["about"] == "bot:ops"
+    moves = {(i["subject"], i["result"]) for i in owner["items"] if i["kind"] == "task"}
+    assert {("Refresh the Acme pricing page", "created"), ("Refresh the Acme pricing page", "done")} <= moves
     assert by_kind["credential.revealed"]["subject"] == "=Stripe key"
     assert (
         by_kind["decision"]["subject"] == "Ship the pricing page today?"
@@ -105,7 +78,7 @@ def test_the_log_shows_every_recorded_kind_and_a_member_only_what_sql_shows_them
     assert {"task", "decision"} <= set(kinds(cara))
     for hidden in ("Acme layoffs plan", secret["id"], "Stripe", "k1", "auto-1"):
         assert hidden not in seen
-    assert not {"approval.asked", "approval.granted", "credential.revealed", "outbound.blocked"} & set(kinds(cara))
+    assert not {"credential.revealed", "outbound.blocked"} & set(kinds(cara))
     # Each of Cara's rows is one her own SQL reads.
     sql = post(
         api,
@@ -121,15 +94,15 @@ def test_the_log_shows_every_recorded_kind_and_a_member_only_what_sql_shows_them
 
 def test_filters_narrow_by_teammate_team_and_kind_and_a_bot_needs_read(api):
     public, _ = seed(api)
-    only = get(api, "history?kind=approval.asked,approval.granted")
-    assert kinds(only) == ["approval.asked", "approval.granted"]
+    only = get(api, "history?kind=run,task")
+    assert kinds(only) == ["run", "task"]
     get(api, "history?kind=mail", expected=422)
     get(api, "history?bot=ops&person=ana", expected=422)
 
-    # A teammate is who acted, or whom the row is about: Ana's grant of ops' approval is in ops' history.
+    # A teammate is who acted, or whom the row is about: Cara's task for ops is in ops' history.
     ops = get(api, "history?bot=ops")
     assert all("bot:ops" in (i["actor"], i["about"]) for i in ops["items"])
-    assert {"run", "task", "approval.asked", "approval.granted", "permission.changed", "decision"} <= set(kinds(ops))
+    assert {"run", "task", "permission.changed", "decision"} <= set(kinds(ops))
     assert [i["result"] for i in get(api, "history?person=ana&kind=decision")["items"]] == ["Send it Monday"]
     assert [i["result"] for i in get(api, "history?person=cara&kind=decision", token="cara-test")["items"]] == [
         "Yes, ship it"
@@ -181,7 +154,7 @@ def test_csv_is_the_owners_and_admins_and_never_runs_a_cell_as_a_formula(api):
     assert len(list(csv.reader(io.StringIO(short.text)))) == 3 and "|" in short.headers["x-next"]
 
 
-def test_consolidated_history_only_shows_task_status_and_recorded_runs(api):
+def test_consolidated_history_only_shows_task_moves_and_recorded_runs(api):
     _, _, active = setup_attempt(api)
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "human:ana", "Refresh pricing", "", "bot:ops", lint=False, private=False)
@@ -241,12 +214,10 @@ def test_source_text_is_clipped_in_sql_before_python_or_csv(api):
     with store.transaction() as c:
         c.execute("UPDATE messages SET body=? WHERE kind IN ('ask','answer')", (large,))
         c.execute("UPDATE tasks SET title=?", (large,))
-        c.execute("UPDATE history_events SET old=?,new=? WHERE kind='status'", (large, large))
-        c.execute("UPDATE approvals SET kind=?", (large,))
         c.execute("UPDATE attempts SET exit=?", (large,))
         H.event(c, "human:ana", "credential.granted", "k1", {"subject": "bot:ops", "unused": large})
         H.event(c, "human:ana", "person.access_edited", "ben", {"roles": large, "via": large})
-    fields = {"answer", "asked", "title", "old", "new", "what", "decision", "exit", "changed", "subject_actor"}
+    fields = {"answer", "asked", "title", "exit", "changed", "subject_actor"}
     with (
         store.read() as c,
         closing(sql.connect(store.settings.db_path, c, auth, Identity("human:ana", "owner"))) as conn,
@@ -273,13 +244,10 @@ def test_source_text_is_clipped_in_sql_before_python_or_csv(api):
 @pytest.mark.parametrize(
     ("kind", "index"),
     [
-        ("approval.asked", "index_approvals_on_created_at_and_id"),
-        ("approval.granted", "index_approvals_on_decision_and_decided_at_and_id"),
-        ("approval.denied", "index_approvals_on_decision_and_decided_at_and_id"),
         ("decision", "index_messages_on_kind_and_created_at_and_id"),
     ],
 )
-def test_approval_and_decision_pages_seek_the_time_index_without_sorting(api, kind, index):
+def test_decision_pages_seek_the_time_index_without_sorting(api, kind, index):
     seed(api)
     store, auth = api.app.state.store, api.app.state.auth
     with (
@@ -302,9 +270,8 @@ def test_pages_keep_all_source_and_id_ties_in_order(api):
     seed(api)
     with api.app.state.store.transaction() as c:
         at = "2026-01-01T00:00:00.000000Z"
-        for table in ("attempts", "history_events", "approvals", "messages", "events"):
+        for table in ("attempts", "history_events", "messages", "events"):
             c.execute(f"UPDATE {table} SET created_at=?", (at,))
-        c.execute("UPDATE approvals SET decided_at=? WHERE decided_at IS NOT NULL", (at,))
     whole = get(api, "history")["items"]
     paged, before = [], ""
     for _ in range(len(whole) + 1):

@@ -904,17 +904,18 @@ Do not ask about anything a sensible default answers.
 {{flow_shape}}
 
 ## What wakes
-A "What wakes" automation (`wakes: {scope_kind, scope_id}`) holds the wake rules of one scope: a bot, a type, a
-department or the team. Each Filter rule matches one event (`event is <name>`; a step rule is `step_entered` with
-`task.step is <step>`) and wakes a bot, notes, archives or leaves it for a person. Its trigger is `tico.wake`; keep
+A "What wakes" automation (`wakes: {scope_kind, scope_id}`) holds the wake rules of one scope: a bot, a pipeline, a
+department or the team. Each Filter rule matches one event (`event is <name>`: `task.created`, `task.step_changed`,
+`task.done`, `task.closed`, `task.reopened`, `task.assigned`; a stage rule is `task.step_changed` with
+`task.stage is <stage>`) and wakes a bot, notes, archives or leaves it for a person. Its trigger is `tico.wake`; keep
 `stop` on.
-- A `task.step` value is the exact name or id of a step on that task type, ignoring case. List a type's steps with
-  `hub task types <id or name>` (`hub_task_types`).
+- A `task.stage` value is the exact name or id of a stage of that pipeline, ignoring case. `hub task show <id>` prints
+  a task's pipeline and stage.
 - Read `problems` on `hub automation show <id>` and `hub automation list` before and after an edit. Each entry is a
-  rule naming a step its type lacks: fix every one.
-- A save that names a missing step is refused, and its message lists the type's steps. Use one of them; do not retry the name.
-- A step a rule names cannot be deleted from its type until the rule changes.
-- To move a rule, set its `task.step` condition and its `then[0].args.rule.when.step` to the same step, then save.
+  rule naming a stage its pipeline lacks: fix every one.
+- A save that names a missing stage is refused, and its message lists the pipeline's stages. Use one of them; do not
+  retry the name.
+- To move a rule, set its `task.stage` condition and its `then[0].args.rule.when.stage` to the same stage, then save.
 
 ## Each reply
 One sentence on what you saved: its name, trigger, what it does, and whether it is on, off or pending. A refusal is one

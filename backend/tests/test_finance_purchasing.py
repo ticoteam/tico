@@ -29,6 +29,7 @@ from backend.tests.helpers.finance_fixtures import (
     finance_template,
     store,
 )
+from backend.tests.helpers.finance_oks import give
 
 EVE = "human:eve"
 FAY = "human:fay"
@@ -211,7 +212,7 @@ def test_a_large_order_asks_the_owner_and_the_owner_approval_runs_it(books):
         asked = act(c, EVE, "po_approve", {"po_id": big})
         assert (asked.status, asked.approver) == ("needs_approval", OWNER), asked
         assert _status(c, big) == ("sent", "") and _state(c) == (0, 0, 500_000)
-        H.approval_decide(c, str(asked.approver), str(asked.approval_id), "approved")
+        give(c, str(asked.approver), str(asked.approval_id))
         done = FA.approval_decided(c, str(asked.approval_id), AT)
         assert done is not None and done.status == "committed", done
         assert _status(c, big) == ("approved", "") and _state(c) == (0, 150_000, 350_000)
@@ -258,7 +259,7 @@ def test_an_order_past_an_ask_budget_asks_a_finance_admin_and_holds_once_approve
         asked = act(c, EVE, "po_approve", {"po_id": po})
         assert asked.status == "needs_approval", asked
         assert _status(c, po) == ("sent", "") and _state(c) == (0, 0, 50_000)
-        H.approval_decide(c, str(asked.approver), str(asked.approval_id), "approved")
+        give(c, str(asked.approver), str(asked.approval_id))
         done = FA.approval_decided(c, str(asked.approval_id), AT)
         assert done is not None and done.status == "committed", done
         assert _status(c, po) == ("approved", "") and _state(c) == (0, 80_000, -30_000)

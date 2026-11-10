@@ -1,6 +1,8 @@
-"""Live, evidence-based outcomes for notes handed to Hub tasks."""
+"""Live, evidence-based outcomes for notes handed to tasks."""
 
 import re
+
+from . import hubdb as H
 
 
 def outcome(conn, record, actor='', owner=False):
@@ -30,24 +32,18 @@ def outcome(conn, record, actor='', owner=False):
     children = [
         dict(t)
         for t in conn.execute(
-            "SELECT id,title,status,owner_id,requester_id FROM tasks WHERE id IN (SELECT from_task FROM task_relations "
-            "WHERE kind='parent' AND to_task=?) ORDER BY created_at",
+            "SELECT id,title,status,owner_id,requester_id FROM tasks WHERE id IN (SELECT to_task_id FROM links "
+            "WHERE from_task_id=?) ORDER BY created_at",
             (task_id,),
         )
         if owner or actor and actor in (t['owner_id'], t['requester_id'])
     ]
     # Quote the actual latest task note, never synthesize completion from a delivery receipt.
     note = task.get('note') or ''
-    if task['status'] == 'waiting':
-        waiting = next(
-            (
-                line.strip()
-                for line in note.splitlines()
-                if re.match(r'\s*(waiting|blocked|awaiting|needs? a decision)\b', line, re.I)
-            ),
-            '',
-        )
-        note = waiting or note
+    # An open task waiting on someone else says on whom (waiting_on), in place of its note.
+    waits = H.task_waits(conn, [task_id]).get(task_id) or [] if task['status'] == 'open' else []
+    if waits and waits[0].ask:
+        note = waits[0].line
     else:
         note = note.split('\n\n', 1)[0]
     note = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', note)
@@ -56,8 +52,6 @@ def outcome(conn, record, actor='', owner=False):
         note = note[:297].rsplit(' ', 1)[0] + '…'
     fallback = {
         'open': 'Delivered; awaiting review.',
-        'doing': 'Review is in progress.',
-        'waiting': 'Waiting for a decision or follow-up.',
         'done': 'Review completed; no outcome summary was recorded.',
         'closed': 'Review closed; no outcome summary was recorded.',
     }

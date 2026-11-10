@@ -1,6 +1,6 @@
 """Task-local inheritance from the current mixed org chart. Never impersonate a report.
 
-Only task parties lend their rights; bot access, approvals and credentials keep their
+Only task parties lend their rights; bot access, asks and credentials keep their
 own checks. Inputs and results last no longer than the connection's read snapshot.
 """
 

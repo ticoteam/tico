@@ -88,17 +88,15 @@ _RULE_NAMES = {
     "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
     "bot_reports_direct": ("Bots send reports to the Tico team without asking", "confirm", ""),
-    "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
     "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }
 _RULE_WHERE = {
     "health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
     "bot_reports_direct": (GENERAL + " > Team", _card("general", "settings-team")),
-    "stale_review": (RULES, SYSTEM_JOBS),
     "topic_fresh": (RULES, SYSTEM_JOBS),
 }
-_ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
+_ADMIN_RULES = ("topic_fresh", "org_rule_checks")
 
 TEAM_RULES = [
     S(
@@ -895,17 +893,6 @@ ENTRIES = TEAM_RULES + [
         "manages_reports",
         card=_card("bots"),
         words="manager report model task name description",
-    ),
-    S(
-        "bot.keep_tasks_going",
-        "Keep tasks going",
-        BOTS + " > Bot editor",
-        "bot",
-        "direct",
-        "POST",
-        "bots/{bot}/keep-tasks-going",
-        "keep_tasks_going",
-        card=_card("bots"),
     ),
     S(
         "bot.turns_at_once",
@@ -1760,7 +1747,6 @@ ALIASES = {
 
 # Writes on a Settings page that change no setting: one-off actions, and why each needs no entry.
 NOT_SETTINGS = {
-    ("POST", "approvals/{x}/undo"): "undoes one approval; nothing to set",
     ("POST", "jobs/{x}/reconcile"): "settles one stopped run; nothing to set",
     ("POST", "system/storage/tico/check"): "checks the storage connection",
     ("POST", "setup/company/people/{x}/invite"): "sends one invitation from setup",

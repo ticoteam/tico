@@ -31,6 +31,7 @@ from backend.tests.helpers.finance_fixtures import (
 )
 from backend.tests.helpers.finance_payments import HOURS, _checking, _payee
 from backend.tests.helpers.finance_ap import LATER, _balance, _bill, _events, _ingest, _pnl, _txn, _vendor
+from backend.tests.helpers.finance_oks import give, send_back, withdraw
 
 PLAIN = "human:eve"  # a web teammate with no grants or rights
 
@@ -224,10 +225,9 @@ def test_a_payment_rejected_in_mercury_leaves_the_bill_unpaid_and_says_so(books)
         assert again.status == "committed", again
 
 
-def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_says_so(books):
-    """A payment a scheduled bill asked for that waits on approval and never runs leaves no "Scheduled" bill behind:
+def test_a_scheduled_payment_sent_back_or_withdrawn_reopens_the_bill_and_says_so(books):
+    """A payment a scheduled bill asked for that waits on an OK and never runs leaves no "Scheduled" bill behind:
     the bill is open with no schedule, its row says how the ask ended, and a new schedule asks again (fresh key)."""
-    from backend import hubdb as H
 
     def asked(c, bid):
         FA.watch_documents(c, AT)
@@ -256,22 +256,16 @@ def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_sa
     with books.transaction() as c:
         bid = _scheduled_today(c, ask=True)
         first = asked(c, bid)
-        H.approval_decide(c, str(first.approver), str(first.approval_id), "declined")
+        send_back(c, str(first.approver), str(first.approval_id))
         assert FA.approval_decided(c, str(first.approval_id), AT).status == "denied"
         reopened(c, bid, "denied")
         reschedule(c, bid)
         assert FR.bill(c, OWNER, bid)["payment"] is None  # a new schedule clears how the last one ended
         second = asked(c, bid)
         assert second.action_id != first.action_id
-        H.approval_withdraw(c, str(second.approval_id), "Withdrawn.")
+        withdraw(c, second.approval_id)
         assert [r.status for r in FA.approvals_sweep(c, AT)] == ["withdrawn"]
         reopened(c, bid, "withdrawn")
-        reschedule(c, bid)
-        third = asked(c, bid)
-        c.execute("UPDATE approvals SET created_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (third.approval_id,))
-        H.approval_withdraw(c, str(third.approval_id), "No decision in 14 days.")
-        assert [r.status for r in FA.approvals_sweep(c, AT)] == ["expired"]
-        reopened(c, bid, "expired")
 
 
 def test_vendor_labels_are_contact_names_and_never_ids(books):
@@ -1323,6 +1317,7 @@ def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_n
     waiting payment_create is withdrawn with its approval, so approving it later runs nothing, the bill stays
     scheduled for its new day, and that day asks afresh. A live payment still refuses a reschedule."""
     from backend import hubdb as H
+    from backend import task_asks
 
     connect(books, FakeMercury())
     with books.transaction() as c:
@@ -1335,8 +1330,10 @@ def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_n
         )
         assert moved.status == "committed", moved
         assert FA.action(c, old.action_id).status == "withdrawn"
-        assert H.approval(c, str(old.approval_id))["decision"] == "withdrawn"
-        assert FA.approval_decided(c, str(old.approval_id), AT).status == "withdrawn"  # approving runs nothing
+        assert task_asks.standing(c, str(old.approval_id)) == task_asks.WITHDRAWN
+        with pytest.raises(H.Refused):  # an OK that was withdrawn cannot be given
+            give(c, str(old.approver), str(old.approval_id))
+        assert FA.approval_decided(c, str(old.approval_id), AT).status == "withdrawn"
         bill = FR.bill(c, OWNER, bid)
         assert (bill["status"], bill["pay_on"], bill["payment"]) == ("scheduled", "2026-11-15", None)
         FA.watch_documents(c, AT)
@@ -1344,7 +1341,7 @@ def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_n
         FA.watch_documents(c, "2026-11-15T12:00:00.000000Z")
         again = FA.action(c, str(FR.bill(c, OWNER, bid)["schedule"]["action_id"]))
         assert again.action_id != old.action_id and again.status == "needs_approval"
-        H.approval_decide(c, str(again.approver), str(again.approval_id), "approved")
+        give(c, str(again.approver), str(again.approval_id))
         assert FA.approval_decided(c, str(again.approval_id), "2026-11-15T12:00:00.000000Z").status == "committed"
         refused = act(
             c,

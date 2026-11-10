@@ -1,4 +1,4 @@
-"""What a meeting turns into: action items a person pushes to the hub's task board.
+"""What a meeting turns into: action items a person pushes to Tico as tasks.
 
 A meeting holds three lists: **Doc updates**, **Tasks** and **Feature requests**, an outbox a
 person empties. They live in `meeting_items` beside the meeting rather than inside its notes, so
@@ -25,11 +25,11 @@ from .views import human_only, roster
 
 SECTIONS = ("doc", "task", "feature")
 PUSHABLE = SECTIONS
-# A feature request is a task on the hub's own board, at the bottom of the product team's queue;
+# A feature request is a task in Tico, at the bottom of the product team's queue;
 # a person on the product or engineering team ranks and reassigns it. Its owner is the person
 # who is primary for the product team in registry/people.yaml, else the environment owner.
 FEATURE_TEAM = "product"
-# Labels that describe a process on the old board, never a request; a push carrying one is refused.
+# Labels that describe a process, never a request; a push carrying one is refused.
 PROCESS_LABELS = {
     "blocked",
     "blocked by specs",
@@ -332,7 +332,7 @@ def _normalise(title):
 
 
 def feature_duplicate(c, title, who=None, auth=None):
-    """A task still on the board whose title means the same thing, or None."""
+    """An open task whose title means the same thing, or None."""
     wanted = _normalise(title)
     if not wanted:
         return None
@@ -367,7 +367,7 @@ def push_feature(c, settings, task_create, who, record, row, detail, force, auth
             found["url"] = f"{settings.public_url}/#/task/{found['id']}"
             raise Problem(
                 "duplicate",
-                f"A task on the board already says this: {found['name']} ({found['list']})",
+                f"An open task already says this: {found['name']} ({found['list']})",
                 409,
                 extra={"duplicate": found},
             )
@@ -581,7 +581,7 @@ def install_meeting_items(app, store, mutate, task_create, auth):
             elif row["section"] == "doc":
                 result = push_doc(c, settings, create_task, who, record, row, detail, auth)
             else:
-                # a close match on the board is refused; `force` is the person saying they meant it
+                # a close match among open tasks is refused; `force` is the person saying they meant it
                 result = push_feature(c, settings, create_task, who, record, row, detail, body.force, auth)
             return {"item": record_push(c, who, rid, iid, result), "pushed": True}
 

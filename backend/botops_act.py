@@ -39,7 +39,6 @@ OTHERS_WORDS = ("comment", "via", "assistant", "slack", "routing", "live_meeting
 # How long a person's request lends their rights after they last spoke on its task (created it, sent the message it
 # carries, commented on it), however long the task stays open.
 LEND_MAX_DAYS = 30
-TERMINAL = ("done", "closed", "declined")
 
 
 def own_run(c, auth, attempt_id):
@@ -189,19 +188,28 @@ def _is_owner(c, auth, actor):
         return False
 
 
+def reopened_by(c, task_id):
+    """Each time the task was reopened after it was done or closed, oldest first: {"actor", "via"} (the engine's move
+    rows, backend/task_engine.py)."""
+    return [
+        dict(row)
+        for row in c.execute(
+            "SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
+            "AND kind='move' AND json_extract(data, '$.move')='reopen' ORDER BY rowid",
+            (task_id,),
+        )
+    ]
+
+
 def lend_lapsed(c, task):
     """Why a person's task no longer lends their rights, whatever its status says, or "" while it does: someone other
-    than the requester moved it back from done, closed or declined (the request it carried was finished), or the
+    than the requester reopened it after it was done or closed (the request it carried was finished), or the
     requester last spoke on it more than LEND_MAX_DAYS ago."""
     from .store import H
 
     requester = task["requester_id"]
-    for row in c.execute(
-        "SELECT actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? "
-        "AND kind='status' AND old IN (?,?,?) AND new NOT IN (?,?,?)",
-        (task["id"], *TERMINAL, *TERMINAL),
-    ):
-        if row["actor"] != requester or dict(row).get("via"):
+    for row in reopened_by(c, task["id"]):
+        if row["actor"] != requester or row.get("via"):
             # Re-asking on the same task can't clear this: the reopening stays in its history. The person's own new
             # words start a run with their rights anyway (a comment on the open task, or their BotOps chat).
             return (

@@ -2,10 +2,12 @@
 then committed, sent to one person for approval, denied or failed, and recorded in `fin_actions` with its audit row
 in the same transaction. Callers outside backend/finance write only through here.
 
-Approvals are Tico approvals with no task, kind `finance` (`spend` is kept for money out, which phase 0 has none of;
-`spend_limit` is never used, since approving one applies a usage-cap proposal). The payload carries the action id.
-When a decision arrives, `approval_decided` verifies the approval is the one Finance asked for, re-checks rights, view
-and budgets, consumes it, and commits, all in one transaction."""
+An approval is an OK bound to exactly what was shown (backend/task_asks.py, subject `finance:<action id>`), asked of
+one person on a task of its own; the action's `approval_id` is the OK's requirement id. A bot never gives one: only the
+named person's own click on its preview in Tico does, and never the person who asked (`_approver`). Once the OK is
+given (`ok_given`, and the hourly `approvals_sweep` for anything it missed), `approval_decided` checks the OK is the one
+Finance asked for, given by that person, for exactly the payload about to run, re-checks rights, view and budgets, uses
+it, and commits, all in one transaction."""
 
 import json
 import logging
@@ -152,12 +154,12 @@ PLANNERS: dict[str, handlers.Planner] = {
 }
 assert set(PLANNERS) == set(K.LIVE)
 
-STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
+STATUSES = ("committed", "needs_approval", "denied", "failed", "withdrawn")
 DENIAL_CODES = (DENIED, NOT_AVAILABLE)
-SOURCE = "finance"  # marks a Tico approval as Finance's, for the decide routes to route
+SOURCE = "finance"  # what an OK's content says it is for
+SUBJECT = "finance:"  # an OK's subject: this and the action id
 MAX_KEY = 200
 CARD_NUMBER_REFUSED = V.CARD_NUMBER_REFUSED
-STALE_DAYS = 14  # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
 RESOLVED_KEYS = frozenset(
@@ -308,7 +310,7 @@ def _release(c: sqlite3.Connection, name: str) -> None:
 
 
 def _requester(c: sqlite3.Connection, who: str) -> str:
-    """Who the Tico approval is asked by: the teammate, or the keeper for system work."""
+    """Who the OK is asked by: the teammate, or the keeper for system work."""
     return who if who != O.SYSTEM and tico.known_actor(c, who) else "keeper"
 
 
@@ -624,13 +626,14 @@ def _ask(
 ) -> str:
     requester = _requester(ctx.c, who)
     payload = _approval_payload(action_id, kind, body, what)
-    approval_id = tico.approval_request(ctx.c, requester, K.approval_kind(kind), payload, approver)
+    title = what.removesuffix(f" (Finance action {action_id})")
+    approval_id = tico.ok_ask(ctx.c, requester, approver, title, SUBJECT + action_id, payload)
     named = None if asks is None else [{"rule": r, "outcome": "needs_approval"} for r, _ in asks]
     SX.asked(
         ctx.c,
         action_id,
         approval_id=approval_id,
-        approval_hash=tico.payload_hash(payload),
+        approval_hash=tico.content_hash(payload),
         requester=requester,
         to=approver,
         rule_id=rule,
@@ -642,25 +645,29 @@ def _ask(
 
 
 # ------------------------------------------------------------------------------------------------ decisions
-def verify(row: Mapping[str, object], appr: Mapping[str, object]) -> str:
-    """Whether an approved Tico approval is the one this action waits on, decided by the person it was sent to, for
-    exactly the payload about to run. "" when it is; "payload" when the payload differs (ask again); else why not."""
-    if appr.get("kind") != K.approval_kind(str(row["kind"])):
-        return "it is a different kind of approval"
-    if appr.get("requested_by_id") != row["approval_by"]:
-        return "Finance did not ask for it"
-    decided_by = str(appr.get("decided_by_id") or "")
-    if not decided_by.startswith("human:") or decided_by != row["approval_to"]:
-        return "it was decided by someone other than the person it was sent to"
-    if appr.get("consumed_at"):
-        return "it was already used"
+def _expected(row: Mapping[str, object]) -> dict[str, object]:
+    """The content an action's OK must be bound to: the payload as it was asked, with its text."""
     result = json.loads(str(row["result"] or "{}"))
-    expected = tico.payload_hash(
-        _approval_payload(
-            str(row["id"]), str(row["kind"]), json.loads(str(row["payload"])), str(result.get("what", ""))
-        )
+    return _approval_payload(
+        str(row["id"]), str(row["kind"]), json.loads(str(row["payload"])), str(result.get("what", ""))
     )
-    if appr.get("payload_hash") != expected or row["approval_hash"] != expected:
+
+
+def verify(row: Mapping[str, object], found: Mapping[str, object]) -> str:
+    """Whether a given OK is the one this action waits on: asked by Finance for this action, given by the person it
+    was asked of (never a bot, never anyone else), not used, for exactly the payload about to run. "" when it is;
+    "payload" when the payload differs (ask again); else why not."""
+    if found.get("subject") != SUBJECT + str(row["id"]):
+        return "it is an OK for something else"
+    if found.get("asked_by_id") != row["approval_by"]:
+        return "Finance did not ask for it"
+    given_by = str(found.get("ok_by_id") or "")
+    if not tico.is_person(given_by) or given_by != row["approval_to"]:
+        return "it was given by someone other than the person it was asked of"
+    if found.get("used_at"):
+        return "it was already used"
+    expected = tico.content_hash(_expected(row))
+    if found.get("content_hash") != expected or row["approval_hash"] != expected:
         return "payload"
     return ""
 
@@ -675,6 +682,8 @@ def _close(
     budgeting.release_for(ctx, "action", action_id)
     payments.drop_details(ctx.c, json.loads(str(row["payload"] or "{}")))
     SX.finish(ctx.c, action_id, status=status, result=_recorded(named), code=code, reason=text, at=ctx.at)
+    if row["approval_id"]:  # its OK is not needed any more: the task it was asked on closes with why
+        tico.ok_withdraw(ctx.c, str(row["approval_id"]), text)
     if str(row["kind"]) == "payment_create":  # a scheduled bill that asked for it is open again, and says why
         documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload"] or "{}")), status, text)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
@@ -685,7 +694,7 @@ def _close(
 
 def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]:
     """End every waiting ask to pay this bill (its scheduled payment's payment_create, an earlier bill_schedule)
-    other than `keep`: its approval is withdrawn and it can never run. The ids ended."""
+    other than `keep`: its OK is withdrawn and it can never run. The ids ended."""
     out: list[str] = []
     for row in SX.waiting(ctx.c, ("payment_create", "bill_schedule")):
         body = json.loads(str(row["payload"] or "{}"))
@@ -696,8 +705,6 @@ def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]
         )  # trimmed as the planners read them
         if not mine or str(row["id"]) == keep:
             continue
-        if row["approval_id"]:
-            tico.approval_withdraw(ctx.c, str(row["approval_id"]), why)
         _close(ctx, row, "withdrawn", "withdrawn", why)
         out.append(str(row["id"]))
     return out
@@ -722,38 +729,28 @@ def revalidate_org(c: sqlite3.Connection, at: str | None = None) -> None:
 
 
 def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = None) -> ActionResult | None:
-    """Act on a decision about a Finance approval, in the caller's transaction: approve commits once (re-checked),
-    decline denies, a withdrawal or expiry ends the action. None when the approval is not Finance's. Safe to call
+    """Act on how a Finance action's OK stands, in the caller's transaction: given, it commits once (re-checked); sent
+    back, the action is denied; withdrawn (or gone), the action ends. None when the OK is not Finance's. Safe to call
     more than once."""
     row = SX.by_approval(c, approval_id)
     if row is None:
         return None
-    tico_db.durable_commit(c)  # approving can move money: its commit reaches the disk (act says why)
+    tico_db.durable_commit(c)  # an OK can move money: its commit reaches the disk (act says why)
     if row["status"] != "needs_approval":
         return _stored(row)
     ctx = load(c, at)
     handlers.suspend_unstanding(ctx)
-    appr = tico.approval(c, approval_id)
-    if appr is None:
-        return _close(ctx, row, "withdrawn", "withdrawn", "its approval is gone")
-    decision = appr.get("decision")
-    if not decision:
+    found = tico.ok_grant(c, approval_id)
+    standing = tico.ok_standing(c, approval_id)
+    if found is None:
+        return _close(ctx, row, "withdrawn", "withdrawn", "its OK is gone")
+    if standing == "waiting":
         return _stored(row)
-    if decision == "declined":
-        return _close(ctx, row, "denied", "declined", f"declined by {appr.get('decided_by_id')}")
-    if decision != "approved":
-        stale = appr.get("decided_by_id") == "keeper" and str(appr.get("created_at") or "") <= tico.shift(
-            ctx.at, days=-STALE_DAYS
-        )
-        status = "expired" if stale else "withdrawn"
-        return _close(
-            ctx,
-            row,
-            status,
-            status,
-            "nobody decided in time; ask again" if stale else "its approval was withdrawn; ask again",
-        )
-    problem = verify(row, appr)
+    if standing == "sent_back":
+        return _close(ctx, row, "denied", "declined", f"sent back by {row['approval_to']}")
+    if standing != "ok":
+        return _close(ctx, row, "withdrawn", "withdrawn", "its OK was withdrawn; ask again")
+    problem = verify(row, found)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""), rule=str(row["rule_id"] or ""))
     kind, body = str(row["kind"]), json.loads(str(row["payload"]))
     if problem:
@@ -762,7 +759,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     mark = _savepoint(c, "fin_decide")
     try:
         ctx.deciding = True
-        ctx.decider = str(appr.get("decided_by_id") or "")  # the person who said yes (verify: approval_to)
+        ctx.decider = str(found.get("ok_by_id") or "")  # the person who gave the OK (verify: approval_to)
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _decider(ctx, row, gate, p.who)
         unnamed = _uncovered(row, plan)
@@ -789,10 +786,11 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
             if _mail_moved(body, plan):
                 return _reask(ctx, row, p, kind, body, MAIL_MOVED)
             return _reask(ctx, row, p, kind, body)
-        tico.approval_consume(c, str(row["approval_by"]), approval_id)
+        tico.ok_use(c, approval_id, SUBJECT + str(row["id"]), _expected(row), str(row["approval_by"]))
         result = plan.apply(str(row["id"]))
         SX.finish(c, str(row["id"]), status="committed", result=result, code="", reason="", at=ctx.at)
         _audit(c, p, str(row["id"]), kind, "committed", extra={"approval_id": approval_id})
+        tico.ok_settle(c, approval_id, "Done in Finance.")
         _release(c, "fin_decide")
         return _stored(SX.by_id(c, str(row["id"])), full=True)
     except FinanceError as e:
@@ -813,8 +811,8 @@ def void_for_recipient(
 ) -> str:
     """A queued payment's recipient was replaced after its approval: that approval is void, and the new details are asked
     for as a new action (its own payment, with its own key) of a finance admin (§5, §6.4 rule 1). The old action keeps its
-    record. Called by payments.recheck; a pending approval is asked again by approval_decided instead. Returns the new
-    approval's id."""
+    record. Called by payments.recheck; a pending OK is asked again by approval_decided instead. Returns the new OK's
+    requirement id."""
     action_id = tico.new_id()
     what = f"{summary} (Finance action {action_id})"
     SX.insert(
@@ -876,6 +874,8 @@ def _reask(
     reason, `why`). The change is planned again and asked again for the payload it would now run, of the person who
     decides it now. Never the requester."""
     action_id = str(row["id"])
+    if row["approval_id"]:  # the old OK is void: never asked again as the same one
+        tico.ok_withdraw(ctx.c, str(row["approval_id"]), f"{why}; asked again")
     ctx.deciding = True  # the recheck runs on the true figures (figure_route)
     try:
         gate, plan = _plan(ctx, p, kind, body, action_id)
@@ -910,11 +910,21 @@ def _reask(
     return _stored(SX.by_id(ctx.c, action_id))
 
 
+def ok_given(c: sqlite3.Connection, grant: Mapping[str, object], ctx: object = None) -> None:
+    """In the transaction of an OK of a Finance action (task_asks.ON_OK "finance"): the action commits now, or is
+    asked again or ends as approval_decided decides."""
+    approval_decided(c, str(grant["requirement_id"]))
+
+
 def approvals_sweep(c: sqlite3.Connection, at: str | None = None, most: int = 200) -> list[ActionResult]:
-    """Finish waiting actions whose approval was decided, withdrawn (backend/approval_expiry.py withdraws undecided ones
-    after 14 days) or deleted: what a scheduler job runs, and what catches a decision no route handed over."""
+    """Finish waiting actions whose OK was given, sent back, withdrawn or is gone: what a scheduler job runs, and what
+    catches an OK no route handed over."""
     out: list[ActionResult] = []
-    for approval_id in SX.settled_waits(c, most):
+    for approval_id in SX.waits(c):
+        if len(out) >= most:
+            break
+        if tico.ok_standing(c, approval_id) == "waiting":
+            continue
         done = approval_decided(c, approval_id, at)
         if done is not None:
             out.append(done)
@@ -950,7 +960,6 @@ def help(kind: str | None = None) -> dict[str, object]:
         "words": K.WORDS[kind],
         "right": need(kind),
         "live": kind in K.LIVE,
-        "approval_kind": K.approval_kind(kind),
         "fields": [
             {"name": n.rstrip("?"), "type": t, "required": not n.endswith("?"), "words": w}
             for n, t, w in K.SHAPES[kind]

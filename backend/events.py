@@ -8,9 +8,9 @@ signed-in person as they commit, filtered to what that person may read:
 - `tasks`: a task as the list shows it to the viewer, or `gone` for one deleted. `task=<ids>` and `party=<actors>`
   narrow it to those tasks and to the tasks those actors own or asked for (now, or before the change moved them): a
   page that shows one bot's or one person's tasks, or a single open task, is not sent every task's change. Anything the list
-  shows of a task (its tags, files, relations, open ask, routine, step) logs the task, so a task
-  list can also be caught up from a change number (backend/task_reads.py). One change to more than
-  FAN_CAP tasks (a type or tag edit) is a single `bulk: true`: read task lists in full.
+  shows of a task (its tags, files, relations, routine, its stage's visit, an ask, an answer, a snooze, a task it
+  filed) logs the task, so a task list can also be caught up from a change number (backend/task_reads.py). One change
+  to more than FAN_CAP tasks (a tag edit) is a single `bulk: true`: read task lists in full.
 - `messages`: a message as a conversation page shows it, a deleted one, or a chat goal change.
 - `runs`: a bot run's output step, or its state moving (queued, started, finished).
 - `bots`: a bot's status line, as `GET /api/v2/status` shows it.
@@ -20,8 +20,7 @@ signed-in person as they commit, filtered to what that person may read:
   `needs=changes` is sent its `count`, `version`, and the ids `changed` and `removed` since `base` instead (both
   null when more than NEEDS_CHANGES_MAX moved: read the list whole), and reads only those items
   (`GET /api/v2/needs-you?ids=`). The stream keeps the marks of the list it last described, from its start; a page
-  whose held version is not `base` reads the list whole. Folded task ids are sent, whole, only when their set
-  changes, and share NEEDS_CHANGES_MAX with `changed` and `removed`: past it, null reads the list whole.
+  whose held version is not `base` reads the list whole.
   Without `needs=changes` a page gets the whole list, as before, so an older page keeps working.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
@@ -131,6 +130,18 @@ def _changed(*columns):
     return " OR ".join(f"OLD.{column} IS NOT NEW.{column}" for column in columns)
 
 
+# The task a visit is of, and the person a requirement names, as SQL for a trigger's body.
+_VISIT_TASK = "(SELECT task_id FROM visits WHERE id={visit})"
+_ASKED = "(SELECT person_id FROM requirements WHERE id={req})"
+
+
+def _task_parties(task):
+    """The SQL of the people a task's change reaches in Needs you: its owner, assignee and requester."""
+    return tuple(
+        f"(SELECT {column} FROM tasks WHERE id={task})" for column in ("owner_id", "assignee_id", "requester_id")
+    )
+
+
 # A WHEN that is true when any column of its table changed. ensure() fills it in from PRAGMA table_info, so a
 # column added later is covered without a change here, and the trigger is rebuilt because its SQL changed.
 _ANY_COLUMN = "__any_column_changed__"
@@ -146,13 +157,10 @@ _NOT_CARRIER = (
 
 
 def _fan(kind, ids, whole=None):
-    """A `tasks` row for each task id `ids` (a SELECT of one column, `id`) yields: a change to
-    something many tasks show, such as a tag or a step. Past FAN_CAP tasks (a type holding hundreds),
-    one `bulk` row instead: per-task rows would be hundreds of events to every open page, each
-    task loaded per viewer, where one full read of the list costs less. `whole` (the same kind of
-    SELECT) is what is counted against FAN_CAP when it is more than `ids`: a type's steps are saved
-    one row at a time, and each step of a big type under the cap made its own hundred rows (TIDY,
-    Oct 30: one type edit, 1,412 rows over 353 tasks, and every open Bot Desk read the roster again)."""
+    """A `tasks` row for each task id `ids` (a SELECT of one column, `id`) yields: a change to something many tasks
+    show, such as a tag. Past FAN_CAP tasks, one `bulk` row instead: per-task rows would be hundreds of events to every
+    open page, each task loaded per viewer, where one full read of the list costs less. `whole` (the same kind of
+    SELECT) is what is counted against FAN_CAP when it is more than `ids`."""
     found = f"(SELECT id FROM ({ids}) WHERE id IS NOT NULL)"
     counted = f"(SELECT id FROM ({whole}) WHERE id IS NOT NULL)" if whole else found
     many = f"(SELECT count(*) FROM (SELECT 1 FROM {counted} LIMIT {FAN_CAP + 1}))>{FAN_CAP}"
@@ -401,7 +409,7 @@ TRIGGERS = [
     # every few minutes per closed task).
     ("changes_task_links_update", "UPDATE", "task_links", _ANY_COLUMN, _row("tasks", "link", "NEW.task_id")),
     ("changes_task_links_delete", "DELETE", "task_links", None, _row("tasks", "link", "OLD.task_id")),
-    # A relation (parent, blocks, related, duplicate, follow-up) changes how both ends show.
+    # A relation (parent, related, duplicate, follow-up) changes how both ends show.
     (
         "changes_task_relations_insert",
         "INSERT",
@@ -438,8 +446,7 @@ TRIGGERS = [
         None,
         _row("tasks", "roles", "OLD.task_id") + _needs("task", "OLD.actor"),
     ),
-    # The rest of what a task's row in a list shows: its tags, files and cover, routine, open ask,
-    # type and step, and whether its next run has been picked up.
+    # The rest of what a task's row in a list shows: its tags, files and cover and routine.
     ("changes_task_tags_insert", "INSERT", "task_tags", None, _row("tasks", "tags", "NEW.task_id")),
     ("changes_task_tags_delete", "DELETE", "task_tags", None, _row("tasks", "tags", "OLD.task_id")),
     (
@@ -496,41 +503,87 @@ TRIGGERS = [
         "NEW.task_id IS NOT NULL",
         _row("tasks", "routine", "NEW.task_id"),
     ),
+    # The engine's tables (backend/task_engine.py): a task's row changes only on a move, a reassign or a field edit,
+    # so an answer, an ask, a snooze, a sub-task or the ladder reaching a person logs the task here, and moves the
+    # Needs-you list of its people and of whoever the ask names.
     (
-        "changes_task_types_update",
-        "UPDATE",
-        "task_types",
-        None,
-        _fan("type", "SELECT id FROM tasks WHERE type_id=NEW.id"),
-    ),
-    # A step's tasks, counted against FAN_CAP with the rest of its type; a write that changes nothing is no change.
-    (
-        "changes_task_steps_insert",
+        "changes_visits_insert",
         "INSERT",
-        "task_steps",
+        "visits",
         None,
-        _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id", "SELECT id FROM tasks WHERE type_id=NEW.type_id"),
+        _row("tasks", "visit", "NEW.task_id") + _needs("task", *_task_parties("NEW.task_id"), "NEW.person_id"),
     ),
     (
-        "changes_task_steps_update",
+        "changes_visits_update",
         "UPDATE",
-        "task_steps",
+        "visits",
+        _changed("level", "person_id", "late_told_at", "late_person_at", "left_at"),
+        _row("tasks", "visit", "NEW.task_id")
+        + _needs("task", *_task_parties("NEW.task_id"), "OLD.person_id", "NEW.person_id"),
+    ),
+    (
+        "changes_answers_insert",
+        "INSERT",
+        "answers",
+        None,
+        _row("tasks", "answer", _VISIT_TASK.format(visit="NEW.visit_id"))
+        + _needs(
+            "ask", *_task_parties(_VISIT_TASK.format(visit="NEW.visit_id")), _ASKED.format(req="NEW.requirement_id")
+        ),
+    ),
+    (
+        "changes_answers_update",
+        "UPDATE",
+        "answers",
         _ANY_COLUMN,
-        _fan("type", "SELECT id FROM tasks WHERE step_id=NEW.id", "SELECT id FROM tasks WHERE type_id=NEW.type_id"),
+        _row("tasks", "answer", _VISIT_TASK.format(visit="NEW.visit_id"))
+        + _needs(
+            "ask", *_task_parties(_VISIT_TASK.format(visit="NEW.visit_id")), _ASKED.format(req="NEW.requirement_id")
+        ),
     ),
     (
-        "changes_task_steps_delete",
-        "DELETE",
-        "task_steps",
-        None,
-        _fan("type", "SELECT id FROM tasks WHERE step_id=OLD.id", "SELECT id FROM tasks WHERE type_id=OLD.type_id"),
+        "changes_requirements_insert",
+        "INSERT",
+        "requirements",
+        "NEW.visit_id IS NOT NULL",
+        _row("tasks", "ask", _VISIT_TASK.format(visit="NEW.visit_id"))
+        + _needs("ask", *_task_parties(_VISIT_TASK.format(visit="NEW.visit_id")), "NEW.person_id"),
     ),
     (
-        "changes_attempts_carried",
+        "changes_requirements_update",
         "UPDATE",
-        "attempts",
-        _changed("state"),
-        _fan("run", "SELECT id FROM tasks WHERE carried_by=NEW.id"),
+        "requirements",
+        f"NEW.visit_id IS NOT NULL AND ({_ANY_COLUMN})",
+        _row("tasks", "ask", _VISIT_TASK.format(visit="NEW.visit_id"))
+        + _needs("ask", *_task_parties(_VISIT_TASK.format(visit="NEW.visit_id")), "OLD.person_id", "NEW.person_id"),
+    ),
+    (
+        "changes_snoozes_insert",
+        "INSERT",
+        "snoozes",
+        None,
+        _row("tasks", "snooze", "NEW.task_id") + _needs("task", *_task_parties("NEW.task_id")),
+    ),
+    (
+        "changes_snoozes_update",
+        "UPDATE",
+        "snoozes",
+        _ANY_COLUMN,
+        _row("tasks", "snooze", "NEW.task_id") + _needs("task", *_task_parties("NEW.task_id")),
+    ),
+    (
+        "changes_links_insert",
+        "INSERT",
+        "links",
+        None,
+        _row("tasks", "filed", "NEW.from_task_id") + _row("tasks", "filed", "NEW.to_task_id"),
+    ),
+    (
+        "changes_links_delete",
+        "DELETE",
+        "links",
+        None,
+        _row("tasks", "filed", "OLD.from_task_id") + _row("tasks", "filed", "OLD.to_task_id"),
     ),
     (
         "changes_messages_insert",
@@ -706,30 +759,6 @@ TRIGGERS = [
     ("changes_bot_control_insert", "INSERT", "bot_control", None, _row("bots", "control", "NEW.bot", bot="NEW.bot")),
     ("changes_bot_control_update", "UPDATE", "bot_control", None, _row("bots", "control", "NEW.bot", bot="NEW.bot")),
     ("changes_bot_control_delete", "DELETE", "bot_control", None, _row("bots", "control", "OLD.bot", bot="OLD.bot")),
-    # An approval is on the Needs-you list of the person its message went to.
-    (
-        "changes_approvals_insert",
-        "INSERT",
-        "approvals",
-        None,
-        _needs("approval", "(SELECT recipient_id FROM messages WHERE id=NEW.message_id)"),
-    ),
-    (
-        "changes_approvals_update",
-        "UPDATE",
-        "approvals",
-        _changed("decision", "consumed_at"),
-        _needs("approval", "(SELECT recipient_id FROM messages WHERE id=NEW.message_id)"),
-    ),
-    # A stale ticket suggestion is on its owner's card until they accept or skip it (backend/stale_review.py).
-    ("changes_stale_suggestions_insert", "INSERT", "stale_suggestions", None, _needs("stale", "NEW.owner")),
-    (
-        "changes_stale_suggestions_update",
-        "UPDATE",
-        "stale_suggestions",
-        _changed("outcome"),
-        _needs("stale", "NEW.owner"),
-    ),
 ]
 
 # ---------------------------------------------------------------- what a computer is told
@@ -1352,11 +1381,6 @@ NEEDS = {
     "changes_blob_media_insert": ("task_assets", "bot_files", "bot_file_versions"),
     "changes_blob_media_update": ("task_assets", "bot_files", "bot_file_versions"),
     "changes_messages_update": ("messages.superseded_at",),
-    "changes_task_types_update": ("tasks.type_id",),
-    "changes_task_steps_insert": ("tasks.step_id",),
-    "changes_task_steps_update": ("tasks.step_id",),
-    "changes_task_steps_delete": ("tasks.step_id",),
-    "changes_attempts_carried": ("tasks.carried_by",),
     "changes_runner_task_links_insert": ("task_links.computer_id",),
     "changes_runner_task_links_update": ("task_links.computer_id",),
     "changes_runner_task_links_delete": ("task_links.computer_id",),
@@ -1453,9 +1477,8 @@ def ensure(c):
             return False
         return not column or column in table_columns(table)
 
-    # What the triggers look tasks up by: a next-run task by the attempt carrying it, a cover by its blob.
+    # What the triggers look tasks up by: a cover by its blob.
     for need, index in (
-        ("tasks.carried_by", "tasks_carried_by ON tasks(carried_by) WHERE carried_by IS NOT NULL"),
         ("task_assets", "task_assets_blob ON task_assets(blob_id)"),
         # The same index hubdb.migrate makes; its leading blob_id serves the cover lookup.
         ("bot_file_versions.media_state", "bot_file_versions_blob_media ON bot_file_versions(blob_id,media_state)"),
@@ -1920,23 +1943,14 @@ def status_line(c, who, slug, default=None, inputs=None, auth=None):
 
 def _trashed_visible(c, who, task_id):
     """A deleted task is reported gone only to someone who could have seen it."""
-    from . import pipeline_rights
-
     try:
         row = c.execute(
-            "SELECT owner, requester, private, readers, json_extract(rows,'$.rows.tasks[0].type_id') AS type_id "
-            "FROM task_trash WHERE task_id=? AND purged_at IS NULL",
+            "SELECT owner, requester, private, readers FROM task_trash WHERE task_id=? AND purged_at IS NULL",
             (task_id,),
         ).fetchone()
     except sqlite3.OperationalError:
         return False
     if not row:
-        return False
-    # A ticket on a members-only pipeline the viewer is not on is left out as it is on the lists (pipeline_rights.left_out).
-    hidden = pipeline_rights.hidden_pipeline_ids(c, who.actor)
-    if pipeline_rights.left_out(
-        hidden, who.actor, {"type_id": row["type_id"], "owner_id": row["owner"], "requester_id": row["requester"]}
-    ):
         return False
     return (
         not row["private"]
@@ -2035,7 +2049,7 @@ class _Viewer:
 
 
 def _tasks(view, rows, task_views, tasks=(), parties=()):
-    from . import meeting_task_links, pipeline_rights, task_reads
+    from . import meeting_task_links, task_reads
 
     c, who = view.c, view.who
     rows, meeting_links = meeting_task_links.event_changes(c, who, rows)
@@ -2060,13 +2074,9 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
         return out
     # The viewer's own bot access, read once for the whole read (task_sql would read it again): the same answer.
     unreadable = {slug for slug, level in view.bots().items() if not level["read"]} if who.role == "human" else None
-    # The members-only pipeline rule too (pipeline_rights.list_sql), as the task lists apply it: a non-member's stream
-    # sends nothing about a ticket on a pipeline it may not see, or about one it saw there before.
-    visible_sql = pipeline_rights.list_sql(
-        c, who.task_actor or who.actor, view.auth.task_sql(c, who, unreadable=unreadable)
-    )
+    visible_sql = view.auth.task_sql(c, who, unreadable=unreadable)
     marks = ",".join("?" * len(ids))
-    found = H._rows(c.execute(f"SELECT * FROM {H.TASKS} tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
+    found = H._rows(c.execute(f"SELECT * FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", ids))
     if tasks or parties:
         # Before each task is built for the viewer: the parties it has now, or had before a change in this batch moved
         # it (`ref`, on that change's row, which a later row of the same task may follow).
@@ -2539,32 +2549,19 @@ NEEDS_CHANGES_MAX = 100  # ids named in one `needs` event; more than this reads 
 
 def needs_baseline(c, auth, who, task_view):
     """What a `needs=changes` stream describes its first change against: the list's marks as the stream starts."""
-    from .views import needs_folded_ids, needs_items, needs_marks
+    from .views import needs_items, needs_marks
 
     items = needs_items(c, auth, who, task_view)
     marks, version = needs_marks(items)
-    return {"marks": marks, "version": version, "folded_task_ids": needs_folded_ids(items)}
+    return {"marks": marks, "version": version}
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_folded_ids, needs_items, needs_kinds, needs_marks, needs_plate_count, went_away
+    from .views import needs_bots, needs_items, needs_kinds, needs_marks
 
     items = needs_items(view.c, view.auth, view.who, task_view)
-    folded = needs_folded_ids(items)
-    away = went_away(view.c, view.who.actor)
     if held is None:
-        return [
-            (
-                rows[-1],
-                {
-                    "count": len(items),
-                    "plate_count": needs_plate_count(items),
-                    "items": items,
-                    "went_away": away,
-                    "folded_task_ids": folded,
-                },
-            )
-        ]
+        return [(rows[-1], {"count": len(items), "items": items})]
     marks, version = needs_marks(items)
     before = held.get("marks") or {}
     changed = [k for k, mark in marks.items() if before.get(k) != mark]
@@ -2572,22 +2569,14 @@ def _needs_list(view, rows, task_view, held=None):
     many = len(changed) + len(removed) > NEEDS_CHANGES_MAX
     entry = {
         "count": len(items),
-        "plate_count": needs_plate_count(items),
         "version": version,
         "base": held.get("version"),
         "changed": None if many else changed,
         "removed": None if many else removed,
-        "went_away": away,
         "bots": needs_bots(items, view.who.actor),
         "by_kind": needs_kinds(items),
     }  # whole-list facts, even on a page
-    before_folded = held.get("folded_task_ids") or []
-    if folded != before_folded:
-        # The set is sent whole, and it shares one cap with the changed and removed ids: together they could pass the
-        # live event's budget. Past it, null reads the list whole.
-        named = 0 if many else len(changed) + len(removed)
-        entry["folded_task_ids"] = None if many or named + len(folded) > NEEDS_CHANGES_MAX else folded
-    held.update(marks=marks, version=version, folded_task_ids=folded)
+    held.update(marks=marks, version=version)
     return [(rows[-1], entry)]
 
 
