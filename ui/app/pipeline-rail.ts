@@ -1,6 +1,6 @@
 /* ui/app/pipeline-rail.ts — The manager's rail beside a pipeline's stages (docs/pipelines-v3.md S10), on a desktop.
    Top: the manager's face and name, and a button that folds the rail to a thin strip (kept in this browser). Tabs: Log,
-   Tasks, Learned. Above the tab's list, the Late tasks: title and how long, no mark, no avatar. Below, the chat with the
+   Tasks, and Learned once it has a line. Above the tab's list, the Late tasks: title and how long, no mark, no avatar. Below, the chat with the
    manager: the ordinary direct thread (thread-view.ts threadMount), never a chat of its own.
    Tasks lists the open tasks the manager was woken about (it owns none, C25); the Log shows each push past and each
    snooze with no end a bot made. Tasks show by title. Any [data-task] row opens the task (the page does that).
@@ -56,7 +56,8 @@ function prLinesHTML(lines: PipelineLogLine[], tasks: TaskAny[]): string {
     const open = id ? ` data-task="${esc(id)}" role="button" tabindex="0"` : '';
     const title = id ? tasks.find(t => t.id === id)?.title : '';
     const tip = title ? ` title="${esc(title)}"` : '';
-    return `<div class="pm-line"${open}${tip}><span class="pm-at tnum">${esc(prClock(line.at))}</span><span>${esc(line.text)}</span></div>`;
+    const why = line.why ? ` · ${line.why}` : '';
+    return `<div class="pm-line"${open}${tip}><span class="pm-at tnum">${esc(prClock(line.at))}</span><span>${esc(line.text + why)}</span></div>`;
   }).join('');
 }
 
@@ -99,7 +100,10 @@ function prDraw(state: PrState): void {
   const count = prTasks(state, tasks).length;
   const tabs = shell.querySelector<HTMLElement>('.pm-tabs');
   if (tabs) {
-    tabs.innerHTML = PR_TABS.map(([id, label]) => {
+    // Learned shows once the manager has learned something.
+    const shown = PR_TABS.filter(([id]) => id !== 'learned' || !!state.log?.learned.length);
+    if (!shown.some(([id]) => id === state.tab)) state.tab = 'log';
+    tabs.innerHTML = shown.map(([id, label]) => {
       const on = state.tab === id, n = id === 'tasks' && count ? ` <span class="tnum">${count}</span>` : '';
       return `<button type="button" role="tab" class="pm-tab${on ? ' on' : ''}" data-pm-tab="${id}" aria-selected="${on}">${label}${n}</button>`;
     }).join('');

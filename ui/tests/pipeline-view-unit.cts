@@ -95,18 +95,23 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.equal(other.text, 'Refund flow: Not moved.');
 }
 
-// ---- Company › Factories
-{
+// ---- Company › Factories (read through factoriesRead, so this part waits)
+const factories = (async () => {
   const recs = [
     rec({id: 'eng', name: 'Engineering', factory_id: 'f-product', stages: [stage('b', 'Build')]}),
-    rec({id: 'product', name: 'Product', factory_id: 'f-product', stages: [stage('s', 'Spec', {on_enter: {file_into: 'eng'}})]}),
+    rec({id: 'product', name: 'Product', factory_id: 'f-product', stages: [stage('s', 'Spec')]}),
     rec({id: 'general', name: 'General', factory_id: null, stages: [stage('g', 'Doing')]}),
     rec({id: 'old', name: 'Old', factory_id: null, retired_at: '2026-11-01T00:00:00Z'}),
   ];
   const map = {factories: [{id: 'f-product', name: 'Product', goal: null, manager_id: null, done: 4}],
-    pipelines: [{id: 'product', factory_id: 'f-product', open: 17, mark: 'person'}, {id: 'eng', factory_id: 'f-product', open: 9, mark: null},
-      {id: 'general', factory_id: null, open: 31, mark: 'cant'}]};
-  const groups = plain(ctx.ofGroups(map, recs));
+    pipelines: [{id: 'product', name: 'Product', factory_id: 'f-product', open: 17, files_into: ['eng'], mark: 'needs_person'},
+      {id: 'eng', name: 'Engineering', factory_id: 'f-product', open: 9, files_into: [], mark: null},
+      {id: 'general', name: 'General', factory_id: null, open: 31, files_into: [], mark: 'cant_run'}]};
+  // The server's answer, read as factoriesRead reads it: its marks become the task mark's names.
+  ctx.get = async () => map;
+  const read = await ctx.factoriesRead('7d');
+  assert.deepEqual(plain(read.pipelines.map((p: {mark: string | null}) => p.mark)), ['person', null, 'cant']);
+  const groups = plain(ctx.ofGroups(read, recs));
   assert.deepEqual(groups.map((g: {name: string; done: number | null; pipelines: {id: string}[]}) => [g.name, g.done, g.pipelines.map(p => p.id)]),
     [['Product', 4, ['product', 'eng']], ['Other', null, ['general']]], 'a pipeline comes before the one it files into; retired ones go');
   const html = ctx.ofGroupHTML(groups[0]);
@@ -115,7 +120,7 @@ if (!view) throw new Error('the view sets its hook on the page');
   const other = ctx.ofGroupHTML(groups[1]);
   assert.doesNotMatch(other, /done/, 'Other has no count');
   assert.match(other, /tk-mark-cant/);
-}
+})();
 
 // ---- the editor's out-of-date save
 {
@@ -127,4 +132,4 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.deepEqual(plain(ctx.peChanged(mine, order)), ['The order of the stages']);
   assert.deepEqual(plain(ctx.peChanged(mine, rec())), []);
 }
-console.log('pipeline-view-unit: ok');
+factories.then(() => console.log('pipeline-view-unit: ok'), error => { console.error(error); process.exitCode = 1; });
