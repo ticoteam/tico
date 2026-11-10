@@ -246,7 +246,6 @@ CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
 TASK_STATUSES = ("open", "done", "closed")
 ACTIVE_STATUSES = ("open",)  # not yet finished
 TASK_ENDED = {"done": "marked done", "closed": "closed"}
-# tasks_due_active (TASKS_DUE_INDEX) is built from ACTIVE_STATUSES, word for word with TASKS_DUE_SQL.
 # The numbered start-up step that seeded the old General type's steps (PIPELINES_SCHEMA) reads this list, as it was.
 STEP_STATUSES = ("open", "doing", "review", "ready", "done", "closed")
 # The product lane is retired. Old rows may still say 'product' (so it is
