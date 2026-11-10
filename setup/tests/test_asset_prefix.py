@@ -1629,20 +1629,33 @@ class Lost(Exception):
     """The connection dropped after AWS did the work: the call happened, its answer never came back."""
 
 
+# Every write the install sends, in about the order it sends them (test_every_write_of_the_traced_install_is_a_stop).
 STOPS = [
     "create_bucket",
+    "put_public_access_block",
+    "put_bucket_ownership_controls",
+    "put_bucket_encryption",
+    "put_bucket_lifecycle_configuration",
+    "put_bucket_versioning",
+    "put_bucket_policy",
     "create_user",
+    "put_user_policy",
+    "create_access_key",
     "put_object",
     "create_security_group",
     "authorize_security_group_ingress",
     "allocate_address",
     "create_role",
+    "attach_role_policy",
     "put_role_policy",
     "create_instance_profile",
+    "add_role_to_instance_profile",
     "put_parameter",
     "run_instances",
     "associate_address",
     "change_resource_record_sets",
+    "send_command",
+    "delete_object",
 ]
 
 
@@ -1688,7 +1701,10 @@ def test_a_hub_install_in_us_east_1_stopped_anywhere_finishes_on_a_plain_retry_a
         code, out = go(argv, deps=d)
     except Lost:  # some steps let the error end the run as it is (a traceback, as on main)
         code, out = None, ""
-    assert fired == [stop] and code != 0, out
+    # The plan's delete comes last, after the server works: a lost answer there is reported, not a failed install.
+    assert fired == [stop] and (code != 0 or stop == "delete_object" and "Could not delete the starter plan" in out), (
+        out
+    )
     code, out = go(argv, deps=d)
     assert code == 0, out
     saved = state.load(DOMAIN)[0]
@@ -1701,6 +1717,15 @@ def test_a_hub_install_in_us_east_1_stopped_anywhere_finishes_on_a_plain_retry_a
     assert gone["eips"] and gone["sgs"] and gone["profiles"] == ["hub-hotmic"]
     assert not r53.records  # the A record setup made is gone
     assert not s3.called("delete_bucket")  # the backup copy stays
+
+
+def test_every_write_of_the_traced_install_is_a_stop(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic", "--backup", "aws")
+    argv[argv.index("us-west-2")] = "us-east-1"
+    assert go(argv, deps=d)[0] == 0
+    reads = ("describe_", "get_", "head_", "list_")
+    assert {n for n, _ in log if not n.startswith(reads)} == set(STOPS)
 
 
 # --- Codex's fourth review -----------------------------------------------------------------------------------------
