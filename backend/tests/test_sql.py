@@ -698,7 +698,10 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
     # A fresh request must rebuild decisions after a task becomes private.
     with store.transaction() as c:
         fixture_owner(
-            c, public, "UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id=?", (public,)
+            c,
+            public,
+            "UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id=?",
+            (public,),
         )
     with store.read() as c:
         assert not ReadIndex(c, who).message('progress-after-revocation', room, json.dumps({'task': public}), None)
@@ -1174,7 +1177,9 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
     for who in callers:
         compare(who)
     with store.transaction() as c:
-        fixture_owner(c, 'tree-5', "UPDATE tasks SET owner_id='bot:finance',requester_id='human:ben',private=1 WHERE id='tree-5'")
+        fixture_owner(
+            c, 'tree-5', "UPDATE tasks SET owner_id='bot:finance',requester_id='human:ben',private=1 WHERE id='tree-5'"
+        )
         c.execute(
             "UPDATE bot_config SET access=? WHERE bot='ops'",
             (

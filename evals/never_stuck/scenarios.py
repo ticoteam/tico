@@ -693,7 +693,13 @@ def s13(r: Rig) -> None:
     asked = r.ok(
         WRITER,
         lambda c: K.ask_ok(
-            c, WRITER, ANA, "Raise the launch ads budget by $40?", shows=raise_, subject="budget_raise:launch-ads", content=raise_
+            c,
+            WRITER,
+            ANA,
+            "Raise the launch ads budget by $40?",
+            shows=raise_,
+            subject="budget_raise:launch-ads",
+            content=raise_,
         ),
         "the writer asks Ana, an owner, for a budget raise",
     )
@@ -713,7 +719,13 @@ def s13(r: Rig) -> None:
     again = r.ok(
         WRITER,
         lambda c: K.ask_ok(
-            c, WRITER, ANA, "Raise the launch ads budget by $40?", shows=raise_, subject="budget_raise:launch-ads", content=raise_
+            c,
+            WRITER,
+            ANA,
+            "Raise the launch ads budget by $40?",
+            shows=raise_,
+            subject="budget_raise:launch-ads",
+            content=raise_,
         ),
         "the writer asks again",
     )

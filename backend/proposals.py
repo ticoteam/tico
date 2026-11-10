@@ -54,7 +54,9 @@ def _parse(kind, payload):
         return found
     except ValidationError as exc:
         first = exc.errors()[0]
-        raise Problem("validation", f"{kind} payload: {'.'.join(map(str, first['loc']))}: {first['msg']}", 422) from None
+        raise Problem(
+            "validation", f"{kind} payload: {'.'.join(map(str, first['loc']))}: {first['msg']}", 422
+        ) from None
 
 
 def check(c, kind, payload):
