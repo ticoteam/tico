@@ -24,7 +24,7 @@ later 0.6 phase ([Engineering](pipelines-v3.md#engineering)).
 ## The release train
 
 Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.github/workflows/train.yml` and
-`scripts/release_train.py`. There are no release windows. No one tags by hand.
+`scripts/release_train.py`. There are no release windows. No one tags by hand, except a new line's first release ([A new line](#a-new-line)).
 
 - **When.** A candidate is cut whenever main has merged work past the newest release and no candidate is in flight
   (no validation running, and the newest tag is published). No new commit, no release. Nothing is stored: every run works
@@ -58,6 +58,16 @@ Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.g
 - **By hand.** `gh workflow run train.yml --ref main` runs one step now (promote, then ship or validate, validating a
   red or cancelled head again), even with `RELEASE_TRAINS` off. `python3 scripts/release_train.py status` (with
   `GITHUB_TOKEN`, and the install variables to see them) shows the next step, the approvals and what each install runs.
+
+### A new line
+
+The train cuts patches of one line, `LINE` in `scripts/release_train.py` (now 0.6). While the newest release is on an
+older line, it cuts nothing and says so on the `release-train` issue: the line's first release (v0.6.0, and its rcs
+before it) is tagged by hand. After that tag it cuts v0.6.1 and on as usual.
+
+0.6 starts fresh (see [Updates](updates.md#from-05-to-06-every-company-starts-over)). The train never updates an install
+that runs 0.5 to 0.6 or later: promotion skips it, and a hotfix or ship to it fails. Move such an install by hand, on a
+new database.
 
 Triggers: every push to main, every finished Release validation run, a manual run, and a backstop every 20 minutes (at
 :05, :25 and :45) for a missed event, a release waiting for stable and a release waiting for latest. A small read-only
