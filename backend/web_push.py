@@ -343,7 +343,7 @@ def _send_one(store, vault, row, message, ttl, urgency, label):
     return status
 
 
-def ring_hook(app, actors, payload):
+def ring_hook(app, call_id, actors, payload):
     """call_ring's hook: the ring to each rung person's browsers, shown until answered where the browser allows."""
     return send(app.state.store, app.state.vault, actors, {**payload, "ring": True}, ttl=RING_TTL, urgency="high")
 

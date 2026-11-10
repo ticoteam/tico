@@ -1,19 +1,32 @@
-"""Ringing the people a new call rings, by every way other modules register.
+"""Ringing for calls in threads (backend/calls.py, docs/meet.md): who a new call rings, and the hooks that ring them.
 
-`HOOKS` is a list of functions `hook(app, actors, payload)`; backend/web_push.py adds one that sends the ring to each
-rung person's browsers. With no hook, ringing does nothing beyond what the call view already shows. A hook that fails
-is logged and the rest still run: a ring never stops a call from starting.
+A call rings the thread's people (never its bots) other than the caller when the thread has at most RING_MAX people;
+in a bigger thread nobody is rung, and its readers see the call on the thread's row and its card. The browser rings
+from the call view (`ring`) and `GET /api/v2/calls/ringing`; anything that rings beyond an open page, such as phone
+push, registers a hook here.
+
+A hook is `hook(app, call_id, actors, payload)`, called once a call has started, outside any transaction: `actors` are
+the rung people, and `payload` is {"title": the caller's name, "body": "# <thread title>", "url": the thread's path with
+`?call=<id>`, "tag": "call-<id>"}. A hook that fails is reported and the others still run.
 """
 
 import logging
 
+log = logging.getLogger("tico.calls")
+
+RING_MAX = 8  # a thread with more people than this rings nobody
 HOOKS = []
 
 
 def ring(app, call_id, actors, payload):
-    """Hand `payload` ({title, body, url, tag}) for call `call_id` to every hook, for the actors it rings."""
+    """Run every hook for one call's ring. Nothing happens with no hook or nobody to ring."""
+    actors = list(actors or ())
+    if not actors:
+        return
     for hook in list(HOOKS):
         try:
-            hook(app, actors, payload)
-        except Exception:
-            logging.getLogger(__name__).exception("call ring hook failed for call %s", call_id)
+            hook(app, call_id, list(actors), dict(payload))
+        except Exception as exc:  # noqa: BLE001 - one hook failing must not stop the call or the other hooks
+            from .batch_work import report
+
+            report("call_ring", call_id, exc, logger="tico.calls")
