@@ -59,7 +59,7 @@ SECRET_FIELDS = (
     "company_file_data",
 )
 # This run's only, never saved: a re-run without the flag must not inherit permission to repoint a record.
-TRANSIENT_FIELDS = ("runner_given",)
+TRANSIENT_FIELDS = ("runner_given", "replace_dns")
 # Only these named settings migrate from the private env; never copy ambient or arbitrary keys.
 RUNTIME_ENV = {
     "domain_aliases": "TICO_DOMAIN_ALIASES",
@@ -97,6 +97,8 @@ class Settings:
     domain: str = ""
     dns_name: str = ""  # optional operational record, separate from the public domain
     dns_zone: str = ""  # exact authoritative Route 53 zone for dns_name
+    dns_owned: str = ""  # the hostnames whose Route 53 records setup wrote, comma-separated: re-runs may update them
+    replace_dns: bool = False  # --replace-dns, this run only: an existing Route 53 record may be pointed at this server
     front_door: str = "caddy"
     updater: bool = True
     company: str = ""

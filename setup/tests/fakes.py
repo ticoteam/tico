@@ -303,6 +303,7 @@ class FakeRoute53:
         self.calls.append(("change_resource_record_sets", {"HostedZoneId": HostedZoneId, "ChangeBatch": ChangeBatch}))
         for c in ChangeBatch["Changes"]:
             rs = c["ResourceRecordSet"]
-            self.records = [r for r in self.records if (r["Name"], r["Type"]) != (rs["Name"], rs["Type"])]
+            key = (rs["Name"].rstrip("."), rs["Type"])
+            self.records = [r for r in self.records if (r["Name"].rstrip("."), r["Type"]) != key]
             if c["Action"] == "UPSERT":
                 self.records.append(rs)

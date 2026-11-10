@@ -891,3 +891,36 @@ def test_a_profile_setup_made_without_its_role_gets_it_on_a_rerun():
     assert iam.called("add_role_to_instance_profile") == [
         {"InstanceProfileName": "hub-hotmic", "RoleName": "hub-hotmic"}
     ]
+
+
+def test_a_route53_record_setup_did_not_make_is_refused_unless_replace_dns(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    r53 = d.route53_client("")._inner
+    production = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 60, "ResourceRecords": [{"Value": "198.51.100.50"}]}
+    r53.records = [production]
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    code, out = go(argv, deps=d)
+    assert code == 2 and f"Route 53 already has A {DOMAIN} -> 198.51.100.50" in out, out
+    assert "--replace-dns" in out and [n for n, _ in log if not n.startswith(READS)] == []
+    assert r53.records == [production]
+    code, out = go([*argv, "--replace-dns"], deps=d)
+    assert code == 0, out
+    assert [r["ResourceRecords"] for r in r53.records] == [[{"Value": "203.0.113.9"}]]
+    assert state.load(DOMAIN)[0]["dns_owned"] == DOMAIN
+    # Re-runs of this install keep working without the flag, also once the record points elsewhere: setup made it.
+    assert go(argv, deps=d)[0] == 0
+    r53.records[0]["ResourceRecords"] = [{"Value": "198.51.100.77"}]
+    assert go(argv, deps=d)[0] == 0 and r53.records[0]["ResourceRecords"] == [{"Value": "203.0.113.9"}]
+
+
+def test_an_alias_or_cname_at_the_hostname_is_refused_too(tmp_path):
+    for existing in (
+        {"Name": f"{DOMAIN}.", "Type": "A", "AliasTarget": {"DNSName": "lb.example.", "HostedZoneId": "Z2"}},
+        {"Name": f"{DOMAIN}.", "Type": "CNAME", "TTL": 60, "ResourceRecords": [{"Value": "app.example."}]},
+        {"Name": f"{DOMAIN}.", "Type": "AAAA", "TTL": 60, "ResourceRecords": [{"Value": "2001:db8::1"}]},
+    ):
+        d, ec2, iam, ssm, s3, log = hub_world()
+        d.route53_client("")._inner.records = [existing]
+        code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)
+        assert code == 2 and f"Route 53 already has {existing['Type']} {DOMAIN}" in out, out
+        assert [n for n, _ in log if not n.startswith(READS)] == []

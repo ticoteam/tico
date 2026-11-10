@@ -655,9 +655,42 @@ def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> boo
         return False
     if not io.confirm(f"  Create the record in Route 53 zone {zone.name}?", True):
         return False
+    refuse_dns(s, route53.conflicts(client, zid, records, set()))
     route53.upsert(client, zid, records, awsmod.Names(s.asset_prefix))
     io.say("  Route 53 records upserted.")
+    s.dns_owned = ",".join(sorted(set(filter(None, s.dns_owned.split(","))) | {r.name.lower() for r in records}))
+    saved = state.load(s.domain)[0]
+    if saved:  # at once: a re-run of this install may update what it wrote, also if this run stops later
+        state.save(s.domain, {**saved, "dns_owned": s.dns_owned})
     return True
+
+
+def refuse_dns(s: Settings, found: list[dict]) -> None:
+    """A Route 53 record setup did not make is never replaced, unless this install wrote it or --replace-dns says so."""
+    owned = set(filter(None, s.dns_owned.split(",")))
+    found = [rs for rs in found if rs["Name"].rstrip(".").lower() not in owned]
+    if found and not s.replace_dns:
+        raise MissingInput(
+            "Route 53 already has "
+            + "; ".join(route53.describe(rs) for rs in found)
+            + ", which this setup did not make; refusing to replace it. Pass --replace-dns to point it at this server, "
+            "or set up another --domain."
+        )
+
+
+def dns_preflight(s: Settings, deps: Deps, zone: dnsmod.Zone | None, records, ours: set[str]) -> None:
+    """Reads only, before the first write: the hostname's Route 53 records are free, this install's, or replaceable."""
+    if not zone or zone.provider.key != "route53" or s.replace_dns:
+        return
+    try:
+        client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile)
+        zid, status = route53.find_zone(client, zone)
+        if status != "authoritative":
+            return  # setup writes nothing there (ensure_dns says so)
+        found = route53.conflicts(client, zid, records, ours)
+    except Exception:
+        return  # unreadable: ensure_dns later says to add the record by hand, or checks again before writing
+    refuse_dns(s, found)
 
 
 def _r53_client(profile: str):
@@ -788,10 +821,15 @@ def run(args, io: IO, deps: Deps) -> int:
     if not kept and s.asset_prefix != awsmod.DEFAULT_PREFIX:
         # Before the first AWS write: a retry after a failure from here on keeps the prefix without the flag.
         state.save(s.domain, s.public())
+    s.replace_dns = bool(getattr(args, "replace_dns", False))
+    ours = {s.server_ip} - {""}
     if s.target == "aws":
         # Before the first write, backup storage included: a name something else holds stops the run here.
         ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
-        awsmod.Deployer(aws_plan(s), ec2, iam, ssm, account, say=io.say, sleep=deps.sleep).preflight()
+        plan = aws_plan(s)
+        awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep).preflight()
+        ours = awsmod.addresses(ec2, plan.name, plan.names)
+    dns_preflight(s, deps, zone, records, ours)
     if not provision_backup(io, s, deps, cf):
         return 1
     if s.front_door == "cloudflared":

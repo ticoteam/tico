@@ -39,6 +39,31 @@ def upsert(client, zone_id: str, records: list[Record], names: Names = DEFAULT_N
     )
 
 
+def conflicts(client, zone_id: str, records: list[Record], allowed: set[str]) -> list[dict]:
+    """The A, AAAA and CNAME record sets at the names in `records` that hold anything but these records' own values and
+    `allowed` (this install's addresses): someone else's. An alias is always someone else's."""
+    out = []
+    for want in sorted({r.name.rstrip(".").lower() for r in records}):
+        mine = allowed | {r.value for r in records if r.name.rstrip(".").lower() == want}
+        r = client.list_resource_record_sets(
+            HostedZoneId=zone_id, StartRecordName=want, StartRecordType="A", MaxItems="20"
+        )
+        for rs in r["ResourceRecordSets"]:
+            if rs["Name"].rstrip(".").lower() != want or rs["Type"] not in ("A", "AAAA", "CNAME"):
+                continue
+            values = {v["Value"].rstrip(".") for v in rs.get("ResourceRecords", [])}
+            if "AliasTarget" in rs or not values <= {v.rstrip(".") for v in mine}:
+                out.append(rs)
+    return out
+
+
+def describe(rs: dict) -> str:
+    target = (
+        rs["AliasTarget"]["DNSName"] if "AliasTarget" in rs else ", ".join(v["Value"] for v in rs["ResourceRecords"])
+    )
+    return f"{rs['Type']} {rs['Name'].rstrip('.')} -> {target}"
+
+
 def pointing_at(client, zone_id: str, name: str, addresses: set[str]) -> tuple[list[dict], list[dict]]:
     """The A and AAAA record sets for `name`, split into (ours, not ours). Ours means every value is one of `addresses`; an
     alias, or a record someone has since pointed elsewhere, is never ours."""

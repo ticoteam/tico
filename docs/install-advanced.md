@@ -46,6 +46,12 @@ dashes in a row). With `--asset-prefix hub --name acme`: tags
 `runner`, `doctor`, `destroy` and `backup-storage` read it and refuse a different one. Names on the server itself
 (`/opt/tico`, the containers, `TICO_*` settings) stay.
 
+Setup never changes, reuses or deletes an AWS resource without both of its tags for this prefix and name: before its
+first write it reads the names it will take (settings parameter, role, instance profile, backup bucket and user), and
+one that something else holds stops the run with its name; pick another `--name` or `--asset-prefix`. Likewise an
+existing Route 53 record for the domain that points elsewhere is left alone and named, unless this install wrote it
+or you pass `--replace-dns`.
+
 A self-install's `--company-file` goes through a private, encrypted bucket setup creates in your AWS account, with
 public access blocked and a one-day expiry rule. Setup keeps its bucket name and chart for retries. The server role
 can read only this install's plan prefix. Creating the bucket needs permission to create/tag S3 buckets and configure
