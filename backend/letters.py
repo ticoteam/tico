@@ -1210,20 +1210,31 @@ class Letters:
             return
         try:
             with self.store.read() as c:
-                # A letter waiting for an OK is due once its OK stands any other way than waiting.
+                now = H.now()
                 due = [
                     r[0]
                     for r in c.execute(
-                        "SELECT l.id, l.status, l.approval_id FROM letters l "
-                        "WHERE ((l.status='waiting_for_ok' AND (l.error='' OR l.next_sync_at<=?)) OR "
-                        "(l.status IN ('ready','submitting','submitted','printing','mailed') AND l.next_sync_at<=?) OR "
-                        "(l.hq_letter_id IS NOT NULL AND l.spend_released=0 AND l.status IN ('failed','cancelled','returned','delivered') "
-                        "AND l.next_sync_at<=?)) "
-                        "ORDER BY l.updated_at LIMIT 100",
-                        (H.now(), H.now(), H.now()),
+                        "SELECT id FROM letters "
+                        "WHERE (status IN ('ready','submitting','submitted','printing','mailed') AND next_sync_at<=?) OR "
+                        "(hq_letter_id IS NOT NULL AND spend_released=0 AND status IN ('failed','cancelled','returned','delivered') "
+                        "AND next_sync_at<=?) "
+                        "ORDER BY updated_at LIMIT 10",
+                        (now, now),
                     )
-                    if r[1] != "waiting_for_ok" or (r[2] and task_asks.standing(c, r[2]) != task_asks.WAITING)
-                ][:10]
+                ]
+                # A letter waiting for an OK is due once its OK stands any other way than waiting, which only the OK's
+                # own rows say. Every one is looked at until the pass is full, so the letters still waiting, however
+                # many, never hold back one whose OK was given (and whose send after it was lost) or sent back.
+                waiting = c.execute(
+                    "SELECT id, approval_id FROM letters WHERE status='waiting_for_ok' AND (error='' OR next_sync_at<=?) "
+                    "ORDER BY updated_at",
+                    (now,),
+                )
+                for ident, rid in waiting:
+                    if len(due) >= 10:
+                        break
+                    if rid and task_asks.standing(c, rid) != task_asks.WAITING:
+                        due.append(ident)
             for ident in due:
                 self.process(ident)
         finally:

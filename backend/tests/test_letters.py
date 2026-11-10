@@ -428,6 +428,31 @@ def test_abandoned_key_is_definitively_not_sent(api, hq):
     assert hq.provider_submits == 0
 
 
+@pytest.mark.parametrize("left", ["approved", "submitting"])
+def test_older_letters_still_waiting_for_an_ok_never_starve_the_drain(api, hq, monkeypatch, left):
+    """A hundred older letters waiting for their OK, and a newer one the drain must reach: approved while the send
+    after the OK was lost (a restart), or claimed with HQ's answer lost."""
+    older = send(api, quote(api))
+    row = send(api, quote(api))
+    with api.app.state.store.transaction() as c:
+        names = [r[1] for r in c.execute("PRAGMA table_info(letters)") if r[1] not in ("id", "updated_at")]
+        for n in range(120):
+            c.execute(
+                f"INSERT INTO letters (id, updated_at, {','.join(names)}) "
+                f"SELECT ?, '2000-01-01T00:00:{n % 60:02d}Z', {','.join(names)} FROM letters WHERE id=?",
+                (f"waiting-{n}", older["id"]),
+            )
+    if left == "approved":
+        monkeypatch.setattr(api.app.state.letters, "decided", lambda rid: None)
+    else:
+        hq.timeout = True
+    approve(api, row)
+    assert fetch(api, row)["status"] == ("waiting_for_ok" if left == "approved" else "submitting")
+    due(api, row)
+    api.app.state.letters.drain()
+    assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1
+
+
 def _ended(api, task_id):
     """The status of the task an OK filed, and the words it ended with (its last history line), if it ended."""
     with api.app.state.store.read() as c:
