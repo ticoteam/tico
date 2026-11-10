@@ -280,35 +280,25 @@ def task_reassign(
 
 
 # ----------------------------------------------------------------------------- asks and answers
-def bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str, *, by: str | None = None) -> None:
+def bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str) -> None:
     """Whoever an ask names must be able to read the task. On a private task that is only someone who already reads
     it, or one person its owning bot brings in by asking them (hubdb.task_reach_refusal has the rule): they become a
-    reader of this task and nothing else. Anyone else is refused, so nobody is asked about a task they cannot open.
-    `by` is who made the change that asks them, when it is not `actor` (a move: the owner brings them in, the mover is
-    refused)."""
+    reader of this task and nothing else. Anyone else is refused, so nobody is asked about a task they cannot open."""
     H = _h()
     if H.task_private_readable(conn, who, row):
         return
     why = H.task_reach_refusal(conn, actor, row, who)
-    if why and by is None:
-        _refuse(conn, actor, "private", str(why), row["id"])
     if why:
-        stage: Row = row.get("stage") or {}
-        _refuse(
-            conn,
-            str(by),
-            "task_requirement",
-            f"{H.actor_name(conn, who)} is asked in {stage.get('name') or 'this stage'} and cannot read this task. "
-            f"{why}.",
-            row["id"],
-        )
+        _refuse(conn, actor, "private", str(why), row["id"])
     H.task_reach(conn, actor, row, who)
 
 
 def bring_in_asked(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
-    """A private task that just entered a stage or changed owner: everyone its open visit asks is brought in to read
-    it, by its owner, as an ask brings them in (`bring_in`). Before anyone is woken, so the one asked can open what
-    they are woken for. Refused, as `by`, when one cannot be."""
+    """A private task that just entered a stage or changed owner: everyone its open visit asks, bot or person, becomes
+    a reader of this task and nothing else, recorded in its history as brought in by its owner (by `by` when the owner
+    is a person). The stage's rule is the pipeline's configuration, so this is never refused. Before anyone is woken,
+    so the one asked can open what they are woken for. They stay readers after the task leaves the stage, as a person
+    an ask brought in does."""
     from . import task_engine as E
     from . import task_requirements as R
 
@@ -320,7 +310,7 @@ def bring_in_asked(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
     for requirement in R.for_visit(conn, row["visit"]):
         who = R.person_of(conn, requirement, row["visit"]["id"]) if requirement["kind"] in ("ok", "answer") else None
         if who:
-            bring_in(conn, str(owner) if is_bot(owner) else by, row, who, by=by)
+            H.task_reach(conn, str(owner) if is_bot(owner) else by, row, who)
             row = E.task(conn, task_id) or row
 
 
