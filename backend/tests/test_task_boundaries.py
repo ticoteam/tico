@@ -2,7 +2,9 @@
 
 import json
 
+from backend import pipeline_settings
 from backend.store import H, encode
+from backend.task_calls import SYSTEM
 from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401
 
 
@@ -29,13 +31,13 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
                 },
             )['id']
         )
-    # The open ask is a question task under the target, private to the bot and Ana: Ben cannot read it.
-    question = post(
+    # The bot's open ask on the target is the target's own: whoever reads the target reads it.
+    asked = post(
         api,
-        'task-questions',
-        {'on': 'ana', 'question': 'Which packet is final?', 'parent': target['id'], 'private': True},
+        f"tasks/{target['id']}/asks",
+        {'to': 'ana', 'line': 'Which packet is final?', 'version': get(api, 'tasks/' + target['id'])['task']['version']},
         token=bot_token(api, 'ops'),
-    )['task']
+    )
     with api.app.state.store.transaction() as c:  # each task has its own room, so the cross-room reply is set here
         for mid in derived:
             c.execute('UPDATE messages SET in_reply_to=? WHERE id=?', (first['id'], mid))
@@ -49,15 +51,12 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     post(api, 'tasks/' + source['id'], {'version': source_version, 'private': True})
     for mid in derived:
         get(api, 'messages/' + mid, 'ben-test', expected=404)
-    for path in ('', '/comments', '/answers'):
+    for path in ('', '/comments'):
         value = get(api, 'tasks/' + target['id'] + path, 'ben-test')
         assert all(mid not in json.dumps(value) for mid in derived)
         assert 'Restricted' not in json.dumps(value)
-    listed = next(t for t in get(api, 'tasks', 'ben-test')['tasks'] if t['id'] == target['id'])
-    assert listed['ask'] is None and listed['open_asks'] == 0
-    # A question is its own open ask (hubdb.open_tasks_asks); the parent carries none of its own.
-    assert get(api, 'tasks/' + question['id'])['task']['open_asks'] == 1
-    assert get(api, 'tasks/' + target['id'])['task']['open_asks'] == 0
+    shown = get(api, 'tasks/' + target['id'], 'ben-test')['task']
+    assert asked['task']['id'] == target['id'] and shown['status'] == 'open'
     # Task comments are say, ask and answer messages; the notice in the loop is not one of them.
     say_id, notice_id, answer_id = derived
     comment_ids = {m['id'] for m in get(api, 'tasks/' + target['id'] + '/comments')['comments']}
@@ -75,43 +74,44 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     assert all('Restricted' not in json.dumps(value) for value in responses)
 
 
-def test_pipeline_cannot_remap_hidden_done_task_but_names_and_order_are_editable(api):
-    typ = post(
-        api,
-        'task-types',
-        {'name': 'Reviews', 'steps': [{'name': 'Start', 'status': 'open'}, {'name': 'Finished', 'status': 'done'}]},
-    )['type']
+def test_a_pipeline_edit_leaves_a_hidden_done_task_as_it_was_and_renames_its_stages(api):
+    record = get(api, 'pipelines/general')['pipeline']
+    [todo] = record['stages']
+    stage = {k: v for k, v in todo.items() if k not in ('id', 'requirements')}
+    # Ana owns the new pipeline, so she may change it.
+    with api.app.state.store.transaction() as c:
+        made = {'id': 'reviews', 'name': 'Reviews', 'goal': 'Review packets.', 'owner_id': 'human:ana'}
+        pipeline_settings.save(c, SYSTEM, {**made, 'stages': [{**stage, 'name': 'Start'}]})
+    pipe = get(api, 'pipelines/reviews')['pipeline']
     row = post(
         api,
         'tasks',
-        {'owner': 'priya', 'title': 'Review private packet', 'body': 'Review it.', 'private': True, 'type': typ['id']},
+        {'owner': 'priya', 'title': 'Review private packet', 'body': 'Review it.', 'private': True, 'pipeline': 'reviews'},
         'ben-test',
     )
-    done = post(api, 'tasks/' + row['id'], {'version': row['version'], 'step': 'Finished'}, 'priya-test')
+    done = post(api, f"tasks/{row['id']}/done", {'version': row['version'], 'note': 'Reviewed.'}, 'priya-test')
+    assert done['status'] == 'done'
     get(api, 'tasks/' + row['id'], expected=404)
-    steps = [{k: s[k] for k in ('id', 'name', 'status', 'position')} for s in typ['steps']]
-    steps[1]['status'] = 'closed'
-    refused = post(api, 'task-types/' + typ['id'], {'steps': steps}, expected=422)
-    assert 'Move tasks off this step' in json.dumps(refused)
+    record = {k: v for k, v in pipe.items() if k != 'may_change'}
+    record['stages'] = [{**record['stages'][0], 'name': 'Begin'}]
+    record['done'] = {**record['done'], 'name': 'Completed'}
+    post(api, 'pipelines/reviews', record)
     assert get(api, 'tasks/' + row['id'], 'ben-test')['task'] == get(api, 'tasks/' + row['id'], 'priya-test')['task']
-    steps[1].update(status='done', name='Completed', position=0)
-    steps[0].update(status='doing', position=1)  # Empty steps may change meaning.
-    post(api, 'task-types/' + typ['id'], {'steps': steps})
     after = get(api, 'tasks/' + row['id'], 'ben-test')['task']
     for key in ('status', 'version', 'done_at', 'closed_at', 'closed_by_id'):
         assert after[key] == done[key]
-    assert after['step']['name'] == 'Completed'
+    assert [s['name'] for s in get(api, 'pipelines/reviews')['pipeline']['stages']] == ['Begin']
 
 
-def test_comment_delegation_never_authorizes_bot_acceptance(api):
+def test_comment_delegation_never_authorizes_a_bot_close(api):
     token = bot_token(api)
     row = make_task(api, 'Review the requested packet')
-    done = post(api, 'tasks/' + row['id'], {'version': row['version'], 'status': 'done'}, token)
-    for comment in (None, 'Accept and close this.'):
+    for comment in (None, 'Close this.'):
         if comment:
             post(api, f"tasks/{row['id']}/comments", {'text': comment})
-        for close in ({'close': True}, {'step': 'general-closed'}):
-            post(api, 'tasks/' + row['id'], {'version': done['version'], **close}, token, expected=403)
-    accepted = post(api, 'tasks/' + row['id'], {'version': done['version'], 'close': True})
-    assert accepted['status'] == 'closed' and accepted['closed_by_id'] == 'human:ana'
-    assert accepted['done_at'] == done['done_at']
+        version = get(api, 'tasks/' + row['id'])['task']['version']
+        body = {'to': 'closed', 'why': 'Ana said to close it.', 'version': version}
+        refused = api.post(f"/api/v2/tasks/{row['id']}/move", json=body, headers=headers(token))
+        assert refused.status_code >= 400 and refused.json()['error'] == 'task_needs_person', refused.text
+    closed = post(api, f"tasks/{row['id']}/move", {'to': 'closed'})
+    assert closed['status'] == 'closed' and closed['closed_by_id'] == 'human:ana'
