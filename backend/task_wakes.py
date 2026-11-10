@@ -4,9 +4,11 @@
 A wake is a row in `messages` with a `wake_key`: `<task id>:<visit id>:<level>:<try>`. The key is unique, so writing the
 same wake twice is one wake. It is written in the same transaction as the move that causes it. The body says what is
 missing and the five ways a run may end. A bot has at most one wake queued per task: a second one carries the first's
-words before its own, and the first is canceled, so one run starts and nothing said is lost.
+words before its own, and the first is canceled, so one run starts and nothing said is lost. The wake remembers what
+was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes out its words alone.
 """
 
+import json
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any, cast
 
@@ -73,6 +75,7 @@ ENGINE_REFS = (
     "trigger_source",
     "source",
     "purpose",
+    "parts",
 )
 
 
@@ -108,25 +111,30 @@ def add(
         return None
     waiting: list[Any] = []
     carried: Row = {}
+    parts: list[Row] = []
     if not quiet and H.is_bot(target):
         waiting = conn.execute(
-            "SELECT j.id, m.body, m.refs FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.bot_id=? "
-            "AND j.state='queued' AND m.wake_key LIKE ? ESCAPE '\\' ORDER BY m.created_at, m.rowid",
+            "SELECT j.id, m.body, m.refs, m.wake_key FROM jobs j JOIN messages m ON m.id = j.message_id "
+            "WHERE j.bot_id=? AND j.state='queued' AND m.wake_key LIKE ? ESCAPE '\\' ORDER BY m.created_at, m.rowid",
             (H.actor_id(target), _like(task["id"])),
         ).fetchall()
-        if waiting:
-            text = "\n\n".join([*(str(found[1] or "") for found in waiting), text])
-            for found in waiting:
-                # What the folded wake's caller attached (a new task's automation run, the work to reconcile with)
-                # rides on: the run that starts is still that work. The engine's own facts are this wake's.
-                was: Row = H._json(found[2], {}) or {}
-                trigger = trigger or (was.get("trigger") if was.get("trigger") != "task_turn" else None)
-                source = source or was.get("trigger_source")
-                carried.update({name: value for name, value in was.items() if name not in ENGINE_REFS})
+        for found in waiting:
+            # What the folded wake's caller attached (a new task's automation run, the work to reconcile with) rides
+            # on: the run that starts is still that work. The engine's own facts are this wake's.
+            was: Row = H._json(found[2], {}) or {}
+            trigger = trigger or (was.get("trigger") if was.get("trigger") != "task_turn" else None)
+            source = source or was.get("trigger_source")
+            carried.update({name: value for name, value in was.items() if name not in ENGINE_REFS})
+            parts += _parts(was, found[3], found[1])
+        if parts:
+            parts.append({"key": wake_key, "text": text})
+            text = _joined(parts)
     own: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
     own["version"] = task.get("version")
     if quiet:
         own["quiet"] = True
+    if parts:
+        own["parts"] = parts  # what was folded into it, each with its key and its words (`cancel`)
     theirs: Row = {name: value for name, value in (refs or {}).items() if name not in ENGINE_REFS}
     stamped: Row = RT.stamp({**carried, **theirs, **own}, trigger or "task_turn", source)
     message = H._write_message(
@@ -335,14 +343,38 @@ def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] |
     return cursor.rowcount
 
 
+def _parts(refs: Row, wake_key: object, body: object) -> list[Row]:
+    """What one queued wake is made of: the wakes folded into it, or itself alone."""
+    folded: list[Row] | None = refs.get("parts")
+    return list(folded) if folded else [{"key": str(wake_key or ""), "text": str(body or "")}]
+
+
+def _joined(parts: list[Row]) -> str:
+    return "\n\n".join(str(part.get("text") or "") for part in parts)
+
+
 def cancel(conn: "sqlite3.Connection", wake_key: str) -> int:
-    """Cancel one wake by its key, while no run has taken it yet. Returns how many jobs it canceled."""
-    cursor = conn.execute(
-        "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
-        "(SELECT id FROM messages WHERE wake_key=?)",
-        (wake_key,),
-    )
-    return cursor.rowcount
+    """Take one wake back by its key, while no run has taken it yet. A wake that was folded into another is taken out
+    of it alone: the wake that holds it keeps the rest of its words, and is canceled only when nothing is left. Returns
+    how many jobs it canceled."""
+    H = _h()
+    rows = conn.execute(
+        "SELECT j.id, m.id, m.wake_key, m.refs, m.body FROM jobs j JOIN messages m ON m.id = j.message_id "
+        "WHERE j.state='queued' AND m.wake_key LIKE ? ESCAPE '\\'",
+        (_like(wake_key.split(":", 1)[0]),),
+    ).fetchall()
+    for job_id, message_id, own_key, raw, body in rows:
+        refs: Row = H._json(raw, {}) or {}
+        parts = _parts(refs, own_key, body)
+        rest = [part for part in parts if part.get("key") != wake_key]
+        if len(rest) == len(parts):
+            continue
+        if not rest:
+            return conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (job_id,)).rowcount
+        refs["parts"] = rest
+        conn.execute("UPDATE messages SET body=?, refs=? WHERE id=?", (_joined(rest), json.dumps(refs), message_id))
+        return 0
+    return 0
 
 
 def _like(task_id: str) -> str:

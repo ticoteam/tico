@@ -418,6 +418,32 @@ def test_undo_of_a_send_back_cancels_the_wake_no_run_took(c, build):
     assert W.headline(c, row["id"]).who == ANA
 
 
+def _waiting_for(c, task_id, bot):
+    """The bodies of the wakes still queued for a bot about a task."""
+    rows = c.execute(
+        "SELECT m.body FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.state='queued' AND j.bot_id=? "
+        "AND m.wake_key LIKE ?",
+        (H.actor_id(bot), task_id + ":%"),
+    ).fetchall()
+    return [str(found[0]) for found in rows]
+
+
+def test_undo_of_one_answer_takes_only_its_words_out_of_the_wake_they_were_folded_into(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    X.settled(c)  # its start ran: the builder still has work
+    colour = E.add_requirement(c, row["id"], ANA, "answer", BEN, "Which colour?")
+    font = E.add_requirement(c, row["id"], ANA, "answer", BEN, "Which font?")
+    blue = A.answer(c, row["id"], colour["requirement_id"], BEN, "Blue")
+    serif = A.answer(c, row["id"], font["requirement_id"], BEN, "Serif")
+    [both] = _waiting_for(c, row["id"], "bot:builder")  # one run starts, with both answers in order
+    assert both.index('Ben answered "Which colour?": Blue') < both.index('Ben answered "Which font?": Serif')
+    A.undo(c, serif["answer_id"], BEN)
+    [rest] = _waiting_for(c, row["id"], "bot:builder")  # the wake stays, with the first answer's words
+    assert 'Ben answered "Which colour?": Blue' in rest and "Serif" not in rest
+    A.undo(c, blue["answer_id"], BEN)
+    assert _waiting_for(c, row["id"], "bot:builder") == []  # nothing is left of it
+
+
 # ----------------------------------------------------------------------------- thumbs
 def test_thumbs_up_goes_on_the_bots_record_and_rating_again_replaces_it(c, general):
     row = X.new_task(c, ANA, "Archive the newsletters", assignee="bot:builder")
