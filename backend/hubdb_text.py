@@ -1078,20 +1078,6 @@ def support_text_matches(payload):
         return False
 
 
-def publish_text_matches(payload):
-    """A publish payload's `text` is what the person approves; `content_sha256` is what the publisher
-    checks. They agree only when the hash is SHA-256 of the text's UTF-8 bytes (hq-tickets hashes the
-    reply file's bytes and sends them decoded, so a UTF-8 file round-trips exactly)."""
-    text, digest = payload.get("text"), payload.get("content_sha256")
-    if not isinstance(text, str) or not isinstance(digest, str):
-        return False
-    try:
-        actual = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    except UnicodeEncodeError:  # a lone surrogate is no text anyone could publish
-        return False
-    return actual == digest  # exact: hq-tickets compares against a lower-case hexdigest
-
-
 LIBRARIAN_LITERAL = re.compile(
     r"^[ \t]{0,3}(?P<bf>`{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}(?P=bf)`*[ \t]*$|\Z)"  # fenced code: the closing line
     r"|^[ \t]{0,3}(?P<tf>~{3,})[^\n]*\n[\s\S]*?(?:^[ \t]{0,3}(?P=tf)~*[ \t]*$|\Z)"  # is the same character only

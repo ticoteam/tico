@@ -29,33 +29,27 @@ withdrawn text in the audit trail.
 3. **Lint (rule 7) applies to unsolicited human items.** A bot's `say`/`notice` to a human is
    linted only when rule 4 counts it as unsolicited; a reply to the human's own message,
    a reply inside a conversation the human started, and `answer`, are exempt. Every task with
-   a human owner and every approval is linted. Without this carve-out a chat reply longer
+   a human owner is linted. Without this carve-out a chat reply longer
    than 120 words would be refused, which
    would break S1; the handoffs rule the lint comes from is about *asking* a person for
    something, not about answering them.
-4. **Approval lint is the payload's fields.** An approval has no title or body, so rule 7 on
-   an approval means "the payload is the exact thing": `send` needs to/cc/subject/
-   body_sha256/mailbox, `spend` amount/account/what, `publish` url/content_sha256, `merge`
-   repo/pr. A missing field is `Refused("lint", "send needs cc")`. A `publish` payload's
-   content_sha256 must be 64 lower-case hex characters, and its optional `text` must be a string
-   whose SHA-256 (of its UTF-8, as lower-case hex) is exactly content_sha256, or it is refused.
-5. **`status_set(..., state="active")`** is accepted although `active` is not a `bot_status`
+4. **`status_set(..., state="active")`** is accepted although `active` is not a `bot_status`
    state: it is how §4 rule 8 says a human clears a quarantine. It sets `bots.state=active`
    and `bot_status.state=idle`.
-6. **Rule names.** §4 names `reach`, `cap`, `depth`, `unsolicited`, `one-question`,
-   `duplicate`, `consumed`, `lint`. The rest are `identity` (acting as someone else, deciding
-   an approval as a bot), `kind` (a bad approval kind or status), `close` (closing a task you
-   did not request), `quarantined` (a quarantined bot's writes) and `not-found`.
-7. **Severity is classified here, not passed in.** `classify()` reads the body or payload and
+5. **Rule names.** §4 names `reach`, `cap`, `depth`, `unsolicited`, `one-question`,
+   `duplicate`, `lint`. The rest are `identity` (acting as someone else), `kind` (a bad kind or
+   value), `quarantined` (a quarantined bot's writes), `not-found`, and the task engine's
+   `task_*` rules.
+6. **Severity is classified here, not passed in.** `classify()` reads the body or payload and
    returns `sensitive` (money, an outbound send, access, a human's inbox) or `normal`. Words
    that name a `secrets/` path or another bot's folder are written as they are and recorded
    (`path_mentioned`); they are never refused or counted. Refusals remain in the audit; repeated
    failures open an internal review. Generic refusal diagnostics do not create human decision tasks.
-8. **`sync_registry` never lowers a state.** A bot the registry calls `active` that hubdb has
+7. **`sync_registry` never lowers a state.** A bot the registry calls `active` that hubdb has
    `quarantined` stays quarantined; only a human clears it. Tokens, thread ids and
    `last_turn_at` are never overwritten by a sync.
-9. **Extra read helpers.** `bot(conn, slug)`, `human(conn, id)`, `task(conn, id)`, `task_history(conn, id)`,
-   `approval(conn, id)`, `message(conn, id)`, `conversation(conn, id)`, `refusals_for(...)`,
+8. **Extra read helpers.** `bot(conn, slug)`, `human(conn, id)`, `task(conn, id)`, `task_history(conn, id)`,
+   `message(conn, id)`, `conversation(conn, id)`, `refusals_for(...)`,
    `undelivered(conn, to_actor=None)`.
 """
 
@@ -119,8 +113,6 @@ from .hubdb_core import (
     is_human,
 )
 from .hubdb_text import (
-    APPROVAL_FIELDS,  # noqa: F401
-    SUPPORT_APPROVAL_KEYS,  # noqa: F401
     LINT_MAX_WORDS,  # noqa: F401
     LINT_CODES,
     LINT_IDENT,  # noqa: F401
@@ -164,12 +156,11 @@ from .hubdb_text import (
     lint_question,  # noqa: F401
     QUESTION_EXAMPLE,  # noqa: F401
     question_refusal,
-    lint_approval,
+    lint_approval,  # noqa: F401
     URL_SPECIAL,  # noqa: F401
     url_authority,  # noqa: F401
     lint_support,  # noqa: F401
     support_text_matches,  # noqa: F401
-    publish_text_matches,
     LIBRARIAN_LITERAL,  # noqa: F401
     JARGON,  # noqa: F401
     RUNNER,  # noqa: F401
@@ -260,6 +251,7 @@ CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
 # a deploy). To everything that only knows the company lane they are a kind of `doing`.
 TASK_STATUSES = SV.TASK_STATUSES
 ACTIVE_STATUSES = ("open", "doing", "waiting", "review", "ready")  # still on the board
+TASK_ENDED = {"done": "marked done", "closed": "closed", "declined": "declined"}
 # tasks_due_active (TASKS_DUE_INDEX) is built from this list. An existing index keeps the list it was created with, so
 # changing it needs that index under a new name and a migration, or upgraded hubs quietly scan every task again.
 BOARD_STATUSES = ACTIVE_STATUSES + ("declined",)  # visible until a person reassigns or closes it
@@ -286,7 +278,7 @@ MOVER_FIELDS = ("lane", "number")  # what only a mover changes (a parent or bloc
 # Labels are a mover's too, except that a bot may change a classification label on a task it manages
 # (_label_writer). Labels Tico acts on stay a mover's: a task goal (execution.task_goal) ...
 WORKFLOW_LABELS = ("goal:on", "goal:off")
-# ...and a label on a public roadmap (roadmaps.settings) needs the bot's approved publish approval.
+# ...and a label on a public roadmap (roadmaps.settings), which roadmaps.approve checks for a bot.
 # A label refusal counts toward a quarantine once per task in this window (_escalate), so a bot
 # retrying a refusal it already had cannot quarantine itself in seconds.
 LABEL_REFUSAL_WINDOW_S = 3600
@@ -294,21 +286,8 @@ LINK_KINDS = ("pr", "issue", "url", "doc", "worktree", "session")
 TITLE_LINT = os.environ.get("TICO_TITLE_LINT", "warn")  # warn | refuse | off
 # Rule 7's writing checks on an item for a person and the shape of an update: warned about with
 # the write accepted, refused only when TICO_STYLE_LINT=refuse. Bots lost whole runs rewriting
-# for them. A missing title or approval field is structural and always refused.
+# for them. A missing title is structural and always refused.
 STYLE_LINT = os.environ.get("TICO_STYLE_LINT", "warn")  # warn | refuse | off
-APPROVAL_KINDS = (
-    "send",
-    "spend",
-    "publish",
-    "merge",
-    "support",
-    "task_cap",
-    "spend_limit",
-    "finance",
-    "mail_alert",
-    "letter",
-)
-
 CAP_PER_HOUR = 20  # rule 3: messages in one conversation between bots, per hour
 UNSOLICITED_PER_DAY = int(os.environ.get("TICO_UNSOLICITED_PER_DAY", "10"))  # rule 4: per human, per bot, per UTC day
 HELD_QUEUE_ITEMS = int(os.environ.get("TICO_HELD_QUEUE_ITEMS", "200"))
@@ -2019,9 +1998,9 @@ def private_task_write(fn):
 
 def event(conn, actor, action, target="", detail=None):
     """Append the audit row every write leaves behind."""
-    # The run that spent an approval, asked for one or filed a task: what feedback on that work names as its run
-    # (backend/feedback.py), since neither a task nor an approval keeps the run that made it.
-    if action in ("approval.consume", "approval.request", "task.create") and RUN.get():
+    # The run that filed a task: what feedback on that work names as its run (backend/feedback.py), since a task does
+    # not keep the run that made it.
+    if action == "task.create" and RUN.get():
         detail = {**(detail or {}), "attempt_id": RUN.get()}
     if VIA.get() and (detail is None or isinstance(detail, dict)):
         detail = {**(detail or {}), "via": VIA.get()}
@@ -2091,7 +2070,7 @@ def _task_facts(conn, task_id, actor, **more):
 
 
 def writing_refusal(rule, detail):
-    """Only diagnostics produced by human-item formatting, never approval validation."""
+    """Only diagnostics produced by human-item formatting."""
     return rule == "lint" and bool(
         re.match(
             r'^(give it a title|start the title with a verb|internal codes|internal jargon|'
@@ -2919,9 +2898,8 @@ HEALTH_MONITOR = "health-monitor"
 
 
 def _botops_only(conn, actor, target):
-    """The Health Monitor gives its fixes to BotOps and never a person a task, a question, a wait on one or a message
-    nobody asked for (docs/health-monitor.md): BotOps decides who to ask. Approvals and support reports do not come
-    here (approval_request writes its own notice), so they are unaffected."""
+    """The Health Monitor gives its fixes to BotOps and never a person a task or a message nobody asked for
+    (docs/health-monitor.md): BotOps decides who to ask."""
     if actor != bot_actor(HEALTH_MONITOR) or not is_human(target or ""):
         return
     refuse(
@@ -3235,7 +3213,7 @@ def _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, 
                     actor,
                     "unsolicited",
                     f"{n} unsolicited messages to {actor_name(conn, target)} today; the cap is "
-                    f"{UNSOLICITED_PER_DAY}. File a task or an approval instead.",
+                    f"{UNSOLICITED_PER_DAY}. File a task instead.",
                     severity,
                 )
             warnings = style_problems(conn, actor, lint_human_item(body), severity)
@@ -8146,277 +8124,11 @@ def _wake(
     )
 
 
-# ----------------------------------------------------------------------------- approvals
-APPROVAL_STALE_DAYS = 14  # an undecided approval older than this is withdrawn (approval_expiry.sweep)
-TASK_ENDED = {"done": "marked done", "closed": "closed", "declined": "declined"}
-# What an approval acts on. A newer request on the same task for the same target replaces the older one; a bot may
-# rightly have several open on one task (three posts to publish), so a different target is a separate decision.
-APPROVAL_TARGET = {
-    "publish": ("url",),
-    "send": ("to", "subject"),
-    "merge": ("repo", "pr"),
-    "spend": ("account", "what"),
-}
-
-
-def approval_target(kind, payload):
-    keys = APPROVAL_TARGET.get(kind)
-    values = [(payload or {}).get(k) for k in keys or ()]
-    if kind == "send" and values and values[0]:
-        # "a@x" and ["A@x"] are the same recipients.
-        to = values[0] if isinstance(values[0], list) else [values[0]]
-        values[0] = sorted(str(v).strip().lower() for v in to)
-    return (
-        json.dumps(values, sort_keys=True, default=str)
-        if keys and all(v not in (None, "", []) for v in values)
-        else None
-    )
-
-
-def approval_withdraw(conn, approval_id, note, *, notify=True):
-    """An undecided approval nobody needs any more leaves the person's queue as `withdrawn`: its task ended, a newer
-    request replaced it, or nobody decided it in APPROVAL_STALE_DAYS. Only the keeper withdraws, so a withdrawal is
-    never mistaken for a person's no; the bot that asked hears once, quietly, and may ask again."""
-    row = approval(conn, approval_id)
-    if not row or row["decision"]:
-        return None
-    if not conn.execute(
-        "UPDATE approvals SET decision='withdrawn', decided_by_id=?, decided_at=? WHERE id=? AND decision IS NULL",
-        (KEEPER, now(), approval_id),
-    ).rowcount:
-        return None
-    event(conn, KEEPER, "approval.withdraw", approval_id, {"decision": "withdrawn", "note": note})
-    if row.get("task_id"):
-        from . import task_holds
-
-        task_holds.refresh(conn, row["task_id"], f"Your {row['kind']} approval was withdrawn")
-    conv = (
-        conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id"))
-        if row.get("message_id")
-        else None
-    )
-    if notify and conv and _actor_exists(conn, row["requested_by_id"]):
-        _write_message(
-            conn,
-            KEEPER,
-            row["requested_by_id"],
-            f"Withdrawn: your {row['kind']} approval. {note}",
-            conv,
-            "notice",
-            {"approval": approval_id, "quiet": True},
-            None,
-            None,
-        )
-    _recount(conn, row["requested_by_id"])
-    hook(conn, "approval.withdrawn", approval_id, lambda: _approval_facts(row), KEEPER, revision=0)
-    return approval(conn, approval_id)
-
-
-def _approval_facts(row):
-    """What an outgoing webhook says of an approval: who asked, what kind, which task. Never the payload."""
-    return {
-        "id": row["id"],
-        "kind": row["kind"],
-        "task_id": row.get("task_id"),
-        "requested_by_id": row["requested_by_id"],
-        "decision_owner": row.get("decision_owner"),
-    }
-
-
-def approval_request(conn, actor, kind, payload, task_id=None, supersedes=None, to=None):
-    """Rule 6. One exact payload, one open request per payload, a human decides, spent once.
-
-    A request replaces the asker's older undecided one it names (`supersedes`), and any it has open on the same task
-    for the same target (APPROVAL_TARGET): a re-cut release or a redrafted email is the same decision, asked again."""
-    _writer(conn, actor, task_id=task_id)
-    if kind not in APPROVAL_KINDS:
-        refuse(conn, actor, "kind", f"an approval is {'|'.join(APPROVAL_KINDS)}, not {kind}")
-    text = json.dumps(payload, sort_keys=True, default=str)
-    severity = classify(text, kind=kind, actor=actor, conn=conn)
-    path_mentioned(conn, actor, f"{kind} approval", text, task_id)
-    problems = lint_approval(kind, payload)
-    if problems:
-        refuse(conn, actor, "lint", "; ".join(problems), severity)
-    if kind == "publish" and "text" in payload and not publish_text_matches(payload):
-        # The person reads `text`, the publisher checks `content_sha256`: they must be the same reply.
-        if not isinstance(payload["text"], str):
-            refuse(conn, actor, "lint", "text must be a string", severity)
-        refuse(
-            conn,
-            actor,
-            "lint",
-            "the text doesn't match content_sha256; send the exact text that will be published",
-            severity,
-        )
-    digest = payload_hash(payload)
-    dup = _one(conn, "SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,))
-    if dup:
-        refuse(conn, actor, "duplicate", f"{dup['id']} already asks for exactly this")
-    if supersedes:
-        named = approval(conn, supersedes)
-        if not named or named["requested_by_id"] != actor:
-            refuse(conn, actor, "not-found", f"you have no approval {supersedes} to replace")
-        _writer(conn, actor, task_id=named["task_id"])
-        if named["decision"] == "approved" and not named["consumed_at"]:
-            # Withdrawing only the undecided would leave the old yes spendable next to the new ask.
-            refuse(
-                conn,
-                actor,
-                "lint",
-                f"{supersedes} is already approved and not spent; use it, or ask on its own without --supersedes",
-            )
-    owner = None
-    if task_id:
-        row = task(conn, task_id)
-        if row and row["status"] in TASK_ENDED:
-            # It would only be withdrawn: nothing acts on an ended task's approvals.
-            refuse(conn, actor, "lint", f"task {task_id} is {row['status']}; {task_reopen_hint(conn, actor, row)}")
-        if row and is_human(row["owner_id"]):
-            owner = row["owner_id"]
-    if kind == "support" and is_human(actor):
-        # A person's own report (their token, or the Assistant for them) is theirs to approve and is filed as them.
-        owner = actor
-    owner = to or owner or human_actor(default_human(conn))  # `to`: a redesign proposal's decider
-    ts = now()
-    ask = (
-        "Send this to Tico support? " + _clip(payload["message"], 200)
-        if kind == "support"
-        else f"Approve this {kind}: " + _clip(text, 200)
-    )
-    msg = _write_message(
-        conn,
-        actor,
-        owner,
-        ask,
-        _pair_conversation(conn, actor, owner, "notice"),
-        "notice",
-        {"approval": "pending", "task": task_id},
-        None,
-        None,
-    )
-    row = {
-        "id": new_id(),
-        "kind": kind,
-        "task_id": task_id,
-        "message_id": msg["id"],
-        "payload": _dump(payload),
-        "payload_hash": digest,
-        "requested_by_id": actor,
-        "decided_by_id": None,
-        "decision": None,
-        "decided_at": None,
-        "consumed_at": None,
-        "created_at": ts,
-        "ready_since": ts,
-        "decision_owner": owner,
-    }
-    # Ready now: a payload that fails its checks is refused above, so this is when it became a decision for `owner`.
-    conn.execute(
-        "INSERT INTO approvals (id, kind, task_id, message_id, payload, payload_hash, "
-        "requested_by_id, decided_by_id, decision, decided_at, consumed_at, created_at, ready_since, decision_owner) "
-        "VALUES (:id, :kind, :task_id, :message_id, :payload, :payload_hash, :requested_by_id, "
-        ":decided_by_id, :decision, :decided_at, :consumed_at, :created_at, :ready_since, :decision_owner)",
-        row,
-    )
-    conn.execute("UPDATE messages SET refs=? WHERE id=?", (_dump({"approval": row["id"], "task": task_id}), msg["id"]))
-    event(conn, actor, "approval.request", row["id"], {"kind": kind, "to": owner})
-    replaced = {supersedes} if supersedes else set()
-    target = approval_target(kind, payload)
-    if task_id and target and is_bot(actor):
-        replaced |= {
-            r["id"]
-            for r in conn.execute(
-                "SELECT id, payload FROM approvals WHERE task_id=? AND kind=? AND requested_by_id=? AND decision IS NULL "
-                "AND id<>?",
-                (task_id, kind, actor, row["id"]),
-            ).fetchall()
-            if approval_target(kind, _json(r["payload"], {})) == target
-        }
-    for aid in sorted(replaced):
-        approval_withdraw(conn, aid, f"Replaced by {row['id']}.")
-    _recount(conn, actor)
-    hook(conn, "approval.requested", row["id"], lambda: _approval_facts(row), actor, revision=0)
-    return approval(conn, row["id"])
-
-
-def approval_decide(conn, actor, approval_id, decision, note="", *, note_sources=()):
-    """Rule 6. Only a human decides, and only once."""
-    _writer(conn, actor)
-    if not is_human(actor):
-        refuse(conn, actor, "identity", "only a person decides an approval")
-    row = approval(conn, approval_id)
-    if not row:
-        refuse(conn, actor, "not-found", f"no approval {approval_id}")
-    if decision not in ("approved", "declined"):
-        refuse(conn, actor, "kind", f"a decision is approved|declined, not {decision}")
-    if row["decision"]:
-        refuse(conn, actor, "duplicate", f"{approval_id} was already {row['decision']}")
-    ts = now()
-    # The person's own Assistant deciding on their words (backend/assistant.py): recorded on the approval itself, so its
-    # history says "decided by <assistant> for <person>" with the words quoted, and the person can undo it.
-    delegated = DELEGATION.get() if VIA.get() == "assistant" else None
-    conn.execute(
-        "UPDATE approvals SET decision=?, decided_by_id=?, decided_at=?, decided_via=?, decided_for=? WHERE id=?",
-        (decision, actor, ts, "assistant" if delegated else None, _dump(delegated) if delegated else None, approval_id),
-    )
-    note, provenance = sourced_text(note, note_sources)
-    event(conn, actor, "approval.decide", approval_id, {"decision": decision, "note": note, **provenance})
-    after = approval(conn, approval_id)
-    if row.get("task_id"):
-        from . import task_holds
-
-        task_holds.refresh(conn, row["task_id"], f"Your {row['kind']} approval was {decision}")
-    conv = (
-        conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id"))
-        if row.get("message_id")
-        else None
-    )
-    if conv:
-        text, refs = sourced_text(
-            f"{decision.title()}: your {row['kind']} approval." + (f"\n{note}" if note else ""),
-            note_sources,
-            {"approval": approval_id},
-        )
-        _write_message(conn, KEEPER, row["requested_by_id"], text, conv, "notice", refs, None, None)
-    _recount(conn, row["requested_by_id"])
-    hook(
-        conn,
-        "approval.decided",
-        approval_id,
-        lambda: {**_approval_facts(row), "decision": decision, "decided_by_id": actor},
-        actor,
-        revision=decision,
-    )
-    return after
-
-
-def approval_consume(conn, actor, approval_id):
-    """Rule 6. The connector spends the approval; a second call is `Refused("consumed")`."""
-    _writer(conn, actor)
-    row = approval(conn, approval_id)
-    if not row:
-        refuse(conn, actor, "not-found", f"no approval {approval_id}")
-    _writer(conn, actor, task_id=row["task_id"])
-    if row["decision"] != "approved":
-        refuse(conn, actor, "kind", f"{approval_id} is {row['decision'] or 'undecided'}, not approved")
-    if row["consumed_at"]:
-        refuse(
-            conn,
-            actor,
-            "consumed",
-            f"{approval_id} was already spent at {row['consumed_at']}",
-            classify(json.dumps(row.get("payload") or {}, default=str), kind=row["kind"], conn=conn),
-        )
-    conn.execute("UPDATE approvals SET consumed_at=? WHERE id=? AND consumed_at IS NULL", (now(), approval_id))
-    event(conn, actor, "approval.consume", approval_id, {"kind": row["kind"]})
-    return approval(conn, approval_id)
-
-
 # ----------------------------------------------------------------------------- status
 def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reason=""):
     """One active row per bot; the old one moves to `bot_status_history` with `until`.
 
-    `state="active"` is how a human clears a quarantine (deviation 5): it sets `bots.state`
+    `state="active"` is how a human clears a quarantine (deviation 4): it sets `bots.state`
     and leaves the live status `idle`.
     """
     _writer(conn, actor, task_id=task_id)
@@ -8503,35 +8215,17 @@ def status_result(conn, actor, bot_slug, last_result=None, last_turn_at=None, ne
 def status_counts(conn, actor):
     """`(open_tasks, needs_human)` for a bot, as they are now.
 
-    `needs_human` is one per thing that waits on a person: a live task the bot filed for a person (a question task
-    among them) and an undecided approval it asked for. A task counts once whichever of these it
-    has, its approval included, as does a task blocked on a person's subtask (_ask_in_subtask)."""
+    `needs_human` is the open tasks the bot asked a person for."""
     live = ACTIVE_STATUSES
     marks = ",".join("?" * len(live))
     open_tasks = conn.execute(
         f"SELECT COUNT(*) FROM tasks WHERE owner_id=? AND status IN ({marks})", (actor, *live)
     ).fetchone()[0]
-    waits = {
-        r[0]
-        for r in conn.execute(
-            f"SELECT t.id FROM tasks t WHERE t.status IN ({marks}) AND (t.owner_id=? OR t.requester_id=?) AND ("
-            "(t.requester_id=? AND t.owner_id LIKE 'human:%'))",
-            (*live, actor, actor, actor),
-        )
-    }
-    held = waits | {
-        r[0]
-        for r in conn.execute(
-            "SELECT r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task WHERE r.kind='blocks' "
-            f"AND t.requester_id=? AND t.owner_id LIKE 'human:%' AND t.status IN ({marks})",
-            (actor, *live),
-        )
-    }
-    approvals = sum(
-        not r[0] or r[0] not in held
-        for r in conn.execute("SELECT task_id FROM approvals WHERE requested_by_id=? AND decision IS NULL", (actor,))
-    )
-    return open_tasks, len(waits) + approvals
+    waits = conn.execute(
+        f"SELECT COUNT(*) FROM tasks t WHERE t.status IN ({marks}) AND t.requester_id=? AND t.owner_id LIKE 'human:%'",
+        (*live, actor),
+    ).fetchone()[0]
+    return open_tasks, waits
 
 
 def _recount(conn, actor):
@@ -9619,118 +9313,6 @@ def prime_task_rows(conn, rows):
     from .read_cache import prime
 
     prime(conn, TASK_SQL, {(row["id"],): {k: v for k, v in row.items() if k != "tags"} for row in rows})
-
-
-def approval(conn, approval_id):
-    row = _one(conn, "SELECT * FROM approvals WHERE id=?", (approval_id,))
-    if row:
-        row["payload"] = _json(row.get("payload"), {}) or {}
-        row["decided_for"] = _json(row.pop("decided_for", None), None)
-        approval_wait(conn, row)
-    return row
-
-
-def is_release_approval(kind, payload):
-    """A release's publish approval: asked by its release page with the exact `version` and `commit` it would ship."""
-    payload = payload if isinstance(payload, dict) else {}
-    return kind == "publish" and all(payload.get(k) not in (None, "") for k in ("version", "commit"))
-
-
-def approval_wait(conn, row, at=None):
-    """Adds to an approval row how long it has waited and on whom: `ready_since`, `decision_owner` and its
-    `decision_owner_name`, and `age_s`, the seconds from ready until its decision (until now while undecided). A row from
-    before these were recorded reads its request time and the person its request was sent to."""
-    row["ready_since"] = row.get("ready_since") or row.get("created_at")
-    if not row.get("decision_owner") and row.get("message_id"):
-        row["decision_owner"] = (message(conn, row["message_id"]) or {}).get("recipient_id")
-    owner = row.get("decision_owner")
-    row["decision_owner_name"] = person_name(conn, actor_id(owner)) if owner and is_human(owner) else ""
-    start, end = parse_ts(row["ready_since"]), parse_ts(row.get("decided_at") or at or now())
-    row["age_s"] = max(0, int((end - start).total_seconds())) if start and end else None
-    return row
-
-
-def wait_words(seconds):
-    """'2 h 10 min' for a wait; under a minute is '0 min'."""
-    minutes = max(0, int(seconds or 0)) // 60
-    days, hours, mins = minutes // 1440, minutes % 1440 // 60, minutes % 60
-    if days:
-        return f"{days} d {hours} h" if hours else f"{days} d"
-    if hours:
-        return f"{hours} h {mins} min" if mins else f"{hours} h"
-    return f"{mins} min"
-
-
-def approval_wait_line(row):
-    """'Ready 2 h 10 min, waiting on Chris': what Needs you says of an undecided approval (approval_wait's fields)."""
-    who = row.get("decision_owner_name") or "a person"
-    return f"Ready {wait_words(row.get('age_s'))}, waiting on {who}"
-
-
-def approval_undo(conn, actor, approval_id):
-    """The person takes back what their Assistant decided for them, while nothing has acted on it: the approval is
-    waiting for them again. A decision of their own, or one already spent, stands."""
-    _writer(conn, actor)
-    row = approval(conn, approval_id)
-    if not row:
-        refuse(conn, actor, "not-found", f"no approval {approval_id}")
-    if row["decided_by_id"] != actor or row.get("decided_via") != "assistant":
-        refuse(conn, actor, "identity", "only a decision your Assistant made for you can be undone here")
-    if row["consumed_at"]:
-        raise Refused("consumed", "it already ran; it can't be undone")
-    if _one(
-        conn,
-        "SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL AND id<>?",
-        (row["payload_hash"], approval_id),
-    ):
-        raise Refused("duplicate", "the bot already asked for this again; decide that one instead")
-    conn.execute(
-        "UPDATE approvals SET decision=NULL, decided_by_id=NULL, decided_at=NULL, decided_via=NULL, "
-        "decided_for=NULL WHERE id=?",
-        (approval_id,),
-    )
-    event(conn, actor, "approval.undo", approval_id, {"was": row["decision"], "decided_for": row.get("decided_for")})
-    conv = (
-        conversation(conn, (message(conn, row["message_id"]) or {}).get("conversation_id"))
-        if row.get("message_id")
-        else None
-    )
-    if conv:
-        _write_message(
-            conn,
-            KEEPER,
-            row["requested_by_id"],
-            f"Undone: the {'approval' if row['decision'] == 'approved' else 'decline'} of your {row['kind']} request was taken back. It is waiting "
-            "for a decision again; don't act on it until then.",
-            conv,
-            "notice",
-            {"approval": approval_id},
-            None,
-            None,
-        )
-    _recount(conn, row["requested_by_id"])
-    return approval(conn, approval_id)
-
-
-def approvals(conn, requested_by=None, decision=None, pending=False):
-    sql, args, where = "SELECT * FROM approvals", [], []
-    if requested_by:
-        where.append("requested_by_id=?")
-        args.append(requested_by)
-    if decision:
-        where.append("decision=?")
-        args.append(decision)
-    if pending:
-        where.append("decision IS NULL")
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    out = _rows(conn.execute(sql + " ORDER BY created_at", args))
-    at = now()
-    for row in out:
-        row["payload"] = _json(row.get("payload"), {}) or {}
-        row["decided_for"] = _json(row.pop("decided_for", None), None)
-        approval_wait(conn, row, at)
-    return out
 
 
 def status(conn, bot_slug):
