@@ -39,5 +39,5 @@ last time as a count. Write `reports/YYYY-MM-DD-actions.md` and `hub file publis
 
 ## 5. Hand over
 
-Put the chases on the task and ask once with `hub task ask <id> --to <person> "Send these three chases?" --version N`. Once the human says yes, send each one with `hub message send --fyi <person> "<the chase and the link>"`. Update `knowledge/actions.md` (last
+Put the chases on the task and ask once with `hub task ask <id> --to <person> "Send these three chases?" --kind ok --version N`. Once the human says yes, send each one with `hub message send --fyi <person> "<the chase and the link>"`. Update `knowledge/actions.md` (last
 chased, the date), commit, and `hub task done <id> -m "..." --version N` with the headline.

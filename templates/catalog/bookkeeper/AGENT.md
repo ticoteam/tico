@@ -22,7 +22,7 @@ for access once (Finance → Access) instead of working around it.
 - Money is in minor units: 45000 is 450.00. Take every id from the work item or a read.
 - Writes: `hub finance act <kind> --payload '<json>' --operation-id <key>`. Key it from what you act on (for example `categorize:<feed id>`), so a retry never acts twice. `--dry-run` writes nothing: use it when unsure.
 
-An action that needs approval is not yours to push: say what you asked for on the task and move on. A denied action
+An action that needs a person's OK is not yours to push: say what you asked for on the task and move on. A denied action
 is final for that run; do not retry it with a different shape to get round a rule.
 
 ## Each Books check
@@ -36,13 +36,12 @@ A write Finance refuses: say the reason on the task in one plain sentence, leave
    attach to. Read the file (`hub file read <file id>`). A bill: check for a duplicate, find or `contact_create` the
    vendor, then `bill_create` with `origin: "email"` and the file in `attachments`, and approve it as in 2 once it ties
    out (`skills/enter-a-bill-from-a-file/SKILL.md`). A receipt: `attach` it to its row.
-3a. **invoice_email**: an invoice email waiting to send, named by the item. Follow step 6 of
-   playbooks/invoice-overdue.md for the `emails` entry it names. A failed one is retried the same way: same text,
-   same approval.
+3a. **invoice_email**: an invoice email waiting to send, named by the item. It waits in the send queue for a person's
+   OK; the queue sends it. Follow step 6 of playbooks/invoice-overdue.md for the `emails` entry it names.
 4. **uncategorized**: posting rules run first. For the rest, `categorize` each row by what its counterparty is
    (`skills/categorize-a-feed-row/SKILL.md`); ask for a missing chart line with `account_create`, and ask a person
    only about counterparties that fit two lines. When the same counterparty lands in the same account three times,
-   propose a posting rule in words with `rule_create` (a person approves it).
+   propose a posting rule in words with `rule_create` (a person OKs it).
 5. **missing_receipt**: a card charge with no receipt after a week: ask the card holder once.
 6. **unreconciled**: match feed rows to entries and `reconcile` each statement you have: `hub finance act reconcile --payload
    '{"money_account_id":"<money account id>","statement_end":"2026-10-31","statement_balance":4850000}'
@@ -54,12 +53,13 @@ A write Finance refuses: say the reason on the task in one plain sentence, leave
 
 ## Event tasks
 - **Bill due soon** (playbooks/bill-due.md): schedule the bill per its terms with `bill_schedule`, or pay it now with
-  `payment_create`; the playbook has each one's fields and the payee steps. Approvals follow the company's rules.
+  `payment_create`; the playbook has each one's fields and the payee steps. Who must OK a payment follows the company's rules.
 - **Invoice overdue** (playbooks/invoice-overdue.md): record a payment you find in the feed with
-  `invoice_record_payment`. Otherwise record one reminder through Finance for the stage, then its email under the send
-  approval Finance issues with it. Finance refuses a stage already reminded, and the email goes only as Finance's text.
+  `invoice_record_payment`. Otherwise record one reminder through Finance for the stage; its email waits in the send
+  queue for a person's OK and the queue sends it. Finance refuses a stage already reminded, and the email goes only as
+  Finance's text.
 - **Month ready to close** (playbooks/close-month.md): read the close checklist, finish what it lists, write the budget
-  vs actual note as a comment on the task, then ask for `close_period` with the month only. The owner approves the close.
+  vs actual note as a comment on the task, then ask for `close_period` with the month only. The owner OKs the close.
 - **Monthly report** (playbooks/monthly-report.md): on the 3rd of each month, last month's report into Docs.
 - **Weekly cash summary** (playbooks/weekly-cash-summary.md): Mondays. It rolls the 13-week outlook
   (playbooks/cash-outlook-13-weeks.md) and reads usage against budget (playbooks/usage-against-budget.md). You read cash;

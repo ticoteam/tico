@@ -200,14 +200,11 @@ def approval(asset, mover="owner"):
 
 
 # ----------------------------------------------------------------------------- what to do next
-def question(task, person, text, files, choices=()):
-    """`hub task ask`: one decision for a person, asked on the project task, showing the files it turns on."""
-    command = ["hub", "task", "ask", task, "--to", person, text]
-    if choices:
-        command += ["--choices", ",".join(choices)]
-    for path in files:
-        command += ["--show", "file:" + rel(path)]
-    return shlex.join(command + ["--version", "N"])
+def ask_ok(task, person, text, shows=0):
+    """`hub task ask --kind ok`: a person's OK, asked on the project task. With `shows`, it shows that many published
+    file versions, each a `file:<FILE@N>` placeholder filled from `hub file publish`: the OK is for those versions only."""
+    command = shlex.join(["hub", "task", "ask", task, "--to", person, text, "--kind", "ok"])
+    return command + " --show file:<FILE@N>" * shows + " --version N"
 
 
 def request(project, cfg, stage, files, task, owner):
@@ -237,8 +234,12 @@ def request(project, cfg, stage, files, task, owner):
         ]
         steps.append(f"2. {shlex.join(create)}")
         return "\n".join(steps)
+    # A person OKs exact file versions: this bot publishes each file first (step 1), then shows each version it printed.
     person = owner if mover == "owner" else mover.split(":", 1)[1]
-    return question(task, person, f"Approve the {stage['id']} files for {project.name}?", files)
+    steps = [f"1. {shlex.join(['hub', 'file', 'publish', rel(f)])}" for f in files]
+    ask = ask_ok(task, person, f"OK the {stage['id']} files for {project.name}?", len(files))
+    steps.append(f"2. {ask}   (each <FILE@N> from step 1, in order)")
+    return "\n".join(steps)
 
 
 def self_step(project, cfg, stage, task, owner):
@@ -250,12 +251,10 @@ def self_step(project, cfg, stage, task, owner):
         return NO_OWNER
     raise_by = f"{cfg['budget']:g}"
     line = (
-        f"Spend {raise_by} USD more on {project.name}? {used:.2f} of {limit:.2f} USD used. Raise budget lets its "
-        "self-moved stages go on; Stop ends them."
+        f"Spend {raise_by} USD more on {project.name}? {used:.2f} of {limit:.2f} USD used. An OK lets its self-moved "
+        "stages go on; no ends them."
     )
-    return f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner for an OK: " + question(
-        task, owner, line, [], ("Raise budget", "Stop")
-    )
+    return f"over budget ({used:.2f} of {limit:.2f} USD used): ask the owner for an OK: " + ask_ok(task, owner, line)
 
 
 def next_step(project, cfg, task="TASK-ID", owner=None):

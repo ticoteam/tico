@@ -1,4 +1,4 @@
-# Write a board brief
+# Write a product brief
 
 Triggered by the weekly review when a problem meets the brief threshold in `knowledge/product-practice.md`, or when the
 your manager asks for a brief on a named problem. Budget 30 minutes. The outcome is one page, filed as a task
@@ -19,7 +19,7 @@ reason did not cover.
 
 One page, plain words, in this shape:
 
-    Title: Board brief: <the problem, in the customer's words, under ten words>
+    Title: Product brief: <the problem, in the customer's words, under ten words>
     Segment: <name> (segment:<slug>)
     Problem: <one or two sentences: what the customer tries to do, and where it fails>
     Who has it: <distinct accounts in the window, out of the segment's accounts in the cohort, with the window>
@@ -43,7 +43,7 @@ One page, plain words, in this shape:
 
 Save the page to a file in your checkout, then file it:
 
-    hub task create --owner <your manager> --title "Board brief: <problem>" --body-file <file> --label segment:<slug>
+    hub task create --owner <your manager> --title "Product brief: <problem>" --body-file <file> --label segment:<slug>
 
 If the problem is already a Product roadmap item, comment the brief on that item instead of filing a new task. Record the
 brief in `knowledge/briefs.md`: the date, the problem, the task id, and "filed".

@@ -63,7 +63,7 @@ You are woken on this task with the answer. For each picked idea, in this order:
        hub task create --owner <channel owner slug> --parent <idea task id> --title "<one piece of the build>" --label channel:<channel slug>
 
 3. A pick that spends: ask the owner for an OK on its idea task before any money is committed, and commit it only on that
-   OK: `hub task ask <idea task id> --to <owner person ref> "Spend <amount> on Google Ads for two weeks?" --version N`.
+   OK: `hub task ask <idea task id> --to <owner person ref> "Spend <amount> on Google Ads for two weeks?" --kind ok --version N`.
 
 Ideas the owner did not pick stay ideas.
 

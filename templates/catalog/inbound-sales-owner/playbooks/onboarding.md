@@ -40,7 +40,7 @@ some, record those and use the defaults for the rest, saying which you used.
    `knowledge/team.md`, which names the person who takes calls. Which prices or terms may I quote, if any? I quote only
    what is recorded.
 5. Who approves a reply before it leaves? (Default: you, on the task.) Which mailbox and calendar should replies come
-   from? Sets the sender and the approval step. Nothing reaches a lead without that approval, once mail sending is on
+   from? Sets the sender and who OKs each send. Nothing reaches a lead without that OK, once mail sending is on
    in Tico.
 
 ## 4. Record
