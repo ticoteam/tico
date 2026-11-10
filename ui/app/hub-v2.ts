@@ -316,12 +316,39 @@ function v2NeedsMore() {
   })();
 }
 // A live `needs` event (live.js asks for changes, not the list): mend the held list from the ids that changed, or read
-// it whole when the event was counted from another version than the one held. One at a time, in order. Resolves true
-// when the list may have moved. A changed item whose place falls past the pages held stays unread: only the count
-// moves, and the next page starts after what is held. Missing folded ids keep the held set; null reads it whole.
+// it whole when the event was counted from another version than the one held. One at a time, in order, by one worker
+// (v2NeedsDrain). Resolves true when the list may have moved. A changed item whose place falls past the pages held
+// stays unread: only the count moves, and the next page starts after what is held. Missing folded ids keep the held
+// set; null reads it whole.
 let NEEDS_MEND = Promise.resolve(false);
-const v2NeedsChanged = (d: unknown) => (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(() => v2NeedsMend(d as NeedsChange)));
-async function v2NeedsMend(d: NeedsChange) {
+// The events not mended yet, each with when it came (`at`, counted): a whole read sent after an event holds its change.
+let NEEDS_PENDING: {d: NeedsChange; at: number}[] = [], NEEDS_ARRIVED = 0;
+const v2NeedsChanged = (d: unknown) => {
+  NEEDS_PENDING.push({d: d as NeedsChange, at: ++NEEDS_ARRIVED});
+  return (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(v2NeedsDrain));
+};
+// One whole read at a time, and only as many as are needed: the events a read covers are dropped, not mended or read
+// again. A read covers every event that came before it was sent, and every event up to the last one naming the version
+// it holds.
+async function v2NeedsDrain(): Promise<boolean> {
+  let moved = false;
+  while (NEEDS_PENDING.length) {
+    const held = S.v2.needsVersion, last = held ? NEEDS_PENDING.map(p => p.d.version).lastIndexOf(held) : -1;
+    if (last >= 0) {
+      for (const p of NEEDS_PENDING.splice(0, last + 1)) if (p.d.went_away) S.v2.wentAway = p.d.went_away;
+      continue;
+    }
+    const next = NEEDS_PENDING.shift()!;
+    const r = await v2NeedsMend(next.d);
+    if (r !== 'whole') { moved = r || moved; continue; }
+    const sent = NEEDS_ARRIVED;
+    if (await v2NeedsRead()) NEEDS_PENDING = NEEDS_PENDING.filter(p => p.at > sent);
+    moved = true;
+  }
+  return moved;
+}
+/** One event onto the held list: true when it moved, 'whole' when only a whole read will do (v2NeedsDrain sends it). */
+async function v2NeedsMend(d: NeedsChange): Promise<boolean | 'whole'> {
   if (d.went_away) S.v2.wentAway = d.went_away;
   if (Array.isArray(d.items)) {       // a server without changes
     NEEDS_REVISION++;
@@ -330,7 +357,7 @@ async function v2NeedsMend(d: NeedsChange) {
   }
   const held = S.v2.needsVersion, list = S.v2.needs;
   if (!d.version || d.version === held) return false;
-  const whole = async () => { await v2NeedsRead(); return true; };
+  const whole = () => 'whole' as const;
   if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed) || d.folded_task_ids === null) return whole();
   const all = needsAll(), out = new Set([...d.changed, ...d.removed].map(String));
   const items = (S.v2.needs || []).filter(it => !out.has(String(it.id)));

@@ -27,6 +27,7 @@ declare const S: {v2: {needs: ({id: string} & Record<string, unknown>)[]; needsC
 declare let v2Get: (path: string) => Promise<unknown>;
 declare function v2NeedsMend(d: unknown): Promise<unknown>;
 declare function needsTake(d: unknown): void;
+declare function v2NeedsChanged(d: unknown): Promise<boolean>;
 type Order = (a: {id: string}, b: {id: string}) => number;
 declare const taskQueueOrder: Order, taskFinishedOrder: Order;
 declare function taskRowsPut(rows: {id: string}[], t: {id: string; [k: string]: unknown} | null, id: string, has: (t: {id: string}) => boolean, order?: Order): boolean;
@@ -308,6 +309,25 @@ const holdNext = (match: Held['match']): Held => {
       Object.assign(S.v2, {needs: kept.needs, needsVersion: kept.version, needsNext: kept.next, needsCount: kept.count});
     }
   }), {version: 'p3', ids: ['c']});
+  // Stale Needs you events queued behind each other: one whole read covers them all, not one read each.
+  assert.deepEqual(await page.evaluate(async () => {
+    const real = v2Get, kept = {needs: S.v2.needs, version: S.v2.needsVersion, next: S.v2.needsNext, count: S.v2.needsCount};
+    let whole = 0;
+    v2Get = async (path: string) => {
+      if (path.includes('ids=')) return null;
+      whole++;
+      return {version: 'p5', count: 1, next: null, items: [{id: 'e', kind: 'task', line: 'E'}]};
+    };
+    Object.assign(S.v2, {needs: [{id: 'a', kind: 'task', line: 'A'}], needsVersion: 'p1', needsNext: null, needsCount: 1});
+    try {
+      const all = ['p2', 'p3', 'p4', 'p5'].map(version => v2NeedsChanged({version, base: 'p0', count: 1, changed: ['e'], removed: ['a']}));
+      await Promise.all(all);
+      return {whole, version: S.v2.needsVersion, ids: S.v2.needs.map(x => x.id)};
+    } finally {
+      v2Get = real;
+      Object.assign(S.v2, {needs: kept.needs, needsVersion: kept.version, needsNext: kept.next, needsCount: kept.count});
+    }
+  }), {whole: 1, version: 'p5', ids: ['e']});
 
   // A list's order holds as rows come and change: queue order is by rank then age, Done most recent first, and the
   // plain Threads list by title.
