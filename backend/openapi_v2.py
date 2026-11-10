@@ -3163,9 +3163,12 @@ SCHEMAS = {
     "ReleaseNowResult": obj(
         {
             "sent": "b",
-            "reason": {"enum": ["no_release_manager", "nothing_pending", "already_open", None]},
-            "task": "n",
-            "tasks": {"type": "integer", "description": "Every task waiting for a release, readable or not"},
+            "reason": {"enum": ["no_release_manager", "already_open", None]},
+            "task": {
+                "type": ["string", "null"],
+                "description": "The task filed, or the open one when you may read it",
+            },
+            "tasks": {"type": "integer", "description": "Open tasks you may read waiting for a release"},
         }
     ),
     "SupportReportResult": obj(

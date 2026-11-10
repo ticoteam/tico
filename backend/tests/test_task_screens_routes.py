@@ -131,9 +131,8 @@ def test_the_release_schedule_reads_and_changes_and_release_now_answers_why_noth
     assert answer == {"sent": False, "reason": "no_release_manager", "task": None, "tasks": 0}
 
 
-def test_release_now_files_one_task_for_the_release_manager_naming_only_what_its_requester_may_read(api):
-    """A release moves every task waiting for one, but what the release task says, and what a reader is shown waiting,
-    is only what they may read: a private task is counted, never named."""
+def _releasing(api):
+    """A Delivery pipeline whose Ship stage waits for a release, and ops as the Release Manager."""
     stages = [
         {"id": "build", "name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
         {"id": "ship", "name": "Ship", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
@@ -144,6 +143,15 @@ def test_release_now_files_one_task_for_the_release_manager_naming_only_what_its
         c.execute("UPDATE requirements SET kind='in_release' WHERE stage_id='ship'")
     patched = api.patch("/api/v2/release-schedule", json={"bot": "ops"}, headers=headers())
     assert patched.status_code == 200 and patched.json()["release_manager"] == "ops", patched.text
+
+
+def test_release_now_files_a_task_that_names_no_waiting_work_and_answers_only_what_the_requester_reads(api):
+    """Codex review 2, 4 and 9: the release task is company-visible, so it says who asked and their note, never which
+    tasks wait or how many; the Release Manager finds them itself. What a requester is answered, and what the schedule
+    shows them, counts only the tasks they may read: no total, no "and N more"."""
+    import json
+
+    _releasing(api)
     shown = post(api, "tasks", {"title": "Saved carts", "body": "x", "owner": "ben", "pipeline": "delivery"})
     hidden = post(
         api,
@@ -155,14 +163,23 @@ def test_release_now_files_one_task_for_the_release_manager_naming_only_what_its
     assert api.get("/api/v2/tasks/" + hidden["id"], headers=headers("cara-test")).status_code == 404
     assert get(api, "release-schedule")["pending"] == 2
     assert get(api, "release-schedule", token="cara-test")["pending"] == 1
-    answer = post(api, "release/now", {"note": "Before the weekend"}, token="cara-test")
-    assert answer["sent"] is True and answer["tasks"] == 2 and answer["reason"] is None
-    filed = get(api, "tasks/" + answer["task"], token="cara-test")["task"]
-    assert filed["owner_id"] == "bot:ops"
-    assert shown["id"] in filed["body"] and hidden["id"] not in filed["body"] and "and 1 more" in filed["body"]
-    assert hidden["id"] not in filed["title"]
+    answer = post(api, "release/now", {"note": "Before the weekend"})
+    assert answer == {"sent": True, "reason": None, "task": answer["task"], "tasks": 2}
+    filed = get(api, "tasks/" + answer["task"], token="cara-test")
+    assert filed["task"]["owner_id"] == "bot:ops" and filed["task"]["title"] == "Release: requested by Ana"
+    said = json.dumps(filed)
+    for leak in (shown["id"], hidden["id"], "Saved carts", "Quiet acquisition", "2 tasks", "1 more"):
+        assert leak not in said, leak
     again = post(api, "release/now", {}, token="cara-test")
-    assert again["sent"] is False and again["reason"] == "already_open" and again["task"] == answer["task"]
+    assert again == {"sent": False, "reason": "already_open", "task": answer["task"], "tasks": 1}
+
+
+def test_release_now_is_filed_whether_or_not_anything_waits(api):
+    """Codex review 2, 9: "nothing waits" would tell a reader that no hidden task waits either. The request is filed;
+    the Release Manager closes it when nothing does."""
+    _releasing(api)
+    answer = post(api, "release/now", {}, token="cara-test")
+    assert answer == {"sent": True, "reason": None, "task": answer["task"], "tasks": 0}
 
 
 def test_healths_never_stuck_check_gives_its_numbers_as_fields(api):
