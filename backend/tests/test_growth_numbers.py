@@ -371,3 +371,21 @@ def test_the_live_answer_matches_the_declared_contract(api):
     answer = get(api, "growth/numbers")
     assert answer["kpis"]["north_star"]["series"] and answer["markers"] and answer["channels"][1]["series"]
     assert conforms(answer, schema, document) is None
+
+
+def _idea(c, title, labels):
+    return H.task_create(c, ANA, title, "Try it.", "bot:ops", lint=False, labels=labels)["id"]
+
+
+def test_an_idea_already_running_starts_no_new_test_when_it_takes_the_other_running_label(company):
+    """growth:running and idea:live say the same thing: a test starts when an idea takes the first of them, not when
+    it adds or swaps to the other while it runs."""
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        tid = _idea(c, "Weekend discount", ["growth:ideas"])
+        H.task_update(c, ANA, tid, labels=["growth:running"])
+        H.task_update(c, ANA, tid, labels=["growth:running", "idea:live"])
+        H.task_update(c, ANA, tid, labels=["idea:live"])
+        H.task_update(c, ANA, tid, labels=["idea:live", "channel:seo"])
+        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    assert [m["kind"] for m in found] == ["started"]

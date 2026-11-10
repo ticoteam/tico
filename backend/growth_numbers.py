@@ -148,9 +148,10 @@ def _kpis(c, hidden):
 
 
 def _started(row):
-    """Whether this label change gave the idea a label that starts its test."""
+    """Whether this label change started the idea's test: it had none of the running labels and now has one. Adding
+    or swapping to the other running label while it runs is the same test."""
     old, new = set(json.loads(row["old"] or "[]")), set(json.loads(row["new"] or "[]"))
-    return bool((new - old) & set(MT.STARTED))
+    return not old & set(MT.STARTED) and bool(new & set(MT.STARTED))
 
 
 def _markers(c, auth, who, since):
