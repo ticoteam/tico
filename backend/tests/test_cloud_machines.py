@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from backend import cloud_access, cloud_machines as CM, placement, readiness
+from backend.cloud_machine_health import file_card as file_health_card
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.cloud_access import signals
@@ -840,26 +841,58 @@ def test_an_offline_own_machine_is_restarted_and_recorded_without_a_person_card(
         assert not c.execute("SELECT 1 FROM tasks WHERE title LIKE 'Health: Check %cloud machine' LIMIT 1").fetchone()
 
 
+def with_botops(cloud):
+    with cloud.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+
+
+def machine_cards(cloud):
+    with cloud.store.read() as c:
+        return [
+            dict(r)
+            for r in c.execute("SELECT title,body,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
+        ]
+
+
 @pytest.mark.parametrize(("code", "status"), [("starts_full", 429), ("cpu_cap", 409)])
-def test_a_refused_offline_restart_files_one_health_card_and_keeps_the_existing_retry(cloud, code, status):
+def test_a_refused_offline_restart_files_one_botops_task_and_keeps_the_existing_retry(cloud, code, status):
+    with_botops(cloud)
     silent_with_waiting_work(cloud)
-    cloud.hq.fail["start"] = [CM.Refused(code, status)]
+    cloud.hq.fail["start"] = [CM.Refused(code, status), CM.Refused(code, status)]
     assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
     assert cloud.tick(1) == ["stop", "start"]
     current = cloud.row()
     assert current["machine_id"] == "m1" and current["problem"] == "hq:" + code
     assert current["next_try_at"] == cloud.at[0] + CM.BACKOFF
+    cards = machine_cards(cloud)
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["owner_id"] == H.bot_actor(H.FLEET_MAINTAINER)
+    assert "ops" in card["body"] and code in card["body"] and "will not replace the machine" in card["body"]
+    assert "Replace the machine, or check it." in card["body"]
+    assert "keeper" not in (card["title"] + card["body"]).lower()
     with cloud.store.read() as c:
-        cards = c.execute(
-            "SELECT title,body,owner_id FROM tasks WHERE title LIKE 'Health: Check %cloud machine'"
-        ).fetchall()
-        assert len(cards) == 1
-        card = dict(cards[0])
-        assert "ops" in card["body"] and code in card["body"]
-        assert "Replace machine" in card["body"] and "Check the machine" in card["body"]
-        assert card["owner_id"].startswith("human:")
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id LIKE 'human:%' LIMIT 1").fetchone()
     cloud.hq.calls.clear()
     assert cloud.tick(14) == []
+    # The retry is refused again: still one open task.
+    assert cloud.tick(CM.BACKOFF) == ["start"]
+    assert len(machine_cards(cloud)) == 1
+
+
+def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_botops(cloud):
+    adopt(cloud)
+    with cloud.store.transaction() as c:
+        assert file_health_card(c, "ops", "starts_full", cloud.at[0]) is None  # no BotOps: nothing filed
+    assert machine_cards(cloud) == []
+    with_botops(cloud)
+    with cloud.store.transaction() as c:
+        first = file_health_card(c, "ops", "starts_full", cloud.at[0])
+        assert first and file_health_card(c, "ops", "cpu_cap", cloud.at[0]) is None
+    assert len(machine_cards(cloud)) == 1
+    with cloud.store.transaction() as c:
+        H.task_done(c, H.KEEPER, first, "Machine replaced.")
+        assert file_health_card(c, "ops", "cpu_cap", cloud.at[0])  # closed: the next refusal files a new one
 
 
 def test_a_same_choice_reposted_keeps_the_start_refusal_and_its_wake_guard(cloud):

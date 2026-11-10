@@ -1996,7 +1996,7 @@ class Manager:
             if restarting and refused.code in ("starts_full", "cpu_cap"):
                 from .cloud_machine_health import file_card as file_health_card
 
-                file_health_card(c, key, refused.code, at, getattr(self.settings, "owner_email", ""))
+                file_health_card(c, key, refused.code, at)
             if (
                 refused.status == 402
                 and current["problem"] != "out_of_credit"
