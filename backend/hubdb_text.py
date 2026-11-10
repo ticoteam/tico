@@ -639,7 +639,7 @@ LINT_PATH = re.compile(
 
 
 LINT_TOOL = re.compile(
-    r"\bhub\s+(?:task|message|question|approval|note|chat|doc|file|goal|kpi|bot|routine|update|tool|calendar|meeting|support|team|tag|human|group|conversation|whoami|sql)\b|(?<![\w-])--[a-z][\w-]*|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|`[^`]+`"
+    r"\b(?:hub|tico)\s+(?:task|message|question|approval|note|chat|doc|file|goal|kpi|bot|routine|update|tool|calendar|meeting|support|team|tag|human|group|conversation|whoami|sql)\b|(?<![\w-])--[a-z][\w-]*|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|`[^`]+`"
 )
 
 

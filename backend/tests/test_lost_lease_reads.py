@@ -142,6 +142,12 @@ def fixture_case(command, host):
         ('/bin/bash -lc "cd /tmp;gh pr merge 42"', 'claude', False),
         ('hub webhook send 1', 'claude', False),
         ('gh pr view 42', 'claude', False),  # `gh` is not a read the runner knows
+        # `tico` is the teamwork CLI; `hub` above is its old name.
+        ('tico task show 42', 'codex', True),
+        ('cd /w && tico needs-you show', 'claude', True),
+        ('tico task close 7', 'claude', False),
+        ('tico release now --notes synthetic-private-marker', 'codex', False),
+        ('tico support send --body synthetic-private-marker', 'claude', False),
     ],
 )
 def test_real_runner_shell_events_decide_a_lost_lease_turn(api, command, host, requeued):

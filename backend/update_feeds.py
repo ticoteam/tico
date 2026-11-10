@@ -207,7 +207,7 @@ TICO_REASONS = (
 )
 TEMPLATE_OTHER = "it changes only the template's other files"
 # Words in a release that touch what a bot calls: its MCP tools, `hub` commands and the API.
-_TOOLING = re.compile(r"\bMCP\b|\bhub_[a-z_]+|`hub\s|\bhub CLI\b|\bAPI\b", re.I)
+_TOOLING = re.compile(r"\bMCP\b|\bhub_[a-z_]+|`(?:hub|tico)\s|\b(?:hub|tico) CLI\b|\bAPI\b", re.I)
 
 
 def tico_item(release):

@@ -42,8 +42,8 @@ STALE = json.loads((ROOT / "e2e" / "cli" / "stale.json").read_text())
 TEMPLATES = ROOT / "templates"
 SKILLS = ROOT / "skills"
 SKIP_FILES = (".png", ".jpg", ".gif", ".pdf", ".woff", ".woff2", ".zip", ".gz", ".sqlite", ".db")
-# A `hub` command in running text: the word `hub`, then up to four words that name a command.
-COMMAND = re.compile(r"(?:^|[\s`$(\"'|&;])hub ((?:[a-z][a-z0-9-]*)(?: [a-z][a-z0-9-]*){0,3})")
+# A `tico` command in running text (or `hub`, its old name): the word, then up to four words that name a command.
+COMMAND = re.compile(r"(?:^|[\s`$(\"'|&;])(?:tico|hub) ((?:[a-z][a-z0-9-]*)(?: [a-z][a-z0-9-]*){0,3})")
 RECORD = os.environ.get("TICO_E2E_RECORD_REFUSALS", "")
 SMOKE = "Acme smoke"
 

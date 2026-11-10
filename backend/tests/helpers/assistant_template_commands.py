@@ -1,4 +1,4 @@
-"""Reading the `hub` commands a text teaches and parsing them with clients/hubcli.py, shared by
+"""Reading the `tico` commands (and `hub`, its old name) a text teaches and parsing them with clients/hubcli.py, shared by
 test_assistant_template_commands and test_bot_instruction_commands so neither imports the other."""
 
 import contextlib
@@ -9,7 +9,8 @@ from itertools import product
 
 from clients import hubcli
 
-SPAN = re.compile(r"`(hub [^`]+)`")
+SPAN = re.compile(r"`((?:tico|hub) [^`]+)`")  # `tico` is the CLI; `hub` is its old name
+STARTS = ("tico ", "hub ")
 PLACEHOLDER = re.compile(r"<[^<>]+>")
 COMMENT = re.compile(r"\s+#\s.*$")
 VERSION = re.compile(r"--version N\b")  # the version the bot was shown, written as the plan writes it
@@ -37,9 +38,9 @@ def commands_in(path):
         if fenced:
             if continued:  # the line before ended in `\`: this one is the rest of its command
                 found[-1] = (found[-1][0], found[-1][1].rstrip("\\").rstrip() + " " + line.strip())
-            elif line.lstrip().startswith("hub "):
+            elif line.lstrip().startswith(STARTS):
                 found.append((number, line.strip()))
-            continued = bool(found) and (continued or line.lstrip().startswith("hub ")) and line.rstrip().endswith("\\")
+            continued = bool(found) and (continued or line.lstrip().startswith(STARTS)) and line.rstrip().endswith("\\")
             continue
         if not line.strip():
             flush()

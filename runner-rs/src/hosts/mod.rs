@@ -309,30 +309,31 @@ pub fn tool_summary(input: &Value) -> String {
 /// while a program-only display summary cannot distinguish `gh pr view` from `gh pr merge`.
 pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
     static RULES: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
-    let rules = RULES.get_or_init(|| {
-        [
+    let rules =
+        RULES.get_or_init(|| {
+            [
             (
                 "merge pull request",
                 r"\bgh\s+(?:pr\s+merge\b|api\b[^\n]*\bmerg(?:e|ed|ing)\b)",
             ),
             (
                 "publish release",
-                r"\bgh\s+release\s+create\b|\bhub\s+release\s+now\b",
+                r"\bgh\s+release\s+create\b|\b(?:hub|tico)\s+release\s+now\b",
             ),
             (
                 "publish package",
                 r"\b(?:npm|cargo)\s+publish\b|\btwine\s+upload\b|\bdocker\s+(?:image\s+)?push\b",
             ),
-            ("consume approval", r"\b(?:hub\s+)?approval\s+consume\b"),
+            ("consume approval", r"\b(?:(?:hub|tico)\s+)?approval\s+consume\b"),
             (
                 "send email",
-                r"\b(?:hub\s+)?(?:mail|email)\s+send\b|\bsendmail\b",
+                r"\b(?:(?:hub|tico)\s+)?(?:mail|email)\s+send\b|\bsendmail\b",
             ),
             (
                 "send webhook",
-                r"\b(?:hub\s+)?webhook\s+(?:send|retry|recover)\b",
+                r"\b(?:(?:hub|tico)\s+)?webhook\s+(?:send|retry|recover)\b",
             ),
-            ("send support report", r"\bhub\s+support\s+send\b"),
+            ("send support report", r"\b(?:hub|tico)\s+support\s+send\b"),
             (
                 "make payment",
                 r"\bstripe\s+(?:payments|payment_intents)\s+(?:create|confirm)\b",
@@ -341,7 +342,7 @@ pub fn shell_outside_actions(command: &str) -> Vec<&'static str> {
         .into_iter()
         .map(|(label, pattern)| (label, Regex::new(&format!("(?i){pattern}")).unwrap()))
         .collect()
-    });
+        });
     // Normalize shell quoting as well as scanning the raw command: quoted subcommands and nested shell
     // wrappers must retain their action. Matching mentions can conservatively hold; it never exports them.
     let normalized = shell_words(command)
@@ -616,9 +617,10 @@ fn words_read_only(words: &[String]) -> bool {
                 .collect();
             rest.first().is_none_or(|w| !w.starts_with('-')) && words_read_only(&rest)
         }
-        "hub" => hub_summary(words)
-            .strip_prefix("hub ")
-            .is_some_and(|path| HUB_READ_PATHS.contains(&path)),
+        // `tico` is the teamwork CLI; `hub` is its old name, still read.
+        "hub" | "tico" => hub_summary(words)
+            .split_once(' ')
+            .is_some_and(|(_, path)| HUB_READ_PATHS.contains(&path)),
         // A file name that expands to a flag could turn on one of the flags refused below.
         "sort" | "tree" | "uniq" | "date" | "rg" if globbed => false,
         "sort" => !short("o") && !long(&["--output", "--compress"]),
@@ -1673,7 +1675,7 @@ fn plain_program(text: &str) -> Option<&str> {
 /// name a real command path and an argument never reaches the summary.
 fn hub_words(run: &str) -> Option<Vec<String>> {
     let run = strip_env(run);
-    if plain_program(run)? != "hub" {
+    if !matches!(plain_program(run)?, "hub" | "tico") {
         return None;
     }
     let words = shell_words(run)?;
@@ -1763,7 +1765,9 @@ fn hub_summary(words: &[String]) -> String {
             break;
         }
     }
-    std::iter::once("hub")
+    // The word the line used (`tico`, or its old name `hub`), without a folder (`/usr/local/bin/hub` reads `hub`).
+    let program = words[0].rsplit('/').next().unwrap_or("tico");
+    std::iter::once(program)
         .chain(path)
         .collect::<Vec<_>>()
         .join(" ")
@@ -2513,6 +2517,53 @@ mod tests {
         ] {
             assert!(!shell_reads_only(command), "{command:?}");
         }
+    }
+
+    #[test]
+    fn tico_and_its_old_name_hub_read_the_same() {
+        for program in ["tico", "hub"] {
+            for (line, labels) in [
+                (format!("{program} release now"), vec!["publish release"]),
+                (
+                    format!("cd /w && {program} support send --body x"),
+                    vec!["send support report"],
+                ),
+                (format!("{program} webhook retry 3"), vec!["send webhook"]),
+                (
+                    format!("{program} approval consume a1"),
+                    vec!["consume approval"],
+                ),
+                (
+                    format!("{program} email send ana@acme.example"),
+                    vec!["send email"],
+                ),
+                (
+                    format!("bash -lc '{program} release now'"),
+                    vec!["publish release"],
+                ),
+                (format!("{program} task list"), vec![]),
+            ] {
+                assert_eq!(shell_outside_actions(&line), labels, "{line}");
+            }
+            assert!(shell_reads_only(&format!("cd /w && {program} task list")));
+            assert!(shell_reads_only(&format!(
+                "bash -lc '{program} needs-you show'"
+            )));
+            assert!(!shell_reads_only(&format!("{program} task close 7")));
+            assert!(!shell_reads_only(&format!("{program} -q task list")));
+            assert_eq!(
+                command_program(&format!("cd /w && {program} task close 7f3a")),
+                format!("{program} task close")
+            );
+            assert_eq!(
+                command_program(&format!("/usr/local/bin/{program} message send ops x")),
+                format!("{program} message send")
+            );
+        }
+        assert_eq!(
+            command_program("tico-computer restart all"),
+            "tico-computer"
+        );
     }
 
     #[test]

@@ -138,7 +138,7 @@ class FakeOks:
 
     def run(self, command, **kwargs):
         self.calls.append(command)
-        assert command[:3] == ["hub", "ok", "use"]
+        assert command[0] in ("tico", "hub") and command[1:3] == ["ok", "use"]
         rid, subject = command[3], command[command.index("--for") + 1]
         content = json.loads(command[command.index("--content") + 1])
         grant = self.grants.get(rid)

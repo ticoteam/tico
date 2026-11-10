@@ -294,3 +294,14 @@ def test_the_shipped_map_is_the_applied_rename_data_and_the_cli_command_table():
         for old, new, tail, rewrite in hubcli.RENAMED
     ]
     assert sorted(shipped["commands"], key=lambda r: r["old"]) == sorted(cli, key=lambda r: r["old"])
+
+
+def test_a_line_written_with_tico_is_read_like_one_written_with_hub(tmp_path):
+    root = tmp_path / "bot-acme"
+    root.mkdir()
+    (root / "AGENT.md").write_text("Say it with `tico say hello`.\n\n```\ntico meetings granola status\n```\n")
+    (root / "run.py").write_text('subprocess.run(["tico", "meetings", "list"])\n')
+    olds = {(f.path, f.kind, f.fixable) for f in bot_names.scan(root, bot_names.load_names())}
+    assert olds == {("AGENT.md", "command", True), ("run.py", "command", False)}
+    bot_names.fix(root, bot_names.scan(root, bot_names.load_names()))
+    assert (root / "AGENT.md").read_text() == "Say it with `tico message send hello`.\n\n```\ntico meeting granola status\n```\n"

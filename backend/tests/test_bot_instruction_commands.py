@@ -32,7 +32,7 @@ FOLDERS = ("policies", "templates", "skills", "integrations", "runner-rs/src/tes
 SUFFIXES = (".md", ".yaml", ".txt")
 # The commands run as taught, not only parsed: the task engine's, whose CLI checks a line before it sends it.
 RUN_GROUPS = ("task", "tasks", "ok", "needs-you")
-SPAN = re.compile(r"`(hub [^`]+)`")
+SPAN = re.compile(r"`((?:tico|hub) [^`]+)`")
 PATH = re.compile(r"[\w./-]+")
 # A value the text leaves for the bot to fill in (`--kind <kind>`, `--content JSON`, `NUMBER`, `--period-start D`)
 # gets a sample that a choice, a number or a JSON flag may refuse; the bot puts in a real one.

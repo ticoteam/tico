@@ -48,12 +48,13 @@ SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 # `hub` after a quote, a backtick, `$`, `(`, `;`, `&` or `|`: a command, not a word in prose. At the start of a line too,
 # where the text is a shell line or a code span or fenced block; a line of Python or JavaScript prose starts with words.
 _WORDS = r"([a-z][a-z-]*(?:[ \t]+[a-z][a-z-]*)*)"
-SHELL_HUB = re.compile(r"(?:^|[`\"'$(;&|])[ \t]*hub[ \t]+" + _WORDS, re.M)
-SHELL_HUB_INLINE = re.compile(r"[`\"'$(;&|][ \t]*hub[ \t]+" + _WORDS)
+# `tico` is the CLI's name and `hub` its old one: both are read.
+SHELL_HUB = re.compile(r"(?:^|[`\"'$(;&|])[ \t]*(?:hub|tico)[ \t]+" + _WORDS, re.M)
+SHELL_HUB_INLINE = re.compile(r"[`\"'$(;&|][ \t]*(?:hub|tico)[ \t]+" + _WORDS)
 SHELL_SUFFIXES = {".sh", ".bash", ".zsh"}
 # `["hub", "sql", ...]` in Python, JavaScript or JSON: the first two words only (a set of names, `{"hub", "docs"}`, is not one)
 ARGV_HUB = re.compile(
-    r"\[[ \t\n]*[\"']hub[\"'][ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'](?:[ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'])?"
+    r"\[[ \t\n]*[\"'](?:hub|tico)[\"'][ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'](?:[ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'])?"
 )
 WORD = re.compile(r"[a-z][a-z-]*")
 SQL_IDENT = re.compile(r"'(?:[^']|'')*'|(?<![\w:@$])([A-Za-z_]\w*)")
@@ -104,7 +105,8 @@ KEY_READ = re.compile(
 ROW_RECEIVERS = {"row", "r", "rec", "record", "item", "result"}
 RECEIVER_TABLES = {"msg": "messages"}
 TALKS_TO_HUB = re.compile(
-    r"/api/v2/|\bHUB_[A-Z_]+\b|[\"'`$(;&|][ \t]*hub[ \t]|^[ \t]*hub[ \t]|\[[ \t\n]*[\"']hub[\"']", re.M
+    r"/api/v2/|\bHUB_[A-Z_]+\b|[\"'`$(;&|][ \t]*(?:hub|tico)[ \t]|^[ \t]*(?:hub|tico)[ \t]|\[[ \t\n]*[\"'](?:hub|tico)[\"']",
+    re.M,
 )
 MOST_KEPT_FOR_A_KEY = 2  # a name most of the schema keeps proves nothing as a key: `created_by` needs its table in view
 

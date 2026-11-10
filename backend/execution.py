@@ -874,10 +874,13 @@ OUTSIDE_ACTIONS = tuple(
         ('publish package', r"\bcargo\s+publish\b"),
         ('publish package', r"\btwine\s+upload\b"),
         ('publish package', r"\bdocker\s+(?:image\s+)?push\b"),
-        ('consume approval', r"\b(?:hub\s+)?approval\s+consume\b"),
-        ('send email', r"\b(?:hub\s+)?(?:mail|email)\s+send\b"),
+        # `tico` is the teamwork CLI; `hub` is its old name, read for good.
+        ('publish release', r"\b(?:hub|tico)\s+release\s+now\b"),
+        ('send support report', r"\b(?:hub|tico)\s+support\s+send\b"),
+        ('consume approval', r"\b(?:(?:hub|tico)\s+)?approval\s+consume\b"),
+        ('send email', r"\b(?:(?:hub|tico)\s+)?(?:mail|email)\s+send\b"),
         ('send email', r"\bsendmail\b"),
-        ('send webhook', r"\b(?:hub\s+)?webhook\s+send\b"),
+        ('send webhook', r"\b(?:(?:hub|tico)\s+)?webhook\s+send\b"),
         ('make payment', r"\bstripe\s+(?:payments|payment_intents)\s+(?:create|confirm)\b"),
     )
 )
@@ -907,6 +910,7 @@ LEGACY_OUTSIDE_PROGRAMS = {
     'twine': 'possible package publish (older computer omitted command details)',
     'docker': 'possible image publish (older computer omitted command details)',
     'hub': 'possible approval, publish or send (older computer omitted command details)',
+    'tico': 'possible approval, publish or send (older computer omitted command details)',
     'stripe': 'possible payment (older computer omitted command details)',
     'sendmail': 'send email',
 }

@@ -764,9 +764,11 @@ def run_sample(case, sample, args, outdir):
     path = os.environ["PATH"]
     bindir = work / "bin"
     bindir.mkdir(parents=True)
-    # The shadow `hub` comes first on PATH: the fake hub on cli and both, a stub that refuses on mcp (no CLI in that run).
-    (bindir / "hub").write_text(STUB_HUB if args.surface == "mcp" else FAKE_HUB)
-    (bindir / "hub").chmod(0o755)
+    # The shadow `tico` (and `hub`, its old name) comes first on PATH: the fake CLI on cli and both, a stub that refuses
+    # on mcp (no CLI in that run).
+    for name in ("tico", "hub"):
+        (bindir / name).write_text(STUB_HUB if args.surface == "mcp" else FAKE_HUB)
+        (bindir / name).chmod(0o755)
     path = f"{bindir}:{path}"
     (work / "canned.json").write_text(json.dumps(case.get("hub") or []))
     logf = work / "hub.log"

@@ -21,7 +21,7 @@ def test_a_bot_filed_task_names_the_bot_and_stop_commands_parse_and_the_payload_
     cli = hubcli.parser()
     for stop in origin["stop"]:
         words = shlex.split(stop["command"])
-        assert words[0] == "hub"
+        assert words[0] in ("tico", "hub")
         cli.parse_args(words[1:])  # every stop is a command the CLI really has
     r = api.get("/api/v2/origins/" + task["id"], headers=headers())
     assert r.status_code == 200 and len(r.content) < 8192

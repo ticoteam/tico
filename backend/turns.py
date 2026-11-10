@@ -202,13 +202,17 @@ HUB_PHRASES = {
 }
 
 
+CLI_NAMES = ("tico", "hub")  # the teamwork CLI, and its old name
+
+
 def hub_words(text):
-    """A hub call's CLI words, lowercased and split on anything but letters and digits, from a shell summary
-    (`hub task show`) or an MCP tool name (`mcp__hub__hub_task_show`). None for any other tool."""
+    """A Tico CLI call's words, lowercased and split on anything but letters and digits, from a shell summary
+    (`tico task show`, or `hub task show` under the CLI's old name) or an MCP tool name (`mcp__hub__hub_task_show`, or
+    `mcp__tico__hub_task_show` as people's own agents name the server). None for any other tool."""
     words = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
     if words[:1] == ["mcp"]:
         words = words[1:]
-    if words[:1] != ["hub"]:
+    if words[:1] not in (["hub"], ["tico"]):
         return None
     words = words[1:]
     if words[:1] == ["hub"]:  # an MCP tool named hub_<command>
@@ -241,7 +245,7 @@ def strip_setup(words):
         rest = words[1:]
         if words[0] in ("cd", "source", "."):
             # Its one argument (a directory or a file) is skipped unless it is the work itself: `cd npm` is npm.
-            if len(rest) > 1 and rest[0] != "hub" and rest[0] not in SHELL_PROGRAMS:
+            if len(rest) > 1 and rest[0] not in CLI_NAMES and rest[0] not in SHELL_PROGRAMS:
                 rest = rest[1:]
         else:
             while rest and "=" in rest[0]:
@@ -258,11 +262,11 @@ def shell_label(summary):
     A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's command list):
     its phrase when it has one, else just `Ran hub`, since an old stored summary can hold argument words."""
     words = strip_setup(summary.split())
-    if words[:1] == ["hub"]:
+    if words[:1] and words[0] in CLI_NAMES:
         phrase = hub_phrase(hub_words(" ".join(words)) or [])
         if phrase:
             return phrase
-        return "Ran hub"
+        return "Ran " + words[0]
     if len(words) == 1 and words[0] in SHELL_PROGRAMS:
         return "Ran " + words[0]
     return None
