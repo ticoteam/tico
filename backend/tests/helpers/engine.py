@@ -210,5 +210,18 @@ def left(c, actor):
     Access.save_roster(c, {**whole, "people": people})
 
 
+def no_sign_in(c, actor):
+    """Turn a person's sign-in off, as the People tab's switch does (backend/access.py): `sign_in: false` on their
+    roster row. They are still on the chart, and cannot act."""
+    from backend import access as Access
+    from backend.views import roster
+
+    whole = roster(c)
+    people = whole["people"]
+    at = next(i for i, p in enumerate(people) if p["id"] == H.actor_id(actor))
+    people[at] = {**people[at], "sign_in": False}
+    Access.save_roster(c, {**whole, "people": people})
+
+
 def guard_closed(c):
     return c.execute("SELECT open FROM task_move_guards WHERE id=1").fetchone()[0] == 0

@@ -74,8 +74,9 @@ class Wait:
 def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The person a task falls to when no bot can take it further: the one the ladder already chose, else the task's
     owner where that is a person, else the pipeline's owner or manager where that is a person, else the owner of its
-    manager bot, else the owner of the bot that has the task, else whoever asked for it, else the company owner. Anyone
-    on the way who left or was removed is skipped. None only when the company has no people."""
+    manager bot, else the owner of the bot that has the task, else whoever asked for it, else the company owner, else
+    the person who has been here longest. Anyone on the way who left, was removed or cannot sign in is skipped. None
+    only when nobody can sign in."""
     visit: Row = row.get("visit") or {}
     pipe: Row = row.get("pipeline") or {}
     for found in (visit.get("person_id"), row.get("owner_id"), pipe.get("owner_id"), pipe.get("manager_id")):
@@ -87,7 +88,29 @@ def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
             return owner
     if R.active_person(conn, row.get("requester_id")):
         return row["requester_id"]
-    return pipeline_rights.company_owner(conn) or None
+    return company_person(conn)
+
+
+def company_person(conn: "sqlite3.Connection") -> str | None:
+    """The person the company falls back on: its owner while they can act, else the person who has been here longest
+    (first on the roster, then anyone else in `humans` by id), so the choice is stable. None only when nobody can
+    sign in."""
+    owner = pipeline_rights.company_owner(conn)
+    if R.active_person(conn, owner):
+        return owner
+    roster = [
+        str(found[0])
+        for found in conn.execute(
+            "SELECT json_extract(p.value, '$.id') FROM registry_metadata m, "
+            "json_each(CASE WHEN json_valid(m.value) THEN m.value ELSE '{}' END, '$.people') p "
+            "WHERE m.key='people' AND json_extract(p.value, '$.id') IS NOT NULL ORDER BY CAST(p.key AS INTEGER)"
+        ).fetchall()
+    ]
+    rest = [str(found[0]) for found in conn.execute("SELECT id FROM humans ORDER BY id").fetchall()]
+    for person in [*roster, *(p for p in rest if p not in roster)]:
+        if R.active_person(conn, human_actor(person)):
+            return human_actor(person)
+    return None
 
 
 def _bot_owner(conn: "sqlite3.Connection", bot: object) -> str | None:
@@ -318,9 +341,10 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
 
 def _fixer(conn: "sqlite3.Connection", bot: str, cause: str | None) -> str | None:
     """The person who can get a bot running again: the company's owner for a cause that stops every bot, else the
-    bot's owner while they are still here, else the company's owner."""
+    bot's owner while they are still here, else the company's owner. An owner who cannot act gives the person the
+    company falls back on (`company_person`)."""
     if cause not in task_wakes.COMPANY_WIDE:
         owner = _bot_owner(conn, bot)
         if owner:
             return owner
-    return pipeline_rights.company_owner(conn) or None
+    return company_person(conn)

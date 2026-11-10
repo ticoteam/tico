@@ -289,10 +289,11 @@ def _parse(record: object) -> tuple[Row, list[str]]:
 
 # ----------------------------------------------------------------------------- check
 def _actor_exists(conn: "sqlite3.Connection", actor: str) -> bool:
+    """A bot that exists, or a person who is here and can act (not left, removed, or with sign-in off)."""
     if is_bot(actor):
         return _h().bot(conn, actor) is not None
     if is_human(actor):
-        return _h().human(conn, actor) is not None
+        return R.active_person(conn, actor)
     return False
 
 
@@ -321,7 +322,7 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
         problems.append(
             f"Only a requirement a person can meet with a button can name a person (C29): not {name}, on {label}."
         )
-    elif person and not (_actor_exists(conn, person) and (is_bot(person) or R.active_person(conn, person))):
+    elif person and not _actor_exists(conn, person):
         problems.append(f"{person} is not a person or a bot here (on {label}).")  # removed, or left
     elif kind == "ok" and not person:
         problems.append(f"An OK from someone on {label} names the person or bot who OKs it.")

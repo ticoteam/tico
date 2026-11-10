@@ -411,3 +411,20 @@ def test_who_may_make_change_and_retire_a_pipeline(c):
     with _refused("task_no_such_stage"):
         X.new_task(c, ANA, "Order more pens", saved["id"])
     assert PS.check(c, _ops()) == []  # its name and prefix are free again
+
+
+def test_a_pipelines_manager_owner_and_stage_owner_are_people_who_can_act(c):
+    X.left(c, BEN)
+    X.no_sign_in(c, CARA)
+    for change, words in (
+        (lambda r: r.update(manager_id=BEN), f"The manager must be a bot or a person here, not {BEN}"),
+        (lambda r: r.update(owner_id=CARA), f"The owner must be a bot or a person here, not {CARA}"),
+        (lambda r: _stage(r).update(owner=CARA), "The owner of Intake must be a bot, a person or the task's assignee"),
+    ):
+        record = _ops(owner_id=ANA)
+        _req(record, 1).update(person_id=ANA)  # Sign off names Ben, who left
+        assert PS.check(c, record) == []
+        change(record)
+        assert any(words in p for p in PS.check(c, record)), PS.check(c, record)
+        with _refused("task_settings"):
+            PS.save(c, ANA, record)

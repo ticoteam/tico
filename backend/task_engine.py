@@ -607,6 +607,22 @@ def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None 
 
 
 # ----------------------------------------------------------------------------- reassign
+def _may_name(conn: "sqlite3.Connection", by: str, actor: str | None, task_id: str) -> None:
+    """Refuse naming someone who cannot act: a person who left, was removed or cannot sign in, a bot that does not
+    exist, or anything that is not a person or a bot. Nobody (None) is not refused here."""
+    if actor is None:
+        return
+    if is_human(actor):
+        if not R.active_person(conn, actor):
+            _refuse(conn, by, "task_requirement", "That person has left or is not here. Ask someone who is.", task_id)
+        return
+    if is_bot(actor):
+        if not _h().bot(conn, actor):
+            _refuse(conn, by, "task_requirement", "There is no such bot here", task_id)
+        return
+    _refuse(conn, by, "task_requirement", "Name a person or a bot", task_id)
+
+
 def reassign(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -628,6 +644,7 @@ def reassign(
     owner = owner or None
     if owner == row.get("owner_id"):
         return row
+    _may_name(conn, by, owner, task_id)
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
     if row["stage"].get("owner") == "assignee":
@@ -866,10 +883,7 @@ def add_requirement(
         _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
-    if is_human(person) and not R.active_person(conn, person):
-        _refuse(conn, by, "task_requirement", "That person has left or is not here. Ask someone who is.", task_id)
-    if is_bot(person) and not H.bot(conn, person):
-        _refuse(conn, by, "task_requirement", "There is no such bot here", task_id)
+    _may_name(conn, by, person, task_id)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)
     ts = H.now()

@@ -342,6 +342,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     broken: list[str] = []
     seen: dict[str, str | None] = {}
     needs: dict[str, list[Row]] = {}
+    someone: bool | None = None  # whether anyone can sign in: read once, when a turn names nobody
     now: str = H.now()
     open_ids = [
         str(found[0])
@@ -368,6 +369,11 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                 or task_wakes.queued(conn, task_id, wait.who)
             ):
                 broken.append(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try")
+        if any(wait.state == W.PERSON and not wait.who for wait in waits):
+            if someone is None:
+                someone = W.company_person(conn) is not None
+            if someone:
+                broken.append(f"3: task {task_id} is a person's turn that names nobody")
         people = {wait.who for wait in waits if wait.state == W.PERSON and wait.who}
         for person in sorted(people):
             if person not in needs:

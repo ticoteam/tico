@@ -375,3 +375,21 @@ def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_th
     asked = E.add_requirement(c, row["id"], ANA, "ok", ANA, "OK the importer's limits")
     E.move(c, row["id"], "Build", ANA)
     assert R.get(c, asked["requirement_id"])["withdrawn_at"]  # moving back ends it: nothing is left behind
+
+
+def test_a_reassign_names_only_someone_who_can_act(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    X.left(c, "human:ben")
+    X.no_sign_in(c, "human:cara")
+    for who, words in (
+        ("human:ben", "has left or is not here"),
+        ("human:cara", "has left or is not here"),
+        ("human:nobody", "has left or is not here"),
+        ("bot:nobody", "no such bot"),
+        ("everyone", "Name a person or a bot"),
+    ):
+        with pytest.raises(H.Refused, match=f"task_requirement.*{words}|{words}.*task_requirement"):
+            E.reassign(c, row["id"], who, ANA)
+    assert E.task(c, row["id"])["owner_id"] == "bot:builder"
+    assert E.reassign(c, row["id"], "bot:reviewer", ANA)["owner_id"] == "bot:reviewer"
+    assert E.reassign(c, row["id"], ANA, ANA)["owner_id"] == ANA

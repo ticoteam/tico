@@ -14,7 +14,7 @@ What met a requirement is its newest answer on the visit that is not undone (`an
   ordinary answers there: they steer only an OK (and a page).
 - `pushed_past`: someone moved the task on without it, with the reason in `notes`. Any kind.
 
-A requirement never waits on a person who left or was removed (`active_person`): it waits on nobody named instead, and
+A requirement never waits on a person who left, was removed or cannot sign in (`active_person`): it waits on nobody named instead, and
 `waiting_on` gives it to the person the task falls to.
 """
 
@@ -60,9 +60,10 @@ def steers(kind: str, value: object) -> bool:
 
 
 def active_person(conn: "sqlite3.Connection", actor: object) -> bool:
-    """Whether `actor` is a person who is still here: `human:<id>` with a `humans` row, whose roster row is not marked
-    as left (`hidden`, set by `access.leave`) nor dropped by the directory (`directory_left`). Remove deletes the
-    `humans` row (`people_remove`). A bot, nobody, or anything else is not an active person."""
+    """Whether `actor` is a person who is still here and can act: `human:<id>` with a `humans` row, whose roster row is
+    not marked as left (`hidden`, set by `access.leave`), nor dropped by the directory (`directory_left`), nor has
+    sign-in turned off (`sign_in: false`, the People tab's switch). Remove deletes the `humans` row
+    (`people_remove`). A bot, nobody, or anything else is not an active person."""
     text = str(actor or "")
     if not text.startswith("human:") or not text[len("human:") :]:
         return False
@@ -70,7 +71,8 @@ def active_person(conn: "sqlite3.Connection", actor: object) -> bool:
         "SELECT 1 FROM humans h WHERE h.id=? AND NOT EXISTS (SELECT 1 FROM registry_metadata m, "
         "json_each(CASE WHEN json_valid(m.value) THEN m.value ELSE '{}' END, '$.people') p "
         "WHERE m.key='people' AND json_extract(p.value, '$.id') = h.id "
-        "AND (json_extract(p.value, '$.hidden') OR json_extract(p.value, '$.directory_left')))",
+        "AND (json_extract(p.value, '$.hidden') OR json_extract(p.value, '$.directory_left') "
+        "OR json_extract(p.value, '$.sign_in') = 0))",
         (text[len("human:") :],),
     ).fetchone()
     return found is not None
