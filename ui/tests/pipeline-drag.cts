@@ -3,7 +3,8 @@ import type {Route} from 'playwright';
 // column is moved by the engine (POST /api/v2/tasks/{id}/move) and shows there. When the move is refused:
 // - with requirements a person may push past, the page asks "Move to Build without Spec page?" and sends the why;
 // - with a refusal it cannot push past, it shows the engine's line and the task stays where it was.
-// Letting go after a drag never opens the task.
+// Letting go after a drag never opens the task. A stage's header opens the pipeline editor on the record as the server
+// sends it ({pipeline: …}), and a save there draws the saved record.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -27,6 +28,7 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
   const errors: string[] = [];
   const tasks = [brief('t1', 'Saved carts', 'spec'), brief('t2', 'Refund flow', 'spec')];
   const moves: {id: string; body: Record<string, unknown>}[] = [];
+  const saves: Record<string, unknown>[] = [];
   try {
     const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     page.on('pageerror', (error: Error) => errors.push(error.message));
@@ -42,7 +44,15 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
       if (p === '/api/employees') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
-      if (p === '/api/v2/pipelines/product') return json(pipeline);
+      // As backend/task_pipelines_routes.py answers: the record inside {pipeline: …}, on a read and on a save.
+      if (p === '/api/v2/pipelines/product' && r.method() === 'POST') {
+        const body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
+        saves.push(body);
+        Object.assign(pipeline, {goal: body['goal'], settings_version: pipeline.settings_version + 1});
+        return json({pipeline});
+      }
+      if (p === '/api/v2/pipelines/product') return json({pipeline});
+      if (p === '/api/v2/factories') return json({factories: [], pipelines: []});
       if (p === '/api/v2/tasks' && r.method() === 'GET') return json({tasks});
       const move = p.match(/^\/api\/v2\/tasks\/([^/]+)\/move$/);
       if (move && r.method() === 'POST') {
@@ -106,6 +116,21 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
     assert.ok(!(await page.evaluate(() => location.hash)).startsWith('#/task/'), 'the drag opened nothing');
     await said.locator('[data-pv-bar-x]').click();
     assert.equal(await page.locator('.pv-bar').count(), 0, 'closed');
+
+    // A stage's header opens the editor on that pipeline; a save sends the record read and draws the saved one.
+    await page.locator('[data-pv-settings="build"]').click();
+    const goal = page.locator('#pe-dialog [data-pe-pf="goal"]');
+    await goal.waitFor();
+    assert.equal(await page.locator('#pe-title').innerText(), 'Product');
+    await goal.fill('Ship it');
+    await page.locator('#pe-dialog [data-pe-save]').click();
+    await page.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])') && !document.querySelector('#pe-dialog [data-pe-error]:not([hidden])'));
+    assert.equal(saves.length, 1);
+    assert.equal(saves[0]!['goal'], 'Ship it');
+    assert.equal(saves[0]!['settings_version'], 1, 'saved at the version it was read at');
+    assert.deepEqual((saves[0]!['stages'] as {id: string}[]).map(x => x.id), ['spec', 'build']);
+    assert.equal(await page.locator('#pe-dialog [data-pe-error]:not([hidden])').count(), 0);
+    assert.equal(await page.locator('#pe-dialog').count(), 1, 'the editor stays open');
 
     assert.deepEqual(errors, []);
     console.log('PASS: a dragged task moves, a refused one says why, with a why to push past only where it may be.');
