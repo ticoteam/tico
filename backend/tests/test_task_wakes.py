@@ -531,3 +531,32 @@ def test_a_run_counts_for_the_task_it_names_and_by_its_conversation_only_when_on
     assert (runs(first), runs(second)) == (0, 1)
     E.move(c, second["id"], E.CLOSED, ANA, "Not needed")
     assert runs(E.task(c, first["id"])) == 1  # now the conversation is one open task's
+
+
+def test_a_run_count_reads_the_runs_since_the_change_and_looks_up_each_ones_start(c, general):
+    """The never-stuck pass counts runs for every task that is due: the count must not gather every start in the
+    company since the task's change into a list (`LIST SUBQUERY`) or read every run there ever was (`SCAN a`). It reads
+    the attempts from a row bound (the attempt mark, or the oldest run started since the start mark) and looks up each
+    one's start by its unique attempt id."""
+    from backend import task_engine as E
+
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    for n in range(3):
+        assert task_wakes.add(c, row, BUILDER, row["visit"], "Carry on.", wake_key=f"{row['id']}:more:{n}")
+        X.ran(c, row["id"], BUILDER)
+    E.changed(c, row["id"], ANA)
+    row = E.task(c, row["id"])
+    assert task_wakes.add(c, row, BUILDER, row["visit"], "Carry on.", wake_key=f"{row['id']}:more:after")
+    X.ran(c, row["id"], BUILDER)
+    row = E.task(c, row["id"])
+    statements: list[str] = []
+    c.set_trace_callback(statements.append)
+    try:
+        assert task_wakes.runs_since(c, row) == 1  # the three before the change are the old change's
+    finally:
+        c.set_trace_callback(None)
+    (counted,) = [s for s in statements if s.lstrip().startswith("SELECT COUNT(*) FROM attempts")]
+    plan = [str(step[3]) for step in c.execute(f"EXPLAIN QUERY PLAN {counted}").fetchall()]
+    assert "SEARCH a USING INTEGER PRIMARY KEY (rowid>?)" in plan, plan
+    assert not [step for step in plan if "LIST SUBQUERY" in step or step.startswith("SCAN")], plan
+    assert any("run_starts" in step and "(attempt_id=?)" in step for step in plan), plan

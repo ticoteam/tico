@@ -389,11 +389,15 @@ def started(conn: "sqlite3.Connection", attempt: str) -> None:
 
 
 # A run started since the change: its start is newer than the visit's (`run_starts`), or, for a run that started with
-# no start row (before there were any, or written straight into attempts), its attempt row is newer. Bound: the start
-# mark, the start mark, the attempt mark.
+# no start row (before there were any, or written straight into attempts), its attempt row is newer. Each run's start
+# is looked up for that run (run_starts.attempt_id is unique), never gathered into a list of every start since the
+# mark. The runs read are bounded by attempt row: none older than the attempt mark or the oldest run that started
+# since the start mark, whichever is older (one number, not a list). Bound: the attempt mark, the start mark, the
+# attempt mark, then the start mark and the attempt mark.
 _STARTED_SINCE = (
-    "a.started_at IS NOT NULL AND (a.rowid IN (SELECT r.rowid FROM run_starts s JOIN attempts r ON r.id = s.attempt_id "
-    "WHERE s.id > ?) OR (a.rowid > ? AND NOT EXISTS (SELECT 1 FROM run_starts s WHERE s.attempt_id = a.id)))"
+    "a.rowid > MIN(?, COALESCE((SELECT MIN(r.rowid) - 1 FROM run_starts s JOIN attempts r ON r.id = s.attempt_id "
+    "WHERE s.id > ?), ?)) AND a.started_at IS NOT NULL AND "
+    "COALESCE((SELECT s.id > ? FROM run_starts s WHERE s.attempt_id = a.id), a.rowid > ?)"
 )
 
 
@@ -405,7 +409,10 @@ def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False,
     when it started (`started`), so a lease claimed before a change and started after it is the new change's.
     `besides` leaves one run out: the one asking whether it may start."""
     attempt_mark, _, start_mark = _marks(task)
-    counted, args = f"({_STARTED_SINCE})", list[object]([start_mark, attempt_mark])
+    counted, args = (
+        f"({_STARTED_SINCE})",
+        list[object]([attempt_mark, start_mark, attempt_mark, start_mark, attempt_mark]),
+    )
     if starting:
         counted = f"({counted} OR (a.state = 'leased' AND a.started_at IS NULL AND a.lease_until > ?))"
         args.append(_h().now())
