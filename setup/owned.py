@@ -63,6 +63,13 @@ def check_mode(domain: str, name: str, prefix: str, saved: dict) -> None:
     """Refuses a command that would take another mode, or start another install, than the one this computer recorded
     making for the domain (or, by name, for a default-path command)."""
     prefix = prefix or DEFAULT_PREFIX
+    had = (saved.get("domain") or "").lower()
+    if strict(prefix) and saved and domain and had != domain.lower():
+        raise MissingInput(
+            f"The state.json under {domain} was saved for {had or 'no domain'} (install {saved.get('install_id')}), "
+            "so it describes another install's AWS resources; refusing to change anything. Run setup for that domain, "
+            "or move this copy aside."
+        )
     rows = {}
     for kind, key in (("domain", domain), ("name", name if not strict(prefix) else "")):
         if key and _marker(kind, key).exists():
@@ -90,6 +97,23 @@ def check_mode(domain: str, name: str, prefix: str, saved: dict) -> None:
             f"This computer recorded install {install_id} for {domain}, made with --asset-prefix {r['asset_prefix']}, "
             f"but its state.json {why}; refusing to change anything or start another install. Check by hand in the AWS "
             "console which of its resources exist, and restore that install's state.json."
+        )
+
+
+def prove_server(ec2, account: str, s) -> None:
+    """Strict mode, before any remote shell on the server: the instance, read now, carries this install's id tag, is the
+    instance it recorded making, and is in the account it recorded."""
+    from .aws import Names
+
+    iid, names = s.aws_instance_id, Names(s.asset_prefix, s.install_id)
+    check_account(s.aws_account_id, account, s.domain)
+    rows = ec2.describe_instances(InstanceIds=[iid])["Reservations"]
+    inst = next((i for r in rows for i in r["Instances"] if i.get("InstanceId") == iid), None)
+    ok = inst is not None and names.is_ours(inst.get("Tags"), s.aws_name)
+    if not ok or not recorded(s.aws_ids or {}, "instance", iid, (inst or {}).get("ClientToken", "")):
+        raise MissingInput(
+            f"EC2 instance {iid}, named in {s.domain}'s saved state, is not this install's server (its tags, or the "
+            "instance this install recorded making, differ); refusing to run anything on it. Check the saved state."
         )
 
 

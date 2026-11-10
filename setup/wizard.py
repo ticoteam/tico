@@ -839,7 +839,9 @@ def run(args, io: IO, deps: Deps) -> int:
 
     s = gather(io, args, s, dry, restore=None if saved else restore)
     prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)
-    owned.check_mode(s.domain, s.aws_name or getattr(args, "name", None) or awsmod.slug(s.domain), prefix, saved)
+    # The domain whose saved state was loaded (--domain), not the one inside it: a copy beneath another domain refuses.
+    where = domain_hint or s.domain
+    owned.check_mode(where, s.aws_name or getattr(args, "name", None) or awsmod.slug(s.domain), prefix, saved)
     strict = owned.strict(prefix)
     if strict:
         _strict_start(args, s, saved, dry)
@@ -1458,7 +1460,9 @@ def doctor(args, io: IO, deps: Deps) -> int:
     saved, env_text = state.load(domain)
     if not saved:
         raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
-    awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)  # refuses a different one; doctor names nothing
+    prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)  # refuses a different one
+    if owned.strict(prefix):
+        owned.check_mode(domain, awsmod.saved_name(saved), prefix, saved)
     s = st.from_saved(saved, env_text)
     tunnel_id = s.tunnel_id or tunnel_id_from_token(s.tunnel_token)
     records = dnsmod.plan_records(domain, s.front_door, ipv4=s.server_ip, tunnel_id=tunnel_id, runner_host=s.runner())
@@ -1466,8 +1470,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
     if s.target == "ssh":
         runner = deps.ssh_shell(s.ssh_host, s.ssh_port, s.ssh_identity)
     elif s.target == "aws" and s.aws_instance_id:
-        _, _, ssm, _ = deps.aws_clients(s.aws_region, s.aws_profile)
-        runner = remote.SSMShell(ssm, s.aws_instance_id, deps.sleep)
+        runner = hosted.shell_for(s, deps)
     io.say(f"tico setup doctor for {domain}")
     checks = verify.run_all(
         domain=domain,
