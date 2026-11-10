@@ -61,7 +61,7 @@ function context(read: () => Promise<unknown> = async () => { throw new Error('t
   const get = async (route: string) => {
     const map = (await read()) as Partial<OrgOverview>;
     assert.match(route, /^\/v2\/factories\?period=/);
-    return {factories: map.factories, pipelines: (map.pipelines || []).map(p => ({id: p.id, factory_id: p.factory_id, open: p.cards, mark: null}))};
+    return {factories: map.factories, pipelines: (map.pipelines || []).map(p => ({id: p.id, name: p.name, factory_id: p.factory_id, open: p.cards, files_into: [], mark: null}))};
   };
   const pipelinesAll = async () => ((await read()) as Partial<OrgOverview>).pipelines?.map(p => ({...p, retired_at: null, stages: []})) ?? [];
   const ctx = vm.createContext({
@@ -105,7 +105,7 @@ const legal = pipe('legal', 'Legal', 'gc', null, {visibility: 'members'});
 
 // The section drawn from an overview, through the same grouping the map uses.
 const sectionOf = (ctx: import('node:vm').Context, map: OrgOverview): string => ctx.orgFactoriesHtml(ctx.ofGroups(
-  {factories: map.factories, pipelines: map.pipelines.map(p => ({id: p.id, factory_id: p.factory_id, open: p.cards, mark: null}))},
+  {factories: map.factories, pipelines: map.pipelines.map(p => ({id: p.id, name: p.name, factory_id: p.factory_id, open: p.cards, files_into: [], mark: null}))},
   map.pipelines.map(p => ({...p, retired_at: null, stages: []}))));
 
 // The markup of one box, from its opening tag to its close (boxes hold no nested section).

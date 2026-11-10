@@ -46,7 +46,7 @@ function ofFlowOrder(boxes: OfBox[]): OfBox[] {
 function ofGroups(map: FactoryMap, recs: PipelineRec[]): OfGroup[] {
   const counts = new Map(map.pipelines.map(p => [p.id, p]));
   const box = (rec: PipelineRec): OfBox => ({id: rec.id, name: rec.name, goal: rec.goal, manager_id: rec.manager_id,
-    open: counts.get(rec.id)?.open ?? 0, mark: counts.get(rec.id)?.mark ?? null, into: pipelineFilesInto(rec)});
+    open: counts.get(rec.id)?.open ?? 0, mark: counts.get(rec.id)?.mark ?? null, into: counts.get(rec.id)?.files_into ?? pipelineFilesInto(rec)});
   const live = recs.filter(r => !r.retired_at);
   const factoryOf = (rec: PipelineRec): string => rec.factory_id ?? counts.get(rec.id)?.factory_id ?? '';
   const ids = new Set(map.factories.map(f => f.id));
@@ -151,6 +151,8 @@ async function ofNewSave(form: HTMLFormElement, period: () => string): Promise<v
     ofNewToggle(false);
     void ofLoad(period());
   } catch (error) {
-    if (err) { err.textContent = errorMessage(error, 'Could not save the factory.'); err.hidden = false; }
+    // The server's own line: a taken name (409) says so.
+    const detail = errorBody(error)['detail'];
+    if (err) { err.textContent = typeof detail === 'string' && detail ? detail : errorMessage(error, 'Could not save the factory.'); err.hidden = false; }
   }
 }
