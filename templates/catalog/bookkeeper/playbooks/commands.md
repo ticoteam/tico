@@ -68,7 +68,7 @@ approver. Use it when unsure, then send the same command without it. A kind's fi
 - `hub doc write finance/reports/<YYYY-MM> --title "<title>" --body-file <file>` — the monthly report, in Docs.
 
 ## Common mistakes
-- The top level has no `help` command: use `hub --help`. Tasks have no `get`: read one with `hub task show`.
+- `tico --help` (or `tico help`) lists the groups. Tasks have no `get`: read one with `tico task show`.
 - `close_period` refuses a `note` field. The variance note is a task comment.
 - `bill_create` refuses `date` and `currency`. The fields are `bill_date` and the ones `help` lists.
 - `hub task show` takes ids only: it has no `--json`.

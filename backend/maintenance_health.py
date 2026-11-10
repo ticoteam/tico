@@ -235,7 +235,7 @@ def _runner_checks(c, settings):
                     else _holding_fix(machine["label"])
                     if rows and rows[0]["running"] and update["state"] != "incompatible" and not update["error"]
                     else f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
-                    "`scripts/tico install` once on that computer so it updates itself).",
+                    "`scripts/tico-computer install` once on that computer so it updates itself).",
                     # Its bots are paused until it updates: bad, as Health says (runner_versions.health_check).
                     severity=BAD if update["state"] == "incompatible" else WARN,
                 )
@@ -267,7 +267,7 @@ def _runner_checks(c, settings):
                 f"Computer {r['label']} has said since {since} UTC that it is restarting, which takes at most "
                 f"{health.RESTART_STUCK_MINUTES} minutes; {running} turn(s) still run there{holds}.",
                 f"BotOps: look at the turns still running on {r['label']} (Runs); stopping one is a person's "
-                f"choice. If none runs, restart Tico on {r['label']} by hand (`tico restart`).",
+                f"choice. If none runs, restart Tico on {r['label']} by hand (`tico-computer restart`).",
             )
         )
     for x in health.silent_computers(c):
@@ -280,7 +280,7 @@ def _runner_checks(c, settings):
                 f"Computer {x['label']} was last heard from at {(x['last_seen_at'] or '')[:16]}; "
                 f"{x['queued'] + x['dead']} job(s) wait for {', '.join(x['bots'])}.",
                 f"Ask the person who runs {x['label']} to wake it and check Tico there "
-                "(`tico status`; `tico restart` starts it again), or move its bots to an online computer.",
+                "(`tico-computer status`; `tico-computer restart` starts it again), or move its bots to an online computer.",
             )
         )
     starts = None

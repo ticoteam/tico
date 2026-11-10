@@ -1143,7 +1143,7 @@ def operation_issues(c, who, auth):
                 since=entry["since"],
                 needs_person=mine and quiet >= NEEDS_YOU_MINUTES,
                 action=f"Wake {entry['label']} and check that {auth.settings.app_name} runs there: "
-                "`tico status` says what stopped, `tico restart` starts it again.",
+                "`tico-computer status` says what stopped, `tico-computer restart` starts it again.",
             )
         else:
             # A computer offline for a moment (asleep, a restart) clears itself when it reconnects.
@@ -1806,7 +1806,7 @@ def checkout_issue(add, row, busy=0):
             severity="warning",
             action="Tico repairs these links on the next update. No local work needs a decision."
             if str(checkout["blocked"]).startswith("only flattened Tico links:")
-            else "On that computer: commit or stash the changes (or run pip install and scripts/tico update "
+            else "On that computer: commit or stash the changes (or run pip install and scripts/tico-computer update "
             "for a dependency change); the runner then updates itself.",
         )
     elif behind:

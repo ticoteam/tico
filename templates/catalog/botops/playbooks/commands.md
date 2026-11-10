@@ -118,11 +118,11 @@ Done when: the change is made as the requester and read back, or the refusal is 
 
 ## Guessed commands that do not exist
 
-The parser refuses each of these after `hub`. The part after the arrow is the command to use.
+The parser refuses each of these after `tico`. The part after the arrow is the command to use.
 - `bot list`, `bot show`, `bot templates` -> `hub bot status list`, `hub api GET bots/<slug>`, `hub template list`
 - `bot status <slug>` -> `hub bot status history <slug>` or `hub api GET bots/<slug>`
 - `bot recent <slug>` -> `hub bot recent` takes no name; for one bot, `hub bot status history <slug>`
 - `task list --limit N` -> `hub task list` with `--brief`, `--owner` or `--requester`
 - `automation list --all` -> `hub automation list` or `hub automation recent-runs --range 24h`
 - `credential list --for-bot <slug>` -> `hub credential list`, then read its bots column
-- `--version` -> there is no such flag; `hub --help` lists the groups
+- `--version` on a group (`bot --version`) -> only `tico --version` (the Tico version) and the commands that change a task take it; `tico --help` lists the groups

@@ -296,7 +296,8 @@ reports its full path, age and one removal command. Check no Git is running for 
 before running that command on the Computer.
 `scripts/tico-computer update` still works by hand and still follows `main`. It ends with `tico-computer restart
 all`; a `scripts/tico` from before `tico-computer` existed ends with `scripts/tico restart all`, which `scripts/tico`
-now hands to `tico-computer`, so that first update lands too.
+still hands to `tico-computer` from a person's terminal, so that first update lands too. `tico` itself is the teamwork
+CLI: `tico update` is the bots' daily updates, not this computer's.
 
 A launch failure waits six hours before another attempt at the same release. A newly installed runner retries a
 launch failure from an older runner build at once; if that attempt fails, the six-hour wait applies again. A dead

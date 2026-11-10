@@ -256,7 +256,7 @@ def wait_until_live(
             waiting = ", ".join(k for k, v in seen.items() if not v)
             say(
                 f"  Still not resolving on {waiting} after {int(timeout // 60)} min. Records can take longer at some "
-                "providers; check they are in the provider named above, then re-run `tico setup` (it resumes)."
+                "providers; check they are in the provider named above, then re-run the setup wizard (it resumes)."
             )
             return False
         say(f"  waiting for DNS ({int(clock() - start)}s): not yet on {', '.join(k for k, v in seen.items() if not v)}")

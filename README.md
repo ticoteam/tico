@@ -58,7 +58,7 @@ For a team, on a Linux server (about 2 GB, with a domain pointed at it), run the
 curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh
 ```
 
-It installs Docker if needed, downloads that release's compose bundle (checksum verified) and walks you through `tico setup`:
+It installs Docker if needed, downloads that release's compose bundle (checksum verified) and walks you through the setup wizard (`python3 -m setup`):
 a domain name to a signed-in Tico, with each step checked. Then open the app, complete **Finish setup**, and use
 **Settings > Computers > Add computer** to join a Mac or a Linux computer. What you need first, where to get a server, and what
 you will see are in [docs/install.md](docs/install.md).
@@ -261,7 +261,7 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 | `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
 | `clients/` | What bots and owners call: the `hub` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
 | `ui/`, `app/` | The web interface and its browser tests; the Tauri desktop shell (Rust) |
-| `setup/` | `tico setup`, the guided Docker install of the server and of Linux runners |
+| `setup/` | the setup wizard (`python3 -m setup`), the guided Docker install of the server and of Linux runners |
 | `infra/` | cloud-init files for a new server or runner (they call `scripts/install.sh`) |
 | `connectors/`, `integrations/`, `skills/` | Shared adapters bots use instead of vendor APIs, one page per outside system, and shared runtime skills |
 | `policies/` | Rules every bot follows: approvals, access, handoffs, writing |
