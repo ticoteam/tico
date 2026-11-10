@@ -12,7 +12,6 @@ from pydantic import (
     Field,
     SecretStr,
     StrictBool,
-    StrictInt,
     StrictStr,
     ValidationError,
     WrapValidator,
@@ -171,50 +170,26 @@ class AsksSeen(Contract):
     asks: Annotated[list[Annotated[StrictStr, Field(min_length=1, max_length=100)]], Field(max_length=200)]
 
 
-class StaleDecision(Contract):
-    """A person's answer to one row of their Stale tickets card (backend/stale_review.py): accept or skip. Accept names
-    the task version the row showed (409 version_conflict once the task changed), as a change by hand does."""
-
-    decision: Literal["accept", "skip"] = "accept"
-    version: int | None = None
-
-
-class StaleShown(Contract):
-    id: ID
-    version: int
-
-
-class StaleAcceptAll(Contract):
-    """Accept all on a Stale tickets card: the rows the card showed, each with its task's version then. A row added
-    since is not in the list and stays; a row whose task changed is refused on its own."""
-
-    rows: list[StaleShown] = Field(min_length=1, max_length=500)
-
-
 Lane = Literal["company", "product"]
 # A task's number: one sequence for the whole team, like one board's ticket numbers.
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
 
 
-RelationKind = Literal["parent", "blocks", "blocked_by", "related", "duplicate_of", "follow_up"]
+# A relation is a note between two tasks. A task waits on no relation: it waits on the tasks it filed (`parent`).
+RelationKind = Literal["related", "duplicate_of", "follow_up"]
 
 
 class TaskRelationRef(Contract):
-    """The new task `kind` the other: `parent` files it under `task`, `blocked_by` makes it wait on it."""
+    """The new task is `kind` to the other."""
 
     task: ID
     kind: RelationKind = "related"
 
 
-class TaskBlocker(Contract):
-    """What refused: an ask about the same repo, status and endpoint as an open one joins it (backend/blocker_asks.py)."""
-
-    repo: str = Field(min_length=3, max_length=200)
-    status: StrictInt = Field(ge=100, le=599)
-    endpoint: str = Field(min_length=1, max_length=200)
-
-
 ReaderName = Annotated[str, Field(min_length=1, max_length=200)]
+# The version of the task the caller was shown. A bot's own command always carries it; a person may leave it out.
+Version = Annotated[int, Field(strict=True, ge=0)]
+Why = Annotated[str, Field(min_length=1, max_length=20_000)]
 
 
 class TaskCreate(Contract):
@@ -227,31 +202,20 @@ class TaskCreate(Contract):
     title: str = Field(min_length=1, max_length=300)
     body: Text
     owner: ID
-    check_back_at: str | None = Field(default=None, max_length=80)
-    check_back_note: str | None = Field(default=None, max_length=500)
+    # The pipeline it goes in, by id; General when none is named. It starts in the pipeline's first stage.
+    pipeline: ID | None = None
+    # The task that files it: that task waits until this one ends. Set once, here.
+    parent: ID | None = None
     due: str | None = None
     relations: list[TaskRelationRef] = Field(default_factory=list, max_length=20)
     goal_id: ID | None = None
     acceptance_criteria: list[str] = Field(default_factory=list, max_length=50)
     lane: Lane | None = None
     labels: list[str] = Field(default_factory=list, max_length=20)
-    change_paths: list[Annotated[str, Field(min_length=1, max_length=1000)]] = Field(
-        default_factory=list, max_length=3000
-    )
-    qa: StrictBool | None = None
-    qa_not_checkable_live: StrictBool = False
-    blocker: TaskBlocker | None = None
     top: bool = False
     links: list[str] = Field(default_factory=list, max_length=20)
-    # Wait for the owner's next run instead of starting one (a bot owner only): the same as delivery defer.
-    next_run: bool = False
-    # A new task is queued or deferred, never steered (422); defer is a deferred task, due within `defer_for` (24h).
-    delivery: Delivery | None = None
-    defer_for: DeferFor | None = None
     request_id: ID | None = None
-    type: ID | None = None
-    step: str | None = Field(default=None, max_length=200)
-    # An imported ticket's own number (a mover's); a numbered type gives the next one otherwise.
+    # An imported task's own number (a mover's).
     number: TaskNumber | None = None
     # Who else is on the task, by role: {role: [actors]} (backend/task_roles.py).
     roles: dict[str, list[str]] | None = None
@@ -259,7 +223,7 @@ class TaskCreate(Contract):
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
     # The filer follows it too (backend/task_followers.py); its owner follows anyway.
     follow: StrictBool = False
-    # With a model, the bot's own check session; review alone is a normal review child.
+    # With a model, the bot's own check session; review alone is a normal sub-task.
     check_model: str | None = Field(default=None, max_length=120)
     check_role: Literal["review", "check"] | None = None
     # The model a bot-owned task's runs use, with its effort and harness (backend/task_run_models.py). No model is the
@@ -273,8 +237,8 @@ class TaskCreate(Contract):
     @model_validator(mode="after")
     def review_child(self):
         if self.check_role == "review" and self.check_model is None:
-            if not any(r.kind == "parent" for r in self.relations):
-                raise ValueError("A review is a child task: choose its parent")
+            if not self.parent:
+                raise ValueError("A review is a sub-task: name the task it is for as its parent")
             if not re.match(r"^review\s+[12](?:\s*:|$)", self.title.strip(), re.I):
                 self.title = "Review 1: " + self.title
         return self
@@ -299,53 +263,105 @@ class NoteCreate(Contract):
 
 
 class TaskUpdate(Contract):
+    """Field edits only. Where a task is and who has it change by its own routes: /done, /move, /owner."""
+
     visibility: Literal['public', 'private'] | None = None
     public_title: str | None = Field(default=None, min_length=1, max_length=300)
     public_summary: str | None = Field(default=None, max_length=8000)
-    approval_id: ID | None = None
     size: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     private: StrictBool | None = None
-    version: int = Field(ge=1)
+    # The version the caller was shown. A bot always sends it (task_changed without it); a person may leave it out.
+    version: Version | None = None
     title: str | None = Field(default=None, min_length=1, max_length=300)
-    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined", "closed"] | None = None
     note: str | None = Field(default=None, max_length=200_000)
-    quiet: bool = False
-    owner: ID | None = None
-    check_back_at: str | None = Field(default=None, max_length=80)
-    check_back_note: str | None = Field(default=None, max_length=500)
     due: str | None = None
     body: Text | None = None
     goal_id: str | None = Field(default=None, max_length=200)  # "" takes the goal off
-    close: bool = False
     lane: Lane | None = None
     labels: list[str] | None = Field(default=None, max_length=20)
-    waiting_on: str | None = Field(
-        default=None, max_length=200
-    )  # a person: files them a question task under it (a bot is refused)
     rank: float | None = None
-    type: ID | None = None
-    step: str | None = Field(default=None, max_length=200)  # "" clears the step
-    step_rank: float | None = Field(default=None, allow_inf_nan=False)  # its place within its step
     number: TaskNumber | None = None  # a mover's, for a task that has none
-    # A rule editor's override of a stage's unmet requirements, logged (backend/pipeline_engine.py check_move). The
-    # reason it is logged with is this update's note.
-    override_requirements: bool = False
-    # A review or QA subtask's verdict and the pull request head it judged; its parent's owner is woken with both.
-    verdict: Literal["approve", "changes", "pass", "fail"] | None = None
-    verdict_head: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{7,40}$")
     # Replace the people in the roles named: {role: [actors]}; [] clears one.
     roles: dict[str, list[str]] | None = None
     # BotOps applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as BotOps.
     on_behalf_of: ID | None = None
 
-    @model_validator(mode="after")
-    def closed_status(self):
-        # Use the same permissions, version check and close/edit separation as close:true.
-        if self.status == "closed":
-            self.status = None
-            self.close = True
-        return self
+
+class TaskDone(Contract):
+    """The work of this stage is finished (H.task_done). It never pushes past anything."""
+
+    note: str | None = Field(default=None, max_length=200_000)
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
+class TaskMove(Contract):
+    """`to` is next, done, closed, reopen, or a stage's id or name (H.task_move)."""
+
+    to: Annotated[str, Field(min_length=1, max_length=200)]
+    why: Why | None = None
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
+class TaskOwner(Contract):
+    """Give the task to another owner for this stage (H.task_reassign)."""
+
+    owner: ID
+    why: Why | None = None
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
+class TaskSnooze(Contract):
+    # An ISO-8601 date (the start of that day in the team's zone) or a date-time; none is On ice.
+    until: str | None = Field(default=None, min_length=10, max_length=40)
+    why: Why | None = None
+    version: Version | None = None
+
+
+class TaskWhy(Contract):
+    """Unsnooze, try again, or withdraw an ask: why, in a sentence."""
+
+    why: Why | None = None
+
+
+class TaskAsk(Contract):
+    """Ask a person on the task (H.task_ask): a question (`answer`, with `choices` where there are some) or an OK."""
+
+    to: ID
+    line: Annotated[str, Field(min_length=1, max_length=300)]
+    kind: Literal["answer", "ok"] = "answer"
+    choices: list[Annotated[str, Field(min_length=1, max_length=60)]] | None = Field(
+        default=None, min_length=2, max_length=6
+    )
+    show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
+    version: Version | None = None
+
+
+class TaskAskAnswer(Contract):
+    """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer)."""
+
+    value: Annotated[str, Field(min_length=1, max_length=20_000)]
+    note: str | None = Field(default=None, max_length=20_000)
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
+class TaskAskGive(Contract):
+    """Give an ask to another person (H.task_give)."""
+
+    to: ID
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
+class TaskAskThumbs(Contract):
+    """Was this worth asking (H.task_thumbs). A thumbs down says what was wrong."""
+
+    up: StrictBool
+    note: str | None = Field(default=None, max_length=2000)
 
 
 class TaskFilter(Contract):
@@ -359,8 +375,6 @@ class TaskFilter(Contract):
     status: str | None = Field(default=None, max_length=200)  # comma-separated, as the list takes it
     lane: Lane | None = None
     label: str | None = Field(default=None, max_length=200)  # a tag's key
-    type: ID | None = None
-    step: str | None = Field(default=None, min_length=1, max_length=200)
     number: TaskNumber | None = None
     updated_since: str | None = Field(default=None, max_length=100)
     member: ID | None = None
@@ -370,73 +384,41 @@ class TaskFilter(Contract):
 
 
 class TaskBulk(Contract):
-    """One change to every task `filter` selects (`POST /api/v2/task-bulk`): `action` names it and its one field
-    carries the value: `step` (id or name), `status`, `owner`, `add` or `remove` (tags, for `tags`), or none for
-    `close`. `note` goes with each task's change, as on a single update."""
+    """One change to every task `filter` selects (`POST /api/v2/task-bulk`, people only): `action` names it and its one
+    field carries the value: `to` for `move` (next, done, closed, reopen, or a stage), `owner` for `owner`, `add` or
+    `remove` (tags) for `tags`, none for `close`. `why` goes with each task's move, close or reassign."""
 
     filter: TaskFilter
-    action: Literal["step", "status", "owner", "tags", "close"]
-    step: str | None = Field(default=None, min_length=1, max_length=200)
-    status: Literal["open", "doing", "waiting", "review", "ready", "done", "declined"] | None = None
+    action: Literal["move", "owner", "tags", "close"]
+    to: str | None = Field(default=None, min_length=1, max_length=200)
     owner: ID | None = None
     add: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=20)
     remove: list[Annotated[str, Field(min_length=1, max_length=100)]] = Field(default_factory=list, max_length=20)
-    note: str | None = Field(default=None, max_length=20_000)
+    why: str | None = Field(default=None, max_length=20_000)
     dry_run: bool = False
 
     @model_validator(mode="after")
     def one_change(self):
-        given = {name for name in ("step", "status", "owner") if getattr(self, name) is not None}
+        given = {name for name in ("to", "owner") if getattr(self, name) is not None}
         if self.add or self.remove:
             given.add("tags")
-        if given != ({self.action} if self.action != "close" else set()):
-            takes = {"step": "step", "status": "status", "owner": "owner", "tags": "add or remove", "close": "no value"}
+        wants = {"move": {"to"}, "owner": {"owner"}, "tags": {"tags"}, "close": set()}[self.action]
+        if given != wants:
+            takes = {"move": "to", "owner": "owner", "tags": "add or remove", "close": "no value"}
             raise ValueError(f"action {self.action} takes {takes[self.action]} and nothing else")
         return self
 
 
-class TaskStepInput(Contract):
-    public_name: str | None = Field(default=None, max_length=200)  # "" keeps the step off public pages
-    id: ID | None = None
-    name: ID
-    position: int | None = None
-    status: Literal["open", "doing", "waiting", "review", "ready", "done", "closed", "declined"]
-    # The bots that may do this step's check, and how many open checks each may hold (backend/check_pools.py).
-    # Left out, a step keeps what it had; an empty list makes it no check step.
-    check_pool: list[ID] | None = Field(default=None, max_length=40)
-    check_limit: int | None = Field(default=None, ge=1, le=20)
-    # What the step does with a ticket (backend/step_flow.py): where a check's pass or other outcome sends it, the
-    # merged step, a skip tag, a check timeout. Left out, a step keeps what it had; {} clears it.
-    flow: dict | None = Field(
-        default=None,
-        description="The step's flow (docs/tasks.md, Step flow). On a check step, "
-        "other_company is prefer (the default) or require.",
-    )
+class PipelineRecord(Contract):
+    """A pipeline's settings record, as GET /api/v2/pipelines/{id} gives it (backend/pipeline_settings.py). It is
+    checked there, whole: this model only carries it."""
+
+    model_config = ConfigDict(extra="allow")
+    settings_version: int | None = None
 
 
-# What every bot may do with a type's tasks beyond its own (hubdb.TYPE_BOTS): parties keeps them to
-# the bots on each task; read opens all of them to read and comment on; work also to change.
-TypeBots = Literal["parties", "read", "work"]
-
-
-class TaskTypeCreate(Contract):
-    default_visibility: Literal['public', 'private'] = 'private'
-    name: ID
-    steps: list[TaskStepInput] = Field(default_factory=list)
-    bots: TypeBots | None = None
-    numbered: bool = False
-    steps_only: bool = False
-
-
-class TaskTypeUpdate(Contract):
-    default_visibility: Literal['public', 'private'] | None = None
-    name: ID | None = None
-    steps: list[TaskStepInput] | None = None
-    bots: TypeBots | None = None
-    numbered: bool | None = None
-    steps_only: bool | None = None
-    # A pipeline's manager: `bot:<id>` or `<id>`, an active bot; "" clears it (backend/pipeline_requirements.py set_manager).
-    manager: str | None = Field(default=None, max_length=128)
+class PipelineRetire(Contract):
+    settings_version: int | None = None
 
 
 # What a pick says on a person's card (ui/app/question-card.ts): `then` is its "what happens" line, under its button;
@@ -574,28 +556,6 @@ class ReviewAsk(Contract):
         return self
 
 
-class ReviewTarget(Contract):
-    comment: ID | None = None
-    file: ID | None = None
-    version: Annotated[int, Field(strict=True, ge=1)] | None = None
-    # A question task (backend/question_tasks.py): the task itself, whose answer closes it.
-    task: ID | None = None
-
-    @model_validator(mode="after")
-    def one_target(self):
-        given = (self.comment is not None, self.file is not None, self.version is not None, self.task is not None)
-        if given not in ((True, False, False, False), (False, True, True, False), (False, False, False, True)):
-            raise ValueError("Target is {comment}, {file, version} or {task}")
-        return self
-
-
-class TaskAnswer(Contract):
-    target: ReviewTarget
-    answers: dict[StrictStr, list[StrictStr]] = Field(default_factory=dict)
-    other: Annotated[StrictStr, Field(max_length=200_000)] | None = None
-    dismiss: StrictBool = False
-
-
 class FileVersionEdit(Contract):
     note: Annotated[StrictStr, Field(max_length=500)] | None = None
 
@@ -647,19 +607,9 @@ class TaskLink(Contract):
     wake_once: bool | None = None
 
 
-class TaskWait(Contract):
-    """What the task waits on: `task:<id>` (blocked_by), `pr:<url>` or `pr:<task>` (until that pull request merges),
-    `release:<tag>` (until that release is published). `remove` takes it off. `note` goes in the owner's wake when a
-    pr or release wait fires (not on task:, which is a blocked_by)."""
-
-    on: Annotated[str, Field(min_length=3, max_length=400)]
-    remove: bool = False
-    note: str | None = Field(default=None, max_length=2000)
-
-
 class TaskRelation(Contract):
-    """`{id} kind {task}`: parent (task is its parent), blocks, blocked_by, related, duplicate_of,
-    follow_up (it was split off or followed up from task)."""
+    """`{id} kind {task}`: related, duplicate_of, follow_up (it was split off or followed up from task). A note: no
+    task waits on a relation."""
 
     task: ID
     kind: RelationKind = "related"
@@ -1046,19 +996,6 @@ class MarketPage(Contract):
     body: str = Field(min_length=1, max_length=100_000)
 
 
-class ApprovalCreate(Contract):
-    # task_cap and spend_limit are the redesign's proposals (backend/proposals.py), refused while it is off.
-    kind: Literal["send", "spend", "publish", "merge", "support", "task_cap", "spend_limit"]
-    payload: dict
-    task_id: ID | None = None
-    supersedes_approval: ID | None = None
-
-
-class ApprovalDecision(Contract):
-    decision: Literal["approved", "declined"]
-    note: str = Field(default="", max_length=2000)
-
-
 class AssistantSettings(Contract):
     """A person's own Assistant settings (Settings > General)."""
 
@@ -1070,10 +1007,6 @@ class AssistantReadBack(Contract):
 
     approvals: Annotated[list[Annotated[str, Field(min_length=1, max_length=64)]], Field(min_length=1, max_length=100)]
     note: Annotated[str, Field(max_length=300)] = ""
-
-
-class ApprovalConsume(Contract):
-    payload_hash: str = Field(min_length=64, max_length=64)
 
 
 class StatusUpdate(Contract):
@@ -2931,34 +2864,6 @@ class BotGoLive(Contract):
     setup: bool = True
 
 
-class TaskCheckBack(Contract):
-    at: str = Field(min_length=2, max_length=80)
-    note: str | None = Field(default=None, max_length=500)
-
-
-class TaskSnooze(Contract):
-    # An ISO-8601 date (the start of that day in the team's zone) or a date-time (backend/task_snooze.py).
-    until: str = Field(min_length=10, max_length=40)
-    # What to check when the snooze ends, put in the owner's wake (at most 500 characters once stripped).
-    note: str | None = Field(default=None, max_length=2000)
-
-
-class TaskQaWaiver(Contract):
-    # A person waives a Dev ticket's QA step (its flow's check is qa) for one exact pull request head, with a reason.
-    # Never a QA verdict; CI, both reviews and release approval stay required.
-    head: str = Field(pattern=r"^[0-9a-fA-F]{40}$")
-    reason: str = Field(min_length=1, max_length=2000)
-    step: str | None = Field(default=None, max_length=200)  # the step to waive; only the ticket's QA step is accepted
-
-
-class TaskDefer(Contract):
-    # Exactly one (backend/quiet_work.py defer): a task to wait for, a time, the next run, or "handled".
-    after: str | None = Field(default=None, min_length=1, max_length=80)
-    at: str | None = Field(default=None, min_length=10, max_length=40)
-    next_run: bool = False
-    handled: bool = False
-
-
 class Empty(Contract):
     pass
 
@@ -3008,16 +2913,6 @@ class MaintenanceRunRequest(Contract):
     step: MaintenanceStepKey | None = None
 
 
-class ReleaseScheduleUpdate(Contract):
-    """The team's release schedule (backend/release_flow.py); only what is sent changes. `bot` and `writer` name the
-    Release Manager and Technical Writer ("" finds them by starter template)."""
-
-    on: bool | None = None
-    times: list[Annotated[str, Field(max_length=5)]] | None = Field(default=None, max_length=2)
-    bot: str | None = Field(default=None, max_length=100)
-    writer: str | None = Field(default=None, max_length=100)
-
-
 class SettingsPlan(Contract):
     """Set one settings catalogue entry (backend/settings_catalog.py): the value, and the bot, computer or person it is
     for when the setting is set per one."""
@@ -3035,12 +2930,6 @@ class SettingsAsk(SettingsPlan):
     optional `note` from the asker shown on the request."""
 
     to: str | None = Field(default=None, max_length=200)
-    note: str | None = Field(default=None, max_length=1000)
-
-
-class ReleaseNow(Contract):
-    """Ask the Release Manager to release what is at Pending Release now; `note` goes in its task."""
-
     note: str | None = Field(default=None, max_length=1000)
 
 
