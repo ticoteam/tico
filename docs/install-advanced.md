@@ -23,7 +23,7 @@ It asks **Where should Tico run?** and the rest of the questions are the same as
 
 Answers and credentials are kept in `~/.config/tico-setup/<domain>/` so a re-run resumes. `--dry-run` prints the plan. Further
 flags for this mode: `--target ssh|aws|command`, `--ssh`, `--ssh-port`, `--ssh-identity`, `--aws-region`, `--aws-profile`,
-`--aws-instance-type`, `--aws-os`, `--cloud-location`, `--cloud-size`, `--cloud-ssh-key`, `--compose-ref`.
+`--aws-instance-type`, `--aws-os`, `--asset-prefix`, `--cloud-location`, `--cloud-size`, `--cloud-ssh-key`, `--compose-ref`.
 
 ### The AWS server
 
@@ -37,6 +37,13 @@ from the domain: the role, security group and instance are `tico-<name>` and the
 account that only lets setup create IAM roles under a permissions boundary, pass its ARN with
 `--aws-permissions-boundary`: the role is created under it, with both tags, in one call. Because the hop limit is 1, backups from the container need explicit keys: an IAM user (or R2
 token) limited to the backup bucket, in `LITESTREAM_ACCESS_KEY_ID` and `LITESTREAM_SECRET_ACCESS_KEY`.
+
+`--asset-prefix PREFIX` puts another word in place of `tico` in every AWS name, tag and path setup makes (1 to 10
+lowercase letters, digits and dashes, starting with a letter). With `--asset-prefix hub --name acme`: tags
+`ManagedBy=hub-setup` and `hub-setup-name=acme`, resources `hub-acme`, settings `/hub/acme/env`, backup bucket
+`hub-backup-<domain>-<account>` with user `hub-backup-acme`. It is saved with the install the first time; later runs,
+`runner`, `doctor`, `destroy` and `backup-storage` read it and refuse a different one. Names on the server itself
+(`/opt/tico`, the containers, `TICO_*` settings) stay.
 
 A self-install's `--company-file` goes through a private, encrypted bucket setup creates in your AWS account, with
 public access blocked and a one-day expiry rule. Setup keeps its bucket name and chart for retries. The server role
