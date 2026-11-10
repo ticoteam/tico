@@ -581,3 +581,21 @@ def test_a_thumb_on_an_ask_shows_in_the_feedback_routes_to_whoever_reads_its_tas
     gone = api.delete("/api/v2/feedback/" + rated["feedback_id"], headers=headers("ana-test"))
     assert gone.status_code == 200, gone.text
     assert listed("ana-test") == []
+
+
+def test_an_ok_bound_to_exact_content_is_never_a_plain_answer_only_given_from_its_preview(c, general):
+    from backend import task_asks as K
+
+    email = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "a" * 64}
+    asked = K.ask_ok(
+        c, "bot:builder", ANA, "Send this email?", shows=["email:e1"], subject="hq_reply:TK-1", content=email
+    )
+    task_id, rid = asked["task_id"], asked["requirement_id"]
+    with pytest.raises(H.Refused, match="task_requirement: " + K.FROM_PREVIEW):
+        A.answer(c, task_id, rid, ANA, "ok")  # a plain ok, even from the person it is asked of
+    assert K.standing(c, rid) == K.WAITING
+    shown = K.show(c, ANA, rid, email, own_click=True)
+    K.give_ok(c, ANA, rid, shown, own_click=True)  # the OK route, with the hash of what she was shown
+    assert K.standing(c, rid) == K.OK
+    plain = E.add_requirement(c, task_id, ANA, "ok", ANA, "OK the wording")
+    A.answer(c, task_id, plain["requirement_id"], ANA, "ok")  # an OK bound to nothing is a plain answer
