@@ -2076,22 +2076,6 @@ def style_problems(conn, actor, problems, severity="normal"):
     return list(problems)
 
 
-def open_children(conn, task_id):
-    """The titles of a task's unfinished subtasks, oldest first. A private subtask under a task
-    that is not private is not named: the parent's readers may not read it."""
-    parent_private = task_private(conn, task(conn, task_id))
-    return [
-        r["title"] if parent_private or not task_private(conn, r) else "a private subtask"
-        for r in _rows(
-            conn.execute(
-                f"SELECT * FROM {TASKS} tasks WHERE id IN (" + TR.CHILD_IDS + ") "
-                "AND status='open' ORDER BY created_at,id",
-                (task_id,),
-            )
-        )
-    ]
-
-
 def _clip(text, limit=180):
     """A refused body, safe to quote inside a task a human will read."""
     one = " ".join(str(text or "").split())[:limit]
@@ -3313,7 +3297,7 @@ def _write_message(
         body = librarian_text(body)
     if conv and ("closed_at" not in conv or conv.get("closed_at")):
         # A person's old chat with a bot is the bot's Home now: whatever writes to the room (a task's notice, a reconnect
-        # card, a run's reply) writes to the Home (backend/bot_home_merge.py). Only a closed room can have moved, so an
+        # notice, a run's reply) writes to the Home (backend/bot_home_merge.py). Only a closed room can have moved, so an
         # open one, the common case, costs no lookup.
         from . import bot_home_merge
 
@@ -4252,7 +4236,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
     if not changed:
         return False
     teams = ", ".join(MOVER_TEAMS)
-    pipe = (_one(conn, "SELECT manager_id FROM pipelines WHERE id=?", (row.get("pipeline_id") or "",)) or {})
+    pipe = _one(conn, "SELECT manager_id FROM pipelines WHERE id=?", (row.get("pipeline_id") or "",)) or {}
     if not task_participant(conn, actor, row) and pipe.get("manager_id") != actor:
         refuse(
             conn,
@@ -4955,7 +4939,7 @@ def _made_private(conn, actor, task_id):
     _private_followups(conn, task_id)
     from .reconnects import access_changed as reconnects_access_changed
 
-    reconnects_access_changed(conn, task_id)  # a reconnect card's person may not read it now
+    reconnects_access_changed(conn, task_id)  # a reconnect's person may not read it now
 
 
 def _private_followups(conn, task_id):
@@ -5267,8 +5251,8 @@ def comment_on(conn, task_row, message_id):
 
 
 def is_comment(msg):
-    """Written by `task_comment`: a say tagged `comment`. Not a question, an answer, a notice, an
-    approval, a bot's reply to its run or a chat message that only mentions the task."""
+    """Written by `task_comment`: a say tagged `comment`. Not a question, an answer, a notice,
+    a bot's reply to its run or a chat message that only mentions the task."""
     refs = msg.get("refs") or {}
     # `moved_home`: the mark a comment in a room that moved into a Home carries (bot_home_merge._mark_moved); the
     # rest are the marks its way and a bot-to-bot hold leave (threads.PRIMARY_MARKS).
@@ -5435,7 +5419,7 @@ def task_comment_delete(conn, actor, task_id, message_id):
     _task_event(conn, task_id, actor, "comment", message_id, None)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, task_id))
     row = task(conn, task_id)
-    recount(conn, [row["owner_id"], row["requester_id"]])  # a question taken back, or reopened by it
+    recount(conn, [row["owner_id"], row["requester_id"]])
     event(conn, actor, "message.deleted", message_id, {"task": task_id, "reopened": reopened, "canceled_run": canceled})
     deleted = message(conn, message_id, include_deleted=True)
     _withdraw_queued_comment_copies(conn, message_id)
@@ -6270,9 +6254,6 @@ def _task_party(conn, actor, row):
     return task_ancestor_party(conn, actor, row)
 
 
-    # A person closes without giving a reason; the requesting bot is still told it was closed (task_close wakes it).
-
-
 def _work_said(stopped, canceled):
     """The history line a close writes about the bot work it stopped (`stop_ended_work`), or None when none was in flight."""
     parts = []
@@ -6335,7 +6316,7 @@ def history_event(
     event_id=None,
 ):
     """Append one change to `history_events`; returns its id. Values are stored as text, `data` as JSON. `event_id` is
-    for a caller whose id is deterministic (backend/task_check_backs.py)."""
+    for a caller whose id is deterministic."""
     if subject_type not in HISTORY_SUBJECTS:
         raise ValueError(f"unknown history subject type {subject_type!r}")
     data = SRC.stamp_data(data, actor)
@@ -6457,10 +6438,9 @@ def person_sent_sql(alias="m"):
     )
 
 
-# wait_detail's one-task reads (auto_tasks.prime_waits seeds them for many tasks)
 def _mirror_task_note(conn, actor, task_row, note):
     """Copy a task note into the chat room a person's task lives in so people and later turns can read it.
-    A bot's task has its own room and reports its milestones to the bot's main chat (task_report) instead."""
+    A bot's task has its own room instead."""
     if task_private(conn, task_row) or is_bot(task_row["owner_id"]):
         return
     text = str(note or "").strip()
@@ -7682,7 +7662,7 @@ def task_labels(row):
 
 
 def labels_in_use(conn, visible="1"):
-    """Every label on a task that is still on the board, most used first. `visible` limits it to
+    """Every label on a task that is still open, most used first. `visible` limits it to
     the tasks the caller may read (`Auth.task_sql`)."""
     marks = ",".join("?" * len(ACTIVE_STATUSES))
     return [
