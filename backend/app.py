@@ -735,7 +735,7 @@ def create_app(settings=None):
 
     @app.middleware("http")
     async def request_guard(request, call_next):
-        via_reset = delegation_reset = run_reset = cause_reset = None
+        via_reset = delegation_reset = run_reset = cause_reset = token_reset = None
         try:
             # The sign-in exemptions below match on prefixes; a dot segment would carry one of
             # them onto the static files ("/download/../index.html").
@@ -906,6 +906,9 @@ def create_app(settings=None):
                     # recorded via assistant, and unless the person just confirmed a proposal it may
                     # write only what is low-risk.
                     via_reset = H.VIA.set(who.via)
+                elif who.via_token:
+                    # A personal token: what it writes in the person's name is not by their hand (H.delegated).
+                    token_reset = H.BY_TOKEN.set(True)
                 if (
                     who.attempt_id
                     and who.role != "runner"
@@ -1313,6 +1316,8 @@ def create_app(settings=None):
         finally:
             if via_reset is not None:
                 H.VIA.reset(via_reset)
+            if token_reset is not None:
+                H.BY_TOKEN.reset(token_reset)
             if delegation_reset is not None:
                 H.DELEGATION.reset(delegation_reset)
             if run_reset is not None:

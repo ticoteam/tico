@@ -3082,7 +3082,7 @@ def quiet_recheck(c, aid, body, task, msg):
     return (
         c.execute(
             "SELECT 1 FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=? "
-            f"AND m.deleted_at IS NULL AND ({H.person_sent_sql()} "
+            f"AND m.deleted_at IS NULL AND ({H.person_named_sql()} "
             f"OR json_extract(m.refs,'$.{wake_rules.CAUSED_BY}') LIKE 'human:%') LIMIT 1",
             (aid,),
         ).fetchone()

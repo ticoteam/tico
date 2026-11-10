@@ -2258,6 +2258,9 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
         return None
     cid = _new_id()
     refs = {"carries": message["id"], "wake": wake, "reason": reason, "from": message.get("sender_id")}
+    source = H._json(message.get("refs"), {}) or {}
+    if H.delegated(source):
+        refs["via"] = source["via"]  # written in the person's name, not by their hand: neither is its carrier
     if rule:
         refs["rule"] = rule
     if way == "queue":
@@ -2267,7 +2270,7 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     author = message.get("sender_id") or ""
     from .files import page_references
 
-    sources = (H._json(message.get("refs"), {}) or {}).get("body_sources", [])
+    sources = source.get("body_sources", [])
     body, refs = H.sourced_text(
         body or f"{author} in this thread: {message.get('body') or ''}",
         [*sources, *({"file": fid} for fid in sorted(page_references(message, c)))],

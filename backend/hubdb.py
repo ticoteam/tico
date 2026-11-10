@@ -1144,14 +1144,30 @@ def uuid7():
     return str(uuid.UUID(bytes=bytes(value)))
 
 
+# A message written in a person's name by someone else's hand says so in refs.via (_write_message): the Assistant,
+# BotOps, an automation, a personal token ("token"). Slack is the one way a person types a message themselves.
+OWN_HAND_VIA = ("slack",)
+
+
+def delegated(refs) -> bool:
+    """Whether a message's refs say it was written in a person's name but not by their hand (refs.via). The same notion
+    as task_asks.refuses_ok_by for a request: the Assistant, BotOps, a token, anything acting for the person."""
+    via = str((_json(refs, {}) or {}).get("via") or "")
+    return bool(via) and via not in OWN_HAND_VIA
+
+
 def person_sent(message):
-    """Whether a message is a person's: one a person sent, or the keeper's carrier of one (threads._carrier writes
-    refs.carries = the message and refs.from = its sender). The row-level test is person_sent_sql."""
+    """Whether a message is a person's own: one a person typed themselves, or the keeper's carrier of one
+    (threads._carrier writes refs.carries = the message, refs.from = its sender and the source's refs.via). A message
+    the Assistant, BotOps or a token wrote in their name is not (delegated): it never lifts a protection a person's
+    act lifts (the 7 runs, a backoff, a snooze). The row-level test is person_sent_sql."""
     message = message or {}
     sender = str(message.get("sender_id") or "")
+    refs = _json(message.get("refs"), {}) or {}
+    if delegated(refs):
+        return False
     if is_human(sender):
         return True
-    refs = _json(message.get("refs"), {}) or {}
     return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
 
 
@@ -1760,6 +1776,9 @@ VIA = contextvars.ContextVar("hub_via", default="")
 # asked in this run (`live`) or BotOps cites their open task in a later one (`follow_through`). Every event then says so.
 # The Assistant sets it too, for a task action the person asked for in their own Assistant chat (`asked`, the message cited).
 DELEGATION = contextvars.ContextVar("hub_delegation", default=None)
+# A person's own identity used through a personal token for this request (backend/app.py request_guard): a message it
+# writes in their name says refs.via "token" (_write_message), so it is not theirs by hand (delegated).
+BY_TOKEN = contextvars.ContextVar("hub_by_token", default=False)
 
 PRIVATE_WRITE = contextvars.ContextVar("hub_private_write", default=False)
 # A dry run reads the same rules as the write without recording or escalating a refusal (backend/mcp.py).
@@ -3241,8 +3260,9 @@ def _write_message(
         moved = bot_home_merge.home_for(conn, conv["id"])
         if moved and moved != conv["id"]:
             conv = conversation(conn, moved)
-    if VIA.get() and is_human(actor):
-        refs = {**(refs or {}), "via": VIA.get()}  # the Assistant wrote this for the person
+    if (VIA.get() or BY_TOKEN.get()) and is_human(actor):
+        # The Assistant, BotOps or a personal token wrote this for the person: not by their hand (delegated).
+        refs = {**(refs or {}), "via": VIA.get() or "token"}
     from . import wake_rules
 
     if actor == KEEPER and str(target).startswith("bot:") and is_human(wake_rules.CAUSE.get()):
@@ -6404,9 +6424,20 @@ MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_
 
 
 def person_sent_sql(alias="m"):
-    """SQL (person_sent over a row): the message `alias` is a person's, sent by one or by the keeper carrying one. A
+    """SQL (person_sent over a row): the message `alias` is a person's own, typed by one or the keeper carrying one. A
     notice that carries a Home or thread message a bot hears is the person's for the claim's order, fences and
-    protections, as the message itself is."""
+    protections, as the message itself is. Not a message written in their name (delegated)."""
+    own = ",".join(f"'{v}'" for v in OWN_HAND_VIA)
+    return (
+        f"(coalesce(json_extract({alias}.refs,'$.via'),'') IN ('',{own}) AND ({alias}.sender_id LIKE 'human:%' "
+        f"OR ({alias}.sender_id='keeper' AND json_extract({alias}.refs,'$.carries') IS NOT NULL "
+        f"AND json_extract({alias}.refs,'$.from') LIKE 'human:%')))"
+    )
+
+
+def person_named_sql(alias="m"):
+    """SQL: the message `alias` is in a person's name, typed by them or written for them (the Assistant, BotOps, a
+    token), or the keeper's carrier of one. For "a person is owed the answer"; person_sent_sql for "a person acted"."""
     return (
         f"({alias}.sender_id LIKE 'human:%' OR ({alias}.sender_id='keeper' "
         f"AND json_extract({alias}.refs,'$.carries') IS NOT NULL AND json_extract({alias}.refs,'$.from') LIKE 'human:%'))"
