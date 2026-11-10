@@ -200,11 +200,6 @@ def stops_for(c, cause, task):
         slug = (H.bot(c, H.actor_id(cause["bot"])) or {}).get("slug") or H.actor_id(cause["bot"])
         title = (task or {}).get("title") or "its work"
         return [
-            {
-                "how": "Close what it filed in one go (counts first)",
-                "command": f"hub task bulk close --where-requester {shlex.quote(slug)} --dry-run",
-                "note": "drop --dry-run to close them",
-            },
             {"how": "Pause the bot until its source is fixed", "command": f"hub bot pause {shlex.quote(slug)}"},
             {
                 "how": "Have BotOps fix the bot's source",

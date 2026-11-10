@@ -901,7 +901,6 @@
   "backend/tests/test_pipeline_judges.py": 68.87,
   "backend/tests/test_pipeline_late.py": 4.54,
   "backend/tests/test_pipeline_members_only.py": 34.68,
-  "backend/tests/test_pipeline_settings_j.py": 5.64,
   "backend/tests/test_places_pack.py": 3.77,
   "backend/tests/test_places_queries.py": 8.77,
   "backend/tests/test_postal_mail.py": 34.91,
