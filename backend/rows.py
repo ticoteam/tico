@@ -184,6 +184,10 @@ class TaskRow(TypedDict):
     answer: str | None
     asked_at: str | None
     work_revision: int
+    # The one task engine (backend/task_engine.py): null on a task still on the old engine, until the cut-over.
+    pipeline_id: str | None
+    stage_id: str | None
+    assignee_id: str | None
 
 
 class PresenceRow(TypedDict):
@@ -1686,3 +1690,146 @@ class SetupHandoffRow(TypedDict):
     used_at: str | None
     revoked_at: str | None
     human_token_id: str | None
+
+
+class PipelineRow(TypedDict):
+    """A pipeline: an ordered list of stages a task moves through (backend/task_engine.py)."""
+
+    id: str
+    name: str
+    goal: str
+    prefix: str | None
+    manager_id: str | None
+    owner_id: str | None
+    private: int
+    factory_id: str | None
+    preset: str | None
+    settings_version: int
+    created_at: str
+    updated_at: str
+    retired_at: str | None
+
+
+class StageRow(TypedDict):
+    """One stage of a pipeline: its work stages in order, then Done and Closed."""
+
+    id: str
+    pipeline_id: str
+    position: int
+    kind: str
+    name: str
+    purpose: str
+    owner: str | None
+    by_hand: int
+    task_limit: int | None
+    expected_minutes: int | None
+    expected_bots_only: int
+    on_enter: str
+    created_at: str
+    updated_at: str
+    retired_at: str | None
+
+
+class VisitRow(TypedDict):
+    """One stay of a task in a stage. Exactly one is open per task (left_at NULL)."""
+
+    id: str
+    task_id: str
+    stage_id: str
+    entered_at: str
+    entered_how: str
+    left_at: str | None
+    how: str | None
+    by_id: str | None
+    why: str | None
+    tries: int
+    level: str
+    person_id: str | None
+    next_try_at: str | None
+    progress_mark: str | None
+    last_change_at: str | None
+    late_told_at: str | None
+    late_person_at: str | None
+    bot_snoozes: int
+
+
+class RequirementRow(TypedDict):
+    """What a task needs to leave a stage: on the stage (every task) or on one visit (this task, this time)."""
+
+    id: str
+    stage_id: str | None
+    visit_id: str | None
+    kind: str
+    settings: str
+    can_push_past: int
+    who_oks: str
+    person_id: str | None
+    added_by_id: str | None
+    by_bot: int
+    line: str
+    shows: str | None
+    choices: str | None
+    position: int
+    created_at: str
+    withdrawn_at: str | None
+
+
+class AnswerRow(TypedDict):
+    """What met a requirement for a visit, sent it back, or pushed past it."""
+
+    id: str
+    visit_id: str
+    requirement_id: str
+    by_id: str
+    answer: str
+    notes: str | None
+    page_version: int | None
+    created_at: str
+    undone_at: str | None
+
+
+class SnoozeRow(TypedDict):
+    """A task set aside. At most one is open per task (ended_at NULL)."""
+
+    id: str
+    task_id: str
+    visit_id: str | None
+    by_id: str
+    why: str | None
+    until_at: str | None
+    created_at: str
+    ended_at: str | None
+    ended_by_id: str | None
+
+
+class LinkRow(TypedDict):
+    """A task filed by another task, during one of its visits."""
+
+    id: str
+    from_task_id: str
+    to_task_id: str
+    visit_id: str | None
+    kind: str
+    created_at: str
+
+
+class EffectRow(TypedDict):
+    """A GitHub call a move still owes, keyed so it happens once."""
+
+    id: str
+    visit_id: str
+    kind: str
+    key: str
+    state: str
+    tries: int
+    last_error: str | None
+    created_at: str
+    updated_at: str
+
+
+class TaskMoveGuardRow(TypedDict):
+    """The one row the tasks_move_only trigger reads: open is 1, for one task, only inside task_engine's write."""
+
+    id: int
+    open: int
+    task_id: str | None

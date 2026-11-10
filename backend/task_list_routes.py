@@ -108,6 +108,10 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "done_at",
                             "closed_at",
                             "closed_by_id",
+                            # Null on every task that is not on the engine (docs/pipelines-v3.md).
+                            "pipeline_id",
+                            "stage_id",
+                            "assignee_id",
                         ):
                             if row.get(field) is None:
                                 row.pop(field, None)

@@ -90,6 +90,7 @@ HOLD_ROW, HOLD_IGNORED = "rule", "ignored"
 # What a message is, as a rule names it. The always-wake events cannot be lowered by a row.
 FLOOR_EVENTS = {
     "check_back": "a task follow-up appointment is due",
+    "task_turn": "a task in a pipeline is the bot's to work",
     "person_message": "a person's message or comment, or a notice of a person's own act",
     "ask": "an ask or a steer: a question to the bot",
     "answer": "the answer to an ask the bot made",
@@ -110,6 +111,7 @@ URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_
 # wake_rules.always_wakes key -> (event, rule id)
 _FLOOR = {
     "check_back": "check_back",
+    "task_turn": "task_turn",
     "person": "person_message",
     "approval": "approval",
     "needs_action": "needs_action",

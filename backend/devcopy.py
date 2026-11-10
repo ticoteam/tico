@@ -58,6 +58,7 @@ EMPTY = (
     "suggestions",  # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries",
     "worktree_waits",
+    "effects",  # a GitHub call a task's move still owes (backend/stage_effects.py): the copy makes none
     "check_waits",
     "check_head_provenance",
     "idempotency",  # bindings too
@@ -573,6 +574,16 @@ KEEP = (
             "task_trash_assets",
             "task_types",
             "tasks",
+            # The one task engine (backend/task_engine.py): what a pipeline is, where each task stands and how it got
+            # there. task_move_guards is the one row the tasks_move_only trigger reads.
+            "pipelines",
+            "stages",
+            "requirements",
+            "visits",
+            "answers",
+            "snoozes",
+            "links",
+            "task_move_guards",
             "turns",
             "update_archive_overrides",
             "update_reads",

@@ -122,6 +122,15 @@ TABLES = {
     rows.FinStatementUploadRow: "fin_statement_uploads",
     rows.FinStatementPreviewRow: "fin_statement_previews",
     rows.SetupHandoffRow: "setup_handoffs",
+    rows.PipelineRow: "pipelines",
+    rows.StageRow: "stages",
+    rows.VisitRow: "visits",
+    rows.RequirementRow: "requirements",
+    rows.AnswerRow: "answers",
+    rows.SnoozeRow: "snoozes",
+    rows.LinkRow: "links",
+    rows.EffectRow: "effects",
+    rows.TaskMoveGuardRow: "task_move_guards",
 }
 
 
