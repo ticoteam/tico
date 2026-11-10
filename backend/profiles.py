@@ -31,7 +31,6 @@ one. `custom` is the way out of a profile's fixed rows: its rows are copied into
 `created_by = 'profile'`, where they are edited like any bot rule; a named profile again drops them (after a confirm).
 """
 
-import json
 import re
 from fnmatch import fnmatchcase
 from typing import Literal
@@ -125,7 +124,7 @@ SPEC = {
         "batch_scope": "bot",
         "description": "Directs others. Wakes for people, escalations and approvals; the rest is one digest a day.",
     },
-    # A type's manager that works by exception (backend/pipeline_exceptions.py): ticket news is a note for its next run.
+    # A manager that works by exception: task news is a note for its next run.
     MANAGER: {
         **BASE,
         "label": "Manager",
@@ -317,55 +316,21 @@ def is_review_task(c, row, *, parent_id=None):
     """One classification for creation, assignment, pull, wakes and Health.
 
     Explicit release QA and a production acceptance run (top-level, or linked to a parent: Dev 750 ruling on 34f2faaf)
-    are review work. Gate and live acceptance requests need a parent; an untitled delegated child also qualifies while
-    its parent is in a review/QA step.
+    are review work. A live acceptance request needs a parent.
     `parent_id` lets creation check the same rule before the child row exists.
     """
-    from . import auto_tasks
-
     title = str(row.get("title") or "").strip()
     if RELEASE_QA_TITLE.match(title):
         return True
     parent_id = parent_id or (H.TR.parent_of(c, row["id"]) if row.get("id") else None)
     if not parent_id:
         return _is_production_acceptance_run(title)
-    return bool(
-        _check_title(c, H.task(c, parent_id), title)
-        or ACCEPTANCE_TITLE.search(title)
-        or _is_production_acceptance_run(title)
-        or auto_tasks.review(c, row, parent_id=parent_id)
-    )
+    return bool(ACCEPTANCE_TITLE.search(title) or _is_production_acceptance_run(title))
 
 
 def _is_production_acceptance_run(title):
     """A run of the production acceptance (PRODUCTION_ACCEPTANCE_RUN_TITLE), not a request that builds or changes it."""
     return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title) and PRODUCTION_ACCEPTANCE_RUN_TITLE.match(title))
-
-
-def _check_title(c, parent, title):
-    """A request titled for one of the parent board's check steps (backend/step_flow.titled), or a Security check."""
-    from . import step_flow
-    from .check_pools import is_security
-
-    return bool(parent) and (is_security(title) or step_flow.is_kind(c, parent, title))
-
-
-def is_check(c, row):
-    """A check that finishes only with a verdict: titled for a check step of its ticket's board (Review 1/2, QA or Post
-    Release QA on the Dev board), or Security, under a ticket another owner
-    holds, or a bot's own check run on another model (H.check_model). A builder's own child titled "QA: add fixtures"
-    and other work handed out while its ticket sits in a review step are ordinary tasks, and so is a person's own
-    child whatever its title: "Security: confirm the vendor contract" finishes when the person finishes it."""
-    owner = str(row.get("owner_id") or "")
-    if H.is_bot(owner) and H.check_model(c, row["id"], owner[len("bot:") :]):
-        return True
-    if H.is_human(owner):
-        return False
-    parent = H.task(c, H.TR.parent_of(c, row["id"]) or "")
-    title = str(row.get("title") or "").strip()
-    return bool(
-        parent and parent["owner_id"] != owner and (_check_title(c, parent, title) or RELEASE_QA_TITLE.match(title))
-    )
 
 
 def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, owner=None):
@@ -399,18 +364,6 @@ def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, o
         f"{name} is a monitor: its watcher files its tasks. Give this task to a bot that does the work, "
         f"or change {name}'s profile.",
     )
-
-
-def pull_refusal(c, row, config):
-    """'auto_start_off' when the owner's profile does not pull this open task by itself, else None. Only
-    auto_tasks.missing (the idle claim's own start) asks: a job a wake rule queued is claimed and started whatever the
-    profile pulls (auto_tasks.refusal with `woken`)."""
-    spec = spec_of(config)
-    if spec is None or spec["pulls"] == "all":
-        return None
-    if spec["pulls"] == "review" and is_review_task(c, row):
-        return None
-    return "auto_start_off"
 
 
 # ---------------------------------------------------------------------------------------------------- changing it
@@ -631,24 +584,10 @@ def default_for(c, slug, declared):
     if any(fnmatchcase(slug, p) for p in MONITOR_SLUGS):
         return MONITOR, {}, None
     if any(fnmatchcase(slug, p) for p in REVIEWER_SLUGS):
-        # The starter's pr-reviewer was the Builder before the builder template: an install that kept it owns the Dev tickets.
-        if slug == "pr-reviewer" and _owns_dev_tickets(c, slug):
-            return DOER, preset, None
         return REVIEWER, {}, None
     if any(fnmatchcase(slug, p) for p in LEAD_SLUGS):
         return LEAD, {}, None
     return DOER, preset, None
-
-
-def _owns_dev_tickets(c, slug):
-    """Whether the bot owns a task of the engineering board's type (Dev tickets, found by role or name)."""
-    for (type_id,) in c.execute(
-        "SELECT DISTINCT type_id FROM tasks WHERE owner_id='bot:'||(SELECT id FROM bots WHERE slug=?)", (slug,)
-    ).fetchall():
-        kind = H.type_get(c, type_id) or {}
-        if kind.get("role") == "engineering" or kind.get("name") == "Dev tickets":
-            return True
-    return False
 
 
 def migrate(c, tell=True):
@@ -657,7 +596,6 @@ def migrate(c, tell=True):
     migrated once, whatever its owner changes afterwards. `tell=False` skips the notice, for an install that is made
     with its bots (the demo), where there is no earlier state to explain."""
     from . import rules
-    from .store import encode
 
     told = {}
     for row in c.execute(
@@ -731,9 +669,9 @@ def mismatches(c):
             if other:
                 out.append(("reviewer_holds_tasks", bot, other))
         elif name == RESPONDER:
-            n = c.execute(
-                "SELECT count(*) FROM tasks WHERE owner_id=? AND status IN ('open','doing')", ("bot:" + bot,)
-            ).fetchone()[0]
+            n = c.execute("SELECT count(*) FROM tasks WHERE owner_id=? AND status='open'", ("bot:" + bot,)).fetchone()[
+                0
+            ]
             if n:
                 out.append(("responder_has_tasks", bot, n))
         elif name == DOER:
