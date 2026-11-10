@@ -175,7 +175,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   void headGoalsLoad('human:' + p.id);
   void personAccessLoad(p);
   const dmButton = $('#person-dm');
-  if (dmButton) dmButton.onclick = () => threadNewOpen({dm: true, members: ['human:' + p.id]});
+  if (dmButton) dmButton.onclick = () => { location.hash = THREADS_NEW + '?to=' + encodeURIComponent('human:' + p.id); };
   $('#ptabs').onclick = (ev: Event) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-pt]'); if (!b) return;
     location.hash = b.dataset.pt === 'assistant' ? ASSISTANT : `#/person/${encodeURIComponent(p.id)}${b.dataset.pt === 'profile' ? '' : '/' + b.dataset.pt}`;

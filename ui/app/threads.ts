@@ -130,7 +130,8 @@ interface ThreadsState {
   gen: number;
 }
 
-const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/';
+// New message (ui/app/new-message.ts) is a page of its own beside the rail.
+const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/', THREADS_NEW = '#/threads/new';
 const THREADS: ThreadsState = {on: null, rail: null, pinned: [], threads: [], next: null, catchUp: 0, cu: null, dms: {}, roots: {}, counted: new Set(),
                  loading: null, again: false, wired: false, needsSeen: null, readAt: 0, gen: 0};
 // A stream connect within this long of the rail's last read leaves it be (the `needs` handler in threadsSync).

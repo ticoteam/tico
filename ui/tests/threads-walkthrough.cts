@@ -287,23 +287,21 @@ async function messageAct(page: Page, text: string, label: string, phone: boolea
 
     // ------------------------------------------------------------------ new thread: private, then to a team and the company
     await journey(browser, hub, 'new thread', 'dana', async (page, phone, name) => {
-      await step(page, 'open new thread', phone, name, async () => {
+      await step(page, 'open new message', phone, name, async () => {
         await shell(page, '#/threads', '#thread-rail')();
         await page.locator('#thread-rail [data-tr-new]').click();
-        await page.locator('#thread-new[open]').waitFor({timeout: WAIT});
-        await snap(page, 'new-thread-dialog', phone);
-      });
-      await step(page, 'private by default', phone, name, async () => {
-        const pressed = await page.locator('#thread-new [data-aud][aria-pressed="true"]').getAttribute('data-aud');
-        assert.equal(pressed, 'members', 'a new thread is private to its members');
+        await page.locator('.tr-pane .nm #nm-title').waitFor({timeout: WAIT});
+        await snap(page, 'new-message', phone);
       });
       await step(page, 'create it', phone, name, async () => {
-        const dialog = page.locator('#thread-new[open]');
-        await dialog.locator('#nt-name').fill('Q4 pricing draft');
-        await dialog.locator('button[type="submit"]').click();
+        await page.locator('#nm-title').fill('Q4 pricing draft');
+        await page.locator('#nm-title').press('Enter');
         await page.waitForURL(/#\/thread\//, {timeout: WAIT});
         await page.locator('.thv-composer .p-text').waitFor({timeout: WAIT});
         await snap(page, 'new-thread-created', phone);
+      });
+      await step(page, 'private by default', phone, name, async () => {
+        await page.locator('.thv-title .tr-mark svg').waitFor({timeout: WAIT});   // the lock: only its members read it
       });
       await step(page, 'make it public to a team', phone, name, async () => {
         await page.locator('[data-thv-menu]').first().click();

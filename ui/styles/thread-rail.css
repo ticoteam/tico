@@ -1,5 +1,5 @@
-/* ui/styles/thread-rail.css — The Threads page: the thread rail beside one thread, Catch up, New thread and Browse
-   threads. Markup: ui/app/thread-rail.ts, ui/app/catch-up.ts, ui/app/threads-page.ts (New thread). */
+/* ui/styles/thread-rail.css — The Threads page: the thread rail beside one thread, Catch up, New message and Browse
+   threads. Markup: ui/app/thread-rail.ts, ui/app/catch-up.ts, ui/app/new-message.ts. */
 
 #nav-threads .nav-icon svg,#mobile-threads .mobile-nav-icon svg{display:block}
 
@@ -156,45 +156,43 @@
 .cu-mute:hover{color:var(--ink);background:var(--surface2)}
 .cu-read{display:inline-flex;align-items:center;gap:6px;height:32px;border-radius:8px}
 
-/* New thread */
-.nt-dialog{box-sizing:border-box;width:calc(100% - 32px);max-width:480px;margin:120px auto 0;padding:0;border:1px solid var(--g4);border-radius:14px;background:var(--surface);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:visible}
-.nt-dialog::backdrop{background:rgba(0,0,0,.55)}
-.nt-head{display:flex;align-items:center;padding:16px 20px 6px}
-.nt-head h2{flex:1;margin:0;font-size:var(--t-lg);font-weight:600}
-.nt-x{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
-.nt-x:hover{color:var(--ink);background:var(--surface2)}
-.nt-body{display:flex;flex-direction:column;gap:16px;padding:10px 20px 4px}
-.nt-field{position:relative;display:flex;flex-direction:column;gap:6px;margin:0;padding:0;border:0;min-width:0}
-.nt-lbl{padding:0;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
-legend.nt-lbl{margin-bottom:6px}
-.nt-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:36px;box-sizing:border-box;padding:4px 6px;border:1px solid var(--g4);border-radius:8px;background:var(--bg);cursor:text}
-.nt-chips:focus-within{border-color:var(--focus);outline:var(--focus-halo)}
-.nt-chiplist{display:contents}
-.nt-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 2px 0 4px;border-radius:var(--r-ctl);background:var(--hover);white-space:nowrap}
-.nt-chip button{width:18px;height:18px;padding:0;border:0;background:none;color:var(--muted);cursor:pointer;line-height:1}
-.nt-chip button:hover{color:var(--ink)}
-.nt-chips input{flex:1;min-width:60px;width:auto;height:26px;padding:0 2px;border:0;background:none;outline:none}
-.nt-chips input:focus{outline:none}
-.nt-sugg{position:absolute;z-index:2;left:0;right:0;top:100%;margin:4px 0 0;padding:4px;list-style:none;border:1px solid var(--g4);border-radius:8px;background:var(--raised);box-shadow:0 8px 24px rgba(0,0,0,.25);max-height:240px;overflow-y:auto}
-.nt-sugg li{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 8px;border-radius:var(--r-ctl);cursor:pointer}
-.nt-sugg li[aria-selected="true"],.nt-sugg li:hover{background:var(--hover)}
-.nt-name{display:flex;align-items:center;height:36px;border:1px solid var(--g4);border-radius:8px;background:var(--bg)}
-.nt-name:focus-within{border-color:var(--focus);outline:var(--focus-halo)}
-.nt-name>span{padding:0 4px 0 12px;color:var(--muted);font-size:15px}
-.nt-name input{flex:1;height:34px;padding:0 8px 0 0;border:0;background:none}
-.nt-name input:focus{outline:none}
-.nt-why{color:var(--wait-ink);font-size:var(--t-sm)}
-.nt-why:empty{display:none}
+/* a segmented choice (a thread's Notifications) */
 .nt-seg{display:flex;padding:2px;border-radius:8px;background:var(--surface2)}
 .nt-seg button{flex:1;height:28px;border:0;border-radius:var(--r-ctl);background:none;color:var(--g7);cursor:pointer}
 .nt-seg button[aria-pressed="true"]{background:var(--g4);color:var(--ink);font-weight:500}
-.nt-group{margin-top:2px}
-.nt-check{display:flex;align-items:center;gap:10px;cursor:pointer}
-.nt-check input{width:16px;height:16px;margin:0;accent-color:var(--accent)}
-.nt-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;padding:16px 20px}
-.nt-foot .err{flex:1 1 auto;color:var(--fail);font-size:var(--t-sm)}
-.nt-foot .err:empty{display:none}
-.nt-foot .primary:disabled{opacity:.45;cursor:default}
+
+/* New message (ui/app/new-message.ts): the header, the To row, one list under it and the composer at the bottom */
+.tr-ib[data-tr-new]{background:var(--surface2);color:var(--ink);text-decoration:none}
+.tr-ib[data-tr-new]:hover{background:var(--hover)}
+.nm{flex:1;display:flex;flex-direction:column;min-height:0}
+.nm-head{display:flex;align-items:center;gap:8px;min-height:52px;box-sizing:border-box;margin:0 -20px;padding:6px 20px;border-bottom:1px solid var(--line)}
+.nm-head h1{flex:1;min-width:0;margin:0;font-size:var(--t-lg);font-weight:600;letter-spacing:var(--track-tight)}
+.nm-to{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-height:44px;box-sizing:border-box;margin:0 -20px;padding:6px 20px;border-bottom:1px solid var(--line);cursor:text}
+.nm-k{color:var(--muted);margin-right:4px}
+.nm-chips{display:contents}
+.nm-chip{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 2px 0 3px;border:1px solid var(--line);border-radius:13px;background:var(--surface2);white-space:nowrap}
+.nm-chip button{width:20px;height:20px;padding:0;border:0;border-radius:50%;background:none;color:var(--muted);cursor:pointer;line-height:1}
+.nm-chip button:hover{color:var(--ink);background:var(--hover)}
+.nm-to input{flex:1;min-width:120px;width:auto;height:30px;padding:0 2px;border:0;background:none;box-shadow:none;outline:none}
+.nm-to input:focus{outline:none;box-shadow:none}
+.nm-list{flex:none;max-height:min(60vh,420px);overflow-y:auto;margin:8px 0 0;padding:4px;list-style:none;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.nm-list[hidden]{display:none}
+.nm-list li{display:flex;align-items:center;gap:10px;min-height:34px;padding:0 8px;border-radius:var(--r-ctl);cursor:pointer}
+.nm-list li[aria-selected="true"]{background:var(--hover)}
+.nm-list li:not([aria-selected="true"]):hover{background:var(--surface2)}
+.nm-list .tr-mark{width:22px}
+.nm-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.nm-ppl{flex:none;display:inline-flex}
+.nm-ppl>*{box-shadow:0 0 0 2px var(--surface);border-radius:50%}
+.nm-ppl>*+*{margin-left:-6px}
+.nm-new{margin-top:4px;border-top:1px solid var(--line);border-top-left-radius:0;border-top-right-radius:0}
+.nm-title{flex:0 1 200px;display:inline-flex;align-items:center;gap:4px;min-width:0;height:28px;padding:0 8px;border:1px solid var(--g4);border-radius:var(--r-ctl);background:var(--bg);color:var(--muted);cursor:text}
+.nm-title:focus-within{border-color:var(--focus);outline:var(--focus-halo)}
+.nm-title:has(input[aria-invalid="true"]){border-color:var(--fail)}
+.nm-title input{flex:1;min-width:0;width:auto;height:26px;padding:0;border:0;background:none;box-shadow:none;outline:none}
+.nm-title input:focus{outline:none;box-shadow:none}
+.nm-fill{flex:1;min-height:24px}
+.nm-composer{padding-bottom:var(--s2)}
 
 /* phone: the rail or the thread takes the screen; Catch up takes it above the tab bar */
 @media (max-width:760px){
@@ -242,8 +240,12 @@ legend.nt-lbl{margin-bottom:6px}
   .cu-foot .spacer{display:none}
   .cu-later{flex:1;height:44px;border-radius:12px}
   .cu-read{flex:2;justify-content:center;height:44px;border-radius:12px}
-  .nt-dialog{margin-top:max(24px,env(safe-area-inset-top))}
-  .nt-x{width:44px;height:44px}
   .nt-seg button{height:40px}
-  .nt-foot button{min-height:44px}
+  .nm-head{margin:0 -12px;padding:2px 12px 6px;min-height:48px}
+  .nm-to{margin:0 -12px;padding:6px 12px}
+  .nm-to input{height:36px;font-size:16px}
+  .nm-list li{min-height:44px}
+  .nm-title{height:36px}
+  .nm-title input{font-size:16px}
+  .nm-chip button{width:28px;height:28px}
 }
