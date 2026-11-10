@@ -100,7 +100,7 @@ function safeLink(el: HTMLElement, options: SafeMdOptions): void {
   }
   try {
     // A path on a bot's Mac (`/Users/...`) would resolve against this origin and look clickable while leading
-    // nowhere. Files reach humans as `/api/v2/files/<id>` (`hub task attach`); only that root-relative form and
+    // nowhere. Files reach humans as `/api/v2/files/<id>` (`tico task attach`); only that root-relative form and
     // hash routes are in-app links.
     if (href.startsWith('/') && !href.startsWith('/api/')) throw new Error('unreachable link');
     const url = new URL(href, location.href);

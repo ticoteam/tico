@@ -1,4 +1,4 @@
-"""Org rules through the hub CLI and the MCP door (clients/hubcli.py, clients/remotecli.py, clients/hubtools.py): the same
+"""Org rules through the tico CLI and the MCP door (clients/hubcli.py, clients/remotecli.py, clients/hubtools.py): the same
 tools and rights as the API. The org is the one in test_org_rules.py."""
 
 import json
@@ -142,8 +142,8 @@ def test_a_retired_rule_is_no_longer_in_force_and_its_due_dates_come_back(api):
 
 def test_the_policy_line_is_the_fixed_one():
     text = (ROOT / "policies" / "shared-rules.md").read_text()
-    # `hub rules check` exists from P1b on (backend/org_rule_check.py), so the line names it.
-    assert "- Rules apply to you. Read them: `hub rules list --mine`. Check a draft: `hub rules check`.\n" in text
+    # `tico rules check` exists from P1b on (backend/org_rule_check.py), so the line names it.
+    assert "- Rules apply to you. Read them: `tico rules list --mine`. Check a draft: `tico rules check`.\n" in text
 
 
 class _Turn:

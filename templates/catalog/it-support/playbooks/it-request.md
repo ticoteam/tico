@@ -14,7 +14,7 @@ on the task; the requester has confirmed it works, or the task states the next s
 
 ## 1. Classify
 
-    hub task show <id>
+    tico task show <id>
 
 Run `skills/triage-an-it-request-by-impact/SKILL.md`: a category (account and access, device, network, software,
 security), a priority by how many people are stopped, and the reason on the task. A suspected compromise (a login they
@@ -23,7 +23,7 @@ what to do first (change that password, report the device) before anything else.
 
 ## 2. Look for a known fix
 
-`knowledge/fixes/`, then `hub doc ask "<the problem>"`. If the team has a guide, point to it and
+`knowledge/fixes/`, then `tico doc ask "<the problem>"`. If the team has a guide, point to it and
 give the steps; if the guide is wrong, say so and report it to the Librarian.
 
 ## 3. Give the fix
@@ -36,7 +36,7 @@ looks at it: say who. A password or MFA problem follows `skills/reset-a-password
 
 Fill every field: human, tool, role (the least that does the job), reason, end date if temporary,
 approver from `knowledge/tools.md`. Use granted admin access only within the stated scope. Put it
-on the task and ask the owner with `hub task create --owner <owner>` after the requester
+on the task and ask the owner with `tico task create --owner <owner>` after the requester
 confirms the details. The admin applies the change, or you do where the owner has given this bot
 write access. Then confirm with the requester that it works.
 

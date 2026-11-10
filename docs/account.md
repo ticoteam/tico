@@ -133,12 +133,12 @@ Each row shows its address or label, **State**, and **Price**.
 
 On a server Tico hosts, an owner or an admin can have Tico stop the server after 1 to 24 quiet hours (2 is a good start)
 and stop the bot computers with it (**Stop bot computers too**, on by default). Set it in Settings > Computers, or with
-`hub sleep set --hours 2` and `hub sleep status`; `hours` 0 turns it off. A self-run server never shows the setting.
+`tico sleep set --hours 2` and `tico sleep status`; `hours` 0 turns it off. A self-run server never shows the setting.
 
 The server is quiet when, for all of those hours, nobody used the app signed in and no run started or ended, and right
 now nothing is queued or running, no computer is working on a job, nothing is being sent or due to be retried within
 15 minutes (Slack posts, outgoing webhooks) and no routine, time-sensitive Maintenance step, daily system job or release
-hour is due in the next 15 minutes. Maintenance wakes the server only for a run where enabled Find stuck or Update is
+hour is due in the next 15 minutes. Maintenance wakes the server only for a run where an enabled Update is
 due, following the run's schedule and each step's cadence. Pause stops those wakes; a run already going keeps the
 server up. Collect, Clean up, Check health, Learn, Suggest, Dream and other interval housekeeping catch up after a wake.
 Tico then records "server.sleep" in History and asks to stop the

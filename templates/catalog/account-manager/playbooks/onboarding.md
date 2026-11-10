@@ -8,12 +8,12 @@ routine checked.
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub team show
-    hub meeting search "renewal"
+    tico task show <id>
+    tico team show
+    tico meeting search "renewal"
 
 Check what you can already reach: a CRM entry in your access, contracts attached to tasks or in the team docs
-(`hub doc search "order form"`), and whether a Customer Success Manager exists (`hub team show`). Do not ask what these already
+(`tico doc search "order form"`), and whether a Customer Success Manager exists (`tico team show`). Do not ask what these already
 say.
 
 ## 2. Introduce yourself in three lines
@@ -45,16 +45,16 @@ Follow `playbooks/weekly-account-review.md`. Write `reports/YYYY-MM-DD-account-r
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list`. If it shows off, arm it with
-`hub automation update <id> --enable`. Tell the human in one line what it does: "I will review every renewal and expansion
+Setting you up switched your first routine on. Check it with `tico automation list`. If it shows off, arm it with
+`tico automation update <id> --enable`. Tell the human in one line what it does: "I will review every renewal and expansion
 opportunity each Tuesday at 09:00." They can change it or turn it off at any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it
-off, change the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+off, change the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} that setup is done. That clears your "Needs setup" mark and lets the routine run. Until then nothing you have
 runs on its own. Run it once the answers and the first result are recorded, not before.

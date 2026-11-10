@@ -51,7 +51,7 @@ def test_only_a_person_who_manages_the_bot_turns_sending_on(api, botops):
 def test_a_refused_botops_write_names_the_person_and_the_place_not_go_ahead(api, botops):
     hint = (
         "A person who manages ops turns its mail sending on in Settings > Bots > ops > Mail sending, "
-        "or with `hub bot mail ops --send`"
+        "or with `tico bot mail ops --send`"
     )
     own = _wake(api, botops)
     r = act(api, own, "POST", "bots/ops/mail-settings", {"outbound_send": True}, ref=None)
@@ -65,4 +65,4 @@ def test_a_refused_botops_write_names_the_person_and_the_place_not_go_ahead(api,
     _, _, attempt = setup_attempt(api, "ops")
     r = change(api, {"outbound_send": True}, attempt["token"])
     assert r.status_code == 403 and "Settings > Bots > ops > Mail sending" in r.json()["error"]["detail"]
-    assert "hub bot mail ops --send" in r.json()["error"]["detail"]
+    assert "tico bot mail ops --send" in r.json()["error"]["detail"]

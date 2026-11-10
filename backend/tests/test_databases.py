@@ -1,4 +1,4 @@
-"""`hub db`: read-only company-database access, its grants, audit and private catalogs.
+"""`tico db`: read-only company-database access, its grants, audit and private catalogs.
 
 Enforcement is tested against a real SQLite file, and against a throwaway PostgreSQL container
 when Docker can run one (skipped otherwise). The statement scanner and binder are tested for

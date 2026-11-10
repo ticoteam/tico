@@ -3,13 +3,17 @@
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner
 
 
-ROUTE = "ask them with `hub task question`, or have them file the subtask"
+ROUTE = "ask them with `tico task ask`, or have them file the subtask"
 
 
 def carry(api, attempt, row):
-    """The run also carries `row`, as when its prompt brought that task in."""
+    """The run also carries `row`, as when its prompt brought that task in: a message on that task is one of the
+    run's inputs (task_privacy.attempt_tasks)."""
+    from backend.store import H
+
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
+        said = H.task_comment(c, H.KEEPER, row["id"], "Look at this task too.", wake=False)
+        c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], said["id"]))
 
 
 def run_for(api, bot):

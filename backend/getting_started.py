@@ -122,8 +122,9 @@ def _login_target(runners, wanted, c=None):
 
 def built_in(settings):
     """The bots every install starts with: the four a person talks to, the Task Manager (docs/task-manager.md), the
-    Bookkeeper (docs/bookkeeper.md), the Brand Owner and Counsel, which onboarding.ensure_counsel adds once a computer
-    enrolls. Counsel is built in, so it is not one of the company's own bots (own_bots)."""
+    Bookkeeper (docs/bookkeeper.md), the Brand Owner, the Updates and Automations Owners, and Counsel, which
+    onboarding.ensure_counsel adds once a computer enrolls. Counsel is built in, so it is not one of the company's own
+    bots (own_bots)."""
     return {
         settings.assistant_bot,
         BOTOPS,
@@ -133,6 +134,8 @@ def built_in(settings):
         "bookkeeper",
         H.BRAND_OWNER,
         H.COUNSEL,
+        "updates-owner",
+        "automations-owner",
     }
 
 
@@ -166,7 +169,7 @@ def _next_bot(c, settings):
 
 def _first_output(c):
     """A starter bot has been onboarded: its onboarding is complete and a person has seen its first
-    result. The bot says so itself (`hub bot setup-done`), so this is what the database records."""
+    result. The bot says so itself (`tico bot setup-done`), so this is what the database records."""
     return c.execute(
         "SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
         "WHERE bc.onboarding_state='onboarded' AND b.state!='archived' LIMIT 1"
@@ -197,7 +200,7 @@ def checklist(c, who, settings, github):
     mine = own_bots(c, settings)
     building = c.execute(
         "SELECT id FROM tasks WHERE owner_id=? AND title LIKE 'Build a bot:%' "
-        "AND status NOT IN ('done','closed','declined') ORDER BY created_at DESC LIMIT 1",
+        "AND status='open' ORDER BY created_at DESC LIMIT 1",
         ("bot:" + BOTOPS,),
     ).fetchone()
     installed = bool(github and github["installation_id"])
@@ -349,13 +352,13 @@ def _botops(c):
 
 
 def _market_title(c, owner, actor):
-    """A title this request can still open: the hub refuses a second live task with the same one."""
-    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    """A title this request can still open: Tico refuses a second open task with the same one."""
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for n in range(1, 20):
         title = MARKET_TASK if n == 1 else f"{MARKET_TASK} ({n})"
         if not c.execute(
             f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
-            (actor, owner, title, *H.LIVE_STATUSES),
+            (actor, owner, title, *H.ACTIVE_STATUSES),
         ).fetchone():
             return title
     return f"{MARKET_TASK} ({n})"

@@ -1,258 +1,102 @@
-// Run with Playwright available: NODE_PATH=/path/to/node_modules node ui/tests/task-board.cts
-// Every request is intercepted; this test never contacts the hub, Slack, or a bot.
-// Labels and PR links, a comment thread
-// with the author on every line (not a chat), and mover-only controls. The list itself (rows, groups, chips, the peek,
-// bulk changes, the keys) is ui/tests/tasks-page.cts.
-// The Product lane is retired: no lane switch, no product board, and the page
-// only asks the hub for company tasks (the product rows below must never show).
+import type * as Tasks from './tasks-page.cts';
+import type {Page} from 'playwright';
+// Task privacy in the task window, on the v3 fixture (ui/tests/tasks-page.cts); every request is intercepted.
+// - Private: the requester may make a private task public; Who can see lists requester, owner and readers, × takes a
+//   reader off, + adds one; a company task says Public.
+// - Followers: each name with its level when not live; Follow / Following for you, × for others.
+// - A task filed under a private parent is private (the create form sends it); a parent the reader cannot open is
+//   named only "a private task", never its title or id, and is not a link.
+// - A parent is fixed when the task is filed: Part of links to it and offers nothing to add, change or take off; the
+//   Related menu offers only the relations the server writes.
+// - A bot's "Create private tasks by default" and update subscriptions save from its settings.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const path = require('node:path') as typeof import('node:path');
-const {html, uiFile} = require('./support/page.cts');
-const {unrouted} = require('./support/routes.cts');
-const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
-interface Attachment {id: string; name: string}
-interface Follower {actor: string; notify: string; reason: string}
-interface Tag {id: string; key: string; label: string; metadata: Record<string, unknown>; markdown: string; is_template: boolean; template_id: string | null; owner_id: string; version: number}
-interface Task {
-  [key: string]: unknown;
-  id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string; rank: number;
-  labels: string[]; links: unknown[]; parts: {total: number; done: number}; version: number; created_at: string; updated_at: string;
-  private?: boolean; readers?: string[]; followers?: Follower[]; tags?: Tag[]; attachments?: Attachment[]; note?: string; close?: unknown; closed_at?: string;
-}
-interface CommentRow {id: string; kind: string; sender_id: string; recipient_id: string; body: string; created_at: string; edited_at?: string; refs: {task: string; comment: boolean; attachments?: Attachment[]}}
-type Body = Record<string, unknown>;
-declare const S: {me?: {id: string}};
-declare const TASKS_ST: {tasks?: unknown[]};
+const {html} = require('./support/page.cts');
+const {open, task} = require('./tasks-page.cts') as Tasks.Api;
 declare function openTaskCreate(owner: string, opts?: {parent: {id: string; title: string; private: boolean}}): void;
 declare function loadSettings(): Promise<void>;
 declare function settingsEditBot(name: string): void;
-const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
+type Body = Record<string, unknown>;
+interface Follower {actor: string; notify: string; reason: string}
 // The icon font is subset (ui/vendor/fonts/icons.txt); a ligature missing from that list renders as a stray glyph.
 {
-  const subset = require('node:fs').readFileSync(require('node:path').join(__dirname, '../vendor/fonts/icons.txt'), 'utf8').split('\n').filter(Boolean);
-  for (const name of ['chevron_right', ...[...html.matchAll(/class="nav-icon" aria-hidden="true">([a-z_]+)</g)].map(m => m[1])])
+  const subset = fs.readFileSync(path.join(__dirname, '../vendor/fonts/icons.txt'), 'utf8').split('\n').filter(Boolean);
+  for (const name of ['chevron_right', ...[...String(html).matchAll(/class="nav-icon" aria-hidden="true">([a-z_]+)</g)].map(m => m[1]!)])
     assert(subset.includes(name), `icon ${name} is not in ui/vendor/fonts/icons.txt (run scripts/build-icon-font.py)`);
   assert.deepEqual(subset, [...subset].sort(), 'icons.txt must stay alphabetical for Google Fonts');
 }
+const SECRET = 'Salary bands 2027';
+const fixtures = () => [
+  task('t-11', 'Draft the newsletter', 'spec', {owner_id: 'bot:writer', private: true, readers: ['human:sam'],
+    followers: [{actor: 'bot:writer', notify: 'live', reason: 'owner'}, {actor: 'human:sam', notify: 'digest', reason: 'manual'}]}),
+  task('t-12', 'Write the copy', 'spec', {owner_id: 'bot:writer'}),
+  // Filed from private work: the server sends the parent with nothing of it but "a private task" (task_relations.py).
+  task('t-13', 'Pick the photos', 'spec', {owner_id: 'bot:writer',
+    relations: {parent: [{id: null, title: 'a private task', status: null, owner_id: null, direction: 'out', private: true}]}}),
+  task('t-14', 'Proof the copy', 'spec', {owner_id: 'bot:writer',
+    relations: {parent: [{id: 't-12', title: 'Write the copy', status: 'open', owner_id: 'bot:writer', direction: 'out'}]}}),
+];
+const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => ({name, display_name, host: 'keeper', status: 'active',
+  state: 'active', can_chat: true, private_tasks_default: name === 'pm', update_subscriptions: name === 'pm' ? ['templates'] : []}));
+
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
-    const errors: string[] = [];
-    page.on('pageerror', e => errors.push(e.message));
-    const bots = ([['coo', 'COO', 'leadership'], ['cpo', 'AI CPO', 'product'], ['cmo', 'AI CMO', 'marketing'],
-      ['cto', 'CTO', 'engineering']] as [string, string, string][]).map(([name, display_name, team]) =>
-      ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team,
-        runtime: ({cpo: 'codex', cmo: 'claude'} as Record<string, string>)[name], private_tasks_default: name === 'cpo',
-        update_subscriptions: name === 'cpo' ? ['templates'] : []}));
-    const now = new Date().toISOString();
-    const task = (id: string, over: Partial<Task>): Task => ({id, title: id, body: 'Details.', owner_id: 'bot:cmo', requester_id: 'human:reviewer', status: 'open',
-      lane: 'company', rank: 1, labels: [], links: [], parts: {total: 0, done: 0}, version: 3, created_at: now, updated_at: now, ...over});
-    let me = {id: 'reviewer', name: 'Test Reviewer', email: 'reviewer@example.test', role: 'owner', mover: true, cloud: true};
-    const tags: Tag[] = [
-      {id: 'tag-newsletter', key: 'newsletter', label: 'release', metadata: {date: '2026-10-02'},
-        markdown: '# Release\n\n- [ ] Smoke checks\n- [x] Tell the team\n\n```md\n- [ ] Literal example\n```\n\n<script>window.tagUnsafe = true</script>',
-        is_template: false, template_id: null, owner_id: 'human:reviewer', version: 1},
-      {id: 'tag-template', key: 'release-checklist', label: 'release', metadata: {channel: 'stable'},
-        markdown: '- [ ] Migrations / scripts to run', is_template: true, template_id: null, owner_id: 'human:reviewer', version: 1},
-    ];
-    let staleTag = false, raceStarter = false;
-    let tasks = [
-      task('Draft the newsletter', {private: true, readers: ['human:ben'], rank: 2,
-        followers: [{actor: 'bot:cmo', notify: 'live', reason: 'owner'}, {actor: 'human:ben', notify: 'digest', reason: 'manual'}], labels: ['newsletter'], tags: [tags[0]!], body: 'Review [packet](http://tico-ui.test/api/v2/files/doc).',
-        attachments: [{id: 'doc', name: 'review-packet.md'}, {id: 'clip', name: 'first-cut.mp4'}, {id: 'archive', name: 'source.zip'}]}),
-      task('Approve the budget', {owner_id: 'human:reviewer', requester_id: 'bot:coo', rank: 1, labels: ['finance'], note: 'Waiting on finance approval'}),
-      task('Write the copy', {rank: 1, labels: ['newsletter', 'copy']}),
-      task('Ship the pricing page', {owner_id: 'bot:cpo', lane: 'product', status: 'review', rank: 1,
-        links: [{id: 'l1', kind: 'pr', url: 'https://github.com/ticoteam/tico/pull/412', title: 'tico#412', state: 'open'}], parts: {total: 2, done: 1}}),
-      task('Fix the checkout bug', {owner_id: 'bot:cpo', lane: 'product', status: 'open', rank: 2, labels: ['bug']}),
-    ];
-    const comments: CommentRow[] = [{id: 'm1', kind: 'say', sender_id: 'human:ben', recipient_id: 'bot:cmo', body: 'Use the September numbers.', created_at: now, edited_at: now, refs: {task: 'Draft the newsletter', comment: true, attachments: [{id: 'doc', name: 'review-packet.md'}]}}];
-    const events = [{id: 'e1', task_id: 'Draft the newsletter', created_at: now, actor: 'human:reviewer', field: 'status', old: null, new: 'open', note: ''},
-                    {id: 'e2', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'status', old: 'open', new: 'doing', note: 'Drafting from the brief'},
-                    {id: 'e3', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Drafting from the brief', note: 'Drafting from the brief'},
-                    {id: 'e4', task_id: 'Draft the newsletter', created_at: now, actor: 'bot:cmo', field: 'note', old: '', new: 'Waiting on the logo', note: ''},
-                    {id: 'e5', task_id: 'Draft the newsletter', created_at: now, actor: 'human:ben', field: 'comment', old: 'm1', new: 'm1', note: ''},
-                    {id: 'e6', task_id: 'Draft the newsletter', created_at: now, actor: 'human:ben', field: 'comment', old: 'm0', new: null, note: ''}];
-    const posted: {path: string; body: Body}[] = [];
-    const people: unknown[] = [];
-    // @ts-expect-error write-only flag, kept for emitted-JS parity with the .cjs
-    let preferencePending = true, tasksStartedBeforePreference = false;
-    await page.route('**/*', async route => {
-      const req = route.request(), url = new URL(req.url()), p = url.pathname;
-      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
-      if (url.origin !== 'http://tico-ui.test') return route.abort();
-      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
-      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
-      if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
-      if (p === '/vendor/fonts/material-symbols-outlined.woff2') return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile('vendor/fonts/material-symbols-outlined.woff2'))});
-      if (p === '/vendor/marked.min.js') return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
-      if (p === '/api/employees') return json(bots);
-      if (p === '/api/issues') return json([]);
-      if (p === '/api/me') return json(me);
-      if (p === '/api/status') return json({active: [], employees: []});
-      if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/humans') return json({people});
-      if (p === '/api/v2/tasks/labels') return json({labels: ['newsletter', 'copy', 'bug', 'finance'], tags: [tags[0]!]});
-      if (p === '/api/v2/tags' && req.method() === 'GET') return json({tags});
-      if (p === '/api/v2/tags' && req.method() === 'POST') {
-        const body = req.postDataJSON(); posted.push({path: p, body});
-        const tag = {...body, id: 'tag-starter', metadata: {}, owner_id: 'human:reviewer', version: 1};
-        tags.push(tag);
-        if (raceStarter) {
-          Object.assign(tag, {is_template: false, label: 'Existing release', markdown: '- [x] Keep our notes'});
-          raceStarter = false;
-          return json({error: {code: 'duplicate', detail: 'Tag already exists'}}, 422);
-        }
-        return json({tag});
-      }
-      const tagRoute = p.match(/^\/api\/v2\/tags\/([^/]+)(\/instances)?$/);
-      if (tagRoute) {
-        const tag = tags.find(tag => tag.id === decodeURIComponent(tagRoute[1]!) || tag.key === decodeURIComponent(tagRoute[1]!));
-        if (!tag) return json({error: {detail: 'Tag not found'}}, 404);
-        if (req.method() === 'GET') return json({tag, editable: me.mover,
-          tasks: tasks.filter(task => task.labels.includes(tag.key)), next_offset: null});
-        const body = req.postDataJSON(); posted.push({path: p, body});
-        if (tagRoute[2]) {
-          const instance = {...tag, ...body, id: 'tag-instance', metadata: {...tag.metadata, ...body.metadata},
-            is_template: false, template_id: tag.id, version: 1};
-          tags.push(instance); return json({tag: instance});
-        }
-        if (staleTag || body.version !== tag.version) {
-          if (staleTag) tag.version += 1;
-          staleTag = false; return json({error: {code: 'version_conflict', detail: 'Tag changed; fetch it and retry your update'}}, 409);
-        }
-        Object.assign(tag, body, {version: tag.version + 1}); return json({tag});
-      }
-      if (p.startsWith('/api/v2/files/')) {
-        const id = p.split('/').at(-1)!;
-        const file = {doc: {name: 'review-packet.md', body: '# Script one\n\nApprove the storyboard. <script>window.previewUnsafe = true</script>'},
-          clip: {name: 'first-cut.mp4', body: 'not a real video'}, archive: {name: 'source.zip', body: 'not a real zip'}}[id];
-        if (!file) return json({}, 404);
-        return route.fulfill({contentType: 'application/octet-stream', headers: {'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`}, body: file.body});
-      }
-      if (p.startsWith('/api/v2/preferences/') && req.method() === 'GET') {
-        await new Promise(resolve => setTimeout(resolve, t(150)));
-        preferencePending = false;
-        return json({key: 'tasks.view', value: null});
-      }
-      if (p === '/api/v2/tasks' && req.method() === 'GET') {
-        if (preferencePending) tasksStartedBeforePreference = true;
-        await new Promise(resolve => setTimeout(resolve, t(50)));
-        let rows = tasks.slice();
-        const statuses = url.searchParams.get('status');
-        if (statuses && statuses !== 'all') {
-          const wanted = new Set(statuses.split(','));
-          rows = rows.filter(task => wanted.has(task.status));
-        }
-        const lane = url.searchParams.get('lane');
-        if (lane) rows = rows.filter(task => (task.lane || 'company') === lane);
-        const owner = url.searchParams.get('owner');
-        if (owner) rows = rows.filter(task => task.owner_id === owner || task.owner_id === 'bot:' + owner);
-        if (url.searchParams.get('sort') === 'finished') rows.sort((a, b) => String(b.closed_at || b.updated_at).localeCompare(String(a.closed_at || a.updated_at)));
-        const offset = Number(url.searchParams.get('offset') || 0), limit = Number(url.searchParams.get('limit') || 500);
-        return json({tasks: rows.slice(offset, offset + limit), next_offset: rows.length > offset + limit ? offset + limit : null});
-      }
-      if (p === '/api/v2/tasks' && req.method() === 'POST') {
-        const body = req.postDataJSON(); posted.push({path: p, body});
-        return json({task: task('created-private', body)});
-      }
-      const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
-      if (one && req.method() === 'GET') {
-        const t = tasks.find(x => x.id === decodeURIComponent(one[1]!))!;
-        return json({task: t, events: events.filter(e => e.task_id === t.id), comments: comments.filter(c => c.refs.task === t.id), children: [], parent: null, mover: me.mover, messages: []});
-      }
-      if (one && req.method() === 'POST') {
-        const body = req.postDataJSON(); posted.push({path: p, body});
-        const t = tasks.find(x => x.id === decodeURIComponent(one[1]!))!;
-        Object.assign(t, body, {version: t.version + 1}); delete t.close;
-        return json({task: t});
-      }
-      const rd = p.match(/^\/api\/v2\/tasks\/([^/]+)\/readers$/);
-      if (rd && req.method() === 'POST') {
-        const body = req.postDataJSON(); posted.push({path: p, body});
-        const t = tasks.find(x => x.id === decodeURIComponent(rd[1]!))!;
+    const tasks = fixtures();
+    const posted: {p: string; body: Body}[] = [];
+    // Readers, followers and the bot definition have their own routes; they go in before the app opens.
+    const routes = async (page: Page) => {
+      await page.route(url => /^\/api\/v2\/tasks\/[^/]+\/readers$/.test(url.pathname), route => {
+        const p = new URL(route.request().url()).pathname, body = route.request().postDataJSON() as {add?: string[]; remove?: string[]};
+        posted.push({p, body});
+        const t = tasks.find(x => x.id === decodeURIComponent(p.split('/')[4]!))!;
         t.readers = [...(t.readers || []).filter(a => !(body.remove || []).includes(a)), ...(body.add || [])];
-        return json({private: true, requester_id: t.requester_id, owner_id: t.owner_id, readers: t.readers});
-      }
-      const fl = p.match(/^\/api\/v2\/tasks\/([^/]+)\/followers$/);
-      if (fl && req.method() === 'PUT') {
-        const body = req.postDataJSON(); posted.push({path: p, body});
-        const t = tasks.find(x => x.id === decodeURIComponent(fl[1]!))!, who = body.actor || 'human:reviewer';
-        const had = (t.followers || []).find(f => f.actor === who);
+        return route.fulfill({contentType: 'application/json', body: JSON.stringify({private: true, requester_id: t.requester_id, owner_id: t.owner_id, readers: t.readers})});
+      });
+      await page.route(url => /^\/api\/v2\/tasks\/[^/]+\/followers$/.test(url.pathname), route => {
+        const p = new URL(route.request().url()).pathname, body = route.request().postDataJSON() as {actor?: string; following: boolean; notify?: string};
+        posted.push({p, body});
+        const t = tasks.find(x => x.id === decodeURIComponent(p.split('/')[4]!))! as {followers?: Follower[]; id: string};
+        const who = body.actor || 'human:ana', had = (t.followers || []).find(f => f.actor === who);
         t.followers = (t.followers || []).filter(f => f.actor !== who);
         if (body.following) t.followers.push({actor: who, notify: body.notify || had?.notify || 'live', reason: had?.reason || 'manual'});
-        const mine = t.followers.find(f => f.actor === 'human:reviewer');
-        return json({task_id: t.id, following: !!mine, notify: mine?.notify ?? null, followers: t.followers});
-      }
-      const cm = p.match(/^\/api\/v2\/tasks\/([^/]+)\/comments$/);
-      if (cm && req.method() === 'POST') {
-        const body = req.postDataJSON(); posted.push({path: p, body});
-        comments.push({id: 'm' + comments.length, kind: 'say', sender_id: 'human:reviewer', recipient_id: 'bot:cmo', body: body.text, created_at: new Date().toISOString(), refs: {task: decodeURIComponent(cm[1]!), comment: true}});
-        return json({comment: comments.at(-1), comments, woke: true});
-      }
-      if (/^\/api\/v2\/bots\/[^/]+\/definition$/.test(p) && req.method() === 'POST') {
-        const body = req.postDataJSON(); posted.push({path: p, body});
-        return json({});
-      }
-      if (p === '/api/v2/conversations') return json({conversations: []});
-      if (p.endsWith('/messages')) return json({messages: []});
-      return json(unrouted(p));
-    });
-    await page.goto('http://tico-ui.test/#/tasks');
-    await page.waitForFunction(() => S.me?.id === 'reviewer' && TASKS_ST?.tasks?.length === 3);
-    if (screenshotDir) fs.mkdirSync(screenshotDir, {recursive: true});
-    const shot = async (name: string) => { await page.evaluate(() => document.fonts.ready); if (screenshotDir) await page.screenshot({path: path.join(screenshotDir, name + '.png')}); };
-    for (const [device, width, height] of [['desktop', 1200, 900], ['phone', 390, 844]] as [string, number, number][]) {
-      await page.setViewportSize({width, height});
-      await page.evaluate(() => openTaskCreate('bot:cpo'));
-      const create = page.locator('#task-create[open]');
-      const checkbox = create.locator('[name=private]');
-      assert(await checkbox.isChecked(), 'effective sensitive-bot default is checked');
-      assert(await checkbox.isEnabled(), 'human can choose company at creation');
-      await shot('private-create-' + device);
-      await checkbox.uncheck();
-      await create.locator('[name=owner]').selectOption('cmo');
-      assert(!await checkbox.isChecked(), 'manual company choice survives assignee changes');
-      await checkbox.check();
-      await create.locator('[name=owner]').selectOption('cto');
-      assert(await checkbox.isChecked(), 'manual private choice survives ordinary assignee changes');
-      await create.locator('[data-modal-close]').click();
-      await page.evaluate(() => openTaskCreate('bot:cmo', {parent: {id: 'parent', title: 'Private parent', private: true}}));
-      assert(await checkbox.isChecked() && await checkbox.isDisabled(), 'private parent forces privacy');
-      await create.locator('[data-modal-close]').click();
-      await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Draft the newsletter'); });
-      const edit = page.locator('#task-modal[open]');
-      await edit.locator('[data-task-private]').waitFor();
-      assert(await edit.locator('[data-task-private]').isChecked());
-      assert(await edit.locator('[data-task-private]').isEnabled(), 'human requester may publish');
-      await shot('private-edit-' + device);
-      await edit.locator('[data-modal-close]').click();
-      await page.evaluate(() => { location.hash = '#/tasks'; });
-      await page.locator('#task-new').waitFor();
-    }
-    // Who can see: a private task's requester, owner and readers; × takes a reader off, + adds one. A company task: Public.
-    await page.setViewportSize({width: 1200, height: 900});
-    await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Draft the newsletter'); });
-    const seen = page.locator('#task-modal[open] [data-prop-row="readers"]');
-    await seen.locator('[data-prop-clear-reader="human:ben"]').waitFor();
+        const mine = t.followers.find(f => f.actor === 'human:ana');
+        return route.fulfill({contentType: 'application/json', body: JSON.stringify({task_id: t.id, following: !!mine, notify: mine?.notify ?? null, followers: t.followers})});
+      });
+      await page.route(url => /^\/api\/v2\/bots\/[^/]+\/definition$/.test(url.pathname), route => {
+        if (route.request().method() !== 'POST') return route.fallback();
+        posted.push({p: new URL(route.request().url()).pathname, body: route.request().postDataJSON()});
+        return route.fulfill({contentType: 'application/json', body: '{}'});
+      });
+    };
+    const {page, errors, posts} = await open(browser, {hash: '#/task/t-11', tasks, needs: [], bots: BOTS, beforeGoto: routes});
+    const win = page.locator('#task-modal[open]');
+
+    // Private: Ana asked for it, so she may make it public.
+    const privacy = win.locator('[data-task-private]');
+    assert(await privacy.isChecked());
+    assert(await privacy.isEnabled(), 'the requester may make it public');
+
+    // Who can see: requester, owner and one reader; only the reader comes off; + adds one (not the owner).
+    const seen = win.locator('[data-prop-row="readers"]');
+    await seen.locator('[data-prop-clear-reader="human:sam"]').waitFor();
     assert.equal(await seen.locator('.prop-chip').count(), 3, 'requester, owner and one reader');
     assert.equal(await seen.locator('.prop-x').count(), 1, 'only a reader comes off');
-    await seen.locator('[data-prop-clear-reader="human:ben"]').click();
+    await seen.locator('[data-prop-clear-reader="human:sam"]').click();
     await page.waitForFunction(() => !document.querySelector('#task-modal [data-prop-clear-reader]'));
-    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/Draft%20the%20newsletter/readers', body: {remove: ['human:ben']}});
+    assert.deepEqual(posted.at(-1), {p: '/api/v2/tasks/t-11/readers', body: {remove: ['human:sam']}});
     await seen.locator('[data-prop="readers"]').click();
-    const pick = page.locator('#task-modal .prop-pop [data-prop-pick="bot:cpo"]');
+    const pick = page.locator('#task-modal .prop-pop [data-prop-pick="bot:pm"]');
     await pick.waitFor();
-    assert.equal(await page.locator('#task-modal .prop-pop [data-prop-pick="bot:cmo"]').count(), 0, 'the owner is not offered');
+    assert.equal(await page.locator('#task-modal .prop-pop [data-prop-pick="bot:writer"]').count(), 0, 'the owner is not offered');
     await pick.click();
-    await seen.locator('[data-prop-clear-reader="bot:cpo"]').waitFor();
-    assert.deepEqual(posted.at(-1)!.body, {add: ['bot:cpo']});
-    await shot('who-can-see-desktop');
-    // Followers: each name, with its level when not live; Follow or Following for you, × and + for others.
-    const fol = page.locator('#task-modal[open] [data-prop-row="followers"]');
+    await seen.locator('[data-prop-clear-reader="bot:pm"]').waitFor();
+    assert.deepEqual(posted.at(-1), {p: '/api/v2/tasks/t-11/readers', body: {add: ['bot:pm']}});
+
+    // Followers: the owner live (no level), Sam at Digest; Follow, then a level; × takes Sam off.
+    const fol = win.locator('[data-prop-row="followers"]');
     const followerWords = () => fol.locator('.prop-chip .prop-txt').allTextContents();
     const named = await followerWords();
     assert.equal(named.length, 2, 'the owner and one chosen follower');
@@ -260,50 +104,76 @@ const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
     assert.doesNotMatch(named[0]!, /·/, 'live shows no level');
     await fol.locator('[data-prop-follow]').click();
     await fol.locator('[data-prop="follow-me"]').waitFor();
-    assert.deepEqual(posted.at(-1), {path: '/api/v2/tasks/Draft%20the%20newsletter/followers', body: {following: true}});
+    assert.deepEqual(posted.at(-1), {p: '/api/v2/tasks/t-11/followers', body: {following: true}});
     await fol.locator('[data-prop="follow-me"]').click();
     await page.locator('#task-modal .prop-pop [data-prop-pick="muted"]').click();
     await fol.locator('[data-prop="follow-me"][aria-label="Following: Muted"]').waitFor();
     assert.deepEqual(posted.at(-1)!.body, {following: true, notify: 'muted'});
-    await fol.locator('[data-prop-unfollow="human:ben"]').click();
-    await fol.locator('[data-prop-unfollow="human:ben"]').waitFor({state: 'detached'});
-    assert.deepEqual(posted.at(-1)!.body, {actor: 'human:ben', following: false});
-    assert.equal((await followerWords()).length, 2, 'the owner and you');
-    await page.locator('#task-modal[open] [data-modal-close]').click();
-    await page.evaluate(() => { location.hash = '#/task/' + encodeURIComponent('Write the copy'); });
-    await page.locator('#task-modal[open] [data-prop-row="readers"]', {hasText: 'Public'}).waitFor();
-    assert.equal(await page.locator('#task-modal[open] [data-prop-row="readers"] [data-prop="readers"]').count(), 0);
-    await page.locator('#task-modal[open] [data-modal-close]').click();
+    await fol.locator('[data-prop-unfollow="human:sam"]').click();
+    await fol.locator('[data-prop-unfollow="human:sam"]').waitFor({state: 'detached'});
+    assert.deepEqual(posted.at(-1)!.body, {actor: 'human:sam', following: false});
+
+    // Making it public sends private: false with the version.
+    await privacy.uncheck();
+    await page.waitForFunction(() => document.querySelector('#task-modal [data-prop-row="readers"]')?.textContent?.includes('Public'));
+    const edit = posts.find(x => x.p === '/api/v2/tasks/t-11')!;
+    assert.equal(edit.body['private'], false);
+
+    // A company task: Public, nothing to add.
+    await page.evaluate(() => { location.hash = '#/task/t-12'; });
+    await page.locator('#task-modal[open][data-task="t-12"] [data-prop-row="readers"]', {hasText: 'Public'}).waitFor();
+    assert.equal(await win.locator('[data-prop-row="readers"] [data-prop="readers"]').count(), 0);
+    // No parent: nothing to add one with (backend/task_relations.py relate refuses a parent).
+    assert.equal(await win.locator('[data-prop-row="parent"] [data-prop="parent"]').count(), 0, 'no Add parent');
+    assert.match(await win.locator('[data-prop-row="parent"]').innerText(), /None/);
+
+    // A parent the reader can open: a link to it, nothing to change or take off.
+    await page.evaluate(() => { location.hash = '#/task/t-14'; });
+    const up = page.locator('#task-modal[open][data-task="t-14"] [data-prop-row="parent"]');
+    await up.waitFor();
+    assert.equal(await up.locator('[data-open-task="t-12"]').count(), 1, 'links to the parent');
+    assert.equal(await up.locator('[data-prop-clear="parent"], [data-prop="parent"]').count(), 0, 'no change or remove');
+    // The Related menu: only what relate writes.
+    await page.locator('#task-modal[open][data-task="t-14"] [data-related-add]').click();
+    const kinds = await page.locator('#task-modal .prop-pop [data-prop-pick]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset['propPick']));
+    assert.deepEqual(kinds, ['related', 'duplicate_of', 'follow_up']);
+    await page.keyboard.press('Escape');
+
+    // A parent the reader cannot open: "a private task", no link, nothing of it in the window.
+    await page.evaluate(() => { location.hash = '#/task/t-13'; });
+    const parent = page.locator('#task-modal[open][data-task="t-13"] [data-prop-row="parent"]');
+    await parent.waitFor();
+    assert.match(await parent.innerText(), /a private task/);
+    assert.equal(await parent.locator('[data-open-task], a').count(), 0, 'not a link');
+    assert.doesNotMatch(await page.locator('#task-modal').innerHTML(), new RegExp(SECRET + '|data-open-task="null"'));
+
+    // Filed under a private parent: the task is private.
     await page.evaluate(() => { location.hash = '#/tasks'; });
-    await page.locator('#task-new').waitFor();
-    await page.evaluate(() => openTaskCreate('bot:cpo'));
+    await page.evaluate(() => openTaskCreate('bot:writer', {parent: {id: 't-11', title: 'Draft the newsletter', private: true}}));
     const create = page.locator('#task-create[open]');
-    await create.locator('[name=private]').uncheck();
-    await create.locator('[name=title]').fill('Review public terms');
-    await create.locator('[name=body]').fill('Review the company terms.');
-    assert(!await create.locator('[name=follow]').isChecked(), 'filing does not follow by default');
-    await create.locator('[name=follow]').check();
+    await create.locator('[name=title]').fill('Pick the font');
+    await create.locator('[name=body]').fill('For the newsletter.');
     await create.locator('[type=submit]').click();
     await page.waitForFunction(() => !(document.querySelector('#task-create') as HTMLDialogElement).open);
-    assert.equal(posted.find(p => p.path === '/api/v2/tasks')!.body.private, false, 'explicit human company choice reaches API');
-    assert.equal(posted.find(p => p.path === '/api/v2/tasks')!.body.follow, true, 'Follow reaches the API');
-    await page.setViewportSize({width: 1200, height: 900});
+    const made = posts.find(x => x.p === '/api/v2/tasks')!.body;
+    assert.equal(made['private'], true, 'a private parent makes it private');
+    assert.equal(made['parent'], 't-11');
+
+    // A bot's settings: private by default, and its update subscriptions; only a change is sent.
     await page.evaluate(() => { location.hash = '#/settings'; });
     await page.locator('#bot-editor').waitFor({state: 'attached'});
-    await page.evaluate(async () => { await loadSettings(); settingsEditBot('cpo'); });
+    await page.evaluate(async () => { await loadSettings(); settingsEditBot('pm'); });
     const settings = page.locator('#pane-settings #bot-editor');
     await settings.locator('[name=private_tasks_default]').waitFor();
     assert(await settings.locator('[name=private_tasks_default]').isChecked());
-    await shot('private-bot-settings-desktop');
-    // Subscribe to updates starts from the saved choice and sends only a change, at either width.
     assert(await settings.locator('[name=update_templates]').isChecked());
     assert(!(await settings.locator('[name=update_tico]').isChecked()));
     await page.setViewportSize({width: 390, height: 844});
     await settings.locator('[name=update_tico]').check();
     await settings.locator('[type=submit]').click();
     await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
-    assert.deepEqual(posted.find(p => p.path === '/api/v2/bots/cpo/definition')!.body.update_subscriptions, ['templates', 'tico']);
+    assert.deepEqual(posted.find(x => x.p === '/api/v2/bots/pm/definition')!.body['update_subscriptions'], ['templates', 'tico']);
     assert.deepEqual(errors, []);
-    console.log('task privacy UI passed: desktop/phone create/edit, default, manual intent, private parent, explicit company payload, who can see');
+    console.log('task privacy: Private, Who can see, Followers, Public, a hidden parent named only "a private task", private under a private parent, bot defaults: ok');
   } finally { await browser.close(); }
-})().catch(e => {console.error(e); process.exit(1);});
+})().catch(e => { console.error(e); process.exit(1); });

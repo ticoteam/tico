@@ -1,5 +1,5 @@
 {
-  "about": "s3:// URIs in bot text: what the hub CLI/MCP rewrite (clients/s3links.py) and the UI (ui/app/markdown.ts) must both make of them. view lists the view URLs, in order; unmapped the URIs left as they are.",
+  "about": "s3:// URIs in bot text: what the tico CLI/MCP rewrite (clients/s3links.py) and the UI (ui/app/markdown.ts) must both make of them. view lists the view URLs, in order; unmapped the URIs left as they are.",
   "mapping": {"acme-files": "https://d1234example.cloudfront.net"},
   "cases": [
     {"text": "See s3://acme-files/reports/report(1).pdf.", "view": ["https://d1234example.cloudfront.net/reports/report%281%29.pdf"], "unmapped": []},

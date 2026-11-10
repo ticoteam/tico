@@ -4,7 +4,7 @@ import importlib
 
 import pytest
 
-from backend import bot_settings as BS, store as S
+from backend import bot_settings as BS, store as S, task_engine
 from backend.tests.helpers.api import as_member, assign, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.files import turn
 from backend.tests.helpers.make_page import start
@@ -105,10 +105,11 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
     post(api, path, body, machine["token"], key, expected=403)
     post(api, "access/people/ben", {"sign_in": True})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET requester_id='human:cara',owner_id='human:cara' WHERE id=?", (t["id"],))
+        c.execute("UPDATE tasks SET requester_id='human:cara' WHERE id=?", (t["id"],))
+        task_engine.reassign(c, t["id"], "human:cara", task_engine.SYSTEM)
     post(api, path, body, machine["token"], key, expected=403)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='human:ben' WHERE id=?", (t["id"],))
+        task_engine.reassign(c, t["id"], "human:ben", task_engine.SYSTEM)
     assert post(api, path, body, machine["token"], key) == first
     # Even on the same computer a new assignment generation cannot recover the former generation's receipts.
     with api.app.state.store.transaction() as c:

@@ -31,7 +31,7 @@ tokens and revoke any of them.
 | URL | `https://<your team hostname>/api/v2/mcp`: `TICO_RUNNER_URL`, or `TICO_PUBLIC_URL` when that is unset. The dialog shows the right one |
 | Transport | Streamable HTTP, JSON replies, stateless (no session id; `GET` answers 405) |
 | Auth | `Authorization: Bearer <token>`, or [OAuth sign-in](#oauth-sign-in) for agents that cannot send a header |
-| Tools | The `hub` command set (`clients/hubtools.py`): tasks, goals and KPIs, docs, bots, messages, approvals, updates, SQL. Each call runs as the token's human through the same routes the web app uses |
+| Tools | The `tico` command set (`clients/hubtools.py`): tasks, goals and KPIs, docs, bots, messages, asks and OKs, updates, SQL. Each call runs as the token's human through the same routes the web app uses |
 | Instructions | The server's `initialize` reply carries the "who needs me" skill (`skills/who-needs-me/SKILL.md`), so nothing else needs pasting |
 
 A personal token can use `hub_api` on v2 routes and `hub_bot_update` with the human's own rights. It never sends
@@ -229,7 +229,8 @@ The `hub` prefix is a command identifier; the product is Tico.
 
 ## Task pipelines
 
-Existing agents can keep setting `status` on tasks. `hub_task_types` lists optional task types and
-steps; `hub_task_create` and `hub_task_update` also accept `type` and `step`. A step sets its status
-under the same task permissions. The CLI mirrors them with `hub task types` and
-`hub task update <id> --step "Legal review"`. See [Tasks](tasks.md) for the mapping rules.
+Every task is in a pipeline and one of its stages. `hub_task_create` takes a pipeline; `hub_task_move` moves a task
+to the next stage, done, closed or back open; `hub_task_ask` and `hub_task_answer` ask for and give an answer or an OK;
+`hub_task_snooze` sets it aside until a time. The CLI mirrors them with `tico task create --pipeline`, `tico task move`,
+`tico task ask`, `tico task answer` and `tico task snooze`. See [Tasks](tasks.md#pipelines-and-stages) and
+[CLI and MCP](tasks.md#cli-and-mcp).

@@ -2,8 +2,8 @@
 service: atlas
 title: Acme Atlas database
 kind: sql
-summary: Acme's product MongoDB Atlas cluster (accounts, events, sessions), read through `hub db atlas`.
-access: "`hub db atlas find|aggregate|count|distinct|collections ...` or `hub db atlas --query <id>`; read-only, audited."
+summary: Acme's product MongoDB Atlas cluster (accounts, events, sessions), read through `tico db atlas`.
+access: "`tico db atlas find|aggregate|count|distinct|collections ...` or `tico db atlas --query <id>`; read-only, audited."
 credentials:
   - DB_ATLAS_URL — mongodb+srv connection string of the Atlas user with the `read` role on database `app`, stored in Tools > Credentials and granted to the bot
 declared_as: |
@@ -22,7 +22,7 @@ aliases: [acme-mongo]
 
 Acme's product database on MongoDB Atlas (M10, replica set): database `app`, read through a
 database user that only holds the built-in `read` role. The generic rules are in
-`hub tool show mongodb`.
+`tico tool show mongodb`.
 
 ## What data it has
 
@@ -31,15 +31,15 @@ database user that only holds the built-in `read` role. The generic rules are in
 | `accounts` | `_id, plan, region, created_at, email` | `email` is personal data: count and group, never list |
 | `events` | `_id, account_id, type, at` | large; always filter on `at` |
 
-`hub db atlas collections` lists them with a sample of their field names.
+`tico db atlas collections` lists them with a sample of their field names.
 
 ## How a bot uses it
 
 ```bash
-hub db atlas collections
-hub db atlas count accounts '{"plan": "team"}'
-hub db atlas --query signups-since --param since=2026-09-01
-hub tool query-search atlas signups
+tico db atlas collections
+tico db atlas count accounts '{"plan": "team"}'
+tico db atlas --query signups-since --param since=2026-09-01
+tico tool query-search atlas signups
 ```
 
 ## Rules
@@ -59,5 +59,5 @@ hub tool query-search atlas signups
 
 ## Learnings
 
-What bots and humans learn about this tool is added with `hub tool learn atlas "..."` and
+What bots and humans learn about this tool is added with `tico tool learn atlas "..."` and
 shown under this page; a human folds it into the page over time. The page is the rule.

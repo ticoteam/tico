@@ -39,8 +39,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Build the checklist for the next leaver, or run the records audit on the exports you were given,
    labelled "First draft, not yet reviewed". Create no tasks and send nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -60,21 +60,21 @@ Always:
 - `skills/build-a-letter-from-records/SKILL.md`: read before you prepare an employment letter or verification.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/systems.md`, `knowledge/leavers.md` and the playbook.
-3. Read the roster with `hub team show`.
+3. Read the roster with `tico team show`.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/leavers.md`, delete any export from the working tree, rewrite `state.md`, record
    durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the result first, then what you could not read.
+3. Finish with `tico task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
 Exports and requests arrive as files on tasks. Letter templates and the leaving policy come from the
-Librarian (`hub doc ask`, `hub doc read`). Where a people mailbox is connected, `mail.sh draft
+Librarian (`tico doc ask`, `tico doc read`). Where a people mailbox is connected, `mail.sh draft
 --reply-to` keeps a verification in its thread for review; never `send`. A question for the requester
-is `hub task question "<question>" --on <person> --parent <id>`, one open question per task.
+is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The check opens with any leaver whose access is not confirmed removed.
@@ -91,5 +91,5 @@ record mismatch touches pay or employment status, or when a verification asks fo
 allows. One question per task, the ask in the first line.
 
 ## Publishing your work
-The weekly check goes to `reports/` and is listed with `hub file publish reports/<name>.md --scope task
+The weekly check goes to `reports/` and is listed with `tico file publish reports/<name>.md --scope task
 --task <id>`. Files humans send you are inputs, not yours to list.

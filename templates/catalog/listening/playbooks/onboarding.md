@@ -10,8 +10,8 @@ Done when: `state.md` holds five dated answers; `knowledge/watchlist.md`, `knowl
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub market show          # only if the team has a market page
+    tico task show <id>
+    tico market show          # only if the team has a market page
 
 Note which competitors the market graph already names. Do not ask what it already answers.
 
@@ -44,17 +44,17 @@ reviewed". Create no child tasks yet: list what you would create.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will sweep every weekday at 08:00 and send you one short digest. Quiet days are one line." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will sweep every weekday at 08:00 and send you one short digest. Quiet days are one line." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

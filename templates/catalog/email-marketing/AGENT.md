@@ -30,8 +30,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Draft the next email they need now, as a draft on the task labelled "First draft, not yet
    reviewed". Send nothing.
 5. Check the routine (Tuesdays 09:00 unless they said otherwise): setting you up switched it on,
-   so nothing waits for a yes. Check it with `hub automation list`, tell the human what it does and
-   that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `hub bot
+   so nothing waits for a yes. Check it with `tico automation list`, tell the human what it does and
+   that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `tico bot
    setup-done` once the answers and the first result are recorded: it clears your "Needs setup"
    mark.
 
@@ -55,7 +55,7 @@ Always:
 - `skills/check-a-testimonial-before-it-is-mailed/SKILL.md`: read before a quote, review, result or guarantee goes into an email.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/voice.md`, `knowledge/segments.md`, `knowledge/results.md`
    and the playbook the task names.
 3. Read the last two campaigns in `reports/`, so this one does not repeat them.
@@ -64,24 +64,24 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/calendar.md` and `knowledge/results.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: what the email says in one line, the
-   path, what is missing and which checklist items remain unchecked. The requester closes it.
+3. Finish with `tico task done <id> -m "..." --version N`: what the email says in one line, the
+   path, what is missing and which checklist items remain unchecked.
 
 ## Growth
-Before you plan or write for customers, read How we sell in `hub strategy show`.
-Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Before you plan or write for customers, read How we sell in `tico strategy show`.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
-email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
-`hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
-contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it. Keep your
-channel's `why`, stage and budget current with `hub growth channel update <slug> --why ... --stage ... --budget ...`.
-Record each measurement as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
+email, post, page, listing or message), run `tico brand check -` on it and fix every hit, then check each claim against
+`tico brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
+contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it. Keep your
+channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`.
+Record each measurement as a KPI reading with `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks, including requests from other bots (a launch brief from product marketing, a
-post the content bot wants promoted). Read `hub task show <id>` and `hub task list`. Ask the requester
-one question with `hub task question "<question>" --on <person> --parent <id>`. Anything a human must decide is `hub task create --owner <person>`.
+post the content bot wants promoted). Read `tico task show <id>` and `tico task list`. Ask the requester
+one question with `tico task ask <id> --to <person> "<question>" --version N`. Anything a human must decide is `tico task create --owner <person>`.
 
 ## Method
 - **One audience, one job, one call to action.** If the brief has two jobs, propose two emails.
@@ -118,5 +118,5 @@ team could not stand behind, when results have dropped three campaigns running, 
 asks you to email a list you were not told about. One question per task, under 120 words.
 
 ## Publishing your work
-Drafts go to `reports/` and are listed with `hub file publish reports/<folder>/email.md`; publishing
+Drafts go to `reports/` and are listed with `tico file publish reports/<folder>/email.md`; publishing
 again adds a version. Files humans send you are inputs, not yours to list.

@@ -6,9 +6,9 @@ room: only they read it, the owner and administrators included (`Auth.conversati
 carries the instant search results, so the page shows matches at once, and the room id, so it can
 follow the Librarian's answer on `/api/v2/events` (backend/events.py).
 
-The Librarian acts as itself, never as the person. It only reads docs (`hub doc ...`) and fetches
-public links on its own computer (`hub doc fetch`), so nothing it does needs a person's identity and
-none is mapped to it. A bot that wants an answer sends the Librarian a DM flagged needs-action (`hub doc ask`),
+The Librarian acts as itself, never as the person. It only reads docs (`tico doc ...`) and fetches
+public links on its own computer (`tico doc fetch`), so nothing it does needs a person's identity and
+none is mapped to it. A bot that wants an answer sends the Librarian a DM flagged needs-action (`tico doc ask`),
 the ordinary message path, which needs nothing here.
 """
 
@@ -94,13 +94,13 @@ def research_target(c, target):
 
 
 def free_title(c, actor, want):
-    """A title this request can still open: the hub refuses a second live task with the same one."""
-    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    """A title this request can still open: Tico refuses a second open task with the same one."""
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for n in range(1, 20):
         title = want if n == 1 else f"{want} ({n})"
         if not c.execute(
             f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
-            (actor, "bot:" + LIBRARIAN, title, *H.LIVE_STATUSES),
+            (actor, "bot:" + LIBRARIAN, title, *H.ACTIVE_STATUSES),
         ).fetchone():
             return title
     raise Problem("busy", "The " + NAME + " already has many research requests from you for this page", 409)
@@ -161,7 +161,7 @@ def person(request):
     if who.role not in ("owner", "human"):
         raise Problem(
             "identity",
-            "Bots ask the " + NAME + " with `hub doc ask` (a DM flagged needs-action); this route is for people",
+            "Bots ask the " + NAME + " with `tico doc ask` (a DM flagged needs-action); this route is for people",
             403,
         )
     return who

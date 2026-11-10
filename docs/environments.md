@@ -36,7 +36,7 @@ Bot runs receive only granted Credentials from Tico. `env remove` never deletes 
 
 Every run is given the workspace as `HUB_WORKSPACE`, alongside `HUB_API_URL`, `HUB_TOKEN`,
 `HUB_BOT` and `HUB_DIR` (Tico's own install; never use it for Git work). `HUB_WORKSPACE` is how
-`hub bot create` knows where a new bot repository goes, and how a bot finds a sibling's work.
+`tico bot create` knows where a new bot repository goes, and how a bot finds a sibling's work.
 
 ### `environment.json`
 

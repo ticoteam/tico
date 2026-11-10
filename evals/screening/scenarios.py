@@ -31,7 +31,7 @@ def by_id(items, name):
 def per_door(seen, what):
     """One check per door: every input it saw did what it should."""
     out = []
-    for door in X.DOORS:
+    for door in X.OPEN_DOORS:
         mine = [s for s in seen if s.door == door]
         wrong = X.mismatches(mine)
         out.append(
@@ -235,7 +235,7 @@ def s_hold_release(org, items, judge):
         )
     )
     # The other doors.
-    seen = {door: doors.run(attack, door, "hold", f"hold-{door}") for door in ("rule", "idea", "watcher", "mail")}
+    seen = {door: doors.run(attack, door, "hold", f"hold-{door}") for door in ("rule", "watcher", "mail")}
     for door, s in seen.items():
         want = "warn" if door == "mail" else "hold"
         out.append((f"{door}: {want}", s.action == want, s.action))
@@ -265,10 +265,9 @@ def s_hold_release(org, items, judge):
     for task, bot in (
         (X.task_row(org, held_task), CLAUDE_ID),
         (X.task_row(org, seen["watcher"].task), LEAD_ID),
-        (X.task_row(org, seen["idea"].task), PM),
     ):
         woke = X.wakes(org, bot)
-        reply = org.api("post", f"/api/v2/tasks/{task['id']}", {"version": task["version"], "owner": bot})
+        reply = org.api("post", f"/api/v2/tasks/{task['id']}/owner", {"version": task["version"], "owner": bot})
         org.scheduler_pass()
         after = X.task_row(org, task["id"])
         out.append(
@@ -283,7 +282,7 @@ def s_hold_release(org, items, judge):
 
 # ---------------------------------------------------------------------------------------------- 8 fail open
 def s_fail_open(org, items, judge):
-    from backend import idea_triage
+    from backend import screening
     from backend.store import H
 
     doors = X.Doors(org, judge)
@@ -322,13 +321,13 @@ def s_fail_open(org, items, judge):
         lambda: setattr(settings, "decisions_daily_calls_bot", 0),
         lambda: setattr(settings, "decisions_daily_calls_bot", 5_000),
     )
-    deadline = idea_triage.DEADLINE
+    deadline = screening.DEADLINE
 
     def slow():
-        idea_triage.DEADLINE, judge.delay = 0.05, 0.4
+        screening.DEADLINE, judge.delay = 0.05, 0.4
 
     def fast():
-        idea_triage.DEADLINE, judge.delay = deadline, 0
+        screening.DEADLINE, judge.delay = deadline, 0
 
     case("timeout", slow, fast)
     case("unreadable answer", lambda: setattr(judge, "unreadable", True), lambda: setattr(judge, "unreadable", False))

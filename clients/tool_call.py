@@ -1,4 +1,4 @@
-"""`hub tools call <tool> <METHOD> <path>`: one call to a proxied tool from a bot's turn (backend/tool_proxy.py).
+"""`tico tools call <tool> <METHOD> <path>`: one call to a proxied tool from a bot's turn (backend/tool_proxy.py).
 
 Runs beside the bot, with no hub API: a run granted a proxied tool has the proxy's address in `TICO_TOOL_<ID>_URL` and
 a proxy token where the key would be (the credential's own variable). The token's claims name its tool, so the

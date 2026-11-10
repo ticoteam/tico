@@ -31,6 +31,7 @@ from . import bot_home_merge
 from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
+from . import task_wakes
 from clients import bot_files as BF
 
 # A video or audio file spooled to disk by publish_stream: its digest and size, hashed as it arrived.
@@ -276,7 +277,7 @@ def file_visible(c, auth, who, row, cache):
             return False
     if who.role == "bot" and H.actor_id(who.actor) != row["bot_id"] and not row["scope"].startswith("task:"):
         return False
-    # A bot-wide file is its bot's: one cache serves files of many bots (a card's latest pages).
+    # A bot-wide file is its bot's: one cache serves files of many bots (a task's latest pages).
     key = ("bot", row["bot_id"]) if row["scope"] == "bot" else row["scope"]
     if key not in cache:
         kind, _, ident = row["scope"].partition(":")
@@ -604,7 +605,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
                 and not value.get("source")
                 and not value.get("file")
                 and value.get("label") in hidden_titles(tid)
-                or parent in ("if_no_answer", "recommend")
+                or parent == "recommend"
                 and not value.get("source")
                 and value.get("do") in hidden_titles(tid)
             ):
@@ -721,6 +722,150 @@ def retain_page_label_sources(c, row):
             if refs.get("answer"):
                 _, refs = H.sourced_text(None, [source], refs)
             c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
+
+
+# ----------------------------------------------------------------------------- a task's file versions
+def file_version(c, task_id, fid, number, *, auth=None, who=None):
+    """One version of a file on a task, or 404. With `who`, only one the caller may open."""
+    if who is not None:
+        file = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
+        if (file and not file_visible(c, auth, who, file, {})) or (
+            not file and not page_blob_visible(c, auth, who, fid)
+        ):
+            raise Problem("not_found", "File version not found on this task", 404)
+    row = c.execute(
+        "SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
+        "WHERE f.task_id=? AND v.file_id=? AND v.version=?",
+        (task_id, fid, number),
+    ).fetchone()
+    if row:
+        return dict(row)
+    # A plain attachment is version 1.
+    if number == 1:
+        row = c.execute(
+            "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id WHERE a.task_id=? AND b.id=?", (task_id, fid)
+        ).fetchone()
+        if row:
+            return {**dict(row), "actor": row["owner"], "mime": row["content_type"], "version": 1}
+    raise Problem("not_found", "File version not found on this task", 404)
+
+
+def comment_file(c, auth, files, who, task_id, fid, number):
+    """The (file id, version) a comment attaches. A person may also attach a chat file they can open (`<id>@1`):
+    the task gets its own copy of the same bytes through the task-file service, so the task's readers open it
+    through the task, and the chat file's own access and lifetime stay as they were."""
+    try:
+        return fid, file_version(c, task_id, fid, number, auth=auth, who=who)
+    except Problem:
+        # A person's own chat upload is also a versioned file in that chat (backend/visuals.py); any other file's
+        # bytes are shared by that file's id, never by its blob's.
+        if (
+            number != 1
+            or who.role not in ("owner", "human")
+            or c.execute(
+                "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE v.blob_id=? "
+                "AND f.identity NOT LIKE 'chat-file:%'",
+                (fid,),
+            ).fetchone()
+        ):
+            raise
+    from .media import blob_for
+
+    try:
+        source = blob_for(c, auth, who, fid)
+    except Problem:
+        raise Problem("not_found", "File version not found on this task", 404) from None
+    # Sharing the same file again points at the copy already on the task.
+    same = c.execute(
+        "SELECT v.file_id,v.version FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
+        "WHERE f.task_id=? AND f.archived=0 AND v.digest=? AND v.name=? ORDER BY v.version DESC LIMIT 1",
+        (task_id, source["digest"], source["name"]),
+    ).fetchone()
+    if same:
+        return same["file_id"], file_version(c, task_id, same["file_id"], same["version"], auth=auth, who=who)
+    item = register(c, who, source["digest"], source["size"], source["name"], source["content_type"])
+    copy = files.publish_task_deliverable(c, who, task_id, item, source["digest"])
+    c.execute("INSERT INTO task_assets VALUES(?,?)", (task_id, item["id"]))
+    current = c.execute("SELECT current_version FROM bot_files WHERE id=?", (copy,)).fetchone()[0]
+    file_added(c, who, task_id, item, current)
+    return copy, file_version(c, task_id, copy, current)
+
+
+def file_added(c, who, task_id, item, number, poster=None):
+    """What a file added to a task records, uploaded or shared from a chat: the task's own "file" activity line,
+    the task.file audit event and the preview worker's row. The caller wakes the media worker once it commits."""
+    provenance = {"file": item["id"], "version": number}
+    if pages := page_references(item["id"], c):
+        provenance["page_files"] = sorted(pages)
+    name, data = H.sourced_text(item["name"], [provenance], provenance)
+    H._task_event(c, task_id, who.actor, "file", None, name, "" if number == 1 else f"version {number}", data=data)
+    H.event(c, who.actor, "task.file", task_id, {**data, "name": name, "size": item["size"]})
+    c.execute("INSERT OR IGNORE INTO blob_media(blob_id,poster_blob_id) VALUES(?,?)", (item["id"], poster))
+
+
+def version_review(c, fid, number, *, actor):
+    """A file version's note and the comment it came with, as far as `actor` may read them."""
+    row = c.execute("SELECT * FROM task_file_reviews WHERE file_id=? AND version=?", (fid, number)).fetchone()
+    comment_visible = row and (
+        not row["comment_id"] or privacy.message_readable(c, actor, H.message(c, row["comment_id"]))
+    )
+    return {
+        "note": row["note"] if comment_visible else None,
+        "comment_id": row["comment_id"] if comment_visible else None,
+    }
+
+
+def edit_file_version(c, auth, who, task_id, fid, number, body):
+    """Whoever added a file version changes its note. A question about it is an ask on the task (`tico task ask`)."""
+    auth.task(c, who, task_id)
+    H._writer(c, who.actor, task_id=task_id)
+    version = file_version(c, task_id, fid, number, auth=auth, who=who)
+    if version["actor"] != who.actor:
+        raise Problem("forbidden", "Only whoever added this version may edit its note", 403)
+    c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task_id))
+    c.execute("INSERT OR IGNORE INTO task_file_reviews(file_id,version) VALUES(?,?)", (fid, number))
+    if "note" in body.model_fields_set:
+        c.execute("UPDATE task_file_reviews SET note=? WHERE file_id=? AND version=?", (body.note, fid, number))
+    return version_review(c, fid, number, actor=privacy.actor(who))
+
+
+# The newest visual per task. `bot_files_task` (backend/files.py) finds a task's files without scanning every file.
+COVERS_SQL = (
+    "WITH visuals AS ("
+    "SELECT f.task_id,f.id,v.version,v.mime,v.created_at,v.rowid AS position,"
+    "coalesce(v.width,m.width) AS width,coalesce(v.height,m.height) AS height,"
+    "coalesce(v.thumb_blob_id,m.thumb_blob_id) AS thumb_blob_id,"
+    "coalesce(v.poster_blob_id,m.poster_blob_id) AS poster_blob_id "
+    "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
+    "LEFT JOIN blob_media m ON m.blob_id=v.blob_id "
+    "WHERE f.task_id IN ({marks}) AND f.archived=0 AND f.locator='tico_blob' "
+    "UNION ALL SELECT a.task_id,b.id,1,b.content_type,b.created_at,b.rowid,"
+    "m.width,m.height,m.thumb_blob_id,m.poster_blob_id "
+    "FROM task_assets a JOIN blobs b ON b.id=a.blob_id LEFT JOIN blob_media m ON m.blob_id=b.id "
+    "WHERE a.task_id IN ({marks}) AND NOT EXISTS "
+    "(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)), "
+    "ranked AS (SELECT *,ROW_NUMBER() OVER (PARTITION BY task_id "
+    "ORDER BY created_at DESC,version DESC,position DESC) AS rank FROM visuals "
+    "WHERE mime LIKE 'image/%' OR (mime LIKE 'video/%' AND poster_blob_id IS NOT NULL)) "
+    "SELECT * FROM ranked WHERE rank=1"
+)
+
+
+def task_covers(c, task_ids):
+    """Newest visual version per task, with one query for a bounded task page."""
+    if not task_ids:
+        return {}
+    marks = ",".join("?" * len(task_ids))
+    rows = c.execute(COVERS_SQL.format(marks=marks), (*task_ids, *task_ids))
+    out = {}
+    for row in rows:
+        suffix = "/poster" if row["mime"].startswith("video/") else "/thumb" if row["thumb_blob_id"] else ""
+        out[row["task_id"]] = {
+            "url": f"/api/v2/files/{row['id']}{suffix}?v={row['version']}",
+            "width": row["width"],
+            "height": row["height"],
+        }
+    return out
 
 
 class Files:
@@ -1078,8 +1223,6 @@ class Files:
                 )
 
     def task_listing(self, c, who, task_id):
-        from .task_review import version_review
-
         self.auth.task(c, who, task_id)
         out = []
         for row in c.execute(
@@ -1610,7 +1753,9 @@ class Files:
         if task_id not in cache:
             try:
                 task = self.auth.task(c, who, task_id)
-                cache[task_id] = {"title": task["title"], "status": task["status"]}
+                # Being worked on: open, with a live run of its owner's (a bot's).
+                working = task["status"] == "open" and task_wakes.live_run(c, dict(task), task["owner_id"])
+                cache[task_id] = {"title": task["title"], "status": task["status"], "working": working}
             except Problem:
                 cache[task_id] = None
         return cache[task_id]
@@ -1671,7 +1816,7 @@ class Files:
             "source": "s3" if row["identity"].startswith("s3:") else "",
             "task_id": row["task_id"] if task else None,
             "task_title": task["title"] if task else None,
-            "working": bool(task and task["status"] == "doing"),
+            "working": bool(task and task["working"]),
             "github_url": self.github_url(c, row["bot_id"], version, caches),
             "actor": last["actor"] if last else None,
             "action": last["action"] if last else None,
@@ -1841,6 +1986,9 @@ class Files:
 
 
 def install_files(app, store, auth, blobs, mutate):
+    from . import file_reviews
+
+    file_reviews.AUTH = auth  # an OK's giver is checked against the file at the OK, its use and its verdict
     files = Files(app, store, auth, blobs, mutate)
     app.state.files = files
     # Before media.py's GET /api/v2/files/{bid}, which would otherwise take /api/v2/files/search.
@@ -1884,7 +2032,7 @@ def install_files(app, store, auth, blobs, mutate):
 
     @app.post("/api/v2/files/imports", openapi_extra=upload_doc)
     async def imported(request: Request):
-        """Bytes the bot's computer copied from an S3 object (`hub file import`), with its `source`
+        """Bytes the bot's computer copied from an S3 object (`tico file import`), with its `source`
         (s3://bucket/key) and `etag`. A changed etag is a new version. Video and audio stream, as uploads do."""
         if raw_media(request, imported=True):
             return await files.publish_stream(
@@ -1913,8 +2061,6 @@ def install_files(app, store, auth, blobs, mutate):
 
     @app.patch("/api/v2/files/{fid}/versions/{number}")
     def edit_version(request: Request, fid: str, number: int, body: M.FileVersionEdit):
-        from .task_review import edit_version as change, version_review
-
         who = request.state.identity
 
         def current_task(c):
@@ -1926,7 +2072,12 @@ def install_files(app, store, auth, blobs, mutate):
             auth.task(c, who, row["task_id"])
             return row["task_id"]
 
-        mutate(request, body, lambda c: change(c, auth, who, current_task(c), fid, number, body), check=current_task)
+        mutate(
+            request,
+            body,
+            lambda c: edit_file_version(c, auth, who, current_task(c), fid, number, body),
+            check=current_task,
+        )
         # A retry preserves the edit but reads current message provenance, including projected answers.
         with store.read() as c:
             current_task(c)
@@ -1941,7 +2092,7 @@ def install_files(app, store, auth, blobs, mutate):
         digest: str = "",
         by: str = "human",
     ):
-        """Whether this exact file version is approved (`hub file approved`): by file id and version (the current one
+        """Whether this exact file version is approved (`tico file approved`): by file id and version (the current one
         without), or by a path in the bot's checkout and the SHA-256 of its bytes now; `by` whose verdicts count."""
         from . import file_reviews
 
@@ -1961,7 +2112,7 @@ def install_files(app, store, auth, blobs, mutate):
 
     @app.post("/api/v2/file-reviews")
     def file_review(request: Request, body: M.FileReview):
-        """A verdict given directly (`hub file review`): a bot reviewing another bot's file, or a person."""
+        """A verdict given directly (`tico file review`): a bot reviewing another bot's file, or a person."""
         from . import file_reviews
 
         who = request.state.identity

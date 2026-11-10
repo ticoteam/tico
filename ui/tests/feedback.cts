@@ -5,8 +5,7 @@
 //    "You've said this before." for a reason used twice (Make a rule becomes the main button), tells the bot, or drafts a
 //    rule to edit, widen to All bots and save; a 👎 mark shows the reason and what came of it, and removes it;
 //  - on a phone a long press opens 👍, 👎 and Copy, a tap still opens the copy line, and a press that moves is a scroll;
-//  - a Decide card's pair rates the approval with the task chips first, never answers it and leaves the card where it is;
-//  - a task row a bot asked for takes the pair on hover without opening the task; a person's request has none;
+//  - a task a bot asked for has the pair in its window's header; a person's request has none;
 //  - a thread message keeps its emoji reactions apart from the thumbs, and copies its own words.
 // FEEDBACK_SHOTS=<dir> saves phone and desktop screenshots of each state.
 import type {Browser, Locator, Page} from 'playwright';
@@ -18,7 +17,7 @@ const {html, uiFile} = require('./support/page.cts') as import('./support/page.c
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 const {assistantView} = require('./support/assistant-chat.cts') as import('./support/assistant-chat.cts').Api;
 const {threadsFake} = require('./support/threads-fake.cts') as import('./support/threads-fake.cts').Api;
-const {open} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
+const {open, task} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
 
 interface Row {id: string; subject_type: string; subject_id: string; rating?: string; reason?: string; [key: string]: unknown}
 interface Write {method: string; p: string; body: {subject_type?: string; [key: string]: unknown} | null}
@@ -26,12 +25,6 @@ interface Fake {rows: Row[]; reads: (string | {type: string | null; ids: string[
 interface PageWin {copied?: string}
 declare const FB: {on: boolean | null};
 declare const V2C: {rendered: boolean; loaded: boolean};
-declare const DEC: {shown: string};
-declare const DEC_OUTBOX: {size: number};
-declare const TASKS_ST: unknown;
-declare function v2Refresh(): Promise<void>;
-declare function tasksRender(state: unknown): void;
-declare function decideOpen(key: string): void;
 const SHOTS = process.env.FEEDBACK_SHOTS || '';
 const iso = () => new Date().toISOString();
 const shot = async (page: Page, name: string) => {
@@ -306,80 +299,28 @@ async function chatPhone(browser: Browser, theme = 'dark') {
   console.log(`feedback chat phone (${theme}): ok`);
 }
 
-const APPROVAL = {id: 'ap-1', kind: 'approval', what: 'send', title: 'Approve this send', requester_id: 'bot:writer', requested_by: 'bot:writer',
-  created_at: iso(), payload: {to: ['ava@customer.example'], subject: 'Your renewal', body: 'Hi Ava, your plan renews on the 14th.'}};
-async function decideCard(browser: Browser, {phone, theme = 'dark'}: {phone: boolean; theme?: string}) {
+// A task a bot asked for: the task window's header carries 👍 / 👎, and a tap saves without leaving the window; a
+// person's request has none.
+async function taskWindow(browser: Browser) {
+  const tasks = [task('t-bot', 'Draft the renewal emails', 'todo', {owner_id: 'human:ana', requester_id: 'bot:writer'}),
+    task('t-person', 'Book the venue', 'todo', {owner_id: 'human:ana', requester_id: 'human:sam'})];
   let feedback!: Fake;
-  const {page, errors} = await open(browser, {viewport: phone ? {width: 390, height: 844} : {width: 1440, height: 900}, hash: '#/tasks', theme,
-    beforeGoto: async page => { feedback = await feedbackFake(page); }});
-  const t = (phone ? 'phone' : 'desktop') + (theme === 'dark' ? '' : '-' + theme);
-  const {writes} = feedback;
-  await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [APPROVAL]})}));
-  await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); decideOpen('approval:ap-1'); });
-  const card = page.locator('#need-card .dc-card[data-key="approval:ap-1"]');
-  await card.waitFor();
-  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
-  const up = card.getByRole('button', {name: 'Good', exact: true});
-  assert.equal(await up.isVisible(), true, 'a small pair on the card');
-  await up.click();
-  await page.waitForFunction(() => document.querySelector('#need-card [data-fb-rate="up"]')?.getAttribute('aria-pressed') === 'true');
-  assert.deepEqual(posts(writes), [{subject_type: 'approval', subject_id: 'ap-1', rating: 'up'}]);
-  // Never an answer: no outbox entry, the same card, still open.
-  assert.deepEqual(await page.evaluate(() => ({outbox: DEC_OUTBOX.size, shown: DEC.shown, open: document.querySelector<HTMLDialogElement>('#need-card')!.open})),
-    {outbox: 0, shown: 'approval:ap-1', open: true});
-  await card.getByRole('button', {name: 'Not good', exact: true}).click();
-  const sheet = page.locator('dialog.fb-down[open]');
-  await sheet.waitFor();
-  await page.waitForFunction(() => document.querySelectorAll('dialog.fb-down .fb-chip').length === 5);
-  assert.deepEqual(await sheet.locator('.fb-chip').allInnerTexts(), ["Shouldn't exist", 'Badly written', 'Wrong person', 'Too long', 'Wrong numbers']);
-  await shot(page, `decide-${t}-down`);
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
-  assert.deepEqual(await page.evaluate(() => ({outbox: DEC_OUTBOX.size, shown: DEC.shown, open: document.querySelector<HTMLDialogElement>('#need-card')!.open})),
-    {outbox: 0, shown: 'approval:ap-1', open: true}, 'Escape closes the sheet, not the card');
-  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());      // the resting look, not the keyboard's ring
-  await shot(page, `decide-${t}`);
-  assert.deepEqual(errors, []);
-  await page.close();
-  console.log(`feedback decide ${t}: ok`);
-}
-
-async function taskRows(browser: Browser) {
-  const bot = {id: 't-bot', title: 'Draft the renewal emails', body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
-    version: 1, created_at: iso(), updated_at: iso(), lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}};
-  const person = {...bot, id: 't-person', title: 'Book the venue', requester_id: 'human:sam'};
-  let feedback!: Fake;
-  const {page, errors} = await open(browser, {hash: '#/tasks', baseTasks: [bot, person],
-    beforeGoto: async page => { feedback = await feedbackFake(page); }});
-  const {writes, reads} = feedback;
-  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
-  // The first render may already have asked before the reset above; each read still names only the bot's task.
-  const asked = reads.filter(r => (r as {type?: string}).type);
-  assert.ok(asked.length >= 1, 'a read for the task a bot asked for');
-  assert.deepEqual([...new Set(asked.map(r => JSON.stringify(r)))], [JSON.stringify({type: 'task', ids: ['t-bot']})],
-    'reads only for the task a bot asked for');
-  assert.equal(await page.locator('[data-task-key="tt-person"] [data-fb]').count(), 0);
-  const row = page.locator('#task-body [data-task-key="tt-bot"]');
-  const up = row.getByRole('button', {name: 'Good', exact: true});
-  assert.equal(await up.isVisible(), false, 'compact: hidden until hover');
-  await row.hover();
-  assert.equal(await up.isVisible(), true);
-  await shot(page, 'task-row-hover');
-  await up.click();
-  await page.waitForFunction(() => document.querySelector('[data-task-key="tt-bot"] [data-fb-mark] [aria-label="You said good"]'));
-  assert.deepEqual(posts(writes), [{subject_type: 'task', subject_id: 't-bot', rating: 'up'}]);
-  assert.equal(await page.locator('#task-peek[open], #task-modal[open]').count(), 0, 'a thumb does not open the task');
-  await page.mouse.move(0, 0);
-  await shot(page, 'task-row-marked');
-  // The task window: the same pair in its header.
-  await row.locator('[data-open-task]').click();
-  const head = page.locator('dialog[open] .tmodal-head [data-fb="task:t-bot"]');
+  const {page, errors} = await open(browser, {hash: '#/task/t-person', tasks, needs: [], beforeGoto: async page => { feedback = await feedbackFake(page); }});
+  assert.equal(await page.locator('#task-modal .tmodal-head [data-fb]').count(), 0, "a person's request has no pair");
+  await page.evaluate(() => { location.hash = '#/task/t-bot'; });
+  const head = page.locator('#task-modal[open] .tmodal-head [data-fb="task:t-bot"]');
   await head.waitFor();
-  assert.equal(await head.getByRole('button', {name: 'Good', exact: true}).getAttribute('aria-pressed'), 'true');
+  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
+  assert.deepEqual(feedback.reads.filter(r => (r as {type?: string}).type).map(r => JSON.stringify(r)), [JSON.stringify({type: 'task', ids: ['t-bot']})],
+    'one read, for the task a bot asked for');
+  await head.getByRole('button', {name: 'Good', exact: true}).click();
+  await page.waitForFunction(() => document.querySelector('#task-modal [data-fb="task:t-bot"] [data-fb-rate="up"]')?.getAttribute('aria-pressed') === 'true');
+  assert.deepEqual(posts(feedback.writes), [{subject_type: 'task', subject_id: 't-bot', rating: 'up'}]);
+  assert.equal(await page.locator('#task-modal[open]').count(), 1, 'the window stays open');
   await shot(page, 'task-window');
   assert.deepEqual(errors, []);
   await page.close();
-  console.log('feedback task rows: ok');
+  console.log('feedback task window: ok');
 }
 
 async function threadMessage(browser: Browser) {
@@ -458,40 +399,6 @@ async function askPanel(browser: Browser) {
   console.log('feedback ask panel: ok');
 }
 
-// On a phone a task row's pair is hidden; a long press on its title (a button over the row) opens 👍, 👎 and never the task.
-async function taskRowPress(browser: Browser) {
-  const bot = {id: 't-bot', title: 'Draft the renewal emails', body: 'Details.', owner_id: 'human:ana', requester_id: 'bot:writer', status: 'open',
-    version: 1, created_at: iso(), updated_at: iso(), lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}};
-  let feedback!: Fake, release!: (value: void) => void;
-  const initialRead = new Promise(resolve => { release = resolve; });
-  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks', baseTasks: [bot],
-    beforeGoto: async page => {
-      feedback = await feedbackFake(page);
-      // Hold the first read past the initial drawing: a slow response must still reach the intended fake.
-      await page.route('**/api/v2/feedback?*', async route => { await initialRead; await route.fallback(); });
-    }});
-  const {writes} = feedback;
-  assert.equal(await page.evaluate(() => FB.on), null);
-  release();
-  await page.waitForFunction(() => document.body.classList.contains('fb-on'));
-  const title = page.locator('[data-task-key="tt-bot"] .tl-open');
-  await press(page, title);
-  const menu = page.locator('dialog.fb-menu[open]');
-  await menu.waitFor();
-  await page.waitForTimeout(300);
-  assert.equal(await page.locator('#task-peek[open], #task-modal[open], dialog.tmodal[open]').count(), 0, 'the long press does not open the task');
-  assert.deepEqual(await menu.locator('button').evaluateAll(bs => bs.map(b => b.getAttribute('aria-label'))), ['Good', 'Not good']);
-  await menu.getByRole('button', {name: 'Good', exact: true}).click();
-  await page.waitForFunction(() => document.querySelector('[data-task-key="tt-bot"] [data-fb-mark] [aria-label="You said good"]'));
-  assert.deepEqual(posts(writes), [{subject_type: 'task', subject_id: 't-bot', rating: 'up'}]);
-  // A tap after the press is a tap again: the task opens.
-  await press(page, title, {ms: 60});
-  await page.waitForFunction(() => document.querySelector('#task-peek[open], dialog[open] .tmodal-head'));
-  assert.deepEqual(errors, []);
-  await page.close();
-  console.log('feedback task row long press: ok');
-}
-
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
@@ -500,12 +407,8 @@ async function taskRowPress(browser: Browser) {
     await chatDesktop(browser, 'light');
     await chatPhone(browser);
     await chatPhone(browser, 'light');
-    await decideCard(browser, {phone: true});
-    await decideCard(browser, {phone: true, theme: 'light'});
-    await decideCard(browser, {phone: false});
-    await taskRows(browser);
+    await taskWindow(browser);
     await threadMessage(browser);
     await askPanel(browser);
-    await taskRowPress(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

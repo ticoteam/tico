@@ -1,5 +1,0 @@
-{
-  "backend/manage.py": {
-    "F401": 1
-  }
-}

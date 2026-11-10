@@ -13,7 +13,7 @@ Every run (its `attempts` row) records three things, all in plain code, none ask
   reports with the result (`pushes`, see `pushed`). A push from anywhere else is not seen.
 - `outcome`: `acted` when the run wrote something: a hub write made with its own run token (`writes`), or a
   reply Tico posted for it (to a person, or an answer to a bot's ask), or a push its runner reported. A commit or pull request counts once Tico
-  sees it (`hub task link`, a task note); one that never reaches Tico cannot. Reads and bookkeeping (`BOOKKEEPING`) are not writes.
+  sees it (`tico task link`, a task note); one that never reaches Tico cannot. Reads and bookkeeping (`BOOKKEEPING`) are not writes.
   With no write it is `no_change` when its task is still open (it looked; nothing had moved) and
   `nothing_to_do` when there was no open task to act on (no task, or one already done, closed or declined).
 
@@ -30,15 +30,17 @@ Every run (its `attempts` row) records three things, all in plain code, none ask
   named gets `purpose_for(bot, trigger_kind)`, the same map that fills the label on runs from before it existed. A
   pair the map does not know reads `unknown`, and the run is still counted.
 
-What became of a run's work is written later, by whoever acts on it: when a bot's task sits at `done` or `review`
-(its result) and someone other than the bot or the keeper moves it on, its run gets one `turn.outcome` event (target
-the turn id, detail `{task_id, outcome, from, to}`), `outcome` one of TASK_OUTCOMES: `accepted` (closed, or `review`
-moved to `done`), `edited` (its title or body rewritten) or `overridden` (sent back to work, declined or handed to
-another owner). The run is the bot's latest on that task that started before the task reached its result; the first
-of these is its outcome and later ones add nothing. A run that never delivered a result gets none, and runs from
-before it existed keep their rows as they were.
+What became of a run's work is written later, by whoever acts on it, never the bot itself or Tico: its run gets one
+`turn.outcome` event (target the turn id, detail `{task_id, outcome, from, to}`), `outcome` one of TASK_OUTCOMES:
+- `accepted`: the bot's task reached Done by someone else's act: a person's OK on what was missing, or the manager or
+  a person saying the work is done. A task the bot finished itself, with nothing for anyone to OK, gets no outcome
+  unless it is sent back. The engine's effects say so when the move into Done is not the bot's own.
+- `edited`: a Done task's title or body rewritten by someone else.
+- `overridden`: a Done task reopened, or the bot's task given to someone else, Done or not.
+The run is the bot's latest on that task that started before the task reached Done (or, for an open task given away,
+its latest); the first of these is its outcome and later ones add nothing. A task the bot never ran on gets none.
 
-`run_weekly` in `hub sql` (backend/sql.py) adds these up per week, bot, trigger and purpose. A run whose
+`run_weekly` in `tico sql` (backend/sql.py) adds these up per week, bot, trigger and purpose. A run whose
 trigger or purpose is not known reads `unknown` for that field, and is still counted.
 """
 
@@ -53,14 +55,13 @@ TRIGGERS = (
     "person_message",
     "background_done",
     "release_published",
-    "check_back",
-    "task_roundup",
+    "task_turn",
     "other",
 )
 OUTCOMES = ("acted", "no_change", "nothing_to_do")
 # What a person (or another bot) did with an acted run's result: `turn_result`.
 TASK_OUTCOMES = ("accepted", "edited", "overridden")
-RESULT_STATES = ("done", "review")
+RESULT_STATES = ("done",)  # a bot's result: its task at Done
 UNKNOWN = "unknown"
 
 # What a run is for when no caller said, by what woke it. The label is the work, not the wake, and stays short.
@@ -68,13 +69,12 @@ TRIGGER_PURPOSES = {
     "comment": "answer comment",
     "status_or_relation": "react to task change",
     "pr_checks": "handle PR checks",
-    "check_back": "follow up task",
     "stall_check": "check stalled task",
     "schedule": "run routine",
     "person_message": "answer person message",
     "background_done": "resume after background work",
     "release_published": "follow up a release",
-    "task_roundup": "check the task roundup list",
+    "task_turn": "work a task",
 }
 # Bots whose work is one thing: a reviewer woken by a task change or a PR's checks is reviewing that PR.
 REVIEWERS = ("pr-reviewer-sol", "reviewer-2")
@@ -122,8 +122,8 @@ BOOKKEEPING_PREFIXES = ("attempt.", "job.", "turn.", "runner.")
 # The runner's own calls about the run (claim, events, complete) carry the run token too; they are not the run's work.
 RUNNER_PATHS = ("/api/v2/attempts/", "/api/v2/jobs/")
 
-# Task states with work still to do: H.ACTIVE_STATUSES, plus `blocked` as backend/github.py counts it.
-OPEN_TASK = ("open", "doing", "waiting", "review", "ready", "blocked")
+# Task states with work still to do (H.ACTIVE_STATUSES).
+OPEN_TASK = ("open",)
 
 
 def stamp(refs, kind, source=None, purpose=None):
@@ -268,36 +268,40 @@ def session(conn, turn_id, session):
     return done
 
 
-def result_outcome(before, after):
-    """The outcome a status move from a bot's result gives its run: `accepted` or `overridden`, or None."""
-    if before not in RESULT_STATES or after == before:
-        return None
-    if after == "closed" or before == "review" and after == "done":
-        return "accepted"
-    return "overridden"
-
-
 def turn_result(conn, actor, row, outcome, event, to=None):
     """Write the one `turn.outcome` event for the run that delivered `row`'s result (the task as it was before this
-    change), when `actor` is neither its owner bot nor the keeper. `event` is H.event (this module is below hubdb).
-    Returns the event row, or None when there is no result, no run, or the run already has its outcome."""
+    change, or as it is when it just reached Done), when `actor` is neither its owner bot nor Tico: the owner bot's run,
+    else the latest run of the bot that worked it before (a person's OK in a stage another bot owns). An open task counts
+    only for `overridden` (given to someone else). `event` is H.event (this module is below hubdb). Returns the event
+    row, or None when there is no result, no run, or the run already has its outcome."""
+    from .hubdb_core import KEEPER
+
     owner = str(row.get("owner_id") or "")
+    status = row.get("status")
     if (
         outcome not in TASK_OUTCOMES
-        or row.get("status") not in RESULT_STATES
+        or not (status in RESULT_STATES or status == "open" and outcome == "overridden")
         or not owner.startswith("bot:")
-        or actor in (owner, "keeper")
+        or actor in (owner, KEEPER)
     ):
         return None
-    reached = conn.execute(
-        "SELECT max(created_at) FROM history_events WHERE subject_type='task' AND subject_id=? "
-        "AND kind='status' AND new=?",
-        (row["id"], row["status"]),
-    ).fetchone()[0]
+    # When the task reached Done: the move into a Done stage (task_engine writes `move` rows, new = the stage).
+    reached = (
+        conn.execute(
+            "SELECT max(e.created_at) FROM history_events e JOIN stages s ON s.id=e.new WHERE e.subject_type='task' "
+            "AND e.subject_id=? AND e.kind='move' AND s.kind='done'",
+            (row["id"],),
+        ).fetchone()[0]
+        if status in RESULT_STATES
+        else None
+    )
+    # The run that produced the result: the owner bot's latest, else (a stage that gave the task to another bot, which
+    # never ran on it) the latest of the bot that did the work before. Never a run of the bot that acts now.
+    by = str(actor)[4:] if str(actor).startswith("bot:") else ""
     turn = conn.execute(
-        "SELECT id FROM attempts WHERE bot_id=? AND task_id=? AND (job_id IS NULL OR trigger IS NOT NULL) "
-        "AND (? IS NULL OR created_at<=?) ORDER BY created_at DESC LIMIT 1",
-        (owner[4:], row["id"], reached, reached),
+        "SELECT id FROM attempts WHERE task_id=? AND bot_id<>? AND (job_id IS NULL OR trigger IS NOT NULL) "
+        "AND (? IS NULL OR created_at<=?) ORDER BY bot_id=? DESC, created_at DESC LIMIT 1",
+        (row["id"], by, reached, reached, owner[4:]),
     ).fetchone()
     if (
         not turn

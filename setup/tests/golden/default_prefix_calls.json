@@ -1,0 +1,2118 @@
+{
+ "_recorded_on": {
+  "setup_digest": "86f329b36277e31f5bcfd100bb7103c5d8c098e3fb5801bf4183a3be5bcf2479"
+ },
+ "install": [
+  [
+   "s3",
+   "head_bucket",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012"
+   }
+  ],
+  [
+   "s3",
+   "create_bucket",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012"
+   }
+  ],
+  [
+   "s3",
+   "put_public_access_block",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_versioning",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "VersioningConfiguration": {
+     "Status": "Enabled"
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_encryption",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "ServerSideEncryptionConfiguration": {
+     "Rules": [
+      {
+       "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_lifecycle_configuration",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+       },
+       "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+       },
+       "Filter": {
+        "Prefix": ""
+       },
+       "ID": "tico-backups",
+       "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 90
+       },
+       "Status": "Enabled"
+      },
+      {
+       "Filter": {
+        "Prefix": "tico/000"
+       },
+       "ID": "litestream",
+       "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 3
+       },
+       "Status": "Enabled"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_policy",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "Policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Sid\": \"TLSOnly\", \"Effect\": \"Deny\", \"Principal\": \"*\", \"Action\": \"s3:*\", \"Resource\": [\"arn:aws:s3:::tico-backup-tico-example-com-123456789012\", \"arn:aws:s3:::tico-backup-tico-example-com-123456789012/*\"], \"Condition\": {\"Bool\": {\"aws:SecureTransport\": \"false\"}}}]}"
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_tagging",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "Tagging": {
+     "TagSet": [
+      {
+       "Key": "ManagedBy",
+       "Value": "tico-setup"
+      },
+      {
+       "Key": "tico-setup-name",
+       "Value": "tico-example-com"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "iam",
+   "get_user",
+   {
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "create_user",
+   {
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "tico-example-com"
+     }
+    ],
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "put_user_policy",
+   {
+    "PolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"s3:ListBucket\", \"s3:GetBucketLocation\"], \"Resource\": \"arn:aws:s3:::tico-backup-tico-example-com-123456789012\"}, {\"Effect\": \"Allow\", \"Action\": [\"s3:GetObject\", \"s3:PutObject\", \"s3:DeleteObject\", \"s3:AbortMultipartUpload\", \"s3:ListMultipartUploadParts\"], \"Resource\": \"arn:aws:s3:::tico-backup-tico-example-com-123456789012/*\"}]}",
+    "PolicyName": "tico-backup",
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "list_access_keys",
+   {
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "create_access_key",
+   {
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "s3",
+   "head_bucket",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012"
+   }
+  ],
+  [
+   "s3",
+   "create_bucket",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000"
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_tagging",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "Tagging": {
+     "TagSet": [
+      {
+       "Key": "ManagedBy",
+       "Value": "tico-setup"
+      },
+      {
+       "Key": "tico-setup-name",
+       "Value": "tico-example-com"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_public_access_block",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_ownership_controls",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "OwnershipControls": {
+     "Rules": [
+      {
+       "ObjectOwnership": "BucketOwnerEnforced"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_encryption",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "ServerSideEncryptionConfiguration": {
+     "Rules": [
+      {
+       "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_lifecycle_configuration",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+       },
+       "Expiration": {
+        "Days": 1
+       },
+       "Filter": {
+        "Prefix": "plans/tico-example-com/"
+       },
+       "ID": "expire-starter-plans",
+       "Status": "Enabled"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "ssm",
+   "put_parameter",
+   {
+    "Name": "/tico/tico-example-com/env",
+    "Overwrite": true,
+    "Type": "SecureString",
+    "Value": [
+     "COMPOSE_PROFILES",
+     "LITESTREAM_ACCESS_KEY_ID",
+     "LITESTREAM_SECRET_ACCESS_KEY",
+     "TICO_AUTH_PROXY",
+     "TICO_BACKUP_REGION",
+     "TICO_BACKUP_URL",
+     "TICO_COMPANY_FILE",
+     "TICO_COMPANY_FILE_DIR",
+     "TICO_COMPANY_FILE_S3",
+     "TICO_COMPANY_FILE_S3_REGION",
+     "TICO_COMPANY_FILE_SHA256",
+     "TICO_COMPANY_NAME",
+     "TICO_DOMAIN",
+     "TICO_OIDC_CLIENT_ID",
+     "TICO_OIDC_CLIENT_SECRET",
+     "TICO_OIDC_ISSUER",
+     "TICO_OWNER_EMAIL",
+     "TICO_PORT",
+     "TICO_SAMPLE_COMPANY",
+     "TICO_TEAM_NAME",
+     "TICO_UPDATER_URL"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "add_tags_to_resource",
+   {
+    "ResourceId": "/tico/tico-example-com/env",
+    "ResourceType": "Parameter",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "tico-example-com"
+     }
+    ]
+   }
+  ],
+  [
+   "s3",
+   "put_object",
+   {
+    "Body": 1080,
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ContentType": "text/plain",
+    "Key": "plans/tico-example-com/01bcb8b8d46be3d04341479e0dca603839cb5b7c1a840da9c0be9406b8eb8abf"
+   }
+  ],
+  [
+   "ec2",
+   "describe_security_groups",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_vpcs",
+   {
+    "Filters": [
+     {
+      "Name": "isDefault",
+      "Values": [
+       "true"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "create_security_group",
+   {
+    "Description": "Tico server",
+    "GroupName": "tico-tico-example-com",
+    "TagSpecifications": [
+     {
+      "ResourceType": "security-group",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "tico-example-com"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-tico-example-com"
+       }
+      ]
+     }
+    ],
+    "VpcId": "vpc-1"
+   }
+  ],
+  [
+   "ec2",
+   "authorize_security_group_ingress",
+   {
+    "GroupId": "sg-1",
+    "IpPermissions": [
+     {
+      "FromPort": 80,
+      "IpProtocol": "tcp",
+      "IpRanges": [
+       {
+        "CidrIp": "0.0.0.0/0"
+       }
+      ],
+      "Ipv6Ranges": [
+       {
+        "CidrIpv6": "::/0"
+       }
+      ],
+      "ToPort": 80
+     },
+     {
+      "FromPort": 443,
+      "IpProtocol": "tcp",
+      "IpRanges": [
+       {
+        "CidrIp": "0.0.0.0/0"
+       }
+      ],
+      "Ipv6Ranges": [
+       {
+        "CidrIpv6": "::/0"
+       }
+      ],
+      "ToPort": 443
+     },
+     {
+      "FromPort": 443,
+      "IpProtocol": "udp",
+      "IpRanges": [
+       {
+        "CidrIp": "0.0.0.0/0"
+       }
+      ],
+      "ToPort": 443
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_addresses",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "allocate_address",
+   {
+    "Domain": "vpc",
+    "TagSpecifications": [
+     {
+      "ResourceType": "elastic-ip",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "tico-example-com"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-tico-example-com"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_vpcs",
+   {
+    "Filters": [
+     {
+      "Name": "isDefault",
+      "Values": [
+       "true"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_route_tables",
+   {
+    "Filters": [
+     {
+      "Name": "vpc-id",
+      "Values": [
+       "vpc-1"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_subnets",
+   {
+    "Filters": [
+     {
+      "Name": "vpc-id",
+      "Values": [
+       "vpc-1"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "route53",
+   "list_hosted_zones_by_name",
+   {
+    "DNSName": "example.com",
+    "MaxItems": "5"
+   }
+  ],
+  [
+   "route53",
+   "get_hosted_zone",
+   {
+    "Id": "Z1"
+   }
+  ],
+  [
+   "route53",
+   "change_resource_record_sets",
+   {
+    "ChangeBatch": {
+     "Changes": [
+      {
+       "Action": "UPSERT",
+       "ResourceRecordSet": {
+        "Name": "tico.example.com",
+        "ResourceRecords": [
+         {
+          "Value": "203.0.113.9"
+         }
+        ],
+        "TTL": 300,
+        "Type": "A"
+       }
+      }
+     ],
+     "Comment": "tico setup"
+    },
+    "HostedZoneId": "Z1"
+   }
+  ],
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "create_role",
+   {
+    "AssumeRolePolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"Service\": \"ec2.amazonaws.com\"}, \"Action\": \"sts:AssumeRole\"}]}",
+    "RoleName": "tico-tico-example-com",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "tico-example-com"
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "attach_role_policy",
+   {
+    "PolicyArn": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "put_role_policy",
+   {
+    "PolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Action\": \"ssm:GetParameter\", \"Resource\": \"arn:aws:ssm:us-east-1:123456789012:parameter/tico/tico-example-com/env\"}, {\"Effect\": \"Allow\", \"Action\": \"s3:GetObject\", \"Resource\": \"arn:aws:s3:::tico-setup-plans-00000000000000000000000000000000/plans/tico-example-com/*\"}]}",
+    "PolicyName": "tico-env",
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "create_instance_profile",
+   {
+    "InstanceProfileName": "tico-tico-example-com",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "tico-example-com"
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "add_role_to_instance_profile",
+   {
+    "InstanceProfileName": "tico-tico-example-com",
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "ssm",
+   "get_parameter",
+   {
+    "Name": "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id"
+   }
+  ],
+  [
+   "ec2",
+   "run_instances",
+   {
+    "BlockDeviceMappings": [
+     {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+       "DeleteOnTermination": true,
+       "Encrypted": true,
+       "VolumeSize": 30,
+       "VolumeType": "gp3"
+      }
+     }
+    ],
+    "IamInstanceProfile": {
+     "Name": "tico-tico-example-com"
+    },
+    "ImageId": "ami-123",
+    "InstanceType": "t4g.small",
+    "MaxCount": 1,
+    "MetadataOptions": {
+     "HttpEndpoint": "enabled",
+     "HttpPutResponseHopLimit": 1,
+     "HttpTokens": "required"
+    },
+    "MinCount": 1,
+    "SecurityGroupIds": [
+     "sg-1"
+    ],
+    "SubnetId": "subnet-1",
+    "TagSpecifications": [
+     {
+      "ResourceType": "instance",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "tico-example-com"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-tico-example-com"
+       }
+      ]
+     },
+     {
+      "ResourceType": "volume",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "tico-example-com"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-tico-example-com"
+       }
+      ]
+     },
+     {
+      "ResourceType": "network-interface",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "tico-example-com"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-tico-example-com"
+       }
+      ]
+     }
+    ],
+    "UserData": "#!/bin/bash\nset -eu\nexec > >(tee -a /var/log/tico-setup.log) 2>&1\necho tico-setup: start $(date -u)\nif ! docker compose version >/dev/null 2>&1; then f=$(mktemp) || exit 1; if ! curl -fsSL https://get.docker.com -o \"$f\"; then rm -f \"$f\"; echo \"tico-setup: could not download https://get.docker.com\" >&2; exit 1; fi; sh \"$f\" || { rc=$?; rm -f \"$f\"; exit \"$rc\"; }; rm -f \"$f\"; fi\nsystemctl enable --now docker\ncommand -v aws >/dev/null || snap install aws-cli --classic\nmkdir -p /opt/tico\nmkdir -p /opt/tico/company-file\nchown 10001:10001 /opt/tico/company-file\nchmod 700 /opt/tico/company-file\necho H4sIAAAAAAACE8tLzE21UijJTM7nAgATQcVrCwAAAA== | base64 -d | gunzip > /opt/tico/compose.yaml\ncat > /opt/tico/pull-env.sh <<'EOS'\n#!/bin/sh\nset -eu\numask 077\naws ssm get-parameter --region us-east-1 --name /tico/tico-example-com/env --with-decryption --query Parameter.Value --output text > /opt/tico/.env.new && mv /opt/tico/.env.new /opt/tico/.env\nplan_src=$(sed -n 's/^TICO_COMPANY_FILE_S3=//p' /opt/tico/.env)\nif [ -n \"$plan_src\" ]; then\n  plan_sha=$(sed -n 's/^TICO_COMPANY_FILE_SHA256=//p' /opt/tico/.env)\n  plan_region=$(sed -n 's/^TICO_COMPANY_FILE_S3_REGION=//p' /opt/tico/.env)\n  if [ \"$(sha256sum /opt/tico/company-file/plan.b64 2>/dev/null | cut -d\" \" -f1)\" != \"$plan_sha\" ]; then\n    rm -f /opt/tico/company-file/plan.b64.new\n    plan_try=1\n    until aws s3 cp --only-show-errors --region \"$plan_region\" \"$plan_src\" /opt/tico/company-file/plan.b64.new; do\n      [ \"$plan_try\" -ge 6 ] && { echo \"tico-setup: FAILED: cannot copy the starter plan from $plan_src\" >&2; exit 4; }\n      plan_try=$((plan_try + 1)); sleep 10\n    done\n    plan_got=$(sha256sum /opt/tico/company-file/plan.b64.new | cut -d\" \" -f1)\n    if [ \"$plan_got\" != \"$plan_sha\" ]; then\n      rm -f /opt/tico/company-file/plan.b64.new\n      echo \"tico-setup: FAILED: the starter plan from $plan_src has sha256 $plan_got, not $plan_sha; not starting Tico\" >&2\n      exit 3\n    fi\n    chown 10001:10001 /opt/tico/company-file/plan.b64.new || { rm -f /opt/tico/company-file/plan.b64.new; echo \"tico-setup: FAILED: cannot give the server's user the starter plan; not starting Tico\" >&2; exit 7; }\n    chmod 0400 /opt/tico/company-file/plan.b64.new || { rm -f /opt/tico/company-file/plan.b64.new; echo \"tico-setup: FAILED: cannot make read-only the starter plan; not starting Tico\" >&2; exit 7; }\n    mv -f /opt/tico/company-file/plan.b64.new /opt/tico/company-file/plan.b64 || { rm -f /opt/tico/company-file/plan.b64.new; echo \"tico-setup: FAILED: cannot put in place the starter plan; not starting Tico\" >&2; exit 7; }\n  fi\nfi\nEOS\nchmod 700 /opt/tico/pull-env.sh\n/opt/tico/pull-env.sh\nchmod 600 /opt/tico/.env\n# Caddy asks for its certificate at first start; wait until the name points here or that fails.\nfor i in $(seq 1 80); do getent hosts tico.example.com | grep -q 203.0.113.9 && break; sleep 15; done\ncd /opt/tico && docker compose pull --quiet && docker compose up -d\ntouch /opt/tico/.bootstrapped\necho tico-setup: done\n# Optional operator source follows the actual running release; failure does not gate the app.\nif command -v python3 >/dev/null 2>&1; then\npython3 -B - <<'TICO_VISUAL_BUNDLE' || true\n\nimport hashlib,io,json,os,pathlib,re,subprocess,tarfile,tempfile,urllib.parse,urllib.request\n\ndef pairs(items):\n    value={}\n    for key,item in items:\n        if key in value:raise ValueError()\n        value[key]=item\n    return value\n\ndef fetch(url,limit):\n    # GitHub serves release bytes through its fixed asset host. Only that\n    # credential-free HTTPS redirect is allowed, never a caller destination.\n    class ReleaseRedirect(urllib.request.HTTPRedirectHandler):\n        max_redirections=3\n        def redirect_request(self,request,fp,code,message,headers,url):\n            target=urllib.parse.urlsplit(url)\n            if target.scheme!='https' or target.hostname!='release-assets.githubusercontent.com' or target.username or target.password or target.port not in (None,443):raise ValueError()\n            return super().redirect_request(request,fp,code,message,headers,url)\n    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),ReleaseRedirect())\n    with opener.open(url,timeout=5) as response:\n        raw=response.read(limit+1)\n        if len(raw)>limit:raise ValueError()\n        return raw\n\ndef install(directory,version,runtime,fetch=fetch):\n    root=pathlib.Path(directory)\n    if not re.fullmatch(r'v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.]+)?',version):raise ValueError()\n    if not isinstance(runtime,dict) or set(runtime)!={'revision','runtime_files'} or not re.fullmatch(r'[0-9a-f]{40}',runtime['revision']):raise ValueError()\n    if root.resolve()!=root or root.stat().st_uid!=os.geteuid() or root.stat().st_mode&0o022:raise ValueError()\n    name='tico-bundle-'+version+'.tar.gz'\n    base='https://github.com/ticoteam/tico/releases/download/'+version+'/'\n    sums=fetch(base+'SHA256SUMS',1048576).decode('ascii')\n    matches=[line.split()[0] for line in sums.splitlines() if len(line.split())==2 and line.split()[1].lstrip('*')==name]\n    if len(matches)!=1 or not re.fullmatch(r'[0-9a-f]{64}',matches[0]):raise ValueError()\n    blob=fetch(base+name,8388608)\n    if hashlib.sha256(blob).hexdigest()!=matches[0]:raise ValueError()\n    files={}\n    with tarfile.open(fileobj=io.BytesIO(blob),mode='r:gz') as archive:\n        total=0\n        for member in archive:\n            if not member.isfile() or member.name in files or member.name.startswith('/') or '..' in member.name.split('/'):raise ValueError()\n            total+=member.size\n            if member.size>2097152 or total>8388608:raise ValueError()\n            files[member.name]=archive.extractfile(member).read()\n    manifest=json.loads(files['installer-manifest.json'],object_pairs_hook=pairs)\n    if set(manifest)!={'protocol','revision','files','runtime_files'} or manifest['protocol']!='tico-hosted-assets-v1':raise ValueError()\n    if manifest['revision']!=runtime['revision'] or manifest['runtime_files']!=runtime['runtime_files']:raise ValueError()\n    required={'compose.yaml','setup/__init__.py','setup/visual_config.py','setup/visual_contract.py','setup/envfile.py','setup/contract.py','setup/cli.py','setup/settings.py'}\n    if not isinstance(manifest['files'],dict) or not required<=set(manifest['files']) or len(manifest['files'])>100:raise ValueError()\n    for path,digest in manifest['files'].items():\n        if not (path=='compose.yaml' or re.fullmatch(r'setup/[a-z_][a-z0-9_]*\\.py',path)):raise ValueError()\n        if hashlib.sha256(files[path]).hexdigest()!=digest:raise ValueError()\n    if files.get('VERSION',b'').decode().strip()!=version[1:]:raise ValueError()\n    # The app's existing Compose selection and environment remain authoritative.\n    # A differing embedded Compose is not silently replaced by this optional step.\n    if (root/'compose.yaml').is_symlink() or (root/'compose.yaml').read_bytes()!=files['compose.yaml']:raise ValueError()\n    if (root/'setup').is_symlink():raise ValueError()\n    selected={path:files[path] for path in manifest['files'] if path.startswith('setup/')}\n    selected['installer-manifest.json']=files['installer-manifest.json']\n    # Validate every destination before writing any file. Interrupted exact\n    # installs can resume; existing unrelated/different source is never replaced.\n    for path,data in selected.items():\n        target=root/path\n        if target.is_symlink() or (target.exists() and (not target.is_file() or target.read_bytes()!=data)):raise ValueError()\n    (root/'setup').mkdir(mode=0o755,exist_ok=True)\n    for path,data in selected.items():\n        target=root/path\n        descriptor,temporary=tempfile.mkstemp(prefix='.visual-bundle-',dir=target.parent)\n        try:\n            with os.fdopen(descriptor,'wb') as output:\n                os.fchmod(output.fileno(),0o644)\n                output.write(data);output.flush();os.fsync(output.fileno())\n            os.replace(temporary,target)\n        finally:\n            if os.path.exists(temporary):os.unlink(temporary)\n    return True\n\ndef selected_runtime(directory):\n    def run(args,limit=65536):\n        result=subprocess.run(args,cwd=directory,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=8,\n                              env={'PATH':'/usr/local/bin:/usr/bin:/bin','HOME':'/root'})\n        if result.returncode or len(result.stdout)>limit:raise ValueError()\n        return result.stdout\n    container=run(['docker','compose','ps','-q','server'],256).decode().strip()\n    if not re.fullmatch(r'[0-9a-f]{64}',container):raise ValueError()\n    labels=json.loads(run(['docker','inspect','--format','{{json .Config.Labels}}',container]),object_pairs_hook=pairs)\n    runtime=json.loads(run(['docker','exec',container,'python','-B','-m','backend.visual_config','capabilities']),object_pairs_hook=pairs)\n    if labels.get('org.opencontainers.image.revision')!=runtime.get('revision'):raise ValueError()\n    return labels.get('org.opencontainers.image.version',''),runtime\n\nimport signal\ndef expired(_signum,_frame): raise TimeoutError()\nsignal.signal(signal.SIGALRM,expired)\nsignal.alarm(40)\ntry:\n    version,runtime=selected_runtime('/opt/tico')\n    install('/opt/tico',version,runtime)\nexcept Exception:\n    print('tico-setup: optional visual operator pending')\nfinally:\n    signal.alarm(0)\nTICO_VISUAL_BUNDLE\nfi\n"
+   }
+  ],
+  [
+   "ec2",
+   "get_waiter",
+   {}
+  ],
+  [
+   "ec2",
+   "associate_address",
+   {
+    "AllocationId": "eipalloc-2",
+    "AllowReassociation": true,
+    "InstanceId": "i-3"
+   }
+  ],
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "describe_instance_information",
+   {
+    "Filters": [
+     {
+      "Key": "InstanceIds",
+      "Values": [
+       "i-3"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "send_command",
+   {
+    "DocumentName": "AWS-RunShellScript",
+    "InstanceIds": [
+     "i-3"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "get_command_invocation",
+   {
+    "CommandId": "c1",
+    "InstanceId": "i-3"
+   }
+  ],
+  [
+   "ssm",
+   "send_command",
+   {
+    "DocumentName": "AWS-RunShellScript",
+    "InstanceIds": [
+     "i-3"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "get_command_invocation",
+   {
+    "CommandId": "c1",
+    "InstanceId": "i-3"
+   }
+  ],
+  [
+   "s3",
+   "delete_object",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "Key": "plans/tico-example-com/01bcb8b8d46be3d04341479e0dca603839cb5b7c1a840da9c0be9406b8eb8abf"
+   }
+  ]
+ ],
+ "rerun": [
+  [
+   "s3",
+   "head_bucket",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012"
+   }
+  ],
+  [
+   "s3",
+   "get_bucket_tagging",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012"
+   }
+  ],
+  [
+   "s3",
+   "put_public_access_block",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_ownership_controls",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "OwnershipControls": {
+     "Rules": [
+      {
+       "ObjectOwnership": "BucketOwnerEnforced"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_encryption",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "ServerSideEncryptionConfiguration": {
+     "Rules": [
+      {
+       "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_lifecycle_configuration",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ExpectedBucketOwner": "123456789012",
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+       },
+       "Expiration": {
+        "Days": 1
+       },
+       "Filter": {
+        "Prefix": "plans/tico-example-com/"
+       },
+       "ID": "expire-starter-plans",
+       "Status": "Enabled"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "ssm",
+   "put_parameter",
+   {
+    "Name": "/tico/tico-example-com/env",
+    "Overwrite": true,
+    "Type": "SecureString",
+    "Value": [
+     "COMPOSE_PROFILES",
+     "LITESTREAM_ACCESS_KEY_ID",
+     "LITESTREAM_SECRET_ACCESS_KEY",
+     "TICO_AUTH_PROXY",
+     "TICO_BACKUP_REGION",
+     "TICO_BACKUP_URL",
+     "TICO_COMPANY_FILE",
+     "TICO_COMPANY_FILE_DIR",
+     "TICO_COMPANY_FILE_S3",
+     "TICO_COMPANY_FILE_S3_REGION",
+     "TICO_COMPANY_FILE_SHA256",
+     "TICO_COMPANY_NAME",
+     "TICO_DOMAIN",
+     "TICO_OIDC_CLIENT_ID",
+     "TICO_OIDC_CLIENT_SECRET",
+     "TICO_OIDC_ISSUER",
+     "TICO_OWNER_EMAIL",
+     "TICO_PORT",
+     "TICO_SAMPLE_COMPANY",
+     "TICO_TEAM_NAME",
+     "TICO_UPDATER_URL"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "add_tags_to_resource",
+   {
+    "ResourceId": "/tico/tico-example-com/env",
+    "ResourceType": "Parameter",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "tico-example-com"
+     }
+    ]
+   }
+  ],
+  [
+   "s3",
+   "put_object",
+   {
+    "Body": 1080,
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "ContentType": "text/plain",
+    "Key": "plans/tico-example-com/01bcb8b8d46be3d04341479e0dca603839cb5b7c1a840da9c0be9406b8eb8abf"
+   }
+  ],
+  [
+   "ec2",
+   "describe_security_groups",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_addresses",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_vpcs",
+   {
+    "Filters": [
+     {
+      "Name": "isDefault",
+      "Values": [
+       "true"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_route_tables",
+   {
+    "Filters": [
+     {
+      "Name": "vpc-id",
+      "Values": [
+       "vpc-1"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_subnets",
+   {
+    "Filters": [
+     {
+      "Name": "vpc-id",
+      "Values": [
+       "vpc-1"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "route53",
+   "list_hosted_zones_by_name",
+   {
+    "DNSName": "example.com",
+    "MaxItems": "5"
+   }
+  ],
+  [
+   "route53",
+   "get_hosted_zone",
+   {
+    "Id": "Z1"
+   }
+  ],
+  [
+   "route53",
+   "change_resource_record_sets",
+   {
+    "ChangeBatch": {
+     "Changes": [
+      {
+       "Action": "UPSERT",
+       "ResourceRecordSet": {
+        "Name": "tico.example.com",
+        "ResourceRecords": [
+         {
+          "Value": "203.0.113.9"
+         }
+        ],
+        "TTL": 300,
+        "Type": "A"
+       }
+      }
+     ],
+     "Comment": "tico setup"
+    },
+    "HostedZoneId": "Z1"
+   }
+  ],
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "create_role",
+   {
+    "AssumeRolePolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"Service\": \"ec2.amazonaws.com\"}, \"Action\": \"sts:AssumeRole\"}]}",
+    "RoleName": "tico-tico-example-com",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "tico-example-com"
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "list_role_tags",
+   {
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "attach_role_policy",
+   {
+    "PolicyArn": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "put_role_policy",
+   {
+    "PolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Action\": \"ssm:GetParameter\", \"Resource\": \"arn:aws:ssm:us-east-1:123456789012:parameter/tico/tico-example-com/env\"}, {\"Effect\": \"Allow\", \"Action\": \"s3:GetObject\", \"Resource\": \"arn:aws:s3:::tico-setup-plans-00000000000000000000000000000000/plans/tico-example-com/*\"}]}",
+    "PolicyName": "tico-env",
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "create_instance_profile",
+   {
+    "InstanceProfileName": "tico-tico-example-com",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "tico-example-com"
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "get_waiter",
+   {}
+  ],
+  [
+   "ec2",
+   "associate_address",
+   {
+    "AllocationId": "eipalloc-2",
+    "AllowReassociation": true,
+    "InstanceId": "i-3"
+   }
+  ],
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "describe_instance_information",
+   {
+    "Filters": [
+     {
+      "Key": "InstanceIds",
+      "Values": [
+       "i-3"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "send_command",
+   {
+    "DocumentName": "AWS-RunShellScript",
+    "InstanceIds": [
+     "i-3"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "get_command_invocation",
+   {
+    "CommandId": "c1",
+    "InstanceId": "i-3"
+   }
+  ],
+  [
+   "ssm",
+   "send_command",
+   {
+    "DocumentName": "AWS-RunShellScript",
+    "InstanceIds": [
+     "i-3"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "get_command_invocation",
+   {
+    "CommandId": "c1",
+    "InstanceId": "i-3"
+   }
+  ],
+  [
+   "s3",
+   "delete_object",
+   {
+    "Bucket": "tico-setup-plans-00000000000000000000000000000000",
+    "Key": "plans/tico-example-com/01bcb8b8d46be3d04341479e0dca603839cb5b7c1a840da9c0be9406b8eb8abf"
+   }
+  ]
+ ],
+ "runner": [
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "runner-build"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "put_parameter",
+   {
+    "Name": "/tico/runner-build/env",
+    "Overwrite": true,
+    "Type": "SecureString",
+    "Value": [
+     "TICO_JOIN_CODE",
+     "TICO_JOIN_LABEL",
+     "TICO_JOIN_URL"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "add_tags_to_resource",
+   {
+    "ResourceId": "/tico/runner-build/env",
+    "ResourceType": "Parameter",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "runner-build"
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_security_groups",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "runner-build"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_vpcs",
+   {
+    "Filters": [
+     {
+      "Name": "isDefault",
+      "Values": [
+       "true"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "create_security_group",
+   {
+    "Description": "Tico server",
+    "GroupName": "tico-runner-build",
+    "TagSpecifications": [
+     {
+      "ResourceType": "security-group",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "runner-build"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-runner-build"
+       }
+      ]
+     }
+    ],
+    "VpcId": "vpc-1"
+   }
+  ],
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "runner-build"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "create_role",
+   {
+    "AssumeRolePolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"Service\": \"ec2.amazonaws.com\"}, \"Action\": \"sts:AssumeRole\"}]}",
+    "RoleName": "tico-runner-build",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "runner-build"
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "attach_role_policy",
+   {
+    "PolicyArn": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    "RoleName": "tico-runner-build"
+   }
+  ],
+  [
+   "iam",
+   "put_role_policy",
+   {
+    "PolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Action\": \"ssm:GetParameter\", \"Resource\": \"arn:aws:ssm:us-east-1:123456789012:parameter/tico/runner-build/env\"}]}",
+    "PolicyName": "tico-env",
+    "RoleName": "tico-runner-build"
+   }
+  ],
+  [
+   "iam",
+   "create_instance_profile",
+   {
+    "InstanceProfileName": "tico-runner-build",
+    "Tags": [
+     {
+      "Key": "ManagedBy",
+      "Value": "tico-setup"
+     },
+     {
+      "Key": "tico-setup-name",
+      "Value": "runner-build"
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "add_role_to_instance_profile",
+   {
+    "InstanceProfileName": "tico-runner-build",
+    "RoleName": "tico-runner-build"
+   }
+  ],
+  [
+   "ssm",
+   "get_parameter",
+   {
+    "Name": "/aws/service/canonical/ubuntu/server/24.04/stable/current/arm64/hvm/ebs-gp3/ami-id"
+   }
+  ],
+  [
+   "ec2",
+   "run_instances",
+   {
+    "BlockDeviceMappings": [
+     {
+      "DeviceName": "/dev/sda1",
+      "Ebs": {
+       "DeleteOnTermination": true,
+       "Encrypted": true,
+       "VolumeSize": 30,
+       "VolumeType": "gp3"
+      }
+     }
+    ],
+    "IamInstanceProfile": {
+     "Name": "tico-runner-build"
+    },
+    "ImageId": "ami-123",
+    "InstanceType": "t4g.medium",
+    "MaxCount": 1,
+    "MetadataOptions": {
+     "HttpEndpoint": "enabled",
+     "HttpPutResponseHopLimit": 1,
+     "HttpTokens": "required"
+    },
+    "MinCount": 1,
+    "SecurityGroupIds": [
+     "sg-4"
+    ],
+    "TagSpecifications": [
+     {
+      "ResourceType": "instance",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "runner-build"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-runner-build"
+       }
+      ]
+     },
+     {
+      "ResourceType": "volume",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "runner-build"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-runner-build"
+       }
+      ]
+     },
+     {
+      "ResourceType": "network-interface",
+      "Tags": [
+       {
+        "Key": "ManagedBy",
+        "Value": "tico-setup"
+       },
+       {
+        "Key": "tico-setup-name",
+        "Value": "runner-build"
+       },
+       {
+        "Key": "Name",
+        "Value": "tico-runner-build"
+       }
+      ]
+     }
+    ],
+    "UserData": "#!/bin/bash\nset -eu\nexec > >(tee -a /var/log/tico-setup.log) 2>&1\necho tico-setup runner: start $(date -u)\nif ! docker compose version >/dev/null 2>&1; then f=$(mktemp) || exit 1; if ! curl -fsSL https://get.docker.com -o \"$f\"; then rm -f \"$f\"; echo \"tico-setup: could not download https://get.docker.com\" >&2; exit 1; fi; sh \"$f\" || { rc=$?; rm -f \"$f\"; exit \"$rc\"; }; rm -f \"$f\"; fi\nsystemctl enable --now docker\ncommand -v aws >/dev/null || snap install aws-cli --classic\nmkdir -p /opt/tico-runner\numask 077\naws ssm get-parameter --region us-east-1 --name /tico/runner-build/env --with-decryption --query Parameter.Value --output text > /opt/tico-runner/join.env\nif docker ps -a --format '{{.Names}}' | grep -qx tico-runner; then echo 'runner already joined; leaving it'; else\n  set -a; . /opt/tico-runner/join.env; set +a; rm -f /opt/tico-runner/join.env\n  f=$(mktemp) || exit 1; if ! curl -fsSL https://github.com/ticoteam/tico/releases/download/v0.3.71/install.sh -o \"$f\"; then rm -f \"$f\"; echo \"tico-setup: could not download https://github.com/ticoteam/tico/releases/download/v0.3.71/install.sh\" >&2; exit 1; fi; sh \"$f\" --runner --dir /opt/tico-runner --url \"$TICO_JOIN_URL\" --code \"$TICO_JOIN_CODE\" --label \"$TICO_JOIN_LABEL\" || { rc=$?; rm -f \"$f\"; exit \"$rc\"; }; rm -f \"$f\"\nfi\nrm -f /opt/tico-runner/join.env\ntouch /opt/tico-runner/.bootstrapped\necho tico-setup runner: done\n"
+   }
+  ],
+  [
+   "ec2",
+   "get_waiter",
+   {}
+  ],
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "runner-build"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "describe_instance_information",
+   {
+    "Filters": [
+     {
+      "Key": "InstanceIds",
+      "Values": [
+       "i-5"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "send_command",
+   {
+    "DocumentName": "AWS-RunShellScript",
+    "InstanceIds": [
+     "i-5"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "get_command_invocation",
+   {
+    "CommandId": "c1",
+    "InstanceId": "i-5"
+   }
+  ],
+  [
+   "ssm",
+   "send_command",
+   {
+    "DocumentName": "AWS-RunShellScript",
+    "InstanceIds": [
+     "i-5"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "get_command_invocation",
+   {
+    "CommandId": "c1",
+    "InstanceId": "i-5"
+   }
+  ]
+ ],
+ "backup-storage": [
+  [
+   "s3",
+   "head_bucket",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012"
+   }
+  ],
+  [
+   "s3",
+   "put_public_access_block",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_versioning",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "VersioningConfiguration": {
+     "Status": "Enabled"
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_encryption",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "ServerSideEncryptionConfiguration": {
+     "Rules": [
+      {
+       "ApplyServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_lifecycle_configuration",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+       },
+       "Expiration": {
+        "ExpiredObjectDeleteMarker": true
+       },
+       "Filter": {
+        "Prefix": ""
+       },
+       "ID": "tico-backups",
+       "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 90
+       },
+       "Status": "Enabled"
+      },
+      {
+       "Filter": {
+        "Prefix": "tico/000"
+       },
+       "ID": "litestream",
+       "NoncurrentVersionExpiration": {
+        "NoncurrentDays": 3
+       },
+       "Status": "Enabled"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_policy",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "Policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Sid\": \"TLSOnly\", \"Effect\": \"Deny\", \"Principal\": \"*\", \"Action\": \"s3:*\", \"Resource\": [\"arn:aws:s3:::tico-backup-tico-example-com-123456789012\", \"arn:aws:s3:::tico-backup-tico-example-com-123456789012/*\"], \"Condition\": {\"Bool\": {\"aws:SecureTransport\": \"false\"}}}]}"
+   }
+  ],
+  [
+   "s3",
+   "put_bucket_tagging",
+   {
+    "Bucket": "tico-backup-tico-example-com-123456789012",
+    "Tagging": {
+     "TagSet": [
+      {
+       "Key": "ManagedBy",
+       "Value": "tico-setup"
+      },
+      {
+       "Key": "tico-setup-name",
+       "Value": "tico-example-com"
+      }
+     ]
+    }
+   }
+  ],
+  [
+   "iam",
+   "get_user",
+   {
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "list_user_tags",
+   {
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "put_user_policy",
+   {
+    "PolicyDocument": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Action\": [\"s3:ListBucket\", \"s3:GetBucketLocation\"], \"Resource\": \"arn:aws:s3:::tico-backup-tico-example-com-123456789012\"}, {\"Effect\": \"Allow\", \"Action\": [\"s3:GetObject\", \"s3:PutObject\", \"s3:DeleteObject\", \"s3:AbortMultipartUpload\", \"s3:ListMultipartUploadParts\"], \"Resource\": \"arn:aws:s3:::tico-backup-tico-example-com-123456789012/*\"}]}",
+    "PolicyName": "tico-backup",
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "list_access_keys",
+   {
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "create_access_key",
+   {
+    "UserName": "tico-backup-tico-example-com"
+   }
+  ]
+ ],
+ "destroy": [
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_addresses",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_security_groups",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "iam",
+   "list_role_tags",
+   {
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "ssm",
+   "list_tags_for_resource",
+   {
+    "ResourceId": "/tico/tico-example-com/env",
+    "ResourceType": "Parameter"
+   }
+  ],
+  [
+   "ec2",
+   "describe_addresses",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "describe_instances",
+   {
+    "Filters": [
+     {
+      "Name": "tag:ManagedBy",
+      "Values": [
+       "tico-setup"
+      ]
+     },
+     {
+      "Name": "tag:tico-setup-name",
+      "Values": [
+       "tico-example-com"
+      ]
+     },
+     {
+      "Name": "instance-state-name",
+      "Values": [
+       "pending",
+       "running",
+       "stopping",
+       "stopped"
+      ]
+     }
+    ]
+   }
+  ],
+  [
+   "route53",
+   "list_hosted_zones_by_name",
+   {
+    "DNSName": "example.com",
+    "MaxItems": "5"
+   }
+  ],
+  [
+   "route53",
+   "get_hosted_zone",
+   {
+    "Id": "Z1"
+   }
+  ],
+  [
+   "route53",
+   "list_resource_record_sets",
+   {
+    "HostedZoneId": "Z1",
+    "MaxItems": "10",
+    "StartRecordName": "tico.example.com",
+    "StartRecordType": "A"
+   }
+  ],
+  [
+   "route53",
+   "change_resource_record_sets",
+   {
+    "ChangeBatch": {
+     "Changes": [
+      {
+       "Action": "DELETE",
+       "ResourceRecordSet": {
+        "Name": "tico.example.com",
+        "ResourceRecords": [
+         {
+          "Value": "203.0.113.9"
+         }
+        ],
+        "TTL": 300,
+        "Type": "A"
+       }
+      }
+     ],
+     "Comment": "tico setup destroy"
+    },
+    "HostedZoneId": "Z1"
+   }
+  ],
+  [
+   "ec2",
+   "terminate_instances",
+   {
+    "InstanceIds": [
+     "i-3"
+    ]
+   }
+  ],
+  [
+   "ec2",
+   "get_waiter",
+   {}
+  ],
+  [
+   "ec2",
+   "release_address",
+   {
+    "AllocationId": "eipalloc-2"
+   }
+  ],
+  [
+   "ec2",
+   "delete_security_group",
+   {
+    "GroupId": "sg-1"
+   }
+  ],
+  [
+   "iam",
+   "remove_role_from_instance_profile",
+   {
+    "InstanceProfileName": "tico-tico-example-com",
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "delete_instance_profile",
+   {
+    "InstanceProfileName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "detach_role_policy",
+   {
+    "PolicyArn": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "delete_role_policy",
+   {
+    "PolicyName": "tico-env",
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "iam",
+   "delete_role",
+   {
+    "RoleName": "tico-tico-example-com"
+   }
+  ],
+  [
+   "ssm",
+   "delete_parameter",
+   {
+    "Name": "/tico/tico-example-com/env"
+   }
+  ]
+ ]
+}

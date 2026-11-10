@@ -6,11 +6,11 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub goal list --all
-    hub market segment tree
+    tico task show <id>
+    tico goal list --all
+    tico market segment tree
 
-Check whether an export is attached and which Tools this bot holds (`hub tool list --bot <slug>`). Note each segment, and each goal that names leads, trials, quotes or sales: they tell you which conversions matter. Do not ask what these already say.
+Check whether an export is attached and which Tools this bot holds (`tico tool list --bot <slug>`). Note each segment, and each goal that names leads, trials, quotes or sales: they tell you which conversions matter. Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
 
@@ -36,10 +36,10 @@ Follow `playbooks/weekly-search-ads-review.md` on the attached exports. Write `r
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list`. If it shows off, run `hub automation update <id> --enable`. Tell the human in one line what it does: "I will review every paid search campaign each Monday at 09:30 from the exports you attach." They can change it or turn it off at any time; there is nothing to approve. Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
+Setting you up switched your first routine on. Check it with `tico automation list`. If it shows off, run `tico automation update <id> --enable`. Tell the human in one line what it does: "I will review every paid search campaign each Monday at 09:30 from the exports you attach." They can change it or turn it off at any time; there is nothing to approve. Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
 
 ## 7. Finish setup
 
 Once the answers and the first result are recorded, not before, tell the task that setup is done, with the report path and the routine's next run date. Then run the command below. It clears your "Needs setup" mark, and until it runs nothing you have runs on its own.
 
-    hub bot setup-done
+    tico bot setup-done

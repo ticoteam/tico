@@ -60,7 +60,7 @@ CREATE INDEX IF NOT EXISTS meeting_items_meeting ON meeting_items(meeting_id, se
 """
 
 # What the brain has already thought about one meeting (`backend/meeting_brain.py`). It lives in a
-# table rather than in memory so the cadence survives a restart and `hub sql` can answer "is the
+# table rather than in memory so the cadence survives a restart and `tico sql` can answer "is the
 # brain keeping up?". `last_turn_index` is how far into `meta.turns` the last think read;
 # `final_at` is the one think that runs right after Stop; `error_at` backs a failing meeting off.
 MEETING_BRAIN_SCHEMA = """

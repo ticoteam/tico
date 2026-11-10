@@ -277,13 +277,13 @@ const systemRuns = (now = Date.now()): Run[] => Array.from({length: 8}, (_, i) =
 
 // Maintenance (`maintenance: true`): backend/maintenance.py's listing at the migration's defaults, Learn's beta numbers
 // (backend/learnings.py beta_stats), and 30 hourly runs, newest first: one failed at Dream, one a Run now of one step.
-const MAINT_ORDER = ['collect', 'clean_up', 'check_health', 'find_stuck', 'learn', 'suggest', 'update', 'dream'];
-const MAINT_NAMES: Record<string, string> = {collect: 'Collect', clean_up: 'Clean up', check_health: 'Check health', find_stuck: 'Find stuck', learn: 'Learn',
+const MAINT_ORDER = ['collect', 'clean_up', 'check_health', 'learn', 'suggest', 'update', 'dream'];
+const MAINT_NAMES: Record<string, string> = {collect: 'Collect', clean_up: 'Clean up', check_health: 'Check health', learn: 'Learn',
   suggest: 'Suggest', update: 'Update', dream: 'Dream'};
-const MAINT_EVERY_RUN = ['collect', 'clean_up', 'check_health'], MAINT_BOTS = ['find_stuck', 'dream'];
+const MAINT_EVERY_RUN = ['collect', 'clean_up', 'check_health'], MAINT_BOTS = ['dream'];
 function maintSteps(): MaintStep[] {
-  const d: Record<string, Partial<MaintStep>> = {find_stuck: {frequency: 'custom', custom_every: 6, custom_unit: 'hours', max_bots: 10}, learn: {enabled: false, frequency: 'day'},
-    suggest: {frequency: 'day'}, update: {frequency: 'day'}, dream: {frequency: 'day', max_bots: 3}};
+  const d: Record<string, Partial<MaintStep>> = {learn: {enabled: false, frequency: 'day'},
+    suggest: {frequency: 'day'}, update: {frequency: 'day'}, dream: {frequency: 'custom', custom_every: 6, custom_unit: 'hours', max_bots: 10}};
   return MAINT_ORDER.map(key => ({key, name: MAINT_NAMES[key]!, enabled: true, frequency: 'run', custom_every: null, custom_unit: null,
     max_bots: null, ...d[key], fixed: MAINT_EVERY_RUN.includes(key),
     last_started_at: null, last_ran_at: key === 'learn' ? null : new Date(Date.now() - 3600000).toISOString(), cursor_at: null,
@@ -298,12 +298,12 @@ function maintRuns(now = Date.now()): MaintRun[] {
       started_at: new Date(at).toISOString(), finished_at: new Date(at + 2000).toISOString(), ...extra});
     const steps = one ? [line('dream', 'ran', {checked: 5, found: 2, woke: 2, cost_usd: 0.05})] : [
       line('collect', 'ran', {checked: 120, found: 14}), line('clean_up', 'ran'), line('check_health', 'skipped', {reason: 'not due'}),
-      line('find_stuck', 'skipped', {reason: 'not due'}), line('learn', 'off'), line('suggest', 'skipped', {reason: 'Privacy consent is off'}),
+      line('learn', 'off'), line('suggest', 'skipped', {reason: 'Privacy consent is off'}),
       line('update', 'skipped', {reason: 'not due'}),
       line('dream', failed ? 'failed' : 'skipped', failed ? {reason: 'model timed out', cost_usd: 0.02} : {reason: 'not due'})];
     return {id: 'mrun_' + (100 - i), occurrence_key: one ? null : 'hourly:' + i, trigger: one ? 'run_now' : 'schedule', step: one ? 'dream' : null,
       started_at: new Date(at).toISOString(), finished_at: new Date(at + 9000).toISOString(), heartbeat_at: new Date(at + 9000).toISOString(),
-      ok: !failed, result: failed ? '1 failed, 2 ran, 4 skipped' : one ? '1 ran' : '2 ran, 5 skipped',
+      ok: !failed, result: failed ? '1 failed, 2 ran, 3 skipped' : one ? '1 ran' : '2 ran, 4 skipped',
       cost_usd: steps.reduce((t, x) => t + Number(x.cost_usd), 0), steps};
   });
 }

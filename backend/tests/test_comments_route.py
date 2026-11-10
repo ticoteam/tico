@@ -317,21 +317,6 @@ def test_a_reply_reaches_its_author_only_while_they_read_the_thread_and_asks_nee
     assert delivery(api, again["id"], "human:cara") is None, "a past reader is reached no more"
 
 
-def test_an_ask_on_a_task_reaches_only_whom_it_asks(api):
-    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
-    follow(api, row["id"], "bot:finance")
-    follow(api, row["id"], "cara")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
-        from backend import question_tasks
-
-        asked = question_tasks.ask_plain(
-            c, "bot:ops", "human:ana", "Which bank feed should I trust?", parent=H.task(c, row["id"])
-        )
-    assert asked["owner_id"] == "human:ana"
-    assert bot_jobs(api, "finance") == [], "a follower bot is not woken by a question put to a person"
-
-
 def test_joining_a_tasks_thread_follows_nobody(api):
     row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
     assert follows(api, row["id"], "human:cara") is None

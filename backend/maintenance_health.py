@@ -235,7 +235,7 @@ def _runner_checks(c, settings):
                     else _holding_fix(machine["label"])
                     if rows and rows[0]["running"] and update["state"] != "incompatible" and not update["error"]
                     else f"BotOps: update the runner on {machine['label']} (Settings > Computers, or "
-                    "`scripts/tico install` once on that computer so it updates itself).",
+                    "`scripts/tico-computer install` once on that computer so it updates itself).",
                     # Its bots are paused until it updates: bad, as Health says (runner_versions.health_check).
                     severity=BAD if update["state"] == "incompatible" else WARN,
                 )
@@ -267,7 +267,7 @@ def _runner_checks(c, settings):
                 f"Computer {r['label']} has said since {since} UTC that it is restarting, which takes at most "
                 f"{health.RESTART_STUCK_MINUTES} minutes; {running} turn(s) still run there{holds}.",
                 f"BotOps: look at the turns still running on {r['label']} (Runs); stopping one is a person's "
-                f"choice. If none runs, restart Tico on {r['label']} by hand (`tico restart`).",
+                f"choice. If none runs, restart Tico on {r['label']} by hand (`tico-computer restart`).",
             )
         )
     for x in health.silent_computers(c):
@@ -280,7 +280,7 @@ def _runner_checks(c, settings):
                 f"Computer {x['label']} was last heard from at {(x['last_seen_at'] or '')[:16]}; "
                 f"{x['queued'] + x['dead']} job(s) wait for {', '.join(x['bots'])}.",
                 f"Ask the person who runs {x['label']} to wake it and check Tico there "
-                "(`tico status`; `tico restart` starts it again), or move its bots to an online computer.",
+                "(`tico-computer status`; `tico-computer restart` starts it again), or move its bots to an online computer.",
             )
         )
     starts = None
@@ -496,46 +496,8 @@ def _check_hold_checks(c):
                 f"{since[:16].replace('T', ' ')} UTC); {title}. Every turn on it since then ({tries}) "
                 "stopped on the limit, and Tico retries it after every reset.",
                 f"BotOps: wait for {model}'s limit to reset; or switch the check model: {name} declines "
-                "this check and files it again on another model (hub task child --check-model); or drop "
+                "this check and files it again on another model (tico task child --check-model); or drop "
                 f"the check: {name} declines it. A declined check's queued turn is let go.",
-            )
-        )
-    return out
-
-
-def _release_approval_checks(c, settings):
-    """A release's publish approval ready longer than the setting (release_approval_wait_minutes) with nobody's decision:
-    one finding per approval, so the same wait seen again only counts (scan) and a re-cut release's new ask is its own.
-    The person decides it in Needs you; nothing here approves or changes who may."""
-    minutes = getattr(settings, "release_approval_wait_minutes", 60)
-    if not minutes:
-        return []
-    at = H.now()
-    out = []
-    for row in H._rows(
-        c.execute(
-            "SELECT * FROM approvals WHERE decision IS NULL AND kind='publish' "
-            "AND coalesce(ready_since,created_at)<? ORDER BY created_at",
-            (H.shift(at, minutes=-minutes),),
-        )
-    ):
-        row["payload"] = H._json(row.get("payload"), {}) or {}
-        if not H.is_release_approval(row["kind"], row["payload"]):
-            continue
-        H.approval_wait(c, row, at)
-        who = row["decision_owner_name"] or "a person"
-        version, commit = str(row["payload"]["version"])[:40], str(row["payload"]["commit"])[:12]
-        out.append(
-            _finding(
-                "release_approval_wait:" + row["id"],
-                "release_approval_wait",
-                SETUP,
-                f"The release {version} approval has waited {H.wait_words(row['age_s'])} on {who}",
-                f"The publish approval for {version} (commit {commit}) has been ready since "
-                f"{row['ready_since'][:16].replace('T', ' ')} UTC, {H.wait_words(row['age_s'])}, with no "
-                f"decision. It is {who}'s to decide; the release waits until then.",
-                f"{who}: approve or decline it in Needs you (or `hub approval show {row['id']}`). Tico does "
-                "not decide it for anyone.",
             )
         )
     return out
@@ -704,7 +666,7 @@ def _bot_checks(c, settings=None):
                         f"A task worktree of {label} failed",
                         f"{label}: {error[:400]}",
                         (
-                            f"Run `hub task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
+                            f"Run `tico task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
                             "Unpushed work stayed on the retired computer."
                             if r['state'] == 'retired'
                             else "BotOps: save any unique work in that worktree on a branch, then remove its link so "
@@ -712,7 +674,6 @@ def _bot_checks(c, settings=None):
                         ),
                     )
                 )
-    out.extend(_quiet_work_checks(c))
     out.extend(_stop_checks(c))
     out.extend(_session_checks(c))
     out.extend(_profile_checks(c))
@@ -775,7 +736,7 @@ def _stop_checks(c):
                 f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
                 f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
                 f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
-                f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {row.get('slug', bot)}). "
+                f"BotOps: read {name}'s last runs, fix the cause, then release it (tico bot release {row.get('slug', bot)}). "
                 "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                 "Its queued work is kept.",
                 subject=kind,
@@ -796,7 +757,7 @@ def _stop_checks(c):
                 f"{hold['budget']}. Held since {str(hold['held_at'])[:16]} UTC. This looks like a runaway "
                 "loop, not normal work.",
                 f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
-                f"(hub bot release {row.get('slug', bot)}) or raise its budget (hub bot budget {row.get('slug', bot)} --{hold['window']} N).",
+                f"(tico bot release {row.get('slug', bot)}) or raise its budget (tico bot budget {row.get('slug', bot)} --{hold['window']} N).",
                 subject=hold["window"],
                 severity=BAD,
             )
@@ -817,7 +778,7 @@ def _stop_checks(c):
                 "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
                 "up to an hour. The server log has the traceback.",
                 f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
-                f"now, release {name} (hub bot release {row.get('slug', bot)}); one that fails again is held with a longer "
+                f"now, release {name} (tico bot release {row.get('slug', bot)}); one that fails again is held with a longer "
                 "wait.",
                 severity=BAD,
             )
@@ -880,35 +841,6 @@ def _session_checks(c):
     return out
 
 
-def _quiet_work_checks(c):
-    """A deferred task handed to a bot's run over two hours ago and not worked since, with no time set to pick it up
-    (backend/quiet_work.py stale): one finding per bot and task. It names them; it asks no person anything."""
-    from . import quiet_work
-
-    out = []
-    for item in quiet_work.stale(c):
-        task, bot = item["task"], item["bot"]
-        label = (H.bot(c, bot) or {}).get("slug", bot)
-        # A private task's title stays out of a finding other people read; its number or short id names it.
-        name = (
-            quiet_work._task_name(task) if H.task_private(c, task) else f"{quiet_work._task_name(task)} {task['title']}"
-        )
-        out.append(
-            _finding(
-                f"quiet_unworked:{bot}:{task['id']}",
-                "quiet_unworked",
-                SETUP,
-                f"{label} was handed a deferred task and has not worked it",
-                f"{label} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
-                f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
-                "up again.",
-                f"{label}: work it, or say when to pick it up (hub task later {task['id']} --after <task> | "
-                "--at <time>). Anyone may press Run now on it to give it a run of its own.",
-            )
-        )
-    return out
-
-
 def _server_checks(c):
     from . import flight
     from .health import runner_route_latency
@@ -965,7 +897,6 @@ def findings(c, settings):
         _login_checks(c, settings),
         _check_hold_checks(c),
         _bot_checks(c, settings),
-        _release_approval_checks(c, settings),
         _server_checks(c),
         _org_rule_checks(c, settings),
     ):
@@ -1075,8 +1006,9 @@ def report_message(c, row):
 
 
 def report(c_factory, support, auth, settings, who, key):
-    """File the finding `key` as a Tico bug: a ticket, a message on its ticket, or an approval. `c_factory` is the
+    """File the finding `key` as a Tico bug: a ticket, a message on its ticket, or an OK asked of the owner. `c_factory` is the
     store; HQ is called outside any transaction."""
+    from . import task_asks
     from .support import SOURCE_COPY, from_source
 
     store = c_factory
@@ -1105,15 +1037,14 @@ def report(c_factory, support, auth, settings, who, key):
         owner = auth.owner_identity(c)
         message = report_message(c, row)
         if filed and not filed["ticket_id"] and filed["approval_id"]:
+            # `approval_id` holds the OK the owner was asked for (backend/task_asks.py: its requirement id).
             done = c.execute(
                 "SELECT id FROM support_tickets WHERE request_key=?", ("approval:" + filed["approval_id"],)
             ).fetchone()
             if done:
                 filed["ticket_id"] = done["id"]
-            else:
-                asked = c.execute("SELECT decision FROM approvals WHERE id=?", (filed["approval_id"],)).fetchone()
-                if not asked or (asked["decision"] and asked["decision"] != "approved"):
-                    cleared = filed["approval_id"]  # declined, withdrawn or gone: the signature can be reported again
+            elif task_asks.standing(c, filed["approval_id"]) in ("sent_back", "withdrawn"):
+                cleared = filed["approval_id"]  # sent back or withdrawn: the signature can be reported again
         today = _reports_today(c)
     if cleared:
         with store.transaction() as c:
@@ -1145,12 +1076,19 @@ def report(c_factory, support, auth, settings, who, key):
     if filed and filed["approval_id"]:
         return {"signature": row["signature"], "approval": filed["approval_id"], "again": True}
     if not allowed:
-        # The person reads the report first: a `support` approval, sent with `hub support send --approval <id>`.
-        digest = hashlib.sha256(message.encode()).hexdigest()
+        # The owner reads the report first: an OK bound to exactly this message (support.ask_report), on a task.
+        from .support import ask_report
+
+        text = message.strip()
+        payload = {
+            "message": text,
+            "content_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            "include_ids": True,
+        }
         now = H.now()
         with store.transaction() as c:
-            approval = H.approval_request(c, who.actor, "support", {"message": message, "content_sha256": digest})
-            approval_id = approval["id"] if isinstance(approval, dict) else approval
+            asked = ask_report(c, who.actor, payload, person=owner.actor)
+            approval_id = asked["requirement_id"]
             c.execute(
                 "INSERT INTO health_reports(signature,approval_id,created_at,reported_occurrences,reported_at) "
                 "VALUES(?,?,?,?,?)",
@@ -1181,7 +1119,7 @@ def report(c_factory, support, auth, settings, who, key):
 
 
 def _reports_today(c):
-    """New tickets sent in the last day, including approvals requested on an earlier day. Repeat comments do not count."""
+    """New tickets sent in the last day, including OKs asked on an earlier day. Repeat comments do not count."""
     return c.execute(
         "SELECT count(*) FROM health_reports h LEFT JOIN support_tickets t ON t.id=h.ticket_id "
         "WHERE h.ticket_id IS NOT NULL AND coalesce(t.created_at,h.created_at)>?",
@@ -1190,9 +1128,9 @@ def _reports_today(c):
 
 
 def file_reports(store, auth, settings, support, signatures):
-    """HQ calls for the Tico bugs the step found, outside any transaction, as BotOps: the approvals it asks are BotOps's. The
-    same report path as the route (`report`): a ticket once, a comment when it comes back worse, an approval when the team
-    rule is off, and at most REPORTS_PER_DAY new tickets a day (the rest wait for the next run). First the reports a person
+    """HQ calls for the Tico bugs the step found, outside any transaction, as BotOps: the OKs it asks are BotOps's. The
+    same report path as the route (`report`): a ticket once, a comment when it comes back worse, an OK asked of the owner
+    when the team rule is off, and at most REPORTS_PER_DAY new tickets a day (the rest wait for the next run). First the reports a person
     approved since the last run are sent (`_send_approved`). With support off (TICO_SUPPORT, a demo or a rehearsal copy)
     nothing leaves for HQ and nothing is asked. A copy run from source (support.from_source) sends nothing either, and
     says so in a `health_monitor.not_reported` event. Returns {signature: answer}."""
@@ -1230,40 +1168,55 @@ def file_reports(store, auth, settings, support, signatures):
 
 
 def _send_approved(store, support):
-    """Approved reports, sent once as their requester (BotOps, or the keeper for older requests). A failed or over-cap send
-    stays queued. Its ticket and current occurrence baseline are kept on its health report. Returns {signature: answer}."""
+    """Deliver the reports a person's click claimed (support.claimed: the click used the OK and so queued the report;
+    nothing here ever claims one). Each goes as whoever asked (support.file_approved, which rechecks the giver's
+    authority before the first send), under the Idempotency-Key of its OK, so a failed or over-cap send goes again and
+    HQ answers a retry with the first ticket. A Health Monitor report keeps its ticket and current occurrence baseline
+    on its health report. Returns {signature or OK id: answer}."""
+    from . import support as support_module, task_asks
+
     with store.read() as c:
-        waiting = [
-            dict(r)
-            for r in c.execute(
-                "SELECT h.signature, h.approval_id, a.requested_by_id FROM health_reports h JOIN approvals a ON a.id=h.approval_id "
-                "WHERE h.ticket_id IS NULL AND a.requested_by_id IN (?,?) AND a.decision='approved' ORDER BY h.created_at",
-                ("bot:" + BOTOPS, H.KEEPER),
-            ).fetchall()
-        ]
+        reports, unrecorded = {}, []
+        for r in c.execute(
+            "SELECT signature, approval_id, ticket_id FROM health_reports WHERE approval_id IS NOT NULL"
+        ):
+            reports[r["approval_id"]] = r["signature"]
+            if r["ticket_id"] is None:
+                unrecorded.append(r["approval_id"])
+        waiting = support_module.claimed(c)
+        queued = {row["requirement_id"] for row in waiting}
+        # A Health Monitor report whose ticket was kept but not yet recorded on it (a crash in between): file_approved
+        # answers with the kept ticket, and it is recorded below.
+        for rid in unrecorded:
+            kept = c.execute("SELECT 1 FROM support_tickets WHERE request_key=?", ("approval:" + rid,)).fetchone()
+            if rid not in queued and kept and task_asks.standing(c, rid) == task_asks.USED:
+                waiting.append({"requirement_id": rid, "asked_by_id": (task_asks.grant(c, rid) or {})["asked_by_id"]})
         today = _reports_today(c)
     sent = {}
     for row in waiting:
+        rid = row["requirement_id"]
+        name = reports.get(rid) or rid
         if today >= REPORTS_PER_DAY:
-            sent[row["signature"]] = {"signature": row["signature"], "deferred": "support_busy"}
+            sent[name] = {"signature": name, "deferred": "support_busy"}
             continue
         try:
-            answer = support.file_approved(SimpleNamespace(actor=row["requested_by_id"]), row["approval_id"])
+            answer = support.file_approved(SimpleNamespace(actor=row["asked_by_id"]), rid)
         except Exception as exc:  # noqa: BLE001 - a report that cannot be sent waits for the next run
-            log.warning("Health report %s could not be sent yet", row["signature"], exc_info=True)
-            sent[row["signature"]] = {"signature": row["signature"], "deferred": type(exc).__name__}
+            log.warning("Report %s could not be sent yet", name, exc_info=True)
+            sent[name] = {"signature": name, "deferred": getattr(exc, "code", None) or type(exc).__name__}
             continue
         ticket = answer["ticket"]["id"]
-        with store.transaction() as c:
-            c.execute(
-                "UPDATE health_reports SET ticket_id=?, reported_at=?, reported_occurrences="
-                "(SELECT coalesce(max(occurrences),0) FROM health_findings WHERE signature=?) "
-                "WHERE signature=? AND approval_id=?",
-                (ticket, H.now(), row["signature"], row["signature"], row["approval_id"]),
-            )
-            H.event(c, row["requested_by_id"], "health_monitor.reported", row["signature"], {"ticket": ticket})
+        if rid in reports:
+            with store.transaction() as c:
+                c.execute(
+                    "UPDATE health_reports SET ticket_id=?, reported_at=?, reported_occurrences="
+                    "(SELECT coalesce(max(occurrences),0) FROM health_findings WHERE signature=?) "
+                    "WHERE signature=? AND approval_id=?",
+                    (ticket, H.now(), name, name, rid),
+                )
+                H.event(c, row["asked_by_id"], "health_monitor.reported", name, {"ticket": ticket})
         today += 1
-        sent[row["signature"]] = {"signature": row["signature"], "ticket": ticket, "approval": row["approval_id"]}
+        sent[name] = {"signature": name, "ticket": ticket, "approval": rid}
     return sent
 
 

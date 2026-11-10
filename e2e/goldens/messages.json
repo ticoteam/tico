@@ -14,8 +14,8 @@
       "id": "<conversation>",
       "kind": "chat",
       "last_message_at": "<time>",
-      "last_seq": 17,
-      "last_unread_seq": 17,
+      "last_seq": 11,
+      "last_unread_seq": 11,
       "owner_id": "human:ana",
       "owner_name": "Ana",
       "parent_id": null,
@@ -75,7 +75,8 @@
           "name": "Ana"
         },
         "superseded_at": null,
-        "wait_s": null
+        "wait_s": null,
+        "wake_key": null
       },
       {
         "answered_by_id": null,
@@ -107,7 +108,8 @@
           "name": "Ana"
         },
         "superseded_at": null,
-        "wait_s": null
+        "wait_s": null,
+        "wake_key": null
       },
       {
         "answered_by_id": null,
@@ -139,48 +141,8 @@
           "name": "Ana"
         },
         "superseded_at": null,
-        "wait_s": null
-      },
-      {
-        "answered_by_id": null,
-        "body": "Draft the launch plan: done. Drafted.",
-        "conversation_id": "<conversation>",
-        "created_at": "<time>",
-        "delivered_at": null,
-        "edited_at": null,
-        "expires_at": null,
-        "hidden_at": null,
-        "id": "<id6>",
-        "in_reply_to": null,
-        "kind": "notice",
-        "origin_id": "<id7>@<id2>",
-        "public": 0,
-        "read_at": null,
-        "recipient_id": "human:ana",
-        "recipient_name": "Ana",
-        "ref_tasks": {
-          "<task>": {
-            "owner_id": "bot:ops",
-            "owner_name": "ops",
-            "status": "closed",
-            "title": "Draft the launch plan"
-          }
-        },
-        "refs": {
-          "quiet": true,
-          "task": "<task>",
-          "task_report": "done"
-        },
-        "revision": 0,
-        "sender_id": "keeper",
-        "seq": 9,
-        "source": {
-          "kind": "task_update",
-          "link": null,
-          "name": "Task update"
-        },
-        "superseded_at": null,
-        "wait_s": null
+        "wait_s": null,
+        "wake_key": null
       },
       {
         "answered_by_id": null,
@@ -191,10 +153,10 @@
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id8>",
+        "id": "<id6>",
         "in_reply_to": null,
         "kind": "notice",
-        "origin_id": "<id9>@<id2>",
+        "origin_id": "<id7>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "human:ana",
@@ -214,14 +176,15 @@
         },
         "revision": 0,
         "sender_id": "keeper",
-        "seq": 11,
+        "seq": 8,
         "source": {
           "kind": "task_update",
           "link": null,
           "name": "Task update"
         },
         "superseded_at": null,
-        "wait_s": null
+        "wait_s": null,
+        "wake_key": null
       },
       {
         "answered_by_id": null,
@@ -232,10 +195,10 @@
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id10>",
+        "id": "<id8>",
         "in_reply_to": null,
         "kind": "say",
-        "origin_id": "<id11>@<id2>",
+        "origin_id": "<id9>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "bot:ops",
@@ -246,14 +209,15 @@
         "revision": 0,
         "sender_id": "human:ana",
         "sender_name": "Ana",
-        "seq": 13,
+        "seq": 9,
         "source": {
           "kind": "person",
           "link": null,
           "name": "Ana"
         },
         "superseded_at": null,
-        "wait_s": null
+        "wait_s": null,
+        "wake_key": null
       },
       {
         "answered_by_id": null,
@@ -267,10 +231,10 @@
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
-        "id": "<id12>",
+        "id": "<id10>",
         "in_reply_to": "<chat_message>",
         "kind": "say",
-        "origin_id": "<id13>@<id2>",
+        "origin_id": "<id11>@<id2>",
         "public": 0,
         "read_at": null,
         "recipient_id": "human:ana",
@@ -296,14 +260,15 @@
         },
         "sender_id": "bot:ops",
         "sender_name": "ops",
-        "seq": 17,
+        "seq": 11,
         "source": {
           "kind": "bot",
           "link": null,
           "name": "ops"
         },
         "superseded_at": null,
-        "wait_s": null
+        "wait_s": null,
+        "wake_key": null
       }
     ],
     "next_before": "<volatile>"

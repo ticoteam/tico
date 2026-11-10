@@ -1,12 +1,12 @@
 # Starter bots
 
-There are 125 role templates: 122 in eleven groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+There are 124 role templates: 121 in eleven groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
 Product, Engineering, Success and Corporate) and a three-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
 feature or a document: it does the research, keeps its records, prepares the finished work and carries it to the point of
 action. Messages to outsiders stay drafts until the owner turns on sending for that bot; after that,
-requested work needs no separate approval for each action. A role is a Recruiting seat until someone recruits it; the bot it becomes is created parked in
+requested work needs no separate OK for each action. A role is a Recruiting seat until someone recruits it; the bot it becomes is created parked in
 "Needs setup" and costs nothing until someone sets it up; it then gets a first useful, reviewable result in its first
 session. The template format is in [Finish setup](onboarding.md); how to write and tune a bot is in [Creating bots](creating-bots.md).
 
@@ -31,7 +31,7 @@ Chief of Staff is no longer a default.
 | Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 21 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
 | Finance | `account_balance` | Head of Finance (`finance-lead`) | 13 | Know where the money is |
-| Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 14 | Run smoothly, nothing dropped |
+| Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`people-lead`) | 11 | Hire well, keep good people |
 | Product | `category` | Head of Product (`product-lead`) | 10 | Build what customers need |
@@ -43,7 +43,7 @@ Chief of Staff is no longer a default.
 Every group has a head, the template its row names (`lead: true`): it writes the group's weekly summary from what its bots and humans
 produced, proposes who should take a stuck or misrouted request, and **hires**: when repeated work in the group is not
 covered, it proposes a specific worker template from its `team_templates` with the reason and that template's first routine,
-and only after the owner confirms asks BotOps to set it up (`hub task create --owner botops`). Heads never create bots
+and only after the owner confirms asks BotOps to set it up (`tico task create --owner botops`). Heads never create bots
 themselves and never do their team's work.
 
 Five Team Managers (Product, Engineering, Growth, Success and Corporate) are also `lead: true`. Each runs its team's week and routes the team's work to its owners and pipeline managers; Product, Engineering and Growth take no group's head seat.
@@ -52,7 +52,7 @@ Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, L
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
-built from them (Support Agent asks it with `hub doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
+built from them (Support Agent asks it with `tico doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
 product repositories); the Brand Owner keeps the brand book and the Brand card, which marketing bots check their drafts
 against; BotOps creates and maintains bots; the Assistant is each human's own; the Strategy Owner (`goal-manager`) keeps
@@ -60,7 +60,7 @@ the KPIs and computes their readings; the Finance Owner (`bookkeeper`) keeps the
 summary; the Rules Owner (`tico-counsel`) reads the documents added to Rules and answers can-I questions; the Updates Owner
 (`updates-owner`) drafts each period's company update; the Automations Owner (`automations-owner`) reviews the team's
 automations each week; and the Owners on the core chart each own one result and log readings for the KPI
-that measures it with `hub kpi log`. Owning a result does not make a bot the only one who logs it. No other template
+that measures it with `tico kpi log`. Owning a result does not make a bot the only one who logs it. No other template
 owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
 ## The templates
@@ -164,7 +164,6 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `route` | `dispatcher` | Dispatcher | Tomorrow's plan for field crews by skill, area and window, the clash list with options, draft arrival notices, jobs not closed out | niche | A jobs export on a task; crew calendars optional |
 | `calendar_month` | `scheduling-bookings` | Scheduling & Bookings | The booking rules, a weekly bookings page with clashes and gaps, reschedule options that fit the rules and no-show follow-up drafts; never changes prices or sends without a person | niche | A bookings export on a task; calendar and mail optional |
 | `task_alt` | `quality-inspections` | Quality & Inspections | Inspection checklists per job type, an inspection log, re-do tracking with causes and a quality score per crew with the jobs behind it; never disciplines staff | niche | Inspection results and a jobs export on a task |
-| `account_tree` | `pipeline-manager` | Pipeline Manager | Runs one pipeline: moves each card through its stages, puts it with the bot or person its stage needs, checks each stage's requirements and limits, and reports what is stuck and why | niche | Tico, with a pipeline to run |
 
 ### Legal
 
@@ -203,7 +202,7 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `feedback` | `feedback-analyst` | Customer Insights Analyst | A weekly report of customer feedback themes with counts, anonymised quotes, the trend and three actions; approved requests and bugs filed with Product Ops or QA, and a close-the-loop list | default | Feedback routed as tasks; email, meetings and chat optional |
 | `record_voice_over` | `product-researcher` | UX Researcher | Interview snapshots, an opportunity map with source counts, study plans and discussion guides, research briefs and a weekly research digest | common | Tico only; a meetings importer optional |
 | `view_timeline` | `product-manager` | Product Manager | One-page specs with evidence, non-goals and Given/When/Then acceptance criteria, and a weekly spec and launch review with blocking questions and checklist lines due | default | Tico only; GitHub (read), docs and meetings optional |
-| `monitoring` | `product-analyst` | Product Analyst | A weekly usage readout (adoption of recent launches, activation funnel, retention cohorts), answers to product questions and experiment readouts, each with its query | common | A team database readable through `hub db`, or exports on a task |
+| `monitoring` | `product-analyst` | Product Analyst | A weekly usage readout (adoption of recent launches, activation funnel, retention cohorts), answers to product questions and experiment readouts, each with its query | common | A team database readable through `tico db`, or exports on a task |
 | `dashboard_customize` | `product-ops` | Product Operations Manager | One feature request ledger with the accounts behind each request, the beta roster, an eight-week release calendar, roadmap hygiene flags and ship notices for a human to send | niche | Tico only; CRM, GitHub and calendar optional |
 | `text_fields` | `ux-writer` | UX Writer | Copy tables for each spec (labels, errors, empty states), the product glossary, and a weekly review of pull requests that change user-facing text, for an engineer to post | niche | GitHub connected (read) |
 | `sell` | `pricing` | Pricing Analyst | A monthly pricing review (competitor price changes, discounts given, plan mix) and impact notes for a price change being weighed | niche | Public web; a CRM optional |
@@ -217,7 +216,7 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `developer_board` | `engineering-lead` | Head of Engineering (head) | A weekly engineering summary (shipped, stuck pull requests, incidents, blocked work), routing proposals, and a hiring proposal when repeated work has no owner | default | GitHub connected |
 | `bug_report` | `issue-triage` | QA Engineer | Label and duplicate proposals, repro-step requests, a weekly issue digest, and a risk-ranked test plan and regression checklist per release | default | GitHub connected; offer it only then |
 | `code_blocks` | `pr-reviewer` | Senior Software Engineer | A weekday review queue with a finished review per pull request (blocking issues first) for a human to post | common | GitHub connected |
-| `code_blocks` | `builder` | Builder | Takes each Dev ticket on its step, builds it on a branch with a test that proves the change, and carries the ticket through review and QA fixes; merges only under the team's merge rules | common | GitHub connected |
+| `code_blocks` | `builder` | Builder | Takes a task Head of Engineering gives it, builds the change on a branch with a test that proves it, opens the pull request and answers its review and QA comments; merges only under the team's merge rules | common | GitHub connected |
 | `new_releases` | `release-notes` | Release Manager | A readiness checklist with a go or no-go call, the changelog entry, plain-language release notes and a suggested version | common | GitHub connected |
 | `monitor_heart` | `incident-scribe` | Site Reliability Engineer | An incident timeline, a blameless postmortem, action items followed to done, an on-call handoff and a weekly incident review | common | Tico only; an incident channel or error-tracker exports optional |
 | `description` | `docs-writer` | Technical Writer | A weekly drift report on READMEs and API docs in the product repositories, with the fixes written for an engineer to commit; internal docs stay with the Librarian | niche | GitHub connected |
@@ -229,7 +228,7 @@ up. The `bookkeeping` template is retired: it is no longer offered, and bots alr
 | `account_tree` | `pipeline` | Pipeline Owner | The path from a merged change to users: each week how long a merged change waits to reach users, which checks gate merging, and failed deploys and rollbacks; for each release the readiness check, the changelog and release notes drafted, and the version the owner approves rolled out; it never reruns, cancels, deploys, rolls back or merges on its own | niche | Repository and release workflow access on a task |
 
 To run these bots as one team that builds, reviews, tests and releases software, see
-[The software factory](software-factory.md): the roles in order, which model each runs on and the Dev tickets steps.
+[The software factory](software-factory.md): the roles in order and which model each runs on.
 | `developer_board` | `engineering-team-manager` | Engineering Team Manager (team lead) | Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, and routes tests, security, CI and releases to their owners | common | GitHub connected |
 | `bug_report` | `qa-owner` | QA Owner | Owns every automated test, unit to end to end: a flaky test register with a fix or quarantine decision for each, a weekly suite health report, and product bugs filed into the Engineering pipeline | niche | GitHub connected; chat optional |
 | `security` | `security-owner` | Security Owner | A weekly dependency and advisory report ranked by real exposure, a patch plan in merge order, and a private report of any committed credential, by location only | common | GitHub and public web connected; chat optional |
@@ -271,7 +270,7 @@ head or `suggest`. Finish setup offers it on its own, off by default, beside the
 
 Every starter drafts messages to outsiders until a person who manages it turns mail sending on in Tico.
 Authorized work uses the bot's granted Tools directly; paying, changing a record or deleting does
-not add a blanket Confirm step. A bot may ask about an uncertain action.
+not need a blanket OK. A bot may ask a person to OK an uncertain action.
 
 ## What every starter does the same way
 
@@ -281,13 +280,13 @@ not add a blanket Confirm step. A bot may ask about an uncertain action.
 2. **A first result in the same session.** It produces a real draft of its `first_routine` output from
    the team's own data, labelled "First draft, not yet reviewed". A human reacts to something real.
 3. **A routine that starts with setup.** It checks the first routine and tells the human what it does. The routine is declared in
-   `bot.yaml` with `enabled: false`, so `hub bot create` seeds it off; starting the setup (**Set up**, go-live) switches it on,
+   `bot.yaml` with `enabled: false`, so `tico bot create` seeds it off; starting the setup (**Set up**, go-live) switches it on,
    so nobody approves it separately, and the bot logs it.
 4. **Draft until sending is on.** A bot drafts messages to outsiders until a person who manages it turns mail sending on in Tico
    (Settings → Bots → <bot> → Email sending: On their own or Ask first). Every send goes through Tico's send queue;
    under Ask first a person approves each one. The bot sends within the requested work and granted Tools.
 5. **Parked until then.** Recruiting a seat creates the starter as `needs_setup`: it answers a human's message and nothing else
-   (no routine, task notice, Slack route or bot request wakes it) until its setup playbook ends with `hub bot setup-done`,
+   (no routine, task notice, Slack route or bot request wakes it) until its setup playbook ends with `tico bot setup-done`,
    which it calls once its answers and first result are recorded. **Set up** on its page, or any first message, begins the
    conversation. Parked starters do not count toward a member's bot limit. See [A bot's stages](onboarding.md#a-bots-stages).
 
@@ -303,7 +302,7 @@ A starter's own prompt is not the gate. What the platform does, checked for ever
 | Post to Slack | A post needs the `post` verb in the bot's Slack access, and the channel must be on the Slack channel list (Tools > Slack) with posting on, which it is unless an owner or admin turned it off; reading grants no posting right. Externally shared channels are always refused. The starters declare Slack read only, commented out until the owner connects it | [Slack gateway](slack-gateway.md) |
 | Comment on or label a GitHub issue, or review a pull request | **Added in this release.** The team's GitHub App token carries Issues: write, so nothing but a prompt stood between the QA Engineer (`issue-triage`) and a public comment. Its access is now `read`, and its `.claude/settings.json` denies `gh issue edit` and `gh issue comment` next to close, reopen, lock, transfer and create. It leaves proposed labels and comments with the exact commands on the task; writes need the corresponding Tool access. Senior Software Engineer, Release Manager, Technical Writer, Security Engineer, DevOps Engineer and Head of Engineering read GitHub the same way: `read` access, only `gh pr list`, `view`, `diff` and `checks` allowed, and `gh pr review`, `comment`, `merge`, `close`, `edit` and `create` denied, so a review is a draft on the task that a human posts. Turning writing on is the owner's edit of `bot.yaml` and the settings file, described in a comment there. The harness reads `.claude/settings.json`; the Codex runtime does not, so for a Codex-run bot the gate is the read-only access declared, the absence of any default write credential to a product repository, and the prompt | `templates/catalog/issue-triage`, `clients/tests/test_catalog.py` |
 | Invite someone to a calendar event | Any address may be invited. Set `TICO_BLOCK_EXTERNAL_INVITES=1` to limit bots to humans on the team roster (`403 external_attendee` otherwise); an invitation to anyone else is then a human's act | `backend/connectors.py`, `backend/tests/test_security_review.py` |
-| Message a human inside the team | Bot-to-human messages are linted and capped at ten unsolicited a day | `hub message send` |
+| Message a human inside the team | Bot-to-human messages are linted and capped at ten unsolicited a day | `tico message send` |
 | Change a record in a CRM, the support tool, the books or a repository | The starters declare no such access. Sales Operations Manager reads the CRM and only lists the fixes; the finance roles read exports and never post, pay or send with the Tools shipped in their templates. A requested change needs that Tool's declared write access | the card |
 | Act on a public review surface | Reputation Manager declares `read` on its review surfaces and on Slack, and keeps `act` and `post` as a commented block the owner enables when it is needed; until then it drafts the requested batch | `templates/catalog/reputation`, `clients/tests/test_catalog.py` |
 
@@ -392,7 +391,7 @@ team_templates: [bookkeeping, ar-followup, accounts-payable, expense-auditor, sp
 
 Same layout as every template, plus what makes a starter reviewable:
 
-- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the bot's sending policy in Tico), how it starts and ends a run, how it uses `hub`, quality
+- `AGENT.md`, under 150 lines (most are 80 to 100): mandate, what it owns, its setup conversation, `## Sending` (matching the bot's sending policy in Tico), how it starts and ends a run, how it uses `tico`, quality
   standards and how it escalates. A head's also has `## Hiring`.
 - `playbooks/`: one for the first routine, one for the most common request, and `onboarding.md`.
 - `knowledge/examples/`: one sample of excellent output for the fictional team Acme. Never a real

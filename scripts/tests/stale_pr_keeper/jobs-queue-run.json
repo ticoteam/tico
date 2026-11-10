@@ -86,22 +86,6 @@
    ]
   },
   {
-   "id": 128503862726,
-   "name": "factory sim 2/3",
-   "conclusion": "cancelled",
-   "html_url": "https://github.com/ticoteam/tico/actions/runs/42405837018/job/128503862726",
-   "steps": [
-    {
-     "name": "Set up job",
-     "conclusion": "success"
-    },
-    {
-     "name": "Run this group of the factory sim",
-     "conclusion": "cancelled"
-    }
-   ]
-  },
-  {
    "id": 128503862852,
    "name": "recorder tests",
    "conclusion": "skipped",

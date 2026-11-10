@@ -546,7 +546,7 @@ case "${1:-help}" in
     mkdir -p "$workspace"
     if [ -d "$HUB/templates/catalog/$template" ]; then
       # The same materialization BotOps runs in a turn, with this environment's names and no
-      # onboarding answers: `hub bot create` is the one that has them.
+      # onboarding answers: `tico bot create` is the one that has them.
       (cd "$HUB" && "$PYTHON" - "$workspace" "$slug" "$template" "${name:-}" "$ENV_DIR/environment.json" <<'PY'
 import json, sys
 from clients import catalog

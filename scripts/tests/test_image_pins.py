@@ -191,6 +191,7 @@ def test_wheel_tags_match_only_the_images_python_and_platforms(wheel, x86_64, aa
 
 
 FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_wheels.json'
+REQUIRES_PYTHON_FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_requires_python.json'
 
 
 def pins(requirements):
@@ -232,24 +233,30 @@ def test_every_pin_has_a_wheel_for_the_images_python(requirements):
     )
 
 
+def requires_python_on_pypi(pin):
+    """The Requires-Python PyPI lists for one pinned version ('' when it names none)."""
+    name, version = pin
+    with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
+        return json.load(response)['info'].get('requires_python') or ''
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize('requirements', ['backend/requirements.txt', 'backend/requirements-dev.txt'])
 def test_every_pin_still_installs_on_the_oldest_supported_python(requirements):
-    """Locks resolve for the images' Python, but runner Macs may still have 3.12 (scripts/setup-runner.sh)."""
+    """Locks resolve for the images' Python, but runner Macs may still have 3.12 (scripts/setup-runner.sh).
+
+    The Requires-Python values come from scripts/tests/fixtures/pypi_requires_python.json, recorded from PyPI, not a
+    live call: a live call failed Release validation with a connection reset, and a published version's metadata does
+    not change. A new or bumped pin needs `python3 scripts/tests/test_image_pins.py --record`.
+    """
     from packaging.specifiers import SpecifierSet
 
     oldest = re.search(r'Python (\d+\.\d+) or newer', (ROOT / 'scripts/setup-runner.sh').read_text()).group(1)
-    pins = re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
-
-    def requires_python(pin):
-        name, version = pin
-        with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
-            return name, json.load(response)['info'].get('requires_python') or ''
-
-    with ThreadPoolExecutor(16) as pool:
-        refused = sorted(
-            f'{name} ({spec})' for name, spec in pool.map(requires_python, pins) if oldest not in SpecifierSet(spec)
-        )
+    recorded = json.loads(REQUIRES_PYTHON_FIXTURE.read_text())
+    keys = [f'{name}=={version}' for name, version in pins(requirements)]
+    missing = [key for key in keys if key not in recorded]
+    assert not missing, f'no recorded Requires-Python for {missing}: python3 scripts/tests/test_image_pins.py --record'
+    refused = sorted(f'{key} ({recorded[key]})' for key in keys if oldest not in SpecifierSet(recorded[key]))
     assert not refused, f'these pins refuse Python {oldest}: {refused}'
 
 
@@ -257,10 +264,20 @@ if __name__ == '__main__':
     import sys
 
     if sys.argv[1:] != ['--record']:
-        sys.exit('usage: python3 scripts/tests/test_image_pins.py --record   (asks PyPI for the wheels of every pin)')
+        sys.exit(
+            'usage: python3 scripts/tests/test_image_pins.py --record   '
+            '(asks PyPI for the wheels and Requires-Python of every pin)'
+        )
     found = pins('backend/requirements.txt')
     with ThreadPoolExecutor(16) as pool:
         recorded = dict(zip((f'{name}=={version}' for name, version in found), pool.map(wheels_on_pypi, found)))
     FIXTURE.parent.mkdir(parents=True, exist_ok=True)
     FIXTURE.write_text(json.dumps(dict(sorted(recorded.items())), indent=1) + '\n')
     print(f'recorded {len(recorded)} pins to {FIXTURE.relative_to(ROOT)}')
+    found = sorted({pin for name in ('backend/requirements.txt', 'backend/requirements-dev.txt') for pin in pins(name)})
+    with ThreadPoolExecutor(16) as pool:
+        versions = dict(
+            zip((f'{name}=={version}' for name, version in found), pool.map(requires_python_on_pypi, found))
+        )
+    REQUIRES_PYTHON_FIXTURE.write_text(json.dumps(dict(sorted(versions.items())), indent=1) + '\n')
+    print(f'recorded {len(versions)} Requires-Python values to {REQUIRES_PYTHON_FIXTURE.relative_to(ROOT)}')

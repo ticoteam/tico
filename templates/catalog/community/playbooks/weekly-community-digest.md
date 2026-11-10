@@ -12,7 +12,7 @@ Done when: every question in the period has a result, or "unknown" with its reas
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/community.md`, `knowledge/champions.md` and last week's digest. Check which replies from last week were posted, approved or dropped.
 
@@ -30,8 +30,8 @@ Every thread and message since the last digest in the sources `knowledge/communi
 
 ## 4. Route
 
-Feedback and bugs become `hub task create --owner <slug|person>` tasks once `knowledge/community.md` allows routing without asking, or once the task asks for it. Support cases become tasks for the Support Agent. Doc gaps go to the Librarian.
+Feedback and bugs become `tico task create --owner <slug|person>` tasks once `knowledge/community.md` allows routing without asking, or once the task asks for it. Support cases become tasks for the Support Agent. Doc gaps go to the Librarian.
 
 ## 5. Write and hand over
 
-Write `reports/YYYY-MM-DD-community.md` in the shape of `knowledge/examples/community-digest.md`, then `hub file publish reports/YYYY-MM-DD-community.md`. Attach the reply batch and its thread links to the task, then put the batch to the human named in setup as a review question: `hub task question "Approve this week's replies?" --on <that person> --parent <id> --review <batch file>`. Nothing is posted from it without a person's approval. Commit, and `hub task update <id> --status done --note "<headline>; reports/YYYY-MM-DD-community.md"`.
+Write `reports/YYYY-MM-DD-community.md` in the shape of `knowledge/examples/community-digest.md`, then `tico file publish reports/YYYY-MM-DD-community.md`. Attach the reply batch and its thread links to the task, then put the batch to the human named in setup as a review question: `tico task ask <id> --to <that person> "Approve this week's replies?" --show file:<batch file> --version N`. Nothing is posted from it without a person's OK. Commit, and `tico task done <id> -m "<headline>; reports/YYYY-MM-DD-community.md" --version N`.

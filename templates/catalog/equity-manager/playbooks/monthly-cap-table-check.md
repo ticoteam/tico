@@ -25,4 +25,4 @@ Schedule: the 5th of each month at 09:00 team time (routine `monthly-cap-table-c
 
 ## 3. Write and hand over
 
-Write `reports/YYYY-MM-DD-cap-table-check.md`, publish it with `hub file publish`, commit it, and `hub task update <id> --status done --note` with the headline.
+Write `reports/YYYY-MM-DD-cap-table-check.md`, publish it with `tico file publish`, commit it, and `tico task done <id> -m "..." --version N` with the headline.

@@ -152,7 +152,7 @@ def register(
 
     # An external agent (a Hermes profile) is a bot with a standing credential instead of a
     # computer: a person mints it here, the agent's box heartbeats with it, and the same token
-    # is the bearer for the MCP endpoint and the `hub` CLI (docs/hermes-agents.md).
+    # is the bearer for the MCP endpoint and the `tico` CLI (docs/hermes-agents.md).
     @app.post("/api/v2/bots/{bot}/agent-credential")
     def agent_credential(request: Request, bot: str, body: M.Empty):
         who = request.state.identity
@@ -528,7 +528,11 @@ def register(
             with automations.for_attempt(c, aid):
                 return execution.started(c, request.state.identity, aid, body)
 
-        return mutate(request, body, begin)
+        out = mutate(request, body, begin)
+        # A refused start is kept with the write (execution.refuse_start), then answered as the wait it is.
+        if isinstance(out, dict) and out.get("refused"):
+            raise Problem(out["refused"]["code"], out["refused"]["detail"], 409)
+        return out
 
     @app.post("/api/v2/attempts/{aid}/thread")
     def attempt_thread(request: Request, aid: str, body: M.AttemptThread):

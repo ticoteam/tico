@@ -186,8 +186,8 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
     assert made["owner_id"] == "human:ana" and made["due_at"] == "2026-11-20"
     assert "A summons from the county court" in made["body"] and "2026-11-20" in made["body"]
     assert "/api/v2/files/" + row["blob_id"] in made["body"]
+    assert row["task_id"] in {i["task"]["id"] for i in get(api, "needs-you", "ana-test")["items"] if i.get("task")}
     with api.app.state.store.read() as c:
-        assert row["task_id"] in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
         assert c.execute("SELECT count(*) FROM task_assets WHERE task_id=?", (row["task_id"],)).fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM tasks WHERE id=?", (row["task_id"],)).fetchone()[0] == 1
         assert (

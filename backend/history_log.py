@@ -2,7 +2,7 @@
 (`GET /api/v2/history`), and the same list as CSV for the owner and the Admins (`GET /api/v2/history.csv`).
 
 Nothing new is recorded. Each kind is read from where Tico already keeps it: runs from `attempts`, task status changes
-from `history_events`, approvals asked and decided from `approvals`, sends the send switch kept as drafts
+(the engine's moves) from `history_events`, sends the send switch kept as drafts
 (`automation.send_off`), credential reveals and permission changes from `events`, and people's answers to bots'
 questions (decisions) from `messages`.
 
@@ -34,13 +34,21 @@ TEXT_MAX = 160
 KINDS = {
     "run": "Run",
     "task": "Task",
-    "approval.asked": "Approval asked",
-    "approval.granted": "Approval granted",
-    "approval.denied": "Approval denied",
     "outbound.blocked": "Outbound blocked",
     "credential.revealed": "Credential revealed",
     "permission.changed": "Permission change",
     "decision": "Decision",
+}
+# What one of the engine's moves (history_events kind "move", data.move) did, in words.
+MOVES = {
+    "new": "created",
+    "forward": "moved on",
+    "done": "done",
+    "pushed_past": "pushed past",
+    "back": "moved back",
+    "closed": "closed",
+    "reopen": "reopened",
+    "restored": "restored",
 }
 REVEALS = {"credential.revealed": "revealed", "credential.sent_to_computer": "sent to its computer"}
 # What each permission event changed, in words.
@@ -117,38 +125,13 @@ def _sources(kinds):
         add(
             "task",
             "SELECT 'task:'||e.id AS rid, e.created_at AS at, e.actor_id AS actor, k.owner_id AS about, k.id AS task_id, "
-            "substr(k.title,1,:text_n) AS title, substr(e.old,1,:text_n) AS old, substr(e.new,1,:text_n) AS new "
+            "substr(k.title,1,:text_n) AS title, json_extract(e.data,'$.move') AS move "
             "FROM history_events e JOIN tasks k ON k.id=e.subject_id "
-            "WHERE e.subject_type='task' AND e.kind='status' AND e.created_at IS NOT NULL",
+            "WHERE e.subject_type='task' AND e.kind='move' AND e.created_at IS NOT NULL",
             "e.created_at",
             "e.actor_id",
             "k.owner_id",
         )
-    if "approval.asked" in kinds:
-        add(
-            "approval.asked",
-            "SELECT 'approval.asked:'||a.id AS rid, a.created_at AS at, a.requested_by_id AS actor, "
-            "a.decision_owner AS about, substr(a.kind,1,:text_n) AS what, "
-            "substr(a.decision,1,:text_n) AS decision, a.task_id AS task_id, "
-            "substr(k.title,1,:text_n) AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
-            "WHERE a.created_at IS NOT NULL",
-            "a.created_at",
-            "a.requested_by_id",
-            "a.decision_owner",
-        )
-    for kind, decision in (("approval.granted", "approved"), ("approval.denied", "declined")):
-        if kind in kinds:
-            add(
-                kind,
-                f"SELECT '{kind}:'||a.id AS rid, a.decided_at AS at, a.decided_by_id AS actor, "
-                "a.requested_by_id AS about, substr(a.kind,1,:text_n) AS what, "
-                "substr(a.decision,1,:text_n) AS decision, a.task_id AS task_id, "
-                "substr(k.title,1,:text_n) AS title FROM approvals a LEFT JOIN tasks k ON k.id=a.task_id "
-                f"WHERE a.decision='{decision}' AND a.decided_at IS NOT NULL",
-                "a.decided_at",
-                "a.decided_by_id",
-                "a.requested_by_id",
-            )
     # A key of a tool the reader may not see (backend/api_tools.py `visible`) has no rows here at all: `:hidden`.
     unseen = "coalesce(e.target,'') NOT IN (SELECT value FROM json_each(:hidden))"
     events = {
@@ -360,10 +343,7 @@ def install(app, store, auth):
                 link = "/api/runs/" + r["ref"] + "/log"
             elif kind == "task":
                 subject = task["title"] if task else ""
-                result = "created" if not r["old"] else f"{r['old']} → {r['new']}"
-            elif kind.startswith("approval."):
-                subject = f"{r['what']} · {task['title']}" if task else str(r["what"] or "")
-                result = r["decision"] or "pending"
+                result = MOVES.get(r["move"], "moved")
             elif kind == "outbound.blocked":
                 subject = autos.get(r["target"]) or "An automation"
                 result = "kept as a draft"

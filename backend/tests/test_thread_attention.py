@@ -1,9 +1,10 @@
-"""Needs attention: a thread item is listed for the person it concerns and clears when they act on it (a reply, a read,
-a release), a message outside the thread's audience never reaches its person, and a paused thread is listed only to
-the people who can manage it."""
+"""Needs attention (backend/thread_attention.py, the threads sidebar's list): a thread item is listed for the person it
+concerns and clears when they act on it (a reply, a read, a release), a message outside the thread's audience never
+reaches its person, and a paused thread is listed only to the people who can manage it. Needs you itself is the
+engine's list plus a person's @s (docs/dev/pipelines-v3-cutover.md, "Needs you"): those @s page and stay cheap there."""
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend import question_tasks as QT, threads
+from backend import threads
 from backend.auth import Identity
 from backend import hubdb as H
 from backend.tests.old_asks import old_ask
@@ -19,6 +20,17 @@ def old_question(api, thread_id, text, *, actor="human:cara", to="human:ana"):
 
 
 def needs(api, kind=None, token="ana-test"):
+    """The thread items listed for the person `token` signs in as."""
+    from backend import thread_attention as TA
+
+    auth = api.app.state.auth
+    who = auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/threads", "GET")
+    with api.app.state.store.read_transaction() as c:
+        items = TA.items(c, auth, who)
+    return [i for i in items if kind is None or i["kind"] == kind]
+
+
+def needs_you(api, kind=None, token="ana-test"):
     items = get(api, "needs-you", token=token)["items"]
     return [i for i in items if kind is None or i["kind"] == kind]
 
@@ -181,14 +193,14 @@ def test_a_participants_dm_is_listed_like_a_personal_one(api):
     assert [i["conversation_id"] for i in needs(api, "thread_dm")] == [dm]
 
 
-def test_every_thread_item_is_reachable_through_the_pages_of_needs_you(api):
+def test_every_mention_is_reachable_through_the_pages_of_needs_you(api):
     tids = [members_thread(api, title=f"Note {i}") for i in range(51)]
     for tid in tids:
         say(api, tid, "@ana please look.")
     seen, cursor = [], None
     while True:
         page = get(api, "needs-you?limit=50" + (f"&cursor={cursor}" if cursor else ""))
-        seen += [i["conversation_id"] for i in page["items"] if i["kind"] == "thread_mention"]
+        seen += [i["conversation_id"] for i in page["items"] if i["kind"] == "mention"]
         cursor = page.get("next")
         if not cursor:
             break
@@ -250,9 +262,18 @@ def test_a_dm_with_only_a_bot_is_counted_on_the_bot_not_listed(api):
     assert needs(api, "thread_dm") == []
     assert get(api, "threads", token="ana-test")["bot_dms"] == {"bot:finance": 1}
     with api.app.state.store.transaction() as c:
-        QT.ask_alone(c, "bot:finance", "human:ana", "Book the Q3 accrual?")
-    # Its question is a question task on Needs you (answered there, which a plain reply is not), so the DM stays out of Inbox.
-    assert len(needs(api, "question")) == 1
+        work = H.task_create(c, "human:ana", "Close Q3", "Book what Q3 needs.", "bot:finance", lint=False)
+        H.task_ask(
+            c,
+            "bot:finance",
+            work["id"],
+            "human:ana",
+            "Book the Q3 accrual?",
+            seen_version=H.task(c, work["id"])["version"],
+        )
+    # Its question is an ask on a task in Needs you (answered there, which a plain reply is not), so the DM stays out of
+    # Inbox.
+    assert len(needs_you(api, "ask")) == 1
     assert get(api, "threads", token="ana-test")["attention"] == []
     with api.app.state.store.transaction() as c:
         threads.mark_all_read(c, ana_viewer(api), dm)
@@ -300,8 +321,7 @@ def test_the_thread_items_take_the_same_statements_however_many_threads_name_the
             say(
                 api,
                 members_thread(api, members=("human:ana", "human:ben"), title=f"Plan {k}"),
-                f"Can you check {k}?",
-                to_actor="human:ana",
+                f"@ana can you check {k}?",
             )
 
     mention_in(2)
@@ -309,8 +329,8 @@ def test_the_thread_items_take_the_same_statements_however_many_threads_name_the
     mention_in(20)
     many_body, many = counted(api, monkeypatch, "/api/v2/needs-you")
     assert (
-        len([i for i in many_body["items"] if i["kind"] == "thread_mention"])
-        == len([i for i in few_body["items"] if i["kind"] == "thread_mention"]) + 20
+        len([i for i in many_body["items"] if i["kind"] == "mention"])
+        == len([i for i in few_body["items"] if i["kind"] == "mention"]) + 20
     )
     assert many - few <= 2, (few, many)
     _, sidebar_few = counted(api, monkeypatch, "/api/v2/threads?limit=50")

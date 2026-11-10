@@ -50,6 +50,24 @@ def load(domain: str) -> tuple[dict, str]:
     return s, e
 
 
+def record(value) -> dict:
+    """A local record as the reads --asset-prefix added take it: anything but a JSON object counts as no record, so a
+    file of the wrong shape never stops a command that did not read it before."""
+    return value if isinstance(value, dict) else {}
+
+
+def save_backup(domain: str, data: dict) -> None:
+    """What `setup backup-storage` made for a domain (its prefix and name), apart from any server state for it."""
+    write_private(_dir(domain) / "backup.json", json.dumps(data, indent=2, sort_keys=True))
+
+
+def load_backup(domain: str) -> dict:
+    try:
+        return json.loads((_dir(domain) / "backup.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def known_domains() -> list[str]:
     try:
         return sorted(p.name for p in home().iterdir() if (p / "state.json").exists())

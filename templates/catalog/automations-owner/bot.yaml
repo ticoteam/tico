@@ -17,5 +17,5 @@ routines:
     template: playbooks/review-the-automations.md
     labels: [priority:p3]
 
-# It needs no tool or credential of its own: it reads and proposes through `hub automation` and tasks.
+# It needs no tool or credential of its own: it reads and proposes through `tico automation` and tasks.
 tools: []

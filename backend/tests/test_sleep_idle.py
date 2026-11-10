@@ -63,13 +63,14 @@ def hq(api, monkeypatch):
     monkeypatch.setattr(sleep_idle, "POLICY", {"at": None, "minutes": None})
     fake.clock = clock
     service(api).started = 0  # the server has been up longer than any setting
-    system_jobs(api)  # no system job or release hour is near, whatever the hour the test runs at
+    system_jobs(api)  # no system job is near, whatever the hour the test runs at
     return fake
 
 
-def system_jobs(api, **on):
-    """Every controlled system job off except the ones named (`key=(preset, "HH:MM")`), releases off, Maintenance paused."""
-    from backend import release_flow
+def system_jobs(api, release=None, **on):
+    """Every controlled system job off except the ones named (`key=(preset, "HH:MM")`), Maintenance paused, the
+    release schedule off unless `release` names its times."""
+    from backend import release_schedule_routes as RS
     from backend import system_routines as SR
 
     config = {key: {"on": False} for key in SR.CONTROLS}
@@ -77,8 +78,8 @@ def system_jobs(api, **on):
     with api.app.state.store.transaction() as c:
         for key, value in (
             (SR.CONFIG_KEY, config),
-            (release_flow.KEY, {"on": False}),
             (maintenance.REGISTRY_KEY, {"paused": True}),
+            (RS.KEY, {"on": bool(release), "times": list(release or [])}),
         ):
             c.execute(
                 "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -279,10 +280,10 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
     zone = SR.zone()
     noon = datetime(2026, 10, 26, 12, 0, tzinfo=zone)  # Monday noon, company time
     hq.clock[0] = noon.timestamp()
-    system_jobs(api, ask_deadlines=("daily", "03:30"), kpi_asks=("15m", "09:00"))
+    system_jobs(api, task_manager_report=("daily", "03:30"), kpi_asks=("15m", "09:00"))
     with api.app.state.store.transaction() as c:  # today's 03:30 run already happened
         c.execute(
-            "INSERT INTO system_runs(id,job,started_at) VALUES('asks','ask_deadlines',?)",
+            "INSERT INTO system_runs(id,job,started_at) VALUES('asks','task_manager_report',?)",
             (sleep_idle.stamp(noon.timestamp() - 8.5 * 3600),),
         )
     with api.app.state.store.read() as c:
@@ -303,6 +304,33 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
         assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
 
 
+def test_a_sleeping_company_wakes_for_its_release_hour_and_stays_up_for_one_not_yet_fired(api, hq):
+    from datetime import datetime
+
+    from backend import release_hour, release_schedule_routes as RS
+
+    zone = RS.zone()
+    noon = datetime(2026, 10, 26, 12, 0, tzinfo=zone)
+    hq.clock[0] = noon.timestamp()
+    system_jobs(api, release=["03:30"])
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
+        assert sleep_idle.wake_time(c, hq.clock[0]) == datetime(2026, 10, 27, 3, 30, tzinfo=zone).timestamp()
+
+    system_jobs(api, release=["11:30"])  # half an hour ago, inside the grace, not fired: due now
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
+    with api.app.state.store.transaction() as c:
+        assert release_hour.tick(c, noon) is not None
+    with api.app.state.store.read() as c:  # fired: tomorrow's is the next
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
+        assert sleep_idle.wake_time(c, hq.clock[0]) == datetime(2026, 10, 27, 11, 30, tzinfo=zone).timestamp()
+
+    system_jobs(api)  # the schedule off: nothing to wake for
+    with api.app.state.store.read() as c:
+        assert sleep_idle.wake_time(c, hq.clock[0]) is None
+
+
 def maintenance_bucket(api, at, schedule=None):
     """Resume Maintenance with a finished full run in the current bucket. No saved schedule means the hourly default."""
     with api.app.state.store.transaction() as c:
@@ -313,15 +341,16 @@ def maintenance_bucket(api, at, schedule=None):
             "VALUES('mr1',?,'schedule',?,?,?,'done')",
             ("schedule:" + start, start, start, start),
         )
-        c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key IN ('find_stuck','update')", (start,))
+        c.execute("UPDATE maintenance_steps SET last_started_at=? WHERE key='update'", (start,))
 
 
-@pytest.mark.parametrize("schedule,hour,next_hour", [(None, 12, 18), ("6h", 12, 18), ("daily", 4, 5)])
-def test_maintenance_sets_the_wake_despite_a_retired_routines_frozen_last_run(api, hq, schedule, hour, next_hour):
+@pytest.mark.parametrize("schedule,hour,days,due", [(None, 12, 1, 5), ("6h", 12, 1, 6), ("daily", 4, 0, 5)])
+def test_maintenance_sets_the_wake_despite_a_retired_routines_frozen_last_run(api, hq, schedule, hour, days, due):
     from backend import system_routines as SR
 
     at = datetime(2026, 11, 4, hour, 20, tzinfo=maintenance.ZONE)
-    wake = at.replace(hour=next_hour, minute=0).timestamp()
+    # Update's next day: the first run at or after 05:00, which every six hours is 06:00
+    wake = (at.replace(hour=due, minute=0) + timedelta(days=days)).timestamp()
     hq.clock[0] = at.timestamp()
     system_jobs(api, auto_dream=("daily", "02:00"))  # an old saved switch survives the timer's retirement
     maintenance_bucket(api, at, schedule)
@@ -353,7 +382,7 @@ def test_catchup_steps_neither_keep_the_server_up_nor_set_an_hourly_wake(api, hq
     maintenance_bucket(api, at)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE maintenance_steps SET enabled=1, frequency='run'")
-        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key IN ('find_stuck','update')")
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key='update'")
         c.execute("DELETE FROM maintenance_runs WHERE id='mr1'")  # even an unclaimed bucket is only catch-up work
     with api.app.state.store.read() as c:
         assert sleep_idle.routine_times(c, hq.clock[0]) == []
@@ -366,10 +395,6 @@ def test_catchup_steps_neither_keep_the_server_up_nor_set_an_hourly_wake(api, hq
 def test_only_enabled_time_sensitive_steps_set_the_next_maintenance_wake(api, hq):
     at = datetime(2026, 11, 4, 12, 20, tzinfo=maintenance.ZONE)
     maintenance_bucket(api, at)
-    with api.app.state.store.read() as c:
-        assert sleep_idle.routine_times(c, at.timestamp()) == [at.replace(hour=18, minute=0).timestamp()]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key='find_stuck'")
     with api.app.state.store.read() as c:
         wake = at.replace(hour=5, minute=0) + timedelta(days=1)
         assert sleep_idle.routine_times(c, at.timestamp()) == [wake.timestamp()]
@@ -388,8 +413,8 @@ def test_only_enabled_time_sensitive_steps_set_the_next_maintenance_wake(api, hq
 @pytest.mark.parametrize(
     "step,frequency,every,unit,elapsed",
     [
-        ("find_stuck", "custom", 6, "hours", timedelta(hours=6)),
-        ("find_stuck", "week", None, None, timedelta(days=7)),
+        ("update", "custom", 6, "hours", timedelta(hours=6)),
+        ("update", "week", None, None, timedelta(days=7)),
         ("update", "custom", 2, "days", timedelta(days=2)),
     ],
 )
@@ -398,7 +423,6 @@ def test_a_step_cadence_waits_for_the_first_eligible_maintenance_bucket(api, hq,
     last = at.replace(hour=10, minute=15)
     maintenance_bucket(api, at)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key IN ('find_stuck','update')")
         c.execute(
             "UPDATE maintenance_steps SET enabled=1, frequency=?, custom_every=?, custom_unit=?, last_started_at=? "
             "WHERE key=?",
@@ -424,7 +448,8 @@ def test_pausing_maintenance_removes_its_wake_and_resuming_restores_it(api, hq):
     with api.app.state.store.transaction() as c:
         maintenance.save_settings(c, H.KEEPER, paused=False)
     with api.app.state.store.read() as c:
-        assert sleep_idle.wake_time(c, hq.clock[0]) == at.replace(hour=18, minute=0).timestamp()
+        wake = at.replace(hour=5, minute=0) + timedelta(days=1)
+        assert sleep_idle.wake_time(c, hq.clock[0]) == wake.timestamp()
 
 
 def test_a_full_run_now_claims_the_bucket_but_a_step_only_run_does_not(api, hq):
@@ -434,7 +459,8 @@ def test_a_full_run_now_claims_the_bucket_but_a_step_only_run_does_not(api, hq):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE maintenance_runs SET trigger='run_now', result='failed', ok=0 WHERE id='mr1'")
         c.execute(
-            "UPDATE maintenance_steps SET last_started_at=? WHERE key='find_stuck'",
+            "UPDATE maintenance_steps SET frequency='custom', custom_every=6, custom_unit='hours', last_started_at=? "
+            "WHERE key='update'",
             (maintenance._stamp(at.replace(hour=6, minute=0)),),
         )
     with api.app.state.store.read() as c:
@@ -455,7 +481,7 @@ def test_a_stale_or_abandoned_maintenance_run_does_not_hide_the_due_bucket(api, 
     maintenance_bucket(api, at)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE maintenance_runs SET finished_at=NULL, result='' WHERE id='mr1'")
-        c.execute("UPDATE maintenance_steps SET last_started_at=NULL WHERE key='find_stuck'")
+        c.execute("UPDATE maintenance_steps SET last_started_at=NULL WHERE key='update'")
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
         assert c.execute("SELECT finished_at, result FROM maintenance_runs WHERE id='mr1'").fetchone()[:] == (None, "")
@@ -474,7 +500,7 @@ def test_a_live_maintenance_run_keeps_the_server_up_even_when_paused(api, hq):
     maintenance_bucket(api, at)
     with api.app.state.store.transaction() as c:
         maintenance.save_settings(c, H.KEEPER, paused=True)
-        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key IN ('find_stuck','update')")
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key='update'")
         c.execute(
             "UPDATE maintenance_runs SET started_at=?, heartbeat_at=?, finished_at=NULL, result='' WHERE id='mr1'",
             (sleep_idle.stamp((at - timedelta(hours=1)).timestamp()), sleep_idle.stamp(hq.clock[0])),

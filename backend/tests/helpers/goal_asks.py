@@ -49,5 +49,5 @@ def sync(api, at=None):
 
 
 def needs_tasks(api, token):
-    page = get(api, "needs-you", token)
-    return {str(i["id"]) for i in page["items"] + page["older"]}
+    """The tasks in a person's Needs you (one list: there is no "older" part any more)."""
+    return {str(i.get("task_id") or i["id"]) for i in get(api, "needs-you", token)["items"]}

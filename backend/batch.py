@@ -2,34 +2,38 @@
 applied together on commit.
 
 The person goes through the list giving a response per item; nothing is applied while they
-talk. Commit applies the decisions with the person's own identity (only a person decides an
-approval), records snoozes, and sends each bot one message in the person's chat with it: what was
-decided, and the questions, instructions and rules it must act on. Each bot's reply, split per
-item, comes back on those items the next time that bot comes up. Any front end runs the same
-loop: the hub tools an outside agent (Grok Bot, Meta Muse) calls, a page.
+talk. Commit applies the decisions with the person's own identity, records snoozes, and sends each bot one message in
+the person's chat with it: what was decided, and the questions, instructions and rules it must act on. Each bot's
+reply, split per item, comes back on those items the next time that bot comes up. Any front end runs the same loop:
+the hub tools an outside agent (Grok Bot, Meta Muse) calls, a page.
 
-A batch is what bots are waiting on the person for, never anything else: the
-person's own tasks and other people's requests are on the Tasks page, not here. The person's Assistant may walk it for
-them, as them; it never approves on a walk (`_apply_decide`). It is the whole list, or one bot's part of it (`scope`). "Who needs
-me" starts the bot that most needs the person, and commit says who is next: the bots come to the
-person one at a time, most important first.
+The list is Needs you (`waiting_on.needs`): every OK and question a bot asked of the person
+(`ask:<visit>:<requirement>`) and every task a bot filed for them (`task:<task>`); a batch holds only what bots are
+waiting on. A decision is what the
+Needs-you buttons do: OK, Send back (with notes), an answer, Done or Close (`_apply_decide`, through the task calls).
+An OK that is bound to what it lets go (send, spend, publish: backend/task_asks.py) is never given on a walk: it is
+the person's own click on its preview in Tico. The person's Assistant may walk the list for them, as them; it never
+OKs. It is the whole list, or one bot's part of it (`scope`). "Who needs me" starts the bot that most needs the
+person, and commit says who is next: the bots come to the person one at a time, most important first.
 """
 
+import contextlib
 import json
 import re
 
 from . import hubdb as H
+from . import task_asks
 from .store import Problem
 from . import task_privacy as privacy
-from .views import deadline, needs_order, pressing
 
 KINDS = ("decide", "needs_info", "instruct", "rule", "skip", "later")
-DECISIONS = ("approve", "decline", "done", "close", "answer")
+DECISIONS = ("ok", "send_back", "done", "close", "answer")
 VERDICTS = ("decide", "skip", "later")
 LATER_DAYS = 1
 REPORT_DAYS = 14  # how far back a bot's reply to a batch still comes back on its items
 MARKER = re.compile(r"^\s*\[item (\d+)\]", re.M)
 NEXT = "next"  # the scope that means "whichever bot most needs the person"
+ORDER = {"ok": 0, "answer": 1, "task": 2}  # an OK first, then a question, then a task filed for them
 
 
 def _clip(text, n):
@@ -55,74 +59,52 @@ def _snoozed(c, actor):
     return out
 
 
-def _children(c, task_id, owner):
-    return H._rows(
-        c.execute(
-            f"SELECT * FROM {H.TASKS} tasks WHERE id IN (SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?) AND owner_id=? AND status IN ('open','doing','waiting','review','ready') "
-            "ORDER BY created_at",
-            (task_id, owner),
-        )
-    )
+def _row(c, entry):
+    """One Needs-you entry as a front end presents it: the whole ask, never a clipped title. None for what no bot is
+    waiting on (a person's own to-do, a bot that cannot run)."""
+    from . import task_requirements as R
+    from . import waiting_on
 
-
-def _row(it, actor):
-    """One item as a front end presents it: the whole question, never a clipped title."""
-    key = ("approval:" if it["kind"] == "approval" else "task:") + str(it["id"])
-    row = {"key": key, "kind": it["kind"], "title": _clip(it.get("title") or it.get("first_line"), 160)}
-    frm = (
-        it.get("requester_id")
-        if it["kind"] == "approval"
-        else it.get("owner_id")
-        if it["kind"] == "waiting"
-        else (it.get("ask") or {}).get("sender_id") or it.get("origin_actor") or it.get("requester_id")
-    )
-    if frm:
-        row["from"] = frm
-    if it.get("status"):
-        row["status"] = it["status"]
-    if it.get("rank") is not None:
-        row["rank"] = it["rank"]
-    if it.get("person_ask"):
-        row["ask"] = it["person_ask"]
-    if it.get("ask_missing"):
-        # Nothing to decide yet: the bot has not yet said plainly what it needs.
-        row["ask_missing"] = True
-    if (it.get("ask") or {}).get("body"):
-        row["question"] = _clip(it["ask"]["body"], 1500)
-    elif it.get("body"):
-        row["body"] = _clip(it["body"], 800)
-    if isinstance(it.get("payload"), dict) and it["payload"]:
-        row["payload"] = _clip(json.dumps(it["payload"], sort_keys=True, default=str), 800)
-    if it["kind"] == "approval" and it.get("ready_since"):
-        row["ready"] = H.approval_wait_line(it)  # "Ready 2 h 10 min, waiting on Chris"
-        row["ready_since"] = it["ready_since"]
-    if it.get("note"):
-        row["note"] = _clip(it["note"], 300)
-    if it.get("created_at"):
-        row["created_at"] = it["created_at"]
-    if it.get("from_person"):
-        row["from_person"] = it["from_person"]
-    if it.get("pressing"):
-        row["pressing"] = True
-    if deadline(it):
-        row["due_at"] = deadline(it)
-    if it.get("recommend"):
-        row["recommend"], provenance = H.sourced_text(it["recommend"]["do"], [it["recommend"].get("source")])
-        row.update(provenance)
-    if it.get("folded"):
-        # Other bots' tasks waiting on the person for the same thing: said with the card so none is lost.
-        row["folded"] = [
-            {
-                k: v
-                for k, v in (
-                    ("title", _clip(f.get("title"), 160)),
-                    ("from", f.get("owner_id")),
-                    ("ask", _clip(f.get("person_ask") or f.get("note"), 300)),
-                )
-                if v
-            }
-            for f in it["folded"]
-        ]
+    task = H.task(c, entry["task_id"]) if entry.get("task_id") else None
+    if not task:
+        return None
+    if entry["kind"] == "ask":
+        requirement = R.get(c, entry["requirement_id"])
+        if not requirement:
+            return None
+        frm = requirement.get("added_by_id") if requirement.get("visit_id") else task.get("owner_id")
+        kind = requirement["kind"]
+        row = {
+            "key": "ask:" + waiting_on.ask_id(entry),
+            "kind": kind,
+            "title": _clip(entry.get("line") or requirement.get("line"), 160),
+            "task": entry["task_id"],
+            "task_title": _clip(task.get("title"), 160),
+        }
+        if requirement.get("choices"):
+            row["choices"] = requirement["choices"]
+        if requirement.get("shows"):
+            row["shows"] = requirement["shows"]
+            row["source"] = requirement["shows"]  # its words come from those pages (files.readable_page_refs)
+        if kind == "ok" and task_asks.grant(c, entry["requirement_id"]):
+            # Bound to what it lets go: OK'd only from its preview in Tico, never on a walk.
+            row["preview_only"] = True
+    elif entry["kind"] == "task":
+        frm = task.get("requester_id")
+        row = {"key": "task:" + entry["task_id"], "kind": "task", "title": _clip(task.get("title"), 160)}
+        if task.get("body"):
+            row["body"] = _clip(task["body"], 800)
+        if entry.get("missing"):
+            row["missing"] = entry["missing"]
+    else:
+        return None
+    if not H.is_bot(frm):
+        return None
+    row["from"] = frm
+    if entry.get("since"):
+        row["created_at"] = entry["since"]
+    if task.get("due_at"):
+        row["due_at"] = task["due_at"]
     return row
 
 
@@ -141,62 +123,22 @@ def alerts(snapshot):
     return out
 
 
-def relevant(c, actor, items):
-    """The relevance check, deterministic: drop what the person deferred, replace a task with the
-    open children the person owns, let an approval stand for the task it belongs to, and order
-    bot requests above the person's own tasks above mail."""
+def relevant(c, actor, reader=None):
+    """What bots are waiting on the person for, from Needs you: what they deferred dropped, each task the reader may read
+    once, an OK above a question above a task, oldest first."""
+    from . import waiting_on
+
     snoozed = _snoozed(c, actor)
-    covered = {it.get("task_id") for it in items if it["kind"] == "approval" and it.get("task_id")}
     out, seen = [], set()
-    for it in items:
-        # Standalone questions and stale checks have their own decision protocols;
-        # a batch applies task and approval responses only.
-        if it["kind"] in ("ask", "stale"):
+    for entry in waiting_on.needs(c, actor):
+        task = H.task(c, entry["task_id"]) if entry.get("task_id") else None
+        if not task or not H.task_private_readable(c, reader or actor, task):
             continue
-        # A person's own parked work belongs on their task board, not in a spoken decision pass.
-        # It has no other requester waiting for an answer and "waiting" explicitly means there is
-        # nothing for the owner to do now. A later bot ask on that task changes its kind to a
-        # question and brings it back into the pass.
-        if (
-            it["kind"] == "task"
-            and it.get("owner_id") == actor
-            and it.get("requester_id") == actor
-            and it.get("status") == "waiting"
-            and not it.get("ask")
-        ):
-            continue
-        if it["kind"] != "approval":
-            if it["id"] in covered:
-                continue
-            kids = _children(c, it["id"], actor)
-            if kids:
-                for kid in kids:
-                    # Its person, as needs-you has it: its own requester when a person (the viewer's own to-do counts
-                    # for nobody), else the parent's, which needs-you worked out under the reader's rule.
-                    own = kid["requester_id"] if H.is_human(kid["requester_id"]) else None
-                    kid = {
-                        **kid,
-                        "kind": "task",
-                        "ask": H.unanswered_ask(c, kid, actor=actor),
-                        "origin_actor": H.task_origin(c, kid),
-                        "first_line": (kid.get("body") or "").split("\n")[0],
-                        "from_person": None if own == actor else own or it.get("from_person"),
-                    }
-                    if kid["ask"]:
-                        kid["kind"] = "question"
-                    kid["pressing"] = pressing(kid)
-                    row = _row(kid, actor)
-                    if row["key"] not in seen and row["key"] not in snoozed:
-                        seen.add(row["key"])
-                        out.append(row)
-                continue
-        row = _row(it, actor)
-        if row["key"] in seen or row["key"] in snoozed:
+        row = _row(c, entry)
+        if not row or row["key"] in seen or row["key"] in snoozed:
             continue
         seen.add(row["key"])
         out.append(row)
-    # views.needs_order: what traces back to a person or presses first, then decisive kinds (an approval,
-    # a question), then the person's queue in its rank order.
     out.sort(key=_rank)
     return out
 
@@ -213,21 +155,13 @@ def _name(c, actor):
 
 
 def _rank(row):
-    return needs_order(
-        row["kind"],
-        row.get("created_at") or row.get("created"),
-        row.get("rank") if row["kind"] == "task" else None,
-        row.get("from_person"),
-        row.get("pressing"),
-        bool(row.get("ask_missing")),
-        row.get("due_at"),
-    )
+    """An OK first, then a question, then a task filed for the person; a due date sooner, then the oldest."""
+    return (ORDER.get(row["kind"], 3), row.get("due_at") or "~", row.get("created_at") or "")
 
 
 def lineup(c, person, rows):
-    """Who needs the person, most important first: each group ranked by its most pressing item
-    (views.needs_order: a person's work or a pressing item, then an approval, a question, the queue in
-    rank order), more items breaking a tie.
+    """Who needs the person, most important first: each group ranked by its most pressing item (`_rank`), more items
+    breaking a tie.
     `awaiting` counts items the person already answered and whose bot has not replied yet."""
     groups = {}
     for row in rows:
@@ -342,11 +276,11 @@ def current(c, actor):
     return dict(row) if row else None
 
 
-def candidates(c, actor, items):
-    """What would go in a new batch: needs-you after the relevance check, with each bot's replies
+def candidates(c, actor, reader=None):
+    """What would go in a new batch: Needs you after the relevance check, with each bot's replies
     attached to the items they answer and its loose notes as a report item from that bot. Nothing
     is consumed here."""
-    rows = [r for r in relevant(c, actor, items) if group_of(r, actor)]
+    rows = [r for r in relevant(c, actor, reader) if group_of(r, actor)]
     reports, awaiting = _pending(c, actor)
     shown = {}
     for report in reports:  # newest first: the latest answer to an item wins
@@ -373,11 +307,11 @@ def candidates(c, actor, items):
     return rows, notes, reports
 
 
-def start(c, actor, items, snapshot, scope=None, reader=None):
-    """The open batch if there is one (resume), otherwise a new one from `items` (needs-you rows):
-    the whole list, or one group of it when `scope` names a bot, a person, `me`, or `next`. `reader` is the privacy
-    actor the person reads with (task_privacy.actor): only the questions it may read are marked read."""
-    rows, notes, reports = candidates(c, actor, items)
+def start(c, actor, snapshot, scope=None, reader=None):
+    """The open batch if there is one (resume), otherwise a new one from Needs you: the whole list, or one group of it
+    when `scope` names a bot or `next`. `reader` is the privacy actor the person reads with (task_privacy.actor): only
+    the tasks it may read are in it."""
+    rows, notes, reports = candidates(c, actor, reader)
     line = lineup(c, actor, notes + rows)
     open_ = current(c, actor)
     if open_:
@@ -514,35 +448,19 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
     if kind == "decide":
         if decision not in DECISIONS:
             raise Problem("decision", f"A decision is {'|'.join(DECISIONS)}, not {decision}", 422)
-        if item["kind"] == "approval" and decision not in ("approve", "decline"):
-            raise Problem("decision", f"{item['title']} is an approval: approve or decline it", 422)
-        if item["kind"] not in ("approval", "task") and decision in ("approve", "decline"):
-            raise Problem("decision", f"{item['title']} is a {item['kind']}, not a yes-or-no decision task", 422)
+        allowed = {
+            "ok": ("ok", "send_back"),
+            "answer": ("answer",),
+            "task": ("done", "close"),
+        }.get(item["kind"], ())
         if item["kind"] == "report":
             raise Problem("decision", "Notes are not decided; instruct or skip", 422)
-        if decision == "answer" and not text:
-            raise Problem("decision", "An answer needs the text to send", 422)
-        # Done is one tap: a note is optional. A yes, a no or a close still says why to the bot that asked.
-        if item["key"].startswith("task:") and decision in ("approve", "decline", "close") and not text:
-            task = H.task(c, item["key"].split(":", 1)[1])
-            if (
-                task
-                and H.is_human(task.get("owner_id"))
-                and H.is_bot(task.get("requester_id"))
-                and task["status"] not in ("done", "declined")
-            ):
-                raise Problem("decision", "Tell the requesting bot what you decided or completed", 422)
-        settles = decision in ("approve", "decline", "done", "close")
-        # A person's close takes any task off its board; the other verdicts need a step move there.
-        if settles and decision != "close" and item["key"].startswith("task:") and item["kind"] != "waiting":
-            task = H.task(c, item["key"].split(":", 1)[1])
-            if task and H.steps_only(c, task):
-                raise Problem(
-                    "decision",
-                    f"{item['title']} is finished only by moving it to a step on its board; "
-                    "instruct its bot or move it in Tico",
-                    422,
-                )
+        if decision not in allowed:
+            raise Problem("decision", f"{item['title']}: {' or '.join(allowed) or 'nothing to decide'}", 422)
+        if decision == "ok" and item.get("preview_only"):
+            raise Problem("decision", f"{item['title']}: {task_asks.FROM_PREVIEW}", 422)
+        if decision in ("answer", "send_back") and not text:
+            raise Problem("decision", "Say the answer" if decision == "answer" else "Say what to change", 422)
         response["decision"] = decision
     elif kind in ("needs_info", "instruct", "rule") and not text:
         raise Problem("text", f"A {kind.replace('_', ' ')} response needs the text", 422)
@@ -565,119 +483,73 @@ def respond(c, actor, batch_id, kind, text="", n=None, decision=None, heard="", 
 
 
 def summary(batch):
-    """What the commit will do, counted, approvals named: the read-back before a yes."""
+    """What the commit will do, counted, OKs named: the read-back before a yes."""
     items = {it["key"]: it for it in _items(batch)}
     responses = _responses(batch)
     counts, total = {}, 0
-    approving, declining = [], []
+    oks, sent_back = [], []
     for key, rs in responses.items():
         for r in rs:
             total += 1
             label = r["kind"] if r["kind"] != "decide" else r.get("decision")
             counts[label] = counts.get(label, 0) + 1
-            if r["kind"] == "decide" and r.get("decision") == "approve":
-                approving.append(items[key]["title"])
-            if r["kind"] == "decide" and r.get("decision") == "decline":
-                declining.append(items[key]["title"])
+            if r["kind"] == "decide" and r.get("decision") == "ok":
+                oks.append(items[key]["title"])
+            if r["kind"] == "decide" and r.get("decision") == "send_back":
+                sent_back.append(items[key]["title"])
     return {
         "responses": total,
         "items": len(responses),
         "unanswered": len(items) - len(responses),
         "counts": counts,
-        "approving": approving,
-        "declining": declining,
+        "ok": oks,
+        "sent_back": sent_back,
     }
 
 
-def _apply_decide(c, auth, who, item, r, boards):
-    """One decision with the person's own identity: exactly what the Needs-you buttons do."""
-    decision, text = r["decision"], r.get("text") or ""
+def _apply_decide(c, who, item, r):
+    """One decision with the person's own identity: exactly what the Needs-you buttons do, through the task calls."""
+    decision, text = r["decision"], (r.get("text") or "")[:2000]
     kind, ident = item["key"].split(":", 1)
-    if kind == "approval":
-        if decision == "approve" and getattr(who, "via", "") == "assistant":
-            # The person's Assistant walks the batch for them, but an approve is never its to make on a walk: it stays
-            # the person's own click, or the Assistant's read-back and their yes (backend/assistant.py approval_words).
-            raise Problem(
-                "approve_not_asked",
-                "Approving is the person's own decision: the Assistant can decline here, "
-                "but the person approves it in Tico or with their yes to the Assistant's read-back",
-                403,
-            )
-        row = auth.approval(c, who, ident, decide=True)
-        if row["kind"] == "support" and decision == "approve":
-            # As on the approve route: sending off the install is a person's own tap in Tico, not their token. A decline
-            # sends nothing, so it is anyone's who may decide it.
-            from .support import require_person
-
-            try:
-                require_person(who)
-            except Problem:
-                raise Problem("forbidden", "Say yes to a support report in Tico itself", 403) from None
-        from .company_page import editions
-
-        own_click = editions.own_click_approval(row.get("payload"))
-        if own_click:
-            editions.require_own_click(who)
-        verdict = "approved" if decision == "approve" else "declined"
-        decided = H.approval_decide(c, who.actor, ident, verdict, note=text[:2000])
-        if own_click:
-            board = editions.approval_decided(c, decided)
-            if board:
-                boards.append(board)  # the caller puts a Public board on the page after commit
-        if row["kind"] in ("finance", "spend"):
-            from .finance import actions as finance
-
-            finance.approval_decided(c, ident)  # Finance acts on it in the same transaction
-        return f"{verdict.capitalize()}: {item['title']}"
-    row = auth.task(c, who, ident)
-    if item["kind"] == "waiting" and decision in ("done", "answer"):
-        # The bot's own task waits on the person: "done" or an answer goes back on the task and wakes
-        # the bot (task_comment also takes it off the person's list). Its status stays the bot's.
-        said = text or "Done."
-        H.task_comment(c, who.actor, ident, said)
-        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
-        return f"Told {H.actor_name(c, row['owner_id'])}: {_clip(said, 120)}"
-    from . import question_tasks
-
-    asked = H.task(c, ident)
-    if (
-        decision in ("approve", "done", "answer")
-        and question_tasks.is_open(asked)
-        and question_tasks.may_answer(c, auth, who, asked)
-    ):
-        # A question task: the answer is its close. A Yes, or a note naming an option, is that pick, with its spend
-        # approval and file verdicts (question_tasks.close_by_label); any other note is the answer as said (closed).
-        picked = question_tasks.close_by_label(c, auth, who, asked, text)
-        if not picked:
-            H.task_update(c, who.actor, ident, status="done", note=text or None)
-        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
-        return f"Answered {H.actor_name(c, row['requester_id'])}: {_clip(text or ('Yes.' if picked else 'Done.'), 120)}"
-    if decision in ("approve", "decline"):
-        status = "done" if decision == "approve" else "declined"
-        note = text or ("Approved." if decision == "approve" else "Declined.")
-        H.task_update(c, who.actor, ident, status=status, note=note)
-        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
-        return f"{'Approved' if decision == 'approve' else 'Declined'}: {item['title']}"
+    if kind == "ask":
+        found = _task_of_key(c, item["key"])
+        if not found:
+            raise Problem("not_found", f"{item['title']} is not asked any more", 404)
+        # The requirement: a stage's is on every task in the stage, so it is answered on the item's own task, whose
+        # answer checks that it is still asked there.
+        task_id, ident = found["id"], ident.rsplit(":", 1)[-1]
+        if decision == "ok":
+            if task_asks.grant(c, ident):
+                raise Problem("decision", task_asks.FROM_PREVIEW, 409)
+            refused = task_asks.refuses_ok_by(c, who, ident, "ok")  # the same check as the answer route
+            if refused:
+                # An OK is the person's own, in Tico: whoever walks the list for them may send back, never OK.
+                raise Problem("ok_not_yours", refused, 403)
+            H.task_answer(c, who.actor, task_id, ident, "ok", text or None, own_click=task_asks.own_click(who))
+            return f"OK'd: {item['title']}"
+        if decision == "send_back":
+            H.task_answer(c, who.actor, task_id, ident, "no", text)
+            return f"Sent back: {item['title']}"
+        H.task_answer(c, who.actor, task_id, ident, text)
+        return f"Answered \"{item['title']}\""
     if decision == "done":
-        H.task_update(c, who.actor, ident, status="done", note=text or None)
-        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
+        H.task_done(c, who.actor, ident, text)
         return f"Done: {item['title']}"
-    if decision == "close":
-        H.task_close(c, who.actor, ident, note=text)
-        c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (ident,))
-        return f"Closed: {item['title']}"
-    ask = H.unanswered_ask(c, row, actor=privacy.actor(who))
-    card = H.task(c, ask["id"]) if ask and ask.get("recipient_id") == who.actor else None
-    if card and question_tasks.is_open(card) and question_tasks.may_answer(c, auth, who, card):
-        # The task's open question task for them (a subtask or blocker): answered as above.
-        if not question_tasks.close_by_label(c, auth, who, card, text):
-            H.task_update(c, who.actor, card["id"], status="done", note=text or None)
-        return f"Answered {H.actor_name(c, ask['sender_id'])}: {_clip(text, 120)}"
-    to = H.task_origin(c, row) or row.get("requester_id")
-    if not to or to == who.actor:
-        raise Problem("answer", f"{item['title']} has nobody to answer", 422)
-    H.say(c, who.actor, to, text, conversation_id=row.get("conversation_id"))
-    return f"Answered {H.actor_name(c, to)}: {_clip(text, 120)}"
+    H.task_close(c, who.actor, ident, text)
+    return f"Closed: {item['title']}"
+
+
+def _task_of_key(c, key):
+    """The task an item is about: the task itself, or for an ask (`ask:<visit>:<requirement>`, waiting_on.ask_id) the
+    task whose visit it was asked on, while that visit is still the task's own: once it moved on, it is not asked."""
+    kind, ident = key.split(":", 1)
+    if kind == "task":
+        return H.task(c, ident)
+    if kind == "ask":
+        visit = ident.split(":", 1)[0]
+        found = c.execute("SELECT task_id FROM visits WHERE id=? AND left_at IS NULL", (visit,)).fetchone()
+        return H.task(c, found[0]) if found else None
+    return None
 
 
 def signature(c, who):
@@ -707,19 +579,33 @@ def _brief(person, done, act):
     return "\n\n".join(parts)
 
 
+@contextlib.contextmanager
+def _savepoint(c, name):
+    """A write that may fail without taking the batch with it: on an error, only what it wrote is rolled back."""
+    c.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except BaseException:
+        c.execute(f"ROLLBACK TO {name}")
+        c.execute(f"RELEASE {name}")
+        raise
+    c.execute(f"RELEASE {name}")
+
+
 def _comment_instead(c, who, to, lines, detail):
     """A bot the person may not message still sees what it must act on: each line becomes a
-    comment on its task. An approval has no task to hold it; that is a failure, said."""
+    comment on its task. Notes with no task are a failure, said."""
     applied, errors = [], []
     for key, line in lines:
-        kind, ident = key.split(":", 1)
-        if kind != "task":
+        task = _task_of_key(c, key)
+        if not task:
             errors.append(f"{H.actor_name(c, to)} could not be told ({detail}): {line.splitlines()[0]}")
             continue
         try:
-            H.task_comment(c, who.actor, ident, line.split("\n", 1)[-1])
+            with _savepoint(c, "batch_comment"):
+                H.task_comment(c, who.actor, task["id"], line.split("\n", 1)[-1])
             applied.append(f"Commented on {line.splitlines()[0]} (could not message {H.actor_name(c, to)})")
-        except Exception as e:  # a refusal is a line in the record, not an abort
+        except Exception as e:  # a refusal is a line in the record, not an abort; its half-write is rolled back
             errors.append(f"{line.splitlines()[0]}: {_clip(str(e), 200)}")
     return applied, errors
 
@@ -737,17 +623,14 @@ def _deliver(c, who, batch_id, outbox, record, send):
         public_lines, public_done = [], []
         for collection, output in ((lines, public_lines), (done, public_done)):
             for key, line in collection:
-                kind, ident = key.split(":", 1)
-                task = H.task(c, ident) if kind == "task" else None
-                source = H.approval(c, ident) if kind == "approval" else None
-                private = bool(task and H.task_private(c, task)) or bool(
-                    source and not privacy.public_message(c, H.message(c, source["message_id"]))
-                )
+                task = _task_of_key(c, key)
+                private = bool(task and H.task_private(c, task))
                 if private:
                     # Each private record stays on its task, never copied to a bot room.
                     if task:
                         try:
-                            H.task_comment(c, who.actor, ident, line)
+                            with _savepoint(c, "batch_record"):
+                                H.task_comment(c, who.actor, task["id"], line)
                             applied.append("Recorded on its private task")
                         except Exception as e:
                             errors.append(_clip(str(e), 200))
@@ -796,11 +679,42 @@ def _record_line(item, r, line):
     return f"- {line}" + (f": \"{text}\"" if text and r["kind"] == "decide" else "")
 
 
-def commit(c, auth, who, batch_id, send, boards):
+# What each response's words are, as the org rule check reads them (backend/task_rule_gate.py): the operation.
+SAID = {
+    "ok": "task_ask_answer",
+    "send_back": "task_ask_answer",
+    "answer": "task_ask_answer",
+    "done": "task_done",
+    "close": "task_move",
+}
+
+
+def said(c, who, batch_id):
+    """Each response with words of the person's own, for the rule check before commit: ((key, i), task id or None,
+    the bot it reaches, operation, text). The words reach the bot (a decision's note, an answer, an instruction or a
+    rule, by message or as a comment on the task) and the task's people."""
+    batch = _load(c, who.actor, batch_id)
+    out = []
+    for item in _items(batch):
+        task = _task_of_key(c, item["key"])
+        for i, r in enumerate(_responses(batch).get(item["key"], [])):
+            if not str(r.get("text") or "").strip() or r["kind"] in ("skip", "later"):
+                continue
+            operation = SAID.get(r.get("decision"), "task_move") if r["kind"] == "decide" else "batch_note"
+            out.append(
+                ((item["key"], i), task["id"] if task else None, group_of(item, who.actor), operation, r["text"])
+            )
+    return out
+
+
+def commit(c, who, batch_id, send, rules=None):
     """Apply every response. Decisions and snoozes here; then one message to each bot the items
     came from, in the person's chat with it: what was decided, and the questions, instructions and
     rules it must act on, whose reply comes back on those items. One item's failure is recorded,
-    not fatal. Board rows recorded by a decision are appended to `boards` for the caller to release after commit."""
+    not fatal: each decision runs in its own savepoint, so a refused one leaves nothing half done.
+    `rules(c, key, i, r)`: the org rule check's verdict on a response's words (`said`), applied before any of its
+    item's responses is: (r, None) to go with r (its text with a warning line when warned), (r, line) when held, a
+    Problem when the check refuses it. Gated first, so one response's write does not make the next one's check stale."""
     batch = _load(c, who.actor, batch_id)
     if batch["state"] != "open":
         raise Problem("state", f"This batch is {batch['state']}", 409)
@@ -811,11 +725,29 @@ def commit(c, auth, who, batch_id, send, boards):
     for n, key in enumerate(order, 1):
         item = items[key]
         to = group_of(item, who.actor)
-        for r in responses.get(key, []):
+        gated = []
+        for i, r in enumerate(responses.get(key, [])):
+            try:
+                r, held = rules(c, key, i, r) if rules else (r, None)
+            except Problem as e:
+                errors.append(f"{item['title']}: {e.detail}")
+                continue
+            if held:
+                errors.append(f"{item['title']}: {held}")
+                continue
+            gated.append(r)
+        for r in gated:
             try:
                 line = None
                 if r["kind"] == "decide":
-                    line = _apply_decide(c, auth, who, item, r, boards)
+                    c.execute("SAVEPOINT batch_decide")
+                    try:
+                        line = _apply_decide(c, who, item, r)
+                    except Exception:
+                        c.execute("ROLLBACK TO batch_decide")
+                        c.execute("RELEASE batch_decide")
+                        raise
+                    c.execute("RELEASE batch_decide")
                 elif r["kind"] == "rule":
                     H.event(
                         c,

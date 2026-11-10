@@ -1,5 +1,5 @@
-"""The tasks board: queues in rank order, two lanes,
-labels, blocked-by, links, comments that wake or wait, movers, and plain-English titles."""
+"""The tasks board: done and closed, two lanes, labels, links, relations, sub-tasks, comments that wake or wait,
+movers, and plain-English titles."""
 
 import json
 
@@ -20,122 +20,28 @@ def related(task, kind, direction=None):
 # ----------------------------------------------------------------------------- rank
 
 
-def _completing_a_bot_requested_human_task_needs_no_result_note(api, token):
-    tapped = post(
-        api,
-        "tasks",
-        {"owner": "ana", "title": "Decide the content hold", "body": "Keep or change the hold?"},
-        token=token,
-    )
-    done = post(api, "tasks/" + tapped["id"], {"version": tapped["version"], "status": "done"})
-    assert done["status"] == "done" and done["note"] == ""
-    noted = post(
-        api,
-        "tasks",
-        {"owner": "ana", "title": "Decide the launch hold", "body": "Keep or change the hold?"},
-        token=token,
-    )
-    done = post(
-        api,
-        "tasks/" + noted["id"],
-        {"version": noted["version"], "status": "done", "note": "Keep the hold; no publication is approved."},
-    )
-    assert done["status"] == "done" and done["note"] == "Keep the hold; no publication is approved."
-    with api.app.state.store.read() as c:
-        told = {r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops'")}
-    assert {
-        "Ana marked this done: Decide the content hold",
-        "Ana marked this done: Decide the launch hold\nKeep the hold; no publication is approved.",
-    } <= told, told
+def test_done_and_closed_tasks_stay_as_their_requester_left_them(api):
+    """Done records the stage's work finished; a bot cannot reopen what a person closed; a person reopens with a why."""
+    from backend.tests.helpers.task_moves_routes import as_bot
 
-
-def _self_requested_completion_stays_done_until_explicit_close(api):
-    owner, completion, token = 'ana', {'status': 'done'}, 'ana-test'
-    task = post(
-        api, 'tasks', {'owner': owner, 'title': 'Check the receipt', 'body': 'Check the receipt totals.'}, token=token
-    )
-    assert task['requester_id'] == task['owner_id']
-    dry = post(api, 'tasks/dry-run', {'owner': owner, 'title': task['title'], 'body': task['body']}, token=token)
-    assert any('already asks' in problem for problem in dry['problems'])
-    with api.app.state.store.transaction() as c:
-        with pytest.raises(H.Refused, match='already asks'):
-            H.task_create(c, task['requester_id'], task['title'], task['body'], task['owner_id'])
-    done = post(
-        api,
-        'tasks/' + task['id'],
-        {'version': task['version'], **completion, 'note': 'Receipt totals match.'},
-        token=token,
-    )
-    assert done['status'] == 'done' and done['done_at']
-    assert done['closed_at'] is None and done['closed_by_id'] is None
-    history = get(api, 'tasks/' + task['id'], token=token)['events']
-    assert not any(e['field'] == 'status' and e['new'] == 'closed' for e in history)
-    dry = post(api, 'tasks/dry-run', {'owner': owner, 'title': task['title'], 'body': task['body']}, token=token)
-    assert not any('already asks' in problem for problem in dry['problems'])
-    # Repeating completed work does not require closing its history first; unfinished duplicates remain refused.
-    fresh = post(api, 'tasks', {'owner': owner, 'title': task['title'], 'body': task['body']}, token=token)
-    assert fresh['id'] != task['id'] and fresh['status'] == 'open'
-    assert get(api, 'tasks/' + task['id'], token=token)['task']['status'] == 'done'
-    closed = post(api, 'tasks/' + task['id'], {'version': done['version'], 'close': True}, token=token)
-    assert closed['status'] == 'closed' and closed['closed_at'] and closed['closed_by_id'] == task['requester_id']
-    assert closed['done_at'] == done['done_at']
-
-
-def _a_late_bot_completion_does_not_reopen_a_task_its_requester_closed(api, token):
+    bot = as_bot(api, "ops")
+    mine = post(api, "tasks", {"owner": "ana", "title": "Decide the content hold", "body": "Keep or change it?"})
+    done = post(api, "tasks/" + mine["id"] + "/done", {"note": "Keep the hold."})
+    assert done["status"] == "done" and done["done_at"] and done["closed_at"] is None
     task = post(api, "tasks", {"owner": "ops", "title": "Clean up the inbox", "body": "Archive the old threads."})
-    done = post(
-        api, "tasks/" + task["id"], {"version": task["version"], "status": "done", "note": "Archived 40."}, token=token
+    version = get(api, "tasks/" + task["id"])["task"]["version"]
+    closed = post(api, "tasks/" + task["id"] + "/move", {"to": "closed", "why": "Not needed now", "version": version})
+    assert closed["status"] == "closed" and closed["closed_by_id"] == "human:ana"
+    late = api.post(
+        "/api/v2/tasks/" + task["id"] + "/move",
+        headers=headers(bot),
+        json={"to": "reopen", "why": "Archived 40, final.", "version": closed["version"]},
     )
-    # The requester accepts it while the bot's next run, started before the close, is still working.
-    closed = post(api, "tasks/" + task["id"], {"version": done["version"], "close": True, "note": "Looks good."})
-    assert closed["status"] == "closed"
-    for status in ("done", "doing", "waiting", "review", "declined"):
-        late = api.post(
-            "/api/v2/tasks/" + task["id"],
-            headers=headers(token),
-            json={"version": closed["version"], "status": status, "note": "Archived 40, final."},
-        )
-        assert late.status_code >= 400 and "stays closed" in late.text, (status, late.text)
-    with api.app.state.store.transaction() as c, pytest.raises(H.Refused, match="stays closed"):
-        H.task_update(c, "bot:ops", task["id"], step="general-done")
-    after = get(api, "tasks/" + task["id"])["task"]
-    assert (after["status"], after["note"], after["closed_by_id"]) == ("closed", "Looks good.", "human:ana")
-    # What the bot has to add still lands, as a comment, and the requester can still reopen it.
-    post(api, f"tasks/{task['id']}/comments", {"text": "Archived 40, final."}, token=token)
-    reopened = post(api, "tasks/" + task["id"], {"version": after["version"], "status": "open"})
+    assert late.status_code == 409 and late.json()["error"] == "task_needs_person", late.text
+    # What the bot has to add still lands, as a comment, and the person can still reopen it.
+    post(api, f"tasks/{task['id']}/comments", {"text": "Archived 40, final."}, token=bot)
+    reopened = post(api, "tasks/" + task["id"] + "/move", {"to": "reopen", "why": "One more pass"})
     assert reopened["status"] == "open" and reopened["closed_at"] is None
-
-
-def _a_bot_requester_may_reopen_a_task_it_closed(api):
-    with api.app.state.store.transaction() as c:
-        tid = H.task_create(c, "bot:cpo", "Draft the launch post", "Write the first draft.", "bot:ops")["id"]
-        H.task_update(c, "bot:ops", tid, status="done", note="Drafted.")
-        H.task_close(c, "bot:cpo", tid, note="Thanks.")
-        with pytest.raises(H.Refused, match="stays closed"):
-            H.task_update(c, "bot:ops", tid, status="done", note="Drafted again.")
-        assert H.task_update(c, "bot:cpo", tid, status="open", note="One more pass, please.")["status"] == "open"
-        # A late note alone would replace the close note; a person's close is not the requester bot's to undo.
-        H.task_update(c, "bot:ops", tid, status="done", note="Drafted again.")
-        H.task_close(c, "human:ana", tid, note="Published.")
-        for who in ("bot:ops", "bot:cpo"):
-            with pytest.raises(H.Refused, match="Ana closed this task"):
-                H.task_update(c, who, tid, note="Late note.")
-            with pytest.raises(H.Refused, match="stays closed"):
-                H.task_update(c, who, tid, status="open")
-        assert H.task(c, tid)["note"] == "Published."
-
-
-def test_done_and_closed_tasks_stay_as_their_requester_left_them(api, subtests):
-    """Completion and close rules, one hub: each check files its own tasks; the bot checks share one leased ops token."""
-    token = bot_token(api, "ops")
-    for check, args in (
-        (_completing_a_bot_requested_human_task_needs_no_result_note, (api, token)),
-        (_self_requested_completion_stays_done_until_explicit_close, (api,)),
-        (_a_late_bot_completion_does_not_reopen_a_task_its_requester_closed, (api, token)),
-        (_a_bot_requester_may_reopen_a_task_it_closed, (api,)),
-    ):
-        with subtests.test(check.__name__):
-            check(*args)
 
 
 # ----------------------------------------------------------------------------- lanes
@@ -143,36 +49,6 @@ def test_done_and_closed_tasks_stay_as_their_requester_left_them(api, subtests):
 
 # ----------------------------------------------------------------------------- labels
 # ----------------------------------------------------------------------------- blocked by
-def test_finishing_the_blocker_clears_blocked_by_and_wakes_the_bot_owner(api):
-    blocker = post(api, "tasks", {"owner": "cmo", "title": "Write the copy", "body": "x"})
-    blocked = post(api, "tasks", {"owner": "ops", "title": "Publish the page", "body": "x"})
-    other = post(api, "tasks", {"owner": "cmo", "title": "Pick the photo", "body": "x"})
-    blocked = relate(api, blocked["id"], blocker["id"], "blocked_by")
-    entry = blocked["relations"]["blocks"][0]
-    assert {k: entry[k] for k in ("id", "title", "status", "owner_id", "direction")} == {
-        "id": blocker["id"],
-        "title": "Write the copy",
-        "status": "open",
-        "owner_id": "bot:cmo",
-        "direction": "in",
-    }
-    relate(api, blocked["id"], blocked["id"], "blocked_by", expected=422)
-    relate(api, blocker["id"], blocked["id"], "blocked_by", expected=422)  # no loops
-    assert related(relate(api, other["id"], blocked["id"], "blocks"), "blocks", "out") == [blocked["id"]]  # a second
-    blocked = get(api, "tasks/" + blocked["id"])["task"]
-    assert related(blocked, "blocks", "in") == [blocker["id"], other["id"]]
-    assert related(get(api, "tasks/" + blocker["id"])["task"], "blocks", "out") == [blocked["id"]]
-    post(api, "tasks/" + blocker["id"], {"version": blocker["version"], "status": "done", "note": "Done."})
-    after = get(api, "tasks/" + blocked["id"])
-    assert related(after["task"], "blocks") == [other["id"]]
-    assert not any("Unblocked" in m["body"] for m in after["messages"])  # the photo still blocks it
-    post(api, "tasks/" + other["id"], {"version": other["version"], "status": "done", "note": "Done."})
-    after = get(api, "tasks/" + blocked["id"])
-    assert "blocks" not in after["task"]["relations"]
-    assert any(e["field"] == "blocked_by" and e["new"] is None for e in after["events"])
-    assert any("Unblocked" in m["body"] for m in after["messages"])
-
-
 # ----------------------------------------------------------------------------- links
 # ----------------------------------------------------------------------------- comments
 def jobs_for(api, bot):
@@ -322,7 +198,7 @@ def test_comments_reach_whom_they_name_and_edits_or_deletes_wake_nobody(api, sub
 
 
 # ----------------------------------------------------------------------------- movers
-def test_only_a_mover_changes_lane_labels_or_blocked_by_on_someone_elses_task(api):
+def test_only_a_mover_changes_lane_or_labels_on_someone_elses_task(api):
     task = post(api, "tasks", {"owner": "cmo", "title": "Draft the newsletter", "body": "x"})
     post(
         api,
@@ -331,14 +207,14 @@ def test_only_a_mover_changes_lane_labels_or_blocked_by_on_someone_elses_task(ap
         token="priya-test",
         expected=403,
     )
-    post(api, "tasks/" + task["id"], {"version": task["version"], "status": "done"}, token="priya-test", expected=403)
+    post(api, "tasks/" + task["id"] + "/done", {"version": task["version"]}, token="priya-test", expected=403)
     ok = post(api, "tasks/" + task["id"], {"version": task["version"], "labels": ["newsletter"]}, token="ben-test")
     assert ok["labels"] == ["newsletter"]
     assert get(api, "tasks/" + task["id"], token="priya-test")["mover"] is False
     assert get(api, "tasks/" + task["id"], token="ben-test")["mover"] is True
     # the owner of a task still marks their own done, mover or not
     mine = post(api, "tasks", {"owner": "priya", "title": "Call the lead", "body": "Ask whether they want the demo."})
-    done = post(api, "tasks/" + mine["id"], {"version": mine["version"], "status": "done"}, token="priya-test")
+    done = post(api, "tasks/" + mine["id"] + "/done", {"version": mine["version"]}, token="priya-test")
     assert done["status"] == "done"
     assert api.get("/api/me", headers=headers("priya-test")).json()["mover"] is False
     assert api.get("/api/me", headers=headers("ben-test")).json()["mover"] is True
@@ -408,45 +284,6 @@ def test_related_tasks_list_each_other_hide_private_ones_and_survive_a_restore(a
 
 
 # ----------------------------------------------------------------------------- tags
-def test_tag_migration_backfills_once_and_preserves_legacy_column(api):
-    cloud = False
-    typ = pipeline(api)
-    task = post(
-        api,
-        "tasks",
-        {"owner": "cmo", "title": "Review the migration", "body": "x", "type": typ["id"], "step": "Copy review"},
-    )
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("UPDATE tasks SET labels=? WHERE id=?", ('["release","bug","bug"]', task["id"]))
-        c.execute("DROP TABLE task_tags")
-        c.execute("DROP TABLE tags")
-        c.execute("PRAGMA user_version=13")
-        c.execute("DELETE FROM cloud_migrations WHERE version=47")
-    if cloud:
-        store.initialize(seed_market=False)
-    else:
-        c = H.connect(store.settings.db_path)
-        c.close()
-    with store.read() as c:
-        assert c.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
-        assert H.task(c, task["id"])["type_id"] == typ["id"]
-        assert H.task(c, task["id"])["step_id"] == task["step_id"]
-        assert {tag["key"] for tag in H.tags(c)} == {"release", "bug"}
-        assert set(H.task_labels(H.task(c, task["id"]))) == {"release", "bug"}
-        assert c.execute("SELECT COUNT(*) FROM task_tags").fetchone()[0] == 2
-        if cloud:
-            assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=47").fetchone()
-    changed = post(api, "tasks/" + task["id"], {"version": task["version"], "labels": ["bug"]})
-    assert changed["labels"] == ["bug"]
-    store.initialize(seed_market=False)
-    with store.read() as c:
-        assert H.task_labels(H.task(c, task["id"])) == ["bug"]
-        assert (
-            c.execute("SELECT labels FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == '["release","bug","bug"]'
-        )
-
-
 def test_tag_owner_movers_and_stale_versions(api):
     tag = post(api, "tags", {"key": "release-day", "owner": "priya", "markdown": "- [ ] Smoke checks"})["tag"]
     assert get(api, "tags/" + tag["id"], token="priya-test")["editable"] is True
@@ -478,150 +315,15 @@ def edit_pipeline_task(api, task, **fields):
     return post(api, 'tasks/' + task['id'], {'version': task['version'], **fields})
 
 
-def test_steps_keep_status_contract_stay_first_match_and_clear(api):
-    typ = pipeline(api)
-    task = post(api, 'tasks', {'owner': 'cmo', 'title': 'Draft the campaign', 'body': 'Please.', 'type': typ['id']})
-    assert task['type'] == {'id': typ['id'], 'name': 'Campaign'}
-    assert task['step']['name'] == 'Draft' and task['status'] == 'open'
-    task = edit_pipeline_task(api, task, step='Copy review')
-    copy_id = task['step_id']
-    assert task['status'] == 'review'
-    # A status-only call from an old client stays on the second review step.
-    task = edit_pipeline_task(api, task, status='review')
-    assert task['step_id'] == copy_id
-    task = edit_pipeline_task(api, task, status='doing')
-    assert task['step'] is None and task['step_id'] is None and task['status'] == 'doing'
-    task = edit_pipeline_task(api, task, status='review')
-    assert task['step']['name'] == 'Legal review'
-    # No step order: move straight to any step, then back to the first.
-    task = edit_pipeline_task(api, task, step='Complete')
-    assert task['status'] == 'done' and task['done_at']
-    task = edit_pipeline_task(api, task, step='Draft')
-    assert task['status'] == 'open' and task['done_at'] is None
-    task = edit_pipeline_task(api, task, step='Archive')
-    assert task['status'] == 'closed' and task['closed_at'] and task['step']['name'] == 'Archive'
-    task = edit_pipeline_task(api, task, status='open')
-    assert task['closed_at'] is None and task['step']['name'] == 'Draft'
-    task = edit_pipeline_task(api, task, close=True)
-    assert task['status'] == 'closed' and task['step']['name'] == 'Archive'
-    history = get(api, 'tasks/' + task['id'])['events']
-    assert any(e['field'] == 'step' and e['new'] == copy_id for e in history)
-    listed = next(t for t in get(api, 'tasks?status=closed')['tasks'] if t['id'] == task['id'])
-    assert listed['type'] == task['type'] and listed['step'] == task['step']
-
-
-def test_type_and_step_management_permissions_and_references(api):
-    post(api, 'task-types', {'name': 'Sales'}, token='priya-test', expected=403)
-    typ = pipeline(api, token='ben-test')
-    task = post(
-        api,
-        'tasks',
-        {'owner': 'cmo', 'title': 'Write the ad', 'body': 'Please.', 'type': 'Campaign', 'step': 'Copy review'},
-    )
-    assert task['status'] == 'review'
-    clean = lambda steps: [{k: s[k] for k in ('id', 'name', 'position', 'status')} for s in steps]
-    post(api, 'task-types/' + typ['id'], {'steps': clean(typ['steps'][:2])}, expected=422)
-    post(api, 'task-types/' + typ['id'] + '/delete', {}, expected=422)
-    renamed = clean(typ['steps'])
-    renamed[1]['name'], renamed[2]['name'] = renamed[2]['name'], renamed[1]['name']
-    post(api, 'task-types/' + typ['id'], {'steps': renamed})
-    assert get(api, 'tasks/' + task['id'])['task']['step_id'] == task['step_id']
-    task = edit_pipeline_task(api, task, type='General')
-    assert task['type_id'] == 'general' and task['step_id'] == 'general-review'
-    # Empty removes a step assignment without changing its status.
-    task = edit_pipeline_task(api, task, step='')
-    assert task['status'] == 'review' and task['step'] is None
-    other = post(api, 'task-types', {'name': 'Design', 'steps': [{'name': 'Draft', 'status': 'open'}]})['type']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'step': other['steps'][0]['id']}, expected=422)
-    post(api, 'task-types/' + typ['id'], {'steps': []})
-    post(api, 'task-types/' + typ['id'] + '/delete', {})
-    post(api, 'task-types/general/delete', {}, expected=422)
-    with api.app.state.store.read() as c:
-        assert c.execute('SELECT 1 FROM cloud_migrations WHERE version=48').fetchone()
-        assert c.execute('PRAGMA foreign_key_check').fetchall() == []
-
-
-def test_step_moves_enforce_existing_bot_status_permissions(api):
-    # Not 'Engineering': roadmaps seed a type of that name.
-    typ = post(
-        api,
-        'task-types',
-        {
-            'name': 'Release train',
-            'steps': [{'name': 'Merged', 'status': 'ready'}, {'name': 'Archive', 'status': 'closed'}],
-        },
-    )['type']
-    task = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the screen', 'body': 'Please.', 'type': typ['id']})
-    token = bot_token(api)
-    for step in typ['steps']:
-        post(api, 'tasks/' + task['id'], {'version': task['version'], 'step': step['id']}, token=token, expected=403)
-    post(
-        api,
-        'tasks',
-        {
-            'owner': 'cmo',
-            'title': 'Build another screen',
-            'body': 'Please.',
-            'type': typ['id'],
-            'step': typ['steps'][0]['id'],
-        },
-        token=token,
-        expected=403,
-    )
-    assert get(api, 'tasks/' + task['id'])['task']['status'] == 'open'
-
-
-def test_number_migration_preserves_shipped_schemas_and_existing_step_order(tmp_path):
-    import sqlite3
-
-    c = sqlite3.connect(tmp_path / 'old.db', isolation_level=None)
-    c.row_factory = sqlite3.Row
-    for schema in H.MIGRATIONS[:22]:
-        H._apply(c, schema)
-    c.execute('PRAGMA user_version=22')
-    stamp = H.now()
-    c.execute("INSERT INTO task_types(id,name,created_at,updated_at) VALUES('dev','Dev ticket',?,?)", (stamp, stamp))
-    c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('todo','dev','To do',0,'open')")
-    for ident in ('first', 'second'):
-        c.execute(
-            "INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,type_id,step_id) "
-            "VALUES(?,?,'x','human:ana','bot:ops','open',?,?,'dev','todo')",
-            (ident, ident, stamp, stamp),
-        )
-    H.migrate(c)
-    ranks = [tuple(row) for row in c.execute('SELECT id,step_rank,number FROM tasks ORDER BY step_rank')]
-    assert [row[0] for row in ranks] == ['first', 'second'] and all(row[2] is None for row in ranks)
-    assert H.MIGRATIONS[19:23] == [H.STORAGE_SCHEMA, H.TASK_REVIEW_SCHEMA, H.MEETING_REVIEW_SCHEMA, H.NUMBERS_SCHEMA]
-    H._apply(c, H.NUMBERS_SCHEMA)
-    H.migrate(c)
-    assert ranks == [tuple(row) for row in c.execute('SELECT id,step_rank,number FROM tasks ORDER BY step_rank')]
-    assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
-    c.close()
-
-
-def test_three_level_tree_requester_rules_cycles_and_last_child_wake(api):
+def test_three_level_tree_requester_rules_and_sub_task_counts(api):
     parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the feature', 'body': 'x'})
     child = post(
         api,
         'tasks',
-        {
-            'owner': 'cpo',
-            'title': 'Build the service',
-            'body': 'x',
-            'relations': [{'task': parent['id'], 'kind': 'parent'}],
-        },
+        {'owner': 'cpo', 'title': 'Build the service', 'body': 'x', 'parent': parent['id']},
         token='ben-test',
     )
-    leaf = post(
-        api,
-        'tasks',
-        {
-            'owner': 'cmo',
-            'title': 'Build the page',
-            'body': 'x',
-            'relations': [{'task': child['id'], 'kind': 'parent'}],
-        },
-    )
+    leaf = post(api, 'tasks', {'owner': 'cmo', 'title': 'Build the page', 'body': 'x', 'parent': child['id']})
     assert child['requester_id'] == 'human:ben' and leaf['requester_id'] == parent['requester_id'] == 'human:ana'
     post(api, 'tasks/' + leaf['id'] + '/links', {'url': 'https://github.com/example/service/pull/1'})
     summary = get(api, 'tasks/' + parent['id'])['task']['children_summary']
@@ -636,55 +338,16 @@ def test_three_level_tree_requester_rules_cycles_and_last_child_wake(api):
     }
     tree = get(api, 'tasks/' + parent['id'] + '/tree')
     assert tree[0]['id'] == child['id'] and tree[0]['children'][0]['pr_state'] == 'open'
-    relate(api, parent['id'], leaf['id'], 'parent', expected=422)
-    leaf = post(api, 'tasks/' + leaf['id'], {'version': leaf['version'], 'close': True})
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE body LIKE 'All subtasks done%'").fetchone()[0] == 1
-    child = post(api, 'tasks/' + child['id'], {'version': child['version'], 'status': 'done'})
+    assert [f['id'] for f in get(api, 'tasks/' + parent['id'])['task']['filed']] == [child['id']]
+    closed = post(api, 'tasks/' + leaf['id'] + '/move', {'to': 'closed', 'why': 'Not needed'})
+    assert closed['status'] == 'closed'
+    done = post(api, 'tasks/' + child['id'] + '/done', {'note': 'Built.'}, token='ben-test')
+    assert done['status'] == 'done'
     assert get(api, 'tasks/' + parent['id'])['task']['children_summary']['done'] == 2
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE body LIKE 'All subtasks done%'").fetchone()[0] == 2
-    other = post(api, 'tasks', {'owner': 'ops', 'title': 'Build the next feature', 'body': 'x'})
-    child = relate(api, child['id'], other['id'], 'parent')
-    assert get(api, 'tasks/' + parent['id'] + '/tree') == []
-    assert get(api, 'tasks/' + other['id'] + '/tree')[0]['children'][0]['id'] == leaf['id']
-    # A human can still cancel an open parent.
-    other = post(api, 'tasks/' + other['id'], {'version': other['version'], 'close': True})
-    assert other['status'] == 'closed'
-
-
-def test_parent_owner_bot_can_track_and_reparent_inherited_subtasks(api):
-    parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Manage the feature', 'body': 'x'})
-    token = bot_token(api)
-    child = post(
-        api,
-        'tasks',
-        {
-            'owner': 'cpo',
-            'title': 'Implement the feature',
-            'body': 'x',
-            'relations': [{'task': parent['id'], 'kind': 'parent'}],
-        },
-        token=token,
+    # A person can still close an open parent.
+    assert (
+        post(api, 'tasks/' + parent['id'] + '/move', {'to': 'closed', 'why': 'Shipped elsewhere'})['status'] == 'closed'
     )
-    assert child['requester_id'] == 'bot:ops'
-    assert get(api, 'tasks/' + child['short_id'], token=token)['task']['id'] == child['id']
-    assert get(api, 'tasks/' + parent['short_id'] + '/tree', token=token)[0]['id'] == child['id']
-    assert child['id'] in {row['id'] for row in get(api, 'tasks', token=token)['tasks']}
-    rows = post(api, 'sql', {'sql': 'SELECT id FROM tasks'}, token=token)['rows']
-    assert [child['id']] in rows
-    unrelated = post(api, 'tasks', {'owner': 'cpo', 'title': 'Do unrelated work', 'body': 'x'})
-    assert get(api, 'tasks/' + unrelated['id'], token=token)['task']['id'] == unrelated['id']
-    # Company transparency grants reads; it does not grant unrelated task mutations.
-    post(
-        api,
-        'tasks/' + unrelated['id'],
-        {'version': unrelated['version'], 'title': 'Change it'},
-        token=token,
-        expected=403,
-    )
-    moved = relate(api, child['short_id'], parent['id'], 'parent', token=token, remove=True)
-    assert related(moved, 'parent') == []
 
 
 def test_delegate_cannot_turn_temporary_access_into_ancestor_access(api):
@@ -703,8 +366,8 @@ def test_delegate_cannot_turn_temporary_access_into_ancestor_access(api):
             ),
         )
     get(api, 'tasks/' + unrelated['id'], token=token)
-    relate(api, unrelated['id'], parent['id'], 'parent', token=token, expected=403)
-    # Direct ownership of the child still does not permit hanging it under a parent it merely reads.
+    # A task's parent is the task that filed it and never changes, so no one hangs it under another.
+    relate(api, unrelated['id'], parent['id'], 'parent', token=token, expected=422)
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'human:ana', unrelated['id'], owner='bot:ops', mover=True)
         alien_parent = H.task_create(c, 'human:ana', 'Coordinate unrelated work', 'x', 'bot:cpo', lint=False)
@@ -724,7 +387,7 @@ def test_hidden_descendants_stay_hidden_in_details_lists_trees_sql_and_counts(ap
             'owner': 'cpo',
             'title': 'Keep private work private',
             'body': 'x',
-            'relations': [{'task': parent['id'], 'kind': 'parent'}],
+            'parent': parent['id'],
         },
     )
     with api.app.state.store.transaction() as c:
@@ -788,7 +451,7 @@ def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
             'owner': 'cpo',
             'title': 'Build linked work',
             'body': 'x',
-            'relations': [{'task': parent['id'], 'kind': 'parent'}],
+            'parent': parent['id'],
         },
     )
     post(api, 'tasks/' + parent['id'] + '/links', {'url': 'https://example.com/plan'}, token=token)
@@ -796,305 +459,3 @@ def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
         'links'
     ][0]
     post(api, 'tasks/' + child['id'] + '/links', {'remove': linked['id']}, token=token)
-
-
-def test_a_type_grants_extra_bot_permissions_while_ordinary_tasks_are_readable(api):
-    """Ordinary reads are transparent; type settings add comments/subtasks or work, with human controls."""
-    typ = post(
-        api,
-        'task-types',
-        {
-            'name': 'Dev ticket',
-            'steps': [
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'PR Review', 'status': 'review'},
-                {'name': 'Shipped', 'status': 'ready'},
-                {'name': 'Done', 'status': 'closed'},
-            ],
-        },
-    )['type']
-    assert typ['bots'] is None
-    ticket = post(
-        api,
-        'tasks',
-        {
-            'owner': 'ben',
-            'title': 'Fix the guest message times',
-            'body': 'Please.',
-            'type': typ['id'],
-            'step': 'On Deck',
-        },
-    )
-    todo = post(api, 'tasks', {'owner': 'ben', 'title': 'Book the offsite', 'body': 'Please.'})
-    token = bot_token(api, 'ops')
-    listed = lambda: {t['id'] for t in get(api, 'tasks?limit=500', token=token)['tasks']}
-    sql = lambda: {
-        r[0] if isinstance(r, list) else r['id']
-        for r in post(api, 'sql', {'sql': 'SELECT id FROM tasks'}, token=token)['rows']
-    }
-
-    assert get(api, 'tasks/' + ticket['id'], token=token)['task']['id'] == ticket['id']
-    assert ticket['id'] in listed() and ticket['id'] in sql()
-    post(api, 'tasks/' + ticket['id'] + '/comments', {'text': 'Unrelated writer.'}, token=token, expected=403)
-
-    post(api, 'task-types/' + typ['id'], {'bots': 'read'}, token='priya-test', expected=403)
-    assert post(api, 'task-types/' + typ['id'], {'bots': 'read'})['type']['bots'] == 'read'
-    assert get(api, 'tasks/' + ticket['id'], token=token)['task']['id'] == ticket['id']
-    assert ticket['id'] in listed() and ticket['id'] in sql()
-    assert todo['id'] in listed() and todo['id'] in sql()
-    assert get(api, 'tasks/' + todo['id'], token=token)['task']['id'] == todo['id']
-    post(api, 'tasks/' + ticket['id'] + '/comments', {'text': 'The same gap shows on two more threads.'}, token=token)
-    child = post(
-        api,
-        'tasks',
-        {
-            'owner': 'ops',
-            'title': 'Build the fix',
-            'body': 'Please.',
-            'relations': [{'task': ticket['id'], 'kind': 'parent'}],
-        },
-        token=token,
-    )
-    assert related(child, 'parent') == [ticket['id']]
-    ticket = get(api, 'tasks/' + ticket['id'])['task']
-    post(api, 'tasks/' + ticket['id'], {'version': ticket['version'], 'step': 'PR Review'}, token=token, expected=403)
-    post(
-        api,
-        'tasks/' + ticket['id'] + '/links',
-        {'url': 'https://github.com/acme/app/pull/7'},
-        token=token,
-        expected=403,
-    )
-
-    post(api, 'task-types/' + typ['id'], {'bots': 'work'})
-    moved = post(
-        api, 'tasks/' + ticket['id'], {'version': ticket['version'], 'step': 'PR Review', 'owner': 'priya'}, token=token
-    )
-    assert moved['status'] == 'review' and moved['owner_id'] == 'human:priya'
-    post(api, 'tasks/' + ticket['id'] + '/links', {'url': 'https://github.com/acme/app/pull/7'}, token=token)
-    for refused in ({'step': 'Shipped'}, {'step': 'Done'}, {'close': True}, {'labels': ['bug']}):
-        r = api.post(
-            '/api/v2/tasks/' + ticket['id'], json={'version': moved['version'], **refused}, headers=headers(token)
-        )
-        assert r.status_code in (403, 422), (refused, r.text)
-    shipped = post(api, 'tasks/' + ticket['id'], {'version': moved['version'], 'step': 'Shipped', 'owner': 'ben'})
-    child = get(api, 'tasks/' + child['id'])['task']
-    post(api, 'tasks/' + child['id'], {'version': child['version'], 'close': True})
-    closed = post(api, 'tasks/' + ticket['id'], {'version': shipped['version'], 'step': 'Done'}, token=token)
-    assert closed['status'] == 'closed'
-    todo = get(api, 'tasks/' + todo['id'])['task']
-    post(api, 'tasks/' + todo['id'], {'version': todo['version'], 'status': 'doing'}, token=token, expected=403)
-
-    post(api, 'task-types/' + typ['id'], {'bots': 'anyone'}, expected=422)
-    assert post(api, 'task-types/' + typ['id'], {'bots': 'parties'})['type']['bots'] is None
-    assert get(api, 'tasks/' + ticket['id'], token=token)['task']['id'] == ticket['id']
-    assert ticket['id'] in listed()
-    post(api, 'tasks/' + ticket['id'], {'version': closed['version'], 'status': 'doing'}, token=token, expected=403)
-
-
-# ----------------------------------------------------------------------------- stats
-def test_task_flow_counts_status_changes_by_day_and_filters_by_owner(api):
-    """The Tasks page's stats read the task history: what entered each status, by day and by owner."""
-    ops = post(api, "tasks", {"owner": "ops", "title": "Check the invoices", "body": "x"})
-    post(api, "tasks", {"owner": "ana", "title": "Approve the budget", "body": "x"})
-    post(api, "tasks/" + ops["id"], {"version": ops["version"], "status": "doing"})
-    flow = get(api, "tasks/flow?days=7")
-    assert flow["totals"] == {"created": 2, "doing": 1}
-    assert flow["days"][-1]["created"] == 2 and flow["stages"]["open"]["n"] == 1
-    assert get(api, "tasks/flow?owner_kind=bot")["totals"] == {"created": 1, "doing": 1}
-    assert [(p["actor"], p["created"]) for p in get(api, "tasks/flow?owner=ana")["people"]] == [("human:ana", 1)]
-    steps = get(api, "tasks/flow?type=" + H.GENERAL_TYPE)
-    assert steps["steps"] and any(k.startswith("step:") for k in steps["totals"])
-    get(api, "tasks/flow?days=0", expected=422)
-
-
-def test_a_steps_only_type_changes_status_only_by_a_step_move(api):
-    typ = post(
-        api,
-        'task-types',
-        {
-            'name': 'Dev ticket',
-            'steps_only': True,
-            'bots': 'work',
-            'steps': [
-                {'name': 'Cant Replicate', 'status': 'closed'},
-                {'name': 'Backlog', 'status': 'open'},
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'Done', 'status': 'closed'},
-            ],
-        },
-    )['type']
-    assert typ['steps_only'] is True
-    ticket = post(
-        api,
-        'tasks',
-        {
-            'owner': 'ops',
-            'title': 'Fix the guest message times',
-            'body': 'Please.',
-            'type': typ['id'],
-            'step': 'On Deck',
-        },
-    )
-    path, ops = 'tasks/' + ticket['id'], bot_token(api, 'ops')
-    version = lambda: get(api, path)['task']['version']
-    # Declining or finishing it without a step move, by a person or by the bot on it, is refused.
-    for token, change in (('ana-test', {'status': 'declined'}), (ops, {'status': 'done', 'note': 'Fixed.'})):
-        assert post(api, path, {'version': version(), **change}, token=token, expected=422)['error']['code'] == 'kind'
-    # A working status still changes without a step: the bot's ask sets it waiting.
-    assert post(
-        api, 'task-questions', {'on': 'human:ana', 'question': 'Which page?', 'parent': ticket['id']}, token=ops
-    )
-    assert get(api, path)['task']['status'] == 'waiting'
-    assert get(api, path)['task']['step']['name'] == 'On Deck'
-    with api.app.state.store.read() as c:
-        assert H.task(c, ticket['id'])['blocked_from_step'] == ticket['step_id']
-    # A bot refused Done on more tickets than the quarantine limit is not quarantined: each names its ticket.
-    for n in range(H.QUARANTINE_AT + 1):
-        other = post(api, 'tasks', {'owner': 'ops', 'title': f'Fix page {n}', 'body': 'Please.', 'type': typ['id']})
-        post(api, 'tasks/' + other['id'], {'version': other['version'], 'status': 'done'}, token=ops, expected=422)
-    post(api, path + '/comments', {'text': 'Still on it.'}, token=ops)
-    # A step move changes the status, Done included, and back out of it.
-    assert post(api, path, {'version': version(), 'step': 'Done'})['status'] == 'closed'
-    post(api, path, {'version': version(), 'status': 'open'}, expected=422)
-    assert post(api, path, {'version': version(), 'step': 'Backlog'})['status'] == 'open'
-    # A person can always close one: it lands on the last closed step, not the first.
-    closed = post(api, path, {'version': version(), 'close': True})
-    assert (closed['status'], closed['step']['name']) == ('closed', 'Done')
-    assert post(api, path, {'version': version(), 'step': 'Backlog'})['status'] == 'open'
-    # Off, the type keeps the bare status changes.
-    post(api, 'task-types/' + typ['id'], {'steps_only': False})
-    assert post(api, path, {'version': version(), 'close': True})['status'] == 'closed'
-
-
-def marketing_idea(c, owner="bot:cmo", requester="human:ana", title="Try referral ads"):
-    return H.task_create(c, requester, title, "Spend $200 for two weeks.", owner, type="idea")["id"]
-
-
-def _the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_requester_is_told(api, monkeypatch):
-    told = []
-    wake = H._wake
-
-    def spy(conn, row, target, *args, **kwargs):
-        told.append(target)
-        return wake(conn, row, target, *args, **kwargs)
-
-    monkeypatch.setattr(H, "_wake", spy)
-    with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c)
-        H.task_update(c, "bot:cmo", tid, step="Live", note="Started.")
-        H.task_update(c, "bot:cmo", tid, step="Succeeded", note="Result: CPA 31")
-        task = H.task(c, tid)
-        last = c.execute(
-            "SELECT kind AS field, old, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='step' "
-            "ORDER BY rowid DESC LIMIT 1",
-            (tid,),
-        ).fetchone()
-        second = marketing_idea(c)
-        H.task_close(c, "bot:cmo", second, note="Lost on cost.", step="Failed")
-        closed_by_close = H.task(c, second)
-    assert (task["status"], task["step_id"], task["closed_by_id"]) == ("closed", "idea-won", "bot:cmo")
-    assert task["note"] == "Result: CPA 31"
-    assert tuple(last) == ("step", "idea-doing", "idea-won")
-    assert (closed_by_close["status"], closed_by_close["step_id"]) == ("closed", "idea-lost")
-    assert "human:ana" in told
-
-
-def _an_owner_bot_cannot_close_a_marketing_idea_on_its_closed_step_or_on_another_types(api):
-    with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c, title="Try podcast sponsorships")
-        sales = H.type_create(
-            c, H.KEEPER, "Sales", [{"name": "Draft", "status": "open"}, {"name": "Lost", "status": "closed"}]
-        )
-        call = H.task_create(c, "human:ana", "Call the lead", "Ring them.", "bot:cmo", type=sales["id"])["id"]
-        with pytest.raises(H.Refused, match="only they or their managers close it"):
-            H.task_update(c, "bot:cmo", tid, step="Closed", note="Done.")
-        with pytest.raises(H.Refused, match="only they or their managers close it"):
-            H.task_update(c, "bot:cmo", call, step="Lost", note="Lost.")
-        assert (H.task(c, tid)["status"], H.task(c, call)["status"]) == ("open", "open")
-
-
-def _a_marketing_idea_moved_to_done_or_ready_is_not_closed(api):
-    with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c, title="Try newsletter swaps")
-        assert H.task_update(c, "bot:cmo", tid, step="Done", note="Checked.")["status"] == "done"
-        assert H.task(c, tid)["closed_at"] is None
-
-
-def _a_bot_that_does_not_own_a_marketing_idea_cannot_finish_it(api):
-    with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c, title="Try billboard tests")
-        with pytest.raises(H.Refused):
-            H.task_update(c, "bot:cpo", tid, step="Won", note="Won.")
-        with pytest.raises(H.Refused, match="only they or their managers close it"):
-            H.task_close(c, "bot:cpo", tid, note="Won.", step="Won")
-        assert H.task(c, tid)["status"] == "open"
-
-
-def _an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_the_same_step_name(api):
-    with api.app.state.store.transaction() as c:
-        tid = marketing_idea(c, title="Try conference booths")
-        # The Sales board an earlier check in the fold made, or a new one.
-        sales = H.type_get(c, "Sales") or H.type_create(
-            c, H.KEEPER, "Sales", [{"name": "Draft", "status": "open"}, {"name": "Lost", "status": "closed"}]
-        )
-        with pytest.raises(H.Refused, match="only they or their managers close it"):
-            H.task_update(c, "bot:cmo", tid, type=sales["id"], step="Lost", note="Lost on cost.")
-        with pytest.raises(H.Refused, match="only they or their managers close it"):
-            H.task_close(c, "bot:cmo", tid, note="Lost on cost.", type=sales["id"], step="Lost")
-        assert H.task(c, tid)["status"] == "open"
-
-
-def test_only_the_owner_bot_finishes_a_marketing_idea_and_only_on_its_outcome_steps(api, monkeypatch, subtests):
-    """Marketing idea finishing rules, one hub: each check files its own idea under its own title."""
-    for check, args in (
-        (_the_owner_bot_finishes_its_marketing_idea_on_an_outcome_step_and_the_requester_is_told, (api, monkeypatch)),
-        (_an_owner_bot_cannot_close_a_marketing_idea_on_its_closed_step_or_on_another_types, (api,)),
-        (_a_marketing_idea_moved_to_done_or_ready_is_not_closed, (api,)),
-        (_a_bot_that_does_not_own_a_marketing_idea_cannot_finish_it, (api,)),
-        (_an_owner_bot_cannot_close_a_marketing_idea_onto_another_board_that_has_the_same_step_name, (api,)),
-    ):
-        with subtests.test(check.__name__):
-            check(*args)
-
-
-def _idea(c, title):
-    return H.task_create(c, "human:ana", title, "Spend $200 for two weeks.", "bot:cmo", type="idea")["id"]
-
-
-def test_cli_aliases_file_list_and_give_verdicts_on_a_live_server(api, live, monkeypatch, capsys):
-    monkeypatch.setenv("HUB_API_URL", live)
-    monkeypatch.setenv("HUB_TOKEN", bot_token(api, "cmo"))
-    with api.app.state.store.transaction() as c:
-        tid = _idea(c, 'Try referral ads')
-    assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused", "--result", "CPA 31 so far"]) == 0
-    with api.app.state.store.transaction() as c:
-        task = H.task(c, tid)
-    assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Result: CPA 31 so far")
-    with api.app.state.store.transaction() as c:
-        tid = _idea(c, 'Try paid video')
-    assert hubcli.main(["growth", "idea", "verdict", tid, "--status", "paused"]) == 0
-    with api.app.state.store.transaction() as c:
-        task = H.task(c, tid)
-    assert (task["status"], task["step_id"], task["note"]) == ("waiting", "idea-paused", "Test paused")
-    with api.app.state.store.transaction() as c:
-        tid = _idea(c, 'Try partner swaps')
-    assert (
-        hubcli.main(
-            ["growth", "idea", "verdict", tid, "--status", "won", "--result", "CPA 31", "--learning", "Video works"]
-        )
-        == 0
-    )
-    with api.app.state.store.transaction() as c:
-        task = H.task(c, tid)
-    assert (task["status"], task["closed_by_id"], task["note"]) == (
-        "closed",
-        "bot:cmo",
-        "Result: CPA 31\nLearning: Video works",
-    )
-    assert hubcli.main(["growth", "idea", "create", "--title", "Referral card", "--channel", "referral"]) == 0
-    with api.app.state.store.transaction() as c:
-        row = c.execute("SELECT type_id FROM tasks WHERE title='Referral card'").fetchone()
-    assert row[0] == "idea"
-    assert hubcli.main(["growth", "idea", "list"]) == 0
-    assert "Referral card" in capsys.readouterr().out

@@ -8,10 +8,10 @@ an owner proposed for every vendor, a first weekly page from it, and the first r
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc search "contract"
-    hub doc search "order form"
-    hub team show
+    tico task show <id>
+    tico doc search "contract"
+    tico doc search "order form"
+    tico team show
 
 Note which contracts you can already read and who the likely owners are. Do not ask what these answer.
 
@@ -41,17 +41,17 @@ labelled "First draft, not yet reviewed". Write a renewal brief only for the soo
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send this page every Tuesday at 09:00 and open each renewal 90 days before its notice deadline." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will send this page every Tuesday at 09:00 and open each renewal 90 days before its notice deadline." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

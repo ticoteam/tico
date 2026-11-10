@@ -696,15 +696,10 @@ def request_text(
         (actor, since, until),
     ).fetchall()
     open_ = c.execute(
-        f"SELECT title, status FROM tasks WHERE owner_id=? AND {shared} AND status IN "
-        "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12",
+        f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status='open' ORDER BY updated_at DESC LIMIT 12",
         (actor,),
     ).fetchall()
-    asked = c.execute(
-        f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id LIKE 'human:%' "
-        "AND status IN ('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8",
-        (actor,),
-    ).fetchall()
+    asked = waiting_on_others(c, actor, shared, people_only=True)
     goals = c.execute(
         "SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
         "ORDER BY rank LIMIT 5",
@@ -715,7 +710,7 @@ def request_text(
         tracked = kpi_snapshot(c, bot)
         ask = [
             f"Time for your week in review ({day}). Post it with hub_update_create{post_day} "
-            "(or `hub update create --slides-file`), then carry on.",
+            "(or `tico update create --slides-file`), then carry on.",
             "",
             SLIDES_SHAPE,
             "Say it plainly: these are skimmed by swiping, so a slide is a few short lines, never a wall of text. "
@@ -729,9 +724,9 @@ def request_text(
             f"Finished {'that week' if redo else 'this week'}:",
             line(done, lambda r: r["title"]),
             "Open:",
-            line(open_, lambda r: f"{r['title']} ({r['status']})"),
+            line(open_, lambda r: r["title"]),
             "Waiting on a person:",
-            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
+            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['who'])})"),
             "Your goals:",
             line(goals, lambda r: r["title"]),
             "Your goal KPIs (Tico puts these on the KPI slide):",
@@ -747,7 +742,7 @@ def request_text(
     else:
         ask = [
             f"Time for your daily update ({day}). Post it with hub_update_create{post_day} "
-            "(or `hub update create`), in plain words, then carry on.",
+            "(or `tico update create`), in plain words, then carry on.",
             "",
             "Write three bullets in plain English and nothing else: no title, no headings or sections, "
             "no task ids or internal codes. Each bullet is one line: what you did, what you do next, or what "
@@ -764,9 +759,9 @@ def request_text(
             f"Finished {'that day' if redo else 'since your last update'}:",
             line(done, lambda r: r["title"]),
             "Open:",
-            line(open_, lambda r: f"{r['title']} ({r['status']})"),
+            line(open_, lambda r: r["title"]),
             "Waiting on a person:",
-            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
+            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['who'])})"),
             "Your goals:",
             line(goals, lambda r: r["title"]),
         ]
@@ -847,6 +842,39 @@ def shared_tasks_sql(hidden, prefix=""):
     return rule
 
 
+# How an OK's answer reads in a draft; a question's answer is its own words.
+_ANSWER_WORDS = {"ok": "OK", "no": "Sent back", "again": "Asked to look again"}
+WAITING_MAX = 8  # tasks a request or a draft lists as waiting on someone else
+WAITING_SCAN = 50  # newest open tasks whose waits are read for that list
+
+
+def waiting_on_others(c, actor, shared, *, people_only=False):
+    """The shared open tasks `actor` owns or asked for that wait on someone else, newest first: [{title, who}], `who`
+    being whom the first such wait names (backend/waiting_on.py; one read for all the tasks). `people_only` keeps only
+    waits on a person (an ask, a task that fell to one); otherwise a bot with the turn counts too, paused or not."""
+    rows = c.execute(
+        f"SELECT id, title FROM tasks WHERE (owner_id=? OR requester_id=?) AND {shared} AND status='open' "
+        "ORDER BY updated_at DESC LIMIT ?",
+        (actor, actor, WAITING_SCAN),
+    ).fetchall()
+    waits = H.task_waits(c, [r["id"] for r in rows])
+    out = []
+    for row in rows:
+        who = next(
+            (
+                w.who
+                for w in waits.get(row["id"]) or []
+                if w.who
+                and w.who != actor
+                and (w.state == "person" or (not people_only and w.state in ("bot", "paused")))
+            ),
+            None,
+        )
+        if who:
+            out.append({"title": row["title"], "who": who})
+    return out[:WAITING_MAX]
+
+
 def _shared_message(c, message, shared):
     """The title of the task a person's message is on, when every task it names (its refs, the message it
     answers, the run it came from: `task_privacy.message_tasks`) passes the shared rule; else None."""
@@ -894,28 +922,40 @@ def draft_facts(c, author, kind, day):
         (author, since),
     ).fetchall()
     open_ = c.execute(
-        f"SELECT title, status FROM tasks WHERE owner_id=? AND {shared} AND status IN "
-        "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12",
+        f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status='open' ORDER BY updated_at DESC LIMIT 12",
         (author,),
     ).fetchall()
-    asked = c.execute(
-        f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id<>? AND status IN "
-        "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8",
-        (author, author),
-    ).fetchall()
+    asked = waiting_on_others(c, author, shared)
     goals = c.execute(
         "SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN "
         "('done','dropped')) ORDER BY rank LIMIT 5",
         (author,),
     ).fetchall()
-    # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
+    # Their decisions: the stage they moved a shared task to (Done, Closed, or another stage), their own move or the
+    # engine's right after they said the stage's work is done (H.task_done answers "owner says done", then it moves)...
     decided = c.execute(
-        f"SELECT t.title, e.new FROM history_events e JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id "
-        f"WHERE e.actor_id=? AND e.kind='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
-        "ORDER BY e.created_at DESC LIMIT ?",
-        (author, since, DRAFT_LIST_MAX),
+        "SELECT t.title, coalesce(s.name, e.new) AS new FROM history_events e "
+        "JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id LEFT JOIN stages s ON s.id=e.new "
+        "WHERE e.kind='move' AND e.old IS NOT NULL AND e.created_at>=? AND (e.actor_id=? OR e.actor_id=? AND "
+        "(SELECT a.actor_id || ' ' || a.kind || ' ' || coalesce(a.new, '') FROM history_events a "
+        "WHERE a.subject_type='task' AND a.subject_id=e.subject_id AND a.rowid<e.rowid ORDER BY a.rowid DESC LIMIT 1)"
+        f"=? || ' answer done') AND {shared_tasks_sql(hidden, 't.')} ORDER BY e.created_at DESC LIMIT ?",
+        (since, author, H.KEEPER, author, DRAFT_LIST_MAX),
     ).fetchall()
-    # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
+    # ...their answers to asks on shared tasks (the engine's answers, the newest of each ask and not taken back)...
+    answers = [
+        (r["title"], f"{_ANSWER_WORDS.get(r['answer'], r['answer'])}{': ' + r['notes'] if r['notes'] else ''}")
+        for r in c.execute(
+            "SELECT t.title, a.answer, a.notes FROM answers a JOIN visits v ON v.id=a.visit_id "
+            "JOIN tasks t ON t.id=v.task_id JOIN requirements q ON q.id=a.requirement_id "
+            "WHERE a.by_id=? AND a.undone_at IS NULL AND a.created_at>=? AND q.kind IN ('ok','answer') "
+            "AND a.answer NOT IN ('pushed_past','give') AND NOT EXISTS (SELECT 1 FROM answers later "
+            "WHERE later.visit_id=a.visit_id AND later.requirement_id=a.requirement_id AND later.undone_at IS NULL "
+            f"AND later.rowid>a.rowid) AND {shared_tasks_sql(hidden, 't.')} ORDER BY a.created_at DESC LIMIT ?",
+            (author, since, DRAFT_LIST_MAX),
+        ).fetchall()
+    ]
+    # ...then their comments; a message counts only when every task it names is shared.
     said = lambda where: [
         (title, m["body"])
         for m in c.execute(
@@ -926,7 +966,6 @@ def draft_facts(c, author, kind, day):
         ).fetchall()
         if (title := _shared_message(c, m, shared))
     ][:DRAFT_LIST_MAX]
-    answers = said("kind='answer'")
     comments = said("kind IN ('say','ask') AND ref_task_id IS NOT NULL AND json_extract(refs,'$.comment')")
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.
@@ -954,13 +993,11 @@ def draft_facts(c, author, kind, day):
         f"Finished {'this week' if week else 'since yesterday'}:",
         line(done, lambda r: r["title"]),
         "Open:",
-        line(open_, lambda r: f"{r['title']} ({r['status']})"),
+        line(open_, lambda r: r["title"]),
         "Waiting on someone else:",
         line(
             asked,
-            lambda r: (
-                f"{r['title']} ({_label(c, r['owner_id'] if is_person(r['owner_id']) else H.actor_id(r['owner_id']))})"
-            ),
+            lambda r: f"{r['title']} ({_label(c, r['who'] if is_person(r['who']) else H.actor_id(r['who']))})",
         ),
         "Their goals:",
         line(goals, lambda r: r["title"]),

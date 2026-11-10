@@ -22,7 +22,6 @@ KINDS = {
     "mail": ("mail-triage",),
     "slack": ("slack-route",),
     "listening": ("listening-item", "listening-card"),
-    "task": ("stale-review",),
 }
 # The engines from judge.from_env() take no level and answer at the default, Low (judge.py documents it as the default
 # model). A higher level is refused rather than saved under a label the engine did not answer at, until one takes it.

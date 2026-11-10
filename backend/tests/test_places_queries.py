@@ -55,7 +55,7 @@ def fill(api, count):
     holds 60 pins (PLACE_MAX), the four defaults among them."""
     put(api, "places/dashboard", {})
     for k in range(count):
-        task(api, "bot:ops", f"Ops work {k}", status="doing" if k % 2 else "open")
+        task(api, "bot:ops", f"Ops work {k}")
         fid = page(api, "ops", f"Weekly numbers {k}")
         post(api, "pins", {"place": "dashboard", "item": "page:" + fid})
         for template, settings in KINDS:

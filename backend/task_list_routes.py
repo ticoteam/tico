@@ -1,4 +1,4 @@
-"""Task list routes: task filters, notes, labels, stuck tasks, task flow."""
+"""Task list routes: task filters, notes, labels."""
 
 from .store import H
 from . import models as M
@@ -11,7 +11,6 @@ from . import org_rule_check
 from . import task_privacy as privacy
 import re
 from . import reach
-from . import pipeline_rights
 from . import views
 
 
@@ -28,8 +27,6 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         limit: int = 500,
         offset: int = 0,
         sort: str = "queue",
-        type: str | None = None,
-        step: str | None = None,
         number: int | None = None,
         updated_since: str | None = None,
         brief: bool = False,
@@ -39,7 +36,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         ids: str | None = None,
         snoozed: str | None = None,
         q: str = "",
+        pipeline: str | None = None,
+        stage: str | None = None,
+        waiting_on: str | None = None,
+        pushed_past: bool | None = None,
     ):
+        """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
+        `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
+        bot's turn, or a bot that can't run); `pushed_past=true` keeps the tasks that entered their stage pushed past
+        a requirement (false, the rest)."""
         from . import task_reads as reads
 
         who = request.state.identity
@@ -49,8 +54,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("limit", "limit is between 1 and 500", 422)
             if offset < 0:
                 raise Problem("offset", "offset is zero or greater", 422)
-            if sort not in ("queue", "finished", "step"):
-                raise Problem("sort", "sort is queue, finished or step", 422)
+            if sort not in ("queue", "finished"):
+                raise Problem("sort", "sort is queue or finished", 422)
             owner, requester, filters = task_filters(
                 c,
                 owner=owner,
@@ -58,19 +63,16 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 status=status,
                 lane=lane,
                 label=label,
-                type=type,
-                step=step,
                 number=number,
                 updated_since=updated_since,
                 member=member,
                 role=role,
                 snoozed=snoozed,
-                viewer=who.task_actor or who.actor,
                 # A snoozed task is off every list until its date unless asked for by id, number or filter.
                 by_id=ids is not None or number is not None or bool(re.fullmatch(r"#\d+", q.strip())),
             )
             # One read: the visibility, the rows, the cursor and the ETag agree (backend/task_reads.py).
-            visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
+            visible_sql = auth.task_sql(c, who)
             # Several tasks by id in one read (an agent's "show these"), instead of one GET each.
             typed = None
             if ids is not None:
@@ -80,6 +82,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             filters.update(order=sort, visible_sql=visible_sql, q=q)
             if typed is not None:
                 filters["ids"] = [tid for tid in found.values() if tid]
+            narrow = narrowing(c, pipeline, stage, pushed_past)
+            if narrow:
+                filters["narrow"] = narrow
+            if waiting_on is not None:
+                waits_on = waited_on(c, waiting_on, visible_sql, narrow)
+                filters["ids"] = [t for t in filters["ids"] if t in waits_on] if "ids" in filters else sorted(waits_on)
 
             def brief_rows(rows):
                 # A board or a bot's task list polling many tasks needs neither their text nor their criteria.
@@ -88,11 +96,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                         for field in (
                             "body",
                             "acceptance_criteria",
-                            "acceptance",
                             "public_title",
                             "public_summary",
-                            "check_back_note",
-                            "check_back",
                             "requester_count",
                             "external_requesters",
                             "internal_requesters",
@@ -101,31 +106,14 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "size",
                         ):
                             row.pop(field, None)
-                        for field in (
-                            "verdict",
-                            "verdict_head",
-                            "check_back_at",
-                            "done_at",
-                            "closed_at",
-                            "closed_by_id",
-                        ):
+                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id"):
                             if row.get(field) is None:
                                 row.pop(field, None)
-                        if isinstance(row.get("step"), dict):
-                            row["step"].pop("public_name", None)
-                            # A stage's Warn after and card cap are the stage's, sent once with the pipeline's steps (task
-                            # types), not on each of a board's cards (pipeline-rail.ts pipelineStepLimit).
-                            row["step"].pop("limit_minutes", None)
-                            row["step"].pop("card_cap", None)
-                        # A snooze's note (up to 500 characters) is text too; the task's own read keeps it whole.
-                        for hold in row.get("holds") or ():
-                            if hold["kind"] == "snoozed":
-                                hold.pop("reason", None)
 
             if changed_after is not None:
                 found = reads.changed(c, changed_after, visible_sql)
-                ids = reads.around(c, found[0]) if found else []
-                if found is None or len(ids) > reads.CAP:
+                changed_ids = reads.around(c, found[0]) if found else []
+                if found is None or len(changed_ids) > reads.CAP:
                     return {
                         "tasks": [],
                         "gone": [],
@@ -134,7 +122,14 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                         "next_offset": None,
                     }
                 was, cursor = found
-                rows = visible_tasks(c, who, owner, requester, limit=len(ids), ids=ids, **filters)[0] if ids else []
+                # A waiting-on (or ids) selection already in the filters keeps only the changed tasks it holds.
+                chosen = set(filters.pop("ids")) if "ids" in filters else None
+                changed_ids = [tid for tid in changed_ids if chosen is None or tid in chosen]
+                rows = (
+                    visible_tasks(c, who, owner, requester, limit=len(changed_ids), ids=changed_ids, **filters)[0]
+                    if changed_ids
+                    else []
+                )
                 gone = reads.gone(c, visible_sql, was, {row["id"] for row in rows})
                 result = {"tasks": rows, "gone": gone, "cursor": cursor, "next_offset": None}
             else:
@@ -161,6 +156,55 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     result["missing"] = [ident for ident in typed if found[ident] not in returned]
             brief_rows(rows)
             return result
+
+    def narrowing(c, pipeline, stage, pushed_past):
+        """The list's pipeline, stage and pushed-past filters as one WHERE fragment over the task's own columns, or
+        None. A pipeline or stage is matched by its rowid, so nothing a caller typed is ever part of the SQL."""
+        parts = []
+        if pipeline is not None:
+            found = c.execute("SELECT rowid FROM pipelines WHERE id=?", (pipeline,)).fetchone()
+            if not found:
+                raise Problem("pipeline", "No such pipeline", 422)
+            parts.append(f"pipeline_id=(SELECT id FROM pipelines WHERE rowid={int(found[0])})")
+        if stage is not None:
+            found = c.execute("SELECT rowid FROM stages WHERE id=?", (stage,)).fetchone()
+            if not found:
+                raise Problem("stage", "No such stage", 422)
+            parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={int(found[0])})")
+        if pushed_past is not None:
+            parts.append(
+                ("" if pushed_past else "NOT ")
+                + "EXISTS (SELECT 1 FROM visits v WHERE v.task_id=tasks.id AND v.left_at IS NULL "
+                "AND v.entered_how='pushed_past')"
+            )
+        return " AND ".join(parts) or None
+
+    WAITING_ON_CAP = 500
+
+    def waited_on(c, actor, visible_sql, narrow):
+        """The ids of the open tasks this reader may read that wait on `actor`: a person's or a bot's turn, or a bot
+        that can't run. Each task's waits are its own read (waiting_on.py), so at most WAITING_ON_CAP open tasks are
+        looked at: a wider ask is refused, to be narrowed by pipeline or stage first."""
+        from . import waiting_on as W
+
+        found = H.resolve_actor(c, actor)
+        if not found:
+            raise Problem("waiting_on", "waiting_on is a person or a bot on the roster", 422)
+        where = f"status='open' AND pipeline_id IS NOT NULL AND ({visible_sql})" + (
+            f" AND ({narrow})" if narrow else ""
+        )
+        ids = [r[0] for r in c.execute(f"SELECT id FROM tasks WHERE {where} LIMIT ?", (WAITING_ON_CAP + 1,))]
+        if len(ids) > WAITING_ON_CAP:
+            raise Problem(
+                "waiting_on",
+                f"waiting_on looks at {WAITING_ON_CAP} open tasks at most: add a pipeline or a stage",
+                422,
+            )
+        return {
+            tid
+            for tid, waits in W.waiting_on_many(c, ids).items()
+            if any(w.who == found and w.state in (W.PERSON, W.PAUSED, W.BOT) for w in waits)
+        }
 
     # ------------------------------------------------------------------ quiet notes
     def note_view(row, c):
@@ -286,9 +330,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            visible_sql = pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who))
-            # The tag is of the labels this reader sees, not of the newest task change: an edit to a ticket it cannot
-            # read (on a members-only pipeline) leaves the tag, and the answer, as they were.
+            visible_sql = auth.task_sql(c, who)
+            # The tag is of the labels this reader sees, not of the newest task change: an edit to a task it cannot
+            # read leaves the tag, and the answer, as they were.
             keys = H.labels_in_use(c, visible_sql)
             tags = [H.tag_by_key(c, key) for key in keys]
             tag = reads.etag("labels", reads.access(visible_sql), reads.names(c), who.actor, keys, tags)
@@ -296,69 +340,3 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 return reads.not_modified(tag)
             response.headers["ETag"] = tag
             return {"labels": keys, "tags": tags}
-
-    @app.get("/api/v2/tasks/stuck")
-    def tasks_stuck(request: Request, hours: int = H.STUCK_HOURS):
-        """Every bot's stuck work, for the fleet maintainer's sweep and for people."""
-        who = request.state.identity
-        if who.role not in ("human", "owner") and who.actor != H.bot_actor(H.FLEET_MAINTAINER):
-            raise Problem("forbidden", "The stuck-task sweep is BotOps's and people's", 403)
-        principal = who.task_actor or who.actor
-        with store.read() as c:
-            hidden = pipeline_rights.hidden_pipeline_ids(c, principal)
-            return {
-                "tasks": [
-                    t
-                    for t in H.stuck_tasks(c, hours=max(1, hours), hidden=auth.unreadable_bots(c, who))
-                    if privacy.task_readable(c, who, H.task(c, t["id"]))
-                    and not pipeline_rights.left_out(hidden, principal, H.task(c, t["id"]) or {})
-                ]
-            }
-
-    @app.get("/api/v2/tasks/flow")
-    def tasks_flow(
-        request: Request,
-        days: int = 30,
-        tz: int = 0,
-        owner: str | None = None,
-        requester: str | None = None,
-        owner_kind: str | None = None,
-        label: str | None = None,
-        recurring: bool | None = None,
-        type: str | None = None,
-    ):
-        """Status changes over time for the Tasks page's stats: counts by day, time in each stage."""
-        who = request.state.identity
-        if who.role not in ("human", "owner"):
-            raise Problem("forbidden", "Task stats are for humans", 403)
-        if days < 1 or days > 365:
-            raise Problem("days", "days is between 1 and 365", 422)
-        if owner_kind not in (None, "", "bot", "human"):
-            raise Problem("owner_kind", "owner_kind is bot or human", 422)
-        with store.read() as c:
-            owner = H.resolve_actor(c, owner) if owner else None
-            requester = H.resolve_actor(c, requester) if requester else None
-            typ = H.type_get(c, type) if type else None
-            # A members-only pipeline is no type to someone outside it: refused as an unknown one is.
-            if typ and not pipeline_rights.may_see(c, who.task_actor or who.actor, typ["id"]):
-                typ = None
-            if type and not typ:
-                raise Problem("type", "No task type " + type, 422)
-            tz = max(-840, min(840, tz))  # minutes east of UTC; days are the viewer's days
-            today = H.shift(H.now(), minutes=tz)[:10] + "T00:00:00.000000Z"
-            since = H.shift(today, days=1 - days, minutes=-tz)
-            return {
-                "since": since,
-                **H.task_flow(
-                    c,
-                    since,
-                    tz_minutes=tz,
-                    visible=pipeline_rights.list_sql(c, who.task_actor or who.actor, auth.task_sql(c, who)),
-                    owner=owner,
-                    requester=requester,
-                    owner_kind=owner_kind or None,
-                    label=label,
-                    recurring=recurring,
-                    type_id=typ["id"] if typ else None,
-                ),
-            }

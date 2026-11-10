@@ -7,16 +7,16 @@ The outcome is five recorded answers, the roadmap and team written down, a first
 
 ## 1. Read before you ask
 
-    hub goal list --all
-    hub team show
-    hub pipeline --type "Product"
+    tico goal list --all
+    tico team show
+    tico task list --all
 
 Do not ask what these already say. Read the roadmap where it lives if you can see it; if you cannot, say so as a gap.
 
 ## 2. Introduce yourself in three lines
 
 What you do: run the product team's week, score each request on evidence, and route each piece of product work to the Product
-Owner who owns it. That you do not write specs or move cards, and that a roadmap change happens only when a task asks for it.
+Owner who owns it. That you do not write specs or work their tasks, and that a roadmap change happens only when a task asks for it.
 
 ## 3. Ask, in one message
 
@@ -36,22 +36,22 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 ## 4. Record
 
 Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/roadmap.md`, `knowledge/team.md` (each segment and its
-Product Owner, plus the Product Pipeline Manager) and `knowledge/decision-log.md` (headings only, to fill).
+Product Owner) and `knowledge/decision-log.md` (headings only, to fill).
 
 ## 5. Produce the first summary now
 
-Follow `playbooks/weekly-product-summary.md` from what you read. Publish it with `hub file publish reports/YYYY-MM-DD-product-summary.md`
+Follow `playbooks/weekly-product-summary.md` from what you read. Publish it with `tico file publish reports/YYYY-MM-DD-product-summary.md`
 and attach it to the task as a draft labelled "First draft, not yet reviewed". Change nothing and start no work with a Product Owner.
 
 ## 6. Check the routine
 
-Setup switched your routine on. Check it with `hub automation list`. If it shows off, arm it with `hub automation update <id> --enable`.
+Setup switched your routine on. Check it with `tico automation list`. If it shows off, arm it with `tico automation update <id> --enable`.
 Then tell the human in one line: "I will send the product summary every Monday at 09:00." They can change it or turn it off.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
 
 ## 7. Finish
 
-    hub bot setup-done
+    tico bot setup-done
 
 Run this once the answers and the first summary are recorded, not before.

@@ -7,9 +7,11 @@
 # compares a pull request with its base, so `git fetch origin main` first; the pre-push hook does. `git config
 # core.hooksPath .githooks` runs this, and the branch conflict check, on every push. CONTRIBUTING.md lists where this
 # differs from CI.
-# Checks: lint.sh (ruff baseline and ruff format), shell_lint.sh (shellcheck), actionlint (workflows), migration order,
+# Checks: lint.sh (ruff baseline and ruff format), test collection (pytest --collect-only), shell_lint.sh (shellcheck),
+# actionlint (workflows), migration order,
 # check_ui_types.sh (generated API types, tsc), check_ui_strict.py (every UI script TypeScript, strict ratchet),
-# check_node_types.py (the .cts/.mts scripts under scripts/ and recorder/ type-check strictly), the
+# check_node_types.py (the .cts/.mts scripts under scripts/ and recorder/, and the Recorder window's .ts, type-check
+# strictly), the
 # OpenAPI document (backend.openapi_v2 --check), check_ui_lint.sh (Biome), check_ui_routes.sh (API paths),
 # check_wire_contract.py (runner wire contract), check_types.sh (basedpyright on the backend against its baseline), and
 # cargo fmt for the Rust crates scripts/rust_checks.sh formats (the merge queue runs that one; the static job does not).
@@ -138,6 +140,26 @@ else
   skip "test imports (no test module imported)" "no Python file changed"
 fi
 
+# 1b. Every test file collects. A test that imports a module that is gone, or a name it lost, fails here instead of in
+# CI's test job. Removing a module breaks the tests that import it, not the files that changed, so every test file is
+# collected: about 5 s in one process, nothing run. Warnings stay warnings here (-p no:warnings); the test run itself
+# makes them errors.
+# shellcheck disable=SC2329  # job calls it by name
+collect_tests() {
+  local out status=0
+  out=$(python3 -m pytest --collect-only -qq -n 0 -p no:cacheprovider -p no:warnings \
+    backend/tests setup/tests scripts/tests 2>&1) || status=$?
+  if [ "$status" -ne 0 ]; then
+    grep -E '^_+ ERROR collecting |^E   |^(ERROR|INTERNALERROR) ' <<< "$out" || printf '%s\n' "$out" | tail -n 40
+  fi
+  return "$status"
+}
+if touched '\.py$|^pytest\.ini$'; then
+  job "tests collect (pytest --collect-only)" collect_tests
+else
+  skip "tests collect (pytest --collect-only)" "no Python file or pytest config changed"
+fi
+
 # 2. Migration names and timestamps against origin/main's history, as CI checks a pull request. Only additions matter.
 if touched '^backend/migrations/|^scripts/check_migration_order\.py$'; then
   if [ -n "$ratchet" ]; then
@@ -217,8 +239,8 @@ else
   skip "ui strict (TypeScript, strict ratchet)" "no UI file changed"
 fi
 
-# 6c'. The TypeScript Node runs directly outside ui/ (scripts/ and recorder/ .cts, .mts and .d.ts files) type-checks
-# strictly, with no baseline (scripts/check_node_types.py). Any TypeScript file outside ui/ is an input: it must sit in
+# 6c'. The TypeScript outside ui/ (scripts/ and recorder/ .cts, .mts and .d.ts files Node runs, and the Recorder
+# window's .ts files under recorder/ui) type-checks strictly, with no baseline (scripts/check_node_types.py). Any TypeScript file outside ui/ is an input: it must sit in
 # a project. The base config and the npm packages whose types the scripts read are inputs too.
 if touched '^([^u]|u[^i]|ui[^/])[^[:space:]]*\.([cm]?ts|tsx)$|(^|/)tsconfig(\.node)?\.json$|^package(-lock)?\.json$|^scripts/check_node_types\.py$'; then
   job "node types (scripts/, recorder/ TypeScript)" python3 scripts/check_node_types.py

@@ -14,10 +14,10 @@ Schedule: in the weekly cash summary (`playbooks/weekly-cash-summary.md`), and w
 
 ## Read
 
-- `hub api GET usage` for the estimated spend in the last seven days (`from` and `to` take UTC dates for another period;
+- `tico api GET usage` for the estimated spend in the last seven days (`from` and `to` take UTC dates for another period;
   `group=bot` groups by bot).
-- `hub api GET usage/limits` for the limits set.
-- `hub finance report budget_vs_actual --start <first day> --end <last day>` for the Finance budgets.
+- `tico api GET usage/limits` for the limits set.
+- `tico finance report budget_vs_actual --start <first day> --end <last day>` for the Finance budgets.
 
 A bot's own credentials may see nothing on the Usage page. If `usage` returns no rows or is refused, say on the summary
 "Usage not readable by this bot, the owner reads it on the Usage page", then continue with the Finance budgets. Do not work

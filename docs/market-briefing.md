@@ -17,7 +17,7 @@ bets it touches. The Strategy Bot looks only at those.
   money going?), `players` (Who are we up against?), `reach` (How does it reach buyers?) and `saying` (What are buyers
   saying?). The server keeps at most 140 characters of each, cut at a word. A question with no answer shows no line.
 
-When the Librarian gathers many items, `hub gateway digest` groups them through the Gateway ([AI Gateway](ai-gateway.md)): the
+When the Librarian gathers many items, `tico gateway digest` groups them through the Gateway ([AI Gateway](ai-gateway.md)): the
 groups order the bullets. The items and the briefing stay the Librarian's.
 
 There is one briefing a week, named by its ISO week (`2026-W44`). Posting the same week again replaces it and keeps the
@@ -29,7 +29,7 @@ The hub makes two built-in automations for the Librarian (see Automations):
 
 - **Market briefing**: daily at 07:00 team time. The Librarian's turn writes the briefing (a one-line title, then a
   bullet per point); the run's `post_update` step, `{"to": ["market", "updates"]}`, posts it as this week's briefing
-  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's title and page; the items the Librarian tagged that week (`hub market briefing post --items-file`), the bets they touch and the answers (`--answers-file`) stay.
+  and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's title and page; the items the Librarian tagged that week (`tico market briefing post --items-file`), the bets they touch and the answers (`--answers-file`) stay.
 - **Market listening · <destination>**: one per listening destination the Librarian receives. Each match is a
   Librarian turn; the turn changes the graph through the market routes, never the match itself.
 
@@ -64,8 +64,8 @@ automation on the event `market.briefing` with a Strategy Bot turn that follows 
 
 | Command | Does |
 |---|---|
-| `hub market briefing post --week <2026-W44> --title <t> --body-file <f> [--items-file <items.json>] [--answers-file <answers.json>]` | Post or replace a week. Owner or Librarian |
-| `hub market briefing latest` | The newest briefing with its body and the bets it touches |
+| `tico market briefing post --week <2026-W44> --title <t> --body-file <f> [--items-file <items.json>] [--answers-file <answers.json>]` | Post or replace a week. Owner or Librarian |
+| `tico market briefing latest` | The newest briefing with its body and the bets it touches |
 
 `--items-file` is a JSON list of `{"text", "kind", "entity_ids"}`; `--answers-file` a JSON object of the answers, by
 key. Both commands are also hub tools

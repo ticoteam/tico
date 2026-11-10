@@ -259,8 +259,8 @@ Services today: **Decide** (live), **Inbox** email addresses (live) and numbers 
 **Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.30 per audio hour for live text) and **Mail** (live), with sending letters and email,
 enrichment and voice coming soon.
 A choice question (which of your labels fits) is a Decide question. Bots and agents read
-the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
-`hub gateway search QUERY`, `hub gateway fetch URL`, `hub gateway digest --items-file FILE`, the `hub_gateway_digest` tool, which groups many items into a summary at Low prices; Signals watch pages and releases for changes, which [market watch](market-watch.md) uses); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
+the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`tico gateway catalog [query]`,
+`tico gateway search QUERY`, `tico gateway fetch URL`, `tico gateway digest --items-file FILE`, the `hub_gateway_digest` tool, which groups many items into a summary at Low prices; Signals watch pages and releases for changes, which [market watch](market-watch.md) uses); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
 
 ## API keys
@@ -301,7 +301,7 @@ curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>
 
 ## Images
 
-`hub gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
+`tico gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
 
 - **low** (the default): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or WebP, 2 MiB each).
   Good for frames and quick pictures.
@@ -317,23 +317,23 @@ category or quality, cost, the reference names and their sha256. An existing fil
 `--category` and no `--model` keeps the older door's choice (`storyboard`, `photo`, `character` or `graphic`).
 
 Each image is billed at what the image model costs plus 25%, from the same cap as the other Gateway services; the price
-varies with the model and size, so it is not one number. The catalog lists the services (`hub gateway catalog images`
-and `hub gateway catalog svg`). Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and
+varies with the model and size, so it is not one number. The catalog lists the services (`tico gateway catalog images`
+and `tico gateway catalog svg`). Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and
 answers the saved paths, never the image bytes.
 
 ## Videos
 
-`hub gateway video PROMPT` starts a short video: 3 to 15 seconds (8 by default), 360p, 720p (the default), 1080p or 4k,
+`tico gateway video PROMPT` starts a short video: 3 to 15 seconds (8 by default), 360p, 720p (the default), 1080p or 4k,
 16:9 or 9:16, with sound unless `--no-audio`. Optional `--first-frame` and `--last-frame` are PNG or JPEG files the video
 starts or ends on. It answers a job id at once. A video takes minutes, so the command does not wait: check it with
-`hub gateway video-status ID --out PATH.mp4`. While the job runs the answer says so and nothing is saved; once it is done
+`tico gateway video-status ID --out PATH.mp4`. While the job runs the answer says so and nothing is saved; once it is done
 the MP4 is saved to `PATH.mp4` (never overwritten) with a sidecar `PATH.mp4.json`, and the answer gives its seconds and cost.
 The Gateway keeps no video: save it when it is done, as the status command does. A video that fails costs nothing;
 one still open after 15 minutes is given up and charged its hold, since the provider may still finish it. Only the key
 that started a job can read it.
 
 Bots use the same two things with the `hub_gateway_video` and `hub_gateway_video_status` tools. The video is priced per
-second at what the video model costs plus 25% (`hub gateway catalog video`), held when the job starts and charged when it
+second at what the video model costs plus 25% (`tico gateway catalog video`), held when the job starts and charged when it
 ends, from the same cap as the other Gateway services.
 
 When the Finance budget for Video production refuses at its limit and is used up for whoever asks (a bot or a person,

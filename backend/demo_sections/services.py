@@ -13,7 +13,7 @@ import uuid
 from .. import demo_content as D
 from .. import gateway_connection, hubdb, slack_app
 from ..auth import Identity
-from ..demo_seed import NAMESPACE, RUNNER_VERSION, SEED_SHA, fixed
+from ..demo_seed import NAMESPACE, RUNNER_VERSION, SEED_SHA, fixed, version
 from ..inbound import save_inbox
 from ..postal_mail import arrived
 from ..store import H
@@ -378,7 +378,8 @@ def _letters(b):
             actor, to, note = letter["handoff"]
 
             def handoff(c, actor=actor, to=to, note=note, ident=ident):
-                hubdb.task_update(c, actor, _letter_row(c, ident)["task_id"], owner=to, note=note)
+                task = _letter_row(c, ident)["task_id"]
+                hubdb.task_reassign(c, actor, task, to, note, version(c, task))
 
             b.write(handoff)
 

@@ -8,7 +8,7 @@ group: marketing
 pack: marketing
 icon: campaign
 suggest: default
-team_templates: [segment-marketing-owner, cro-owner, seo-owner, social-ads-owner, search-ads-owner, lead-generation-owner, inbound-sales-owner, outbound-sales-owner, pipeline-manager]
+team_templates: [segment-marketing-owner, cro-owner, seo-owner, social-ads-owner, search-ads-owner, lead-generation-owner, inbound-sales-owner, outbound-sales-owner]
 tags: [marketing, sales, weekly-summary, pipeline, calendar, b2b, b2c, smb]
 when: "A team that runs marketing and sales as one growth engine and wants one weekly page from first touch to closed deal, instead of separate marketing and sales reports."
 summary: "Runs the growth team's week: one page on marketing and pipeline movement, the blocked work, the six-week calendar and the forecast call pack, plus routing and hiring proposals. Channel owners and pipeline managers do the work; routing and set-up tasks happen only when the task asks for them and a granted Tool allows it."
@@ -20,8 +20,8 @@ pains:
   - "campaigns and launches collide with the sales calendar"
 owns:
   - "The weekly growth page: headline, red, amber or green per workstream, pipeline movement and stalled deals, blockers, the six-week calendar and up to three priorities for next week"
-  - "The growth ideas (cards in the Growth Experiments pipeline), their tests and close-outs, the weekly growth meeting and the weekly numbers: Tico computes the channel numbers, the bot enters cohorts and KPI readings from sources"
-  - "The routing proposals for new leads, requests and campaigns: which owner or pipeline manager takes each, as a task for the owner to review"
+  - "The growth ideas (tasks labelled growth:ideas, growth:running or growth:measuring), their tests and close-outs, the weekly growth meeting and the weekly numbers: Tico computes the channel numbers, the bot enters cohorts and KPI readings from sources"
+  - "The routing proposals for new leads, requests and campaigns: which owner takes each, as a task for the owner to review"
   - "The forecast call pack: commit, best case and the gap to target from the sales roll-up, with the deals to inspect"
   - "Hiring proposals: the growth role recurring work needs next, with the evidence and its first routine"
 never:

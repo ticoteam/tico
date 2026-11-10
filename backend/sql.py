@@ -236,18 +236,6 @@ def live_masks(unsettled):
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
 # `{all_table}` may only narrow what is counted, never add a row.
 DERIVED = {
-    # Who each waiting task waits on (spec D8, step 6b): the person owning its oldest open question task, a subtask or a
-    # blocker (question_tasks.waiting_on). Read over the caller's own views, so a card they cannot read names nobody.
-    "task_waits": (
-        ("tasks", "task_relations"),
-        """
-        SELECT t.id AS task_id,
-               (SELECT q.owner_id FROM {task_relations} r JOIN {tasks} q ON q.id=r.from_task
-                WHERE r.to_task=t.id AND r.kind IN ('parent','blocks') AND q.questions IS NOT NULL AND q.answer IS NULL
-                  AND q.status IN ('open','doing','waiting','review','ready') AND q.owner_id LIKE 'human:%'
-                ORDER BY q.created_at, q.id LIMIT 1) AS waiting_on
-        FROM {tasks} t WHERE t.status='waiting'""",
-    ),
     # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment). A run from before measured usage has its one-number
@@ -559,24 +547,9 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "task_assets": by_task,
         "task_links": by_task,
         "task_roles": by_task,
-        # A task's moves to Blocked and snoozes, open and past (migration 0075), read with their task.
-        "task_holds": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
-        "approvals": (
-            "(task_id IS NULL OR "
-            + by_task
-            + ") AND "
-            + by_message
-            + " AND ("
-            + (
-                "1"
-                if owner
-                else f"requested_by_id={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})"
-            )
-            + ")"
-        ),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"),
         "bot_status_history": bots_visible("bot"),
@@ -605,8 +578,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "attempt_inputs": by_attempt,
         "attempt_conversations": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
-        "task_types": "1",
-        "task_steps": "1",
         "humans": TA.sql_visible(c, who, "id", bare="human", unseen=unseen),
         # Recruiting seats are roles on the company chart that everyone sees (backend/lifecycle.py): their titles,
         # job descriptions and reporting lines. Never a bare "1" (the same reason as intake_items below).
@@ -675,8 +646,10 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         # hashes roadmap visitors' addresses: with it the small IPv4 space turns every stored hash back into an address.
         # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft, and the
         # imported company file (backend/company_import.py) its unpublished strategy: the owner's.
+        # Nor the never-stuck reading's tasks and break sentences (health.NEVER_STUCK_TASKS_KEY): they name tasks an
+        # Admin may not read. Its numbers (health:never_stuck) are readable.
         "registry_metadata": (
-            "key!='roadmap_ip_secret'"
+            "key NOT IN ('roadmap_ip_secret','health:never_stuck:tasks')"
             + ("" if owner else " AND key NOT IN ('strategy.draft_from','onboarding.company_file')")
         )
         if admin and not bot
@@ -943,11 +916,12 @@ def materialize(conn, index, tables, inner, function, private):
     create("known_tasks", "SELECT id FROM main.tasks")
     create("denied_tasks", sorted(index.denied))
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
+    # A run on a denied task (its `attempts.task_id`) is never a fast yes.
     create(
         "run_carriers",
         sorted(
             aid
-            for tid, aid in conn.execute("SELECT id,carried_by FROM main.tasks WHERE carried_by IS NOT NULL")
+            for aid, tid in conn.execute("SELECT id,task_id FROM main.attempts WHERE task_id IS NOT NULL")
             if tid in index.denied
         ),
     )
@@ -1005,10 +979,42 @@ def materialize(conn, index, tables, inner, function, private):
     }
 
 
-def connect(path, c, auth, who, trace=None, seconds=None):
+# Tables built in Python for one request, only when its statement names them.
+WORKED_OUT = ("task_waits",)
+
+
+def task_waits(conn, c, private, hidden):
+    """What each open task the caller may read waits on, as the engine reads it (`H.task_waits`, backend/waiting_on.py):
+    one row per wait, `position` 0 the headline. A person or bot the caller may not see is '' with no line; a sub-task
+    they may not read is named by neither its title nor its id, as the task's own read says it (waiting_on.unnamed)."""
+    from . import waiting_on as W
+    from .store import H
+
+    visible = f'SELECT id FROM "{private("visible_tasks")}"'
+    conn.execute(
+        'CREATE TEMP TABLE "task_waits"(task_id TEXT NOT NULL, position INTEGER NOT NULL, state TEXT NOT NULL, '
+        "waiting_on TEXT, line TEXT NOT NULL, since TEXT, until TEXT, PRIMARY KEY(task_id, position)) WITHOUT ROWID"
+    )
+    ids = [r[0] for r in conn.execute(f"SELECT id FROM main.tasks WHERE status='open' AND id IN ({visible})")]
+    if not ids:
+        return
+    readable = set(ids) | {r[0] for r in conn.execute(visible)}
+    rows = []
+    for tid, waits in H.task_waits(c, ids).items():
+        for position, wait in enumerate(waits):
+            wait = W.unnamed(wait, readable.__contains__)
+            who, line = wait.who, wait.line or ""
+            if who and who in hidden:
+                who, line = "", ""
+            rows.append((tid, position, wait.state, who, line, wait.since, wait.until))
+    conn.executemany('INSERT INTO "task_waits" VALUES(?,?,?,?,?,?,?)', rows)
+
+
+def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
     """A read-only connection whose temp views and authorizer carry this caller's visibility.
 
-    `seconds` bounds building this request's visibility sets as `run` bounds the query itself."""
+    `seconds` bounds building this request's visibility sets as `run` bounds the query itself. A table in WORKED_OUT
+    is built only when `statement` names it."""
     deadline = None if seconds is None else time.monotonic() + seconds
     prefix = "v" + secrets.token_hex(12) + "_"
     inner = lambda table: f'"{prefix}{table}"'
@@ -1051,6 +1057,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
             "letter_proofs",
             "letter_outbox_grants",
             "agents",
+            "ok_grants",  # an event about a bound OK reads only to its parties (task_asks.event_hidden)
         }
 
         class Source:
@@ -1211,6 +1218,9 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                     tool_names=qlist(sorted(outcome_stats.TOOL_NAMES)),
                 )
             )
+        worked_out = {name for name in WORKED_OUT if re.search(rf"\b{name}\b", statement or "", re.I)}
+        if "task_waits" in worked_out:
+            task_waits(conn, c, private, set(unseen) | set(bots))
         # Older SQLite versions initialize JSON virtual tables with schema authorization calls.
         # Initialize only these built-ins before installing the read-only authorizer.
         for function in sorted(TABLE_FUNCTIONS):
@@ -1275,8 +1285,6 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 "market_figures",
                 "market_sources",
                 "listen_runs",
-                "task_types",
-                "task_steps",
             }:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
@@ -1293,7 +1301,7 @@ def connect(path, c, auth, who, trace=None, seconds=None):
         if schema == "temp":
             if table in sets:
                 return sqlite3.SQLITE_OK if context in tables else sqlite3.SQLITE_DENY
-            if table in tables or table in views:
+            if table in tables or table in views or table in worked_out:
                 return sqlite3.SQLITE_OK
             if table in inner_names and context in views:
                 return sqlite3.SQLITE_OK if table[len(prefix) :] in views[context][0] else sqlite3.SQLITE_DENY
@@ -1394,7 +1402,7 @@ def install_sql(app, store, auth):
                 cap, seconds = LIMITS[principal.role]
                 if body.max_rows:
                     cap = min(cap, body.max_rows)
-                conn = connect(store.settings.db_path, c, auth, principal, seconds=seconds)
+                conn = connect(store.settings.db_path, c, auth, principal, seconds=seconds, statement=body.sql)
                 try:
                     result = run(conn, body.sql, body.params, cap, seconds)
                     detail.update(rows=result["row_count"], ms=result["ms"])

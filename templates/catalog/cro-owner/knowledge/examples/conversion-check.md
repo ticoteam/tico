@@ -46,7 +46,7 @@ Segment leaks, on their own lines and not added to the 75:
 
 ## Open tests
 
-- Annual price first on the pricing page (Marketing task 412, label `channel:conversion`, brief in
+- Annual price first on the pricing page (idea task 412, label `channel:conversion`, brief in
   `knowledge/experiments/annual-price-first.md`). It reached its planned sample on 8 Nov. Read below.
 
 ## Read-out: annual price first (28 Sep to 8 Nov, six weeks)

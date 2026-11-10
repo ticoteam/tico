@@ -391,7 +391,7 @@ def refresh_generated_docs(c):
     if bot and bot["state"] in ("active", "planned"):
         pending = c.execute(
             "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id='bot:librarian' "
-            "AND title='Refresh the map' AND status IN ('open','doing','ready','waiting','review')",
+            "AND title='Refresh the map' AND status='open'",
             (H.KEEPER,),
         ).fetchone()
         if not pending:
@@ -405,7 +405,6 @@ def refresh_generated_docs(c):
                 "Use docs/glossary.md for generated wording and preserve source facts.",
                 "bot:librarian",
                 allow_planned=True,
-                next_run=True,
                 lint=False,
                 deduplicate=False,
             )

@@ -110,27 +110,14 @@ class Job:
 TRIGGERS = {
     "schedule": ("", ()),  # the job's schedule in words: "every hour", "every day at 09:00"
     "topic_changed": ("a message in a direct chat changes the topic", ("chat", "topic", "message")),
-    "quiet_task": (
-        "a bot's task is quiet, waits on nothing recorded and stands as at the bot's last checkpoint",
-        ("stalled", "tasks", "quiet"),
-    ),
-    "free_turn": (
-        "a bot has a free turn and assigned work that is not snoozed or blocked",
-        ("tasks", "assigned", "turn", "prerequisite"),
-    ),
     "directory": ("a company directory is connected", ("directory",)),
 }
 ACTIONS = {
-    "check_stale": ("check stale tickets", ("stale", "tasks", "finished", "forgotten", "done")),
-    "suggest_owner": (
-        "suggest to each owner: mark done, close or check it",
-        ("suggest", "done", "close", "owner", "decide"),
-    ),
-    "ask_kpi_keeper": ("ask a KPI's keeper for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
+    "ask_kpi_keeper": ("ask a KPI's owner for a reading when it goes out of date", ("kpi", "ask", "remind", "goal")),
     "ask_goal_owner": ("ask a goal's owner when a KPI goes off track", ("kpi", "goal", "ask", "remind")),
     "check_health": ("check Tico's health", ("health", "check")),
     "check_invariants": (
-        "check production invariants (stuck runs and tasks, unreachable owners, refusal loops, "
+        "check production invariants (stuck runs, refusal loops, "
         "provider sign-in, webhooks, automations, relays) and raise one task per failing check",
         ("health", "invariants", "production", "alert", "stuck"),
     ),
@@ -167,27 +154,6 @@ ACTIONS = {
         "open the week's rules digest task for the Bookkeeper when there are new rules",
         ("finance", "rules", "digest", "wake"),
     ),
-    "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
-    "go_ahead": (
-        "go ahead on a past-deadline question's default answer, or expire it",
-        ("ask", "question", "deadline", "expire"),
-    ),
-    "expire_approvals": (
-        "take approvals and asks nobody will act on out of Needs you",
-        ("approval", "expire", "close", "done", "needs you"),
-    ),
-    "resend_questions": (
-        "record questions unanswered for two business days as lines on their bots' task roundup",
-        ("question", "remind", "unanswered", "roundup"),
-    ),
-    "start_task": (
-        "start the highest-ranked eligible assigned task in its own session",
-        ("task", "start", "assigned", "On Deck", "prerequisite"),
-    ),
-    "recover_assignment": (
-        "list an unattempted assignment once on its owner's task roundup after one hour; show it in Health and its manager's Needs you two hours later",
-        ("task", "assigned", "not started", "roundup", "health", "manager"),
-    ),
     "free_dead_starts": (
         "free turns proven dead: process gone and lease lost, or stopped before they started",
         ("turn", "start", "dead", "stuck", "free", "busy"),
@@ -195,11 +161,6 @@ ACTIONS = {
     "turns_finding": (
         "keep one Health finding per busy-turns incident and hand what it cannot fix to BotOps",
         ("health", "turns", "incident", "botops", "busy"),
-    ),
-    "send_task_roundup": (
-        "send each bot one list of its tasks: a follow-up that came due, an unanswered question, an assignment "
-        "not started, a restate, a late ticket, an exception, a backlog, a missed update or a quiet task",
-        ("tasks", "roundup", "wake", "missed", "quiet", "update", "late", "backlog", "exceptions", "assigned"),
     ),
     "wake_digest_bots": (
         "start one run for each bot with new messages in the threads it follows on digest",
@@ -224,15 +185,10 @@ ACTIONS = {
         ("email", "digest", "unread", "thread", "notify"),
     ),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
-    "reopen_stranded": (
-        "send a bot's task waiting on nothing tracked back to open after two hours",
-        ("waiting", "stranded", "reopen", "tasks"),
+    "read_never_stuck": (
+        "check that every open task waits on something and count where the ladder has them, for Health",
+        ("tasks", "never stuck", "health", "stuck"),
     ),
-    "resume_stranded": (
-        "wake a bot once on its task in progress with no run and nothing to wait on; stop after three runs with no progress",
-        ("doing", "stranded", "resume", "stuck", "tasks"),
-    ),
-    "end_snooze": ("bring snoozed tasks back when their date comes", ("snooze", "tasks")),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
     "goal_colours": ("work out every goal's colour again", ("goal", "colour", "color")),
@@ -250,9 +206,12 @@ ACTIONS = {
     ),
     "ask_updates": ("ask people and bots for today's updates", ("updates", "ask")),
     "sync_github": ("catch up on pull requests, merges and releases", ("github", "pr", "merge", "release")),
-    "finish_repo_waits": ("finish a bot waiting for its repository or a worktree", ("repository", "worktree")),
     "tell_setup_stuck": ("tell a person about a bot stuck in setup", ("setup", "remind")),
     "check_release": ("check for a new Tico release", ("release", "update")),
+    "ask_release": (
+        "ask the Release Manager for a release at the daily release hour",
+        ("release", "schedule", "daily"),
+    ),
     "fetch_feeds": ("fetch subscribed updates", ("feeds", "updates")),
     "sync_directory": ("bring people in from the company directory", ("directory", "people")),
     "sync_meetings": ("bring in meeting notes from each person's Granola", ("meetings", "granola", "notes")),
@@ -272,16 +231,7 @@ ACTIONS = {
         "mark a merged pull request shipped once the running release has it",
         ("github", "merge", "shipped", "deploy"),
     ),
-    "tell_task_loop": ("tell a looping task's owner and requester once a day", ("tasks", "loop", "status", "notice")),
     "note_queue_refusals": ("note why a bot's queued work is not starting", ("queue", "refused", "bots", "health")),
-    "wake_milestone_waits": (
-        "wake a task waiting for a merge or release that already happened",
-        ("merge", "release", "wait", "wake"),
-    ),
-    "send_release_task": (
-        "send the Release Manager one task for what is at Pending Release",
-        ("release", "manager", "pending"),
-    ),
     "start_editions": (
         "start the Company page editions that came due and send waiting reader notices",
         ("company", "page", "edition", "readers"),
@@ -292,11 +242,13 @@ ACTIONS = {
         ("skills", "screening", "proposals", "approve"),
     ),
     "finance_upkeep": (
-        "post Finance's waiting events, usage and prepaids, end holds and finished approvals, open the next period",
-        ("finance", "events", "usage", "holds", "period", "approvals"),
+        "post Finance's waiting events, usage and prepaids, end holds and actions whose OK was given, open the next "
+        "period",
+        ("finance", "events", "usage", "holds", "period", "ok"),
     ),
     "deadline_sweeps": (
-        "turn off failing webhooks, retire replaced computers, hand on support tickets and screened items",
+        "turn off failing webhooks, retire replaced computers, hand on support tickets and screened items, keep "
+        "unsent the held writes nobody decided",
         ("webhooks", "computers", "support", "screening", "deadline"),
     ),
     "start_strategy_note": (
@@ -321,12 +273,8 @@ ACTIONS = {
         ("cloud", "machines", "computers"),
     ),
     "run_heartbeat": (
-        "run the Heartbeat's steps: due times, recovery and outside polls",
-        ("heartbeat", "due", "remind", "snooze", "stall", "recovery", "github", "poll", "alerts"),
-    ),
-    "triage_quiet": (
-        "not run any more: Decide no longer reads a quiet task (it used to set the wait it names, close it if finished, or let one wake through)",
-        ("decide", "stalled", "tasks", "wait", "close", "wake"),
+        "run the Heartbeat's steps: the never-stuck check, due times, recovery and outside polls",
+        ("heartbeat", "never stuck", "snooze", "stall", "recovery", "github", "poll", "alerts"),
     ),
 }
 
@@ -396,17 +344,18 @@ def _pages_watched(c, settings):
     return _row_exists(c, "SELECT 1 FROM entity_watches WHERE active=1 LIMIT 1")
 
 
+def _release_manager(c, settings):
+    # The daily release asks the Release Manager (release_schedule_routes.release_manager); with none, it has no one to ask.
+    from . import release_schedule_routes
+
+    return release_schedule_routes.release_manager(c) is not None
+
+
 def _strategy_bot(c, settings):
     from . import strategy_bot
 
     row = H.bot(c, strategy_bot.SLUG)
     return bool(row) and row["state"] != "archived"
-
-
-def _release_hour_on(c, settings):
-    from . import release_flow
-
-    return not getattr(settings, "rehearsal", False) and release_flow.load(c)["on"]
 
 
 def _company_page_open(c, settings):
@@ -455,39 +404,17 @@ JOBS = [
     Job(
         "heartbeat",
         "Heartbeat",
-        "Runs, in order, the steps that must happen within seconds: due times, recovery from crashes nothing announces, "
-        "and polls of outside systems that do not push.",
+        "Runs, in order, the steps that must happen within seconds: the never-stuck check, which moves and wakes "
+        "tasks, due times, recovery from crashes nothing announces, and polls of outside systems that do not push.",
         HOUSEKEEPING,
         "Every 10 s",
         10,
         then=("run_heartbeat",),
     ),
     Job(
-        "assigned_tasks",
-        "Start assigned tasks",
-        "Starts eligible assigned work on a free computer turn; respects task caps, usage holds and computer capacity. "
-        "Each start is one run.",
-        HOUSEKEEPING,
-        "When a turn is free",
-        then=("start_task",),
-        when="free_turn",
-    ),
-    Job(
-        "stale_review",
-        "Stale ticket review",
-        "Finds open tasks that look finished or forgotten and suggests to each owner what to do.",
-        CHECKS,
-        "Hourly",
-        3600,
-        ai=True,
-        control=True,
-        labels=("stale-review",),
-        then=("check_stale", "suggest_owner"),
-    ),
-    Job(
         "kpi_asks",
         "KPI stale asks",
-        "Asks a KPI's keeper for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
+        "Asks a KPI's owner for a reading when it goes out of date, and a goal's owner when a KPI goes off track.",
         CHECKS,
         "Hourly",
         3600,
@@ -497,8 +424,8 @@ JOBS = [
     Job(
         "task_manager_report",
         "Task Manager report",
-        "Lists each department's quiet tasks, overdue asks, review tickets without a pull request, merged work that did "
-        "not move and held bots in plain code, and opens one task for the Task Manager per department that has something.",
+        "Lists each department's paused tasks, held bots, runs waiting on an owner's review and duplicate tasks in plain "
+        "code, and opens one task for the Task Manager per department that has something.",
         CHECKS,
         "Hourly on weekdays, 08:00 to 18:00",
         3600,
@@ -543,34 +470,15 @@ JOBS = [
         applies=_bookkeeper,
     ),
     Job(
-        "still_needed",
-        "Unanswered questions",
-        "On weekday mornings, questions unanswered for two business days go back to their bots as lines on the bots' "
-        "task roundup, never as a wake.",
-        REMINDERS,
-        "Hourly",
-        3600,
-        then=("resend_questions",),
-    ),
-    Job(
-        "waiting_checks",
-        "Waiting checks",
-        "Sends a bot's task waiting on nothing tracked back to open after two hours (one that keeps coming back "
-        "goes to its manager bot or BotOps).",
+        "never_stuck_reading",
+        "Tasks reading",
+        "Checks the rules that hold at all times over every open task (each waits on something, each bot's turn has a "
+        "run, a wake or a next try) and counts the tasks on a retry, with a manager, with a person or unable to run, "
+        "for Health. Plain code: no model, no wake.",
         HOUSEKEEPING,
         "Hourly",
         3600,
-        then=("reopen_stranded",),
-    ),
-    Job(
-        "stranded_resume",
-        "Resume stranded work",
-        "Wakes a bot once on its task left in progress with no run and nothing to wait on, 15 minutes after its last run "
-        "ended; after three runs with no progress it stops and lists the task on the bot's manager's task roundup.",
-        HOUSEKEEPING,
-        "Every 10 minutes",
-        600,
-        then=("resume_stranded",),
+        then=("read_never_stuck",),
     ),
     Job(
         "thread_retention",
@@ -654,6 +562,17 @@ JOBS = [
         applies=_company_linked,
     ),
     Job(
+        "release_hour",
+        "Daily release",
+        "At each hour the release schedule names, asks the Release Manager for a release as Release now does: one "
+        "Release task, or its unfinished one. Each hour fires once.",
+        HOUSEKEEPING,
+        "At the release hours",
+        10,
+        then=("ask_release",),
+        applies=_release_manager,
+    ),
+    Job(
         "hosted_update",
         "Scheduled update",
         "On a hosted server: updates to the release Tico support scheduled, once no bot turn runs.",
@@ -733,15 +652,6 @@ JOBS = [
     ),
     # The scheduler's other timed work (backend/scheduler.py `tick`), each one row.
     Job(
-        "release_hour",
-        "Daily release",
-        "At the team's release hour, sends the Release Manager one task for what is at Pending Release.",
-        HOUSEKEEPING,
-        "At the release hour",
-        then=("send_release_task",),
-        applies=_release_hour_on,
-    ),
-    Job(
         "screening",
         "Outside text check",
         "Screens outside text a restart left waiting.",
@@ -765,7 +675,8 @@ JOBS = [
     Job(
         "finance_upkeep",
         "Finance upkeep",
-        "Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds and finished approvals, "
+        "Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds and actions whose OK was "
+        "given, "
         "watches documents, and opens next month's period.",
         HOUSEKEEPING,
         "Every 10 seconds",
@@ -776,8 +687,8 @@ JOBS = [
     Job(
         "hourly_deadlines",
         "Hourly deadlines",
-        "Turns off a webhook that failed for five days, retires replaced computers, and hands a person a support ticket "
-        "or screened item that waited an hour.",
+        "Turns off a webhook that failed for five days, retires replaced computers, hands a person a support ticket "
+        "or screened item that waited an hour, and keeps unsent a held write nobody decided in time.",
         HOUSEKEEPING,
         "Hourly",
         3600,
@@ -930,9 +841,7 @@ class Control:
 
 
 CONTROLS = {
-    "stale_review": Control(rule="stale_review", presets=AI_PRESETS, preset=HOURLY, at="09:00"),
     "kpi_asks": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
-    "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
     "bookkeeper_check": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
@@ -1172,7 +1081,7 @@ class Run:
         return self
 
     def ai(self, routes=None, fallback=None, cost_usd=None):
-        """The Decide calls of this run: `routes` counts calls per route (stale_review.route_of), `fallback` the
+        """The Decide calls of this run: `routes` counts calls per route, `fallback` the
         first failure (`{"code", "from"}` or a bare code) when the first route did not answer, `cost_usd` the total."""
         routes = {k: v for k, v in (routes or {}).items() if v}
         if routes:
@@ -1555,21 +1464,12 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
             item["fallback"] = answered["fallback"] if answered else None
             item["spent_this_month_usd"] = spent_this_month(c, job.labels, now)
         rows.append(item)
-    rows.extend(task_rules.listing(c, settings, who, auth, now))
     from . import task_settings
 
     rows = [task_settings.describe_job(row) for row in rows]
     return {
         "jobs": rows,
         "departments": list(chart.values()),
-        "task_rule_departments": task_rules.departments(settings),
-        "task_rule_department": task_rules.department_of(c, settings, who.actor) if who else None,
-        "can_create_task_rule": bool(
-            who
-            and auth
-            and (task_rules.department_of(c, settings, who.actor) or auth.bot_admin(who))
-            and not who.support
-        ),
         "now": _stamp(now),
     }
 
@@ -1602,7 +1502,7 @@ def install(app, store, auth, mutate):
     @app.put("/api/v2/system-routines/{key}")
     def system_routine_save(key: str, request: Request, body: M.SystemRoutineUpdate):
         """Switch a job on or off, or pick its schedule preset and daily time. An owner or an admin.
-        Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
+        Topic changed's switch is its team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
 
@@ -1615,18 +1515,16 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/system-routines/{key}/run")
     def system_routine_run(key: str, request: Request, body: M.Empty):
-        """Run one of the controlled jobs once, now, through the code and caps of its scheduled run (a stale ticket
-        review still makes at most its hourly Decide calls); its result lands on its row. `running` while a job that
-        asks Decide works on its own thread. 409 while it is off or already running. The retired task_roundup and
-        learnings jobs run Maintenance Find stuck and Learn respectively and return {run, started}."""
+        """Run one of the controlled jobs once, now, through the code and caps of its scheduled run; its result lands
+        on its row. `running` while a job that asks Decide works on its own thread. 409 while it is off or already
+        running. The retired learnings job runs Maintenance Learn and returns {run, started}."""
         who = request.state.identity
-        if key in ("task_roundup", "learnings"):
+        if key == "learnings":
             from . import maintenance
 
             maintenance.may_change(auth, who)
-            step = "find_stuck" if key == "task_roundup" else "learn"
             run, started = maintenance.run_now(
-                store, auth, who.actor, step=step, key=request.headers.get("idempotency-key")
+                store, auth, who.actor, step="learn", key=request.headers.get("idempotency-key")
             )
             return {"run": run, "started": started}
         may_change(auth, who, key)

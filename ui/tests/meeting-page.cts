@@ -33,7 +33,7 @@ function world(): World {
     meetings: {
       // Shared with Ops: its delivery task and follow-up, one created item and one linked task, overlapping on purpose.
       m1: base('m1', {live_meeting_id: 'lm1', sent: {task: 't-sent', bot: 'ops'}, delivery: {status: 'sent', destination: 'ops', task_id: 't-sent'},
-        outcome: {bot: 'ops', task_id: 't-sent', status: 'doing', summary: 'Reading the call.', tasks: [{id: 't-follow', title: 'Draft the quote', status: 'open'}, {id: 't-made', title: 'Book the review', status: 'doing'}]}}),
+        outcome: {bot: 'ops', task_id: 't-sent', status: 'open', summary: 'Reading the call.', tasks: [{id: 't-follow', title: 'Draft the quote', status: 'open'}, {id: 't-made', title: 'Book the review', status: 'done'}]}}),
       m2: base('m2', {title: 'Renewal call', private: true}),
     },
     items: {
@@ -42,7 +42,7 @@ function world(): World {
            {id: 'i3', version: 1, section: 'task', text: 'Rename the repo', detail: {}, status: 'dismissed', updated_by: 'human:ana'}],
       m2: [],
     },
-    linked: {m1: [{task_id: 't-made', number: 12, title: 'Book the review', status: 'doing'}], m2: []},
+    linked: {m1: [{task_id: 't-made', number: 12, title: 'Book the review', status: 'done'}], m2: []},
     sent: [], edits: [],
   };
 }
@@ -116,9 +116,9 @@ async function shot(page: Page, name: string) {
       const rows = await detail.locator('#meet-sections li .t').allInnerTexts();
       assert.equal(rows.filter(t => t === 'Book the review').length, 1, `${where}: no duplicate task`);
       assert.ok(rows.includes('Draft the quote') && rows.includes('Review by Ops'), `${where}: made tasks listed: ${rows}`);
-      // The status and the next part are separated, never run together ("doingOpen").
+      // The status and the next part are separated, never run together ("DoneOpen").
       const linked = await detail.locator('[data-linked-task="t-made"]').innerText();
-      assert.match(linked, /#12 · Doing/, where);
+      assert.match(linked, /#12 · Done/, where);
       assert.doesNotMatch(linked, /Open/, where);
       // Dismissed items wait behind one toggle.
       assert.equal(await detail.getByText('Rename the repo').count(), 0, where);

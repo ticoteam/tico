@@ -1,7 +1,7 @@
 """A bot's run, as the public contract names it.
 
 Storage calls one try at a job an attempt (`attempts`, and an `attempt_id` column on jobs, messages, files, events
-and the rest) until Release 2 moves it. API v2, the live events, webhooks, the MCP tools, the hub CLI and the web app
+and the rest) until Release 2 moves it. API v2, the live events, webhooks, the MCP tools, the tico CLI and the web app
 call it a run: a field is `run_id`, an object is `run`, a list of them is `runs`, and `run.state` is the value map
 below (docs/status-and-state.md, Runs).
 

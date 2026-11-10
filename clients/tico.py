@@ -212,11 +212,12 @@ class Client:
                         payload = {}
                     error = payload.get("error", {})
                     if isinstance(error, str):
-                        # A flat refusal (CONTRACT §1 task caps): `error` is the code, `message` the words, the rest is extra.
+                        # A flat refusal: `error` is the code, `detail` (a task refusal) or `message` (CONTRACT §1 task
+                        # caps) the words, the rest is extra (a task refusal's `missing`, `next` and `version`).
                         error = {
                             "code": error,
-                            "detail": payload.get("message") or "",
-                            **{k: v for k, v in payload.items() if k not in ("error", "message")},
+                            "detail": payload.get("detail") or payload.get("message") or "",
+                            **{k: v for k, v in payload.items() if k not in ("error", "message", "detail")},
                         }
                     if not isinstance(error, dict):
                         error = {}

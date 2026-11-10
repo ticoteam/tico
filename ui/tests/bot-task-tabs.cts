@@ -25,14 +25,11 @@ interface Cond { field: string; value: string | string[] }
 interface Tab { builtin?: string; name: string; show_count?: boolean; conditions?: Cond[] }
 interface Widget { id: string; hidden: boolean; height: number | null }
 interface Layout { tabs: Tab[]; widgets: Widget[] }
-interface Blocker { id: string; title: string; owner_id?: string; status: string; direction: string }
-interface Hold { kind: string; reason: string; since: string; until: string | null; by: string; cause: string }
+interface Turn { who: string; state: string; line: string; since: string }
 interface Task {
-  id: string; title: string; body: string; owner_id: string; requester_id: string; status: string; lane: string;
-  rank: number | null; labels: string[]; tags: string[]; links: string[]; parts: {total: number; done: number};
-  version: number; created_at: string; updated_at: string;
-  waiting_on?: string | null; note?: string; relations?: {blocks?: Blocker[]}; holds?: Hold[];
-  type_id?: string; done_at?: string; ask?: {recipient_id?: string};
+  id: string; title: string; body: string; owner_id: string; requester_id: string; status: string;
+  labels: string[]; version: number; created_at: string; updated_at: string;
+  pipeline_id: string; stage_id: string; turn: Turn | null; late: null; snoozed: boolean; done_at?: string;
 }
 interface PageFixture { file_id: string; title: string; bot: string; updated_at: string; archived: boolean }
 interface Server {
@@ -49,25 +46,29 @@ interface Server {
 const ago = (minutes: number): string => new Date(Date.now() - minutes * 60000).toISOString();
 const bots = ['lead', 'qa'].map(name => ({name, display_name: {lead: 'Head of Engineering', qa: 'QA Engineer'}[name], org_parent: '',
   host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}));
-const task = (id: string, title: string, over: Partial<Task> = {}): Task => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'doing',
-  lane: 'company', rank: null, labels: [], tags: [], links: [], parts: {total: 0, done: 0}, version: 1, created_at: ago(600), updated_at: ago(60), ...over});
+const turn = (who: string, state: string, line = ''): Turn => ({who, state, line, since: ago(120)});
+const task = (id: string, title: string, over: Partial<Task> = {}): Task => ({id, title, body: 'Details.', owner_id: 'bot:lead', requester_id: 'human:ana', status: 'open',
+  labels: [], version: 1, created_at: ago(600), updated_at: ago(60), pipeline_id: 'general', stage_id: 'g-build', turn: turn('bot:lead', 'bot'),
+  late: null, snoozed: false, ...over});
 const TASKS: Task[] = [
   task('t-own', 'Ship the release notes'),
-  task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created_at: ago(480)}),
-  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner_id: 'bot:qa', status: 'doing', direction: 'in'}]}, holds: [{kind: 'blocked', reason: 'Waiting for the test machine', since: ago(480), until: null, by: 'keeper', cause: 'dependency'}]}),
-  task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created_at: ago(30)}),
-  task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created_at: ago(3 * 1440)}),
-  task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead'}),
+  task('t-waits', 'Turn on the screen default', {turn: turn('human:ana', 'person', 'Waiting on Ana'), created_at: ago(480)}),
+  task('t-bot-wait', 'Wait for QA', {turn: turn('bot:qa', 'tasks', 'Waiting on QA Engineer')}),
+  task('t-roadmap', 'Plan the import page', {pipeline_id: 'product', stage_id: 'p-plan', created_at: ago(30)}),
+  task('t-roadmap-done', 'Write the import spec', {status: 'done', pipeline_id: 'product', stage_id: 'p-done', turn: null, done_at: ago(1440), created_at: ago(3 * 1440)}),
+  task('t-qa', 'Run the release check', {owner_id: 'bot:qa', requester_id: 'bot:lead', turn: turn('bot:qa', 'bot')}),
 ];
-const TYPES = [{id: 'general', name: 'General', steps: []}, {id: 'roadmap', name: 'Product roadmap', role: 'product-roadmap', steps: []}];
+const PIPELINES = [{id: 'general', name: 'General', retired_at: null, stages: [{id: 'g-build', name: 'Build'}]},
+  {id: 'product', name: 'Product', retired_at: null, stages: [{id: 'p-plan', name: 'Plan'}]}];
 const OTHERS: Tab = {name: 'Assigned to others', show_count: true, conditions: [{field: 'asked_by', value: 'this_bot'},
-  {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open', 'doing', 'waiting']}]};
-const DEFAULT: Tab[] = [{builtin: 'needs', name: 'Needs you', show_count: true}, {builtin: 'active', name: 'Doing', show_count: true},
-                 {builtin: 'blocked', name: 'Blocked', show_count: true}, OTHERS];
+  {field: 'assigned_to', value: 'others'}, {field: 'status', value: ['open']}]};
+const DEFAULT: Tab[] = [{builtin: 'needs', name: 'Needs you', show_count: true}, {builtin: 'active', name: 'Open', show_count: true},
+                 {builtin: 'blocked', name: 'Waiting', show_count: true}, OTHERS];
+// backend/bot_task_tabs.py DEFAULT_CONDITIONS
 const CONDITIONS: Record<'needs' | 'active' | 'blocked', Cond[]> = {
   needs: [{field: 'needs', value: 'you'}],
-  active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open', 'doing']}],
-  blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
+  active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open']}],
+  blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'waiting_on', value: 'not_me'}],
 };
 const normalized = (tab: Tab): Tab => tab.builtin && tab.builtin !== 'done' && !tab.conditions ? {...tab, conditions: CONDITIONS[tab.builtin as keyof typeof CONDITIONS]} : tab;
 const WIDGETS: Widget[] = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
@@ -77,16 +78,12 @@ const PAGES: Record<string, PageFixture> = {'page:f1': {file_id: 'f1', title: 'W
 const matches = (bot: string, tab: Tab, t: Task): boolean => (t.owner_id === 'bot:' + bot || t.requester_id === 'bot:' + bot) && tab.conditions!.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
   if (field === 'status') return value.includes(t.status);
-  if (field === 'needs') return (t.owner_id === 'human:ana' && ['open', 'doing', 'waiting'].includes(t.status)) || (t.status === 'waiting' && t.waiting_on === 'human:ana');
-  if (field === 'waiting_on') {
-    const blockers = (t.relations?.blocks || []).filter(r => r.direction === 'in' && !['done', 'closed', 'declined'].includes(r.status));
-    const person = String(t.waiting_on || '').startsWith('human:');
-    const botWait = !person && !['gate', 'worktree'].includes((t.holds || []).find(h => h.kind === 'blocked')?.cause as string) && !t.ask?.recipient_id?.startsWith('human:')
-      && !blockers.some(r => r.owner_id?.startsWith('human:')) && blockers[0]?.owner_id?.startsWith('bot:');
-    return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana'
-      : value === 'person' ? person : value === 'bot' ? botWait : true);
-  }
-  if (field === 'type') return value.includes(t.type_id || 'general');
+  // Whose turn it is: a task waits on someone who is not the bot itself.
+  const waits = t.status === 'open' && !!t.turn?.who && t.turn.who !== 'bot:' + bot ? t.turn.who : '';
+  if (field === 'needs') return waits === 'human:ana';
+  if (field === 'waiting_on') return !!waits && (value === 'me' ? waits === 'human:ana' : value === 'not_me' ? waits !== 'human:ana'
+    : value === 'person' ? waits.startsWith('human:') : value === 'bot' ? waits.startsWith('bot:') : true);
+  if (field === 'pipeline') return value.includes(t.pipeline_id);
   if (field === 'asked_by') return t.requester_id === who;
   if (field === 'assigned_to') return value === 'others' ? !['human:ana', 'bot:' + bot].includes(t.owner_id) : t.owner_id === who;
   throw new Error('fixture has no ' + field);
@@ -118,7 +115,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates') return json({updates: q.get('bot') === 'lead' ? [{id: 'u1', bot: 'lead', day: '2026-10-23', kind: 'daily',
       body: 'Shipped the export fix.', read: true, created_at: ago(600)}] : [], missed: [], unread: 0, next_before: null, today: {}});
-    if (p === '/api/v2/task-types') return json({types: TYPES});
+    if (p === '/api/v2/pipelines') return json({pipelines: PIPELINES});
     const layout = p.match(/^\/api\/v2\/bots\/([^/]+)\/task-tabs$/);
     if (layout) {
       const bot = layout[1]!;
@@ -190,16 +187,18 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       release();
       await page.waitForFunction(() => document.querySelector('#cnt-c3')?.textContent!.trim() === '1');
       assert.equal(await rail.locator('.bot-rail-loading').isHidden(), true);
-      assert.deepEqual(await tabTexts(), ['Needs you 1', 'Doing 2', 'Blocked 1', 'Assigned to others 1'], at);
-      await pill('Blocked').click();
-      assert.deepEqual(await rail.locator('#t-blocked .ttl').allInnerTexts(), ['Wait for QA']);
-      assert.match(await rail.locator('#t-blocked .trow-waits').innerText(), /Waiting for the test machine.*since/);
-      await pill('Doing').click();
-      // Rows come a page (here one) at a time; the counts above already leave the blocked task out of Doing.
-      assert.deepEqual(await rail.locator('#t-open .ttl').allInnerTexts(), ['Ship the release notes'], at);
+      assert.deepEqual(await tabTexts(), ['Needs you 1', 'Open 4', 'Waiting 1', 'Assigned to others 1'], at);
+      await pill('Waiting').click();
+      // S14: a row is its title and, dimmed at the right, its stage; no Blocked or Waiting words.
+      assert.deepEqual(await rail.locator('#t-blocked .tk-title').allInnerTexts(), ['Wait for QA']);
+      assert.equal(await rail.locator('#t-blocked .tk-after').innerText(), 'Build');
+      assert.doesNotMatch(await rail.locator('#t-blocked').innerText(), /Blocked|Waiting on/);
+      await pill('Open').click();
+      // Rows come a page (here one) at a time.
+      assert.deepEqual(await rail.locator('#t-open .tk-title').allInnerTexts(), ['Ship the release notes'], at);
       assert.deepEqual(await order(), ['tasks', 'updates', 'files']);
       await pill('Assigned to others').click();
-      assert.deepEqual(await rail.locator('#t-c3 .trow .ttl').allInnerTexts(), ['Run the release check']);
+      assert.deepEqual(await rail.locator('#t-c3 .tk-row .tk-title').allInnerTexts(), ['Run the release check']);
       // One pencil, no gear or board icon.
       await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
       assert.equal(await page.locator('#bot-tasks-settings').count(), 0);
@@ -216,14 +215,14 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       await rail.locator('#bot-sidebar-done').waitFor();
       assert.equal(await rail.locator('#bot-sidebar-edit').isHidden(), true);
       await widget('files').locator('[data-w-eye]').click();
-      await pill('Doing').click();
+      await pill('Open').click();
       await dialog.waitFor();
       await dialog.locator('[data-filter-name]').fill('Busy');
       await dialog.getByRole('button', {name: 'Save'}).click();
-      assert.deepEqual((await tabTexts()).slice(0, 2), ['Needs you 1', 'Busy 2']);
+      assert.deepEqual((await tabTexts()).slice(0, 2), ['Needs you 1', 'Busy 4']);
       await rail.locator('#bot-sidebar-cancel').click();
       assert.equal(server.puts.length, 0);
-      assert.deepEqual(await tabTexts(), ['Needs you 1', 'Doing 2', 'Blocked 1', 'Assigned to others 1']);
+      assert.deepEqual(await tabTexts(), ['Needs you 1', 'Open 4', 'Waiting 1', 'Assigned to others 1']);
       assert.equal(await widget('files').getAttribute('data-off'), null);
 
       // Edit again: hide Files, move Updates up by keyboard and down past Files by dragging its handle, set Tasks' height
@@ -262,12 +261,12 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       const updatesHeight = Number(await widget('updates').getAttribute('data-h'));
       assert.ok(Math.abs(updatesHeight - Math.max(80, Math.round(before + 300))) <= 2, `${before} -> ${updatesHeight}`);
 
-      // A default tab has ordinary editable conditions and Reset. Turn Doing’s count off.
-      await pill('Doing').click();
+      // A default tab has ordinary editable conditions and Reset. Turn Open’s count off.
+      await pill('Open').click();
       await dialog.waitFor();
       assert.deepEqual(await dialog.locator('[data-cond-field]').evaluateAll<string[], unknown, HTMLSelectElement>(els => els.map(el => el.value)), ['assigned_to', 'status']);
       assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'this_bot');
-      assert.deepEqual(await dialog.locator('[data-cond-value="1"]:checked').evaluateAll<string[], unknown, HTMLInputElement>(els => els.map(el => el.value)), ['open', 'doing']);
+      assert.deepEqual(await dialog.locator('[data-cond-value="1"]:checked').evaluateAll<string[], unknown, HTMLInputElement>(els => els.map(el => el.value)), ['open']);
       await dialog.locator('[data-cond-remove="0"]').click();
       await dialog.locator('[data-cond-add]').click();
       assert.equal(await dialog.locator('[data-cond-field]').count(), 2);
@@ -277,8 +276,8 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       await dialog.locator('[data-filter-count]').uncheck();
       await dialog.getByRole('button', {name: 'Save'}).click();
       await dialog.waitFor({state: 'hidden'});
-      assert.equal(await pill('Doing').locator('.cnt').isHidden(), true);
-      // + adds a filter: name it, Type is Product roadmap, Status adds Done. Show count is on by default.
+      assert.equal(await pill('Open').locator('.cnt').isHidden(), true);
+      // + adds a filter: name it, Pipeline is Product, Status adds Done. Show count is on by default.
       await rail.locator('[data-bot-tab-add]').click();
       await dialog.waitFor();
       assert.equal(await dialog.locator('[data-filter-count]').isChecked(), true);
@@ -287,9 +286,9 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       await dialog.locator('[data-filter-name]').fill('product tasks');
       await dialog.locator('[data-cond-value="0"][value="done"]').check();
       await dialog.locator('[data-cond-add]').click();
-      await dialog.locator('[data-cond-field="1"]').selectOption('type');
+      await dialog.locator('[data-cond-field="1"]').selectOption('pipeline');
       await dialog.locator('[data-cond-value="1"][value="general"]').uncheck();
-      await dialog.locator('[data-cond-value="1"][value="roadmap"]').check();
+      await dialog.locator('[data-cond-value="1"][value="product"]').check();
       await dialog.locator('[data-cond-add]').click();
       await dialog.locator('[data-cond-field="2"]').selectOption('created_within');
       await dialog.locator('[data-cond-remove="2"]').click();
@@ -305,12 +304,12 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       for (let n = 0; n < 40; n++) await page.mouse.move(bar.x + 4 + n % 2, from.y + from.height / 2);
       await page.mouse.up();
       assert.equal(await dialog.isVisible(), false, 'a drag does not open the pop-up');
-      assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs you', 'Doing', 'Blocked', 'Assigned to others']);
-      await pill('Blocked').focus();
+      assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs you', 'Open', 'Waiting', 'Assigned to others']);
+      await pill('Waiting').focus();
       await page.keyboard.press('ArrowRight');
-      await pill('Blocked').focus();
+      await pill('Waiting').focus();
       await page.keyboard.press('ArrowLeft');
-      assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs you', 'Doing', 'Blocked', 'Assigned to others']);
+      assert.deepEqual((await tabTexts()).map(s => s.replace(/ \d+$/, '')), ['product tasks', 'Needs you', 'Open', 'Waiting', 'Assigned to others']);
       // Delete removes a tab.
       await pill('Assigned to others').click();
       await dialog.locator('[data-filter-delete]').click();
@@ -338,7 +337,7 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       await page.keyboard.press('ArrowDown');
       assert.equal(await widget('tasks').getAttribute('data-h'), null);
       await page.keyboard.press('Escape');
-      await pill('Doing').dispatchEvent('click');
+      await pill('Open').dispatchEvent('click');
       assert.equal(await dialog.isVisible(), false);
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), true);
       putDone();
@@ -347,18 +346,18 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       assert.equal(server.puts.length, 2);
       assert.deepEqual(server.puts[1], server.puts[0]);
       assert.deepEqual(server.puts[1], {bot: 'lead', body: {
-        tabs: [{name: 'product tasks', show_count: true, conditions: [{field: 'status', value: ['open', 'doing', 'waiting', 'done']}, {field: 'type', value: ['roadmap']}]},
-               {builtin: 'needs', name: 'Needs you', show_count: true, conditions: CONDITIONS.needs}, {builtin: 'active', name: 'Doing', show_count: false, conditions: CONDITIONS.active},
-               {builtin: 'blocked', name: 'Blocked', show_count: true, conditions: CONDITIONS.blocked}],
+        tabs: [{name: 'product tasks', show_count: true, conditions: [{field: 'status', value: ['open', 'done']}, {field: 'pipeline', value: ['product']}]},
+               {builtin: 'needs', name: 'Needs you', show_count: true, conditions: CONDITIONS.needs}, {builtin: 'active', name: 'Open', show_count: false, conditions: CONDITIONS.active},
+               {builtin: 'blocked', name: 'Waiting', show_count: true, conditions: CONDITIONS.blocked}],
         widgets: [{id: 'tasks', hidden: false, height: null},
                   {id: 'files', hidden: true, height: null}, {id: 'updates', hidden: false, height: updatesHeight}]}});
       assert.equal(await rail.evaluate(el => el.classList.contains('editing')), false);
       await page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent!.trim() === '2');
-      assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs you 1', 'Doing', 'Blocked 1']);
+      assert.deepEqual(await tabTexts(), ['product tasks 2', 'Needs you 1', 'Open', 'Waiting 1']);
       await pill('product tasks').click();
       // A page at a time: Show more reads the next, and a refresh keeps as many as were read, also a refresh that
       // starts while Show more is on its way.
-      assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page']);
+      assert.deepEqual(await rail.locator('#t-c0 .tk-row .tk-title').allInnerTexts(), ['Plan the import page']);
       let moreDone!: Resolver;
       server.moreHold = new Promise<void>(resolve => { moreDone = resolve; });
       await rail.locator('#t-c0 [data-bot-filter-more]').click();
@@ -368,44 +367,39 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       server.moreHold = null;
       await page.evaluate(() => window.refreshing);
       await rail.locator('#t-c0 [data-bot-filter-more]').waitFor({state: 'detached'});
-      assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page', 'Write the import spec']);
+      assert.deepEqual(await rail.locator('#t-c0 .tk-row .tk-title').allInnerTexts(), ['Plan the import page', 'Write the import spec']);
       await page.evaluate(() => botTaskFilterRead('lead'));
-      assert.deepEqual(await rail.locator('#t-c0 .trow .ttl').allInnerTexts(), ['Plan the import page', 'Write the import spec']);
+      assert.deepEqual(await rail.locator('#t-c0 .tk-row .tk-title').allInnerTexts(), ['Plan the import page', 'Write the import spec']);
       assert.equal(await rail.locator('#t-c0 [data-bot-filter-more]').count(), 0);
       // A default tab uses exactly its edited conditions after Done and reload; Reset restores its full default.
       await rail.locator('#bot-sidebar-edit').click();
-      await pill('Blocked').click();
+      await pill('Waiting').click();
       await dialog.waitFor();
-      assert.equal(await dialog.locator('[data-cond-field]').count(), 3);
-      assert.equal(await dialog.locator('[data-cond-value="2"]').inputValue(), 'not_me');
-      await page.evaluate(() => document.fonts.ready);
-      await page.screenshot({path: `/tmp/dev511-blocked-${scheme}-${viewport.width}.png`});
-      await dialog.locator('[data-cond-remove="2"]').click();
-      await dialog.locator('[data-cond-value="1"][value="waiting"]').uncheck();
-      await dialog.locator('[data-cond-value="1"][value="open"]').check();
+      assert.equal(await dialog.locator('[data-cond-field]').count(), 2);
+      assert.equal(await dialog.locator('[data-cond-value="1"]').inputValue(), 'not_me');
+      await dialog.locator('[data-cond-value="1"]').selectOption('me');
       await dialog.getByRole('button', {name: 'Save'}).click();
       await rail.locator('#bot-sidebar-done').click();
       await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
       await goto('#/bot/lead');
-      await page.waitForFunction(() => document.querySelector('#cnt-blocked')?.textContent === '1');
-      await pill('Blocked').click();
-      assert.deepEqual(await rail.locator('#t-blocked .trow .ttl').allInnerTexts(), ['Plan the import page']);
+      await page.waitForFunction(() => document.querySelector('#t-blocked .tk-title')?.textContent === 'Turn on the screen default');
+      await pill('Waiting').click();
+      assert.deepEqual(await rail.locator('#t-blocked .tk-row .tk-title').allInnerTexts(), ['Turn on the screen default']);
       await rail.locator('#bot-sidebar-edit').click();
-      await pill('Blocked').click();
+      await pill('Waiting').click();
       await dialog.waitFor();
-      assert.equal(await dialog.locator('[data-cond-field]').count(), 2);
       await dialog.getByRole('button', {name: 'Reset to default'}).click();
-      assert.equal(await dialog.locator('[data-cond-field]').count(), 3);
+      assert.equal(await dialog.locator('[data-cond-value="1"]').inputValue(), 'not_me');
       await dialog.getByRole('button', {name: 'Save'}).click();
       await pill('Needs you').click();
       await dialog.waitFor();
       assert.equal(await dialog.locator('[data-cond-field]').inputValue(), 'needs');
       assert.equal(await dialog.locator('[data-cond-value="0"]').inputValue(), 'you');
-      assert.ok((await dialog.innerText()).includes('approvals and questions for you'));
+      assert.doesNotMatch(await dialog.innerText(), /approvals/);
       await dialog.getByRole('button', {name: 'Save'}).click();
       await rail.locator('#bot-sidebar-done').click();
       await rail.locator('#bot-sidebar-edit:not([hidden])').waitFor();
-      await page.waitForFunction(() => document.querySelector('#t-blocked .ttl')?.textContent === 'Wait for QA');
+      await page.waitForFunction(() => document.querySelector('#t-blocked .tk-title')?.textContent === 'Wait for QA');
       // Outside edit mode: Files is not drawn, the rest in the new order, and Updates' height is its most.
       assert.equal(await widget('files').isHidden(), true);
       assert.deepEqual(await order(), ['tasks', 'files', 'updates']);
@@ -433,30 +427,31 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
       await page.screenshot({path: `/tmp/bot-sidebar-${scheme}-${viewport.width}-edit.png`});
       await context.close();
     }
-    // A read-only viewer gets the same default filters: one wait is Blocked 1 and Doing 0.
-    const isolated: Server = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner_id: 'bot:qa', status: 'waiting', waiting_on: null, relations: {blocks: [{id: 'builder', owner_id: 'bot:lead', title: 'Build it', status: 'doing', direction: 'in'}]}})]};
+    // A read-only viewer gets the same default filters: a task waiting on another bot is Waiting 1 and Open 1.
+    const isolated: Server = {layouts: {}, puts: [], page: 200, tasks: [task('one-wait', 'Wait for the builder', {owner_id: 'bot:qa', turn: turn('bot:lead', 'tasks', 'Waiting on Head of Engineering')})]};
     const readOnly = await open(browser, {width:1280,height:900}, 'light', isolated);
     await readOnly.page.goto('https://tico-ui.test/#/bot/qa/tasks');
     await readOnly.page.waitForFunction(() => document.querySelector('#cnt-blocked')?.textContent === '1');
-    assert.equal(await readOnly.page.locator('#cnt-active').innerText(), '0');
+    assert.equal(await readOnly.page.locator('#cnt-active').innerText(), '1');
     assert.equal(await readOnly.page.locator('#bot-tasks-board').count(), 0);
     assert.equal(await readOnly.page.locator('#bot-sidebar-edit').isHidden(), true);
     await readOnly.page.locator('#bot-tab-t-blocked').click();
-    assert.deepEqual(await readOnly.page.locator('#t-blocked .ttl').allInnerTexts(), ['Wait for the builder']);
+    assert.deepEqual(await readOnly.page.locator('#t-blocked .tk-title').allInnerTexts(), ['Wait for the builder']);
     await readOnly.page.locator('#bot-tab-t-active').click();
-    assert.equal(await readOnly.page.locator('#t-open .trow').count(), 0);
+    assert.deepEqual(await readOnly.page.locator('#t-open .tk-title').allInnerTexts(), ['Wait for the builder']);
     assert.deepEqual(readOnly.errors, []);
     await readOnly.context.close();
     const filtered = await open(browser, {width:1280,height:900}, 'light', {puts: [], page: 200, layouts: {lead: {
       tabs: [{name: 'Bot waits', conditions: [{field: 'waiting_on', value: 'bot'}]},
              {name: 'People waits', conditions: [{field: 'waiting_on', value: 'person'}]}], widgets: WIDGETS}}});
     await filtered.page.goto('https://tico-ui.test/#/bot/lead/tasks');
-    await filtered.page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent === '1');
+    // Waiting on a bot: on QA for the task it waits on, and the task this bot asked QA for.
+    await filtered.page.waitForFunction(() => document.querySelector('#cnt-c0')?.textContent === '2');
     await filtered.page.locator('#bot-tab-t-c0').click();
-    assert.deepEqual(await filtered.page.locator('#t-c0 .ttl').allInnerTexts(), ['Wait for QA']);
-    assert.match(await filtered.page.locator('#t-c0 .trow-waits').innerText(), /Waiting on QA Engineer: Waiting for the test machine/);
+    assert.deepEqual(await filtered.page.locator('#t-c0 .tk-title').allInnerTexts(), ['Wait for QA', 'Run the release check']);
+    assert.equal(await filtered.page.locator('#t-c0 .tk-after').first().innerText(), 'Build');
     await filtered.page.locator('#bot-tab-t-c1').click();
-    assert.deepEqual(await filtered.page.locator('#t-c1 .ttl').allInnerTexts(), ['Turn on the screen default']);
+    assert.deepEqual(await filtered.page.locator('#t-c1 .tk-title').allInnerTexts(), ['Turn on the screen default']);
     assert.deepEqual(filtered.errors, []);
     await filtered.context.close();
     // A sidebar of pages: the built-ins hidden, a page shown with its title; Add puts another page in the draft, its

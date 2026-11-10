@@ -59,8 +59,9 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
   [Databases](databases.md), [Query Tico data](hub-sql.md), [Slack gateway](slack-gateway.md).
 - Project maintenance: [Architecture](architecture.md), [Contributing](../CONTRIBUTING.md), [Releasing](releasing.md),
   [Runner wire contract](runner-wire-contract.md), [Tico HQ](tico-hq.md) and [Telemetry](telemetry.md).
+- Pipelines in Tico 0.6.0: [the build spec](pipelines-v3.md) and [its validation](pipelines-v3-validation.md).
 - Staff only: [Manage a company's billing](staff-billing.md) (credit, minimum balance, grace, enforcement, reversals) and
   [Review the Hosting waitlist](staff-waitlist.md).
 
-[Task types and steps](tasks.md): custom pipelines, status mapping, and CLI, MCP, API and SQL examples;
+[Tasks](tasks.md): pipelines and stages, asks and OKs, snooze, and the CLI, MCP and API;
 editing and deleting your own comments.

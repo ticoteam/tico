@@ -2,7 +2,7 @@
 
 import json
 from fastapi import Request
-from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, views
+from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, task_rule_gate, views
 from .store import H, Problem
 
 
@@ -40,10 +40,9 @@ def register(app, auth, mutate, send, store, task_view):
 
         def work(c):
             privacy.require_batch(c, who, batch.current(c, who.actor))
-            items = views.needs_items(c, auth, who, task_view)
             snapshot = views.fleet_snapshot(c, auth, who, task_view)
             scope = body.bot if body.bot == batch.NEXT else (H.resolve_bot(c, body.bot) or {}).get("id", body.bot)
-            return batch.start(c, who.actor, items, snapshot, scope=scope, reader=privacy.actor(who))
+            return batch.start(c, who.actor, snapshot, scope=scope, reader=privacy.actor(who))
 
         return mutate(request, body, work)
 
@@ -58,9 +57,8 @@ def register(app, auth, mutate, send, store, task_view):
             raise Problem("date", "since must be an ISO-8601 date/time with a timezone", 422)
         start = views.since_time(since) or H.shift(H.now(), hours=-12)
         with store.read() as c:
-            items = views.needs_items(c, auth, who, task_view)
             snapshot = views.fleet_snapshot(c, auth, who, task_view)
-            rows, notes, reports = batch.candidates(c, who.actor, items)
+            rows, notes, reports = batch.candidates(c, who.actor, privacy.actor(who))
             said = []
             for m in c.execute(
                 "SELECT * FROM messages WHERE recipient_id=? AND "
@@ -78,11 +76,10 @@ def register(app, auth, mutate, send, store, task_view):
                         "text": batch._clip(m["body"] or "", 240),
                     }
                 )
-            stuck = [
-                t
-                for t in H.stuck_tasks(c, hidden=auth.unreadable_bots(c, who))
-                if privacy.task_readable(c, who, H.task(c, t["id"]))
-            ]
+            # A bot that cannot run, which this person can fix (waiting_on: a Paused cause).
+            from . import waiting_on
+
+            stuck = [n for n in waiting_on.needs(c, who.actor) if n["kind"] == "paused"]
             open_ = batch.current(c, who.actor)
             return {
                 "now": H.now(),
@@ -191,20 +188,50 @@ def register(app, auth, mutate, send, store, task_view):
     def batch_commit(request: Request, bid: str, body: M.Empty):
         who = request.state.identity
         views.human_only(who)
-        boards = []
+
+        # The person's words in the batch (a note, an answer, an instruction, a rule) are checked like the same words
+        # on the task or in a message (backend/task_rule_gate.py): outside the write, applied inside it. A held one is
+        # not applied; the commit's errors name it.
+        rules = request.app.state.task_rules
+        with store.read() as c:
+            said = batch.said(c, who, bid)
+        checks = {}
+        for at, task_id, to, operation, text in said:
+            words = [("Said", text)]
+
+            def reach(c, to=to):
+                return [to] if to else []
+
+            verdict = (
+                rules.check(who, task_id, operation, words, also=reach)
+                if task_id
+                else rules.check_words(who, operation, words, reach)
+            )
+            checks[at] = (task_id, operation, words, reach, verdict)
+
+        def gate(c, key, i, r):
+            if (key, i) not in checks:
+                return r, None
+            task_id, operation, words, reach, verdict = checks[(key, i)]
+            if task_id:
+                found = rules.apply(c, who, task_id, verdict, words, None, also=reach)
+            else:
+                found = rules.apply_words(c, who, verdict, words, reach)
+            if task_rule_gate.held(found):
+                return r, found["held"]["text"]
+            if found and found.get("warn"):
+                r = {**r, "text": task_rule_gate.warn_on(found, r["text"])}
+            return r, None
 
         def work(c):
-            out = batch.commit(c, auth, who, bid, batch_send, boards)
-            rows, notes, _ = batch.candidates(c, who.actor, views.needs_items(c, auth, who, task_view))
+            # A bound OK is never given here (batch._apply_decide refuses it): each is the person's own click on its
+            # own preview, so nothing a commit applies has a step to run after it.
+            out = batch.commit(c, who, bid, batch_send, rules=gate)
+            rows, notes, _ = batch.candidates(c, who.actor, privacy.actor(who))
             line = batch.lineup(c, who.actor, notes + rows)
             return {**out, "lineup": line, "up_next": batch.up_next(line, out["scope"])}
 
-        result = mutate(request, body, work, durable=True)  # a batch can approve a payment
-        from .company_page import editions
-
-        for board in boards:
-            editions.release_board(store, board)  # after the commit, as the decide route does
-        return result
+        return mutate(request, body, work, durable=True)
 
     @app.post("/api/v2/batch/{bid}/abandon")
     def batch_abandon(request: Request, bid: str, body: M.Empty):

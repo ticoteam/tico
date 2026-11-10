@@ -527,3 +527,52 @@ def test_optional_release_branches_start_after_core_publication():
     assert ancestors("release") == core - {"release"}
     for job in jobs.keys() - core:
         assert "release" in ancestors(job), f"{job} competes with core publication for job slots"
+
+
+@pytest.mark.parametrize(
+    "ref, want",
+    [
+        ("v0.6.0-rc.1", True),
+        ("v1.2.0-beta", True),
+        ("v1.0.0-0+build.5", True),
+        ("v0.6.0", False),
+        ("v0.6.0+build-5", False),
+        ("chris/pipelines-v3-cutover", False),
+        ("gh-readonly-queue/main/pr-3227-abc", False),
+        ("", False),
+    ],
+)
+def test_only_a_semver_prerelease_tag_is_a_prerelease(ref, want):
+    from scripts.company_apps import prerelease
+
+    assert prerelease(ref) is want
+
+
+def test_a_prerelease_tag_lists_no_company_and_never_publishes(tmp_path, monkeypatch, capsys):
+    # v0.6.0-rc.1 must not move a company's latest.json while its server is still on 0.5.
+    from scripts import company_apps
+
+    out = tmp_path / "output"
+    monkeypatch.setenv("TICO_COMPANY_APPS", json.dumps([ENTRY]))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("GITHUB_REF_NAME", "v0.6.0-rc.1")
+    assert main(["matrix"]) == 0
+    assert capsys.readouterr().out.splitlines() == ['{"include":[]}']
+    assert out.read_text().splitlines() == ['matrix={"include":[]}', "enabled=false"]
+
+    monkeypatch.setattr(company_apps, "required_env", lambda name: "v0.6.0-rc.1" if name == "GITHUB_REF_NAME" else "x")
+    import scripts.app_release
+
+    monkeypatch.setattr(scripts.app_release, "main", lambda flags: pytest.fail("a prerelease must not publish"))
+    assert main(["publish", "--company", key(ENTRY)]) == 1
+    output = capsys.readouterr()
+    assert "A prerelease never publishes a company app" in output.err
+    assert all(value not in output.out + output.err for value in ENTRY.values())
+
+    monkeypatch.setenv("GITHUB_REF_NAME", "v0.6.1")
+    out.write_text("")
+    assert main(["matrix"]) == 0
+    assert out.read_text().splitlines() == [
+        "matrix=" + json.dumps(matrix([ENTRY]), separators=(",", ":")),
+        "enabled=true",
+    ]

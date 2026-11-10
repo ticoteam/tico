@@ -1,6 +1,6 @@
 """What clients read and send on today's conversation surfaces, pinned before the native threads build replaces them.
 
-docs/dev/threads-contract.md (section 10) keeps `/api/v2/conversations/*` as aliases for one release, and the `hub` CLI
+docs/dev/threads-contract.md (section 10) keeps `/api/v2/conversations/*` as aliases for one release, and the `tico` CLI
 and MCP old names with them. Each test here is a behaviour a client depends on today: the paths a person or a bot
 calls, the fields it parses, the cursor it walks, the answer a person who may not read a chat gets, and the claim
 fields the runner keys its session on. The refactor has to keep each one true, or change the client on purpose.
@@ -23,6 +23,9 @@ from clients.tico import APIError
 
 BODY = "A long reply about the launch plan and its checks. " * 110  # about 5.5 KB a message
 CHAT_PAGE = {"limit": 50, "max_bytes": 163840}  # the web app's chat page (ui/app/chat.ts)
+# Fields the answer adds after the page is cut (backend/task_privacy.py page): each message's `source`
+# (teammate_access.Known) and the display names beside its ids (backend/names.py). `max_bytes` counts the rest.
+ADDED_AFTER_PAGE = {"source", "sender_name", "recipient_name"}
 
 
 def read(api, cid, token="ana-test", **query):
@@ -129,7 +132,10 @@ def test_a_chat_pages_back_by_limit_and_by_bytes_and_every_message_is_read_once(
         query = {**CHAT_PAGE, **({"before": cursor} if cursor else {})}
         page = read(api, cid, **query)
         pages += 1
-        sizes = [len(json.dumps(m, default=str).encode()) for m in page["messages"]]
+        sizes = [
+            len(json.dumps({k: v for k, v in m.items() if k not in ADDED_AFTER_PAGE}, default=str).encode())
+            for m in page["messages"]
+        ]
         assert len(page["messages"]) == 1 or sum(sizes) <= CHAT_PAGE["max_bytes"], sizes
         seen = [m["id"] for m in page["messages"]] + seen
         if not page["has_more"]:

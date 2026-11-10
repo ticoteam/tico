@@ -88,9 +88,6 @@ MAX_JOB_SECONDS = JOB_SECONDS
 QUEUE_MAX_JOB_SECONDS = JOB_SECONDS
 TARGET_STEP_SECONDS = 30
 CEILING = {"pull_request": 30, "merge_group": 30}
-# The factory sim's legs: about FACTORY_LEG_SECONDS of scenario time per worker, so a leg is about 130 s of tests on each
-# of its 4 vCPUs. Measured legs ran 1.6-2.2x their planned seconds, so four legs take about 5 minutes with setup.
-FACTORY_LEG_SECONDS = 130
 # Python jobs pass the release gate's own flags: restore a worker-local schema snapshot instead of migrating a fresh
 # database for every API test (about half of each file's time), and hand out at most two tests at a time so expensive
 # tests spread across the workers.
@@ -807,17 +804,6 @@ CONFTEST_BELOW_LIMIT = 25
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
 UI_RUNNER = "scripts/ui-tests.cts"
-# The factory simulation (evals/factory) runs the Dev board end to end, and the merge queue runs it when a change reaches
-# what it runs. That reach is measured, not mapped: evals/factory/call_path.json lists the Python files a run of the sim
-# executed, the non-Python files it read and the folders it listed (python -m evals.factory.run --seeds 1-3
-# --save-call-path). The static map cannot say it: the sim imports backend.app, which imports every router, and a read of
-# ui/ by backend/config.py would reach the sim from a stylesheet. The sim also loads every catalog template into the
-# company file, so a new template under templates/catalog/ runs it; the pinned backend dependencies and this workflow
-# (which defines the sim's job) are named too.
-FACTORY_DIR = "evals/factory/"
-FACTORY_CALL_PATH = FACTORY_DIR + "call_path.json"
-FACTORY_TEMPLATES = ("templates/catalog/",)
-FACTORY_PINS = re.compile(r"backend/requirements[\w.-]*\.(txt|in)")
 
 
 # Data folders that one tool owns. A changed, added or deleted file under one of these folders runs exactly the tests
@@ -1276,11 +1262,11 @@ def groups(counts, timings, total=None, kind="python", fallback=1.0, target=JOB_
     return [sorted(g) for g in out], loads
 
 
-def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILING["pull_request"], cap=MAX_JOB_SECONDS):
+def size_groups(counts, timings, browser=None, fixed=0, ceiling=CEILING["pull_request"], cap=MAX_JOB_SECONDS):
     """The Python and browser VM groups of a plan at the smallest target that keeps its test jobs within `ceiling`.
     `browser` is (the scripts as a Counter, their measured times), `fixed` the jobs that always run (conformance and
-    contracts), `shards` the factory legs. The target starts at JOB_SECONDS and rises by TARGET_STEP_SECONDS up to
-    `cap`; past that the plan keeps the cap's VMs, and its count may exceed the ceiling."""
+    contracts). The target starts at JOB_SECONDS and rises by TARGET_STEP_SECONDS up to `cap`; past that the plan keeps
+    the cap's VMs, and its count may exceed the ceiling."""
     target = JOB_SECONDS
     while True:
         split, loads = groups(counts, timings, target=target)
@@ -1290,7 +1276,7 @@ def size_groups(counts, timings, browser=None, fixed=0, shards=0, ceiling=CEILIN
             )
         else:
             browser_split, browser_loads = [], []
-        tests = sum(1 for group in split + browser_split if group) + fixed + shards
+        tests = sum(1 for group in split + browser_split if group) + fixed
         if tests <= ceiling or target >= cap:
             return {
                 "split": split,
@@ -1329,58 +1315,6 @@ def image_checks(changed, root=ROOT):
     subprocess.run([sys.executable, "-c", found.group(1)], cwd=root, check=True)
 
 
-def factory_call_path(root=ROOT):
-    """What the sim's recorded run ran, read and listed (evals/factory/call_path.json), or None when nothing is recorded."""
-    path = root / FACTORY_CALL_PATH
-    if not path.is_file():
-        return None
-    recorded = json.loads(path.read_text())
-    return {key: list(recorded.get(key, ())) for key in ("code", "data", "folders")}
-
-
-def factory_reason(changed, call_path=None, root=ROOT):
-    """Why a change runs the factory simulation, or None. An empty diff runs it too: the diff could not be read, and a
-    change that is not known to miss the sim does not go unchecked."""
-    if not changed:
-        return "the diff is empty or could not be read"
-    measured = factory_call_path(root) if call_path is None else call_path
-    if measured is None:
-        return f"{FACTORY_CALL_PATH} is missing"
-    reached = set(measured["code"]) | set(measured["data"])
-    folders = set(measured["folders"])
-    for name in changed:
-        if name.startswith(FACTORY_DIR):
-            return f"{name} is the sim's own code"
-        if name in reached:
-            return f"the sim runs or reads {name}"
-        # A listing sees the entries directly in a folder, so only a change to one of them moves it.
-        parent = name.rsplit("/", 1)[0] + "/" if "/" in name else ""
-        if parent in folders:
-            return f"the sim lists {parent}, which {name} is in"
-        if name.startswith(FACTORY_TEMPLATES):
-            return f"{name} is a catalog template the sim loads"
-        if name == PR_WORKFLOW:
-            return f"{name} defines the sim's job"
-        if FACTORY_PINS.fullmatch(name):
-            return f"{name} pins what the sim installs"
-    return None
-
-
-def factory_shards():
-    """The `i/n` groups of the sim's seed-1 runs that `run.py --shard` takes, one per RunsOn VM: the sim's own packing
-    of its scenarios by timings.json. Imports only run.py, which sets up no scenario, server or environment."""
-    if str(ROOT) not in sys.path:
-        sys.path.insert(0, str(ROOT))
-    from evals.factory import run as factory
-
-    timings = factory.timings()
-    pairs = [(name, 1) for name in timings]
-    total = sum(timings[name] for name, _ in pairs)
-    # The sim's work is fixed by its scenarios: enough legs that each takes about FACTORY_LEG_SECONDS per worker.
-    count = max(1, min(len(pairs), math.ceil(total / (factory.REMOTE_CPUS * FACTORY_LEG_SECONDS))))
-    return [f"{index}/{count}" for index in range(1, count + 1)]
-
-
 # The Rust lint, desktop app and recorder jobs check their own folders, so a merge queue group starts their VMs only when
 # its change touches one (scripts/rust_checks.sh lists the Rust crates). A diff that could not be read runs them all.
 QUEUE_JOB_PATHS = {
@@ -1388,23 +1322,14 @@ QUEUE_JOB_PATHS = {
         r"(runner-rs|relay-rs|tools/release-command|tools/trust-list-check|contracts/runner)/|scripts/rust_checks\.sh$"
     ),
     "desktop": re.compile(r"app/"),
-    "recorder": re.compile(r"recorder/"),
+    # The root npm files pin esbuild, which builds the recorder's window (recorder/build-ui.cjs).
+    "recorder": re.compile(r"recorder/|package(-lock)?\.json$"),
 }
 
 
 def queue_jobs(changed):
     """Which of QUEUE_JOB_PATHS' jobs a change runs: those whose folders it touches, or all of them for an empty diff."""
     return {job: not changed or any(paths.match(name) for name in changed) for job, paths in QUEUE_JOB_PATHS.items()}
-
-
-def factory_plan(event, changed, own_inputs=False):
-    """The factory simulation's part of a plan: whether it runs, why, and its VM groups. A merge queue group and a pull
-    request both run it on RunsOn, one VM per group, so both pack it; the workflow decides which pull requests get it.
-    `own_inputs` (a light pull request run, NARROW) ignores the recorded call path: only a change to the sim's own code,
-    its catalog templates, its job or its pins runs it."""
-    reason = factory_reason(changed, call_path=dict.fromkeys(("code", "data", "folders"), ()) if own_inputs else None)
-    shards = factory_shards() if reason and event in ("merge_group", "pull_request") else ["1/1"]
-    return {"run": reason is not None, "reason": reason or "no change reaches the sim", "shards": shards}
 
 
 # Light runs (`plan --light`). Pull request runs spent about 70% of the CI job-minutes (Nov 8: 418 pull request and 168
@@ -1425,7 +1350,7 @@ def factory_plan(event, changed, own_inputs=False):
 # Python tests to `shards` VMs of about NARROW_SHARD_SECONDS, by measured seconds (the run's timings over scripts/test-timings.json), keeping changed
 # test files first, then the smoke set, then the nearer level, then the shorter file. What it leaves out is listed in the
 # job summary and in the plan (narrow.left_transitive, narrow.left_over_budget). A light pull request also runs the browser
-# scripts, the Caddy job and the factory sim only when the change touches their own inputs directly; a queue group keeps
+# scripts and the Caddy job only when the change touches their own inputs directly; a queue group keeps
 # them, the contracts, the static checks on its merge commit and the Rust, desktop and recorder jobs as they were.
 # What a queue group leaves out still runs before a release: release validation's incremental runs select with the full
 # rules above (the whole transitive closure) over every change since the last full validation, which runs once every 24
@@ -1635,7 +1560,6 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
         timings |= {f: seconds[f] for f in kept}  # packing reuses the cap's estimates, untimed files included
         record["selected_seconds"] = round(sum(seconds[f] for f in kept), 1)
         record["left_transitive"] = sorted(set(record["left_transitive"]) - set(kept))
-    factory = factory_plan(event, changed, own_inputs=light and event == "pull_request")
     browser = None
     if picked["browser"] != []:
         scripts = browser_scripts(picked["browser"] or [])
@@ -1649,7 +1573,6 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
         timings,
         browser=browser,
         fixed=fixed,
-        shards=len(factory["shards"]) if factory["run"] else 0,
         ceiling=ceiling,
         cap=QUEUE_MAX_JOB_SECONDS if event == "merge_group" else MAX_JOB_SECONDS,
     )
@@ -1685,13 +1608,12 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     plan = {
         **picked,
         "changed": changed,
-        "factory": factory,
         "queue_jobs": queue_jobs(changed),
         "matrix": {"include": jobs},
         "estimated_seconds": loads,
         "timed_files": len(set(counts) & timings.keys()),
-        # The ceiling's arithmetic for the receipt: matrix jobs plus factory legs against the ceiling.
-        "test_jobs": len(jobs) + (len(factory["shards"]) if factory["run"] else 0),
+        # The ceiling's arithmetic for the receipt: matrix jobs against the ceiling.
+        "test_jobs": len(jobs),
         "ceiling": ceiling,
         "job_target_seconds": target,
     }
@@ -1703,8 +1625,6 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
             stream.write("matrix=" + json.dumps(plan["matrix"]) + "\n")
             stream.write("caddy=" + str(plan["caddy"]).lower() + "\n")
-            stream.write("factory=" + str(plan["factory"]["run"]).lower() + "\n")
-            stream.write("factory_shards=" + json.dumps(plan["factory"]["shards"]) + "\n")
             for job, on in plan["queue_jobs"].items():
                 stream.write(f"{job}={str(on).lower()}\n")
     if record is not None and os.environ.get("GITHUB_STEP_SUMMARY"):
@@ -1935,7 +1855,7 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
     the pull request ready (`--ready` does that after a pass). The selection is the plan's: the branch's own change
     against `base`, as a pull_request event. The Python files, the contract tests and the browser scripts run through
     scripts/heavy.sh (the computer's shared slots, or a RunsOn VM with TICO_HEAVY_REMOTE=1). What only CI runs (the
-    Rust conformance job, the factory simulation) is named, not run. The last line is a receipt naming the full head
+    Rust conformance job) is named, not run. The last line is a receipt naming the full head
     sha and the result, which the review gate accepts on the ticket (backend/test_receipts.py).
 
     Exit codes: 0 passed, 1 failed (or the pull request could not be marked ready), 2 nothing to check here.
@@ -2007,14 +1927,7 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
                 ["node", UI_RUNNER, "-j", str(jobs), *browser],
             )
         )
-    ci_only = [
-        name
-        for name, on in (
-            ("conformance", picked["conformance"]),
-            ("factory simulation", factory_reason(changed, root=root)),
-        )
-        if on
-    ]
+    ci_only = ["conformance"] if picked["conformance"] else []
     print(f"Selected for {head[:12]} against {base}: {picked.get('reason', '')}", flush=True)
     # CI sets no PYTEST_ADDOPTS; one inherited here (a -k, a -m) could deselect the selection.
     env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}

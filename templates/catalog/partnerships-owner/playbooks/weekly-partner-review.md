@@ -7,7 +7,7 @@ with a proposed decision, the partner pipeline, and fees due. Nothing is decided
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/rules-of-engagement.md`, `knowledge/registrations.md` and last week's review. Check each
 decision a human made since: record it with who and when.
@@ -19,7 +19,7 @@ age; one waiting more than two business days goes first.
 
 ## 3. Partner-sourced pipeline
 
-From a CRM read or the Customer Pipeline Manager's review: each registered deal's stage, amount, owner, days quiet,
+From a CRM read or the deal owner's latest review: each registered deal's stage, amount, owner, days quiet,
 and protection expiry. Flag deals quiet past 14 days and protections expiring in 14 days. For each flagged
 deal, prepare one partner update or question, ready to use.
 
@@ -36,5 +36,5 @@ the fee. Put the list on the task for the Finance Owner (`bookkeeper`) to pay. M
 
 ## 6. Write and hand over
 
-Write `reports/YYYY-MM-DD-partner-review.md` in the shape of `knowledge/examples/partner-review.md`, `hub file publish` it, commit, and `hub task update <id> --status done --note`: registrations waiting, conflicts,
+Write `reports/YYYY-MM-DD-partner-review.md` in the shape of `knowledge/examples/partner-review.md`, `tico file publish` it, commit, and `tico task done <id> -m "..." --version N`: registrations waiting, conflicts,
 fees for review, sources not read. Always finish the task.

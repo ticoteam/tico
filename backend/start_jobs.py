@@ -33,14 +33,12 @@ def run(store, onboarding, telemetry):
     # A company from before the Librarian was built in gets it on update, once it can run it. Only an update
     # adds them; until this runs, a page shows the company as it was before the update.
     try:
+        # What completes a company (the built-ins it can run, the Assistant's routines, General's manager, BotOps'
+        # sweep): the same function the end of a first run calls. A failed step is captured and the next one runs.
         with _transaction(store) as c:
-            onboarding.ensure_librarian(c)
-            onboarding.ensure_goal_manager(c)
-            onboarding.ensure_task_manager(c)
-            onboarding.ensure_counsel(c)
-            onboarding.ensure_brand_owner(c)
+            onboarding.complete_company(c, failed=telemetry.capture)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
-        telemetry.capture("librarian", exc)
+        telemetry.capture("complete_company", exc)
     # The Librarian gets the market posts from Listening, once (Settings > Listening). After the Librarian exists.
     try:
         from . import listening

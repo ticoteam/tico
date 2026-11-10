@@ -1,9 +1,13 @@
 """Recruit: the Recruiting seats on the team chart, the applicants for the install crew job, the cloud agent request in
 flight and one seat filled from a template last week."""
 
+from datetime import timedelta
+
 from .. import hubdb as H
 from .. import lifecycle
 from ..auth import Identity
+from ..demo_seed import version
+from ..scheduler import stamp
 
 CONTENT = {
     # Recruiting seats, posted by Ana. `days` is when the seat was posted.
@@ -26,14 +30,15 @@ CONTENT = {
             "and drafts the reply. Anything over the limit goes to Ben as a call.",
         },
     },
-    # One applicant for the human seat each: a recruiter task, owned by the recruiter, with its summary as the note.
-    # `status` is the stage: open (new), doing (interview set), review (summary ready for Ana), waiting (outside reply).
+    # One applicant for the human seat each: a recruiter task, owned by the recruiter, with its summary as the note. A
+    # summary ready for Ana asks her on the task (`ask`, an OK); one waiting on an outside reply is snoozed (`snooze`:
+    # the reason and the days until it ends).
     "applicants": [
         {
             "name": "Maya Osei",
             "applied": 5.6,
             "changed": 0.9,
-            "status": "review",
+            "ask": "Interview Maya Osei for the crew coordinator job? Ben would run it.",
             "note": "Ran install crews for a solar installer for eight years, up to thirty jobs a week. Strong on safety "
             "sign-off and on keeping customers told. Asked about winter pay. Recommend an interview with Ben.",
         },
@@ -41,7 +46,6 @@ CONTENT = {
             "name": "Jordan Park",
             "applied": 5.2,
             "changed": 0.4,
-            "status": "doing",
             "note": "Dispatches field crews for a regional HVAC firm and builds each day's routes from parts and skills. No "
             "install time, but the scheduling is the job. Interview Thursday with Ben, then a ride-along on a "
             "Storefront install.",
@@ -50,10 +54,10 @@ CONTENT = {
             "name": "Luis Ortega",
             "applied": 4.0,
             "changed": 1.8,
-            "status": "waiting",
+            "snooze": ("Waiting on a former employer's reference.", 4),
             "note": "Reference call requested from a former employer. Waiting on their reply before the next step.",
         },
-        {"name": "Priya Nair", "applied": 0.1, "changed": None, "status": "open", "note": ""},
+        {"name": "Priya Nair", "applied": 0.1, "changed": None, "note": ""},
     ],
     # The cloud agent request in flight: a seat for the agent under Engineering, and the first task Ana gave it.
     "request": {
@@ -106,7 +110,7 @@ def seed(b):
 
     post_seat(CONTENT["seats"]["install"])
 
-    # The applicants: one recruiter task each, carrying the stage as its status and the summary as its note.
+    # The applicants: one recruiter task each, with the summary as its note and what it waits on.
     def applicants(c):
         for row in CONTENT["applicants"]:
             b.at(days=row["applied"])
@@ -118,9 +122,16 @@ def seed(b):
                 RECRUITER,
                 deduplicate=False,
             )
-            if row["changed"] is not None:
-                b.at(days=row["changed"])
-                H.task_update(c, RECRUITER, task["id"], status=row["status"], note=row["note"])
+            if row["changed"] is None:
+                continue
+            b.at(days=row["changed"])
+            H.task_update(c, RECRUITER, task["id"], note=row["note"], seen_version=version(c, task["id"]))
+            if row.get("ask"):
+                H.task_ask(c, RECRUITER, task["id"], HUMAN, row["ask"], kind="ok", seen_version=version(c, task["id"]))
+            if row.get("snooze"):
+                why, days = row["snooze"]
+                until = stamp(b.now + timedelta(days=days))
+                H.task_snooze(c, RECRUITER, task["id"], why, until, version(c, task["id"]))
 
     b.write(applicants)
 

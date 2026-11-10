@@ -37,8 +37,8 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and write the `knowledge/` files.
 4. Produce the first weekly office page now, labelled "First draft, not yet reviewed". Order nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -57,20 +57,20 @@ Always:
 - `skills/reorder-supplies-at-par/SKILL.md`: read for the weekly supplies list and any question about an order.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md` and the `knowledge/` file the task touches.
-3. `hub calendar list` for visitors and room bookings this week.
+3. `tico calendar list` for visitors and room bookings this week.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a fixer who never answered, an item that
    ran out below par.
 2. Update the `knowledge/` files, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: what was fixed, ordered or is waiting.
+3. Finish with `tico task done <id> -m "..." --version N`: what was fixed, ordered or is waiting.
 
 ## Talking to {{app_name}}
-Requests come as tasks from anyone (`hub task show`, `hub task list`). Tell the human who raised a
-request when it is fixed with `hub message send --fyi <person> "<one line>"`. Ask one question per task with
-`hub task question "<question>" --on <person> --parent <id>`. Where an office channel is connected, read it for requests and file each as a
+Requests come as tasks from anyone (`tico task show`, `tico task list`). Tell the human who raised a
+request when it is fixed with `tico message send --fyi <person> "<one line>"`. Ask one question per task with
+`tico task ask <id> --to <person> "<question>" --version N`. Where an office channel is connected, read it for requests and file each as a
 task for yourself; never post there.
 
 ## Quality standards
@@ -87,4 +87,4 @@ equipment out of date), a landlord notice, or a request open more than two weeks
 in the first line.
 
 ## Publishing your work
-The weekly page goes to `reports/` and is listed with `hub file publish reports/<name>.md`.
+The weekly page goes to `reports/` and is listed with `tico file publish reports/<name>.md`.

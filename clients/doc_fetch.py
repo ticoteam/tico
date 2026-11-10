@@ -1,4 +1,4 @@
-"""`hub doc fetch <url>`: read one public link for the Librarian (docs/librarian.md). Runs on the
+"""`tico doc fetch <url>`: read one public link for the Librarian (docs/librarian.md). Runs on the
 computer that runs the bot, never on the Tico server, and never with more reach than a stranger has.
 
 What it enforces, on every hop of every request:

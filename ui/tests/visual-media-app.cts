@@ -1,4 +1,3 @@
-import type * as Tasks from './tasks-page.cts';
 // Video and audio in the real app (Visual replies 3/4): a chat message and a task comment show players in their cards,
 // from the sign-in-free visual address only and paused; a person's clip too; video and audio count toward the cap of
 // 4; a clip playing in the chat keeps playing, in place, when a live update redraws the thread with freshly signed
@@ -12,9 +11,6 @@ const fs: typeof import('node:fs') = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
 const {threadsFake} = require('./support/threads-fake.cts') as ThreadsFake.Api;
-// Page globals read inside page.evaluate (types: tasks-page.cts).
-declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
-declare var taskModalShow: Tasks.Globals['taskModalShow'];
 // Element.prototype.moveBefore is newer than the DOM lib: a file-local view of the Element constructor.
 declare const Element: typeof globalThis.Element & {prototype: {moveBefore?(node: Node, child: Node | null): void}};
 interface PageWin { __mb: typeof Element.prototype.moveBefore }
@@ -86,7 +82,7 @@ const A = (id: string, kind: Kind, over: Record<string, unknown> = {}): Att => (
       if (p === '/api/v2/tasks/t1') return json({task, comments: taskComments, events: [], children: [], parent: null, mover: true, messages: [], can_comment: true});
       return json(unrouted(p));
     });
-    const task = {id: 't1', title: 'Launch video', owner_id: 'bot:editor', requester_id: 'human:ana', status: 'review', lane: 'company', rank: 1, labels: [], links: [],
+    const task = {id: 't1', title: 'Launch video', owner_id: 'bot:editor', requester_id: 'human:ana', status: 'open', lane: 'company', rank: 1, labels: [], links: [],
       parts: {total: 0, done: 0}, version: 1, created_at: now, updated_at: now, body: 'Cut it.', attachments: []};
     const taskComments = [{id: 'c1', kind: 'say', sender_id: 'bot:editor', body: 'Cut attached.', created_at: now, answers: [],
       refs: {task: 't1', comment: true, attachments: [A('f-cut', 'video', {width: 1280, height: 720})]}}];
@@ -144,9 +140,7 @@ const A = (id: string, kind: Kind, over: Record<string, unknown> = {}): Att => (
     await page.locator('[data-message="m5"] figure.vcard audio').evaluate(m => (m as HTMLMediaElement).pause());
 
     // ---- task comments: the same player
-    await page.goto('https://tico-ui.test/#/tasks?view=board');
-    await page.waitForFunction(() => typeof TASKS_ST !== 'undefined' && TASKS_ST && !TASKS_ST.loading);
-    await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't1')));
+    await page.goto('https://tico-ui.test/#/task/t1');
     const c1 = page.locator('#task-modal .tcomment', {hasText: 'Cut attached.'});
     await c1.locator('figure.vcard[data-kind="video"] video').waitFor();
     assert.equal(await c1.locator('figure.vcard video').getAttribute('src'), VIS + 'tok-f-cut');

@@ -1,6 +1,6 @@
 """Production invariants: a few plain-SQL checks over the hub for the failures Tico has actually had (lapsed leases,
-tasks nothing is running, questions to people who cannot be reached, refusal loops, a provider sign-in that fails,
-webhooks and automations that stopped, a hook relay nobody pulls).
+refusal loops, a provider sign-in that fails, webhooks and automations that stopped, a hook relay nobody pulls). A task
+that nothing works on is the never-stuck check's (backend/never_stuck.py, `rules_hold` on Health), not a check here.
 
 The scheduler runs `sweep` every 15 minutes (backend/scheduler.py). Plain code only: no model runs. A check that fires
 shows on Health with its count and example ids (`health_checks`). The sweep keeps that state and nothing else: it raises
@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from . import flight, hook_relay, run_backoff
-from .stranded_resume import RESUMED
 from .store import H
 
 log = logging.getLogger(__name__)
@@ -28,20 +27,15 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS invariant_state(
  check_id TEXT PRIMARY KEY, firing INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0,
  examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, started_firing_at TEXT, task_id TEXT);
-CREATE INDEX IF NOT EXISTS invariants_doing ON tasks(updated_at) WHERE status='doing';
 """
 
 LIMIT = 500  # rows read per check; a count at this many is "500 or more"
 EXAMPLES = 5  # example ids shown and written into the alert
 LEASE_MINUTES = 10  # a lease this far past its end, still leased or running, is not being renewed or expired
-TASK_QUIET_MINUTES = 60  # a bot's task still "doing" this long with no job queued, leased, running or waiting
 REFUSALS_PER_DAY = 20  # the same rule refusing the same bot more often than this in 24 hours
 SENDING_MINUTES = 10  # a webhook send still `sending` this long: its worker is gone and recovery did not run
 OVERDUE_MINUTES = 30  # a scheduled automation this long past its time has not been run
 RELAY_SILENT_MINUTES = 30  # a relay address no pull has reached this long
-# Jobs still owed work: a task whose job is in one of these is in progress, not stuck.
-LIVE_JOBS = ("queued", "leased", "running", "input", "uncertain")
-UNREACHABLE_BOT_STATES = ("paused", "archived", "quarantined")
 LONG_HOLDS_PER_HOUR = 30  # write-lock holds of flight.LONG_HOLD_MS (5 s) or more in an hour; a week on Tico Team
 # averaged about 2 an hour, with bursts far above that
 RUNNER_ERROR_PERCENT = 2  # 5xx answers as a share of a runner route's requests in the last hour
@@ -82,65 +76,6 @@ def lease_overdue(c, ctx):
         (_ago(ctx, minutes=LEASE_MINUTES), LIMIT),
     ).fetchall()
     return [row["id"] for row in rows]
-
-
-def task_stuck(c, ctx):
-    """A bot's task in progress (`doing`) with no job for it still owed work, and nothing changed on it for the hour.
-    A task the resume sweep woke in that hour is in its hand (backend/stranded_resume.py), not counted. The live-job
-    test is in the query, ahead of LIMIT, so busy old tasks cannot hide a stuck newer one."""
-    since = _ago(ctx, minutes=TASK_QUIET_MINUTES)
-    rows = c.execute(
-        f"SELECT t.id FROM tasks t WHERE t.status='doing' AND t.owner_id LIKE 'bot:%' AND t.updated_at<? "
-        f"AND NOT {H.ON_ICE % 't'} AND NOT EXISTS (SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
-        f"JOIN conversations cv ON cv.id=m.conversation_id "
-        f"WHERE j.bot_id=substr(t.owner_id, 5) AND j.state IN ({','.join('?' * len(LIVE_JOBS))}) "
-        f"AND {H.MESSAGE_TASK_SQL}=t.id) "
-        "AND NOT EXISTS (SELECT 1 FROM history_events h WHERE h.subject_type='task' AND h.subject_id=t.id "
-        "AND h.kind=? AND h.created_at>=?) ORDER BY t.updated_at LIMIT ?",
-        (since, *LIVE_JOBS, RESUMED, since, LIMIT),
-    ).fetchall()
-    return [row["id"] for row in rows]
-
-
-def _unreachable(actor, people, bots):
-    """Whether a person or bot cannot take an answer now: a person not on the roster (or left), a bot that is not
-    active. Anything else, including a bot still being set up, is reachable."""
-    if actor.startswith("human:"):
-        person = people.get(actor[len("human:") :])
-        return person is None or bool(person.get("hidden"))
-    if actor.startswith("bot:"):
-        state = bots.get(actor[len("bot:") :])
-        return state is None or state in UNREACHABLE_BOT_STATES
-    return False
-
-
-def owner_unreachable(c, ctx):
-    """Questions still open, and approvals still undecided, whose person or bot cannot be reached."""
-    from .views import roster
-
-    people = {p["id"]: p for p in roster(c).get("people") or []}
-    bots = {row["id"]: row["state"] for row in c.execute("SELECT id, state FROM bots")}
-    found = []
-    # Every open question task's person and every undecided approval is read: the reachability test is in Python, so
-    # a LIMIT before it could leave an unreachable owner behind reachable ones.
-    from .question_tasks import OPEN_SQL
-
-    targets = [row[0] for row in c.execute(f"SELECT DISTINCT owner_id FROM tasks WHERE {OPEN_SQL}")]
-    for actor in targets:
-        if _unreachable(actor, people, bots):
-            found += [
-                row[0]
-                for row in c.execute(
-                    f"SELECT id FROM tasks WHERE {OPEN_SQL} AND owner_id=? ORDER BY created_at LIMIT ?", (actor, LIMIT)
-                )
-            ]
-    for row in c.execute(
-        "SELECT a.id, COALESCE(a.decision_owner, m.recipient_id) AS owner_id FROM approvals a "
-        "LEFT JOIN messages m ON m.id=a.message_id WHERE a.decision IS NULL ORDER BY a.created_at"
-    ).fetchall():
-        if row["owner_id"] and _unreachable(row["owner_id"], people, bots):
-            found.append(row["id"])
-    return found[:LIMIT]
 
 
 def refused_again(c, ctx):
@@ -271,22 +206,6 @@ CHECKS = (
         "The runner that holds each run, and whether the server's lease sweep is running (Health > Runs).",
         "botops",
         lease_overdue,
-    ),
-    Check(
-        "task_stuck",
-        "Tasks in progress with no run",
-        "Bot tasks marked in progress with no run queued or live for them, and nothing changed for an hour.",
-        "The task's owner bot: its last run, and whether it should be woken or the task moved on.",
-        "botops",
-        task_stuck,
-    ),
-    Check(
-        "owner_unreachable",
-        "Waiting on someone who cannot be reached",
-        "Questions and approvals still open to a person who left or a bot that is paused, archived or quarantined.",
-        "Who the question is to; reassign it, answer it, or bring that bot back.",
-        "owner",
-        owner_unreachable,
     ),
     Check(
         "refused_again",

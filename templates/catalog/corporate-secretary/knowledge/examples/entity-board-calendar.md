@@ -35,5 +35,5 @@ still unsigned.**
 
 ## Sources
 - `knowledge/board.md` (bylaws read 2026-09-14); `knowledge/minute-book.md` and `knowledge/approvals-needed.md`
-  2026-10-03; cap table export 2026-10-02; `hub calendar list` 2026-10-03
+  2026-10-03; cap table export 2026-10-02; `tico calendar list` 2026-10-03
 ```

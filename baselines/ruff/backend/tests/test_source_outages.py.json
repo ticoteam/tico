@@ -1,5 +1,0 @@
-{
-  "backend/tests/test_source_outages.py": {
-    "F841": 1
-  }
-}

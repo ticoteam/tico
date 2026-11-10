@@ -1,17 +1,17 @@
 # The production stages of one video, in order. Each company edits this file: set the owner and budget at setup,
 # change a mover, or add a stage. software/pipeline.py reads it; `status`, `next`, `gate` and `raise` follow it.
 #
-# owner: the person (by the name they have in Tico) who approves stages whose mover is owner. Empty until setup
+# owner: the person (by the name they have in Tico) who OKs stages whose mover is owner. Empty until setup
 #   names them; until then the bot uses the person who opened the project task and passes --owner.
 # budget_usd: the most the self-moved stages of one project may spend, in USD, summed from the cost_usd in each
-#   file's provenance sidecar. Over it, the owner is asked to approve a raise; an approved raise is recorded in
-#   projects/<slug>/budget.json and adds to this number.
+#   file's provenance sidecar. Over it, the owner is asked to OK a raise of that project and amount;
+#   once Tico takes that OK, the raise is recorded in projects/<slug>/budget.json and adds to this number.
 #
 # mover says who moves a stage's files on:
-#   owner           the owner approves them on the project's task (a hub task question under it)
-#   person:<name>   that person approves them, by the name they have in Tico
-#   bot:<slug>      that bot is handed the files as a task; its `hub file review` verdict is what counts
-#   self            this bot moves them itself, with no approval; the stage is done when its folder has a .done file
+#   owner           the owner OKs them on the project's task (an ask on it)
+#   person:<name>   that person OKs them, by the name they have in Tico
+#   bot:<slug>      that bot is handed the files as a task; its `tico file review` verdict is what counts
+#   self            this bot moves them itself, with no OK; the stage is done when its folder has a .done file
 owner: ""
 budget_usd: 10
 stages:

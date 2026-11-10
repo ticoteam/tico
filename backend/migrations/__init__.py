@@ -30,15 +30,18 @@ step (`CLOUD_VERSION`) neither list grows: every persistent change is a file her
 `preflight` runs before anything writes to a database. It refuses a file newer than this code, a recorded migration this
 code does not know or whose file has changed, and a file below `MIN_BRIDGE_USER_VERSION`, which a release that writes that
 version must open first. `Store.initialize(adopt_legacy=True)`, the legacy import (manage.migrate_legacy), skips only that
-last refusal.
+last refusal. A database made by Tico 0.5 (`refuse_old_tasks`) is also refused by `hubdb.migrate`, on every connection,
+before its first migration.
 """
 
 import hashlib
 import importlib.util
 import re
+import shutil
 import sqlite3
+import tempfile
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from .. import hubdb as H
@@ -62,9 +65,24 @@ TABLE = (
 NAME = re.compile(r"(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
 LEGACY_USER = re.compile(r"legacy_user_version_(\d+)")
 LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
-# A shipped file whose work a later file does now. Its up() is not run: it imports ask_routing, which step 6c removed,
-# and 20261106131713_asks_to_question_tasks moves every open ask, system asks included. Its row and checksum stay.
-SUPERSEDED = {"20261105034511_resend_system_asks"}
+# The Pipelines v3 cut-over. A database that has tasks and has not had it was made by Tico 0.5: this release does not
+# open it (preflight), so nothing in it is changed and it still runs on 0.5.
+CUTOVER = "20261110054000_pipelines_v3_cutover"
+OLD_TASKS = (
+    "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks over: every company starts on a new "
+    "database. Nothing was changed. Run Tico 0.5 on this database, or set up a new company on 0.6."
+)
+# A shipped file whose work no longer applies. It is recorded as applied, with its checksum, and never imported or
+# run: each imports a module that is gone. Its file may be emptied to a stub, so a database that ran the old body is
+# not held to its checksum (_verify).
+# - resend_system_asks imported ask_routing; 20261106131713_asks_to_question_tasks moved every open ask.
+# - blocked_reason_recompute (task_holds) and factory_output_stage (pipeline_setup) worked on the old task engine's
+#   tables, which the Pipelines v3 cut-over deletes; their files are stubs now.
+SUPERSEDED = {
+    "20261105034511_resend_system_asks",
+    "20261107140000_blocked_reason_recompute",
+    "20261107210000_factory_output_stage",
+}
 # A shipped file from before the directory rename reads the market graph's old names (0030_growth_segments reads
 # market_entities and market_edges). A replay of it on a file the rename already moved, as when a database without
 # schema_migrations is adopted, sees those names as temporary views over the new tables for that one run.
@@ -150,7 +168,7 @@ def _verify(recorded, known):
     for version, checksum in recorded:
         if version in by_version:
             current = by_version[version].checksum
-            if checksum != current:
+            if checksum != current and version not in SUPERSEDED:  # a retired file never runs: its bytes are moot
                 raise MigrationError(
                     f"Migration {version} was applied to this database with checksum {checksum[:12]}, but its file now "
                     f"has {current[:12]}. An applied migration is never edited: make the change in a new file."
@@ -162,18 +180,46 @@ def _verify(recorded, known):
             )
 
 
+@contextmanager
+def read_only(path):
+    """A connection that reads the database as it is, with what its write-ahead log holds, and changes no byte of it,
+    of its -wal or of its -shm, and makes no file next to it. A read-write connection would merge the log into the
+    file when it closes; a plain read-only one still writes the -shm index and makes a missing -wal and -shm.
+    - No log (a clean stop): the file alone is the database, read as immutable (no locks, no -shm, no -wal).
+    - A log and its index (a running server, or one that stopped without closing): the index is opened read-only, and
+      SQLite reads the log itself where the index cannot be trusted.
+    - A log without its index (copied without it): the file and its log are read from a copy, since SQLite reads a log
+      only through an index it can write."""
+    wal, shm = Path(f"{path}-wal"), Path(f"{path}-shm")
+    uri = path.resolve().as_uri()
+    if not wal.is_file() or wal.stat().st_size == 0:
+        with closing(sqlite3.connect(f"{uri}?mode=ro&immutable=1", uri=True)) as conn:
+            yield conn
+    elif shm.is_file():
+        with closing(sqlite3.connect(f"{uri}?mode=ro&readonly_shm=1", uri=True)) as conn:
+            yield conn
+    else:
+        with tempfile.TemporaryDirectory() as scratch:
+            copy = Path(scratch) / path.name
+            shutil.copyfile(path, copy)
+            shutil.copyfile(wal, f"{copy}-wal")
+            with closing(sqlite3.connect(copy)) as conn:
+                yield conn
+
+
 def preflight(path, *, adopt_legacy=False, directory=None):
     """Refuse a database this code must not open, before anything writes to it. A missing or empty file is new."""
     path = Path(path)
     if not path.is_file() or path.stat().st_size == 0:
         return
-    with closing(sqlite3.connect(str(path))) as conn:
+    with read_only(path) as conn:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not tables:
             return
         version = conn.execute("PRAGMA user_version").fetchone()[0]
+        known = files(directory)
         if "schema_migrations" in tables:
-            _verify(conn.execute("SELECT version, checksum FROM schema_migrations").fetchall(), files(directory))
+            _verify(conn.execute("SELECT version, checksum FROM schema_migrations").fetchall(), known)
         if version > NEWEST_USER_VERSION:
             raise MigrationError(
                 f"This database is at schema version {version}, newer than this code "
@@ -190,6 +236,55 @@ def preflight(path, *, adopt_legacy=False, directory=None):
                 f"upgrades. Start it once with Tico v0.5.x (the release that writes version {MIN_BRIDGE_USER_VERSION}), "
                 "then upgrade to this release."
             )
+        if any(migration.version == CUTOVER for migration in known):
+            refuse_old_tasks(conn)
+
+
+def refuse_old_tasks(conn):
+    """Refuse a database made by Tico 0.5: it has tasks and has not had the cut-over. `preflight` runs this on a file
+    before the store starts, and `hubdb.migrate` on every connection before its first migration, so a 0.5 database is
+    never written to, whichever way it is opened."""
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "tasks" not in tables:
+        return
+    cut = (
+        "schema_migrations" in tables
+        and conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (CUTOVER,)).fetchone()
+    )
+    if not cut and conn.execute("SELECT 1 FROM tasks LIMIT 1").fetchone():
+        raise MigrationError(OLD_TASKS)
+
+
+SCHEMA_ERROR = re.compile(r"error in (trigger|view|index) (.+?)(?: after rename)?: (.+)")
+PROBE = "schema_probe"
+
+
+def schema_errors(conn):
+    """Each trigger, view and index in `main` that names a table or column that is not there, as (type, name, error),
+    for example ("trigger", "changes_attempts_carried", "no such column: carried_by"). Nothing is changed.
+
+    SQLite checks a trigger's or view's names only when it runs, or when an ALTER TABLE ... RENAME or DROP COLUMN
+    re-checks the whole schema, which then fails on the first broken one. So that re-check is what finds them: a column
+    rename on a probe table, inside a savepoint that is rolled back, taking each object it names out of the way until
+    it passes."""
+    found = []
+    conn.execute("SAVEPOINT schema_errors")
+    try:
+        conn.execute(f"CREATE TABLE main.{PROBE}(a)")
+        while True:
+            try:
+                conn.execute(f"ALTER TABLE main.{PROBE} RENAME COLUMN a TO b")
+                break
+            except sqlite3.OperationalError as exc:
+                match = SCHEMA_ERROR.fullmatch(str(exc))
+                if not match or (match.group(1), match.group(2)) in {(kind, name) for kind, name, _ in found}:
+                    raise
+                found.append((match.group(1), match.group(2), match.group(3)))
+                conn.execute(f'DROP {match.group(1).upper()} main."{match.group(2)}"')
+    finally:
+        conn.execute("ROLLBACK TO schema_errors")
+        conn.execute("RELEASE schema_errors")
+    return found
 
 
 def _record_legacy(conn):
@@ -228,7 +323,8 @@ def _old_name_views(conn, migration):
 
 def _run(conn, migration):
     """One migration in one transaction with its row, so a failure rolls back both. `conn` must be in autocommit."""
-    module = _module(migration) if migration.kind == "py" else None
+    superseded = migration.version in SUPERSEDED
+    module = _module(migration) if migration.kind == "py" and not superseded else None
     keys_off = bool(module and getattr(module, "FOREIGN_KEYS_OFF", False))
     prior = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     if keys_off:
@@ -239,14 +335,13 @@ def _run(conn, migration):
         try:
             before = _broken_references(conn) if keys_off else None
             if module:
-                if migration.version not in SUPERSEDED:
-                    views = _old_name_views(conn, migration)
-                    try:
-                        module.up(conn)
-                    finally:
-                        for name in views:
-                            conn.execute(f"DROP VIEW IF EXISTS temp.{name}")
-            else:
+                views = _old_name_views(conn, migration)
+                try:
+                    module.up(conn)
+                finally:
+                    for name in views:
+                        conn.execute(f"DROP VIEW IF EXISTS temp.{name}")
+            elif not superseded:
                 for statement in statements(migration.path.read_text(encoding="utf-8")):
                     conn.execute(statement)
             if keys_off:

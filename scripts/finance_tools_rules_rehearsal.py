@@ -2,7 +2,7 @@
 """Rehearse Tico Finance's bot tools and rules on a local stack with simulated services.
 
 The eight checks drive the spec's bot tools (section 7.1: the six offered `hub_finance_*` tools, on the hub's MCP endpoint
-and on the local stdio MCP, plus the `hub finance` CLI) against a running demo and the fake Mercury. This is a rehearsal,
+and on the local stdio MCP, plus the `tico finance` CLI) against a running demo and the fake Mercury. This is a rehearsal,
 not the proof: real Mercury credentials are never used, and a pass here does not show that the real bank run works.
 Exit 0 only when every check passes.
 
@@ -110,7 +110,7 @@ DEFAULT_RULES = (
 DECIDED = {"committed": ("allow", "limit"), "needs_approval": ("needs_approval",), "denied": ("deny",)}
 # fields that are a call's own clock, not part of the answer
 VOLATILE = ("as_of",)
-# the leaf parser of `hub finance <sub>`, read from clients/hubcli.py's own parser (argument dests, not help text)
+# the leaf parser of `tico finance <sub>`, read from clients/hubcli.py's own parser (argument dests, not help text)
 PARSER_SPEC = (
     "import argparse, json, sys\n"
     "sys.path.insert(0, sys.argv[1])\n"
@@ -448,7 +448,7 @@ def cli_spec(sub):
         check=False,
     )
     if done.returncode != 0 or not done.stdout.strip():
-        raise RuntimeError(f"could not read `hub finance {sub}`'s parser: {done.stderr[-200:]}")
+        raise RuntimeError(f"could not read `tico finance {sub}`'s parser: {done.stderr[-200:]}")
     spec = json.loads(done.stdout)
     return spec["positional"], set(spec["options"])
 
@@ -712,7 +712,7 @@ def check1_surface(d, run, fx):
         cli_args = set(positionals) | options
         mcp_args = schema.get(tool, set())
         run.check(
-            f"{tool} and `hub finance {sub}` take the same arguments",
+            f"{tool} and `tico finance {sub}` take the same arguments",
             cli_args == mcp_args,
             f"MCP only: {sorted(mcp_args - cli_args)}; CLI only: {sorted(cli_args - mcp_args)}",
         )

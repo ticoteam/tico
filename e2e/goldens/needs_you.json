@@ -7,64 +7,71 @@
       "human:ana": "Ana"
     },
     "by_kind": {
-      "approval": 1
+      "ask": 1
     },
     "count": 1,
-    "folded_task_ids": [],
     "items": [
       {
-        "actions": [
-          "decide"
+        "ask": {
+          "answer": null,
+          "asked_by": "bot:ops",
+          "choices": null,
+          "kind": "ok",
+          "line": "Spend $9 on ads for a second test?",
+          "may": [
+            "ok",
+            "no",
+            "give",
+            "withdraw",
+            "thumbs"
+          ],
+          "met": false,
+          "requirement_id": "<pending_ask>",
+          "shows": [],
+          "standing": "Spend $9 on ads for a second test?",
+          "who": "human:ana"
+        },
+        "id": "<id1>:<pending_ask>",
+        "kind": "ask",
+        "line": "Spend $9 on ads for a second test?",
+        "missing": [
+          "Spend $9 on ads for a second test?"
         ],
-        "age_s": "<volatile>",
-        "body": null,
-        "consumed_at": null,
-        "conversation_id": "<id2>",
-        "created_at": "<time>",
-        "decided_at": null,
-        "decided_by_id": null,
-        "decided_for": null,
-        "decided_via": null,
-        "decision": null,
-        "decision_owner": "human:ana",
-        "decision_owner_name": "Ana",
-        "from_person": "human:ana",
-        "id": "<pending_approval>",
-        "kind": "approval",
-        "message_id": "<id1>",
-        "need": "pay",
-        "payload": {
-          "account": "ads",
-          "amount": 9,
-          "what": "Second test"
+        "requirement_id": "<pending_ask>",
+        "since": "<time>",
+        "task": {
+          "assignee_id": "bot:ops",
+          "due_at": null,
+          "id": "<open_task>",
+          "late": null,
+          "number": null,
+          "owner_id": "bot:ops",
+          "owner_name": "ops",
+          "pipeline_id": "general",
+          "pushed_past": false,
+          "requester_id": "human:ana",
+          "requester_name": "Ana",
+          "snoozed": false,
+          "stage_id": "general-todo",
+          "status": "open",
+          "title": "Check the vendor list",
+          "turn": {
+            "ask": true,
+            "line": "Spend $9 on ads for a second test?",
+            "requirement_id": "<pending_ask>",
+            "running": false,
+            "since": "<time>",
+            "state": "person",
+            "until": null,
+            "who": "human:ana"
+          },
+          "version": 1
         },
-        "payload_hash": "<digest>",
-        "pressing": false,
-        "ready_since": "<time>",
-        "requested_by_id": "bot:ops",
-        "requester_id": "bot:ops",
-        "requester_name": "ops",
-        "subject": {
-          "id": "<pending_approval>",
-          "type": "approval"
-        },
-        "task_id": "<open_task>",
-        "tier": 2,
-        "title": "Pay 9: Second test",
-        "what": "spend"
+        "task_id": "<open_task>"
       }
     ],
     "next": null,
-    "older": [],
-    "plate_count": 1,
-    "version": "<opaque>",
-    "went_away": {
-      "assistant": 0,
-      "days": 7,
-      "expired": 0,
-      "total": 0,
-      "withdrawn": 0
-    }
+    "version": "<opaque>"
   },
   "request": "GET /api/v2/needs-you",
   "status": 200

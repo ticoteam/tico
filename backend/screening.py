@@ -45,6 +45,8 @@ from .models import Contract
 from .store import H, Problem
 
 log = logging.getLogger("tico.screening")
+# How long a screening waits for the model's answer: Jev's one 8 s try, then a little for the company's model.
+DEADLINE = 12
 
 SET = "injection-screen"
 SOURCES = ("webhook", "mail", "idea", "watcher", "document", "slack")
@@ -368,8 +370,6 @@ def _screen(store, source, text, bot, key, primary, free, actor, role, mode_, ca
         )
     if why:
         return verdict(mode_, None, "", patterns, detector, why, thresholds=thresholds)
-    from .idea_triage import _ask  # the same deadline thread: a call still running finishes on its own
-
     result, error = _ask(engine, {"source": source, "text": _fenced(text)}, qset["questions"], qset["label"])
     score = kind = None
     if result is not None and not error:
@@ -971,3 +971,25 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         admin(who, "tests screening")
         return run_tests(store, who, getattr(request.app.state, "judge", None))
+
+
+def _ask(engine, state, questions, label):
+    """The engine's answer within DEADLINE seconds: (result, None), (None, error code) or (None, 'timeout'). A call
+    still running at the deadline finishes on its own thread; its cost is metered all the same."""
+    box = {}
+
+    def work():
+        try:
+            box["result"] = engine(state, questions, label)
+        except J.JudgeError as exc:
+            box["error"] = exc.code
+        except Exception as exc:  # noqa: BLE001  a fake, a provider bug: screening fails open on it
+            log.warning("Screening call failed: %s", type(exc).__name__)
+            box["error"] = "error"
+
+    worker = threading.Thread(target=work, name="screening", daemon=True)
+    worker.start()
+    worker.join(DEADLINE)
+    if worker.is_alive():
+        return None, "timeout"
+    return box.get("result"), box.get("error")

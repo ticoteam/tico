@@ -1,4 +1,4 @@
-"""hub health check / GET /api/v2/fleet/check: spend checks share one company Default."""
+"""tico health check / GET /api/v2/fleet/check: spend checks share one company Default."""
 
 from backend import fleet_check, usage_limits
 

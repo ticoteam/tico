@@ -14,7 +14,8 @@ from backend.scheduler import Scheduler
 from backend.store import H, encode
 from backend.tests.helpers.api import headers, runner
 from backend.enqueue import enqueue_stored
-from backend.tests.helpers.attempt_contention import fleet
+from backend import task_engine as E
+from backend.tests.helpers.attempt_contention import fleet, on_engine
 
 
 def test_fresh_renew_reads_through_a_write_and_rechecks_stop_lease_and_assignment(api, monkeypatch):
@@ -99,7 +100,8 @@ def test_heartbeat_prepares_provenance_outside_write_and_discards_a_stale_snapsh
     def changes_after_read(c, computer_id):
         selected = prepare(c, computer_id)
         with store.transaction() as writer:
-            writer.execute("UPDATE tasks SET carried_by='attempt-0' WHERE id='task-4'")
+            # attempt-0's turn now carries task-4 too: the snapshot read before it is stale.
+            writer.execute("UPDATE messages SET refs=? WHERE id='message-0'", (encode({"task": ["task-0", "task-4"]}),))
         return selected
 
     monkeypatch.setattr(worktrees, "live_turn_cache", changes_after_read)
@@ -107,7 +109,8 @@ def test_heartbeat_prepares_provenance_outside_write_and_discards_a_stale_snapsh
     assert "tree-4" not in {a["link_id"] for a in result["worktree_actions"]}
     monkeypatch.setattr(worktrees, "live_turn_cache", prepare)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id='task-4'")
+        row = on_engine(c, "task-4")
+        E.reassign(c, "task-4", "bot:finance", "human:ana", seen_version=row["version"])
     result = post(api, "runners/heartbeat", body, computer["token"])
     assert "tree-4" in {a["link_id"] for a in result["worktree_actions"]}
 
@@ -164,7 +167,9 @@ def test_idle_inputs_and_task_read_do_not_wait_on_unrelated_writers(api):
             release.set()
         background.result()
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id='task-0'")
+        row = on_engine(c, "task-0")
+        c.execute("UPDATE tasks SET private=1,requester_id='human:ben' WHERE id='task-0'")
+        E.reassign(c, "task-0", "bot:finance", "human:ana", seen_version=row["version"])
     assert api.post('/api/v2/attempts/attempt-0/inputs', json={}, headers=headers(computer['token'])).status_code == 409
 
 
@@ -181,11 +186,16 @@ def test_shared_provenance_rechecks_permissions_and_never_publishes_rolled_back_
         return original(c, aid)
 
     monkeypatch.setattr(task_privacy, '_attempt_tasks', build)
+    with store.transaction() as c:
+        # Finance owns the task now; while it is not private, Ops' run still reads it.
+        row = on_engine(c, "task-0")
+        E.reassign(c, "task-0", "bot:finance", "human:ana", seen_version=row["version"])
+        c.execute("UPDATE tasks SET private=0 WHERE id='task-0'")
     with store.read_transaction() as c:
         assert task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
     count = len(builds)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id='task-0'")
+        c.execute("UPDATE tasks SET private=1,requester_id='human:ben' WHERE id='task-0'")
     with store.read_transaction() as c:
         assert not task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
     assert len(builds) == count  # Only neutral provenance survives; permission never does.
@@ -209,7 +219,9 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
     computer = fleet(api, attempts=0, trees=20)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done'")
+        for i in range(20):
+            row = on_engine(c, f"task-{i}")
+            E.move(c, row["id"], E.DONE, "human:ana", "Finished", seen_version=row["version"])
         for i in range(20):
             c.execute(
                 "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
@@ -219,13 +231,9 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
             enqueue_stored(c, f'obsolete-{i}')
     assert post(api, 'jobs/claim', {}, computer['token'])['attempt'] is None
     with store.read() as c:
-        assert (
-            c.execute("SELECT count(*) FROM jobs WHERE state='canceled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
-        )
-        assert (
-            c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0]
-            == 20 - execution.CLAIM_MAINTENANCE
-        )
+        obsolete = "SELECT count(*) FROM jobs WHERE state=? AND message_id LIKE 'obsolete-%'"
+        assert c.execute(obsolete, ("canceled",)).fetchone()[0] == execution.CLAIM_MAINTENANCE
+        assert c.execute(obsolete, ("queued",)).fetchone()[0] == 20 - execution.CLAIM_MAINTENANCE
 
 
 def test_health_flags_runner_p95_and_clears_after_the_window(api):

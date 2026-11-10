@@ -7,14 +7,14 @@ with its evidence. Nothing is sent.
 
 ## 1. Read the question and the history
 
-    hub task show <id>
+    tico task show <id>
 
 Check `knowledge/asks.md` and the last two updates: has this been answered already? If so, the draft points to it in one line. If mail is connected, read the
 thread with `$HUB_DIR/scripts/mail.sh search`.
 
 ## 2. Find the facts
 
-Answer only from the record: `hub goal list --all`, `hub kpi show <kpi id>`, `hub update list`, `hub meeting search`, and the finance inputs. Check every
+Answer only from the record: `tico goal list --all`, `tico kpi show <kpi id>`, `tico update list`, `tico meeting search`, and the finance inputs. Check every
 figure with `skills/check-a-figure-before-it-goes-out/SKILL.md`. A fact you cannot source is a marked gap, never a guess. Check `knowledge/exclusions.md` before
 naming anyone.
 
@@ -26,4 +26,4 @@ owner's voice, plain, with no spin. If the question is about a legal, tax or val
 ## 4. Hand over
 
 Attach the draft to the task with the facts and their sources under it, and say what you could not confirm. Send the text to its recipient with your Tools only
-when the task asks for the send and mail sending is on in Tico. Otherwise keep the draft. Then `hub task update <id> --status done --note`.
+when the task asks for the send and mail sending is on in Tico. Otherwise keep the draft. Then `tico task done <id> -m "..." --version N`.

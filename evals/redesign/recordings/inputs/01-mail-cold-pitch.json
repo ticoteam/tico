@@ -19,7 +19,10 @@
     "labels": [
       "INBOX",
       "UNREAD"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "",
+    "known_sender": false
   },
   "note": "Cold vendor pitch with no earlier thread: archive, nothing is asked of the owner."
 }

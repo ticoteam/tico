@@ -17,7 +17,7 @@ person:
   - {when: asked, text: Use the main repository only.}
   - {when: asked, text: "This week, Monday to Friday."}
 done:
-  - status: [done, review]
+  - status: [done]
   - file_attached: summary
   - reply_not_matches: "I could not"
 limits: {person_steps: 2, jargon: 2, duplicates: 0, sent_elsewhere: 0}

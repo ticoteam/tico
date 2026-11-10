@@ -151,7 +151,7 @@ def test_a_bots_docs_tools_read_write_and_survive_a_concurrent_edit(api):
     assert err and refused["error"] == "locked"
 
 
-def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
+def test_upgrade_repairs_generated_docs_once_and_queues_a_map_refresh(api):
     from backend.store import H
 
     source = make(api, "Refund policy", path="finance/refunds.md")
@@ -195,5 +195,5 @@ def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
     assert call(api, "GET", "docs/" + idx["id"])["doc"]["version"] == fresh["version"]
     with api.app.state.store.read() as c:
         tasks = c.execute("SELECT * FROM tasks WHERE owner_id='bot:librarian' AND title='Refresh the map'").fetchall()
-        assert len(tasks) == 1 and tasks[0]["next_run"] == 1
+        assert len(tasks) == 1 and tasks[0]["status"] == "open"
         assert "unreadable" in tasks[0]["body"] and "archived" in tasks[0]["body"]

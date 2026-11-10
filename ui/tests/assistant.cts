@@ -13,7 +13,7 @@ type Card = {id: string; summary: string; method: string; path: string; status: 
   description: string; diff: {field: string; new: string; routine?: boolean}[]; body: Record<string, unknown>; proposed_via: string; proposer?: string};
 type Msg = {id: string; sender_id: string; body: string; refs: Record<string, unknown>; created_at: string; kind: string};
 type AsstState = {reads: number; sent: string[]; decided: string[][]; messages: Msg[]; card: Card | null; bulk: Card; enrol: Card; routine: Card;
-  fail?: boolean; turnedOn?: number; view: () => unknown; reply: () => {message: Msg}};
+  fail?: boolean; turnedOn?: number; view: () => unknown; reply: () => {message: Msg}; tasks?: number; taskReads?: URL[]};
 declare const S: {route: string};
 declare const V2C: {rendered: boolean; stick: {atBottom: boolean}; messages: Msg[]};
 declare function v2ChatRender(conv: unknown): void;
@@ -40,7 +40,14 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
-    if (p === '/api/v2/tasks') return json({tasks: []});
+    if (p === '/api/v2/tasks') {
+      // The Assistant's open tasks, in queue order, a page as backend/task_list_routes.py cuts it.
+      (state.taskReads ||= []).push(url);
+      const all = Array.from({length: url.searchParams.get('owner') === 'coo' ? state.tasks || 0 : 0}, (_, i) => ({id: `r-${i + 1}`, title: `Rail task ${i + 1}`,
+        status: 'open', owner_id: 'bot:coo', pipeline_id: 'product', stage_id: 'spec', created_at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(), version: 1}));
+      const limit = Number(url.searchParams.get('limit') || 500), offset = Number(url.searchParams.get('offset') || 0);
+      return json({tasks: all.slice(offset, offset + limit), next_offset: offset + limit < all.length ? offset + limit : null, cursor: 'c1'});
+    }
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/conversations/room1/snapshot') return json({messages: state.messages, execution: null, has_more: false, next_before: null});
     if (p === '/api/v2/assistant' && method === 'GET') { state.reads++; return json(state.view()); }
@@ -228,8 +235,18 @@ function fixture(): AsstState {
       // takes you to the bottom, which then follows the answer.
       const state = fixture();
       for (let i = 0; i < 24; i++) state.messages.push(msg('h' + i, i % 2 ? 'bot:coo' : 'human:ana', `Line ${i}. ` + 'Some words to fill the line. '.repeat(10)));
+      state.tasks = 503;
       const {page, errors} = await open(browser, {width: 1280, height: 900}, state);
       await page.goto('https://tico-ui.test/#/assistant');
+      // The rail's Active list reads on past its first page with More.
+      const rail = page.locator('#asst-active');
+      await rail.locator('[data-asst-more]').waitFor({state: 'attached'});
+      const railCount = () => rail.evaluate(el => (el.textContent!.match(/Rail task \d+/g) || []).length);
+      assert.equal(await railCount(), 500, 'rail: a first page');
+      await rail.locator('[data-asst-more]').evaluate((b: HTMLElement) => b.click());
+      await page.waitForFunction(() => !document.querySelector('#asst-active [data-asst-more]'));
+      assert.equal(await railCount(), 503, 'rail: More reads on');
+      assert.equal(state.taskReads!.at(-1)!.searchParams.get('offset'), '500');
       await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .bubble').length === 24);
       const thread = page.locator('#conv-thread'), pill = page.locator('#conv-jump');
       const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));

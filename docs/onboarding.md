@@ -34,8 +34,7 @@ a job description from its template card (what it owns, and the file's reason fo
 a role under a role included (`seat:<id>`). Only the built-ins and the file's `live` seats become bots, once each: a live bot is made from its
 template, fills its seat and reports where the seat's line ends. The Finance Owner (the bookkeeper) keeps a seat on its line in the team
 its file gives (Corporate in the default structure), filled by the built-in bot itself, so a Corporate Team Manager hired later takes it
-along. Then the factory pipelines are set up once, best effort: a failure is recorded (`onboarding.pipelines_failed`), rolled back,
-and the team stays. Import retries do not duplicate
+along. Import retries do not duplicate
 a seat, and an import cannot replace a company whose setup is complete. A file named at install
 (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts; if it cannot be read or applied,
 the server still starts, **no sample team is set up in its place**, and the owner sees why on the welcome page and on
@@ -193,9 +192,8 @@ second). It reaches no computer.
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default. They are
   Active on day one.
-- **A new company's first Create ends like an import** (`company_import.finish_new_company`): the live seats' bots, then the default
-  factories and their nine pipelines, once, best effort, and only while the company has no task type beyond the ones every server
-  starts with. **With nothing picked**, the chart is the default one: the chart formula's own
+- **A new company's first Create ends like an import** (`company_import.finish_new_company`): the live seats' bots. The General
+  pipeline needs no setup: every server start makes it when it is missing. **With nothing picked**, the chart is the default one: the chart formula's own
   (`backend/company_file/chart_formula.py`, no segment or bet, the default channels), the chart the public setup page's file
   gives a company that picked nothing, so it starts with the same live bots and seats.
 - **Everything else picked is a Recruiting seat** (`seats` on the record: `{pick: seat id}`), with the reviewed name as its
@@ -237,7 +235,7 @@ second). It reaches no computer.
 Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
 
 - **Recruiting** is a seat: a role on the org chart with its job description and reporting line, and no bot, repository or
-  computer slot (`hub seat create|list|update|close`, `/api/v2/seats`, and `seats` on `GET /api/v2/org`). It holds no work:
+  computer slot (`tico seat create|list|update|close`, `/api/v2/seats`, and `seats` on `GET /api/v2/org`). It holds no work:
   a task for it is refused with the name of the manager it reports to, it is never woken and it has no routines. The owner
   places a seat anywhere; anyone else under themselves or someone below them.
 - A seat is filled by recruiting it ([Recruiting a seat](#recruiting-a-seat)); the bot it gets starts Onboarding.
@@ -271,13 +269,13 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   the shared doc `onboarding/interview.md` so the next bot only asks whether anything changed, and suggests the person open
   the mic and just talk; the Onboarding pill carries the same tip. It learns only: it answers and asks in
   its thread, reads, connects tools and talks with its manager. It takes no task, files none, runs no routine (timed or on an event),
-  comments on, asks about or attaches to no task (one it held before included), asks no approval, sends no email and posts
+  comments on, asks about or attaches to no task (one it held before included), sends no email and posts
   nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in
   a thread. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
   plain reason. Any number of bots may be onboarding at once.
-- When it has learned enough, the bot says so with `hub bot ready --summary "..."` (MCP `hub_bot_ready`); its page shows the
+- When it has learned enough, the bot says so with `tico bot ready --summary "..."` (MCP `hub_bot_ready`); its page shows the
   summary. Only a person above it on the org chart (its manager, their managers, the owner) sees **Mark onboarding complete**
-  (`hub bot setup-done <bot>`, `POST /api/v2/bots/{bot}/onboarded`, checked on the server; the bot's own call is its "I'm
+  (`tico bot setup-done <bot>`, `POST /api/v2/bots/{bot}/onboarded`, checked on the server; the bot's own call is its "I'm
   ready"). That makes it **Active**: its routines run, its queued work starts and it counts toward a member's limit.
 
 `stage` on a bot (`GET /api/v2/bots`, `/api/v2/bots/{bot}`, `/api/v2/org`) is `onboarding` or `active`; while onboarding it also
@@ -354,7 +352,7 @@ The last question's **Start research** calls `POST /api/v2/librarian/setup/marke
 then shows "The Librarian is researching your market. This usually takes 5–10 minutes." with a link to the task, until the market
 has content (at least two minutes, at most thirty), kept in the browser, polling the market every 30 seconds. Then the normal
 Market page is drawn. The code is `ui/market-page.ts`. When setup was given the team's website (`names.website`), finishing setup files "Set up the
-market map" from it and the market page opens on the researching notice; the Librarian reads that website from `hub strategy show`
+market map" from it and the market page opens on the researching notice; the Librarian reads that website from `tico strategy show`
 when the task has none, and the four questions stay for a team that gave no website.
 
 ### What is stored, and who may do what
@@ -402,8 +400,8 @@ exception, so the computer keeps reporting the others.
 ## What BotOps does
 
 BotOps works one setup task at a time, following `playbooks/set-up-a-bot.md` in its own repository:
-read the task, `hub bot create --template <template> --name "<Display>"` (Tico picks the slug from the name), put the reviewed
-instructions into `AGENT.md` (or tailor the template's to the answers), run `hub bot check <slug>`
+read the task, `tico bot create --template <template> --name "<Display>"` (Tico picks the slug from the name), put the reviewed
+instructions into `AGENT.md` (or tailor the template's to the answers), run `tico bot check <slug>`
 and fix every failure, then commit the result.
 
 For a human's authorized request, BotOps finishes the work: it places the bot on a computer,
@@ -423,7 +421,7 @@ The assistant is every human's private [Assistant](assistant.md) (its own page, 
 background: it routes Slack messages to the bot that owns them, takes meetings and tasks nobody was named for, reviews
 BotOps' refused writes, and runs its own routines.
 
-None can be archived or deleted by anyone, the owner included, through Settings, the API, `hub` or BotOps itself:
+None can be archived or deleted by anyone, the owner included, through Settings, the API, `tico` or BotOps itself:
 the archive route answers `409 system_bot`. Pausing, renaming and editing their instructions stay allowed. Settings >
 Bots lists them as **Built-in**, with no Archive or Delete control. Like every bot they start open to everyone; their
 **Access** can be narrowed in Settings > Bots ([permissions](permissions.md)), and the owner keeps full access to them
@@ -442,7 +440,7 @@ The Brand Owner (`brand`) keeps the brand book and the Brand card. It is built t
 team from before it existed gets it on update once a model is chosen and a computer is enrolled) and sits outside the chart
 like the others. A team that already hired a bot under the slug `brand` (a Brand Manager)
 keeps that bot as it is and gets no second one. Its monthly brand audit starts off and goes on, once, when it runs
-`hub bot setup-done` at the end of its setup; one a person turned off stays off.
+`tico bot setup-done` at the end of its setup; one a person turned off stays off.
 
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
 on update: nothing restores it automatically. Its owner sees "The Assistant is off" on the Assistant page and at the top of
@@ -531,8 +529,8 @@ session on that site grants no access to your Tico. Older installs can select th
 
 - **Settings → Bots → Add from template.** The same cards, minus the bots that already exist. A starter is created parked, exactly as Create
   makes it; any other template is created `planned` with the same BotOps task the wizard would have filed.
-- **From a BotOps task**, inside a run: `hub bot create --template <template> --name
-  "<Display>"`, then `hub bot check <slug>` with the slug it printed. Both need `HUB_WORKSPACE`, which the runner puts in
+- **From a BotOps task**, inside a run: `tico bot create --template <template> --name
+  "<Display>"`, then `tico bot check <slug>` with the slug it printed. Both need `HUB_WORKSPACE`, which the runner puts in
   every run's environment.
 - **An agent you already run elsewhere**: a [Hermes](hermes-agents.md) or [OpenClaw](openclaw-agents.md) profile
   becomes a bot with a pairing code, no template; see [Connect an external agent](connect-an-agent.md#an-agent-that-is-a-bot-not-you).
@@ -557,7 +555,7 @@ Tico ships 125 role templates, by group, each with a card. `templates/catalog/` 
   `team_templates`, `kind` (`helper` on a card that serves one human and sits outside the team chart), `pains`, `prerequisites` and, for a starter, `onboarding`, `first_routine`, `approval_required` and `example_output`. The
   server serves all of them except `onboarding` and `example_output`; the team builder reads `group`, `pack`, `lead`, `kind`, `icon`, `tags`,
   `suggest`, `pains`, `summary` and `recommend_when` ([The team builder](#the-team-builder)); `prerequisites` are shown by the bot's own setup, not by the wizard ([Starter bots](starter-bots.md)). After changing a card or `templates/groups.yaml`, run `python3 scripts/build_catalog_json.py` (the setup page's role list; Tico HQ builds its own copy from each published release, [docs/tico-hq.md](tico-hq.md#the-templates-hq-reads)) and `python3 scripts/build-icon-font.py` (a new icon). A card with a `first_routine` and an
-  `onboarding` list is a **starter**: Create parks it (`needs_setup`), so its `onboarding` playbook must end with `hub bot setup-done`.
+  `onboarding` list is a **starter**: Create parks it (`needs_setup`), so its `onboarding` playbook must end with `tico bot setup-done`.
 - Everything else in the folder is the repository the bot starts from: `AGENT.md`,
   `bot.yaml`, `playbooks/`, `knowledge/`, `memory/`, `state.md`, `.env.example`, `.gitignore`.
 - `{{company_name}}`, `{{app_name}}`, `{{assistant_name}}` and `{{bot_name}}` are filled in every
@@ -612,9 +610,9 @@ all is also `waiting`.
 
 A bot placed on, or moved to, a computer that has never held it gets its repository by cloning it from GitHub
 with its own token (the assignment names it). If that cannot happen the row says why instead of the generic
-line: *not on GitHub yet* (create it with `hub bot repo-create <slug> --empty`; the computer that holds the
+line: *not on GitHub yet* (create it with `tico bot repo-create <slug> --empty`; the computer that holds the
 only copy publishes it while the bot is still assigned there), *GitHub refused the token*, or the clone's own
-error. `hub health check` and Health list these as bots that cannot run. A move is refused up front when the
+error. `tico health check` and Health list these as bots that cannot run. A move is refused up front when the
 computer being left reports a repository GitHub does not have and the destination holds no copy.
 
 **`422` on a template name.** `PUT /api/v2/setup` and `POST /api/v2/bots` refuse a template
@@ -628,7 +626,7 @@ offer, and the bots screen says so. On a hosted server that means the release di
 
 **A starter does not answer, or a routine never runs.** While it is `needs_setup` it answers only a human's message: a task
 message, a Slack route, a bot's request and its routines wait. Press **Set up**, or say anything to it in its DM, and answer its
-questions. When its setup is done it calls `hub bot setup-done`. If it cannot (a member's bot at their limit answers
+questions. When its setup is done it calls `tico bot setup-done`. If it cannot (a member's bot at their limit answers
 `bot_limit`), archive a bot you no longer need or ask an admin to raise the limit in Settings > People. An owner or a bot's manager can
 also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose thread went wrong.
 

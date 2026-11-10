@@ -12,7 +12,7 @@ Done when: the brief is attached with the decide-by date first, every fact has i
 
 ## 1. Read what you have
 
-    hub task show <id>
+    tico task show <id>
 
 Read the vendor's line in `knowledge/vendors.md`, the contract or invoice if attached (price, term,
 seats, notice period, auto-renewal clause) and the last two reports' mentions of it.
@@ -26,7 +26,7 @@ seats, notice period, auto-renewal clause) and the last two reports' mentions of
 - **Owner and need**: who uses it and what breaks if it is gone; ask the owner through the task,
   never by messaging them.
 - **Alternatives**: overlaps in `knowledge/vendors.md`. A real comparison is the Procurement Manager's:
-  `hub task create --owner procurement`.
+  `tico task create --owner procurement`.
 - **The clock**: renewal date, notice period and the decide-by date, in the first line.
 
 ## 3. Write the brief
@@ -38,6 +38,6 @@ show are idle, a multi-year offer already in the paper.
 
 ## 4. Finish
 
-Attach the brief, then `hub task update <id> --status done --note`: the decide-by date, the suggestion, and
+Attach the brief, then `tico task done <id> -m "..." --version N`: the decide-by date, the suggestion, and
 what you could not read. The human cancels, renegotiates or renews; you never contact the vendor.
 When the notice date has passed, say so in the first line.

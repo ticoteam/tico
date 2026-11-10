@@ -8,7 +8,7 @@ reasoning_effort: medium
 max_run_minutes: 60
 
 # Declared off. Setup switches on only the first routine (the weekday outbound run); the onboarding playbook (step 6)
-# switches on the weekly read-out with `hub automation update <id> --enable`. `hub bot create` seeds them once;
+# switches on the weekly read-out with `tico automation update <id> --enable`. `tico bot create` seeds them once;
 # from then on Tico's automations are the routines (docs/routines.md).
 routines:
   - id: outbound-run

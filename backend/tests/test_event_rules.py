@@ -182,7 +182,7 @@ def test_a_woken_bot_is_told_where_to_read_the_rest_only_when_the_body_was_cut()
     values = {"type": "order.created"}
     call = {"trigger": "shop", "delivery": "d1", "content": "{...}"}
     assert "--part 2" not in R._wake_text({"text": "New {{type}}"}, values, call, "x")
-    assert "hub trigger delivery shop d1 --part 2" in R._wake_text(
+    assert "tico trigger delivery shop d1 --part 2" in R._wake_text(
         {"text": "New {{type}}"}, values, {**call, "cut": True}, "x"
     )
 
@@ -216,9 +216,13 @@ def test_the_ledger_forgets_a_delivery_after_thirty_days(api):
 def test_the_listing_endpoint_names_the_catalog(api):
     setup(api)
     out = get(api, "event-types")["items"]
-    assert {"webhook.received", "task.done", "release.published"} <= {e["name"] for e in out}
-    assert [e["name"] for e in get(api, "event-types?group=approval")["items"]] == [
-        "approval.requested",
-        "approval.decided",
-        "approval.withdrawn",
+    assert {"webhook.received", "task.done", "meeting.ready"} <= {e["name"] for e in out}
+    assert [e["name"] for e in get(api, "event-types?group=task")["items"]] == [
+        "task.created",
+        "task.assigned",
+        "task.step_changed",
+        "task.commented",
+        "task.done",
+        "task.closed",
+        "task.reopened",
     ]

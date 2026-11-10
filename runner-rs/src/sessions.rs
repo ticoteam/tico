@@ -259,7 +259,7 @@ pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
         lines.push("Other people run branches from this same repository. Every branch reads and writes the same AGENT.md, knowledge and memory. Follow those files on every computer.".to_string());
     }
     if !source.is_empty() {
-        lines.push(format!("You run as `{bot}`, a branch of `{source}`. Where your files name `{source}` as yourself, they mean you; use `{bot}` in hub commands about your own work."));
+        lines.push(format!("You run as `{bot}`, a branch of `{source}`. Where your files name `{source}` as yourself, they mean you; use `{bot}` in tico commands about your own work."));
     }
     if !stateless {
         lines.push("Save only lessons about the code, designs and work to the repository, never who asked or one person's preferences, messages or attachments. Commit lessons, then `git pull --rebase` and `git push`, keeping both sides' lessons on a conflict.".into());

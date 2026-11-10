@@ -24,11 +24,8 @@ class AlertPreferenceRow(TypedDict):
     phone_version: str
     verified_at: str | None
     revocation_pending: int
-    stall_after: str
     call_consent: int
-    urgent_needs: int
     legal_mail: int
-    bot_stuck: int
     urgent_calls: int
     timezone: str
     quiet_start: str
@@ -122,17 +119,16 @@ class SuggestionRow(TypedDict):
 
 
 class TaskRow(TypedDict):
-    """One `tasks` row (SELECT *)."""
+    """One `tasks` row (SELECT *). Its status, stage, owner and pipeline are written by the engine alone
+    (backend/task_engine.py); what it waits on is read, not stored (backend/waiting_on.py)."""
 
     id: str
     title: str | None
     body: str | None
     requester_id: str | None
     owner_id: str | None
-    status: str | None
+    status: str
     due_at: str | None
-    check_back_at: str | None
-    check_back_note: str | None
     conversation_id: str | None
     live_meeting_id: str | None
     created_at: str | None
@@ -143,17 +139,11 @@ class TaskRow(TypedDict):
     note: str | None
     goal_id: str | None
     labels: str
-    type_id: str | None
-    step_id: str | None
     number: int | None
-    step_rank: float | None
     private: int
     readers: str | None
     lane: str
     rank: float | None
-    next_run: int
-    carried_by: str | None
-    resume: str | None
     occurrence: str | None
     occurrence_step: str | None
     rule_due_id: str | None
@@ -161,13 +151,7 @@ class TaskRow(TypedDict):
     checkpoint_at: str | None
     checkpoint_by_id: str | None
     checkpoint_state: str | None
-    stale_asked_at: str | None
     checkpoint_blocked: int
-    verdict: str | None
-    verdict_head: str | None
-    building_started_at: str | None
-    building_seconds: float
-    blocker_key: str | None
     visibility: str
     public_title: str
     public_summary: str
@@ -175,15 +159,10 @@ class TaskRow(TypedDict):
     request_id: str | None
     version: int
     acceptance: str
-    # A question task's (backend/question_tasks.py): JSON text, null on any other task.
-    questions: str | None
-    question_topic: str | None
-    if_no_answer: str | None
-    review: str | None
-    spend: str | None
-    answer: str | None
-    asked_at: str | None
     work_revision: int
+    pipeline_id: str | None
+    stage_id: str | None
+    assignee_id: str | None
 
 
 class PresenceRow(TypedDict):
@@ -194,55 +173,6 @@ class PresenceRow(TypedDict):
     actor: str
     session_id: str
     seen_at: str
-
-
-class TaskCheckBackWakeRow(TypedDict):
-    """A reminder occurrence; jobs and attempts retain all execution state."""
-
-    task_id: str
-    check_back_at: str
-    sent_at: str
-    message_id: str | None
-
-
-class TaskHoldRow(TypedDict):
-    """One `task_holds` row (SELECT *): a task's move to Blocked or its snooze (migration 0075). At most one of each
-    kind per task is open (released_at NULL); a released one stays as history."""
-
-    id: int
-    task_id: str
-    kind: str
-    cause: str | None
-    reason: str | None
-    by_id: str | None
-    until_at: str | None
-    from_step_id: str | None
-    from_status: str | None
-    gate: str | None
-    cleared_at: str | None
-    created_at: str
-    released_at: str | None
-    reason_changed_at: str | None
-
-
-class StuckSpellRow(TypedDict):
-    """One stuck spell of a pipeline card (backend/stuck_cards.py): open while ended_at is NULL, at most one open per card.
-    It records the manager's one wake and the person's one question, so a pass never repeats either."""
-
-    id: str
-    task_id: str
-    pipeline_id: str
-    stuck_since: str
-    started_at: str
-    hold_reason: str | None
-    manager_id: str | None
-    manager_woken_at: str | None
-    person_id: str | None
-    person_asked_at: str | None
-    question_task_id: str | None
-    answer_relayed_at: str | None
-    ended_at: str | None
-    end_reason: str | None
 
 
 class QuarantineHoldRow(TypedDict):
@@ -365,27 +295,6 @@ class RunnerStateRow(TypedDict):
     restart_since: str | None
     memory_hold: int
     last_sampled_at: int | None
-
-
-class ApprovalRow(TypedDict):
-    """One `approvals` row (SELECT *)."""
-
-    id: str
-    kind: str | None
-    task_id: str | None
-    message_id: str | None
-    payload: str | None
-    payload_hash: str | None
-    requested_by_id: str | None
-    decided_by_id: str | None
-    decision: str | None
-    decided_at: str | None
-    consumed_at: str | None
-    created_at: str | None
-    decided_via: str | None
-    decided_for: str | None
-    ready_since: str | None
-    decision_owner: str | None
 
 
 class AttemptEventRow(TypedDict):
@@ -1174,7 +1083,6 @@ class FactoryRow(TypedDict):
     retired_at: str | None
     goal: str | None
     manager_id: str | None
-    output_stage_id: str | None
 
 
 class FactoryManagerActionRow(TypedDict):
@@ -1203,220 +1111,6 @@ class FactoryManagerRunRow(TypedDict):
     woke: int
     model_called: int
     error: str | None
-
-
-class FirstStartSeedRow(TypedDict):
-    """One `first_start_seeds` row (SELECT *)."""
-
-    name: str
-
-
-class PipelineCheckCursorRow(TypedDict):
-    """One `pipeline_check_cursor` row (SELECT *)."""
-
-    id: int
-    task_id: str
-    lease_until: str | None
-    lease_token: str | None
-    failed_task_id: str
-    failed_passes: int
-
-
-class PipelineCheckRunRow(TypedDict):
-    """One `pipeline_check_runs` row (SELECT *)."""
-
-    id: str
-    task_id: str
-    stage_requirement_id: str
-    repo: str
-    head_sha: str
-    state: str
-    posted_state: str | None
-    check_run_id: int | None
-    attempts: int
-    retry_at: str | None
-    last_error: str | None
-    created_at: str
-    updated_at: str
-    posted_at: str | None
-    lease_until: str | None
-    lease_token: str | None
-
-
-class PipelineHandoffRow(TypedDict):
-    """One `pipeline_handoffs` row (SELECT *)."""
-
-    id: str
-    pipeline_link_id: str
-    source_task_id: str
-    target_task_id: str
-    created_at: str
-    returned_at: str | None
-
-
-class PipelineLinkRow(TypedDict):
-    """One `pipeline_links` row (SELECT *)."""
-
-    id: str
-    from_pipeline_id: str
-    from_pipeline_stage_id: str
-    to_pipeline_id: str
-    mode: str
-    return_stage_id: str | None
-    created_by: str | None
-    created_at: str
-    retired_at: str | None
-    fires: str
-
-
-class PipelineManagerActionRow(TypedDict):
-    """One `pipeline_manager_actions` row (SELECT *)."""
-
-    id: str
-    pipeline_id: str
-    pipeline_manager_run_id: str
-    task_id: str | None
-    stage_visit_id: str | None
-    stage_requirement_id: str | None
-    action: str
-    target_actor: str | None
-    note: str | None
-    created_at: str
-
-
-class PipelineManagerRunRow(TypedDict):
-    """One `pipeline_manager_runs` row (SELECT *)."""
-
-    id: str
-    pipeline_id: str
-    started_at: str
-    finished_at: str | None
-    status: str
-    exceptions_count: int
-    actions_count: int
-    model_called: int
-    error: str | None
-
-
-class PipelineMemberRow(TypedDict):
-    """One `pipeline_members` row (SELECT *)."""
-
-    pipeline_id: str
-    actor_id: str
-    created_at: str
-
-
-class RequirementAttachmentRow(TypedDict):
-    """One `requirement_attachments` row (SELECT *)."""
-
-    id: str
-    task_id: str
-    stage_requirement_id: str
-    source: str
-    blob_id: str | None
-    file_id: str | None
-    file_version: int | None
-    task_link_id: str | None
-    url: str | None
-    digest: str
-    work_version: int
-    commit_sha: str | None
-    attached_by: str | None
-    created_at: str
-    removed_at: str | None
-    removed_by: str | None
-
-
-class ReviewClaimRow(TypedDict):
-    """One `review_claims` row (SELECT *)."""
-
-    id: str
-    task_id: str
-    stage_requirement_id: str
-    claimed_by: str
-    work_version: int | None
-    attachment_digest: str | None
-    claimed_at: str
-    expires_at: str | None
-    released_at: str | None
-
-
-class StageDecisionRow(TypedDict):
-    """One `stage_decisions` row (SELECT *)."""
-
-    id: str
-    task_id: str
-    pipeline_stage_id: str
-    stage_visit_id: str | None
-    stage_requirement_id: str | None
-    requirement_version: int | None
-    requirement_attachment_id: str | None
-    attachment_digest: str | None
-    work_version: int | None
-    judge: str
-    judge_actor: str | None
-    verdict: str
-    confidence: float | None
-    reason: str | None
-    route_next_to: str | None
-    inputs_digest: str | None
-    judge_call_id: str | None
-    cost_cents: int
-    outcome: str | None
-    outcome_at: str | None
-    undone_at: str | None
-    undone_by: str | None
-    created_at: str
-    work_digest: str | None
-
-
-class StageRequirementVersionRow(TypedDict):
-    """One `stage_requirement_versions` row (SELECT *)."""
-
-    id: int
-    stage_requirement_id: str
-    version: int
-    definition: str
-    changed_by: str | None
-    created_at: str
-
-
-class StageRequirementRow(TypedDict):
-    """One `stage_requirements` row (SELECT *)."""
-
-    id: str
-    pipeline_id: str
-    pipeline_stage_id: str
-    name: str
-    kind: str
-    needs: str
-    reviewed_by: str
-    reviewer_id: str | None
-    backup_reviewer_id: str | None
-    rubric: str | None
-    applies_to_label: str | None
-    position: int
-    version: int
-    enforced_by: str | None
-    created_by: str | None
-    created_at: str
-    updated_at: str
-    retired_at: str | None
-    retired_by: str | None
-
-
-class StageVisitRow(TypedDict):
-    """One `stage_visits` row (SELECT *)."""
-
-    id: str
-    task_id: str
-    pipeline_id: str
-    pipeline_stage_id: str
-    entered_from_stage_id: str | None
-    direction: str
-    entered_by: str | None
-    entered_at: str
-    left_at: str | None
 
 
 # The Directory (backend/entities/): one row shape per table the Directory's tables migration makes.
@@ -1671,3 +1365,184 @@ class SetupHandoffRow(TypedDict):
     used_at: str | None
     revoked_at: str | None
     human_token_id: str | None
+
+
+class PipelineRow(TypedDict):
+    """A pipeline: an ordered list of stages a task moves through (backend/task_engine.py)."""
+
+    id: str
+    name: str
+    goal: str
+    prefix: str | None
+    manager_id: str | None
+    owner_id: str | None
+    private: int
+    factory_id: str | None
+    preset: str | None
+    settings_version: int
+    created_at: str
+    updated_at: str
+    retired_at: str | None
+
+
+class StageRow(TypedDict):
+    """One stage of a pipeline: its work stages in order, then Done and Closed."""
+
+    id: str
+    pipeline_id: str
+    position: int
+    kind: str
+    name: str
+    purpose: str
+    owner: str | None
+    by_hand: int
+    task_limit: int | None
+    expected_minutes: int | None
+    expected_bots_only: int
+    on_enter: str
+    created_at: str
+    updated_at: str
+    retired_at: str | None
+
+
+class VisitRow(TypedDict):
+    """One stay of a task in a stage. Exactly one is open per task (left_at NULL)."""
+
+    id: str
+    task_id: str
+    stage_id: str
+    entered_at: str
+    entered_how: str
+    left_at: str | None
+    how: str | None
+    by_id: str | None
+    why: str | None
+    tries: int
+    level: str
+    person_id: str | None
+    next_try_at: str | None
+    progress_mark: str | None
+    last_change_at: str | None
+    late_told_at: str | None
+    late_person_at: str | None
+    bot_snoozes: int
+    last_change_attempt: int | None
+    last_change_message: int | None
+    last_change_start: int | None
+
+
+class RequirementRow(TypedDict):
+    """What a task needs to leave a stage: on the stage (every task) or on one visit (this task, this time)."""
+
+    id: str
+    stage_id: str | None
+    visit_id: str | None
+    kind: str
+    settings: str
+    can_push_past: int
+    who_oks: str
+    person_id: str | None
+    added_by_id: str | None
+    by_bot: int
+    line: str
+    shows: str | None
+    choices: str | None
+    position: int
+    created_at: str
+    withdrawn_at: str | None
+
+
+class AnswerRow(TypedDict):
+    """What met a requirement for a visit, sent it back, or pushed past it."""
+
+    id: str
+    visit_id: str
+    requirement_id: str
+    by_id: str
+    answer: str
+    notes: str | None
+    page_version: int | None
+    created_at: str
+    undone_at: str | None
+
+
+class SnoozeRow(TypedDict):
+    """A task set aside. At most one is open per task (ended_at NULL)."""
+
+    id: str
+    task_id: str
+    visit_id: str | None
+    by_id: str
+    why: str | None
+    until_at: str | None
+    created_at: str
+    ended_at: str | None
+    ended_by_id: str | None
+
+
+class OkGrantRow(TypedDict):
+    """An OK bound to exactly what was shown, used once (backend/task_asks.py). One per OK requirement."""
+
+    requirement_id: str
+    asked_by_id: str
+    subject: str
+    content_hash: str
+    content: str
+    filed: int
+    created_at: str
+    ok_at: str | None
+    ok_by_id: str | None
+    answer_id: str | None
+    used_at: str | None
+    used_by_id: str | None
+    asked_of_id: str | None
+    revoked_at: str | None
+
+
+class RunStartRow(TypedDict):
+    """The order runs started in: every start takes the next id (migration 20261110100007_run_starts)."""
+
+    id: int
+    attempt_id: str
+
+
+class OkShownRow(TypedDict):
+    """Who was shown which content of an OK, in their own session."""
+
+    requirement_id: str
+    person_id: str
+    content_hash: str
+    shown_at: str
+
+
+class LinkRow(TypedDict):
+    """A task filed by another task, during one of its visits."""
+
+    id: str
+    from_task_id: str
+    to_task_id: str
+    visit_id: str | None
+    kind: str
+    created_at: str
+
+
+class EffectRow(TypedDict):
+    """A GitHub call a move still owes, keyed so it happens once."""
+
+    id: str
+    visit_id: str
+    kind: str
+    key: str
+    state: str
+    tries: int
+    last_error: str | None
+    created_at: str
+    updated_at: str
+
+
+class TaskMoveGuardRow(TypedDict):
+    """The one row the tasks_move_only trigger reads: open is 1, for one task, only inside task_engine's write."""
+
+    id: int
+    open: int
+    task_id: str | None

@@ -300,7 +300,7 @@ async function runScripts(files: string[], jobs: number, run: (file: string) => 
 async function main(): Promise<void> {
   const dir = path.join(__dirname, '..', 'ui', 'tests');
   const CORE = ['account-status', 'health-findings', 'bot-permissions', 'chat', 'docs', 'goals', 'inbound', 'meetings', 'meeting-page', 'meetings-pending', 'task-live', 'task-live-drafts', 'recorder-pending', 'org-rules', 'org-rules-counsel', 'people-access', 'recruit-unit',
-                'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'tasks-page', 'team-groups', 'threads', 'threads-halfway', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
+                'settings-forms', 'settings-no-dead-ends', 'sign-in-redirect', 'strategy', 'task-privacy', 'ask-screen', 'team-groups', 'threads', 'threads-halfway', 'dashboard', 'visual-cards', 'visual-fallback', 'visual-hosted', 'visual-media', 'visual-media-app'];
   const args = process.argv.slice(2);
   let jobs: number | undefined;
   let all = false;
@@ -337,6 +337,8 @@ async function main(): Promise<void> {
   if (needs) { console.error(needs); process.exit(1); }
   // The page runs the UI's TypeScript files as their compiled JavaScript: compile them once, before any script reads it.
   execFileSync(process.execPath, [path.join(__dirname, 'build-ui.cjs')], {stdio: 'inherit'});
+  // The Recorder's window too: its specs (recorder/tests, ui/tests/support/recorder-pause.cts) load recorder/dist.
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'recorder', 'build-ui.cjs')], {stdio: 'inherit'});
   const {cores, idleFraction} = await sampleCpu();
   const selected = resources(process.env, cores, idleFraction);
   jobs ??= selected.jobs;

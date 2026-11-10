@@ -12,8 +12,8 @@ task, and any role plan is written to `knowledge/plans/<role>.md`.
 
 ## 1. Read what the level asks for
 
-    hub task show <id>
-    hub doc ask "What does the level guide say for <role> at <level>?"
+    tico task show <id>
+    tico doc ask "What does the level guide say for <role> at <level>?"
 
 List the four to six skills that separate this level from the one below. If there is no level guide, ask the manager for the three
 things a person at this level does that one below does not.
@@ -31,7 +31,7 @@ review each other's work, a monthly conversation.
 ## 4. Courses, only where they earn it
 
 At most two. Each one goes through `skills/decide-whether-a-course-earns-its-place/SKILL.md`: the skill it builds, what work alone
-will not teach, its practice and feedback, provider, length, cost, and a finish-by date. Read the course page (`hub doc fetch <url>`)
+will not teach, its practice and feedback, provider, length, cost, and a finish-by date. Read the course page (`tico doc fetch <url>`)
 and note what it actually covers.
 
 ## 5. How to know it worked

@@ -107,9 +107,9 @@ stays, and the Strategy Bot only suggests a different one. Turning the regular c
 
 ### A human can override
 
-A colour a human sets (`hub goal status`, or the colour control on the Goals page) is theirs. It carries their name and
+A colour a human sets (`tico goal status`, or the colour control on the Goals page) is theirs. It carries their name and
 their one-sentence note ("set by Ana"), and it **stays until a human hands it back**: **Let Strategy Bot set it**
-(`hub goal status <id> auto`, `POST /api/v2/goals/{id}/status/auto`) ends the override and the colour is worked out at once.
+(`tico goal status <id> auto`, `POST /api/v2/goals/{id}/status/auto`) ends the override and the colour is worked out at once.
 
 While a goal is overridden the Strategy Bot may *suggest* a different colour. The suggestion is shown on the goal and never
 applied. Done and dropped are always set by a human.
@@ -126,14 +126,14 @@ computer and a model exist. Its template is `templates/catalog/goal-manager/`; i
 
 There is no On/Off switch. How much it does is the [level](strategy-bot.md) the owner picks, and a new install starts at
 **Suggests actions**. Its first job is the team's [strategy](strategy.md): it proposes the Strategy page to the owner and, when a
-bet's wrong-if trips, puts one Decide card in front of them; the owner writes and publishes, never the bot.
+bet's wrong-if trips, puts one proposal in front of them; the owner writes and publishes, never the bot.
 On goals and KPIs it does five things:
 
 1. **Goals make sense.** It flags vague or duplicate goals and may suggest a measure once or clearer wording, as proposals on
    the goal. At Passive it does this when you ask it. It prefers goals that serve a strategy bet and have a KPI, and
    suggests one or two per active bet that no KPI-backed goal serves.
 2. **KPIs.** It is the steward of every KPI. Each has a folder in its repository, `kpis/<slug>/`, with `definition.md`,
-   `sources.md`, the query or script (`hub sql`, PostHog or another API through a tool the team declared), a
+   `sources.md`, the query or script (`tico sql`, PostHog or another API through a tool the team declared), a
    known-values check it runs before trusting a number, and a changelog. It computes each KPI on its cadence in one routine
    pass with a time budget per KPI, posts readings with evidence, marks stale or missing data, and skips a failing KPI and
    reports it.
@@ -185,7 +185,7 @@ recovery, and posts a comment on the goal saying what it did and why; you undo a
 you undid is never made alone again: tried again, it becomes an item in your Needs you.
 
 When several bots ask you the same thing, the Strategy Bot can make them **one item** (`POST /api/v2/strategy-bot/merge`), a
-question task for you. Their tasks leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
+task for you in General with one question on it. Their questions leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
 without an answer, they come back as they were. A merged item counts toward the 5 a day.
 
 After 10 recoveries in a row approved with its pick unchanged, the Monday note offers **Acts on its own** once, and at most once
@@ -354,27 +354,27 @@ from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to ac
 - The Strategy Bot reads every goal and KPI, writes readings and the automatic colours, records check-ins, and proposes. It
   cannot set a colour by hand, edit a goal, create or link a KPI, change a definition or a target, or archive a KPI.
 
-## `hub` and the API
+## `tico` and the API
 
 ```
-hub goal list [--owner X] [--all]              hub kpi list [--goal ID] [--owner X] [--unlinked] [--bot SLUG] [--archived]
-hub goal show <id>                         hub kpi show <id>
-                                             hub kpi archive <id> | restore <id>
-hub goal create / update [--bet ID]        hub kpi create "<name>" [--goal ID] [--definition ..] [--unit ..]
-hub goal status <id> <colour> "<why>"          [--direction ..] [--cadence ..] [--owner ..] [target flags]
-hub goal status <id> auto                         hub kpi update <id> [fields]
-hub goal refresh                           hub kpi link <goal> <kpi> [target flags]  |  hub kpi unlink <goal> <kpi>
-hub kpi update <id> --parent P --role R --stage S --loop NAME:STEP   sets the KPI view fields: tree, loops and journey
-hub goal checkin <id> "<words>"            hub kpi log <kpi> <value> ["<note>"] [--period-end D] [--evidence ..]
-hub goal checkin-list <id>                         [--quality ..] [--supersedes READING]
-hub goal needs-you                         hub kpi show <kpi> [--effective]
-hub proposal create | list | decide
+tico goal list [--owner X] [--all]              tico kpi list [--goal ID] [--owner X] [--unlinked] [--bot SLUG] [--archived]
+tico goal show <id>                         tico kpi show <id>
+                                             tico kpi archive <id> | restore <id>
+tico goal create / update [--bet ID]        tico kpi create "<name>" [--goal ID] [--definition ..] [--unit ..]
+tico goal status <id> <colour> "<why>"          [--direction ..] [--cadence ..] [--owner ..] [target flags]
+tico goal status <id> auto                         tico kpi update <id> [fields]
+tico goal refresh                           tico kpi link <goal> <kpi> [target flags]  |  tico kpi unlink <goal> <kpi>
+tico kpi update <id> --parent P --role R --stage S --loop NAME:STEP   sets the KPI view fields: tree, loops and journey
+tico goal checkin <id> "<words>"            tico kpi log <kpi> <value> ["<note>"] [--period-end D] [--evidence ..]
+tico goal checkin-list <id>                         [--quality ..] [--supersedes READING]
+tico goal needs-you                         tico kpi show <kpi> [--effective]
+tico proposal create | list | decide
 ```
 
 Target flags: `--baseline N --target N --deadline YYYY-MM-DD` (an improvement) or `--min N --max N` (a range). Every command
 has an MCP tool of the same meaning (`hub_goal_*`, `hub_kpi_*`, `hub_proposal_*`).
 
-Archived KPIs stay available in `hub kpi show <id>`, `hub kpi list --archived`, and the owner's **Archived KPIs** view. The active list,
+Archived KPIs stay available in `tico kpi show <id>`, `tico kpi list --archived`, and the owner's **Archived KPIs** view. The active list,
 Strategy Bot freshness checks and Needs you omit them. A goal panel keeps each archived KPI that the goal links to as one muted
 line, **Archived <date>, not counting**, with no colour. It shows at most three such lines, then **+N archived**. The goal
 tree's chips leave them out. Archive asks first and names each goal you can see that the KPI stops counting toward, done

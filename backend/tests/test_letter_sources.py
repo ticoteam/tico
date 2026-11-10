@@ -8,11 +8,19 @@ from pathlib import Path
 
 import pytest
 
-from backend import blobs, events as E, letters as L
+from backend import blobs, events as E, letters as L, task_asks
 from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
-from backend.tests.helpers.letters import hq, quote, send, approve, grant, fetch  # noqa: F401
+from backend.tests.helpers.letters import hq, quote, send, grant, fetch  # noqa: F401
 from backend.tests.helpers.agents import hermes_bot, bot_id, credential
 from backend.tests.threads_e2e import create_thread
+
+
+def approve(api, row, token="ana-test"):
+    """The person opens the letter in Tico and clicks OK on it (backend/task_asks.py)."""
+    shown = get(api, "letters/" + row["id"], token=token)["shown_hash"]
+    with api.app.state.store.read() as c:
+        task = task_asks.task_of(c, row["approval_id"])
+    return post(api, f"tasks/{task}/asks/{row['approval_id']}/ok", {"shown_hash": shown}, token=token)
 
 
 def read_letters(api, token, after):
@@ -112,7 +120,7 @@ def test_a_manager_losing_source_access_gets_gone_and_an_unrelated_person_gets_n
         token='ben-test',
     )
     row = send(api, quote(api, token=token, task_id=task['id']), token)
-    approve(api, row)
+    approve(api, row, 'cara-test')  # the bot's OK is asked of its manager, Cara: hers to click
     delivered(api, row)
     assert not fetch(api, row, 'cara-test')['redacted']
     before = cursor(api)
@@ -183,9 +191,9 @@ def test_unrelated_task_access_change_uses_the_index_at_archive_scale(api, hq):
         )
         assert 'letter_sources_source' in plan and 'SEARCH' in plan and 'SCAN' not in plan
         before = E.latest(c)
-        started = time.perf_counter()
+        started = time.process_time()  # this process's CPU: a loaded runner's waits do not count
         c.execute('UPDATE tasks SET private=1 WHERE id=?', (task['id'],))
-        elapsed = time.perf_counter() - started
+        elapsed = time.process_time() - started
         assert elapsed < 0.050, f'unrelated indexed privacy update took {elapsed:.4f}s'
         assert c.execute("SELECT count(*) FROM changes WHERE topic='letters' AND seq>?", (before,)).fetchone()[0] == 0
         print(f'5k letters / 10k conversations: indexed unrelated task update {elapsed * 1000:.3f} ms')

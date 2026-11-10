@@ -149,7 +149,7 @@ def _the_owners_card_for_the_proposal_was_filed_when_it_was_proposed_and_closed_
         assert not db.execute("SELECT 1 FROM goal_asks WHERE kind = 'proposal'").fetchone()
     assert row is not None
     owner, status, created, proposed, decided = row
-    assert owner == "human:ana" and status not in H.LIVE_STATUSES
+    assert owner == "human:ana" and status != "open"
     assert parse(proposed) <= parse(created) < parse(proposed) + timedelta(minutes=1)
     assert parse(created) > NOW - timedelta(days=2) and parse(decided) > parse(created)
 

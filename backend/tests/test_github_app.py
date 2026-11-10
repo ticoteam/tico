@@ -94,11 +94,9 @@ def test_manifest_asks_for_administration_unless_the_owner_unticks_it(api, gh):
     assert "administration" not in manifest(api, administration="false")["manifest"]["default_permissions"]
 
 
-def test_missing_repo_permission_raises_one_needs_you_item_and_finishes_when_granted(api, gh, monkeypatch):
-    """BotOps' create without Administration: a refusal naming a person, one owner task however often it is
-    retried, a Health alert, and the repository made (and the task closed) once GitHub reports the permission."""
-    from backend import repo_waits
-
+def test_missing_repo_permission_is_refused_with_both_fixes_and_botops_creates_it_once_granted(api, gh):
+    """BotOps' create without Administration: a refusal naming a person and both fixes, no task filed, the bot kept as
+    planned; once GitHub reports the permission, BotOps's next try makes the repository."""
     connect(api, administration="false")
     gh.permissions = {"administration": "read", "contents": "write", "metadata": "read"}
     gh.missing = {"bot-newbie"}
@@ -106,56 +104,23 @@ def test_missing_repo_permission_raises_one_needs_you_item_and_finishes_when_gra
     create = lambda: api.post(
         "/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test")
     )
-    # Nobody on the roster can change the app's permissions yet: no task, only the refusal and Health.
-    assert create().json()["error"]["needs_you_task"] is None
-    with api.app_state.store.transaction() as c:
-        c.execute(
-            "INSERT OR REPLACE INTO registry_metadata VALUES('owner',?)", (encode({"email": "ana@acme.example"}),)
-        )
-    first, again = create(), create()
-    for refused in (first, again):
+    with api.app_state.store.read() as c:
+        tasks = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+    for refused in (create(), create()):
         error = refused.json()["error"]
         assert refused.status_code == 409 and error["code"] == "github_permission_missing", refused.text
         assert error["detail"].startswith("A person must act")
         assert error["create_url"] == "https://github.com/new?owner=Acme&visibility=private&name=bot-newbie"
         assert error["permissions_url"] == "https://github.com/organizations/Acme/settings/apps/acme-tico/permissions"
-    assert first.json()["error"]["needs_you_task"] == again.json()["error"]["needs_you_task"]
     with api.app_state.store.read() as c:
-        tasks = c.execute("SELECT id,owner_id,status FROM tasks WHERE title LIKE 'Create Acme/bot-newbie%'").fetchall()
-        assert [tuple(t)[1:] for t in tasks] == [("human:ana", "open")]
+        assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == tasks
         assert H.bot(c, "newbie")["state"] == "planned"
-    needs = api.get("/api/v2/needs-you", headers=auth()).json()
-    assert [i["id"] for i in needs["items"] if i["id"] == tasks[0]["id"]] == [tasks[0]["id"]]
-    health = {x["id"]: x for x in api.get("/api/v2/health", headers=auth()).json()["checks"]}
-    alert = health["github_repo_create"]
-    assert alert["label"] == "GitHub can't create bot repositories" and "Acme/bot-newbie" in alert["summary"]
-    assert {f["href"] for f in alert["fixes"]} >= {error["create_url"], error["permissions_url"]}
-    assert "github_repo_create" not in {
-        x["id"] for x in api.get("/api/v2/health", headers=auth("person-test")).json()["checks"]
-    }
-
-    assert repo_waits.resume(api.app_state.github_app) == {}  # nothing changed on GitHub yet
     assert not gh.created_repositories
-    # Another waiting bot whose check fails unexpectedly does not hold this one up.
-    with api.app_state.store.transaction() as c:
-        every = repo_waits.waits(c)
-        repo_waits._save(c, repo_waits.KEY, {**every, "cpo": {"repository": "Acme/bot-cpo", "task_id": None}})
-    service, mint = api.app_state.github_app, api.app_state.github_app.mint
-
-    def flaky(repos, *a, **k):
-        if repos == ["Acme/bot-cpo"]:
-            raise httpx.ConnectError("synthetic")
-        return mint(repos, *a, **k)
-
-    monkeypatch.setattr(service, "mint", flaky)
     gh.permissions = {"administration": "write", "contents": "write", "metadata": "read"}
     checked = api.post("/api/v2/github/app/check-permissions", json={}, headers=auth())
     assert checked.status_code == 200 and checked.json()["administration"] is True, checked.text
-    assert list(checked.json()["resumed"]) == ["newbie"] and [w["bot"] for w in checked.json()["waiting"]] == ["cpo"]
-    assert gh.created_repositories == {"Acme/bot-newbie"}
-    with api.app_state.store.read() as c:
-        assert c.execute("SELECT status FROM tasks WHERE id=?", (tasks[0]["id"],)).fetchone()[0] == "closed"
-    assert "github_repo_create" not in {x["id"] for x in api.get("/api/v2/health", headers=auth()).json()["checks"]}
+    made = create()
+    assert made.status_code == 200 and gh.created_repositories == {"Acme/bot-newbie"}, made.text
 
 
 def test_state_is_single_use_and_bound_to_session(api, gh):
@@ -998,7 +963,7 @@ def test_a_new_bot_goes_live_first_on_the_computer_that_built_it(api, gh):
     assert refused.status_code == 409, refused.text
     error = refused.json()["error"]
     assert error["code"] == "history_elsewhere"
-    assert "built on mac" in error["detail"] and 'hub bot go-live newbie --computer "mac"' in error["detail"]
+    assert "built on mac" in error["detail"] and 'tico bot go-live newbie --computer "mac"' in error["detail"]
     assert not _placed(api)
     waiting = _go_live(api)
     assert waiting.status_code == 202 and waiting.json()["computer"] == "mac", waiting.text
@@ -1283,9 +1248,7 @@ def test_an_expired_user_token_is_refreshed_once_and_its_rotated_refresh_token_i
         assert service._open_user(c, service._user_token_row(c)) == {"access_token": "gho_2", "refresh_token": "ghr_2"}
 
 
-def test_a_refused_refresh_forgets_the_authorization_and_the_next_authorization_finishes_the_waiting_bot(api, gh):
-    from backend import repo_waits
-
+def test_a_refused_refresh_forgets_the_authorization_and_the_next_authorization_lets_botops_create_it(api, gh):
     personal(gh, "ana-dev")
     connect(api, org="ana-dev")
     authorize(api)
@@ -1301,12 +1264,10 @@ def test_a_refused_refresh_forgets_the_authorization_and_the_next_authorization_
     assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is False
     with api.app_state.store.read() as c:
         assert c.execute("SELECT count(*) FROM github_user_token").fetchone()[0] == 0
-        assert "newbie" in repo_waits.waits(c)
     gh.refuse_refresh = False
-    authorize(api)  # the owner authorizes again: the waiting bot's empty repository is made in the account now
-    assert "ana-dev/bot-newbie" in gh.created_repositories
-    with api.app_state.store.read() as c:
-        assert "newbie" not in repo_waits.waits(c)
+    authorize(api)  # the owner authorizes again: BotOps's next try makes the empty repository in the account
+    again = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
+    assert again.status_code == 200 and "ana-dev/bot-newbie" in gh.created_repositories, again.text
 
 
 def test_a_personal_product_repository_needs_the_authorization_and_is_made_with_the_owners_token(api, gh):
@@ -1452,8 +1413,6 @@ def test_tokens_never_reach_events_logs_or_the_status(api, gh, caplog):
 
 
 def test_a_refresh_github_cannot_answer_is_retryable_and_forgets_nothing(api, gh):
-    from backend import repo_waits
-
     personal(gh, "ana-dev")
     connect(api, org="ana-dev")
     authorize(api)
@@ -1471,8 +1430,7 @@ def test_a_refresh_github_cannot_answer_is_retryable_and_forgets_nothing(api, gh
     assert down.status_code == 502 and down.json()["error"]["code"] == "github_unreachable", down.text
     assert api.get("/api/v2/github/app", headers=auth()).json()["authorized"] is True, "an outage forgets nothing"
     with api.app_state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == tasks, "no Needs-you task for an outage"
-        assert "newbie" not in repo_waits.waits(c)
+        assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == tasks, "no task for an outage"
         assert not c.execute("SELECT 1 FROM events WHERE action='github.user_authorization_lost'").fetchone()
     gh.refresh_status = None
     made = create()
@@ -1658,8 +1616,6 @@ def test_the_user_token_migration_makes_its_two_tables_and_runs_again_safely():
 
 
 def test_links_follow_the_kind_of_account_everywhere_they_are_built():
-    from backend import repo_waits
-
     organization = {"slug": "acme-tico", "org": "Acme", "account_type": "Organization"}
     personal_row = {"slug": "acme-tico", "org": "ana-dev", "account_type": "User"}
     assert G.links(organization) == {
@@ -1674,8 +1630,8 @@ def test_links_follow_the_kind_of_account_everywhere_they_are_built():
         "install_url": "/api/v2/github/app/install",
         "uninstall_url": "https://github.com/settings/installations",
     }
-    assert repo_waits.permissions_url(None, personal_row) == G.links(personal_row)["permissions_url"]
-    assert repo_waits.permissions_url(None, {**personal_row, "account_type": "Organization"}) == (
+    assert G.fixes(None, personal_row)["permissions_url"] == G.links(personal_row)["permissions_url"]
+    assert G.fixes(None, {**personal_row, "account_type": "Organization"})["permissions_url"] == (
         "https://github.com/organizations/ana-dev/settings/apps/acme-tico/permissions"
     )
 

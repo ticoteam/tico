@@ -8,7 +8,7 @@ spokesperson briefing and a plan, every outbound item ready to act on.
 
 ## 1. Find the story
 
-    hub task show <id>
+    tico task show <id>
 
 Ask what is actually new and who it matters to. A feature is rarely news; a number, a trend the
 team can show with its own data, a customer outcome or a first often is. Write the angle in one
@@ -17,7 +17,7 @@ sentence. If there is no story for press, say so and suggest the team's own chan
 ## 2. Check the rules
 
 Read `knowledge/rules.md`: what may be named, who may speak, what must wait. Anything not cleared is
-marked "needs clearance" and a question goes to the owner with `hub task question "<question>" --on <person> --parent <id>`.
+marked "needs clearance" and a question goes to the owner with `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## 3. Write the release
 
@@ -42,4 +42,4 @@ what not to discuss, numbers they may use.
 
 ## 6. Put it up for review
 
-On the task: the pack, the send plan (who, when, one follow-up after two business days). Send requested pitches with their recipients and text, and publish requested releases, with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts. `hub task update <id> --status done --note`.
+On the task: the pack, the send plan (who, when, one follow-up after two business days). Send requested pitches with their recipients and text, and publish requested releases, with your Tools when a person has turned mail sending on in Tico; otherwise keep drafts. `tico task done <id> -m "..." --version N`.

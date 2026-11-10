@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""`hub`: the company hub's CLI. See docs/history/hub-v2.md §5 and clients/hubcli.py.
+"""`hub`: the old name of `tico`, the teamwork CLI (clients/hubcli.py). The same CLI, kept as a silent alias through
+0.6.x; scripts/tico runs this file for every teamwork word.
 
-Resolves the hub checkout from its own path, so the symlink in ~/.local/bin works from
-anywhere and a second checkout uses its own clients/.
+Resolves the checkout from its own path, so a symlink to it works from anywhere and a second checkout uses its own
+clients/.
 """
 import sys
 from pathlib import Path

@@ -8,11 +8,11 @@ month's numbers, and the routine checked.
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub market segment tree
-    hub strategy show --section serve
-    hub goal list --all
-    hub growth channel list
+    tico task show <id>
+    tico market segment tree
+    tico strategy show --section serve
+    tico goal list --all
+    tico growth channel list
 
 Find the segment named in your title in the tree. Note whether the Strategy page marks it Us (served now) or Next (not
 served yet), any goal that names this segment, and the channels already spending on it. Do not ask what these already say.
@@ -28,10 +28,10 @@ change a channel or send copy. Nothing is filed or changed during setup.
 Numbered, each with its one-line why. Offer a default so a human can answer "fine".
 
 1. Which customer segment do you own, and how is a customer counted in it? (Default: the segment named in your title.)
-2. Which goal does this segment serve, and what are its new customers per month, its floor and its cost per customer ceiling? (Default: the goal `hub goal list --all` names for it, with its KPI's target; if there is none, say so.)
-3. What is this segment's monthly budget, and which channels may spend on it? (Default: the channels in `hub growth channel list` that already spend on it, with the budget the Growth Team Manager (`growth-team-manager`) sets.)
+2. Which goal does this segment serve, and what are its new customers per month, its floor and its cost per customer ceiling? (Default: the goal `tico goal list --all` names for it, with its KPI's target; if there is none, say so.)
+3. What is this segment's monthly budget, and which channels may spend on it? (Default: the channels in `tico growth channel list` that already spend on it, with the budget the Growth Team Manager (`growth-team-manager`) sets.)
 4. Where do this segment's sign-ups and customers come from, and who sends the monthly export? (Default: the sign-up export on the task, and the segment field in the CRM where it is connected.)
-5. Which claims may this segment's copy make, and who reads the weekly review? (Default: `hub brand show --section claims`, with the Brand Owner for new claims; the Growth Team Manager (`growth-team-manager`), Tuesdays at 09:00.)
+5. Which claims may this segment's copy make, and who reads the weekly review? (Default: `tico brand show --section claims`, with the Brand Owner for new claims; the Growth Team Manager (`growth-team-manager`), Tuesdays at 09:00.)
 
 ## 4. Record
 
@@ -48,12 +48,12 @@ File no ask and no idea. If a month's cohort rows or the export are missing, say
 
 ## 6. Check the routine
 
-Setup switched your routine on. Check it with `hub automation list` (if it shows
-off, `hub automation update <id> --enable`) and tell the human in one line what it does: "I will review this segment
+Setup switched your routine on. Check it with `tico automation list` (if it shows
+off, `tico automation update <id> --enable`) and tell the human in one line what it does: "I will review this segment
 each Tuesday at 09:00 from Tico's growth numbers and file ideas for the Monday growth meeting." They can change it or
 turn it off at any time. Nothing needs approval.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. Last, once the answers and the first review
 are recorded, and not before, run:
 
-    hub bot setup-done
+    tico bot setup-done

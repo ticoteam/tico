@@ -21,7 +21,7 @@ the top of the board and gets one today (`playbooks/plan-a-new-customer.md`).
 
 ## 2. Read the evidence of progress
 
-For each customer: `hub meeting search "<customer>"`, `hub task list` for tasks naming them, support tickets routed to Tico, and a
+For each customer: `tico meeting search "<customer>"`, `tico task list` for tasks naming them, support tickets routed to Tico, and a
 usage reading if one is in your access. Log each dated fact in the plan's progress log. A milestone is done only with evidence.
 
 ## 3. Sort
@@ -39,6 +39,6 @@ write the exact text (under 120 words, one clear ask, their goal in the first li
 ## 5. Write and hand over
 
 Write `reports/YYYY-MM-DD-onboarding-board.md` in the shape of `knowledge/examples/onboarding-board.md`, then
-`hub file publish reports/YYYY-MM-DD-onboarding-board.md`. Put the messages on the task as separate items so each can be checked on
+`tico file publish reports/YYYY-MM-DD-onboarding-board.md`. Put the messages on the task as separate items so each can be checked on
 its own. A customer who reached go-live gets a handover task to `customer-success`. Commit, then
-`hub task update <id> --status done --note "..."` with the counts and the path.
+`tico task done <id> -m "..." --version N` with the counts and the path.

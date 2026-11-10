@@ -6,7 +6,7 @@
 // The Goals page is one tree: the team, then every human and bot as the team chart nests them,
 // one line each with their goal (ui/goals-kpis.ts draws it and the panel a tap opens). A goal's level
 // comes from its owner: `company`, a human or a bot. Its parent is optional ("Supports"); a goal with
-// none is simply not linked. A bot reads its own with `hub goal list`; nothing here is pushed into a run.
+// none is simply not linked. A bot reads its own with `tico goal list`; nothing here is pushed into a run.
 /** The Goals page's state (pageGoals): the tree's data, what needs the person, and the open panel (ui/goals-kpis.ts). */
 interface GoalsState extends GkState<GkPanel | null> { owners: Record<string, unknown>; open: string }
 /** A to-do on the Goals page as the server sends it: GkNeed plus the owner fields the built-in-bot filter reads. */

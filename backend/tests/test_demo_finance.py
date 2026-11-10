@@ -1,6 +1,6 @@
 """Demo finance: Tico's own books balance, show the previous full month and this month to date by default, and carry the
-budgets, invoices, bills and rules the demo tells. The bookkeeper's books view is granted and its first rule proposal
-approved before the build, so nothing about them is waiting in Ana's queue.
+budgets, invoices, bills and rules the demo tells. The bookkeeper's books view is granted before the build, and its first
+rule proposal waits for Ana's OK.
 
 The demo is built early in a month. Finance reads its default month from its clock, so the test pins that clock to the
 build's moment, as the demo is shown the day it is built. The checks live in helpers/demo_finance.py (CHECKS), and

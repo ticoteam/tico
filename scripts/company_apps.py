@@ -3,6 +3,8 @@
 
 TICO_COMPANY_APPS is supplied through a private Actions secret, never a source file.
 --dry-run validates and reports hashes without network access or printing private values.
+A prerelease tag (v0.6.0-rc.1) builds and publishes no company app: `matrix` lists none and `publish` refuses, so a
+company's installed apps never move to a release its server is not on.
 """
 
 import argparse
@@ -155,6 +157,12 @@ def parse(raw):
         seen.add(entry["slug"])
         ids.add(entry["id"])
     return entries
+
+
+def prerelease(ref):
+    """Whether a ref is a semver prerelease tag (v0.6.0-rc.1, v1.2.0-beta), which release.yml publishes as a GitHub
+    prerelease. A branch name with a '-' in it is not one."""
+    return re.fullmatch(r"v?[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.-]+(?:\+[0-9A-Za-z.-]+)?", str(ref or "")) is not None
 
 
 def key(entry):
@@ -337,6 +345,9 @@ def main(argv=None):
                 print("::warning::Company entries without a slug cannot be built", file=sys.stderr)
                 if not usable:
                     raise Invalid("Each company needs a slug")
+            if prerelease(os.environ.get("GITHUB_REF_NAME")):
+                print("::notice::A prerelease builds no company app", file=sys.stderr)
+                usable = []
             value = json.dumps(
                 {"include": [{"company": k} for k in dict.fromkeys(key(e) for e in usable)]}, separators=(",", ":")
             )
@@ -409,6 +420,8 @@ def main(argv=None):
                 )
         else:
             stage = "publish"
+            if prerelease(required_env("GITHUB_REF_NAME")):
+                raise Invalid("A prerelease never publishes a company app")
             if __package__:
                 from .app_release import main as release
             else:

@@ -1,4 +1,4 @@
-"""A thread tied to a task leaves Threads and Catch up when the task is done, closed or declined, and comes back when the
+"""A thread tied to a task leaves Threads and Catch up when the task is done or closed, and comes back when the
 task reopens or someone posts in it again (a close's own notice does not count); it stays readable. An archived thread
 leaves both at once, comes back when unarchived, and only a manager archives. Fictional people only: ana (owner), ben
 and cara (humans)."""
@@ -13,7 +13,7 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend.tests.helpers.api import headers  # noqa: F401
 from backend.tests.test_thread_rail import ids, listed, new_thread, post_as, private_ref, say
 
-FINISHES = ({"status": "done"}, {"status": "declined"}, {"close": True})
+FINISHES = ({"status": "done"}, {"status": "closed"})
 
 
 def make_task(api, title="Ship pricing", owner="human:ben"):
@@ -25,10 +25,17 @@ def make_task(api, title="Ship pricing", owner="human:ben"):
 
 
 def change_task(api, task, body, token="ana-test"):
-    """A change to the task at the version it was last read at; returns the task as the server now holds it."""
-    response = api.post(
-        f"/api/v2/tasks/{task['id']}", json={"version": task["version"], **body}, headers=headers(token)
-    )
+    """A change to the task at the version it was last read at; returns the task as the server now holds it. A
+    `status` is a move: done by /done, closed and open (a reopen) by /move."""
+    status = body.get("status")
+    if status == "done":
+        path, body = f"/api/v2/tasks/{task['id']}/done", {"version": task["version"]}
+    elif status in ("closed", "open"):
+        to = "closed" if status == "closed" else "reopen"
+        path, body = f"/api/v2/tasks/{task['id']}/move", {"to": to, "why": "Plans changed.", "version": task["version"]}
+    else:
+        path, body = f"/api/v2/tasks/{task['id']}", {"version": task["version"], **body}
+    response = api.post(path, json=body, headers=headers(token))
     assert response.status_code == 200, response.text
     return response.json().get("task", response.json())
 
@@ -71,7 +78,7 @@ def test_a_thread_on_an_open_task_shows_in_threads_and_catch_up(api):
     assert shows(api, thread["id"]) == (True, True)
 
 
-def test_a_thread_on_a_task_that_is_done_closed_or_declined_leaves_threads_and_catch_up(api):
+def test_a_thread_on_a_task_that_is_done_or_closed_leaves_threads_and_catch_up(api):
     for number, finish in enumerate(FINISHES):
         task = make_task(api, title=f"Finish {number}")
         thread = task_thread(api, task, title=f"Pricing {number}")
@@ -111,17 +118,12 @@ def test_a_post_before_the_task_closed_does_not_bring_its_thread_back(api):
     assert shows(api, thread["id"]) == (False, False)
 
 
-def test_the_close_notice_in_the_tasks_own_thread_does_not_bring_it_back(api):
+def test_finishing_a_task_writes_nothing_that_brings_its_own_thread_back(api):
     task = make_task(api)
     conversation = task["conversation_id"]
     say(api, conversation, "Update from Ana")
     assert shows(api, conversation)[1] is True
     change_task(api, task, {"status": "done"})
-    with api.app.state.store.read() as c:
-        notices = c.execute(
-            "SELECT COUNT(*) FROM messages WHERE conversation_id=? AND kind='notice'", (conversation,)
-        ).fetchone()[0]
-    assert notices >= 1  # the close did write its notice into the thread
     assert shows(api, conversation)[1] is False
 
 

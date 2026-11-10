@@ -12,7 +12,7 @@ starts the conversation.
   | SERVER (Docker)                             |
   | Caddy or Cloudflare Tunnel -> Tico server   |
   | SQLite + Litestream backups, files          |
-  | tasks, chats, approvals, routines, humans   |
+  | tasks, chats, routines, humans              |
   | optional updater                            |
   | runs NO bots; sends questions to the        |
   | decision provider, when that is on          |
@@ -38,7 +38,7 @@ starts the conversation.
 
 | Where | What |
 |---|---|
-| Server | The web app and API, sign-in, the human roster, tasks, chats, approvals, the routine scheduler (the clock), files, the credential store, Litestream backups, and the optional updater. |
+| Server | The web app and API, sign-in, the human roster, tasks, chats, the routine scheduler (the clock), files, the credential store, Litestream backups, and the optional updater. |
 | Each computer | The runner, the harnesses installed on it, the workspace with one `bot-<slug>` git repository per bot, Credentials delivered for active runs, and local model logins. |
 | Model providers | Bots reach them from computers, using that computer's logins. The server reaches only the decision provider, when decisions or Slack routing are on. |
 | GitHub | Reached from computers with short-lived tokens the server mints per bot. |
@@ -59,10 +59,10 @@ installed on a computer when a bot there needs one; the server does not need to 
 4. The runner asks the server for a scoped GitHub token if needed and starts the harness inside
    the bot's repository.
 5. The harness talks to the model provider directly, using the login on that computer, and uses tools
-   (`hub` commands, git, shell) to do the work.
-6. The runner streams progress and the reply back to the server; approvals pause the run until a human
-   answers. The bot commits what it learned to its repository.
-7. The server records the result and notifies the humans involved.
+   (`tico` commands, git, shell) to do the work.
+6. The runner streams progress and the reply back to the server. A bot that needs a person asks on the task and its
+   run ends; the answer wakes it again. The bot commits what it learned to its repository.
+7. The server records the result. What needs a person is in their Needs you.
 
 If the computer is asleep or offline, the server keeps accepting work and shows the computer as
 offline; the work waits and runs when it returns.

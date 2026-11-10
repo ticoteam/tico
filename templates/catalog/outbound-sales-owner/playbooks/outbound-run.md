@@ -9,7 +9,7 @@ unless a task asks for it.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/outbound-method.md`, `knowledge/do-not-contact.md`, `knowledge/sequences.md` (who is at which step), and
 yesterday's run note.
@@ -40,7 +40,7 @@ and `knowledge/sequences.md` records why.
 
 For each contact whose next step is due today, follow `skills/write-a-personal-first-line/SKILL.md`, add this touch's new reason
 (a fact, an answer or a smaller ask), and keep the touch under 100 words. Check it against `knowledge/voice.md`, and run
-`hub brand check -` on it. Put on the task: the recipient, the subject, the body, the source and date of the first line, and the
+`tico brand check -` on it. Put on the task: the recipient, the subject, the body, the source and date of the first line, and the
 step number. Respect the day's cap in `knowledge/outbound-method.md`.
 
 ## 5. Check and record today's new contacts
@@ -52,10 +52,10 @@ with its first touch. Enrolling it in a live sequence is a send act: it waits fo
 ## 6. Hand over meetings
 
 For each meeting booked: write a short note on the account (who, the role, the first line that worked, what they asked, the open
-questions), then `hub task create --owner <who takes calls> --title "<account> meeting booked" --body-file <note>`. The calendar invitation is a
+questions), then `tico task create --owner <who takes calls> --title "<account> meeting booked" --body-file <note>`. The calendar invitation is a
 person's act.
 
 ## 7. Finish
 
-Write the run note on the routine's task, commit, and run `hub task update <id> --status done --note`. A quiet day finishes with the
+Write the run note on the routine's task, commit, and run `tico task done <id> -m "..." --version N`. A quiet day finishes with the
 count of contacts still waiting and the oldest reply waiting on a person.

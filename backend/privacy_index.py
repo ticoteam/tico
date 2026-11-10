@@ -163,7 +163,7 @@ class ReadIndex:
             for aid, mid in self.c.execute("SELECT attempt_id,message_id FROM attempt_inputs"):
                 if aid in rows:
                     rows[aid]["messages"].append(mid)
-            for tid, aid in self.c.execute("SELECT id,carried_by FROM tasks WHERE carried_by IS NOT NULL"):
+            for aid, tid in self.c.execute("SELECT id,task_id FROM attempts WHERE task_id IS NOT NULL"):
                 if aid in rows and tid in self.private:
                     rows[aid]["tasks"].add(tid)
             for aid, detail in self.c.execute(
@@ -182,7 +182,7 @@ class ReadIndex:
         ).fetchone()
         if not row:
             return set()
-        ids = {r[0] for r in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)) if r[0] in self.private}
+        ids = {r[0] for r in self.c.execute(privacy.RUN_TASK_SQL, (aid,)) if r[0] in self.private}
         for (detail,) in self.c.execute(
             "SELECT detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)
         ):
@@ -260,7 +260,7 @@ class ReadIndex:
                 return False
         if not found:
             return None
-        if any(tid in self.denied for (tid,) in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,))):
+        if any(tid in self.denied for (tid,) in self.c.execute(privacy.RUN_TASK_SQL, (aid,))):
             return False
         for action, detail in self.c.execute(
             "SELECT action,detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ") AND target=?",
@@ -424,6 +424,11 @@ class ReadIndex:
 
     def event(self, target, actor, ts, detail):
         if not self.content(H._json(detail, {}) or {}) or not self.content(target):
+            return False
+        from . import task_asks
+
+        # An event about a bound OK reads only to the OK's parties (task_asks.party), whoever reads its task.
+        if task_asks.event_hidden(self.c, self.principals, target):
             return False
         if target in self.tags() and not self.tag(target, False):
             return False

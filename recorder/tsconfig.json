@@ -1,7 +1,9 @@
 {
+  "//": "The Recorder's Node scripts (tests/*.cts, ui/preview/shoot.mts) and their .d.ts files. The window's page scripts and bridge types (ui/app, ui/preview/*.ts, ui/types) are ui/tsconfig.json's: DOM, no Node.",
   "extends": "../tsconfig.node.json",
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"]
   },
-  "include": ["./**/*.cts", "./**/*.mts", "./**/*.d.ts", "./**/*.d.cts", "./**/*.d.mts"]
+  "include": ["./**/*.cts", "./**/*.mts", "./**/*.d.ts", "./**/*.d.cts", "./**/*.d.mts"],
+  "exclude": ["./ui/types", "./dist", "./target", "./node_modules"]
 }

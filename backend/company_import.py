@@ -29,10 +29,8 @@ from . import kpis as K
 from . import market as MK
 from . import market_spend as MS
 from . import market_watch as MW
-from . import marketing_tasks as MT
 from . import models as M
 from . import onboarding as O
-from . import roadmap_flow as RF
 from . import strategy as S
 from . import strategy_setup as SS
 from .company_file import draft as D
@@ -47,6 +45,7 @@ FAILED_KEY = "onboarding.company_import_failed"
 # The built-ins the chart shows in a team rather than in the Built-in group: the Finance Owner is the Bookkeeper, in
 # Corporate. Every other built-in stays in the Built-in group whatever team a file names.
 IN_TEAM_BUILT_INS = ("bookkeeper",)
+SOFTWARE_DEPARTMENTS = ("product", "engineering")  # the default chart's seats a company that makes no software skips
 
 
 def plan(onboarding, c, who, text):
@@ -669,6 +668,7 @@ def apply(onboarding, c, who, text, fingerprint):
         "",
         {"fingerprint": fingerprint, "bots": sorted(body.selected), "seats": record["company_import"]["seats"]},
     )
+    onboarding.complete_company(c)  # what a start would complete, now that the chart's live bots exist
     return onboarding.view(c, who)
 
 
@@ -742,29 +742,21 @@ def lay_out_chart(onboarding, c, who, seats):
     return made, {key: seat["team"] for key, seat in chart.items()}
 
 
-# The task types every hub boots with (hubdb's General, roadmap_flow's two role types, marketing_tasks' Marketing). A
-# company with any other type has set its work up already.
-BOOT_TYPES = (H.GENERAL_TYPE, RF.PRODUCT, RF.ENGINEERING, MT.TYPE_ID)
 FINISHED_KEY = "new_company_finished"  # on the onboarding record: when the finish ran, so it never runs twice
 
 
 def new_company(c):
-    """Whether this company's work is still only what every hub boots with: no task type beyond BOOT_TYPES."""
-    marks = ",".join("?" * len(BOOT_TYPES))
-    return not c.execute("SELECT 1 FROM task_types WHERE id NOT IN (%s) LIMIT 1" % marks, BOOT_TYPES).fetchone()
+    """Whether this company's work is still only what every hub boots with: no pipeline beyond General."""
+    return not c.execute("SELECT 1 FROM pipelines WHERE id<>? LIMIT 1", (H.GENERAL_PIPELINE,)).fetchone()
 
 
 def finish_new_company(onboarding, c, who, seats, made, teams):
     """The finish every way a new company is set up shares (a company file, the setup page's chart, or no chart at all):
-    the chart's live seats get their bots (_go_live), then company_default's factories and pipelines with each one's
-    manager (_factory_setup). The boot's Marketing board stays: the Growth page and older growth templates still read it
-    (no manager, so the Task Manager covers it), while the Growth Team Manager files experiments in Growth Experiments.
-    Only for a new company (new_company), and once: a company already set up, or one finished before, is left as it is. True
-    when it ran."""
+    the chart's live seats get their bots (_go_live). Only for a new company (new_company), and once: a company already
+    set up, or one finished before, is left as it is. True when it ran."""
     if O.load(c).get(FINISHED_KEY) or not new_company(c):
         return False
     _go_live(onboarding, c, who, seats, made, teams)
-    _factory_setup(c, who, made)
     record = O.load(c)
     record[FINISHED_KEY] = H.now()
     onboarding._store(c, record, who.actor)
@@ -775,13 +767,20 @@ def default_chart(onboarding, c, home):
     """The chart a new company starts with when setup picked none: the chart formula's own default
     (backend/company_file/chart_formula.py: no segment or bet picked, the default channels), which is the chart the
     site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
-    install lacks is left out, and a seat under it reports to the owner. The Finance Owner's seat is filled by the
-    Bookkeeper, as on import."""
+    install lacks is left out, and a seat under it reports to the owner. A company that said software is not its
+    product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`). The
+    Finance Owner's seat is filled by the Bookkeeper, as on import."""
     from .company_file import chart_formula as F
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
-    display = O.display_names(onboarding.settings, O.load(c))
-    rows = [row for row in F.build({})["employees"] if row["template"] in cards]
+    record = O.load(c)
+    display = O.display_names(onboarding.settings, record)
+    no_software = record["answers"].get("software_product") == "no"
+    rows = [
+        row
+        for row in F.build({})["employees"]
+        if row["template"] in cards and not (no_software and row["department"] in SOFTWARE_DEPARTMENTS)
+    ]
     keys = {row["id"] for row in rows}
     seats = {}
     for row in rows:
@@ -800,53 +799,6 @@ def default_chart(onboarding, c, home):
             **({"fills": built_in} if built_in else {}),
         }
     return seats
-
-
-# The pipelines of company_default (backend/pipeline_setup.py) and what manages each: a bot by its slug, or a seat by its
-# chart key. A chart key that is not on the chart leaves its pipeline to the name match, as apply_factory_setup always did.
-FACTORY_BINDINGS = {
-    "Product": ("bot", "product-pipeline-manager"),
-    "Engineering": ("bot", "engineering-pipeline-manager"),
-    "Growth Experiments": ("seat", "growth-experiments-pipeline-manager"),
-    "Lead": ("seat", "lead-pipeline-manager"),
-    "Opportunity": ("seat", "opportunity-pipeline-manager"),
-    "Customer": ("seat", "customer-pipeline-manager"),
-    "Success Experiments": ("seat", "success-experiments-pipeline-manager"),
-    "Legal": ("seat", "legal-owner"),
-    "Finance": ("bot", "bookkeeper"),
-}
-
-
-def _factory_setup(c, who, made):
-    """The company's factories and pipelines, once the bots and seats exist: one call, with each pipeline's manager. A
-    bot is named by its slug (a live seat's bot is made under its chart key). Best effort, as onboarding's market task
-    is: a failure rolls back its own writes, is recorded, and the team stays set up. True when the pipelines were made."""
-    bindings = {}
-    for name, (kind, key) in FACTORY_BINDINGS.items():
-        if kind == "seat":
-            if key in made:
-                bindings[name] = {"seat": made[key]}
-        elif found := H.resolve_bot(c, key):
-            bindings[name] = {"bot": found["id"]}
-    c.execute("SAVEPOINT company_factories")
-    try:
-        from . import pipeline_setup
-
-        pipeline_setup.apply_factory_setup(
-            c,
-            who.actor,
-            preset="company_default",
-            bindings=bindings,
-        )
-    except Exception as err:  # noqa: BLE001 - best effort: setup never fails on the factories
-        c.execute("ROLLBACK TO company_factories")
-        c.execute("RELEASE company_factories")
-        H.event(
-            c, who.actor, "onboarding.pipelines_failed", "", {"error": str(err)[:200], "bindings": sorted(bindings)}
-        )
-        return False
-    c.execute("RELEASE company_factories")
-    return True
 
 
 def add_invitee(onboarding, c, who, key, email):

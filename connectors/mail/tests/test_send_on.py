@@ -177,7 +177,7 @@ class Cli(Stage2):
         )
         self.assertEqual(rc, 0, err)
         self.assertIn("answer.pdf (19 bytes)", out)
-        self.assertNotIn("hub approval request", out)
+        self.assertNotIn("tico approval request", out)
 
 
 class TeamDomains(Stage2):

@@ -1,6 +1,6 @@
 //! A turn's raw provider stream, both ways, for a bot whose `capture_stream` is on: every frame the runner
 //! wrote to the harness and every frame it read back, redacted with the running turns' secrets, capped at
-//! LIMIT bytes, and handed to the server when the turn ends (`hub run export --fixture`).
+//! LIMIT bytes, and handed to the server when the turn ends (`tico run export --fixture`).
 //!
 //! One record per line: `{"dir":"start","provider":..}` when a harness attaches (a fallback adds a second),
 //! then `{"dir":"out"|"in","ms":..,"frame":..}` with the frame as JSON when it parses and as text when not,

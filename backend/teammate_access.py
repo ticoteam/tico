@@ -513,8 +513,7 @@ def may_reply(c, viewer, target):
         return True
     return bool(
         c.execute(
-            "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status NOT IN "
-            "('done','closed','declined') LIMIT 1",
+            "SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND status='open' LIMIT 1",
             (other, actor),
         ).fetchone()
     )

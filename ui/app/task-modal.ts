@@ -2,7 +2,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// ---- the shapes this file reads: the task dialog (#task-modal or #task-peek) and what the page keeps on it, a task as the
+// ---- the shapes this file reads: the task dialog (#task-modal) and what the page keeps on it, a task as the
 // dialog draws it (a list row, or GET /v2/tasks/{id}'s task with its detail beside it), that detail, and its conversation.
 interface ModalLink { kind: string; id?: string; url?: string; title?: string | null; state?: string | null; detail?: string | null; }
 // What a session link's `detail` says (JSON): whose session it is, and the thread its resume command opens.
@@ -29,6 +29,10 @@ interface ModalTask extends TaskRow {
 // counters, the rail, the page cards' slot (ui/app/pages.ts) and the live edit (ui/app/task-live.ts).
 interface ModalDialog extends TfDialog {
   taskOpening?: {pending?: boolean};
+  /** Closed by a change of page (taskModalRouteClose): a task the new page opens is not cancelled by this close. */
+  routeClose?: boolean;
+  /** The task's own address (#/task/<id>) when it opened by it; closing leaves that address. */
+  address?: string;
   liveTask?: ModalTask | null;
   returnContext?: {route: string; task: string; opener: HTMLElement | SVGElement | null} | null;
   drawSeq?: number;
@@ -71,8 +75,7 @@ type ModalLine = {kind: 'comment'; ts: string; message: ModalComment} | ({kind: 
 interface ModalSteps { html: Map<string, string>; live: Map<string, string>; open: Set<string>; reading: Set<string>; }
 
 // ---- the task modal: one item, in full, with what you can do to it
-// The full task (#task-modal, a modal dialog) and the side peek (#task-peek, a dialog shown beside the list) draw the
-// same content and wire the same clicks.
+// The task's window (#task-modal, a modal dialog): its content and its clicks.
 function taskDialogWire(d: ModalDialog) {
   tfWire(d);
   // A link in the task to one of its files opens that file's tile; any other file link opens the viewer (viewer.js).
@@ -92,7 +95,7 @@ function taskDialogWire(d: ModalDialog) {
     d.tfEl = null; d.tfOpen = null;
     d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     taskLiveStop(d);
-    d.taskOpening = {}; d.askDrafts = new Map();
+    d.taskOpening = {};
   });
 }
 function taskModal(): ModalDialog {
@@ -103,9 +106,15 @@ function taskModal(): ModalDialog {
   d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
   taskDialogWire(d);
   d.addEventListener('close', () => {
+    const routed = d.routeClose; d.routeClose = false;
     if (d.open || d.taskOpening?.pending) return;
-    TASK_MODAL_LOAD++;
+    // A close by hand cancels an opening still on its way; a change of page cancels its own (taskModalOpen checks the
+    // route), and the next task's address opening now is not undone by the old one's queued close.
+    if (!routed) TASK_MODAL_LOAD++;
     document.body.classList.remove('task-modal-open');
+    // A task opened by its address (#/task/<id>) leaves it when it closes, so the address opens it again.
+    const address = d.address; d.address = '';
+    if (!routed && TASKS_ST && address && location.hash === address) tasksURLWrite(TASKS_ST);
     const back = d.returnContext; d.returnContext = null;
     if (!back) return;
     if (history.state?.taskModal && location.hash === back.route && !TASK_MODAL_BACK) { TASK_MODAL_BACK = true; history.back(); }
@@ -115,6 +124,13 @@ function taskModal(): ModalDialog {
   document.body.appendChild(d);
   return d;
 }
+// The router's close of the task window when the page changes (ui/app/router.ts).
+function taskModalRouteClose() {
+  const d: ModalDialog | null = $('#task-modal');
+  if (!d?.open) return;
+  d.routeClose = true;
+  d.close();
+}
 let TASK_MODAL_BACK = false;
 let TASK_MODAL_LOAD = 0;
 window.addEventListener('popstate', () => {
@@ -122,24 +138,12 @@ window.addEventListener('popstate', () => {
   const d = $('#task-modal');
   if (d?.open && d.returnContext && !history.state?.taskModal) d.close();
 });
-// `d` is the full modal unless a caller passes the peek.
-async function taskModalOpen(key: string, d?: ModalDialog) {
-  const state = TASKS_ST, from = S.route, load = ++TASK_MODAL_LOAD;
-  let it = (state?.tasks || []).map(taskItem).find(x => x.key === key);
-  if (!it && /^t/.test(key)) {
-    const detail = await v2Get(`/v2/tasks/${encodeURIComponent(key.slice(1))}`);
-    if (S.route !== from || load !== TASK_MODAL_LOAD) return;
-    if (detail?.task) it = taskItem(detail.task);
-  }
-  if (!it) return;
-  if (it.kind === 'schedule') {
-    const d = taskModal(); taskLiveStop(d);
-    d.innerHTML = `<h2>${esc(it.title)}</h2><p>Scheduled for ${esc(fmt(it.schedule!.next))}</p><button data-modal-close>Close</button>`;
-    $('[data-modal-close]', d).onclick = () => d.close();
-    if (!d.open) d.showModal();
-    return;
-  }
-  taskModalShow(it.task, d);
+// Opens a task by its id in the task's window.
+async function taskModalOpen(id: string, d?: ModalDialog) {
+  const from = S.route, load = ++TASK_MODAL_LOAD;
+  const detail: ModalDetail | null = await v2Get(`/v2/tasks/${encodeURIComponent(id)}`);
+  if (S.route !== from || load !== TASK_MODAL_LOAD || !detail?.task) return;
+  void taskModalShow(detail.task, d, {detail});
 }
 // The runs section drawn for the open task, held across a redraw of that task (taskModalShow).
 const taskModalRuns = new WeakMap<ModalDialog, HTMLElement>();
@@ -147,19 +151,19 @@ function taskModalRunsKeep(d: ModalDialog, keep: TaskChatState | null) {
   const runs = keep && $('[data-task-runs]', d);
   if (runs) { runs.dataset.task = String(d.dataset.task); taskModalRuns.set(d, runs); } else taskModalRuns.delete(d);
 }
-// The one way a hub task opens in full: from the board, from a link, from a chat card. In the peek it opens beside the list.
+// The one way a task opens in full: from a list, from a link, from a chat card.
 // `opts.thread`: just the task's own conversation, as a bot's chat opens it (taskThreadShow); Details shows the rest.
 async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts: {thread?: boolean; detail?: ModalDetail} = {}) {
   TASK_MODAL_LOAD++;
   if (!d) d = taskModal();
-  const peek = !!d.dataset.peek, sameTask = d.open && String(d.dataset.task) === String(task.id);
+  const sameTask = d.open && String(d.dataset.task) === String(task.id);
   // A fresh open starts with no file open, whether or not the last close's event has run yet.
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
     taskLiveStop(d);
     d.tpOff?.(); d.tpOff = null; d.tpEl = null;
-    d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
-    d.classList.toggle('thread', !peek && !!opts.thread);     // a redraw of the same task keeps the view it had
-  } else askDraftCapture(d);
+    d.taskOpening = {pending: !d.open}; d.tfEl = null; d.tfOpen = null;
+    d.classList.toggle('thread', !!opts.thread);     // a redraw of the same task keeps the view it had
+  }
   const opening = d.taskOpening, scroll = opts.detail && d.open ? d.scrollTop : 0;
   // A redraw of the open task (a property saved, the task changed) keeps its conversation and its runs as they are, as
   // the files keep theirs (tfAdopt): the thread stays on screen, scrolled where it was, with what is typed in its box,
@@ -181,18 +185,15 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   // never draw an older copy of the task over the newer one a save returned
   else if (d.liveTask && Number(task.version) < Number(d.liveTask.version)) task = d.liveTask;
   const seq = d.drawSeq = (d.drawSeq || 0) + 1;
-  if (peek && TASKS_ST && TASKS_ST.peek !== 't' + task.id && tasksById(TASKS_ST).has(String(task.id))) {
-    taskPeekOpen(TASKS_ST, 't' + task.id, {via: 'link'}); return;   // a parent or subtask opened from the peek: the list follows it
-  }
   d.dataset.task = task.id;
   // a property that has the focus now keeps it through the redraw (over the one a save asked for)
   const onProp = d.contains(document.activeElement) && document.activeElement instanceof HTMLElement ? document.activeElement.dataset.prop : '';
   if (onProp) d.focusProp = onProp;
   // The detail is asked for at once; the first draw waits only for the CLI's manifest (session copy commands need it
   // even when Tasks is the first page opened), read once.
-  const reading = Promise.all([opts.detail || v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`), taskTypesLoad({cached: true}).catch(() => TASK_TYPES)]);
+  const reading = Promise.all([opts.detail || v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`)]);
   // A previous close's Back navigation must settle before a new dialog takes its place in history.
-  if (!peek && TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
+  if (TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
   await loadHarnessRows();
   if (d.drawSeq !== seq || d.taskOpening !== opening) return;
   if (!opening) return;
@@ -200,32 +201,29 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   taskModalRunsKeep(d, kept);
   taskLiveFocusKeep(d);
   const keptForm = sameTask ? taskFormCapture(d) : {fields: [], folds: []};
-  d.innerHTML = hubModalHTML(task, taskItem(task), {peek, thread: d.classList.contains('thread')});
-  void taskRequirementsLoad(d);
+  d.innerHTML = hubModalHTML(task, {thread: d.classList.contains('thread')});
   adopt(); taskFormAdopt(d, keptForm);
   taskModalBind(d, task);
   taskPropFocus(d); taskLiveFocusRestore(d); taskFormRestore(d, keptForm);
   if (!d.open) {
-    // The peek sits beside the list: opening it leaves the focus on the row, so ↑/↓ keep moving through the list.
     const was = document.activeElement as HTMLElement | SVGElement | null;
-    if (!peek && !TASKS_ST) {
+    const address = '#/task/' + encodeURIComponent(String(task.id));
+    d.address = location.hash === address ? address : '';
+    if (!TASKS_ST) {
       // Outside Tasks, Back dismisses the detail without rebuilding the bot's chat, tab or scroll position.
       d.returnContext = {route: location.hash, task: String(task.id), opener: was};
       history.pushState({...(history.state || {}), taskModal: 1}, '');
     }
-    if (peek && matchMedia('(max-width:760px)').matches) d.showModal();     // a phone's sheet covers the list: modal
-    else if (peek) { d.show(); if (was && was !== document.body && was.isConnected) was.focus({preventScroll: true}); }
-    else d.showModal();
+    d.showModal();
     // Opening lands on the title, not on the first header button (a focus ring on "…" read as a stray highlight).
     if (d.open && d.matches(':modal')) $(d.classList.contains('thread') ? '.tthread-title' : '.tmodal-title', d)?.focus({preventScroll: true});
   }
-  if (!peek) document.body.classList.add('task-modal-open');
+  document.body.classList.add('task-modal-open');
   d.scrollTop = scroll;
   // the list knows the task; the detail adds its parts, its parent and the comments
   const [detail] = await reading;
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (!detail?.task) { d.close(); d.innerHTML = ''; TASK_DRAFTS.delete(String(task.id)); return; }
-  if (detail.task.open_asks) taskAsksRead(task.id);     // opening the task reads its questions to the viewer
   await taskMenuSettled(d);                 // never pull a menu out from under the pointer
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (d.liveTask && Number(detail.task.version) < Number(d.liveTask.version)) return;   // a save landed since this was asked for
@@ -238,12 +236,10 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   const keep = !a ? '' : a.matches('[data-modal-close]') ? '[data-modal-close]' : a.matches('[data-task-more]') ? '[data-task-more]' : a.matches('.tmodal-title') ? '.tmodal-title'
     : a.matches('[data-thread-back]') ? '[data-thread-back]' : a.matches('.tthread-title') ? '.tthread-title'
     : a instanceof HTMLElement && a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
-  askDraftCapture(d);
   taskModalRunsKeep(d, kept);
   taskLiveFocusKeep(d);
   const fullForm = taskFormCapture(d);
-  d.innerHTML = hubModalHTML(full, taskItem(full), {peek, thread: d.classList.contains('thread')});
-  void taskRequirementsLoad(d);
+  d.innerHTML = hubModalHTML(full, {thread: d.classList.contains('thread')});
   adopt(); taskFormAdopt(d, fullForm);
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});
@@ -282,7 +278,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   if (d.taskRail?.id !== String(task.id)) d.taskRail = {id: String(task.id), open: new Set()};
   if (full) d.taskRail.full = task;
   taskRailPaint(d, task); taskRailBind(d, task);
-  const dismiss = () => d.dataset.peek && TASKS_ST ? taskPeekClose(TASKS_ST) : d.close();
+  const dismiss = () => d.close();
   $('[data-modal-close]', d).onclick = dismiss;
   const back = $('[data-thread-back]', d), details = $('[data-thread-details]', d);
   if (back) back.onclick = dismiss;
@@ -293,12 +289,15 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   // Done and Close finish with the task: the window closes and the page behind it is where the person was.
   d.querySelectorAll<HTMLButtonElement>('[data-task-finish]').forEach(b => b.onclick = async () => {
     b.disabled = true;
-    const saved = await change(b.dataset.taskFinish === 'close' ? {close: true} : {status: 'done'}, false, 'status');
+    const saved = await change(b.dataset.taskFinish === 'close' ? {close: true} : {done: true}, false, 'stage');
     if (saved && d.open && String(d.dataset.task) === String(task.id)) dismiss();
     else b.disabled = false;
   });
   const unsnooze = $('[data-task-unsnooze]', d);
   if (unsnooze) unsnooze.onclick = () => change({unsnooze: true}, undefined, 'snooze');
+  const answer = $('[data-task-answer]', d);
+  if (answer) answer.onclick = () => decideOpen(String(answer.dataset.taskAnswer));
+  taskRequirementsBind(d, task, fresh => { if (d.open && String(d.dataset.task) === String(task.id)) { d.liveTask = fresh; void taskModalShow(fresh, d); } });
   taskPropsBind(d, task, change);
   roadmapTaskBind(d, task, change);
   const privacy = $('[data-task-private]', d);
@@ -318,7 +317,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
     try {
       await post(`/v2/tasks/${encodeURIComponent(task.id)}/links`, {url});
       const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       if (linkCurrent() && data.task) taskModalShow(data.task, d);
     } catch (e) { toast(errorMessage(e, ''), true); }
   };
@@ -353,10 +352,12 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   if (addRelated) addRelated.onclick = () => propMenu(d, addRelated, {label: 'Relation', items: TASK_REL_ADD.map(([kind, text]) => ({value: kind, text, html: `<span>${esc(text)}</span>`})),
     onPick: kind => setTimeout(async () => {
       const have = new Set(Object.values(task.relations || {}).flat().map(r => String(r.id)));
-      const rows = (await taskPropCandidates(task, kind.value)).filter(x => !have.has(String(x.id)));
+      const pick = (rows: PropCandidate[]) => rows.filter(x => !have.has(String(x.id))).map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
+        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`}));
+      const first = await taskPropCandidates(task);
       if (!addRelated.isConnected) return;
-      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: rows.map(x => ({value: x.id, text: `${x.title} ${actorLabel(x.owner_id)}`,
-        html: `${taskStatusText(x)}<span class="tl-mi-t">${esc(clipLine(x.title, 70))}</span><span class="tl-mi-sub">${esc(actorLabel(x.owner_id))}</span>`})),
+      propMenu(d, addRelated, {label: kind.text, find: 'Find a task', none: 'No open tasks', items: pick(first.rows),
+        ...(first.more ? {search: async (q: string) => pick((await taskPropCandidates(task, q)).rows)} : {}),
         onPick: it => taskRelate(d, task, {task: it.value, kind: kind.value})});
     }, 0)});
   d.querySelectorAll<HTMLElement>('[data-drop-rel]').forEach(b => b.onclick = () => {
@@ -474,13 +475,14 @@ function taskRunModelBind(d: ModalDialog, task: ModalTask) {
       const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
       if (saved.warning) toast(saved.warning);
       const data = await get(`/v2/tasks/${encodeURIComponent(id)}`);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       if (d.open && String(d.dataset.task) === id && data.task) void taskModalShow(data.task, d);
     } catch (e) { toast(errorMessage(e, ''), true); apply.disabled = same(); }
   };
 }
-const TASK_REL_ADD: [string, string][] = [['related', 'Related'], ['blocked_by', 'Blocked by'], ['blocks', 'Blocks'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of']];
-const TASK_REL_GROUPS: [string, string, string][] = [['blocks', 'in', 'Blocked by'], ['blocks', 'out', 'Blocks'], ['related', 'both', 'Related'], ['duplicate_of', 'out', 'Duplicate of'],
+// The relations backend/task_relations.py relate writes (a parent is fixed when the task is filed).
+const TASK_REL_ADD: [string, string][] = [['related', 'Related'], ['duplicate_of', 'Duplicate of'], ['follow_up', 'Follow-up of']];
+const TASK_REL_GROUPS: [string, string, string][] = [['related', 'both', 'Related'], ['duplicate_of', 'out', 'Duplicate of'],
   ['duplicate_of', 'in', 'Duplicated by'], ['follow_up', 'out', 'Follow-up of'], ['follow_up', 'in', 'Follow-ups']];
 // One relation added or taken off (POST /v2/tasks/{id}/relations), then the task redrawn. `on` is the task whose
 // endpoint takes it, when that is the other end.
@@ -488,7 +490,7 @@ async function taskRelate(d: ModalDialog, task: ModalTask, body: PropPatch, on =
   try {
     await post(`/v2/tasks/${encodeURIComponent(on)}/relations`, body);
     const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
   } catch (e) { toast(errorMessage(e, ''), true); }
 }
@@ -511,7 +513,7 @@ function taskRelHTML(t: ModalTask) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]): [string, string, string, TaskRelRow[]] => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
   const milestones = taskMilestoneHTML(t);
   return `<section class="tsec task-related${groups.length || milestones ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
-    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
+    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
 // quick second edit never trips over the first. The dialog redraws at once with the task the server sent back; the
@@ -522,7 +524,19 @@ function taskSaveQueued(d: ModalDialog, id: string, body: PropBody, then?: boole
   const run = () => taskSave(d, id, body, then, field).finally(() => { d.saving!--; });
   return (d.saveQueue = (d.saveQueue || Promise.resolve()).then(run, run));
 }
-async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then: boolean | undefined, field: string) {
+// One save, by what it asks (task-api.ts): a move ({move: to, why?}, {close}, {done}), a new owner, a snooze, or the
+// task's own fields. `quiet` with a move: a refusal for what is missing is answered (the caller asks why) instead of shown.
+async function taskSaveSend(cur: ModalTask, body: PropPatch, note: string): Promise<TaskV3> {
+  const id = String(cur.id), version = cur.version, why = typeof body.why === 'string' ? body.why : undefined;
+  if (typeof body.move === 'string') return (await taskMove(id, body.move, version, why)).task;
+  if (body.close) return (await taskMove(id, 'closed', version)).task;
+  if (body.done) return (await taskDone(id, version, note || undefined)).task;
+  if (typeof body.owner === 'string') return (await taskReassign(id, body.owner, version)).task;
+  if (typeof body.snooze === 'string') return (await taskSnooze(id, body.snooze, version)).task;
+  if (body.unsnooze) return (await taskUnsnooze(id)).task;
+  return taskEdit(id, version, body);
+}
+async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then: boolean | undefined, field: string): Promise<boolean | TaskRefused> {
   const here = () => d.open && String(d.dataset.task) === id;
   let cur = d.liveTask && String(d.liveTask.id) === id ? d.liveTask : null;
   if (!cur) cur = (await v2Get(`/v2/tasks/${encodeURIComponent(id)}`))?.task;
@@ -531,47 +545,31 @@ async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then:
   if (!body) return true;
   if (!d.propsErrs || d.propsErrs.id !== id) d.propsErrs = {id, map: new Map()};
   const errs = d.propsErrs.map;
-  let note = '';
+  const note = body.done ? taskOutcomeNote(cur, {}, TASK_DRAFTS.get(String(id))) : '';
+  const quiet = !!body.quiet;
   try {
-    const outcome = body.close ? 'closed' : pipelineActionStatus(cur, body);
-    if ((outcome === 'done' || outcome === 'closed') && outcome !== cur.status) {
-      note = taskOutcomeNote(cur, outcome === 'closed' ? {close: true} : body, TASK_DRAFTS.get(String(id)));
-      if (note) body = {...body, note};
-    }
-    const state = d.dataset.peek && TASKS_ST, key = 't' + id;
-    const at = state ? tasksVisibleKeys().indexOf(key) : -1;
-    const path = `/v2/tasks/${encodeURIComponent(id)}`;
-    const data = body.snooze ? await post(path + '/snooze', {until: body.snooze})
-      : body.unsnooze ? await post(path + '/unsnooze', {})
-      : await post(path, {version: cur.version, ...body});
-    taskOverCapWarn(cur, body, data);
+    const task = await taskSaveSend(cur, body, note);
     if (note) taskOutcomeTaken(cur);
     errs.delete(field);
-    if (data.task && String(d.liveTask?.id) === id) d.liveTask = data.task;
-    if (here() && then !== false && data.task) void taskModalShow(data.task, d);       // the server's answer, at once
-    if (BOT) void loadBotTasksV2(BOT.slug);
+    if (String(d.liveTask?.id) === id) d.liveTask = task;
+    if (here() && then !== false) void taskModalShow(task, d);       // the server's answer, at once
+    // Closing says so with Undo for a while (S5): Undo reopens it.
+    if (body.close) toast('Closed', false, {label: 'Undo', run: () => taskMove(id, 'reopen', task.version).then(r => { if (here()) void taskModalShow(r.task, d); }, e => toast(errorMessage(e, ''), true))});
+    if (BOT) void botTasksCatchUp(BOT.slug);
     void personTasksReload();
-    // The list reloads behind it. If the task left the view (done, closed, handed on, declined), the list and the
-    // peek move on to the next row: checked by whichever load lands last (a poll may overtake this one). Not for a
-    // task reached from inside the peek (a parent's subtask): its row's neighbour is some other task, and edits made
-    // after the save would land on it, so the peek stays on the task that was saved.
-    if (state && state.peekVia !== 'link') state.pendingFinish = {key, at, after: state.loadSeq};
-    // The list shows the saved task at once (a card moves to its new step); the load that follows brings the rest.
-    if (TASKS_ST && data.task && TASKS_ST.tasks?.some(x => String(x.id) === String(data.task.id))) {
-      TASKS_ST.tasks = mergeTaskRows(TASKS_ST.tasks, [data.task]);
-      tasksRender(TASKS_ST);
-    }
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     roadmapRankingRefresh();
     return true;
   } catch (e) {
+    const refused = taskRefusedOf(e);
+    if (quiet && refused?.missing.length) return refused;
     if (!here()) { toast(errorMessage(e, ''), true); return false; }
-    errs.set(field, errorStatus(e) === 409 ? 'Changed elsewhere. Showing the latest.' : `Not saved: ${errorMessage(e, 'refused')}`);
+    errs.set(field, refused?.error === 'task_changed' || errorStatus(e) === 409 && !refused?.detail ? 'Changed elsewhere. Showing the latest.'
+      : `Not saved: ${refused?.detail || errorMessage(e, 'refused')}`);
     const fresh = await v2Get(`/v2/tasks/${encodeURIComponent(id)}`);
     if (fresh?.task && here()) {
       d.liveTask = fresh.task;
       void taskModalShow(fresh.task, d);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
     } else taskPropsMsgPaint(d);
     return false;
   }
@@ -620,7 +618,14 @@ const commentAuthor = (a: string | null | undefined, via?: string | null, src: {
   const slug = actorSlug(a);
   return `${slug ? avatar(slug, 16, stateOf(slug)) : ''}<span class="who">${esc(actorLabel(a))}</span>`;
 };
-const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEvent) => string> = {step: id => id ? `moved it to ${pipelineStepName(id)}` : 'cleared the step', type: id => `set the type to ${TASK_TYPES.find(type => type.id === id)?.name || id}`, status: s => `moved it to ${STATUS_WORD[String(s)] || s}`, owner: v => `handed it to ${actorLabel(v)}`,
+// A stage's name by its id, from the pipelines the Tasks page has read; else the id.
+const taskStageWord = (id: string | null | undefined) => ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).flatMap(p => p.stages).find(st => st.id === id)?.name || String(id || '');
+// The pipelines' stage names a task's history names its moves by, read once when it has a move and the Tasks page has not read them.
+const taskStagesFor = async (data: ModalDetail | null | undefined) => {
+  if (!TASK_PIPELINES && data?.events?.some(e => e.field === 'move')) await tasksPipelinesRead().catch(() => []);
+};
+// A move (backend/task_engine.py) names the stage it went to; a reassign who has it now.
+const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEvent) => string> = {move: id => `moved it to ${taskStageWord(id)}`, reassign: v => `handed it to ${actorLabel(v)}`, status: s => `moved it to ${taskStatusLabel({status: s ?? null})}`, owner: v => `handed it to ${actorLabel(v)}`,
   lane: v => `moved it to the ${v === 'company' ? 'team' : v} lane`, labels: v => { try { const l = JSON.parse(v || '[]'); return l.length ? `set the tags: ${l.join(', ')}` : 'removed the tags'; } catch { return 'changed the tags'; } },
   blocked_by: v => v ? 'marked it blocked' : 'cleared the block', parent_id: v => v ? 'filed it under a parent task' : 'took it out of its parent',
   subtask: v => v ? 'added a subtask' : 'moved a subtask out', blocks: v => v ? 'made it block another task' : 'stopped it blocking a task',
@@ -628,14 +633,11 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   duplicated_by: v => v ? 'marked a duplicate of it' : 'unmarked a duplicate of it', follow_up_of: v => v ? 'marked it a follow-up' : 'unmarked it as a follow-up',
   follow_ups: v => v ? 'added a follow-up' : 'removed a follow-up',
   link: v => v ? `linked ${v}` : 'removed a link', file: (v, x) => v ? `added ${v}` : `removed ${x.old || 'a file'}`, due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
-  qa_waiver: v => { let w: {head?: string} = {}; try { w = JSON.parse(v || '{}'); } catch { /* an unreadable record still says what it is */ }
-    return `waived QA${w.head ? ` on ${String(w.head).slice(0, 7)}` : ''}: a waiver, not a QA pass`; },
-  verdict: v => `recorded the verdict ${v || 'none'}`,
   lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment'};
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
-function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '', canAnswer = true) {
+function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '') {
   if (x.kind === 'event') {
-    if (x.field === 'status' && x.old == null) return '';           // created: the header says so
+    if ((x.field === 'status' || (x.field === 'move' && !x.note)) && x.old == null) return '';   // created: the header says so
     // The type and first step a task is filed with are part of its creation too, not moves.
     if ((x.field === 'type' || x.field === 'step') && x.old == null
       && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
@@ -655,12 +657,10 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
     // A result mirrored into a comment keeps its full text there; the event still records the status move.
     const mirrored = x.note && all?.some(y => y.kind === 'comment' && y.message?.sender_id === x.actor
       && String(y.message.body || '').trim() === String(x.note).trim() && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 5000);
-    // A QA waiver is a person's decision, never a verdict: it keeps its own mark and its full reason.
-    const waived = x.field === 'qa_waiver' ? ' <span class="verdict-chip waived" data-qa-waiver>QA waived</span>' : '';
     const src = rowSource(x, x.actor), who = commentAuthor(x.actor, x.via, src);
     // A change the server made with no name to give it (a system line) reads as a sentence of its own.
     const said = who ? say : say.charAt(0).toUpperCase() + say.slice(1);
-    return `<div class="tcomment sys tmark${waived ? ' qa-waiver' : ''}">${who ? `<span class="tcomment-who">${who}</span>` : ''}${waived} <span class="muted">${esc(said)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(waived ? x.note : clipLine(x.note, 200))}` : ''}</span>
+    return `<div class="tcomment sys tmark">${who ? `<span class="tcomment-who">${who}</span>` : ''} <span class="muted">${esc(said)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(clipLine(x.note, 200))}` : ''}</span>
       <time class="muted tnum" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>`;
   }
   const m = x.message, ask = askOf(m);
@@ -680,7 +680,7 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
       <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
     <div class="bubble ${person ? 'you' : 'bot'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? `<div class="md">${safeMd(body)}</div>` : ''}
-    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.sender_id, taskId, files, canAnswer) : ''}${fbRowHTML(fb, m.body || '')}</div>${taskStepsHTML(m)}</div>`;
+    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id, files) : ''}${fbRowHTML(fb, m.body || '')}</div>${taskStepsHTML(m)}</div>`;
 }
 // A bot's work on this task stopped on an account (backend/reconnects.py): its one line, the fix for the person who
 // can make it, and Reconnected once it works. A missing secret's fix is its credential card (ui/credential-card.ts).
@@ -935,7 +935,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   }
   state.data = data;
   taskComposerToPaint(state);
-  // `can_comment`: false for someone who may read the task but not comment on it; they get no box and no answer controls
+  // `can_comment`: false for someone who may read the task but not comment on it; they get no box
   const can = data.can_comment !== false, d = state.dialog;
   $('form', host).hidden = !can;
   if (d.canComment !== can) { d.canComment = can; if (d.tfEl) tfPaint(d); }
@@ -948,19 +948,17 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
   // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.ts sourceRunsHTML).
-  const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id, can));
+  const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id));
   const isUpdate = (x: ModalLine) => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
   state.openLines ||= new Set();
   const html = (sourceRunsHTML(said, {isUpdate, open: (run: ModalLine[]) => run.some(x => state.openLines!.has(x.message!.id)),
-    line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id, can), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id, can)}) || '<p class="muted">Nothing said yet.</p>') + wait;
+    line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id)}) || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
-  if (!can) d.askDrafts?.clear();
-  if (can && askBusy(thread)) return;     // never under someone answering
   if (html !== state.rendered) {
     // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.ts).
     const stick = stickScroll(thread);
     if (!state.rendered) stick.toBottom();
-    stick.update(() => { visualSwap(thread, html); askDraftRestore(thread, d); }, {fresh: !!state.rendered});
+    stick.update(() => { visualSwap(thread, html); }, {fresh: !!state.rendered});
     // A working run's steps, left open, follow it as it moves on.
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
@@ -976,6 +974,7 @@ async function taskChatRead(state: TaskChatState) {
   state.reading = true;
   try {
     const data = await get<ModalDetail>(state.path);
+    await taskStagesFor(data);
     if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
     if (taskChatCurrent(state) && !state.sending) taskCommentsRender(state, data);
   } catch (e) {
@@ -984,7 +983,7 @@ async function taskChatRead(state: TaskChatState) {
       state.stopped = true; clearInterval(state.poll); state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
       if (state.dialog.taskLive) taskLiveGone(state.dialog, state.dialog.taskLive);
-      else if (TASKS_ST) void tasksLoad(TASKS_ST);
+      else if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       state.dialog.close(); state.dialog.innerHTML = '';
       return;
     }
@@ -999,7 +998,7 @@ async function taskChatLoad(id: string | number, dialog: ModalDialog, data: Moda
     path: `/v2/tasks/${encodeURIComponent(id)}`, id, poll: 0, sending: false, reading: false};
   liveTasksSync();
   if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
-  if (data) taskCommentsRender(state, data); else await taskChatRead(state);
+  if (data) { await taskStagesFor(data); taskCommentsRender(state, data); } else await taskChatRead(state);
   if (!taskChatCurrent(state) || state.stopped) return;
   taskJumpPending(state);
   // Without live events, the poll they replaced.
@@ -1078,13 +1077,6 @@ async function taskCommentSend(state: TaskChatState) {
     }
   }
 }
-async function taskChatSend(state: TaskChatState) { return taskCommentSend(state); }
-// Where the peek's task sits in the list ("3 / 16"); j/k and ↑/↓ move.
-function taskPeekPos(id: string) {
-  if (!TASKS_ST || typeof tasksVisibleKeys !== 'function') return '';
-  const keys = tasksVisibleKeys(), i = keys.indexOf('t' + id);
-  return i < 0 ? '' : `${i + 1} / ${keys.length}`;
-}
 // A deferred task (backend/quiet_work.py): delivered into a run (held until something), eligible for the bot's next
 // run, or queued with a run of its own; which run, and when it was handed over. `quiet` is the field's older name.
 function taskDeferredHTML(t: ModalTask) {
@@ -1095,72 +1087,50 @@ function taskDeferredHTML(t: ModalTask) {
   const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
   return `<p class="task-wait task-deferred" data-task-deferred="${esc(state)}"><span class="lbl">Deferred: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
 }
-// A question to you on a task past the Needs you pages held: its item is read alone, and its question box takes the
-// plain ask's place once it lands.
-function taskQcardWait(t: ModalTask) {
-  // Before the first Needs you read lands, nothing is known past it: wait for it, then read the item alone if needed.
-  const landed = needsFirstIn();
-  if (landed && (needsAll() || needsOneHeld(t.id))) return '';
-  const read = landed ? v2NeedsOne(t.id)
-    : NEEDS_FIRST.then(() => qcardItem(t) || needsAll() || needsOneHeld(t.id) ? null : v2NeedsOne(t.id));
-  void read.then(() => {
-    const el = qcardItem(t) && document.querySelector(`[data-qcard-wait="${CSS.escape(String(t.id))}"]`);
-    if (el) el.outerHTML = qcardBoxHTML(t);
-  });
-  return ` data-qcard-wait="${esc(String(t.id))}"`;
-}
-// The task in full or in the peek. The header holds actions only, no state: the status, the wait and the blockers are
-// properties and Related below. Snoozed (a button that wakes it), the Screen icon, 👍 👎, the age, then Done and Close
-// for whoever may use them as labelled buttons, then the quiet icon buttons: "…" and, past a rule, ✕ for the window.
-// Who added it and when is the age's tooltip. Then the title, the properties, the details, Code, Subtasks, Comments.
-function hubModalHTML(t: ModalTask, it: TaskItem, opts: {peek?: boolean; thread?: boolean} = {}) {
-  const askToYou = taskAskToPerson(t);
-  const finished = taskFinished(t);
-  // What it waits on: a question to you reads as one; any other waiting note is a quiet line. A blocker is in Related.
-  // Waiting on a bot's prerequisite work reads "Waiting on <bot>: <reason>" (taskBotWait).
-  const blockers = taskBlockers(t), botWait = !askToYou && !finished ? taskBotWait(t) : null;
-  const waitText = clipLine(botWait ? `${botWait.name}${botWait.reason ? `: ${botWait.reason}` : ''}${botWait.since}`
-    : blockers.length && !askToYou && !taskBlockedHold(t) ? '' : taskWaitLine(t), 400);
-  const waitLabel = askToYou ? needsWho(t) : botWait || t.status === 'waiting' ? 'Waiting on' : '';
+// The task in full. The header holds actions only: Snoozed (a button that wakes it), the Screen icon, 👍 👎, the age, then
+// Done and Close for whoever may use them as labelled buttons, then "…" and ✕. Who has it now is one line under the title
+// (the turn's own words), with Answer when it is your ask; then the details, To leave <stage> and the rest.
+function hubModalHTML(t: ModalTask, opts: {thread?: boolean} = {}) {
+  const finished = taskFinished(t), me = myActor();
+  const turn = !finished ? t.turn : null;
+  const yours = !!turn?.ask && !!turn.requirement_id && !!me && turn.who === me;
   const original = taskBody(t).trim() === String(t.title || '').trim() ? '' : taskBody(t);   // a quick subtask's details are its title
   const note = String(t.note || '');
   const mover = canMove();
   const links = (t.links || []).filter(l => !['pr', 'worktree', 'session'].includes(l.kind));   // Code is in the rail; Sessions below
-  const pos = opts.peek ? taskPeekPos(t.id) : '';
-  // Done for the owner; Close as the "…" menu allows it (who may move tasks, or the task's parties)
   const rights = taskPropRights(t);
-  const canDone = !finished && t.status !== 'done' && !!myActor() && myActor() === t.owner_id && !pipelineStepsOnly(t);
-  const snooze: Partial<import('../types/api').TaskHold> = taskHold(t, 'snoozed') || {};
-  const canClose = t.status !== 'closed' && (rights.mover || rights.party) && !pipelineStepsOnly(t);
+  const canDone = !finished && !!me && me === t.owner_id;
+  const canClose = t.status === 'open' && (rights.mover || rights.party);
+  const snooze = t.snooze || null;
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
   const thread = !!opts.thread;
+  const turnLine = turn?.line ? `<p class="task-wait"${yours ? ' data-task-yours' : ''}>${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${yours
+    ? ` <button type="button" class="primary tmodal-act" data-task-answer="${esc(turn.requirement_id)}">Answer</button>` : ''}</p>` : '';
   return `<div class="tmodal-head">${thread ? `<button class="ghost peek-btn tthread-only tthread-back" type="button" data-thread-back aria-label="Back to chat" title="Back to chat"><svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}${taskSnoozed(t)
-      ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="Snoozed until ${esc(fmt(snooze.until))} by ${esc(actorLabel(snooze.by))}${snooze.reason ? ` · ${esc(snooze.reason)}` : ''}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>Snoozed to ${esc(snoozeDay(t))}${chipNoteHTML(snooze.reason)}</button>` : ''}
+      ? `<button type="button" class="tl-due wake tchip-snoozed" data-task-unsnooze title="${esc(`Snoozed${snooze?.until ? ` until ${fmt(snooze.until)}` : ''}${snooze?.by ? ` by ${actorLabel(snooze.by)}` : ''}${snooze?.why ? ` · ${snooze.why}` : ''}`)}${rights.snooze ? '. Click to bring it back now' : ''}"${rights.snooze ? '' : ' disabled'}>${snoozeDay(t) ? `Snoozed to ${esc(snoozeDay(t))}` : 'Snoozed'}${chipNoteHTML(snooze?.why)}</button>` : ''}
       ${finished ? '' : taskScreenLinkHTML(t.owner_id)}
-      <span class="spacer"></span>${pos ? `<span class="peek-pos tnum" title="J / K or ↑ / ↓ move to the next or previous task">${esc(pos)}</span>` : ''}
+      <span class="spacer"></span>
       ${fbButtonsHTML(fbTaskKey(t))}
-      <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created_at ? ' ' + fmt(t.created_at) : ''} · Updated ${fmt(it.updated_at)}`)}">${esc(ago(it.updated_at))}</span>
+      <span class="muted tnum tmodal-age" title="${esc(`${taskSourceLine(t)}${t.created_at ? ' ' + fmt(t.created_at) : ''} · Updated ${fmt(t.updated_at)}`)}">${esc(ago(t.updated_at || t.created_at))}</span>
       ${canDone ? `<button class="ghost tmodal-act" type="button" data-task-finish="done" title="Mark this task done">${PROP_ICON.check}<span>Done</span></button>` : ''}
-      ${canClose ? `<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close</button>` : ''}
+      ${canClose ? '<button class="ghost tmodal-act" type="button" data-task-finish="close" title="Close this task">Close</button>' : ''}
       <button class="ghost peek-btn" type="button" data-task-more aria-haspopup="menu" aria-label="More actions" title="More actions">${PROP_ICON.more}</button>
       ${thread ? '<button class="ghost tmodal-act tthread-only" type="button" data-thread-details>Details</button>' : ''}
       <span class="tmodal-sep" aria-hidden="true"></span><button class="ghost peek-btn tmodal-x" type="button" data-modal-close aria-label="Close window" title="Close window (Esc)">${TL_ICON.x}</button></div>
     <h2 class="tmodal-title" tabindex="-1">${esc(t.title)}</h2>
     <div class="task-edit-meta muted"><span data-task-edited></span><span data-task-presence></span><span data-task-edit-error hidden>Not saved · <button type="button" class="linkish" data-task-edit-retry>Retry</button></span></div>
     <div class="muted" data-task-edit-current hidden></div>
-    ${taskBuilderNotices(taskBuilderActors(t))}
     ${t.goal_id ? `<div class="muted tmeta"><a href="#/goals/${encodeURIComponent(t.goal_id)}" class="task-goal" data-goal-title="${esc(t.goal_id)}">serves a goal</a></div>` : ''}
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
       ${githubNudgeTaskHostHTML(t)}
       <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
       <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
-      ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
-        : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
+      ${turnLine}
       ${taskDeferredHTML(t)}
-      ${taskEditBodyHTML(t, original, waitText)}
-      ${note && ![waitText, botWait && clipLine(botWait.reason, 400)].includes(note.replace(/\s+/g, ' ').trim()) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
+      ${taskEditBodyHTML(t, original, turn?.line || '')}
+      ${note && note.replace(/\s+/g, ' ').trim() !== clipLine(turn?.line, 400) ? `<details class="task-orig"><summary>Progress</summary><div class="tdesc md">${safeMd(note)}</div></details>` : ''}
       ${(t.acceptance_criteria || []).length ? `<section class="tsec"><h3 class="rail-h">Done looks like</h3><ul class="tcriteria">${t.acceptance_criteria!.map(a => `<li>${esc(a)}</li>`).join('')}</ul></section>` : ''}
       <div class="tsecs">
       ${taskRequirementsHTML(t)}
@@ -1177,7 +1147,7 @@ function hubModalHTML(t: ModalTask, it: TaskItem, opts: {peek?: boolean; thread?
       </div>
       </div>
       <aside class="task-side" aria-label="Details">
-        <section class="task-props" data-task-props aria-label="Properties">${taskPropsHTML(t, opts)}</section>
+        <section class="task-props" data-task-props aria-label="Properties">${taskPropsHTML(t)}</section>
         <div class="task-rail" data-task-rail hidden></div>
       </aside>
       <section class="task-chat" aria-label="Conversation"><p class="muted" role="status">Loading the conversation…</p></section>

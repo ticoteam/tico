@@ -21,7 +21,7 @@ shapes below are part of the contract; change them only with a reviewed contract
   to see and have Write access to. Switching to private keeps every attached bot and explicitly added person.
   Attachment creates a meeting-scoped read grant; it does not change the bot's standing access or
   grant access to other meetings. Runner delivery is checked against the attaching human's current
-  Write access and contact policy, so keeper transport does not create bot-to-bot contact. The connector
+  Write access and contact policy, so delivery by Tico itself does not create bot-to-bot contact. The connector
   or the person who attached a bot can remove it from this meeting; removal revokes that meeting-only grant and
   settles outstanding turns without changing ordinary bot permissions.
 - Meeting-derived threads, messages and run artifacts retain the meeting's current access
@@ -237,7 +237,7 @@ review. Enforced, not left to the bot, on any harness:
 
 - **Hub writes.** Every write a private meeting's turn makes through the hub API or `/api/v2/mcp` is refused
   with HTTP 403 `privacy`, detail "This is a private meeting: nothing from it is saved or shared until its
-  owner reviews it." (docs, pages, tasks, messages to other threads, mail, status, approvals, settings). What it
+  owner reviews it." (docs, pages, tasks, messages to other threads, mail, status, OKs, settings). What it
   may still write is one list, `task_privacy.PRIVATE_MEETING_WRITES`: reads over POST (`sql`,
   `tasks/dry-run`), the MCP door, run files (they keep the run's provenance, so only the meeting's readers see
   them), a GitHub token (read-only for it), and its own meeting's `chat` and `turns/{turn_id}/claim`. The

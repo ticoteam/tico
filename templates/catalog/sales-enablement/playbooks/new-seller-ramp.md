@@ -8,8 +8,8 @@ deals. It is guidance for them and their manager, never an assessment.
 
 ## 1. Read the role
 
-    hub task show <id>
-    hub team show --person <seller>
+    tico task show <id>
+    tico team show --person <seller>
 
 Note the role (SDR, Account Executive, Account Manager), start date, manager, and segment or territory.
 
@@ -29,7 +29,7 @@ Each week has two or three concrete tasks and one milestone the manager can see 
 
 ## 4. Hand over
 
-Save to `knowledge/ramp/<seller>.md` and attach it to the task for the manager. `hub task update <id>
---status done --note`: the start date, the milestones, the example calls. Weekly check-ins on milestones
+Save to `knowledge/ramp/<seller>.md` and attach it to the task for the manager. `tico task done <id>
+-m "..." --version N`: the start date, the milestones, the example calls. Weekly check-ins on milestones
 appear in the win/loss notes; a slip twice goes to the Sales Manager as a question about support, not a
 judgment.

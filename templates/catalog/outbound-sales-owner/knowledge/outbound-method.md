@@ -5,7 +5,7 @@ team's own at setup, and the rules around them stay as they are. The consent bas
 
 ## Target and volume
 
-- The target is meetings booked per week, set at setup. Read it from `hub goal list`. Keep no second copy of it.
+- The target is meetings booked per week, set at setup. Read it from `tico goal list`. Keep no second copy of it.
 - Daily cap per sending mailbox: default 20 new first touches a day for four weeks. The cap rises only while bounces stay under
   2% and spam complaints stay at zero.
 - Warm up new mailboxes and sending domains gradually. Watch bounces and complaints by mailbox, not only in total.

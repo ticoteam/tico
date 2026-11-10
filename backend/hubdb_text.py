@@ -617,48 +617,6 @@ LINT_PR_REF = re.compile(r"(?<![\w#/.-])PR #\d+(?![\w#/-]|\.\w)")
 LINT_BARE_REF = re.compile(r"(?<![&#/.-])#\d{3,}(?!\w)")
 
 
-LINT_WAIT_WORDS = 40
-
-
-def lint_waiting_note(note, person, asked=False):
-    """The note on a task a bot sets waiting on a person (`--status waiting --on <person> --note`): the person reads
-    it as what they are asked to do, so it is one plain request to them, not the bot's working notes. The problems,
-    empty when it passes. No note passes only when an open question to them on the task already asks."""
-    text, name = str(note or "").strip(), actor_id(person)
-    if not text:
-        return [] if asked else [f"say in one plain sentence what you need {name} to do (--note)"]
-    problems = []
-    # An amount ("$250000") is not a reference number, nor is a pull request named "PR #1555". Only here: a title
-    # keeps LINT_IDENT as it is.
-    unref = LINT_PR_REF.sub("PR", text)
-    m = (
-        LINT_HEX_ID.search(unref)
-        or next(
-            (
-                i
-                for i in LINT_IDENT.finditer(unref)
-                if not (i.start() and unref[i.start() - 1] in LINT_CURRENCY)
-                and not LINT_NAMED_NUMBER.fullmatch(i.group(0))
-            ),
-            None,
-        )
-        or LINT_BARE_REF.search(unref)
-    )
-    if m:
-        problems.append(f'id in the note for {name}: "{m.group(0)}" - say what it is in plain words')
-    n = len(text.split())
-    sentences = len([s for s in re.split(r"(?<=[.!?;])\s+", text) if s.strip()])
-    if n > LINT_WAIT_WORDS or sentences > 2:
-        problems.append(
-            f"the note for {name} reads as working notes ({n} words): write one plain sentence "
-            f"asking them for what you need, and keep your notes in a comment"
-        )
-    m = LINT_CODES.search(text) or LINT_JARGON.search(text)
-    if m:
-        problems.append(f'internal jargon in the note for {name}: "{m.group(0)}"')
-    return problems
-
-
 # The ask a bot puts to a person, when it sets a task waiting on them or gives them a task: what their card leads
 # with, read by someone busy. Unlike the warnings above it is always refused, whatever TICO_STYLE_LINT says: a card
 # with no plain ask costs the person more than the bot's retry costs the bot. Paths, links to stored objects and
@@ -681,7 +639,7 @@ LINT_PATH = re.compile(
 
 
 LINT_TOOL = re.compile(
-    r"\bhub\s+(?:task|message|question|approval|note|chat|doc|file|goal|kpi|bot|routine|update|tool|calendar|meeting|support|team|tag|human|group|conversation|whoami|sql)\b|(?<![\w-])--[a-z][\w-]*|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|`[^`]+`"
+    r"\b(?:hub|tico)\s+(?:task|message|question|approval|note|chat|doc|file|goal|kpi|bot|routine|update|tool|calendar|meeting|support|team|tag|human|group|conversation|whoami|sql)\b|(?<![\w-])--[a-z][\w-]*|\b[a-z][a-z0-9]*_[a-z0-9_]+\b|`[^`]+`"
 )
 
 
@@ -893,9 +851,9 @@ def lint_plain(text):
 
 def person_ask_of_body(body, title=""):
     """The ask in a task given to a person: the body's first paragraph, after a first line that only repeats the
-    title. The rest of the body is details."""
+    title. The rest of the body is details. A body that is only the title is that ask."""
     lines = str(body or "").strip().splitlines()
-    if lines and str(title or "").strip() and lines[0].strip() == str(title).strip():
+    if len(lines) > 1 and str(title or "").strip() and lines[0].strip() == str(title).strip():
         lines = lines[1:]
     return re.split(r"\n\s*\n", "\n".join(lines).strip(), maxsplit=1)[0].strip()
 
@@ -904,18 +862,18 @@ def person_ask_refusal(person, text, where):
     """What a refusal of this ask says, or "" when it passes: what failed, what to do about it in this same turn, the
     rule and an example, so the bot fixes it in one retry. An ask refused for its length carries a rewrite to retry
     with (person_ask_rewrite), or, when none keeps the decision, the exact repair: a blocker is never left unasked
-    for want of a shorter wording. `where` is "waiting" (the waiting note) or "assign" (the body of a task given to
-    them)."""
+    for want of a shorter wording. `where` is "ask" (an ask on a task, `tico task ask`) or "assign" (the body of a task
+    given to them)."""
     text = str(text or "").strip()
     problems = lint_person_ask(text)
     if not problems:
         return ""
     name = actor_id(person)
-    place = "the waiting note (--note)" if where == "waiting" else "the first paragraph of the task body (--body)"
+    place = "the ask (the sentence in quotes)" if where == "ask" else "the first paragraph of the task body (--body)"
     fix = ""
     if len(text.split()) > LINT_ASK_WORDS or lint_sentences(text) > 2:
         rewrite, repair = person_ask_rewrite(text)
-        details = "a comment on the task" if where == "waiting" else "the body under it, after a blank line"
+        details = "a comment on the task" if where == "ask" else "the body under it, after a blank line"
         fix = (
             f' Retry once with this ask, which keeps what you need and what happens after: "{rewrite}" Put the '
             f"rest of your text in {details}, so nothing is lost."
@@ -1076,20 +1034,6 @@ def support_text_matches(payload):
         return hashlib.sha256(message.encode("utf-8")).hexdigest() == digest
     except UnicodeEncodeError:
         return False
-
-
-def publish_text_matches(payload):
-    """A publish payload's `text` is what the person approves; `content_sha256` is what the publisher
-    checks. They agree only when the hash is SHA-256 of the text's UTF-8 bytes (hq-tickets hashes the
-    reply file's bytes and sends them decoded, so a UTF-8 file round-trips exactly)."""
-    text, digest = payload.get("text"), payload.get("content_sha256")
-    if not isinstance(text, str) or not isinstance(digest, str):
-        return False
-    try:
-        actual = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    except UnicodeEncodeError:  # a lone surrogate is no text anyone could publish
-        return False
-    return actual == digest  # exact: hq-tickets compares against a lower-case hexdigest
 
 
 LIBRARIAN_LITERAL = re.compile(

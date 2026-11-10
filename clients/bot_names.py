@@ -1,11 +1,11 @@
-"""`hub bot check-names <bot>`: the names a bot's own checkout still uses from before the renames.
+"""`tico bot check-names <bot>`: the names a bot's own checkout still uses from before the renames.
 
 The map is clients/renames.json (written by scripts/cleanup/export_names.py): the column renames that have shipped, with
-the tables each one moved on and the tables that keep the old name, the API fields that moved, and the hub CLI commands
+the tables each one moved on and the tables that keep the old name, the API fields that moved, and the tico CLI commands
 that were renamed or removed. The command runs on this computer, beside the bot's files: no Tico server, no credential,
 nothing is sent.
 
-Only code is read, and only four things in it: the SQL of a `hub sql` call (a quoted argument, a heredoc or the rest of
+Only code is read, and only four things in it: the SQL of a `tico sql` call (a quoted argument, a heredoc or the rest of
 the line), other SQL-looking text (a quoted statement, or a statement that starts a line in a code span or fenced block),
 a key read from an API answer or a stored document (`row["refs_json"]`, `.get("attempt_id")`, `row.refs_json`), and a
 `hub` command in a code span, a fenced block, a shell line or a quoted argument. Prose outside code spans is never
@@ -24,7 +24,7 @@ INTO, or before a column (`market_entities.name`).
 the name is a SQL alias (`AS created`), when the key is a word other code uses too (`attempt`), when the field changed
 shape (`snoozed_until` is now part of `holds`), when the name has more than one new spelling or a table keeps it
 (`owner`), when it is a key renamed on some tables only (the same word may be an input or a stored document's key), when
-SQL is not in a `hub sql` call (it may be the bot's own database), or when the file is under memory/: a bot's notes are
+SQL is not in a `tico sql` call (it may be the bot's own database), or when the file is under memory/: a bot's notes are
 reported, never rewritten.
 """
 
@@ -48,12 +48,13 @@ SPAN = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
 # `hub` after a quote, a backtick, `$`, `(`, `;`, `&` or `|`: a command, not a word in prose. At the start of a line too,
 # where the text is a shell line or a code span or fenced block; a line of Python or JavaScript prose starts with words.
 _WORDS = r"([a-z][a-z-]*(?:[ \t]+[a-z][a-z-]*)*)"
-SHELL_HUB = re.compile(r"(?:^|[`\"'$(;&|])[ \t]*hub[ \t]+" + _WORDS, re.M)
-SHELL_HUB_INLINE = re.compile(r"[`\"'$(;&|][ \t]*hub[ \t]+" + _WORDS)
+# `tico` is the CLI's name and `hub` its old one: both are read.
+SHELL_HUB = re.compile(r"(?:^|[`\"'$(;&|])[ \t]*(?:hub|tico)[ \t]+" + _WORDS, re.M)
+SHELL_HUB_INLINE = re.compile(r"[`\"'$(;&|][ \t]*(?:hub|tico)[ \t]+" + _WORDS)
 SHELL_SUFFIXES = {".sh", ".bash", ".zsh"}
-# `["hub", "sql", ...]` in Python, JavaScript or JSON: the first two words only (a set of names, `{"hub", "docs"}`, is not one)
+# `["tico", "sql", ...]` in Python, JavaScript or JSON: the first two words only (a set of names, `{"hub", "docs"}`, is not one)
 ARGV_HUB = re.compile(
-    r"\[[ \t\n]*[\"']hub[\"'][ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'](?:[ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'])?"
+    r"\[[ \t\n]*[\"'](?:hub|tico)[\"'][ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'](?:[ \t]*,[ \t]*[\"']([a-z][a-z-]*)[\"'])?"
 )
 WORD = re.compile(r"[a-z][a-z-]*")
 SQL_IDENT = re.compile(r"'(?:[^']|'')*'|(?<![\w:@$])([A-Za-z_]\w*)")
@@ -104,7 +105,8 @@ KEY_READ = re.compile(
 ROW_RECEIVERS = {"row", "r", "rec", "record", "item", "result"}
 RECEIVER_TABLES = {"msg": "messages"}
 TALKS_TO_HUB = re.compile(
-    r"/api/v2/|\bHUB_[A-Z_]+\b|[\"'`$(;&|][ \t]*hub[ \t]|^[ \t]*hub[ \t]|\[[ \t\n]*[\"']hub[\"']", re.M
+    r"/api/v2/|\bHUB_[A-Z_]+\b|[\"'`$(;&|][ \t]*(?:hub|tico)[ \t]|^[ \t]*(?:hub|tico)[ \t]|\[[ \t\n]*[\"'](?:hub|tico)[\"']",
+    re.M,
 )
 MOST_KEPT_FOR_A_KEY = 2  # a name most of the schema keeps proves nothing as a key: `created_by` needs its table in view
 
@@ -196,7 +198,7 @@ def _regions(text, prose):
 
 
 def _sql_body(s, pos):
-    """(start, end) of the SQL a `hub sql` call runs: a quoted argument (it may run over lines), a heredoc, or the rest
+    """(start, end) of the SQL a `tico sql` call runs: a quoted argument (it may run over lines), a heredoc, or the rest
     of the line."""
     i = SEP.match(s, pos).end()
     if i < len(s) and s[i] in "\"'":
@@ -222,7 +224,7 @@ def _commands(s, line_start):
 
 
 def _hub_sql_bodies(s, line_start):
-    """(start, end) of the SQL of each `hub sql` call in s."""
+    """(start, end) of the SQL of each `tico sql` call in s."""
     for words, shell in _commands(s, line_start):
         if words[0][0] == "sql":
             yield _sql_body(
@@ -290,7 +292,7 @@ def _statement_tables(stmt):
 
 
 def _table_scoped_findings(body, base, names, out, in_hub_sql):
-    """Each renamed name a statement uses on a table it moved on. In a `hub sql` body the names renamed on every table
+    """Each renamed name a statement uses on a table it moved on. In a `tico sql` body the names renamed on every table
     were already read, without needing their table; elsewhere the SQL may be the bot's own database, so it is reported."""
     for offset, stmt in _statements(body):
         tables, spots = _statement_tables(stmt)
@@ -333,7 +335,7 @@ def _table_scoped_findings(body, base, names, out, in_hub_sql):
 
 def _table_findings(body, base, names, out, in_hub_sql):
     """Each renamed table a statement names: in table position, or before a column (`market_entities.name`). In a
-    `hub sql` body the new name is the only one, so --fix may rewrite it; elsewhere the SQL may be the bot's own."""
+    `tico sql` body the new name is the only one, so --fix may rewrite it; elsewhere the SQL may be the bot's own."""
     for offset, stmt in _statements(body):
         _tables, spots = _statement_tables(stmt)
         for m in SQL_IDENT.finditer(stmt):
@@ -392,12 +394,12 @@ def _command_findings(s, base, names, out, line_start):
         old, new, fixable, removed = hit
         start, end = words[0][1], words[len(old) - 1][2]
         if removed:
-            target = "hub " + " ".join(new) + " (the flags differ: hub automation create --file)"
+            target = "tico " + " ".join(new) + " (the flags differ: tico automation create --file)"
         else:
-            target = "hub " + " ".join(new)
+            target = "tico " + " ".join(new)
         out.append(
             Finding(
-                old="hub " + " ".join(old),
+                old="tico " + " ".join(old),
                 new=target,
                 kind="removed" if removed else "command",
                 fixable=fixable and shell,
@@ -557,20 +559,20 @@ def fix(root, findings):
 
 
 def command(target, fix_it, workspace, names=None):
-    """`hub bot check-names <target>`: print each finding and return 0 when none is left, else 1."""
+    """`tico bot check-names <target>`: print each finding and return 0 when none is left, else 1."""
     from clients import manifest
 
     folder = Path(target)
     if not folder.is_dir():
         if not workspace:
             print(
-                f"hub bot check-names: {target} is not a folder, and HUB_WORKSPACE is not set to find a bot by slug",
+                f"tico bot check-names: {target} is not a folder, and HUB_WORKSPACE is not set to find a bot by slug",
                 file=sys.stderr,
             )
             return 1
         folder = manifest.repo_dir(Path(workspace), target)
     if not folder.is_dir():
-        print(f"hub bot check-names: no checkout at {folder}", file=sys.stderr)
+        print(f"tico bot check-names: no checkout at {folder}", file=sys.stderr)
         return 1
     names = names or load_names()
     findings = scan(folder, names)

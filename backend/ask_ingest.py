@@ -2,7 +2,7 @@
 server's Decide engine, `backend/judge.py` `server_engine`; spec: Tasks Owner, ask-ingest.md v2).
 
 Gated: a bot's write that would put something on a person's Needs you, today a task filed with the person as its
-owner (`app.task_create`). Not gated: anything a person writes (their Assistant included), approvals, the keeper's own
+owner (`app.task_create`). Not gated: anything a person writes (their Assistant included), asks on a task, Tico's own
 items and anything Tico files itself; they still count toward the person's load.
 
 One call per item, outside the write's transaction (`preflight`), answers six typed questions; plain code then decides
@@ -179,13 +179,23 @@ def gated(who, assistant_bot=""):
     )
 
 
+def _needs(c, person):
+    """The person's Needs you as the engine reads it (backend/waiting_on.py `needs`): their tasks, the asks that name
+    them and the Paused causes they can fix, snoozed tasks left out."""
+    from . import waiting_on
+
+    return waiting_on.needs(c, person)
+
+
+def _plate_tasks(c, person):
+    """The tasks on the person's Needs you, each once: {task id: title}."""
+    return {item["task_id"]: item.get("title") or "" for item in _needs(c, person) if item.get("task_id")}
+
+
 def load(c, person):
-    """The open items on the person's Needs you, including chores and approvals, snoozed ones left out.
-    Read before the item is written, so it never counts itself."""
-    plate = H.needs_you(c, person)
-    ids = {t["id"] for t in plate["tasks"]} | {t["id"] for t in plate["waiting"]}
-    approvals = sum(1 for a in plate["approvals"] if a.get("decision_owner") == person)
-    return len(ids) + approvals
+    """The open items on the person's Needs you: each task of theirs, each ask that names them and each Paused cause
+    they can fix, snoozed ones left out. Read before the item is written, so it never counts itself."""
+    return len(_needs(c, person))
 
 
 def source_readable(c, asker, task):
@@ -208,21 +218,20 @@ def source_readable(c, asker, task):
 def open_items(c, person, asker):
     """{option name: (task id, title)} for the person's open items a new one may be the same as, newest first, only the
     ones `asker` may read in full (`source_readable`): no title it may not see reaches the model."""
-    plate = H.needs_you(c, person)
-    rows = sorted(plate["tasks"] + plate["waiting"], key=lambda t: t.get("created_at") or "", reverse=True)
+    rows = [H.task(c, task_id) for task_id in _plate_tasks(c, person)]
+    rows = sorted((t for t in rows if t), key=lambda t: t.get("created_at") or "", reverse=True)
     out = {}
     for t in rows:
         if len(out) >= MAX_ITEMS:
             break
-        if source_readable(c, asker, H.task(c, t["id"])):
+        if source_readable(c, asker, t):
             out[f"item-{len(out) + 1}"] = (t["id"], t.get("title") or "")
     return out
 
 
 def on_plate(c, person, task_id):
     """Whether the task is still on the person's Needs you, the list `open_items` offers from."""
-    plate = H.needs_you(c, person)
-    return any(t["id"] == task_id for t in plate["tasks"] + plate["waiting"])
+    return task_id in _plate_tasks(c, person)
 
 
 def manager_of(c, bot_actor):
@@ -590,7 +599,7 @@ def apply(c, verdict):
         # asker since the call. Then it goes through as before, and the reply names no source.
         if (
             not open_item
-            or open_item["status"] not in H.ACTIVE_STATUSES
+            or open_item["status"] != "open"
             or not on_plate(c, person, merged_into)
             or not source_readable(c, asker, open_item)
         ):
@@ -796,7 +805,7 @@ def on_reply(c, actor, task_id, text, *, text_sources=()):
             H.say(c, H.KEEPER, row["asker"], said, kind="notice", refs={**refs, "ask_ingest": row["id"]})
         else:
             own = H.task(c, row["ref"])
-            if not own or own["status"] not in H.ACTIVE_STATUSES:
+            if not own or own["status"] != "open":
                 continue
             H.task_comment(c, H.KEEPER, own["id"], said, wake=True, extra_refs=refs)
         c.execute("UPDATE ask_ingest_items SET passed_at=? WHERE id=?", (H.now(), row["id"]))
@@ -854,22 +863,22 @@ def _next_day(day):
 
 _ACTIVE_AT = (
     "owner_id=? AND created_at<? AND (done_at IS NULL OR done_at>?) AND (closed_at IS NULL OR closed_at>?) "
-    "AND NOT EXISTS (SELECT 1 FROM task_holds sh WHERE sh.task_id=tasks.id AND sh.kind='snoozed' "
-    "AND sh.released_at IS NULL AND sh.until_at>?)"
+    "AND NOT EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=tasks.id AND sz.ended_at IS NULL "
+    "AND (sz.until_at IS NULL OR sz.until_at>?))"
 )
 
 
-# The owner then is the old owner of the task's first owner change (its history, hubdb `_task_event`), and today's owner
+# The owner then is the old owner of the task's first reassign (its history, written by task_engine), and today's owner
 # where it never changed hands. The gate's judgment of a filing is an ask row written no later than that first owner
 # change: a filing is judged in its own request, before any change. A handoff always has an owner change before its
 # own ask row, so a handoff's ask row is never that judgment.
 _FIRST_OWNER_CHANGE = (
     "(SELECT MIN(julianday(h.created_at)) FROM history_events h WHERE h.subject_type='task' "
-    "AND h.subject_id=t.id AND h.kind='owner')"
+    "AND h.subject_id=t.id AND h.kind='reassign')"
 )
 _OWNER_THEN = (
     "COALESCE((SELECT h.old FROM history_events h WHERE h.subject_type='task' AND h.subject_id=t.id "
-    "AND h.kind='owner' ORDER BY julianday(h.created_at), h.rowid LIMIT 1), t.owner_id)"
+    "AND h.kind='reassign' ORDER BY julianday(h.created_at), h.rowid LIMIT 1), t.owner_id)"
 )
 
 
@@ -886,9 +895,8 @@ def replay_items(c, person, start, end, assistant_bot=None):
     # for them written no later than the task's first owner change leaves the filing to the second branch. That branch
     # lists every ask row the check wrote for them on its own day, so a judged filing shows once, and each handoff
     # shows on the day it was handed back, wherever the task was created and whoever owns it now. When the check was
-    # off there is no ask row, so owner history supplies that handoff. New On handoffs and let-through owner events
-    # link back to their ask row; the nearby-row check keeps older history single where that link is absent.
-    # A question task (backend/question_tasks.py) was judged with its question's lines, which it carries itself.
+    # off there is no ask row, so owner history supplies that handoff. A reassign within a second of its ask row is that
+    # same handoff, listed once.
     out = [
         {
             "kind": "task",
@@ -896,26 +904,25 @@ def replay_items(c, person, start, end, assistant_bot=None):
             "asker": r["asker"],
             "title": r["title"] or "",
             "text": r["body"] or "",
-            "asked": H._json(r["questions"], None) or None,
+            "asked": None,
             "created_at": r["at"],
         }
         for r in c.execute(
-            "SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at,t.questions "
+            "SELECT t.id,t.title,t.body,t.requester_id AS asker,t.created_at AS at "
             "FROM tasks t "
             f"WHERE {_OWNER_THEN}=? AND t.created_at>=? AND t.created_at<? "
             "AND t.requester_id LIKE 'bot:%' AND t.requester_id<>? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.ref=t.id AND i.person=? AND i.kind='task' "
             f"AND julianday(i.created_at)<=COALESCE({_FIRST_OWNER_CHANGE}, 1e9)) "
-            "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at,t.questions FROM ask_ingest_items i "
+            "UNION ALL SELECT t.id,t.title,t.body,i.asker,i.created_at FROM ask_ingest_items i "
             "JOIN tasks t ON t.id=i.ref WHERE i.person=? AND i.kind='task' AND i.created_at>=? "
             "AND i.created_at<? AND i.asker LIKE 'bot:%' AND i.asker<>? "
-            "UNION ALL SELECT t.id,t.title,t.body,h.actor_id,h.created_at,t.questions FROM history_events h "
-            "JOIN tasks t ON t.id=h.subject_id WHERE h.subject_type='task' AND h.kind='owner' "
+            "UNION ALL SELECT t.id,t.title,t.body,h.actor_id,h.created_at FROM history_events h "
+            "JOIN tasks t ON t.id=h.subject_id WHERE h.subject_type='task' AND h.kind='reassign' "
             "AND h.new=? AND h.actor_id LIKE 'bot:%' AND h.actor_id<>? "
             "AND h.created_at>=? AND h.created_at<? AND NOT EXISTS "
             "(SELECT 1 FROM ask_ingest_items i WHERE i.person=? AND i.kind='task' AND i.ref=t.id "
-            "AND i.asker=h.actor_id AND (json_extract(h.data,'$.ask_ingest_item')=i.id OR "
-            "abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400))",
+            "AND i.asker=h.actor_id AND abs(julianday(i.created_at)-julianday(h.created_at))<=1.0/86400)",
             (person, start, end, skip, person, person, start, end, skip, person, skip, start, end, person),
         )
     ]

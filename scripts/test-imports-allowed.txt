@@ -10,13 +10,6 @@ runner_support/tests/test_old_runner_skew.py -> runner_support.tests.test_confor
 
 # Existing debt, allowed by the ratchet: these test modules import names from other test modules. Moving the shared
 # names into helpers/ is separate work; new imports still fail the guard.
-backend/tests/test_pipeline_stage_caps.py -> backend.tests.test_pipeline_foundation
-backend/tests/test_pipeline_stage_caps.py -> backend.tests.test_pipeline_links
-backend/tests/test_pipeline_stage_caps.py -> backend.tests.test_pipeline_members_only
-backend/tests/test_pipeline_stage_caps.py -> backend.tests.test_step_backlog
-backend/tests/test_pipeline_stage_caps.py -> backend.tests.test_quiet_work
-backend/tests/test_pipeline_stage_caps.py -> backend.tests.test_comment_delivery
-backend/tests/test_pipeline_stage_caps.py -> backend.tests.test_task_holds
 backend/tests/test_visual_specs.py -> backend.tests.test_files
 backend/tests/test_visual_specs.py -> backend.tests.test_roadmaps
 backend/tests/test_visual_specs.py -> backend.tests.test_tasks_board

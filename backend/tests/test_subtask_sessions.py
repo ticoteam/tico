@@ -54,30 +54,32 @@ def test_a_subtask_the_bot_filed_for_itself_is_its_own_root(api):
         assert H.session_root(c, "ops", asked) == own, "a person's subtask under it continues its session"
 
 
-def test_a_bot_finishing_its_last_self_filed_subtask_wakes_the_parent_but_not_one_in_the_parents_session(api):
+def filed_wakes(c, since):
+    """The tasks the engine woke ops on since `since` because what they filed ended (task_engine._ended)."""
+    return [
+        r[0]
+        for r in c.execute(
+            "SELECT json_extract(m.refs,'$.task') FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='ops' AND j.state='queued' AND m.wake_key LIKE '%:filed:%' AND m.rowid>? ORDER BY m.rowid",
+            (since,),
+        )
+    ]
+
+
+def test_finishing_the_last_subtask_wakes_its_parent_once_whatever_session_it_ran_in(api):
+    # v3: a parent waits on what it filed and is woken once when that ends. A subtask that continued the parent's
+    # session wakes it too: the parent's turn is what moves the parent on.
     first, second = tasks(api, ("bot:ops", None), ("bot:ops", None))
     with api.app.state.store.transaction() as c:
         asked = H.task_create(c, "human:ana", "Add the CSV column", "x", "bot:ops", parent_id=first, lint=False)["id"]
         own = H.task_create(c, "bot:ops", "Build the export", "Its own work.", "bot:ops", parent_id=second, lint=False)[
             "id"
         ]
+        assert H.session_root(c, "ops", asked) == first and H.session_root(c, "ops", own) == own
         since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
-
-    def woken():
-        with api.app.state.store.read() as c:
-            return [
-                r[0]
-                for r in c.execute(
-                    "SELECT json_extract(m.refs,'$.task') FROM jobs j JOIN messages m ON m.id=j.message_id "
-                    "WHERE j.bot_id='ops' AND j.state='queued' AND m.body='All subtasks done' AND m.rowid>?",
-                    (since,),
-                )
-            ]
-
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:ops", asked, status="done", note="Column added.")
-        H.task_update(c, "bot:ops", own, status="done", note="Export built.")
-    assert woken() == [second], "the first's own session finished its subtask; the second's ran apart"
+        H.task_done(c, "bot:ops", asked, "Column added.", H.task(c, asked)["version"])
+        H.task_done(c, "bot:ops", own, "Export built.", H.task(c, own)["version"])
+        assert filed_wakes(c, since) == [first, second]
 
 
 def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_the_same_readers(api):
@@ -119,11 +121,13 @@ def roots_runner(api, capabilities):
 
 def test_a_subtask_turn_runs_in_its_parents_lane_and_session_and_links_and_checkpoints_the_parent(api):
     machine = roots_runner(api, ["task_lanes_v2", "session_roots_v1"])
-    parent, sub = tasks(api, ("bot:ops", None), ("bot:ops", 0))
+    (parent,) = tasks(api, ("bot:ops", None))
     first = claim(api, machine)
     assert first["lane"] == "task:" + parent and first["task"]["session_task_id"] == parent
-    assert claim(api, machine) is None, "the subtask waits behind its parent's turn in the same lane"
     post(api, f"attempts/{first['id']}/started", {"thread_id": "t-parent"}, machine["token"])
+    with api.app.state.store.transaction() as c:  # filed for the bot under its task, mid-turn
+        sub = H.task_create(c, "human:ana", "Step 1 of the launch", "Do this step.", "bot:ops", parent_id=parent)["id"]
+    assert claim(api, machine) is None, "the subtask waits behind its parent's turn in the same lane"
     post(
         api,
         f"attempts/{first['id']}/complete",
@@ -193,53 +197,38 @@ def test_subtasks_a_bot_files_for_itself_from_one_turn_start_in_their_own_lanes_
 
 def test_an_older_runner_and_subtask_session_own_keep_each_subtask_its_own_session(api):
     machine = roots_runner(api, ["task_lanes_v2"])
-    parent, sub = tasks(api, ("bot:ops", None), ("bot:ops", 0))
-    lanes = {claim(api, machine)["lane"] for _ in range(2)}
-    assert lanes == {"task:" + parent, "task:" + sub}
+    (parent,) = tasks(api, ("bot:ops", None))
+    assert claim(api, machine)["lane"] == "task:" + parent
+    with api.app.state.store.transaction() as c:
+        sub = H.task_create(c, "human:ana", "Step 1 of the launch", "Do this step.", "bot:ops", parent_id=parent)["id"]
+    assert claim(api, machine)["lane"] == "task:" + sub, "beside its parent's running turn, in a lane of its own"
     with api.app.state.store.read() as c:
         assert H.session_root(c, "ops", sub, {"subtask_session": "own"}) == sub
     turn = {"bot": "ops", "task": {"id": sub}}  # no session_task_id: keyed on the subtask
     assert state.session_key({}, turn) == "task:" + sub
 
 
-def test_a_person_finishing_a_subtask_wakes_the_bot_once_on_the_parent(api):
+def test_a_person_finishing_a_subtask_wakes_the_bot_once_on_the_parent_with_its_title_never_its_note(api):
     (parent,) = tasks(api, ("bot:ops", None))
     with api.app.state.store.transaction() as c:
         sub = H.task_create(
             c, "bot:ops", "Approve the launch copy", "Yes or no.", "human:ana", parent_id=parent, lint=False
         )["id"]
-
-    def notices():
-        with api.app.state.store.read() as c:
-            return [
-                (json.loads(r[0]).get("task"), json.loads(r[0]).get("subtask"))
-                for r in c.execute(
-                    "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-                    "WHERE j.bot_id='ops' AND j.state='queued' AND m.kind='notice' AND m.rowid>? ORDER BY m.rowid",
-                    (since,),
-                )
-            ]
-
-    with api.app.state.store.read() as c:
-        since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "human:ana", sub, status="done", note="Approved.")
-    assert notices() == [(parent, sub)]
-    with api.app.state.store.transaction() as c:  # closing it after done is acceptance: nothing more
-        H.task_close(c, "human:ana", sub)
-    assert notices() == [(parent, sub)]
-    # A quiet update tells the parent the title and status, never the note.
-    with api.app.state.store.transaction() as c:
-        quiet = H.task_create(
+        budget = H.task_create(
             c, "bot:ops", "Approve the budget", "Yes or no.", "human:ana", parent_id=parent, lint=False
         )["id"]
-        H.task_update(c, "human:ana", quiet, status="done", note="Salary detail: 140k.", quiet=True)
+        since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+        H.task_done(c, "human:ana", sub, "Approved.", H.task(c, sub)["version"])
+        assert filed_wakes(c, since) == [], "the parent still waits on the budget"
+        H.task_done(c, "human:ana", budget, "Salary detail: 140k.", H.task(c, budget)["version"])
+        assert filed_wakes(c, since) == [parent]
         [body] = [
             m["body"]
             for m in H.messages(c, H.task(c, parent)["conversation_id"])
-            if (m.get("refs") or {}).get("subtask") == quiet
+            if ":filed:" in str(m.get("wake_key") or "")
         ]
-    assert "Approve the budget" in body and "140k" not in body
+    assert "Approve the launch copy: Done" in body and "Approve the budget: Done" in body
+    assert "Approved." not in body and "140k" not in body
 
 
 def test_a_turn_reads_only_its_own_lane_of_the_room_and_the_main_chat_keeps_the_task_lines(api):

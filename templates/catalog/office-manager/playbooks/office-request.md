@@ -13,7 +13,7 @@ a one-line reply, and any order or message is on the task as a draft or as place
 
 ## 1. Understand it
 
-    hub task show <id>
+    tico task show <id>
 
 What, where, since when, how bad. If it is unsafe (water, gas, electrics, a lock, a blocked exit), say
 so in the first line and tell the Operations Manager now; do not wait for the weekly page.
@@ -22,7 +22,7 @@ so in the first line and tell the Operations Manager now; do not wait for the we
 
 Skill: `skills/triage-an-office-request/SKILL.md`. Route by type:
 
-- IT (laptops, accounts, Wi-Fi password, software): hand to `it-support` with `hub task create --owner
+- IT (laptops, accounts, Wi-Fi password, software): hand to `it-support` with `tico task create --owner
   it-support` and tell the requester.
 - A fix in the building: the fixer from `knowledge/fixers.md`. Building-owned items (heating, lifts,
   doors) go to the landlord or building manager.
@@ -38,4 +38,4 @@ attached one), or the order. Record it on the task. Place a requested order only
 ## 4. Log and reply
 
 Add the row to `knowledge/requests.md` with the promised date. Reply to the requester in one line:
-who fixes it and by when. When it is fixed, close the row and `hub message send --fyi` the requester.
+who fixes it and by when. When it is fixed, close the row and `tico message send --fyi` the requester.

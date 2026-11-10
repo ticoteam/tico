@@ -1,5 +1,5 @@
 // Journey: the default-seed pages, as Dana, in one browser on one hub per viewport. It runs, in this order, what
-// were six journeys: the task board and sheet (tasks), Needs you (needsYou), a new bot in every page (newBot, which
+// were six journeys: a pipeline's task and its sheet (tasks), Needs you (needsYou), a new bot in every page (newBot, which
 // also checks the DM's message bubble, sender, time and sideways scroll), Settings (settings), Finance (finance) and
 // Strategy with goals (strategy). Each step opens its own page, keeps its own assertions and names itself in a
 // failure ("[needsYou] ..."). Runs on a phone and a desktop.
@@ -9,14 +9,12 @@ import type {PassContext} from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {journey, open, go, must, call, assertClean, drawn, expectFailure, shot, until, t} = require('./support/e2e.cts') as E2E.Api;
 
-interface TaskType {
-  id: string;
-  steps: {id: string; name: string; status: string}[];
-}
 interface TaskRecord {
   id: string;
   version: number;
   status: string;
+  stage?: {name: string} | null;
+  to_leave?: {requirement_id: string; met: boolean; answer: {value: string} | null}[];
 }
 
 // ---- e2e-tasks
@@ -31,8 +29,9 @@ const tasks = (() => {
         .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === label)?.innerText.replace(/\s+/g, ' ').trim() || '';
       return {
         open: !!m?.open,
+        id: m?.dataset.task || '',
         title: m?.querySelector<HTMLElement>('.tmodal-title')?.textContent!.trim() || '',
-        step: row('Step'),
+        stage: row('Stage'),
         created_at: m?.querySelector<HTMLElement>('.tmodal-age')?.getAttribute('title') || '',
         owner_id: row('Owner'),
         asked: row('Asked by'),
@@ -51,139 +50,154 @@ const tasks = (() => {
     return detail(page);
   }
 
-  // A typed task's step is its Step property (the header carries no state).
-  async function waitStep(page: Page, re: RegExp) {
+  // A task's stage is its Stage property (the header carries no state).
+  async function waitStage(page: Page, re: RegExp) {
     await page.waitForFunction(src => new RegExp(src, 'i').test([...document.querySelectorAll<HTMLElement>('#task-modal .prop')]
-      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Step')?.innerText || ''), re.source, {timeout: t(15000)});
+      .find(r => r.querySelector<HTMLElement>('.prop-k')?.textContent!.trim() === 'Stage')?.innerText || ''), re.source, {timeout: t(15000)});
+  }
+  async function waitHistory(page: Page, text: string) {
+    await page.waitForFunction(text => document.querySelector<HTMLElement>('#task-modal .task-comments')?.innerText.includes(text),
+      text, {timeout: t(15000)});
   }
 
   async function pick(page: Page, text: string) {
     await page.locator('.prop-pop:popover-open .tl-mi', {hasText: text}).first().click();
   }
+  // Reopen, from the task menu, with the note a reopen needs.
+  async function reopen(page: Page, why: string) {
+    await page.locator('#task-modal [data-task-more]').click();
+    await pick(page, 'Reopen');
+    const entry = page.locator('.prop-pop:popover-open .tl-menu-q').first();
+    await entry.fill(why);
+    await entry.press('Enter');
+  }
   return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
-    const launch = (await must<{type: TaskType}>(hub, 'dana', 'POST', 'task-types', {name: 'Launch', steps: [
-      {name: 'Plan', status: 'open'}, {name: 'Build', status: 'doing'}, {name: 'Ship', status: 'done'}]}, 'make the Launch type')).type;
-    const ship = launch.steps.find(s => s.name === 'Ship') as TaskType['steps'][number];
+    const pipeline = phone ? 'launch-phone' : 'launch';
+    await must(hub, 'dana', 'POST', `pipelines/${pipeline}`, {name: phone ? 'Launch on phone' : 'Launch', goal: 'Launch notes go out.',
+      stages: ['Plan', 'Build', 'Ship'].map(name => ({name, owner: 'assignee'}))}, 'make the Launch pipeline');
 
-    // Dana makes the task in the page, for the engineering-lead bot.
-    const page = await open(browser, hub, 'dana', {phone, hash: `#/tasks?view=list&type=${launch.id}`});
+    // Dana makes the task in the page, for the engineering-lead bot, in the Launch pipeline: it opens once made.
+    const page = await open(browser, hub, 'dana', {phone, hash: `#/tasks?pipeline=${pipeline}`});
     await page.click('#task-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
     const owner = await form.locator('select[name=owner] option', {hasText: 'engineering-lead'}).getAttribute('value');
     await form.locator('select[name=owner]').selectOption(owner!);
-    await form.locator('select[name=type]').waitFor({timeout: t(20000)});   // the Type field appears once a second type exists
-    await form.locator('select[name=type]').selectOption(launch.id);
+    await form.locator(`select[name=pipeline] option[value="${pipeline}"]`).waitFor({state: 'attached', timeout: t(20000)});
+    assert.equal(await form.locator('select[name=pipeline]').inputValue(), pipeline, `${where}: the form files it in the pipeline shown`);
     await form.locator('textarea[name=body]').fill('Write the note and send it to the list.');
     await form.locator('button[type=submit]').click();
-    const row = page.locator('.tl-row', {hasText: TITLE}).first();
-    await row.waitFor({timeout: t(20000)});
-    const id = (await row.getAttribute('data-task-key'))!.slice(1);
+    let d = await sheet(page, TITLE);
+    const id = d.id;
+    assert.ok(id, `${where}: the new task opens`);
+    await page.keyboard.press('Escape');
+    await page.locator(`#task-body [data-task="${id}"]`).waitFor({timeout: t(20000)});
     assertClean(page, `${where}: after create`);
 
     // The sheet draws what the task says. Dana asked for it, so she can close it; she is not its owner, so no Done.
     go(page, '#/task/' + id);
-    let d = await sheet(page, TITLE);
+    d = await sheet(page, TITLE);
     assert.match(d.owner_id, /engineering-lead/, `${where}: owner row names the bot`);
     assert.match(d.asked, /You/, `${where}: asked-by row names the requester`);
     assert.match(d.created_at, CREATED, `${where}: created time is drawn`);
-    assert.match(d.step, /Plan/, `${where}: a typed task shows its first step`);
+    assert.match(d.stage, /Plan/, `${where}: a new task is in the pipeline's first stage`);
     assert.ok(d.canClose, `${where}: the requester can close`);
     assert.ok(!d.canDone, `${where}: the requester cannot mark it done`);
     assertClean(page, `${where}: sheet`);
 
-    // Moved to Build from the Step menu. The history shows the move.
-    await page.locator('#task-modal [data-prop="step"]').click();
-    await pick(page, 'Build');
-    await waitStep(page, /Build/);
-    await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal .task-comments')?.innerText.includes('Build'),
-      null, {timeout: t(15000)});
-    d = await detail(page);
-    assert.match(d.history, /Build/, `${where}: history shows the step move`);
-    assertClean(page, `${where}: after the step move`);
+    // Moved on to Build from the Stage menu. The history shows the move.
+    await page.locator('#task-modal [data-prop="stage"]').click();
+    await pick(page, 'Move on');
+    await waitStage(page, /Build/);
+    await waitHistory(page, 'moved it to Build');
+    assertClean(page, `${where}: after the move`);
 
-    // The bot (the owner) finishes the work: the step moves to Ship, which is done.
-    const current = await must<{task?: TaskRecord} & Partial<TaskRecord>>(hub, 'engineering-lead', 'GET', `tasks/${id}`, undefined, 'the bot reads the task');
-    const version = (current.task || current).version;
-    await must(hub, 'engineering-lead', 'POST', `tasks/${id}`, {version, step: ship.id, status: 'done'}, 'the bot marks it done');
+    // The bot (the owner) moves it to Ship and finishes it there: in the last stage, done is Done.
+    const read = async (who: string) => (await must<{task: TaskRecord}>(hub, who, 'GET', `tasks/${id}`, undefined, `${who} reads the task`)).task;
+    await must(hub, 'engineering-lead', 'POST', `tasks/${id}/move`, {to: 'Ship', version: (await read('engineering-lead')).version}, 'the bot moves it to Ship');
+    await must(hub, 'engineering-lead', 'POST', `tasks/${id}/done`, {version: (await read('engineering-lead')).version}, 'the bot marks it done');
+    assert.equal((await read('dana')).status, 'done', 'the task is done in the hub');
     await page.reload();
     d = await sheet(page, TITLE);
-    assert.match(d.step, /Ship/, `${where}: the sheet shows the step the bot moved it to`);
-    await page.waitForFunction(() => document.querySelector<HTMLElement>('#task-modal .task-comments')?.innerText.includes('Ship'),
-      null, {timeout: t(15000)});
+    await waitHistory(page, 'moved it to Ship');
     d = await detail(page);
-    assert.match(d.history, /Ship/, `${where}: history shows the bot's move`);
-    assert.equal((await must<{task: TaskRecord}>(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'done', 'the task is done in the hub');
+    assert.match(d.stage, /Done/, `${where}: the sheet shows it done`);
+    assert.ok(!d.canClose && !d.canDone, `${where}: a done task offers neither Done nor Close`);
     assertClean(page, `${where}: after done`);
 
-    // Dana accepts it by closing it: the sheet closes with the task. She opens it again: a closed task offers no close, and
-    // its task menu reopens it.
+    // Dana reopens it from its task menu, saying why, then closes it: the sheet closes with the task. Opened again, a closed task
+    // offers no close.
+    await reopen(page, 'The note needs the new date');
+    await page.waitForFunction(() => !!document.querySelector<HTMLElement>('#task-modal [data-task-finish="close"]'), null, {timeout: t(15000)});
+    assert.equal((await read('dana')).status, 'open', `${where}: the hub has it reopened`);
+    assertClean(page, `${where}: after reopen`);
     await page.locator('#task-modal [data-task-finish="close"]').click();
     await page.waitForFunction(() => !(document.querySelector('#task-modal') as HTMLDialogElement | null)?.open, null, {timeout: t(15000)});
-    assert.equal((await must<{task: TaskRecord}>(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'closed', `${where}: the hub has it closed`);
+    assert.equal((await read('dana')).status, 'closed', `${where}: the hub has it closed`);
     assertClean(page, `${where}: after close`);
-    go(page, `#/tasks?view=list&type=${launch.id}`);
     go(page, '#/task/' + id);
     d = await sheet(page, TITLE);
     assert.ok(!d.canClose, `${where}: a closed task offers no close`);
-    await page.locator('#task-modal [data-task-more]').click();
-    await pick(page, 'Reopen');
+    await reopen(page, 'Send it after all');
     await page.waitForFunction(() => !!document.querySelector<HTMLElement>('#task-modal [data-task-finish="close"]'), null, {timeout: t(15000)});
-    assert.equal((await must<{task: TaskRecord}>(hub, 'dana', 'GET', `tasks/${id}`)).task.status, 'open', `${where}: the hub has it reopened`);
-    assertClean(page, `${where}: after reopen`);
+    assert.equal((await read('dana')).status, 'open', `${where}: the hub has it reopened again`);
+    assertClean(page, `${where}: after the second reopen`);
 
-    // The board for the type draws the card, and the page does not scroll sideways.
-    go(page, `#/tasks?view=board&type=${launch.id}`);
-    await page.locator(`.bcard[data-task-key="t${id}"]`).waitFor({timeout: t(20000)});
+    // The pipeline's columns draw the task, and the page does not scroll sideways.
+    go(page, `#/tasks?pipeline=${pipeline}&layout=columns`);
+    // A phone shows one stage at a time, under its tabs.
+    await page.locator(phone ? `.pv-phone .tk-row[data-task="${id}"]` : `.tk-card[data-task="${id}"]`).waitFor({timeout: t(20000)});
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    assert.ok(overflow <= 1, `${where}: board page scrolls sideways by ${overflow}px`);
-    assertClean(page, `${where}: board`);
-    await shot(page, `e2e-tasks-board-${where}`);
+    assert.ok(overflow <= 1, `${where}: the columns scroll the page sideways by ${overflow}px`);
+    assertClean(page, `${where}: columns`);
+    await shot(page, `e2e-tasks-columns-${where}`);
   };
 })();
 
 // ---- e2e-needs-you
 const needsYou = (() => {
-  // A question with no options is filed with Yes and No (question_tasks), so its card is a pick card with those two.
+  // A bot asks Dana on two of its own tasks: a question with two choices, and an OK. A task is one row of You (its newest
+  // ask), and the row opens its card.
   const QUESTION = 'Should we ship the beta on Nov 3?';
+  const OK = 'OK a $40 daily limit for builder-claude';
   return async ({hub, browser, phone}: PassContext) => {
     const where = phone ? 'phone' : 'desktop';
-    const asked = await must<{task: {id: string}}>(hub, 'engineering-lead', 'POST', 'task-questions', {
-      on: 'dana', question: QUESTION,
-    }, 'the bot asks a question');
-    const questionId = asked.task.id;
-    const approval = await must<{id?: string; approval?: {id: string}}>(hub, 'builder-claude', 'POST', 'approvals', {
-      kind: 'spend_limit', payload: {bot: 'builder-claude', daily_usd: 40},
-    }, 'the bot asks for an approval');
-    const approvalId = approval.id || approval.approval?.id;
-    assert.ok(questionId && approvalId, `${where}: both are recorded`);
+    const read = async (id: string) => (await must<{task: TaskRecord}>(hub, 'dana', 'GET', `tasks/${id}`, undefined, 'read the task')).task;
+    const ask = async (title: string, body: Record<string, unknown>, what: string) => {
+      const id = (await must<{task: {id: string}}>(hub, 'engineering-lead', 'POST', 'tasks', {title, body: 'For the beta.', owner: 'engineering-lead'},
+        'the bot files its task')).task.id;
+      const rid = (await must<{requirement_id: string}>(hub, 'engineering-lead', 'POST', `tasks/${id}/asks`,
+        {to: 'dana', version: (await read(id)).version, ...body}, what)).requirement_id;
+      assert.ok(rid, `${where}: ${what} is recorded`);
+      return async () => (await read(id)).to_leave?.find(r => r.requirement_id === rid);
+    };
+    const question = await ask('Plan the beta', {line: QUESTION, choices: ['Yes', 'No']}, 'the bot asks a question');
+    const ok = await ask('Set the beta budget', {line: OK, kind: 'ok'}, 'the bot asks for an OK');
 
-    const page = await open(browser, hub, 'dana', {phone, hash: '#/tasks?view=foryou'});
-    const card = page.locator('[data-need-card]');
-    await card.first().waitFor({timeout: t(20000)});
+    const page = await open(browser, hub, 'dana', {phone, hash: '#/tasks'});
+    // This OK binds no content (no grant), so its card's preview read is a 404 and the card shows the ask's own line.
+    expectFailure(page, 404, '^/api/v2/oks/[^/]+$', 'GET');
+    const row = (text: string) => page.locator('#task-body [data-need]', {hasText: text}).first();
+    await row(QUESTION).waitFor({timeout: t(20000)});
+    await row(OK).waitFor({timeout: t(20000)});
     assertClean(page, `${where}: needs you drawn`);
 
     // The question: answer it on its card.
-    await page.locator(`[data-need-card="task:${questionId}"]`).first().click();
-    await page.locator('#need-card', {hasText: QUESTION}).first().waitFor({timeout: t(20000)});
-    await page.locator('#need-card [data-dc="pick"]', {hasText: 'Yes'}).first().click();
-    // The card sends the answer when its undo toast runs out, so the hub is read until the answer is there.
-    const reply = await until(async () => {
-      const got = await must<{answers?: unknown[]}>(hub, 'dana', 'GET', `tasks/${questionId}/answers`, undefined, 'read the answers');
-      return (got.answers || [])[0];
-    }, `${where}: the answer on the hub`);
-    assert.ok(reply, `${where}: the hub has the answer to the question`);
+    await row(QUESTION).click();
+    const card = page.locator('#need-card');
+    await card.locator('.dc-q', {hasText: QUESTION}).first().waitFor({timeout: t(20000)});
+    await card.locator('[data-dc-choice="Yes"]').first().click();
+    // The card sends the answer when its undo runs out, so the hub is read until the answer is there.
+    const reply = await until(async () => (await question())?.answer?.value, `${where}: the answer on the hub`);
+    assert.equal(reply, 'Yes', `${where}: the hub has the answer to the question`);
     assertClean(page, `${where}: answered`);
 
-    // The approval: approve it on its card.
-    go(page, '#/tasks?view=foryou');
-    await page.locator(`[data-need-card="approval:${approvalId}"]`).first().click();
-    await page.locator('#need-card [data-dc="yes"]').first().click();
-    await until(async () => {
-      const decided = await must<{decision: string}>(hub, 'dana', 'GET', `approvals/${approvalId}`, undefined, 'read the approval');
-      return decided.decision === 'approved';
-    }, `${where}: the approval approved on the hub`);
+    // The OK: the card goes on to it (or its row opens it), and she approves it there.
+    if (!await card.evaluate(c => (c as HTMLDialogElement).open)) await row(OK).click();
+    await card.locator('.dc-q', {hasText: OK}).first().waitFor({timeout: t(20000)});
+    await card.locator('[data-dc="approve"]:not([disabled])').first().click();
+    await until(async () => (await ok())?.met, `${where}: the OK given on the hub`);
     assertClean(page, `${where}: approved`);
     await shot(page, `e2e-needs-you-${where}`);
   };
@@ -229,7 +243,7 @@ const newBot = (() => {
     assertClean(page, `${where}: chat`);
 
     // A task for it, made in the Tasks page: the owner choice is its id, labelled with its name.
-    go(page, '#/tasks?view=list');
+    go(page, '#/tasks');
     await page.click('#task-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
@@ -238,9 +252,10 @@ const newBot = (() => {
     await form.locator('select[name=owner]').selectOption(bot);
     await form.locator('textarea[name=body]').fill('The sheet is in Files; send it with a short note.');
     await form.locator('button[type=submit]').click();
-    const row = page.locator('.tl-row', {hasText: TITLE}).first();
-    await row.waitFor({timeout: t(20000)});
-    const task = (await row.getAttribute('data-task-key'))!.slice(1);
+    // The new task opens once made.
+    await page.waitForFunction(text => (document.querySelector('#task-modal') as HTMLDialogElement | null)?.open
+      && document.querySelector<HTMLElement>('#task-modal .tmodal-title')?.textContent!.trim() === text, TITLE, {timeout: t(20000)});
+    const task = (await page.locator('#task-modal').getAttribute('data-task'))!;
     assert.equal((await must<{task: {owner_id: string}}>(hub, 'dana', 'GET', 'tasks/' + task)).task.owner_id, 'bot:' + bot, `${where}: the task's owner is bot:<id>`);
     assertClean(page, `${where}: task made`);
 

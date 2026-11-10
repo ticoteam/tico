@@ -87,11 +87,9 @@ def raise_item(c, settings, bot, title, body):
 def close_item(c, task_id, note):
     """Close the Needs-you task a hold filed, once the bot is released. Quiet when it is already closed."""
     row = H.task(c, task_id) if task_id else None
-    if not row or row["status"] not in H.ACTIVE_STATUSES:
+    if not row or row["status"] != "open":
         return
-    try:
-        H.task_close(c, H.KEEPER, task_id, note=note, strict=False)
-    except H.Refused:
+    if H.attempt(c, H.task_close, H.KEEPER, task_id, note) is None:
         log.warning("Could not close the Needs-you task %s", task_id)
 
 

@@ -19,7 +19,7 @@ Done when: the copy exists as an ordinary bot the asker owns, or the update or s
 
 ## 1. Copy it
 
-    hub bot copy <original> [--name "<Display>"] [--slug <slug>] [--with-memory] [--computer <label>]
+    tico bot copy <original> [--name "<Display>"] [--slug <slug>] [--with-memory] [--computer <label>]
 
 - Ask about memory only if they raised it. The default leaves out the original's memory, notes, state and reports, and the copy starts
   with a blank `state.md`. `--with-memory` brings them too; use it only when they asked for the original's history.
@@ -28,7 +28,7 @@ Done when: the copy exists as an ordinary bot the asker owns, or the update or s
   their limit, offer to archive one they no longer need, or say an admin can raise it, and stop.
 - The original's files come from this computer's workspace, or, when the bot runs on another computer, from its GitHub repository
   (read-only, for a bot they may read). If the command says the original's repository isn't on this computer or GitHub, tell them its
-  owner has to publish it, and stop; if it is some other failure, `hub support file "<what they asked, what the command said>"`.
+  owner has to publish it, and stop; if it is some other failure, `tico support file "<what they asked, what the command said>"`.
 - `--computer` places the copy once it is made. Until GitHub has its history only this computer holds it, so another computer
   is refused (`placement.problem` says which to use): leave `--computer` out, take it live here, and move it once it is published.
 - The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Bot) are not copied. Explain that limit in one line and offer the nearest catalog role
@@ -44,7 +44,7 @@ The answer's `credentials` lists what the original's tools need:
 
 - **`granted`**: the requester is a credential administrator, so the copy already has those, as grants. Nothing more to do.
 - **`needs`** ("needs credential X"): open the card for each and do not wait for the answer to do the rest:
-  `hub credential request <VARIABLE> --for-bot <copy> --label "your Jira credential" ...` (`playbooks/connect-a-tool.md`). When the
+  `tico credential request <VARIABLE> --for-bot <copy> --label "your Jira credential" ...` (`playbooks/connect-a-tool.md`). When the
   credential is already stored and only they lack the right to share it, say who can (the message names the administrators), or follow
   `playbooks/share-a-credential.md` if they are one. Never copy a value from the original's files.
 
@@ -52,15 +52,15 @@ The answer's `credentials` lists what the original's tools need:
 
 Read the copy's `AGENT.md` and `bot.yaml` once for what belonged to the original's people, not the role: a person's name, a mailbox or
 address, a channel, a customer, a file path. List what you found in your report and change it only as they tell you; a message bot's
-mailbox is one person's, so never keep the original's. Then `hub bot check <copy>` and fix what it fails on, and commit in the copy's
+mailbox is one person's, so never keep the original's. Then `tico bot check <copy>` and fix what it fails on, and commit in the copy's
 repository.
 
-If they asked you to take it live, `hub bot go-live <copy>` (`playbooks/build-me-a-bot.md`, step 6). Otherwise it stays planned and you
+If they asked you to take it live, `tico bot go-live <copy>` (`playbooks/build-me-a-bot.md`, step 6). Otherwise it stays planned and you
 say so.
 
 ## 4. "Update my copy from the original"
 
-Only when they ask. `hub bot update-from-original <copy>`.
+Only when they ask. `tico bot update-from-original <copy>`.
 
 It compares the original's `AGENT.md`, `skills/` and `playbooks/` at the commit the copy was made from and now, with the copy's files, and
 merges file by file with git. The answer's `status`:
@@ -70,13 +70,13 @@ merges file by file with git. The answer's `status`:
 - **`current`**: nothing new in the original. Say so.
 - **`conflicts`**: nothing was changed. Each conflict shows what the original changed and what the copy changed in the same file. Tell the
   person in plain words what differs, ask which they want (or both, combined), write that into the copy's file, commit it, then run
-  `hub bot update-from-original <copy> --resolved` so the copy counts as up to date. Do not guess which side wins.
+  `tico bot update-from-original <copy> --resolved` so the copy counts as up to date. Do not guess which side wins.
 
 If it says the copy has changes that are not committed, commit or discard them first.
 
 ## 5. "Suggest this to the original"
 
-Only when they ask. `hub bot suggest-to-original <copy> [--paths AGENT.md skills/<name> ...]`.
+Only when they ask. `tico bot suggest-to-original <copy> [--paths AGENT.md skills/<name> ...]`.
 
 It takes the copy's own changes to its instructions and skills. If they may write to the original and GitHub is connected, it opens a pull
 request on the original's repository and answers its link; otherwise it files a task for the original's owner with the diff. Say which
@@ -86,5 +86,5 @@ original first. Never push to the original's repository yourself.
 ## When it goes sideways
 
 - **`on_behalf_of` refused.** The run was not started by a human's own chat message or their own comment on their open task. Tell whoever is on the task; do not retry.
-- **"not a copy".** That bot was not made with `hub bot copy`, so there is nothing to update from or suggest to.
-- **A product problem** (the command fails in a way that is not the person's rights): `hub support file`, with what you saw.
+- **"not a copy".** That bot was not made with `tico bot copy`, so there is nothing to update from or suggest to.
+- **A product problem** (the command fails in a way that is not the person's rights): `tico support file`, with what you saw.

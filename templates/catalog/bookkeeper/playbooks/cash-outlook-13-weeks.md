@@ -7,10 +7,10 @@ Method: `skills/build-the-13-week-cash-forecast/SKILL.md`, the direct method, ca
 you build or roll the forecast, and `skills/reconcile-a-cash-figure/SKILL.md` before a cash or runway figure goes to the owner
 as an alarm.
 
-Inputs: the bank balances (`hub api GET finance/pay-from`); open invoices and their payment history (`hub finance search
---kind invoice`, `hub api GET finance/invoices/<id>`); bills due and scheduled (`hub finance search --kind bill`); payroll and
-tax dates from `hub calendar list`; rent and loan schedules the owner gave on a task; last week's
-`knowledge/cash-forecast.md`; and the cash-flow report for the last three closed months (`hub finance report cash_flow`).
+Inputs: the bank balances (`tico api GET finance/pay-from`); open invoices and their payment history (`tico finance search
+--kind invoice`, `tico api GET finance/invoices/<id>`); bills due and scheduled (`tico finance search --kind bill`); payroll and
+tax dates from `tico calendar list`; rent and loan schedules the owner gave on a task; last week's
+`knowledge/cash-forecast.md`; and the cash-flow report for the last three closed months (`tico finance report cash_flow`).
 
 ## Steps
 
@@ -20,7 +20,7 @@ tax dates from `hub calendar list`; rent and loan schedules the owner gave on a 
    Later weeks (5 to 13) are estimates from collection history and known commitments, labelled as estimates.
 4. Keep to 8 to 12 lines, each naming its source and date.
 5. Find the lowest week, its closing cash and the gap to the minimum cash line in `knowledge/cash-thresholds.md`. Runway is
-   `hub finance metric runway_months`, shown with its as-of time and its inputs.
+   `tico finance metric runway_months`, shown with its as-of time and its inputs.
 6. Rewrite `knowledge/cash-forecast.md` with the rolled weeks. Commit it with the summary.
 
 ## Checks

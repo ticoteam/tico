@@ -7,7 +7,7 @@ sparkline and a pace work the way they do for a KPI a person or the Strategy Bot
 
   tasks_done_7d       tasks the bot owns that were finished in the last seven days
   first_response_min  median minutes from a message to the bot to its first reply in that conversation (7 days)
-  approval_rate_30d   the share of its approval requests a person approved, over the last thirty days
+  approval_rate_30d   the share of the OKs it asked a person for that they gave, over the last thirty days
   failed_runs_7d      runs that ended failed in the last seven days
   cost_7d             what its runs cost in the last seven days, estimated from their tokens (usage.py); runs on a
                       subscription sign-in are left out
@@ -17,7 +17,7 @@ no run recorded a cost) has no reading, and no reading is missing data, never ze
 """
 
 import statistics
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 
 from . import hubdb as H
 
@@ -45,8 +45,8 @@ METRICS = {
         "unit": "%",
         "direction": "up",
         "window": 30,
-        "definition": "Share of this bot's approval requests that a person approved, of those "
-        "decided in the last 30 days.",
+        "definition": "Share of the OKs this bot asked a person for that the person gave, of those "
+        "answered (OK or sent back) in the last 30 days.",
     },
     "failed_runs_7d": {
         "name": "Failed runs (7d)",
@@ -98,12 +98,10 @@ def private_history(conn, slug):
     return bool(
         conn.execute(
             "SELECT 1 FROM tasks t WHERE (t.private IS NULL OR t.private<>0) AND "
-            "(t.owner_id=? OR t.requester_id=? OR t.carried_by IN (SELECT id FROM attempts WHERE bot_id=?) "
+            "(t.owner_id=? OR t.requester_id=? "
             "OR t.id IN (SELECT " + H.MESSAGE_TASK_SQL + " FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot_id=?) "
-            "OR t.id IN (SELECT v.value FROM events e JOIN attempts a ON a.id=e.target "
-            "JOIN json_each(e.detail,'$.tasks') v WHERE a.bot_id=? AND e.action='task.next-run.carried')) LIMIT 1",
-            (actor, actor, slug, slug, slug),
+            "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot_id=?)) LIMIT 1",
+            (actor, actor, slug),
         ).fetchone()
     )
 
@@ -136,11 +134,12 @@ def value(conn, slug, key, at=None, *, _privacy_checked=False):
         return round(statistics.median(gaps), 1) if gaps else None
     if key == "approval_rate_30d":
         rows = conn.execute(
-            "SELECT decision FROM approvals WHERE requested_by_id=? AND decision IN ('approved','declined') "
-            "AND decided_at>? AND decided_at<=?",
+            "SELECT a.answer FROM requirements r JOIN answers a ON a.requirement_id=r.id WHERE r.kind='ok' "
+            "AND r.added_by_id=? AND a.undone_at IS NULL AND a.answer IN ('ok','no') AND a.created_at>? "
+            "AND a.created_at<=?",
             (actor, since, end),
         ).fetchall()
-        return round(100 * sum(r[0] == "approved" for r in rows) / len(rows), 1) if rows else None
+        return round(100 * sum(r[0] == "ok" for r in rows) / len(rows), 1) if rows else None
     if key == "failed_runs_7d":
         return float(
             conn.execute(

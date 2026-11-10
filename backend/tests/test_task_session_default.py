@@ -75,9 +75,10 @@ def test_a_retired_assignment_hands_its_task_back_awake_but_waits_out_a_running_
         )
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops-a1','ana')")
         BS.write(c, 'ops-a1', {'assignment_branch': True, 'shared_from': 'ops'})
-        c.execute("UPDATE tasks SET owner_id='bot:ops-a1',status='doing' WHERE id=?", (task["id"],))
         job = c.execute("SELECT id FROM jobs WHERE bot_id='ops'").fetchone()[0]
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
+        H.task_reassign(c, H.KEEPER, task["id"], "ops-a1", "The assignment works it.", H.task(c, task["id"])["version"])
+        c.execute("DELETE FROM jobs WHERE bot_id='ops-a1'")
         c.execute(
             "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
             "VALUES('a1',?,'ops-a1',?,0,'h','running',?,?)",

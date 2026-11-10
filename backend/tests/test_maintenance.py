@@ -47,7 +47,7 @@ def inline(store, auth, run_id, only, wait):
 
 
 def test_the_steps_run_in_one_fixed_order_and_the_api_lists_them_so(api):
-    assert M.ORDER == ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
+    assert M.ORDER == ("collect", "clean_up", "check_health", "learn", "suggest", "update", "dream")
     assert [s["key"] for s in get(api, "maintenance")["steps"]] == list(M.ORDER)
     assert all("old_timer" not in s for s in get(api, "maintenance")["steps"]), "every step runs in the run"
     suggest = next(s for s in get(api, "maintenance")["steps"] if s["key"] == "suggest")
@@ -105,7 +105,6 @@ def test_run_now_runs_every_step_in_order_like_a_scheduled_run(api):
     assert [s["step"] for s in run["steps"]] == list(M.ORDER), "one log row per step, in order"
     steps = {s["step"]: s for s in run["steps"]}
     assert steps["collect"]["status"] == "ran"
-    assert steps["find_stuck"]["status"] == "ran" and cursor(store, "find_stuck"), "Find stuck is live"
     assert steps["learn"]["status"] == "off", "learn is off by default"
     assert steps["check_health"]["status"] == "ran"
     assert steps["suggest"]["status"] == "skipped" and steps["suggest"]["reason"] in (
@@ -225,22 +224,6 @@ def _migrated_rows(registry, rules):
             "SELECT key, enabled, frequency, custom_every, custom_unit FROM maintenance_steps"
         )
     }
-
-
-def _migrated(registry, rules):
-    """The step switches after the migration runs on a bare database."""
-    return {key: row[0] for key, row in _migrated_rows(registry, rules).items()}
-
-
-def test_only_an_explicit_roundup_switch_sets_find_stuck_and_stale_review_never_does(monkeypatch):
-    """Stale review defaults off, so a saved off stale review, or TICO_STALE_REVIEW=0, must not turn Find stuck off."""
-    monkeypatch.setenv("TICO_STALE_REVIEW", "0")
-    assert _migrated({}, {"stale_review": False})["find_stuck"] == 1, "Find stuck keeps its default (on)"
-    assert _migrated({}, {})["find_stuck"] == 1
-    assert _migrated({}, {"stale_review": True})["find_stuck"] == 1
-    assert _migrated({"task_roundup": {"on": False}}, {"stale_review": True})["find_stuck"] == 0
-    assert _migrated({"task_roundup": {"on": True}}, {"stale_review": False})["find_stuck"] == 1
-    assert _migrated({"learnings": {"on": True}}, {})["learn"] == 1, "a saved Learn switch carries over"
 
 
 def test_replaying_the_migration_changes_nothing(api):
@@ -666,3 +649,23 @@ def test_maintenance_has_one_monthly_cap_and_ignores_a_saved_rules_cap(api, monk
     body = patch(api, "maintenance", {"monthly_cap_usd": 80})
     assert body["settings"]["monthly_cap_usd"] == body["settings"]["monthly_cap_usd_in_effect"] == 80
     assert not any(key.startswith("rules_") for key in body["settings"])
+
+
+def test_the_real_clean_up_step_runs_and_prunes_old_maintenance_history(api):
+    """Clean up, as Maintenance runs it (no stand-in): it finishes without raising and drops runs past 30 days."""
+    from backend.maintenance_steps import clean_up
+
+    store, _ = stores(api)
+    now = H.now()
+    old = H.shift(now, days=-(clean_up.RUN_HISTORY_DAYS + 1))
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,finished_at,result) "
+            "VALUES('old','schedule:old','schedule',NULL,?,?,?,'ran')",
+            (old, old, old),
+        )
+    with store.read() as c:
+        out = M.LIVE["clean_up"](c, {"store": store, "now": now})
+    assert out["status"] == "ran", out
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM maintenance_runs WHERE id='old'").fetchone()

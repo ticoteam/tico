@@ -1,4 +1,4 @@
-"""The `hub` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
+"""The `tico` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
 depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
@@ -23,7 +23,7 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-ALIASES = {"approvals", "automations", "bots", "rule", "tasks"}
+ALIASES = {"automations", "bots", "rule", "tasks"}
 SUBCOMMANDS = [
     "whoami",
     "alerts",
@@ -50,8 +50,6 @@ SUBCOMMANDS = [
     "assistant",
     "tag",
     "task",
-    "requirements",
-    "requirement",
     "replay",
     "goal",
     "kpi",
@@ -71,13 +69,11 @@ SUBCOMMANDS = [
     "relay",
     "call",
     "sleep",
+    "ok",
     "notice",
     "settings",
     "release",
-    "approval",
     "webhook",
-    "pipeline",
-    "pipeline-manager",
     "brief",
     "mcp",
     "origin",
@@ -579,18 +575,18 @@ class Parser(unittest.TestCase):
         choices = text.split("{", 1)[1].split("}", 1)[0].split(",")
         self.assertEqual([c for c in choices if c not in ALIASES], SUBCOMMANDS)
 
-    def test_task_update_help_and_mcp_offer_only_writable_statuses(self):
+    def test_a_task_is_open_done_or_closed_and_update_edits_fields_only(self):
         from clients import hubtools
 
-        code, out = run_hub("task", "update", "--help")
-        self.assertEqual(code, 0, out)
-        self.assertNotIn("closed", out["_stdout"])
-        statuses = ["open", "doing", "waiting", "review", "ready", "done", "declined"]
-        schema = next(t["inputSchema"] for t in hubtools.TOOLS if t["name"] == "hub_task_update")
-        self.assertEqual(schema["properties"]["status"]["enum"], [status for status in statuses if status != "ready"])
-        for status in statuses:
-            args = hubcli.parser().parse_args(["task", "update", "T1", "--status", status])
-            self.assertEqual(args.status, status)
+        for status in ("open", "done", "closed"):
+            self.assertEqual(hubcli.parser().parse_args(["task", "list", "--status", status]).status, [status])
+        schema = hubtools.BY_NAME["hub_task_list"]["inputSchema"]
+        self.assertEqual(schema["properties"]["status"]["items"]["enum"], ["open", "done", "closed"])
+        update = hubtools.BY_NAME["hub_task_update"]["inputSchema"]["properties"]
+        self.assertFalse({"status", "step", "type", "owner", "waiting_on"} & set(update))
+        for gone in (["--status", "doing"], ["--step", "Build"], ["--type", "Dev"], ["--owner", "ana"]):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                hubcli.parser().parse_args(["task", "update", "T1", *gone])
 
 
 class Remote(unittest.TestCase):
@@ -634,18 +630,41 @@ class Stub(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         self.seen.append(("POST", self.path, self.headers.get("Authorization"), body))
         if self.path == "/api/v2/tasks/T1":
-            return self.reply(200, {"task": {"id": "T1", "status": body.get("status"), "version": 4}})
+            return self.reply(200, {"task": {"id": "T1", "title": body.get("title"), "version": 4}})
+        if self.path == "/api/v2/tasks/T1/move":
+            return self.reply(
+                409,
+                {
+                    "error": "task_not_met",
+                    "detail": "Not moved. Not met: Owner says done.",
+                    "missing": ["Owner says done"],
+                    "next": ['tico task move T1 next -m "why" --version 3', 'tico task close T1 -m "why" --version 3'],
+                    "version": 3,
+                },
+            )
         if self.path == "/api/v2/tasks" and body.get("check_model"):
             return self.reply(200, {"task": {"id": "T2", "owner": body["owner"], "title": body["title"]}})
         if self.path == "/api/v2/bots/writer/tools":
             return self.reply(200, {"ok": True, "dry_run": bool(body.get("dry_run"))})
-        if self.path == "/api/v2/approvals":
-            return self.reply(200, {"id": "ap-1", "kind": body.get("kind"), "decision": None})
+        if self.path == "/api/v2/support/reports":
+            return self.reply(200, {"id": "r-1", "requirement_id": "r-1", "task_id": "T9", "status": "pending"})
         if self.path == "/api/v2/support/tickets/from-approval":
             return self.reply(200, {"ticket": {"id": "sup_1"}, "approval": body.get("approval"), "again": False})
         if any(
             part in self.path
-            for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings", "/waits", "/snooze")
+            for part in (
+                "/requesters",
+                "/publication-preview",
+                "/moderate",
+                "/roadmaps/settings",
+                "/waits",
+                "/snooze",
+                "/comments",
+                "/api/v2/webhooks",
+                "/api/v2/release/now",
+                "/oks",
+                "/thumbs",
+            )
         ):
             return self.reply(200, {"ok": True})
         self.reply(422, {"error": {"code": "refused", "detail": "rule 2: not on the roster"}})
@@ -677,19 +696,41 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual(out["actor"], "bot:coo")
         self.assertEqual(Stub.seen[0][2], "Bearer turn-token")
 
-    def test_task_update_reads_the_version_first_so_a_stale_write_cannot_clobber(self):
-        code, out = run_hub("task", "update", "T1", "--status", "done", "--note", "shipped", env=self.env)
-        self.assertEqual(code, 0)
-        self.assertEqual(out["status"], "done")
+    def test_task_update_sends_the_version_it_was_given_and_never_reads_one(self):
+        code, out = run_hub(
+            "task", "update", "T1", "--title", "Ship it", "-m", "renamed", "--version", "2", env=self.env
+        )
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out["title"], "Ship it")
+        self.assertNotIn(("GET", "/api/v2/tasks/T1"), [(m, p) for m, p, _, _ in Stub.seen])
         posted = next(b for m, p, _, b in Stub.seen if m == "POST")
-        self.assertEqual((posted["version"], posted["status"], posted["note"]), (3, "done", "shipped"))
+        self.assertEqual(posted, {"version": 2, "title": "Ship it", "note": "renamed"})
 
-    def test_task_update_closed_gives_close_hint_without_an_api_call(self):
-        for status_arg in (("--status", "closed"), ("--status=closed",)):
-            code, out = run_hub("task", "update", "T1", *status_arg, env=self.env)
+    def test_a_change_without_a_version_says_to_add_the_version_and_sends_nothing(self):
+        from clients.hubtools import version_needed
+
+        for argv in (["task", "update", "T1", "--title", "x"], ["task", "done", "T1", "-m", "x"]):
+            Stub.seen.clear()
+            code, out = run_hub(*argv, env=self.env)
             self.assertEqual(code, 1, out)
-            self.assertIn("use `hub task close <id>`", out["_stderr"])
-            self.assertEqual(Stub.seen, [])
+            self.assertEqual((out["error"], out["detail"]), ("usage", version_needed("T1")))
+            self.assertIn("--version N", out["detail"])
+            self.assertFalse([s for s in Stub.seen if s[0] == "POST"])
+
+    def test_a_refusal_prints_what_is_missing_and_the_commands_allowed_next(self):
+        code, out = run_hub("task", "move", "T1", "next", "--version", "3", env=self.env)
+        self.assertEqual(code, 2, out)
+        self.assertEqual(
+            out["_stdout"].strip().splitlines(),
+            [
+                "Not moved. Not met: Owner says done.",
+                "Missing:",
+                "  Owner says done",
+                "You can:",
+                '  tico task move T1 next -m "why" --version 3',
+                '  tico task close T1 -m "why" --version 3',
+            ],
+        )
 
     def test_task_list_still_filters_closed_tasks(self):
         code, out = run_hub("task", "list", "--status", "closed", env=self.env)
@@ -717,8 +758,8 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual(code, 0, out)
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks")
         self.assertEqual(
-            (posted["owner"], posted["check_model"], posted["check_role"], posted["relations"]),
-            ("bot:coo", "grok", "review", [{"task": "T1", "kind": "parent"}]),
+            (posted["owner"], posted["check_model"], posted["check_role"], posted["parent"]),
+            ("bot:coo", "grok", "review", "T1"),
         )
         # With no value, the server picks the company's check model.
         code, out = run_hub(
@@ -754,22 +795,23 @@ class AgainstAStub(unittest.TestCase):
         self.assertTrue(posted["dry_run"])
         self.assertEqual(posted["mcp"]["url"], "https://mcp.notion.example/mcp")
 
-    def test_support_report_drafts_an_approval_with_the_exact_message_and_send_names_it(self):
+    def test_support_report_asks_an_ok_on_the_exact_message_and_send_names_it(self):
         import hashlib
 
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "report.md"
-            report.write_bytes(b"hub task update fails.\r\nError: refused (version)\r\n\r\n")
-            code, out = run_hub("support", "report", "--file", str(report), "--no-ids", env=self.env)
+            report.write_bytes(b"tico task update fails.\r\nError: refused (version)\r\n\r\n")
+            argv = ("support", "report", "--file", str(report), "--no-ids", "--task", "T9")
+            code, out = run_hub(*argv, env=self.env)
         self.assertEqual(code, 0, out)
-        self.assertEqual(out["approval"], "ap-1")
-        self.assertIn("hub support send --approval ap-1", out["next"])
-        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/approvals")
-        message = "hub task update fails.\nError: refused (version)"
+        self.assertEqual((out["ok"], out["task_id"]), ("r-1", "T9"))
+        self.assertIn("tico support send --ok r-1", out["next"])
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/reports")
+        message = "tico task update fails.\nError: refused (version)"
         self.assertEqual(
             posted,
             {
-                "kind": "support",
+                "task_id": "T9",
                 "payload": {
                     "message": message,
                     "content_sha256": hashlib.sha256(message.encode()).hexdigest(),
@@ -777,26 +819,106 @@ class AgainstAStub(unittest.TestCase):
                 },
             },
         )
-        code, out = run_hub("support", "send", "--approval", "ap-1", env=self.env)
+        code, out = run_hub("support", "send", "--ok", "r-1", env=self.env)
         self.assertEqual((code, out["ticket"]["id"]), (0, "sup_1"))
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
-        self.assertEqual(posted, {"approval": "ap-1"})
+        self.assertEqual(posted, {"approval": "r-1"})
 
-    def test_task_wait_and_snooze_send_their_note(self):
+    def test_a_public_reply_names_the_ok_a_person_gave_and_the_old_approval_flag_is_gone(self):
+        def last(path):
+            return [b for m, p, _, b in Stub.seen if m == "POST" and p == path][-1]
+
+        code, out = run_hub("task", "comment", "T1", "Fixed in 1.2", "--public", "--ok", "r-7", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(last("/api/v2/tasks/T1/comments")["approval_id"], "r-7")
+        code, out = run_hub("task", "comment-edit", "T1", "m-1", "Fixed in 1.2.1", "--ok", "r-8", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(last("/api/v2/tasks/T1/comments/m-1"), {"text": "Fixed in 1.2.1", "approval_id": "r-8"})
+        for argv in (["comment", "T1", "x"], ["comment-edit", "T1", "m-1", "x"]):
+            with self.assertRaises(SystemExit):
+                hubcli.parser().parse_args(["task", *argv, "--approval-id", "a-1"])
+
+    def test_an_ok_bound_to_a_subject_is_asked_on_the_task_and_used_once_by_its_id(self):
+        content = '{"project":"launch","usd":"10.00"}'
+        argv = ("task", "ask", "T1", "Raise it?", "--to", "human:ana", "--for", "budget_raise:launch")
+        code, out = run_hub(*argv, "--content", content, "--version", "3", env=self.env)
+        self.assertEqual(code, 0, out)
+        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks/T1/oks"]
+        self.assertEqual(
+            posted,
+            [
+                {
+                    "to": "human:ana",
+                    "line": "Raise it?",
+                    "version": 3,
+                    "subject": "budget_raise:launch",
+                    "content": {"project": "launch", "usd": "10.00"},
+                }
+            ],
+        )
+        code, out = run_hub("ok", "use", "r-1", "--for", "budget_raise:launch", "--content", content, env=self.env)
+        self.assertEqual(code, 0, out)
+        used = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/oks/r-1/use"]
+        self.assertEqual(used, [{"subject": "budget_raise:launch", "content": {"project": "launch", "usd": "10.00"}}])
+        code, _ = run_hub(*argv, "--choices", "a,b", "--content", content, "--version", "3", env=self.env)
+        self.assertNotEqual(code, 0)  # a bound OK is never a question with choices
+
+    def test_an_ask_is_rated_through_its_task_and_approval_is_no_feedback_subject(self):
+        from clients import hubtools
+
+        code, out = run_hub("task", "thumbs", "T1", "r-2", "down", "--note", "Don't ask, just archive", env=self.env)
+        self.assertEqual(code, 0, out)
+        rated = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks/T1/asks/r-2/thumbs"]
+        self.assertEqual(rated, [{"up": False, "note": "Don't ask, just archive"}])
+        with self.assertRaises(SystemExit):
+            hubcli.parser().parse_args(["task", "thumbs", "T1", "r-2", "sideways"])
+        for argv in (["feedback", "give", "approval", "a-1", "up"], ["feedback", "markers", "approval", "a-1"]):
+            with self.assertRaises(SystemExit):
+                hubcli.parser().parse_args(argv)
+        hubcli.parser().parse_args(["feedback", "markers", "ask", "v-1:r-2"])
+        give = hubtools.BY_NAME["hub_feedback_give"]["inputSchema"]["properties"]["subject_type"]["enum"]
+        markers = hubtools.BY_NAME["hub_feedback_markers"]["inputSchema"]["properties"]["subject_type"]["enum"]
+        self.assertEqual((give, markers), (["message", "task"], ["message", "task", "ask"]))
+
+    def test_a_webhook_filters_by_pipeline_and_task_types_are_gone(self):
+        from clients import hubtools
+
+        argv = ("webhook", "create", "--name", "Ops", "--url", "https://hooks.example.test/x", "--pipelines", "General")
+        code, out = run_hub(*argv, env=self.env)
+        self.assertEqual(code, 0, out)
+        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/webhooks"][-1]
+        self.assertEqual(posted["filter"], {"pipelines": ["General"]})
+        with self.assertRaises(SystemExit):
+            hubcli.parser().parse_args(["webhook", "update", "w-1", "--task-types", "Bug"])
+        self.assertIn(
+            "pipelines", hubtools.BY_NAME["hub_webhook_create"]["inputSchema"]["properties"]["filter"]["properties"]
+        )
+
+    def test_settings_ask_is_gone_and_release_now_keeps_its_route(self):
+        from clients import hubtools
+
+        with self.assertRaises(SystemExit):
+            hubcli.parser().parse_args(["settings", "ask", "team.rules.admin_sql", "on"])
+        self.assertNotIn("hub_settings_ask", hubtools.BY_NAME)
+        code, out = run_hub("release", "now", "--note", "hotfix", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual([b for m, p, _, b in Stub.seen if p == "/api/v2/release/now"], [{"note": "hotfix"}])
+        for name in ("hub_release_now", "hub_release_schedule"):
+            self.assertNotIn("Pending Release", hubtools.BY_NAME[name]["description"])
+            self.assertNotIn("ticket", hubtools.BY_NAME[name]["description"])
+
+    def test_task_snooze_sends_its_date_why_and_version(self):
         def last(method, path):
             return [b for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
 
-        pr = "pr:https://github.com/acme/app/pull/9"
-        self.assertEqual(run_hub("task", "wait", "T1", "--on", pr, "--note", "Check the migration", env=self.env)[0], 0)
+        argv = ("task", "snooze", "T1", "--until", "2026-11-14", "-m", "Vendor replies by Nov 14", "--version", "3")
+        self.assertEqual(run_hub(*argv, env=self.env)[0], 0)
         self.assertEqual(
-            last("POST", "/api/v2/tasks/T1/waits"), {"on": pr, "remove": False, "note": "Check the migration"}
+            last("POST", "/api/v2/tasks/T1/snooze"),
+            {"version": 3, "until": "2026-11-14", "why": "Vendor replies by Nov 14"},
         )
-        self.assertEqual(run_hub("task", "wait", "T1", "--on", "release:v0.3.64", env=self.env)[0], 0)
-        self.assertNotIn("note", last("POST", "/api/v2/tasks/T1/waits"), "no note is sent when none is given")
-        self.assertEqual(
-            run_hub("task", "snooze", "T1", "--until", "2026-11-02", "--note", "Ask the landlord", env=self.env)[0], 0
-        )
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"until": "2026-11-02", "note": "Ask the landlord"})
+        self.assertEqual(run_hub("task", "snooze", "T1", "-m", "On ice", "--version", "3", env=self.env)[0], 0)
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"version": 3, "why": "On ice"})
 
     def test_roadmap_commands_send_what_their_tools_send(self):
         def last(method, path):
@@ -883,7 +1005,7 @@ ONBOARDING = {
 
 
 class BotSetup(unittest.TestCase):
-    """`hub template list` and `hub bot create|check`: the three commands BotOps needs in a turn.
+    """`tico template list` and `tico bot create|check`: the three commands BotOps needs in a turn.
 
     The parsing is the real parser and the work is the real `clients/catalog.py`; only the API is
     a fake, so what these assert is which endpoints a command reads and what it writes to disk.
@@ -984,7 +1106,7 @@ class BotSetup(unittest.TestCase):
         self.client.github = APIError("forbidden", "seo is not a bot being set up or running", 403, False)
         made = self.run_command("bot", "create", "seo", "--template", "specialist")
         self.assertIn("skipped", made["github"])
-        self.assertIn("hub bot repo-create seo --empty", made["github"]["note"])
+        self.assertIn("tico bot repo-create seo --empty", made["github"]["note"])
 
     def test_a_bot_created_without_a_slug_takes_the_one_picked_from_its_name(self):
         # The server picks it in a person's turn; the build and its repository use that slug.
@@ -1014,57 +1136,34 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
-@pytest.mark.parametrize('choice', ['yes', 'no'])
-def test_creation_qa_override_and_paths_survive_cli_and_mcp(monkeypatch, choice):
+def test_create_sends_its_pipeline_and_parent_the_same_from_the_cli_and_mcp(monkeypatch):
     from clients import remotecli, hubtools
 
     sent = []
 
     class Api:
         def get(self, path, **kw):
-            return {'actor': 'human:ana'}
+            return {"actor": "human:ana"}
 
         def post(self, path, body, **kw):
-            sent.append(body)
-            return {'task': {'id': 'synthetic'}}
+            sent.append((path, body))
+            return {"task": {"id": "synthetic"}}
 
     api = Api()
-    monkeypatch.setenv('HUB_API_URL', 'https://api.example.invalid')
-    monkeypatch.setattr(remotecli, 'Client', lambda *a, **kw: api)
-    args = hubcli.parser().parse_args(
-        [
-            'task',
-            'create',
-            '--owner',
-            'cpo',
-            '--title',
-            'UI change',
-            '--body',
-            'x',
-            '--qa',
-            choice,
-            '--change-path',
-            'ui/page.js',
-            '--qa-not-checkable-live',
-        ]
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: api)
+    argv = ["task", "create", "--owner", "cpo", "--title", "UI change", "--body", "x", "--pipeline", "general"]
+    remotecli.run(hubcli.parser().parse_args(argv + ["--parent", "T1"]))
+    hubtools.BY_NAME["hub_task_create"]["fn"](
+        api, {"owner": "cpo", "title": "UI change", "body": "x", "pipeline": "general", "parent": "T1"}
     )
-    remotecli.run(args)
-    hubtools.BY_NAME['hub_task_create']['fn'](
-        api,
-        {
-            'owner': 'cpo',
-            'title': 'UI change',
-            'body': 'x',
-            'qa': choice == 'yes',
-            'change_paths': ['ui/page.js'],
-            'qa_not_checkable_live': True,
-        },
-    )
-    assert len(sent) == 2
-    assert all(
-        p['qa'] is (choice == 'yes') and p['change_paths'] == ['ui/page.js'] and p['qa_not_checkable_live'] is True
-        for p in sent
-    )
+    assert len(sent) == 2 and sent[0] == sent[1]
+    path, body = sent[0]
+    assert path == "tasks" and (body["pipeline"], body["parent"]) == ("general", "T1")
+    assert not {"type", "step", "status", "relations", "next_run", "qa"} & set(body)
+    for gone in (["--type", "Dev"], ["--step", "Build"], ["--status", "doing"], ["--next-run"], ["--qa", "yes"]):
+        with pytest.raises(SystemExit):
+            hubcli.parser().parse_args(argv + gone)
 
 
 def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
@@ -1197,7 +1296,7 @@ def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_
 
 
 def test_market_apply_sends_the_verified_date_to_an_entity_or_a_new_one_and_only_when_given(monkeypatch):
-    """`hub market apply --last-verified-at` puts the date on the existing entity, or on the new entity it creates;
+    """`tico market apply --last-verified-at` puts the date on the existing entity, or on the new entity it creates;
     without the flag the body is what it was. The date is passed through: the server refuses a bad one."""
     import pytest
     from clients import remotecli
@@ -1309,7 +1408,7 @@ def test_market_apply_refuses_a_timestamp_or_a_written_date_and_sends_nothing(mo
 
 
 def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(monkeypatch):
-    """`hub thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
+    """`tico thread link-slack` runs `hub_thread_link_slack` (clients/hubtools.py): a channel asks for the link, the thread
     alone lists its links, and --off lists them and deletes each one."""
     from clients import remotecli
 
@@ -1347,7 +1446,7 @@ def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(mo
 
 
 def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
-    """`hub task create --private --reader X` sends the readers; `hub task readers list|add|remove` run the
+    """`tico task create --private --reader X` sends the readers; `tico task readers list|add|remove` run the
     hub_task_readers_* tools against /tasks/{id}/readers."""
     from clients import remotecli
 
@@ -1408,7 +1507,7 @@ def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
 
 
 def test_followers_run_from_the_cli_and_its_mcp_tools(monkeypatch):
-    """`hub task create --follow` sends follow; `hub task followers|follow|unfollow` run the hub_task_* tools against
+    """`tico task create --follow` sends follow; `tico task followers|follow|unfollow` run the hub_task_* tools against
     /tasks/{id}/followers."""
     from clients import remotecli
 
@@ -1541,7 +1640,7 @@ def test_every_webhook_command_runs_against_a_remote_server(argv, monkeypatch):
 
 
 def test_hub_notice_list_is_not_the_renamed_notice_send():
-    """Only the old `hub notice <text>` becomes `message send --fyi`; the new `notice list` and its flags stay."""
+    """Only the old `tico notice <text>` becomes `message send --fyi`; the new `notice list` and its flags stay."""
     assert hubcli.rename_argv(["notice", "list"]) == (["notice", "list"], None)
     assert hubcli.rename_argv(["notice", "--help"]) == (["notice", "--help"], None)
     argv, said = hubcli.rename_argv(["notice", "Deploy done"])
@@ -1551,24 +1650,41 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
 @pytest.mark.parametrize(
     "argv, instead",
     [
-        (["question", "ask", "ops", "Which plan?"], "hub task question"),
-        (["question", "answer", "m1", "Yes"], "Needs you"),
-        (["ask", "ops", "Which plan?"], "hub task question"),
-        (["answer", "m1", "Yes"], "Needs you"),
-        (["task", "ask", "t1", "Which plan?"], "hub task question"),
+        (["question", "ask", "ops", "Which plan?"], "tico task ask"),
+        (["question", "answer", "m1", "Yes"], "tico task answer"),
+        (["ask", "ops", "Which plan?"], "tico task ask"),
+        (["answer", "m1", "Yes"], "tico task answer"),
+        (["task", "question", "Which plan?", "--on", "ana"], "tico task ask"),
         (["task", "ask-resolve", "t1", "c1"], "Needs you"),
+        (["task", "answers", "t1"], "tico task show <id>, under To leave"),
+        (["approval", "approve", "ap1"], "tico task answer"),
+        (["approval", "request", "--kind", "send"], "tico task ask"),
+        (["task", "wait", "t1", "--on", "task:t2"], "tico task file"),
+        (["task", "check-back", "t1", "--in", "2h"], "tico task snooze"),
+        (["task", "later", "t1", "--handled"], "tico task snooze"),
+        (["task", "defer", "t1", "--handled"], "tico task snooze"),
+        (["task", "bulk", "close"], "one task at a time"),
+        (["task", "waive-qa", "t1"], "tico task move"),
+        (["task", "types"], "tico task show"),
+        (["task", "type", "create", "--name", "Ops"], "tico task show"),
+        (["pipeline"], "tico task show"),
+        (["pipeline-manager", "eng", "ops"], "tico task show"),
+        (["requirements", "s1"], "tico task show"),
+        (["task", "stuck"], "tico task list"),
+        (["growth", "idea", "create", "--title", "Referral"], "tico task create"),
     ],
 )
-def test_a_removed_ask_command_prints_one_line_naming_its_replacement(argv, instead, capsys, monkeypatch):
-    """Asks are gone: each old command says in one line what to use instead, sends nothing and exits 1."""
+def test_a_removed_command_prints_one_line_naming_its_replacement(argv, instead, capsys, monkeypatch):
+    """Asks, approvals and the old task engine's commands are gone: each old command says in one line what to use
+    instead, sends nothing and exits 1."""
     monkeypatch.setattr(hubcli, "run", lambda *a: pytest.fail("a removed command ran"))
     assert hubcli.main(argv) == 1
     out = capsys.readouterr()
     lines = out.err.strip().splitlines()
-    assert out.out == "" and len(lines) == 1 and lines[0].startswith('hub: "') and "is gone" in lines[0]
+    assert out.out == "" and len(lines) == 1 and lines[0].startswith('tico: "') and "is gone" in lines[0]
     assert instead in lines[0]
-    if "ask" in argv[:2] and instead == "hub task question":
-        assert "hub message send" in lines[0] and "--needs-action" in lines[0]
+    if instead == "tico task ask" and argv[0] in ("ask", "question"):
+        assert "tico message send" in lines[0] and "--needs-action" in lines[0]
 
 
 def test_goal_checkin_list_with_the_list_word_is_checkin_list():
@@ -1610,10 +1726,6 @@ def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
     monkeypatch.setattr(remotecli, "Client", _Recorder)
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
     commands = [
-        ["task", "type", "create", "--name", "Ops", "--default-visibility", "private"],
-        ["task", "type", "update", "ops", "--default-visibility", "public"],
-        ["task", "type", "delete", "ops"],
-        ["task", "types", "--name", "Legacy"],
         ["release", "schedule", "--off"],
         ["release", "now", "--note", "hotfix"],
         ["task-manager", "on"],
@@ -1639,8 +1751,6 @@ def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
         _Recorder.calls = []
         remotecli.run(hubcli.parser().parse_args(words))
         assert _Recorder.calls and all(delegated for *_, delegated in _Recorder.calls), (words, _Recorder.calls)
-        if "--default-visibility" in words:
-            assert _Recorder.calls[0][2]["default_visibility"] == words[-1]
 
 
 def test_settings_cli_passes_an_id_addressed_routine_as_the_requester(monkeypatch):
@@ -1686,7 +1796,7 @@ def test_a_plain_webhook_header_sends_no_secret_key():
 
 
 def test_file_approved_by_path_asks_with_the_path_and_digest_as_query_fields(tmp_path, monkeypatch):
-    """`hub file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
+    """`tico file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
     import hashlib
     from urllib.parse import parse_qs, urlsplit
     from clients import hubtools, remotecli, tico
@@ -1903,7 +2013,7 @@ def test_finance_has_no_card_fill_command():
         hubcli.parse(hubcli.parser(), ["finance", "card-fill"])
 
 
-def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_notice(monkeypatch, capsys):
+def test_the_retired_gtm_lines_run_their_new_commands_with_a_notice(monkeypatch, capsys):
     ran = []
     monkeypatch.setattr(hubcli, "run", lambda argv, who: ran.append(argv) or 0)
     for old, new in (
@@ -1913,70 +2023,7 @@ def test_the_retired_gtm_and_growth_idea_lines_run_their_new_commands_with_a_not
     ):
         assert hubcli.main(old) == 0
         assert ran[-1] == new
-    assert '"hub gtm show" is now "hub strategy show --section how"' in capsys.readouterr().err
-
-    assert (
-        hubcli.main(
-            [
-                "growth",
-                "idea",
-                "create",
-                "--title",
-                "Referral card",
-                "--hypothesis",
-                "Friends bring friends",
-                "--prediction",
-                "Sign-ups up 10%",
-                "--bet",
-                "b1",
-                "--kpi",
-                "k1",
-                "--channel",
-                "referral",
-                "--channel",
-                "door",
-                "--assignee",
-                "me",
-                "--i",
-                "7",
-                "--segment",
-                "s1",
-            ]
-        )
-        == 0
-    )
-    assert ran[-1] == [
-        "task",
-        "create",
-        "--type",
-        "idea",
-        "--owner",
-        "me",
-        "--title",
-        "Referral card",
-        "--body",
-        "Hypothesis: Friends bring friends\nPrediction: Sign-ups up 10%\nBet: b1\nKPI: k1",
-        "--label",
-        "channel:referral",
-        "--label",
-        "channel:door",
-    ]
-    assert '"hub growth idea create" is now "hub task create --type idea"' in capsys.readouterr().err
-    assert hubcli.main(["growth", "idea", "list", "--status", "testing", "--channel", "referral"]) == 0
-    assert ran[-1] == ["task", "list", "--type", "idea", "--step", "Live", "--label", "channel:referral"]
-    assert (
-        hubcli.main(
-            ["growth", "idea", "verdict", "t1", "--status", "won", "--result", "CPA 31", "--learning", "Video works"]
-        )
-        == 0
-    )
-    assert ran[-1] == ["task", "update", "t1", "--step", "Succeeded", "--note", "Result: CPA 31\nLearning: Video works"]
-    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "lost", "--result", "CPA 80"]) == 0
-    assert ran[-1] == ["task", "update", "t1", "--step", "Failed", "--note", "Result: CPA 80"]
-    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused", "--result", "CPA 31 so far"]) == 0
-    assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Result: CPA 31 so far"]
-    assert hubcli.main(["growth", "idea", "verdict", "t1", "--status", "paused"]) == 0
-    assert ran[-1] == ["task", "update", "t1", "--step", "Paused", "--note", "Test paused"]
+    assert '"tico gtm show" is now "tico strategy show --section how"' in capsys.readouterr().err
 
 
 def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_published(monkeypatch, capsys):
@@ -2058,7 +2105,7 @@ def test_call_commands_run_the_call_tools_on_their_routes(monkeypatch):
 
 
 def test_thread_delete_runs_the_message_delete_route(monkeypatch):
-    """`hub thread delete` runs `hub_thread_delete`: DELETE on the message, with no body."""
+    """`tico thread delete` runs `hub_thread_delete`: DELETE on the message, with no body."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2071,7 +2118,7 @@ def test_thread_delete_runs_the_message_delete_route(monkeypatch):
 
 
 def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch, tmp_path):
-    """`hub thread upload` runs `hub_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
+    """`tico thread upload` runs `hub_thread_upload`: the file is streamed (never read whole) as multipart to the thread's
     upload route, with the text and reply target as form fields."""
     from pathlib import Path
     from unittest.mock import Mock
@@ -2101,7 +2148,7 @@ def test_thread_upload_streams_the_file_to_the_thread_message_route(monkeypatch,
 
 
 def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
-    """`hub thread slack-resume` runs `hub_thread_slack_resume`: POST on the link's resume route, as the person asking."""
+    """`tico thread slack-resume` runs `hub_thread_slack_resume`: POST on the link's resume route, as the person asking."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2114,7 +2161,7 @@ def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
 
 
 def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypatch):
-    """`hub rules withdraw <hold-id>` runs `hub_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
+    """`tico rules withdraw <hold-id>` runs `hub_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2127,7 +2174,7 @@ def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypat
 
 
 def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
-    """`hub assistant withdraw <id> --reason ...` runs `hub_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
+    """`tico assistant withdraw <id> --reason ...` runs `hub_assistant_withdraw`: POST assistant/actions/{id}/withdraw."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2140,7 +2187,7 @@ def test_assistant_withdraw_posts_the_reason_to_the_card_route(monkeypatch):
 
 
 def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
-    """`hub assistant proposals` runs `hub_assistant_proposals`: GET assistant/proposals."""
+    """`tico assistant proposals` runs `hub_assistant_proposals`: GET assistant/proposals."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2153,7 +2200,7 @@ def test_assistant_proposals_lists_the_callers_waiting_cards(monkeypatch):
 
 
 def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
-    """`hub tool index --limit 5 --cursor c2` runs `hub_tool_index`: GET tool-index with the page."""
+    """`tico tool index --limit 5 --cursor c2` runs `hub_tool_index`: GET tool-index with the page."""
     from clients import remotecli
     from unittest.mock import Mock
 
@@ -2167,33 +2214,8 @@ def test_tool_index_reaches_the_tool_index_route_with_its_paging(monkeypatch):
     assert call("tool-index", limit=5, cursor="c2") in client.get.call_args_list
 
 
-def test_task_check_back_reaches_the_same_api_from_cli_and_mcp(monkeypatch):
-    from clients import hubtools, remotecli
-
-    calls = []
-
-    class Api:
-        def __init__(self, *args, **kw):
-            self.__dict__["_tico_is_botops"] = False
-
-        def get(self, path, **query):
-            return {"actor": "human:ana"}
-
-        def post(self, path, body=None, key=None):
-            calls.append((path, body))
-            return {"task": {"id": "t1", "check_back_at": "2026-11-03T10:00:00Z"}}
-
-    monkeypatch.setattr(remotecli, "Client", Api)
-    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
-    remotecli.run(
-        hubcli.parser().parse_args(["task", "check-back", "t1", "--in", "45m", "--for", "Inspect the result."])
-    )
-    hubtools.task_check_back(Api(), {"id": "t1", "at": "45m", "note": "Inspect the result."})
-    assert calls == [("tasks/t1/check-back", {"at": "45m", "note": "Inspect the result."})] * 2
-
-
 def test_the_background_card_names_its_person_on_the_wire(monkeypatch):
-    """`hub assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
+    """`tico assistant propose --for human:<id>` reaches the server as the body's `for`: remotecli.run used to drop it."""
     from clients import hubcli, remotecli
 
     client = mock.Mock()
@@ -2237,7 +2259,7 @@ def test_a_propose_without_for_sends_no_recipient(monkeypatch):
 
 
 def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypatch):
-    """`hub assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
+    """`tico assistant morning --for human:<id> --body <text>` reaches the server as assistant/morning with both fields."""
     from clients import hubcli, remotecli
 
     client = mock.Mock()
@@ -2251,62 +2273,18 @@ def test_the_morning_message_posts_its_person_and_body_to_the_assistant(monkeypa
     assert client.post.call_args.args[1] == {"for": "human:ana", "body": "Hi"}
 
 
-def test_approval_list_is_the_pending_default_and_the_mcp_tool_matches(monkeypatch):
-    """`hub approval list` runs `approval list` (GET approvals, pending by default, with --from/--since passed through),
-    and the MCP tool `hub_approval_list` takes the same arguments."""
-    from clients import remotecli, hubtools
-    from unittest.mock import Mock
-
-    client = Mock()
-    client.get.return_value = {"actor": "human:ana", "status": "pending", "total": 0, "approvals": [], "next": None}
-    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
-    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
-    args = hubcli.parser().parse_args(["approval", "list"])
-    assert args.fn == "approval list" and remotecli.tool_name(args.fn) == "hub_approval_list"
-    remotecli.run(args)
-    client.get.assert_called_with("approvals", status="pending", limit=20, offset=0)
-    remotecli.run(
-        hubcli.parser().parse_args(
-            [
-                "approval",
-                "list",
-                "--status",
-                "declined",
-                "--from",
-                "bot:finance",
-                "--since",
-                "2026-10-01",
-                "--limit",
-                "5",
-            ]
-        )
-    )
-    client.get.assert_called_with(
-        "approvals", status="declined", limit=5, offset=0, **{"from": "bot:finance"}, since="2026-10-01"
-    )
-    tool = hubtools.BY_NAME["hub_approval_list"]
-    assert set(tool["inputSchema"]["properties"]) == {"status", "from", "before", "since", "limit", "offset"}
-    tool["fn"](client, {"from": "bot:finance", "since": "2026-10-01"})
-    client.get.assert_called_with(
-        "approvals", status="pending", limit=20, offset=0, **{"from": "bot:finance"}, since="2026-10-01"
-    )
-
-
 @pytest.mark.parametrize(
     "alias, canonical",
     [
         (["tasks", "list"], ["task", "list"]),
-        (["task", "defer", "T1", "--handled"], ["task", "later", "T1", "--handled"]),
-        (["tasks", "defer", "T1", "--handled"], ["task", "later", "T1", "--handled"]),
-        (["approvals", "list"], ["approval", "list"]),
         (["automations", "list"], ["automation", "list"]),
         (["bots", "show", "ops"], ["bot", "show", "ops"]),
         (["rule", "list"], ["rules", "list"]),
     ],
 )
 def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, monkeypatch):
-    """The parser keeps the spelling typed, so dispatch renames an alias first: `hub tasks list` makes the calls of
-    `hub task list` and never reaches the "unsupported" fallback."""
+    """The parser keeps the spelling typed, so dispatch renames an alias first: `tico tasks list` makes the calls of
+    `tico task list` and never reaches the "unsupported" fallback."""
     from clients import remotecli
     from unittest.mock import MagicMock
 
@@ -2321,7 +2299,7 @@ def test_an_alias_runs_the_same_calls_as_the_command_it_names(alias, canonical, 
 
 
 def test_maintenance_status_reads_the_one_maintenance_tool(monkeypatch):
-    """`hub maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
+    """`tico maintenance status` has no tool of its own: its command name is hub_maintenance_status only in the parser's
     listing (CLI_TOOL_ALIASES), so the dispatch must name the tool that exists, hub_maintenance."""
     from clients import remotecli
 
@@ -2363,3 +2341,19 @@ def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkey
     remotecli.run(args)
     assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
     assert "hub_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}
+
+
+def test_tico_help_is_the_teamwork_help(capsys):
+    assert hubcli.main(["help"]) == 0
+    assert "task" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv, word", [(["status"], "status"), (["update"], "update")])
+@pytest.mark.parametrize("bot", ["", "ops"])
+def test_a_word_that_was_the_computers_says_where_it_went_to_a_person_only(argv, word, bot, capsys, monkeypatch):
+    monkeypatch.setenv("HUB_BOT", bot)
+    monkeypatch.delenv("HUB_EMPLOYEE", raising=False)
+    monkeypatch.setattr(hubcli, "run", lambda *a: 0)
+    assert hubcli.main(argv) == 0
+    note = f"this computer's own {word} is `tico-computer {word}`"
+    assert (note in capsys.readouterr().err) == (not bot)

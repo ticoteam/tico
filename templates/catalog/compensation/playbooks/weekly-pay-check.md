@@ -11,8 +11,8 @@ due has a band or a flagged gap, the attachment is on the task for the owners, a
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub task list --status open --status doing --status waiting
+    tico task show <id>
+    tico task list
 
 Then `knowledge/bands.md`, `knowledge/philosophy.md` and last week's page. Collect this week's proposed offers and pay changes
 from the tasks and their attachments.
@@ -31,14 +31,14 @@ recruiter and the owners.
 
 ## 4. Write the attachment
 
-Person-level detail (references, figures, compa-ratios) goes into one file attached with `hub task attach <id> <file>` for the
+Person-level detail (references, figures, compa-ratios) goes into one file attached with `tico task attach <id> <file>` for the
 owners named in `state.md`. Delete the local file.
 
 ## 5. Write the page and hand over
 
 Write `reports/YYYY-MM-DD-pay-check.md` with counts only, in the shape of `knowledge/examples/pay-check.md`, then
-`hub file publish reports/YYYY-MM-DD-pay-check.md --scope task --task <id>`. Delete the exports, commit, and
-`hub task update <id> --status done --note`.
+`tico file publish reports/YYYY-MM-DD-pay-check.md --scope task --task <id>`. Delete the exports, commit, and
+`tico task done <id> -m "..." --version N`.
 
 ## When a source fails
 

@@ -8,7 +8,7 @@ When to use: before any control is marked collected on the monthly page, and bef
 
 Steps:
 1. Read the control's row in `knowledge/controls.md`: its reference, cadence, the evidence it needs and the period it covers. If the owner or cadence is blank, mark the control "no owner or cadence" and stop there.
-2. Search the evidence folder with `hub doc search` for the control's name and the period, then read the candidates. Check `knowledge/evidence-log.md` for an entry. A file that is not logged is not evidence yet: log it, or report it as found but not filed.
+2. Search the evidence folder with `tico doc search` for the control's name and the period, then read the candidates. Check `knowledge/evidence-log.md` for an entry. A file that is not logged is not evidence yet: log it, or report it as found but not filed.
 3. Test each file against `knowledge/evidence-method.md`:
    - dated inside the period, by a date the file shows and not only its name;
    - shows the thing: a visible date and the system name for a screenshot, the export and filter for a count;

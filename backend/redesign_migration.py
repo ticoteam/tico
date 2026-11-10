@@ -11,10 +11,10 @@ budgets become automations and the new amounts, once per install, at startup (`c
 - **Adopt**: after the cutover, a routine or wake rule something still writes the old way (`routines.create`, a Dev
   tickets type's hand-off rows, a Custom profile's rows) moves to an automation in the same write.
 
-What stays where it is: task rules, system jobs and the Health Monitor show as read-only built-in automations
-(`readonly`, with the job's `controls`) and keep running from their own tables. A converted wake rule keeps deciding
-wakes from rules.py, which reads it from its "What wakes" automation (`wake_rows`), so an edit there (a rule's step
-turned off, deleted, its event or outcome changed) is what wakes the bot. Old tables keep their rows.
+What stays where it is: system jobs and the Health Monitor show as read-only built-in automations (`readonly`,
+with the job's `controls`) and keep running from their own tables. A converted wake rule keeps deciding wakes from
+rules.py, which reads it from its "What wakes" automation (`wake_rows`), so an edit there (a rule turned off, deleted,
+its event or outcome changed) is what wakes the bot. Old tables keep their rows.
 """
 
 import json
@@ -331,7 +331,7 @@ def _wakes_name(c, scope, ident, me):
     words = {
         "team": "every bot",
         "department": f"the {ident} bots",
-        "type": f"bots on {ident} tasks",
+        "pipeline": f"bots on {ident} tasks",
         "task": f"bots on task {ident}",
     }.get(scope, f"{scope} {ident}".strip())
     return f"What wakes {words}", me
@@ -425,8 +425,8 @@ def wakes_builtin(owner):
 
 
 def _builtins(c, done, me):
-    """The built-in wake rules, task rules, system jobs and the Health Monitor: read-only built-ins. The hub makes
-    `What wakes bots` itself once the redesign is on; the converter then only records it (`adopt`)."""
+    """The built-in wake rules, system jobs and the Health Monitor: read-only built-ins. The hub makes `What wakes
+    bots` itself once the redesign is on; the converter then only records it (`adopt`)."""
     from . import system_routines as SR
 
     out = []
@@ -442,29 +442,6 @@ def _builtins(c, done, me):
                 "_do": ("adopt", {}),
             }
         )
-    if _table(c, "task_rules"):
-        for row in c.execute("SELECT * FROM task_rules ORDER BY created_at, id").fetchall():
-            if ("task_rule", row["id"]) in done or not me:
-                continue
-            controls = {
-                "on": bool(row["enabled"]),
-                "preset": row["preset"],
-                "daily_at": row["daily_at"],
-                "department": row["department"],
-                "triggers": _json(row["triggers"], []),
-                "actions": _json(row["actions"], []),
-            }
-            flow = _mirror(row["name"], me, "task_rule", controls, {"kind": "task_rule", "id": row["id"]})
-            out.append(
-                {
-                    "kind": "task_rule",
-                    "id": row["id"],
-                    "title": row["name"],
-                    "becomes": flow,
-                    "flags": [],
-                    "_do": ("mirror", {}),
-                }
-            )
     cfg = SR.config(c)
     for job in SR.JOBS:
         oid = "job:" + job.key
@@ -812,12 +789,7 @@ def _convert_one(c, who, mid, obj, group_done):
         aid = _save(c, who, obj["becomes"])
         _mark(
             c,
-            {
-                "builtin": "builtin",
-                "task_rule": "task_rule",
-                "system_job": "system_job",
-                "health_monitor": "health_monitor",
-            }[obj["kind"]],
+            {"builtin": "builtin", "system_job": "system_job", "health_monitor": "health_monitor"}[obj["kind"]],
             obj["id"],
             mid,
             aid,
@@ -1036,9 +1008,14 @@ def _printed_to_stderr():
 
 
 def _finish(c, who, mid, waiting):
-    """Record a pass, log it and tell the owner once. With nobody to tell yet, `owner_wait` keeps it for `catch_up`."""
-    told = _tell_owner(c, who, mid)
+    """Record a pass, log it and tell the owner once. With nobody to tell yet, `owner_wait` keeps it for `catch_up`. On a
+    new database (`new`) nothing came from an older release: what it set up is its own built-ins, so no one is told and
+    the log line is not a warning."""
     previous = state(c)
+    new = bool(previous.get("new"))
+    if new:
+        c.execute("UPDATE redesign_migrated SET told=? WHERE migration=? AND told IS NULL", (_now(), mid))
+    told = None if new else _tell_owner(c, who, mid)
     total = totals(c, mid)
     untold = c.execute("SELECT 1 FROM redesign_migrated WHERE migration=? AND told IS NULL LIMIT 1", (mid,)).fetchone()
     record = {
@@ -1048,6 +1025,7 @@ def _finish(c, who, mid, waiting):
         **total,
         "told": told or previous.get("told"),
         "owner_wait": who.role != "owner" or bool(waiting) or bool(untold),
+        **({"new": True} if new else {}),
     }
     _set_meta(c, CUTOVER, json.dumps(record, sort_keys=True))
     line = (
@@ -1055,6 +1033,9 @@ def _finish(c, who, mid, waiting):
         f"{total['failed']} failed, {waiting} wait for an owner; owner told: "
         f"{told or ('no one yet' if record['owner_wait'] else 'nothing new')}"
     )
+    if new:
+        log.info("%s (a new database)", line)
+        return told
     log.warning("%s", line)
     # The server's log handler is the in-app ring (diagnostics.py), so the operator's container log gets it from here.
     if not _printed_to_stderr():
@@ -1067,12 +1048,13 @@ def _finish(c, who, mid, waiting):
     return told
 
 
-def cutover(store):
+def cutover(store, new=False):
     """Once per install, at startup (before the scheduler starts): every routine, wake rule, system job, inbox, limit
     and budget moves to the redesign. Each object moves in its own write and is marked in the same write, so a restart
     part way goes on where it stopped and nothing moves twice. An object with a `keeps` flag, or one that fails,
     stays as it was (marked, never tried again) and is listed once for the owner. What needs a person to own it, on an
-    install with nobody yet, waits for `catch_up`. Returns the result, or None when it already ran."""
+    install with nobody yet, waits for `catch_up`. `new`: the database was made by this start (Store.initialize), so
+    it tells no one and logs no warning (`_finish`). Returns the result, or None when it already ran."""
     with store.transaction() as c:
         ensure(c)
         record = state(c)
@@ -1082,7 +1064,8 @@ def cutover(store):
         mid = record.get("migration") or "mig_" + H.new_id()
         if not record:
             now = _now()
-            _set_meta(c, CUTOVER, json.dumps({"state": "running", "migration": mid, "at": now}, sort_keys=True))
+            began = {"state": "running", "migration": mid, "at": now, **({"new": True} if new else {})}
+            _set_meta(c, CUTOVER, json.dumps(began, sort_keys=True))
         else:
             log.warning("redesign cutover %s: resuming after a restart", mid)
         objects = plan(c, who)
@@ -1133,56 +1116,6 @@ def catch_up(store):
         "migration": mid,
         "told": told,
     }
-
-
-REPAIR = "stale_review_repair"  # registry_metadata: set once the converted Stale ticket review automation is undone
-
-
-def repair_stale_review(c):
-    """Undo the cutover's conversion of Stale ticket review, once, at startup before the cutover (backend/store.py).
-    The converted automation's first step was a find that matched nothing, so it never reviewed a task, and its
-    conversion turned the team rule `stale_review` off. Where that automation exists: the rule goes on if the
-    automation was on, the automation is deleted through `automations.remove` (on record), and the read-only mirror
-    every built-in job has takes its place in the cutover's mark. Returns the removed automation ids. Later starts
-    find the marker and do nothing; an install without the automation gets only the marker."""
-    from . import automations, team_rules
-
-    if _meta(c, REPAIR):
-        return []
-    # The no-op is the one with steps; a read-only mirror (steps []) is what a fixed cutover makes.
-    found = c.execute(
-        "SELECT * FROM automations WHERE deleted_at IS NULL AND "
-        "json_extract(flow,'$.source.kind')='system_job' "
-        "AND json_extract(flow,'$.source.id')='job:stale_review' "
-        "AND json_array_length(json_extract(flow,'$.steps'))>0"
-    ).fetchall()
-    from . import system_routines as SR
-
-    removed = []
-    for row in found:
-        if row["enabled"]:
-            team_rules.save(c, H.KEEPER, {"stale_review": True})
-        automations.remove(c, H.KEEPER, row, via="migration repair")
-        removed.append(row["id"])
-        # In its place the read-only mirror every other built-in job has (`_builtins`), so the job still shows on the
-        # Automations page, and the cutover's mark points at it.
-        job = SR.BY_KEY["stale_review"]
-        owner = (json.loads(row["flow"] or "{}") or {}).get("owner") or row["owner_id"]
-        controls = {"on": True, "schedule": job.schedule, **(SR.config(c).get(job.key) or {})}
-        aid = _save(
-            c,
-            system_who(c),
-            _mirror(
-                job.name, owner, "job." + job.key, controls, {"kind": "system_job", "id": "job:stale_review"}, job.what
-            ),
-        )
-        c.execute(
-            "UPDATE redesign_migrated SET outcome='converted', automation=?, why='' "
-            "WHERE kind='system_job' AND id='job:stale_review'",
-            (aid,),
-        )
-    _set_meta(c, REPAIR, json.dumps({"at": _now(), "removed": removed}, sort_keys=True))
-    return removed
 
 
 PROMPT_REPAIR = "inbox_prompt_repair"  # registry_metadata: set once the cutover's inbox prompts are repaired
@@ -1392,41 +1325,6 @@ def drop_wake_rules(c, scope_kind, scope_id, created_by):
     return gone
 
 
-def rename_steps(c, type_id, lower):
-    """A type's steps were renamed ({lowercased old name: new name}): its "What wakes" rules that name a step by its
-    old name name the new one, as rules.steps_renamed does for rows still in the table."""
-    import copy
-    from . import automations
-
-    def moved(value):
-        if isinstance(value, list):
-            return [lower.get(str(v).lower(), v) for v in value]
-        return lower.get(str(value).lower(), value) if isinstance(value, str) else value
-
-    who = None
-    for row, flow in _wakes_of(c, "type", type_id):
-        after = copy.deepcopy(flow)
-        for step in after.get("steps") or []:
-            for rule in step.get("rules") or []:
-                for cond in rule.get("when") or []:
-                    if cond.get("field") == "task.step" and cond.get("op") == "is":
-                        cond["value"] = moved(cond.get("value"))
-                for then in rule.get("then") or []:
-                    source = (then.get("args") or {}).get("rule")
-                    if isinstance(source, dict) and isinstance(source.get("when"), dict) and "step" in source["when"]:
-                        source["when"]["step"] = moved(source["when"]["step"])
-        if after != flow:
-            who = who or system_who(c)
-            automations._save(
-                c,
-                who.actor,
-                row["id"],
-                automations._checked(c, after, saved=flow, aid=row["id"]),
-                flow,
-                via="steps renamed",
-            )
-
-
 def wake_rules_by(c, scope_kind, scope_id, created_by):
     """How many rules `created_by` made are in a scope's "What wakes" automations."""
     return sum(
@@ -1541,60 +1439,64 @@ def wake_rules_of(aid, flow):
     return out
 
 
-def _steps_of(c, type_id):
-    """A task type's steps in board order, as (id, name)."""
+def _stages_of(c, pipeline_id):
+    """A pipeline's stages in order, as (id, name), retired ones left out."""
     return [
         (r[0], r[1])
-        for r in c.execute("SELECT id, name FROM task_steps WHERE type_id=? ORDER BY position, id", (type_id,))
+        for r in c.execute(
+            "SELECT id, name FROM stages WHERE pipeline_id=? AND retired_at IS NULL ORDER BY position, id",
+            (pipeline_id,),
+        )
     ]
 
 
 def _named(when):
-    """The step values a rule's `when` names (one name or id, or a list of them), or None when it names no step."""
-    if "step" not in when:
+    """The stage values a rule's `when` names (one name or id, or a list of them), or None when it names no stage."""
+    if "stage" not in when:
         return None
-    value = when["step"]
+    value = when["stage"]
     return [str(v) for v in value] if isinstance(value, list) else [str(value)]
 
 
-def _missing_steps(c, scope, when):
-    """[(value, step names)] for each step a type-scoped rule names that its type does not have. A step is matched as
-    rules.py matches it: by name or by id, ignoring case. A rule scoped to a team, department or bot names no one
-    type's steps, so nothing is checked for it."""
+def _missing_stages(c, scope, when):
+    """[(value, stage names)] for each stage a pipeline-scoped rule names that its pipeline does not have. A stage is
+    matched as rules.py matches it: by name or by id, ignoring case. A rule scoped to a team, department or bot names
+    no one pipeline's stages, so nothing is checked for it."""
     named = _named(when)
-    if named is None or scope.get("scope_kind") != "type":
+    if named is None or scope.get("scope_kind") != "pipeline":
         return []
-    steps = _steps_of(c, scope.get("scope_id") or "")
-    known = {str(s).lower() for ident, name in steps for s in (ident, name)}
-    return [(value, [name for _, name in steps]) for value in named if value.lower() not in known]
+    stages = _stages_of(c, scope.get("scope_id") or "")
+    known = {str(s).lower() for ident, name in stages for s in (ident, name)}
+    return [(value, [name for _, name in stages]) for value in named if value.lower() not in known]
 
 
 def _missing_why(value, names):
     return (
-        f'The wake rule names step "{value}", which its task type does not have. Its steps are: '
+        f'The wake rule names stage "{value}", which its pipeline does not have. Its stages are: '
         f'{", ".join(names) or "none"}. Use one of those names, or its id.'
     )
 
 
 def wake_problems(c, aid, flow):
-    """The wake rules of one "What wakes" automation that name a step its type does not have: [{rule, step, why}].
-    Read for every automation payload, so a rule that stopped working says so; nothing here raises."""
+    """The wake rules of one "What wakes" automation that name a stage its pipeline does not have: [{rule, stage,
+    why}]. Read for every automation payload, so a rule that stopped working says so; nothing here raises."""
     try:
         rows = wake_rules_of(aid, flow)
     except ValueError:
         return []
     return [
-        {"rule": row["id"], "step": value, "why": _missing_why(value, names)}
+        {"rule": row["id"], "stage": value, "why": _missing_why(value, names)}
         for row in rows
-        for value, names in _missing_steps(c, flow.get("wakes") or {}, _json(row["condition"], {}))
+        for value, names in _missing_stages(c, flow.get("wakes") or {}, _json(row["condition"], {}))
     ]
 
 
 def check_wakes(flow, c=None, saved=None, aid=None):
     """On save (automations._checked): a "What wakes" automation is refused (422) when an edit is one its wake rules
-    cannot carry out, rather than saved to show one thing and do another. With `c`, a rule that names a step its type
-    does not have is refused too, with the type's real steps; a rule that already named that missing step in `saved`
-    (the version it changes) is not, so an unrelated edit does not trip over a rule that is already flagged."""
+    cannot carry out, rather than saved to show one thing and do another. With `c`, a rule that names a stage its
+    pipeline does not have is refused too, with the pipeline's real stages; a rule that already named that missing
+    stage in `saved` (the version it changes) is not, so an unrelated edit does not trip over a rule that is already
+    flagged."""
     if not flow.get("wakes") or flow.get("readonly"):
         return
     try:
@@ -1609,35 +1511,14 @@ def check_wakes(flow, c=None, saved=None, aid=None):
             kept = {
                 (row["id"], value.lower())
                 for row in wake_rules_of(aid, saved)
-                for value, _ in _missing_steps(c, saved["wakes"], _json(row["condition"], {}))
+                for value, _ in _missing_stages(c, saved["wakes"], _json(row["condition"], {}))
             }
         except ValueError:
             kept = set()
     for row in rows:
-        for value, names in _missing_steps(c, flow["wakes"], _json(row["condition"], {})):
+        for value, names in _missing_stages(c, flow["wakes"], _json(row["condition"], {})):
             if (row["id"], value.lower()) not in kept:
                 raise Problem("invalid", _missing_why(value, names), 422)
-
-
-def wakes_naming(c, type_id, steps):
-    """The wake rules of a type's "What wakes" automations that name one of `steps` ([(id, name)], say the steps a save
-    deletes), as "<automation name>: <step>" strings. A rule names a step by its name or its id."""
-    named = {str(s).lower() for step in steps for s in step}
-    try:
-        found = _wakes_of(c, "type", type_id)
-    except Exception:  # sqlite3.OperationalError: a database from before the automations table
-        return []
-    out = []
-    for row, flow in found:
-        try:
-            rules = wake_rules_of(row["id"], flow)
-        except ValueError:  # not readable as wake rules: nothing it shows can run
-            continue
-        for rule in rules:
-            for value in _named(_json(rule["condition"], {})) or []:
-                if value.lower() in named:
-                    out.append(f"{row['name']}: {value}")
-    return out
 
 
 def wake_rows(c, event=None):
@@ -1668,7 +1549,6 @@ RUNS_FROM = {
     "wake_rule": "rules.py, read from its What wakes automation",
     "inbox": "Automations",
     "builtin": "rules.py (built in); shown read-only",
-    "task_rule": "the task rules engine; shown read-only",
     "system_job": "the scheduler; shown read-only",
     "health_monitor": "its bot; shown read-only",
 }
@@ -1706,7 +1586,7 @@ def inventory(c):
     for m in marked:
         outcome = _outcome(m)
         now = {"converted": "moved"}.get(outcome, outcome)
-        if outcome == "converted" and m["kind"] in ("builtin", "task_rule", "system_job", "health_monitor"):
+        if outcome == "converted" and m["kind"] in ("builtin", "system_job", "health_monitor"):
             now = "runs as before"
         if m["id"] in GONE_JOBS:
             continue

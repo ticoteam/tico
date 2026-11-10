@@ -22,3 +22,7 @@ pub mod stream;
 pub mod task_links;
 pub mod transcript;
 pub mod workspace;
+// build.rs's check of the window's build (dist/app against dist/build-manifest.txt), included here for its tests.
+#[cfg(test)]
+#[path = "../build_window.rs"]
+mod build_window;

@@ -12,13 +12,13 @@ Done when: the bot that needs it holds the credential through a grant and has re
 
 ## 1. Find it
 
-    hub credential list
+    tico credential list
 
 It lists names, variables and which bots have each; never a value. If the credential is listed, go to step 3.
 
 ## 2. It is only in A's own file: move it into Credentials
 
-    hub credential import <VARIABLE> --from-bot <A>
+    tico credential import <VARIABLE> --from-bot <A>
 
 A's computer reads that one variable from A's own file and sends it to the server itself; the value never reaches you or the chat.
 A's file is untouched and A keeps working. Only a credential admin (the owner or an admin) may ask, and the human you act for must
@@ -27,21 +27,21 @@ variable is not in A's file, say so in one line. Do not look for the value anywh
 
 ## 3. Grant it to B, as them
 
-    hub credential grant "<name>" --to <B>
+    tico credential grant "<name>" --to <B>
 
 It runs at once; no card. If B already has another credential under the same variable name, the server says so: take the old one
-away (`hub credential revoke "<old name>" --from <B>`) when the human wants the new one instead, then grant again. Refused for their rights:
+away (`tico credential revoke "<old name>" --from <B>`) when the human wants the new one instead, then grant again. Refused for their rights:
 say so kindly, and who can. Do not look for another way in.
 
 ## 4. Check B's connection
 
-Make sure B's `bot.yaml` declares the tool with that variable in `env:` (`hub tool add <B> <service> --can read --env <VARIABLE>`;
+Make sure B's `bot.yaml` declares the tool with that variable in `env:` (`tico tool add <B> <service> --can read --env <VARIABLE>`;
 declaring it is the owner's ask, so do it only if they asked B to use the tool). B gets the credential from its next run. Run B's own
 read-only check (read one Jira project, list one repository) and report in one line what it showed: "Engineering Monitor is connected to
 Jira: project HTM loaded." If it fails, say why in one line; do not try another credential.
 
 ## 5. Taking it away
 
-    hub credential revoke "<name>" --from <B>
+    tico credential revoke "<name>" --from <B>
 
 B's next run no longer has it. A's access is unchanged.

@@ -37,7 +37,9 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
       if (p === '/api/status') return json({cloud: true, keeper_alive: true, health_issues: []});
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/health') return json({audience: 'owner', stuck: [], attention: 0, computers: [{id: 'r1', label: 'Studio Mac', online: true, runtimes: []}], failures: [],
-        checks: [{id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []}]});
+        checks: [{id: 'computers', label: 'Computers', status: 'ok', summary: '1 computer online.', fixes: []},
+          {id: 'never_stuck', label: 'Tasks', status: 'ok', summary: 'not this text', fixes: [], at: '2026-11-10T00:00:00Z',
+            counts: {waiting_on_nothing: 0, retry: 2, manager: 1, person: 3, cant_run: 1, broken: 0}}]});
       if (p === '/api/v2/health/findings') return json(doc);
       if (p === '/api/v2/health/findings/disk_full%3Aserver/report' && route.request().method() === 'POST') {
         requests.push({path: p, body: route.request().postDataJSON()});
@@ -63,6 +65,10 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
     page.on('pageerror', (e: Error) => errors.push(e.message));
     await page.route('**/*', serve);
     await open(page);
+    // Health · Tasks (S15): the never-stuck check's counts, one line each, not its summary.
+    assert.deepEqual(await page.locator('#hl-page [data-hl-check="never_stuck"] .hl-ladder li').allInnerTexts(),
+      ['0 waiting on nothing', '2 on a retry', '1 with a manager', '3 reached a person', "1 can't run", '0 broken']);
+    assert.equal(await page.locator('#hl-page [data-hl-check="never_stuck"]', {hasText: 'not this text'}).count(), 0);
     const section = page.locator('#hl-page [data-hl-findings]');
     assert.equal(await section.locator('h2').innerText(), 'Checks');
     const row = (key: string) => section.locator(`[data-hl-finding="${key}"]`);

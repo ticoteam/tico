@@ -12,9 +12,9 @@ missing count or is marked "not read", every probation end in the next 30 days i
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub team show
-    hub task list --status open --status doing --status waiting
+    tico task show <id>
+    tico team show
+    tico task list
 
 Then `knowledge/review-cycle.md`, `knowledge/probation.md` and last week's tracker.
 
@@ -31,7 +31,7 @@ missing three days before the deadline is flagged with a proposed reminder.
 ## 4. Probation
 
 Every probation end in the next 30 days: reference, role, end date, reviewer, and whether a review meeting is booked
-(`hub calendar list`). A date in the next 7 days with nothing booked is bold.
+(`tico calendar list`). A date in the next 7 days with nothing booked is bold.
 
 ## 5. Calibration flags (when ratings are in)
 
@@ -41,8 +41,8 @@ of the scale, ratings with no evidence cited. Individual detail stays in the cal
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-performance-tracker.md` in the shape of `knowledge/examples/performance-tracker.md`, then
-`hub file publish reports/YYYY-MM-DD-performance-tracker.md --scope task --task <id>`. Reminders for managers go on the task as
-one-line texts for review. Commit, and `hub task update <id> --status done --note`.
+`tico file publish reports/YYYY-MM-DD-performance-tracker.md --scope task --task <id>`. Reminders for managers go on the task as
+one-line texts for review. Commit, and `tico task done <id> -m "..." --version N`.
 
 ## When a source fails
 

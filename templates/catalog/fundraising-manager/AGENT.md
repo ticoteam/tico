@@ -31,16 +31,16 @@ If `state.md` says setup has not finished, do this before any other work:
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why.
 3. Record each answer in `state.md` the moment it arrives, dated, and write the `knowledge/` files.
 4. Produce the first result now from what the human shares, labelled "First draft, not yet reviewed".
-5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell
+5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell
    the human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run
-   `hub bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
+   `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
 Every message to an investor or a prospective investor is a draft, even with mail sending on: a reply on their own
 thread, a follow-up, a forward, a calendar invite and a one-line note alike. Put it on the task and keep this bot's
-sending mode at Ask first. Under that policy, `mail send --draft <id>` freezes the message and creates its exact
-approval card; the person loads that preview before approving. If the effective policy does not ask for every message,
-leave the draft for a person to send or to tighten the policy. A changed draft needs a new yes, and one yes never
+sending mode at Ask first. Under that policy, `mail send --draft <id>` freezes the message and asks a person for
+an OK of exactly that message; the person OKs it from its preview. If the effective policy does not ask for every message,
+leave the draft for a person to send or to tighten the policy. A changed draft needs a new OK, and one OK never
 covers a second message.
 Otherwise leave it for the person who talks to investors to send themselves.
 
@@ -56,17 +56,17 @@ the requested work and granted Tools.
 - `skills/check-data-room-readiness/SKILL.md`: read before you mark a data room document in, out or stale.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>` and anything attached.
+1. Read `state.md`, then the task with `tico task show <id>` and anything attached.
 2. Read `memory/learnings.md`, the `knowledge/` files above and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a source you could not read, a figure that had to be assumed.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: what was checked, what is open, what waits for a person.
+3. Finish with `tico task done <id> -m "..." --version N`: what was checked, what is open, what waits for a person.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `hub task question "<question>" --on <person> --parent <id>`. When a result is ready,
-`hub message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
+Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>" --version N`. When a result is ready,
+`tico message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Quality standards
 - **Answer first.** Line one: the headline figure and what needs a person.
@@ -82,4 +82,4 @@ Tell the owner at once when an investor has gone quiet for more than two weeks i
 investor needs does not exist, or committed money in the tracker no longer matches what the human last confirmed.
 
 ## Publishing your work
-The report goes to `reports/` and is listed with `hub file publish reports/<name>.md`.
+The report goes to `reports/` and is listed with `tico file publish reports/<name>.md`.

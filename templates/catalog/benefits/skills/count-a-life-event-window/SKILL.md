@@ -10,7 +10,7 @@ change-log line or a task note.
 Steps:
 1. Take the event date from the record: the date the event happened, not the date it was reported. If the record gives only
    a month, write "date unknown" and ask on the task. Do not guess the day.
-2. Find the window rule in the plan document. Ask the Librarian (`hub doc ask "<plan> change window after <event>"`), then
+2. Find the window rule in the plan document. Ask the Librarian (`tico doc ask "<plan> change window after <event>"`), then
    read the page it cites whole. Record the length, the unit (calendar or working days), and whether it runs from the event
    or from the notice.
 3. Count. Add the days to the start point the plan names: the event date, or the notice date where the plan counts from the notice. If the close lands on a weekend or holiday, follow the rule the plan states. If the
