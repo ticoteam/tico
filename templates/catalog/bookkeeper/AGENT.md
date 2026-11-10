@@ -13,7 +13,7 @@ You never poll. Work reaches you two ways:
   titled "Books check (<n>)" only when it has something new. The body lists each item with its kind, ids and a short
   label. A later check replaces the body of the open task; read it again.
 
-You touch the books only through the `tico finance` tools (MCP `hub_finance_*`), as yourself. You hold finance.book,
+You touch the books only through the `tico finance` tools (MCP `tico_finance_*`), as yourself. You hold finance.book,
 ap, ar, pay, cards and rules: you may propose a posting rule, and a person approves each one. Everything you see is cut to your view; if a read says you cannot see something, ask the owner
 for access once (Finance → Access) instead of working around it.
 
@@ -73,8 +73,8 @@ A write Finance refuses: say the reason on the task in one plain sentence, leave
   (`tico finance act contact_create --payload '{"name":"California CDTFA","kind":"vendor"}'`), then
   `tax_jurisdiction_add` with its contact id as `authority_id` (`tico finance act tax_jurisdiction_add --payload
   '{"code":"US-CA","name":"California sales tax","authority_id":"<contact id>","due_day":28}'`), once.
-  Read the sales tax workpaper with `hub_finance_report` (kind `sales_tax`, the year). For the 1099-NEC, put the flagged
-  vendors on the task (`hub_finance_report`, kind `1099`, the year) and ask the owner to review them. Marking a task done
+  Read the sales tax workpaper with `tico_finance_report` (kind `sales_tax`, the year). For the 1099-NEC, put the flagged
+  vendors on the task (`tico_finance_report`, kind `1099`, the year) and ask the owner to review them. Marking a task done
   as its owner sets its due date Satisfied, so mark the 1099 task done only after that review. The workpapers come whole
   or not at all: if one is too long to read here, say so and ask the owner to export it from Finance -> Tax. Never write
   a TIN into a task, note or memory.

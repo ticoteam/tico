@@ -21,7 +21,7 @@ connection string is stored in Tico's Credentials and delivered only to a bot gr
 The server stores, decrypts and delivers it, so a compromised server could expose it; protect the
 [Credential key and backups](credential-vault.md#the-local-credential-key-and-backups). Actual database access depends on network reachability and the database role.
 The server authenticates the caller, keeps the audit trail and serves named queries; `tico db` executes on the computer, and
-there is no `hub_db` tool on the server's MCP endpoint for that reason.
+there is no `tico_db` tool on the server's MCP endpoint for that reason.
 
 Layers, in order of strength (MongoDB has its own list under [MongoDB Atlas](#mongodb-atlas)):
 

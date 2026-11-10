@@ -279,7 +279,7 @@ destination. Bots named are only those you may see.
 
 `GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
 who_total, needs_you, href}], counts, next}`, at most 500 rows and 192 KB a page; follow `next` with `cursor`. CLI:
-`tico tool index`; MCP: `hub_tool_index` (BotOps reads it with the rights of the person who asked).
+`tico tool index`; MCP: `tico_tool_index` (BotOps reads it with the rights of the person who asked).
 
 ### API tools
 
@@ -292,4 +292,4 @@ reads the tool's page.
 Status: **Working**, **Key rejected** (the check got 401 or 403), **Check failed**, **Expires in N days** (14 or fewer),
 **Not checked**, or **Key on computers** (the key still goes to each run's environment, as every key stored before API
 tools did; move it to the proxy on the tool's page). Tico checks each proxied tool every 30 minutes; `tico tool check
-<id>` (MCP `hub_tool_check`) checks now. Checks and calls older than 90 days are deleted.
+<id>` (MCP `tico_tool_check`) checks now. Checks and calls older than 90 days are deleted.

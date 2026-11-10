@@ -64,7 +64,7 @@ def test_email_cli_returns_refusal_for_a_member_without_mailbox_access(email_cli
 
 
 def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(api, live, assistant_token):
-    names = {"hub_email_" + action for action in ("mailboxes", "inbox", "search", "thread", "message")}
+    names = {"tico_email_" + action for action in ("mailboxes", "inbox", "search", "thread", "message")}
     assert names <= {tool["name"] for tool in hubtools.listing(kind="assistant")}
     assert not names & {tool["name"] for tool in hubtools.listing(kind="bot")}
     for name, args in (
@@ -74,9 +74,9 @@ def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(
         ("thread", {"mailbox": SHARED, "id": "t1"}),
         ("message", {"mailbox": SHARED, "id": "m1"}),
     ):
-        error, result = call(api, "hub_email_" + name, args, token=assistant_token)
+        error, result = call(api, "tico_email_" + name, args, token=assistant_token)
         assert not error, result
-    error, result = call(api, "hub_email_message", {"mailbox": SHARED, "id": "m1"}, token="cara-test")
+    error, result = call(api, "tico_email_message", {"mailbox": SHARED, "id": "m1"}, token="cara-test")
     assert error and result["error"] == "forbidden"
 
 
@@ -125,18 +125,18 @@ def test_organize_cli_refuses_missing_or_conflicting_selections(email_cli, live,
 
 def test_email_organize_mcp_tools_are_available_and_use_the_callers_rights(api, live, assistant_token):
     actions = ("archive", "unarchive", "mark_read", "mark_unread", "label", "unlabel")
-    names = {"hub_email_" + action for action in actions}
+    names = {"tico_email_" + action for action in actions}
     for kind in ("owner", "member", "assistant", "bot", "botops", "agent"):
         assert names <= {tool["name"] for tool in hubtools.listing(kind=kind)}
     for action in actions:
         args = {"mailbox": BOX, "ids": ["m1"]}
         if action in ("label", "unlabel"):
             args["label"] = "Review later"
-        error, result = call(api, "hub_email_" + action, args, token=assistant_token)
+        error, result = call(api, "tico_email_" + action, args, token=assistant_token)
         assert not error, result
         assert result["count"] == 1 and result["ids"] == ["m1"]
     before = len(live["writes"])
-    error, result = call(api, "hub_email_archive", {"mailbox": SHARED, "ids": ["m1"]}, token="cara-test")
+    error, result = call(api, "tico_email_archive", {"mailbox": SHARED, "ids": ["m1"]}, token="cara-test")
     assert error and result["error"] == "forbidden" and len(live["writes"]) == before
 
 

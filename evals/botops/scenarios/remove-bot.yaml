@@ -10,5 +10,5 @@ done:
 reply: "QA Remove is removed. Its history and repository stay."
 limits: {person_steps: 0, jargon: 0, duplicates: 0, sent_elsewhere: 0}
 script:
-  - tool: hub_bot_archive
+  - tool: tico_bot_archive
     args: {bot: qa-remove}

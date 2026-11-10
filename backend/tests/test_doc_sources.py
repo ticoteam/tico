@@ -135,7 +135,7 @@ def test_search_finds_a_nested_passage_and_tools_read_it_as_untrusted(api):
 
     schema = generate()
     assert conforms({'results': hits}, schema['components']['schemas']['DocsSearchResults'], schema) is None
-    err, answer = tool(api, 'hub_context_show', {'id': hit['id'], 'revision': hit['commit']})
+    err, answer = tool(api, 'tico_doc_read', {'ref': hit['id'], 'revision': hit['commit']})
     assert not err and answer['doc']['trust'] == 'untrusted_external'
     assert 'cobalt jitter' in answer['doc']['content']
     fast = call(api, 'GET', 'context/search', params={'q': 'cobalt', 'source': 'docs'})['results'][0]

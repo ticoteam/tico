@@ -104,12 +104,12 @@ company, plus the optional bot cap, in each UTC month. A failed delivery does no
 must confirm no charge, a void or a reversal. Older HQ responses without billing fields keep the reservation.
 
 Use `tico letter quote --text "..." --recipient '{"name":"Recipient","line1":"2 Main St","city":"Dover","state":"DE","postal_code":"19901"}'`
-(MCP `hub_letter_quote`), or `--file-id` for a PDF already in Tico's upload/media store. ReportLab renders text and
+(MCP `tico_letter_quote`), or `--file-id` for a PDF already in Tico's upload/media store. ReportLab renders text and
 markdown as searchable US Letter text, without fetching images or executing HTML; upload a PDF for characters
 outside its Latin character set. The source PDF may have 1–100 pages and be at most 5 MiB. The result includes the
 page count, live total and a link to HQ's rendered proof, kept in Tico's own blob store.
 
-`tico letter send <letter_id>` (`hub_letter_send`) asks for an OK by default: "Mail this letter?", on the letter's task
+`tico letter send <letter_id>` (`tico_letter_send`) asks for an OK by default: "Mail this letter?", on the letter's task
 or a task of its own. The ask shows the proof, recipient, return address, mail class and total. A bot's manager or an
 admin OKs it with their own click; saying no closes the letter. On their own is an explicit company opt-in and still
 asks for certified mail, courts/agencies, uncertain
@@ -177,7 +177,7 @@ For example, to let a bot whose slug is `legal` read physical mail at every comp
 `PUT /api/v2/postal/settings` with `{"legal_bot_id":"legal"}` to give it future legal-mail tasks while keeping the
 owner informed. Use `DELETE` on the grant's URL to revoke it, and `{"legal_bot_id":null}` to restore owner routing.
 
-Bots and people read letters with `tico mail list` and `tico mail read <id>` (MCP `hub_mail_list`, `hub_mail_read`).
+Bots and people read letters with `tico mail list` and `tico mail read <id>` (MCP `tico_mail_list`, `tico_mail_read`).
 
 ## Personal alerts
 
@@ -206,7 +206,7 @@ spend are visible in Alerts settings. Tests bypass quiet hours but still require
 
 These controls use `/api/v2/alerts/me` and `/api/v2/alerts/company`, with `/me/phone`, `/me/phone/confirm` and `/me/test`
 subroutes (see [the v2 contract](api.md#the-contract)). The same actions are `tico alerts show|set|verify|confirm|remove|test|company`
-and MCP's `hub_alerts_*`, offered only to people. `tico alerts test --accept-charge --operation-id <stable-id>` keeps
+and MCP's `tico_alerts_*`, offered only to people. `tico alerts test --accept-charge --operation-id <stable-id>` keeps
 retries to one paid test. They are personal settings, including in the Tauri app; Slack/BotOps directs you to them.
 HQ must deploy the person-scoped paging API and configure its signed Twilio opt-out webhook before personal
 verification/sending works. Demo and rehearsal mode send nothing.

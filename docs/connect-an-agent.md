@@ -34,15 +34,15 @@ tokens and revoke any of them.
 | Tools | The `tico` command set (`clients/hubtools.py`): tasks, goals and KPIs, docs, bots, messages, asks and OKs, updates, SQL. Each call runs as the token's human through the same routes the web app uses |
 | Instructions | The server's `initialize` reply carries the "who needs me" skill (`skills/who-needs-me/SKILL.md`), so nothing else needs pasting |
 
-A personal token can use `hub_api` on v2 routes and `hub_bot_update` with the human's own rights. It never sends
+A personal token can use `tico_api` on v2 routes and `tico_bot_update` with the human's own rights. It never sends
 `on_behalf_of`; BotOps alone uses that to act for the human who asked it. Friendly tools also archive bots, docs and files,
 delete meetings, and run Routines now.
 
-`hub_api` supports bodyless writes, including DELETE. A file read returns its content type and
+`tico_api` supports bodyless writes, including DELETE. A file read returns its content type and
 either `text` or `base64`, with `bytes` and `truncated`; at most 1 MiB is returned. A human may close
-any task they can edit with `hub_task_close`; `wake: false` closes without waking a bot. BotOps uses
-the requester's rights for that tool. `hub_bot_model` accepts a `harness` from the model's list.
-For a correction to your active BotOps request, send `hub_message_send` with `in_reply_to` set to
+any task they can edit with `tico_task_close`; `wake: false` closes without waking a bot. BotOps uses
+the requester's rights for that tool. `tico_bot_model` accepts a `harness` from the model's list.
+For a correction to your active BotOps request, send `tico_message_send` with `in_reply_to` set to
 the original message id, or `steer: true` in the same thread. The message stays queued until
 the Computer delivers it into the active run; thread status shows when the follow-up is added.
 
@@ -50,15 +50,15 @@ The token cannot create or revoke tokens, make other credentials (a bot's agent 
 Confirm cards. Those need the human signed in to Tico.
 Ask BotOps to collect Credential values through your thread card. The API pass-through retains the
 human's existing Credential permissions, including storing or revealing values when authorized. A Credential administrator can import a bot's existing Credential with
-`hub_credential_import`, grant or revoke access, and delete it with `hub_credential_delete`; values never pass through the
+`tico_credential_import`, grant or revoke access, and delete it with `tico_credential_delete`; values never pass through the
 agent during import. Bot deletion, outside-domain invites by an owner or admin, Team rule changes by the Owner, and Tico
 updates run directly when requested.
 
-Use `hub_assistant_read` and `hub_assistant_send` for your private Assistant DM. `assistant` is also a friendly recipient
-for `hub_message_send`. These always use your own DM; another human's Assistant DM stays private.
+Use `tico_assistant_read` and `tico_assistant_send` for your private Assistant DM. `assistant` is also a friendly recipient
+for `tico_message_send`. These always use your own DM; another human's Assistant DM stays private.
 
-Tools that need a local repository or make a local network call are available only on a Computer: `hub_bot_copy`,
-`hub_bot_update_from_original`, `hub_bot_suggest_to_original`, `hub_skill_copy`, `hub_skill_submit` (docs/skills.md) and `hub_doc_fetch`. Run them on the Computer
+Tools that need a local repository or make a local network call are available only on a Computer: `tico_bot_copy`,
+`tico_bot_update_from_original`, `tico_bot_suggest_to_original`, `tico_skill_copy`, `tico_skill_submit` (docs/skills.md) and `tico_doc_fetch`. Run them on the Computer
 holding the repository, or ask BotOps. The server explains this when one is called.
 
 For a complete Needs you walkthrough, see [Needs you batches](needs-you-batches.md).
@@ -169,12 +169,12 @@ What the agent can do from there, for each part of **Finish setup**:
 
 | Step | How |
 |---|---|
-| See where setup stands | `hub_setup_show`: whether the welcome wizard is finished, its saved answers, the people the company file names, and the getting-started checklist |
-| Finish the welcome wizard | `hub_setup_complete` (the wizard's Create my team); the picks are saved first with `hub_api` `PUT /api/v2/setup`, or come from the company file or sample company the install was given |
-| Invite the people from the company file | `hub_setup_invite` with `person_key` (from `hub_setup_show`) and `email`. They go on the roster, and Tico mails them when the install signs people in with a Tico account |
-| Choose models (your subscriptions or the Gateway default) | `hub_settings_set` on `models.providers` (`hub_settings_find` and `hub_settings_show` read it first); the Gateway's own setting is `models.gateway` |
-| Add a Tico Cloud computer | `hub_api` `POST /api/v2/bots/<bot>/cloud-machine` with `{"mode": "cloud", "placement": "shared"}`: the company's shared cloud machine is made when its first bot runs there. `hub_bot_place` puts a bot on a computer that is already connected |
-| Skip an optional getting-started step | `hub_api` `POST /api/v2/getting-started/state` with `{"skip": "github"}`. The other steps tick by themselves as they come true |
+| See where setup stands | `tico_setup_show`: whether the welcome wizard is finished, its saved answers, the people the company file names, and the getting-started checklist |
+| Finish the welcome wizard | `tico_setup_complete` (the wizard's Create my team); the picks are saved first with `tico_api` `PUT /api/v2/setup`, or come from the company file or sample company the install was given |
+| Invite the people from the company file | `tico_setup_invite` with `person_key` (from `tico_setup_show`) and `email`. They go on the roster, and Tico mails them when the install signs people in with a Tico account |
+| Choose models (your subscriptions or the Gateway default) | `tico_settings_set` on `models.providers` (`tico_settings_find` and `tico_settings_show` read it first); the Gateway's own setting is `models.gateway` |
+| Add a Tico Cloud computer | `tico_api` `POST /api/v2/bots/<bot>/cloud-machine` with `{"mode": "cloud", "placement": "shared"}`: the company's shared cloud machine is made when its first bot runs there. `tico_bot_place` puts a bot on a computer that is already connected |
+| Skip an optional getting-started step | `tico_api` `POST /api/v2/getting-started/state` with `{"skip": "github"}`. The other steps tick by themselves as they come true |
 
 ## An agent that is a bot, not you
 
@@ -216,21 +216,22 @@ async def main(url, token):
         async with ClientSession(read, write) as session:
             await session.initialize()
             print(len((await session.list_tools()).tools), "tools")
-            print((await session.call_tool("hub_whoami", {})).content[0].text)
+            print((await session.call_tool("tico_whoami", {})).content[0].text)
 ```
 
 The token's **Last used** in the dialog moves on the first call.
 
 ## Tool naming
 
-Most MCP tools use `hub_<thing>_<action>`. Four established helpers keep their short names for compatibility:
-`hub_whoami` (identity), `hub_sql` (read-only query), `hub_classify` (Decision questions) and `hub_brief` (build a brief).
-The `hub` prefix is a command identifier; the product is Tico.
+Most MCP tools use `tico_<thing>_<action>`. Four established helpers keep their short names:
+`tico_whoami` (identity), `tico_sql` (read-only query), `tico_classify` (Decision questions) and `tico_brief` (build a brief).
+Before 0.6.0 every tool was named `tico_*`; there is no alias for the old names, so update any saved allow rule
+(`mcp__tico__tico_*` becomes `mcp__tico__tico_*`).
 
 ## Task pipelines
 
-Every task is in a pipeline and one of its stages. `hub_task_create` takes a pipeline; `hub_task_move` moves a task
-to the next stage, done, closed or back open; `hub_task_ask` and `hub_task_answer` ask for and give an answer or an OK;
-`hub_task_snooze` sets it aside until a time. The CLI mirrors them with `tico task create --pipeline`, `tico task move`,
+Every task is in a pipeline and one of its stages. `tico_task_create` takes a pipeline; `tico_task_move` moves a task
+to the next stage, done, closed or back open; `tico_task_ask` and `tico_task_answer` ask for and give an answer or an OK;
+`tico_task_snooze` sets it aside until a time. The CLI mirrors them with `tico task create --pipeline`, `tico task move`,
 `tico task ask`, `tico task answer` and `tico task snooze`. See [Tasks](tasks.md#pipelines-and-stages) and
 [CLI and MCP](tasks.md#cli-and-mcp).

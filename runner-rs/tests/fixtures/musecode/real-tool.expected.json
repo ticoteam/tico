@@ -11,8 +11,8 @@
  },
  {
   "kind": "tool",
-  "name": "mcp__hub__hub_task_list",
-  "tool": "mcp__hub__hub_task_list",
+  "name": "mcp__tico__tico_task_list",
+  "tool": "mcp__tico__tico_task_list",
   "phase": "tool_execution_start"
  },
  {

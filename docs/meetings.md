@@ -3,8 +3,8 @@
 ## Linked tasks
 
 `tico meeting link <meeting> <task>...` links existing tasks. `tico meeting unlink <meeting> <task>` removes a link;
-`tico task meetings <task>` lists the meetings you can open. Their MCP equivalents are `hub_meeting_link`,
-`hub_meeting_unlink` and `hub_task_meetings`. Links preserve each meeting and task's own access.
+`tico task meetings <task>` lists the meetings you can open. Their MCP equivalents are `tico_meeting_link`,
+`tico_meeting_unlink` and `tico_task_meetings`. Links preserve each meeting and task's own access.
 
 `tico task context <task>` lists up to ten linked meetings and ten task pages the caller may read, as metadata only.
 `tico meeting read <id>` includes saved notes at transcript offset zero; `--notes` reads just the notes, paged with
@@ -45,7 +45,7 @@ in the tool that made it. Media files can be attached too.
 |---|---|---|
 | **Add notes** on the Meetings page | a human with notes to write, a transcript file or a paste | title, date and time (default now), participants from the roster plus emails or names, markdown notes, and an optional bot to send them to. **Upload a file** (or drop one on the dialog) or **Paste** adds a transcript: a `.txt`, `.vtt`, `.srt` or `.json` file, with its source (`upload` by default) and an optional recording link. Files through this same API: notes alone as source `manual`, a transcript as the source you chose |
 | `tico meeting import <file>` | a human or script on a computer | `tico meeting import call.vtt --title "Pricing call" --date 2026-09-28T16:00 --participant dana@example.com --source zoom --external-id 123` |
-| `hub_meeting_import` (MCP) | a human's external agent | the same fields; the agent reads the file and sends the text |
+| `tico_meeting_import` (MCP) | a human's external agent | the same fields; the agent reads the file and sends the text |
 | `POST /api/v2/meetings/import` | anything else | one JSON body, below |
 | Close | Close calls and Notetaker meetings | the `close-calls` worker on a Mac or a Linux runner; see [Close](#close) |
 | Zoom, Google Meet, Granola | the team's meeting tools | the `importers` job on an enrolled computer, turned on in **Tools > Meeting importers**; see [Meeting importers](#meeting-importers) |
@@ -137,8 +137,8 @@ and Share them, or the explicit whole-queue CLI/API action.
 
 CLI: `tico meeting pending`, `tico meeting approve <id>` or `tico meeting approve --all`,
 `tico meeting dismiss <id>`, and `tico meeting restore <id>`. MCP equivalents are
-`hub_meeting_pending`, `hub_meeting_approve` (`id` or `all: true`), `hub_meeting_dismiss`, and
-`hub_meeting_restore`. All use the caller's own meetings; BotOps uses the requesting person's
+`tico_meeting_pending`, `tico_meeting_approve` (`id` or `all: true`), `tico_meeting_dismiss`, and
+`tico_meeting_restore`. All use the caller's own meetings; BotOps uses the requesting person's
 rights. `tico meeting import ... --review live` shares immediately. `send_to` on a pending import
 is held until approval; direct Send and pushing items require a live meeting.
 
@@ -231,7 +231,7 @@ format is a `422` that names the problem.
 - **A computer** that runs an importer (a registered runner whose owner is in
   `TICO_PROCESSING_OPERATORS`, else the owner's) files meetings for a roster human it names in
   `owner_email`. It cannot file for someone who is not on the roster.
-- **A bot** cannot import. Bots read: `hub_meeting_search` and `hub_meeting_read` give them
+- **A bot** cannot import. Bots read: `tico_meeting_search` and `tico_meeting_read` give them
   Team meetings that are not private and filed meetings they were attached to, including Participants only.
   Personal notes remain unavailable.
 - **Reading**: a team meeting is readable by everyone signed in. A private one is readable by its
@@ -538,7 +538,7 @@ Status also includes `skip_reasons`, the last attempt's skipped count per code (
 `http_status`, the JSON-RPC `rpc_code`, `tool_error` (an MCP `isError` result), `retry_after` in seconds,
 the fixed `signal` that classified a throttle (`rate limit`, `slow down` or `too many requests`) and the
 `batch` size. It never holds Granola's text, note IDs or titles.
-The MCP tools `hub_meeting_granola_status` and `hub_meeting_granola_sync` use the caller's person
+The MCP tools `tico_meeting_granola_status` and `tico_meeting_granola_sync` use the caller's person
 rights; BotOps can give the Meetings link but cannot complete the browser sign-in.
 
 The account sync matches existing meetings by person and Granola ID, then by the Granola web URL
@@ -664,7 +664,7 @@ stays is everything that was ever imported or recorded. An upgrading install kee
   attached to its meeting.
 - Routes moved from `/api/recordings/...` to `/api/meetings/...` and the page from `#/recordings`
   to `#/meetings` (old links redirect). `hub recordings ...` became `tico meeting ...` and the
-  `hub_recordings_*` tools `hub_meeting_*`; `hub_recordings_submit` and `POST /api/v2/recordings`
+  recordings tools the meeting tools; the recording submit tool and `POST /api/v2/recordings`
   are replaced by the import API. `/api/v2/recordings/search` and `/transcript` still answer.
 - `recording.ready` is still emitted beside `meeting.ready`.
 - A Mac set up earlier has a processing job (`team.tico.tico-processing`); `scripts/tico-computer install`,

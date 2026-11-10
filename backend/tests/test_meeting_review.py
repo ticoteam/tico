@@ -150,10 +150,10 @@ def test_botops_can_review_only_the_requesting_persons_queue(api, botops):
     mine = imported(api, token='cara-test')
     other = imported(api)
     attempt = turn(api, botops, 'cara-test', 'Share my pending meetings')
-    err, pending = call(api, 'hub_meeting_pending', {}, token=attempt['token'])
+    err, pending = call(api, 'tico_meeting_pending', {}, token=attempt['token'])
     assert not err and [r['id'] for r in pending['meetings']] == [mine['id']]
-    assert call(api, 'hub_meeting_approve', {'id': other['id']}, token=attempt['token'])[0]
-    err, shared = call(api, 'hub_meeting_approve', {'id': mine['id']}, token=attempt['token'])
+    assert call(api, 'tico_meeting_approve', {'id': other['id']}, token=attempt['token'])[0]
+    err, shared = call(api, 'tico_meeting_approve', {'id': mine['id']}, token=attempt['token'])
     assert not err and shared['review_state'] == 'live'
     assert queue(api)['count'] == 1
 

@@ -48,7 +48,7 @@ Whatever the audiences say, these callers can see, read and write to a bot:
 - an **admin**, and the bot's **owners** (its creator and any others added). This is the same rule that lets
   them change the bot's settings, so being able to edit who has access and having access always go together.
 
-A bot above another in the `reports_to` chain also reads that bot's runs (`hub_run_list`, with each run's tokens and
+A bot above another in the `reports_to` chain also reads that bot's runs (`tico_run_list`, with each run's tokens and
 estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its Home thread. A run a
 human started by messaging the bot in a DM stays with that DM, and private tasks stay with their parties. Peers and
 the bots below keep the usual thread rule, so they never read a manager's Home runs.
@@ -115,8 +115,8 @@ PUT  /api/v2/humans/cara/access          PUT  /api/v2/groups/legal/access
 
 The GET answers `{target, see, read, write, default, revision, you, teams}`; `revision` is `0` until the first save,
 and a stale one answers `409 version_conflict`. `tico human access <id>` and `tico group access <id>` (with `--see`,
-`--read`, `--write`, each `everyone` or `ben,group:legal,bot:analyst`), and the MCP tools `hub_human_access` and
-`hub_group_access`, do the same; BotOps uses them with the rights of the person who asked, with or without
+`--read`, `--write`, each `everyone` or `ben,group:legal,bot:analyst`), and the MCP tools `tico_human_access` and
+`tico_group_access`, do the same; BotOps uses them with the rights of the person who asked, with or without
 `on_behalf_of`, and can put them to the person as a Confirm card. Each save writes an audit row
 (`human:<id>:access`, `group:<id>:access`) and a `person.access_changed` or `group.access_changed` event.
 
@@ -416,9 +416,9 @@ A bot's **direct reports** are the bots whose `reports_to` is it. Its manager bo
 itself: the manager is the actor, and the change is recorded with `via: report_manager`, so the settings history names the
 manager:
 
-- its **model** (`POST /api/v2/bots/{bot}/model`, `tico bot model`, MCP `hub_bot_model`);
+- its **model** (`POST /api/v2/bots/{bot}/model`, `tico bot model`, MCP `tico_bot_model`);
 - its **task model** (`POST /api/v2/bots/{bot}/task-model`, the bot editor; there is no hub or MCP command for it);
-- its **name and description** (`POST /api/v2/bots/{bot}/definition`, `tico bot update`, MCP `hub_bot_update`).
+- its **name and description** (`POST /api/v2/bots/{bot}/definition`, `tico bot update`, MCP `tico_bot_update`).
 
 It does not change the report's instructions, status, place on the team chart (`reports_to`), owners, access or computer.
 Its instructions are changed by a **next-run task** the manager files for the report, which the report does when it next runs.
@@ -659,7 +659,7 @@ A secret in a request body is refused too (`422 secret_in_request`), including t
 `422` and no card: a card never stores or shows back what its route has no place for. Each step of a bulk card is
 checked against its own route, and one step refused refuses the whole card.
 
-If a friendly tool refuses for permissions, BotOps retries the same action with `hub_api` before handing work back. Both use the same rights.
+If a friendly tool refuses for permissions, BotOps retries the same action with `tico_api` before handing work back. Both use the same rights.
 
 **Following through later.** A request often finishes in a later run that something else started: the daily-update
 request, a retry once a busy bot is idle, a notice. Nobody's request is attached to that run, so by default BotOps has

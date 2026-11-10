@@ -125,9 +125,9 @@ def test_botops_mcp_uses_the_human_requester(api, botops):
     provider = Provider(api)
     provider.connect("cara-test")
     attempt = turn(api, botops, person="cara-test", text="Sync my Granola notes")
-    error, result = call(api, "hub_meeting_granola_status", token=attempt["token"])
+    error, result = call(api, "tico_meeting_granola_status", token=attempt["token"])
     assert not error and result["connected"] and result["email"] is None
-    error, result = call(api, "hub_meeting_granola_sync", token=attempt["token"])
+    error, result = call(api, "tico_meeting_granola_sync", token=attempt["token"])
     assert not error and result["state"] == "syncing"
 
     async def finish():

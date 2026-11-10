@@ -18,7 +18,7 @@ TOKEN_PREFIX = "tpx1."
 MAX_ANSWER = 1_000_000
 TIMEOUT = 130
 # Cloudflare in front of Tico refuses Python's default User-Agent (error 1010, "browser signature banned") before the
-# proxy sees the call, as clients/hermes_agent.py notes. Seen live on Tico Team: hub_tool_call to Sentry got that 403.
+# proxy sees the call, as clients/hermes_agent.py notes. Seen live on Tico Team: tico_tool_call to Sentry got that 403.
 USER_AGENT = "tico-tool-call/1"
 
 

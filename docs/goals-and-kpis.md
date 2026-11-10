@@ -372,7 +372,7 @@ tico proposal create | list | decide
 ```
 
 Target flags: `--baseline N --target N --deadline YYYY-MM-DD` (an improvement) or `--min N --max N` (a range). Every command
-has an MCP tool of the same meaning (`hub_goal_*`, `hub_kpi_*`, `hub_proposal_*`).
+has an MCP tool of the same meaning (`tico_goal_*`, `tico_kpi_*`, `tico_proposal_*`).
 
 Archived KPIs stay available in `tico kpi show <id>`, `tico kpi list --archived`, and the owner's **Archived KPIs** view. The active list,
 Strategy Bot freshness checks and Needs you omit them. A goal panel keeps each archived KPI that the goal links to as one muted

@@ -76,7 +76,7 @@ and gives the `reinstall ... --timer` command to retry. It still exits 0, as it 
   credential is in `tico.env` in the profile's state folder (mode 600) and in
   `~/.config/tico/agents/openclaw-<name>.json`. The skill calls the Tico tools this bot may use through
   `hermes_agent.py`:
-  `python3 ~/.config/tico/agents/hermes_agent.py call --harness openclaw --profile <name> hub_message_list`
+  `python3 ~/.config/tico/agents/hermes_agent.py call --harness openclaw --profile <name> tico_message_list`
   (one HTTPS call to Tico's MCP endpoint with the bot's token; the agent never sees the token). This works
   with every OpenClaw release since 2026.3. See [MCP](#mcp) for the client newer releases have.
 - **Profiles.** `--profile <name>` is OpenClaw's own `--profile`: state in `~/.openclaw-<name>`. Leave it out
@@ -138,7 +138,7 @@ step. The cron job still starts one short agent turn each interval until you `un
 OpenClaw 2026.3 had no MCP client. OpenClaw 2026.9 has one: `openclaw mcp add|set|probe|list` manages remote
 MCP servers (streamable-http or sse, with headers) and exposes their tools to the agent as `<server>__<tool>`.
 Tico's MCP endpoint works with it. `openclaw --profile <name> mcp probe` against `<Tico URL>/api/v2/mcp`
-with the bot's credential lists the bot's `hub_*` tools as `tico__hub_*`.
+with the bot's credential lists the bot's `tico_*` tools as `tico__tico_*`.
 
 The connector does not set this up, and the `tico-sync` skill does not depend on it: the skill calls Tico through
 `hermes_agent.py call` on every release. If you add Tico as an MCP server yourself, keep the token out of

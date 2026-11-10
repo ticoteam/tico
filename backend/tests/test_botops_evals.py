@@ -115,7 +115,7 @@ def replay(api, botops_machine, scenario):
                 args["model"] = next(
                     m["id"] for m in captured["models"]["models"] if m["id"] != captured["models"]["current"]
                 )
-            if step["tool"] == "hub_bot_go_live":
+            if step["tool"] == "tico_bot_go_live":
                 # Local repository construction is outside the remote tool script; report its result.
                 post(api, f"bots/{args['bot']}/place", {"computer": computer["runner_id"]}, person)
                 readiness = {

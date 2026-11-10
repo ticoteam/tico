@@ -47,5 +47,5 @@ routines:
     template: playbooks/close-month.md
     labels: [priority:p2]
 
-# It needs no tool or credential of its own: Finance's books, banks and cards are reached through the hub_finance tools.
+# It needs no tool or credential of its own: Finance's books, banks and cards are reached through the tico_finance tools.
 tools: []

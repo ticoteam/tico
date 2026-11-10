@@ -171,12 +171,12 @@ def test_mcp_docs_ask_status_collects_the_same_private_answer(desk):
     from backend.tests.helpers.mcp import call
 
     assert InProcessApi.docs_wait_max == 20
-    err, pending = call(desk, "hub_doc_ask", {"question": "Refund window?", "wait_s": 0})
+    err, pending = call(desk, "tico_doc_ask", {"question": "Refund window?", "wait_s": 0})
     assert not err and pending["timeout"] and pending["message_id"] and pending["conversation_id"]
     ids = {k: pending[k] for k in ("message_id", "conversation_id")}
-    err, waiting = call(desk, "hub_doc_ask_status", ids)
+    err, waiting = call(desk, "tico_doc_ask_status", ids)
     assert not err and waiting == pending
-    err, refused = call(desk, "hub_doc_ask_status", ids, token="ben-test")
+    err, refused = call(desk, "tico_doc_ask_status", ids, token="ben-test")
     assert err and refused["error"] == "not_found"
     attempt = claim(desk, desk.runner)
     post(desk, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=desk.runner["token"])
@@ -186,7 +186,7 @@ def test_mcp_docs_ask_status_collects_the_same_private_answer(desk):
         {"outcome": "completed", "text": "14 days. [Internal doc · Refund policy](doc:d1)", "last_seq": 0},
         token=desk.runner["token"],
     )
-    err, final = call(desk, "hub_doc_ask_status", ids)
+    err, final = call(desk, "tico_doc_ask_status", ids)
     assert not err and final["covered"] and final["answer"].startswith("14 days")
     snapshot = get(desk, f"conversations/{pending['conversation_id']}/snapshot")
     assert len([m for m in snapshot["messages"] if m["sender_id"] == "human:ana"]) == 1

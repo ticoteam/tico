@@ -43,12 +43,12 @@ Bots use the same docs through the `tico` CLI and the MCP tools:
 
 | Command | Tool | |
 |---|---|---|
-| `tico doc list [--prefix sales/]` | `hub_doc_list` | paths, titles, who changed them last |
-| `tico doc read <id\|path>` | `hub_doc_read` | one doc in full, with its version |
-| `tico doc search "words" [--manual]` | `hub_doc_search` | internal and external content, linked metadata and the Tico manual (`--manual`: only it) |
-| `tico doc write <path> --title T (--body-file F \| stdin) [--note N]` | `hub_doc_write` | creates or replaces; on a version conflict it reads again and retries once |
-| `tico doc history <id\|path>` | `hub_doc_history` | the versions |
-| `tico doc link-list` | `hub_doc_link_list` | the linked docs |
+| `tico doc list [--prefix sales/]` | `tico_doc_list` | paths, titles, who changed them last |
+| `tico doc read <id\|path>` | `tico_doc_read` | one doc in full, with its version |
+| `tico doc search "words" [--manual]` | `tico_doc_search` | internal and external content, linked metadata and the Tico manual (`--manual`: only it) |
+| `tico doc write <path> --title T (--body-file F \| stdin) [--note N]` | `tico_doc_write` | creates or replaces; on a version conflict it reads again and retries once |
+| `tico doc history <id\|path>` | `tico_doc_history` | the versions |
+| `tico doc link-list` | `tico_doc_link_list` | the linked docs |
 
 A bot's writes show in the history as its own ("by Ops"). A locked doc refuses a bot.
 

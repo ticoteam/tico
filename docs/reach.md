@@ -73,7 +73,7 @@ A bot's write is checked on:
 - an edit of its own message (`PATCH /api/v2/messages/{id}`): those it @mentions now and did not before. A message
   that is not its own, or one it cannot read, gets the edit's own 403 or 404 first, never a refusal.
 
-`hub_task_dry_run` reports the refusal a task would get.
+`tico_task_create` with `dry_run` reports the refusal a task would get.
 
 A person is only reached by a bot next to them on the chart: the bot's manager (the owner, for a bot with no manager)
 or a person on its own team, or a person a line allows. A bot two levels down does not reach the owner: it takes the

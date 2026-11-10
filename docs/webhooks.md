@@ -9,7 +9,7 @@ A webhook is one program posting a small message to another over HTTP. Tico does
 
 Incoming webhooks are a built-in row on Automations (**Incoming webhooks**), outgoing ones are on Tools (**Add tool → Outgoing webhook**,
 then a row each), and Through Tico Gateway is the **Webhooks** fold of the Tico Gateway card in Settings → Models. Everything there
-is also in `tico` and in the `hub_*` tools for bots and agents ([the table at the end](#the-commands)).
+is also in `tico` and in the `tico_*` tools for bots and agents ([the table at the end](#the-commands)).
 
 Step by step:
 [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md).
@@ -507,20 +507,20 @@ They are built in. `tico notice list` shows the notices. See also
 
 | What | `tico` | Tool for bots and agents |
 |---|---|---|
-| List event names | `tico event-types [--group G]` | `hub_event_types` |
-| Incoming: list, add, show, change | `tico trigger list`, `create`, `show`, `update` | `hub_trigger_list`, `hub_trigger_create`, `hub_trigger_show`, `hub_trigger_update` |
-| Incoming: new secret, signing | `tico trigger rotate`, `sign` | `hub_trigger_rotate`, `hub_trigger_sign` |
-| Incoming: delete | `tico trigger delete <id>` | `hub_trigger_delete` |
-| Incoming: log, one call, run again | `tico trigger deliveries`, `delivery [--part n]`, `replay` | `hub_trigger_deliveries`, `hub_trigger_delivery`, `hub_trigger_replay` |
-| Incoming: run refused calls again | `tico trigger recover [--since hours]` | `hub_trigger_recover` |
-| Through Tico Gateway | `tico trigger relay create`, `rotate`, `delete`; `tico relay status`; `tico relay set --wake on\|off` | `hub_trigger_relay_create`, `hub_trigger_relay_rotate`, `hub_trigger_relay_delete`, `hub_relay_status`, `hub_relay_set` |
-| Automations on a webhook | `tico automation list`, `create`, `update`, `delete` | `hub_automation_list`, `hub_automation_create`, `hub_automation_update`, `hub_automation_delete` |
-| Outgoing: endpoints | `tico webhook list`, `create`, `show`, `update`, `rotate`, `pause`, `resume`, `delete` | `hub_webhook_list`, `hub_webhook_create`, `hub_webhook_show`, `hub_webhook_update`, `hub_webhook_rotate`, `hub_webhook_pause`, `hub_webhook_resume`, `hub_webhook_delete` |
-| Outgoing: send, log, retry, example | `tico webhook send`, `sends`, `retry`, `example` | `hub_webhook_send`, `hub_webhook_sends`, `hub_webhook_retry`, `hub_webhook_example` |
-| Outgoing: turn on, recover, replay | `tico webhook enable`, `recover --since`, `replay --since` | `hub_webhook_enable`, `hub_webhook_recover`, `hub_webhook_replay` |
-| Wake address for a server you run | `tico relay wake-url show`, `set <url>`, `off` | `hub_relay_wake_url_show`, `hub_relay_wake_url_set`, `hub_relay_wake_url_off` |
-| Sleep when idle | `tico sleep status`, `tico sleep set` | `hub_sleep_status`, `hub_sleep_set` |
-| Notices | `tico notice list` | `hub_notice_list` |
+| List event names | `tico event-types [--group G]` | `tico_event_types` |
+| Incoming: list, add, show, change | `tico trigger list`, `create`, `show`, `update` | `tico_trigger_list`, `tico_trigger_create`, `tico_trigger_show`, `tico_trigger_update` |
+| Incoming: new secret, signing | `tico trigger rotate`, `sign` | `tico_trigger_rotate`, `tico_trigger_sign` |
+| Incoming: delete | `tico trigger delete <id>` | `tico_trigger_delete` |
+| Incoming: log, one call, run again | `tico trigger deliveries`, `delivery [--part n]`, `replay` | `tico_trigger_deliveries`, `tico_trigger_delivery`, `tico_trigger_replay` |
+| Incoming: run refused calls again | `tico trigger recover [--since hours]` | `tico_trigger_recover` |
+| Through Tico Gateway | `tico trigger relay create`, `rotate`, `delete`; `tico relay status`; `tico relay set --wake on\|off` | `tico_trigger_relay_create`, `tico_trigger_relay_rotate`, `tico_trigger_relay_delete`, `tico_relay_status`, `tico_relay_set` |
+| Automations on a webhook | `tico automation list`, `create`, `update`, `delete` | `tico_automation_list`, `tico_automation_create`, `tico_automation_update`, `tico_automation_delete` |
+| Outgoing: endpoints | `tico webhook list`, `create`, `show`, `update`, `rotate`, `pause`, `resume`, `delete` | `tico_webhook_list`, `tico_webhook_create`, `tico_webhook_show`, `tico_webhook_update`, `tico_webhook_rotate`, `tico_webhook_pause`, `tico_webhook_resume`, `tico_webhook_delete` |
+| Outgoing: send, log, retry, example | `tico webhook send`, `sends`, `retry`, `example` | `tico_webhook_send`, `tico_webhook_sends`, `tico_webhook_retry`, `tico_webhook_example` |
+| Outgoing: turn on, recover, replay | `tico webhook enable`, `recover --since`, `replay --since` | `tico_webhook_enable`, `tico_webhook_recover`, `tico_webhook_replay` |
+| Wake address for a server you run | `tico relay wake-url show`, `set <url>`, `off` | `tico_relay_wake_url_show`, `tico_relay_wake_url_set`, `tico_relay_wake_url_off` |
+| Sleep when idle | `tico sleep status`, `tico sleep set` | `tico_sleep_status`, `tico_sleep_set` |
+| Notices | `tico notice list` | `tico_notice_list` |
 
 The API routes are under `/api/v2/triggers`, `/api/v2/webhooks`, `/api/v2/event-types`, `/api/v2/relay`, `/api/v2/hooks/wake-url` and `/api/v2/notices`,
 and in the OpenAPI file ([API](api.md)).

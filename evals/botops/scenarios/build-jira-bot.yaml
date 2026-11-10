@@ -15,13 +15,13 @@ done:
 reply: "Jira Manager is live on your computer and can read your Jira. I opened a field in this chat for your Jira login, you saved it, and a first test read one project fine. Ask it which issues to solve first."
 limits: {person_steps: 1, jargon: 0, duplicates: 0, sent_elsewhere: 0}
 script:
-  - tool: hub_bot_create
+  - tool: tico_bot_create
     args: {slug: jira-manager, name: Jira Manager, description: Reads Jira and says which issues to solve first}
-  - tool: hub_credential_request
+  - tool: tico_credential_request
     args: {env: JIRA_BASIC_AUTH, for_bot: jira-manager, label: your Jira login, format: "you@company.com:API token", help_url: "https://id.atlassian.com/manage-profile/security/api-tokens"}
   - person: fill_card
   - next_turn: true
-  - tool: hub_bot_go_live
+  - tool: tico_bot_go_live
     args: {bot: jira-manager}
-  - tool: hub_task_create
+  - tool: tico_task_create
     args: {owner: jira-manager, title: Read one Jira project and name its top issue, body: "Read one project and say which issue to solve first. Change nothing."}

@@ -305,7 +305,7 @@ def test_an_empty_week_says_so_and_still_gives_the_months_spend(api):
 def test_a_bot_reads_it_through_the_tool(api):
     a_week_of_use(api)
     r, msg, attempt = setup_attempt(api)
-    err, out = call(api, "hub_decision_readout", {"days": 7}, token=attempt["token"])
+    err, out = call(api, "tico_decision_readout", {"days": 7}, token=attempt["token"])
     assert not err and out["total"]["calls"] == 21 and out["text"].startswith("Decide readout, ")
 
 

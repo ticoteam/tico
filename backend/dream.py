@@ -2,7 +2,7 @@
 
 A dream is an ordinary task: the bot owns it, the person who started it is its requester, it carries the label
 `dream` and its body is INSTRUCTIONS. It runs as a task turn on the bot's computer with the bot's own model, and its
-session resumes across the one ask it may put to its requester on the task (`hub_task_ask`), so the answer lands in
+session resumes across the one ask it may put to its requester on the task (`tico_task_ask`), so the answer lands in
 the same context. The commits it makes are memory updates like any other: the Learnings history names their run's
 task, and the panel filters them by this task. Nothing is stored here beyond the task.
 
@@ -43,9 +43,9 @@ MARKED = (
 
 INSTRUCTIONS = """Dream: tidy your own instructions and memory. {waiting}
 They watch this task's note while you work: at the start of each step below, and whenever you begin something that
-takes a while, set it with `hub_task_update` (the note only) to one short line saying what you are doing now, e.g.
+takes a while, set it with `tico_task_update` (the note only) to one short line saying what you are doing now, e.g.
 "2/7 Gathering: reading chats since Oct 20" or "5/7 Applying: rewriting the merge rules in AGENT.md". Read the task
-with `hub_task_show` first, and pass the version the last call on it printed with every call.
+with `tico_task_show` first, and pass the version the last call on it printed with every call.
 
 1. Orient. Read your instructions and memory: AGENT.md, AGENTS.md or CLAUDE.md if present, `memory/` (the working
    rules at the top of memory/learnings.md first, then memory/decisions.md and any index), state.md and `knowledge/`.
@@ -64,7 +64,7 @@ with `hub_task_show` first, and pass the version the last call on it printed wit
 4. Ask. Ask only about the business: what you should do, for whom, by which rule or priority, where two
    instructions about the work disagree, or one broad question that would align you better. Never ask for
    permission, about which files to edit, how to organize your memory, or anything else about the dream itself:
-   decide those yourself. If something only {requester} can settle, ask it with `hub_task_ask` to {requester} on
+   decide those yourself. If something only {requester} can settle, ask it with `tico_task_ask` to {requester} on
    this task: one question per ask (an ask that asks two things is refused), and one ask at a time (asking again
    replaces the open one), so wait for each answer before the next. At most 3 asks. Each one makes sense on its own
    and ends with your suggested answer ("Suggested: ..."). Ask big alignment questions before small either/or ones.
@@ -78,7 +78,7 @@ with `hub_task_show` first, and pass the version the last call on it printed wit
 
 7. Finish. Make one commit of every file you changed, instructions and memory alike, with the subject
    `Dream: <what changed, in a few words>`, ending with the usual `Tico-Run:` line. Then finish this task with
-   `hub_task_done` and a 2-4 line summary of what changed.
+   `tico_task_done` and a 2-4 line summary of what changed.
 
 If nothing needed changing, say so and finish."""
 
@@ -242,7 +242,7 @@ def view(c, who, row):
     questions, summary, doing = None, None, None
     if ended:
         state = "done" if row["status"] == "done" else "stopped"
-        # The summary is the note the bot finished with (`hub_task_done`): the notes of its `done` answer.
+        # The summary is the note the bot finished with (`tico_task_done`): the notes of its `done` answer.
         done = c.execute(
             "SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=? AND a.answer='done' "
             "AND coalesce(a.notes,'')<>'' ORDER BY a.created_at DESC, a.rowid DESC LIMIT 1",
@@ -260,7 +260,7 @@ def view(c, who, row):
     else:
         ask = _ask(c, row)
         if ask:
-            # Its ask to the requester (`hub_task_ask` on the dream), answered on the Learnings panel.
+            # Its ask to the requester (`tico_task_ask` on the dream), answered on the Learnings panel.
             state = "asking"
             questions = {
                 "task_id": row["id"],

@@ -79,8 +79,8 @@ tico lens runs [--lens ID] [--limit N]              runs you may see, newest fir
 ```
 
 The answers file is `{"<step key>": answer}`: a list step is a list of short strings, a score step is
-`{"columns": [...], "rows": [{"factor": "...", "scores": [0-5, ...]}]}`. The MCP tools are `hub_lens_list`,
-`hub_lens_run`, `hub_lens_show` and `hub_lens_runs`. The routes, under `/api/v2`:
+`{"columns": [...], "rows": [{"factor": "...", "scores": [0-5, ...]}]}`. The MCP tools are `tico_lens_list`,
+`tico_lens_run`, `tico_lens_show` and `tico_lens_runs`. The routes, under `/api/v2`:
 
 | Route | Who | What it does |
 |---|---|---|

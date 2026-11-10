@@ -212,10 +212,10 @@ ahead of time so it doesn't try.
   - task updates (`POST /api/v2/tasks/{tid}`: title, body, note, `public_title`, `public_summary`; on Block they stay
     unchanged; public text, or making a task public, adds the whole company and judges the public text), the owner's
     ask (`POST /api/v2/tasks/{tid}/ask`), and bulk changes' `note`;
-  - notes to a bot (`hub_note_create`), which ride its next prompt;
+  - notes to a bot (`tico_note_create`), which ride its next prompt;
   - automation steps that write as a bot or for one: `_create_task`, `_on_task`, `_note`, `_wake_bot` (their text is
     judged against the automation's owning bot), `_post_update`; Slack `send_reply`;
-  - comment edits (`POST /api/v2/tasks/{tid}/comments/{mid}`, `hub_task_comment_edit`): the new text is judged in the
+  - comment edits (`POST /api/v2/tasks/{tid}/comments/{mid}`, `tico_task_comment_edit`): the new text is judged in the
     comment's context, and on Block the old comment stays;
   - bulk owner changes (`POST /api/v2/task-bulk`): one verdict per task, and held tasks come back as skipped with the
     reason;
@@ -328,7 +328,7 @@ ahead of time so it doesn't try.
 - **With `ask_ingest`:** where both apply (a task filed on a person), the rule check runs first, and a block skips
   ask ingest.
 - **Bots read rules; they're not injected.** Every teammate, bots included, can read every rule (`tico rules list`,
-  `hub_rules_list`). Bot instructions get one fixed line: "Rules apply to you. Read them: `tico rules list --mine`.
+  `tico_rules_list`). Bot instructions get one fixed line: "Rules apply to you. Read them: `tico rules list --mine`.
   Check a draft: `tico rules check`." That's a policy text change, not a runner contract bump.
   - `--mine` = Everyone, the bot's group (via `team_of`), its slug, and rules where it's in With, plus its settings as
     read-only `setting:` lines.
@@ -411,8 +411,8 @@ tico rules appeal <hold-id> "<why>"                                             
 tico rules ask "<question>"                                                     # Counsel answers with cites
 ```
 
-- MCP: `hub_rules_list`, `hub_rules_add`, `hub_rules_read`, `hub_rules_suggested`, `hub_rules_accept`,
-  `hub_rules_edit`, `hub_rules_check`, `hub_rules_appeal`, `hub_rules_due`, `hub_rules_due_set`, `hub_rules_due_satisfied`, `hub_rules_ask`.
+- MCP: `tico_rules_list`, `tico_rules_add`, `tico_rules_read`, `tico_rules_suggested`, `tico_rules_accept`,
+  `tico_rules_edit`, `tico_rules_check`, `tico_rules_appeal`, `tico_rules_due`, `tico_rules_due_set`, `tico_rules_due_satisfied`, `tico_rules_ask`.
 - Each is a v2 route with one permission check. A bot's `add` lands as `suggested`.
 - **Permissions:** accept, retire or edit is open to the owner, admins, a lead of a group in Who, or an owner of a
   bot in Who. Everyone rules are owner and admins only. A With party can't edit a rule, but sees it. Any member can add a document.

@@ -111,7 +111,7 @@ def test_interrupted_fallback_waits_for_reset_only_with_positive_empty_evidence(
     if evidence in ('output', 'yielded_output'):
         rows.append(('delta', {'text': 'Partial work'}))
     if evidence == 'tool':
-        rows.append(('tool', {'tool': 'mcp__hub__hub_webhook_send', 'status': 'started'}))
+        rows.append(('tool', {'tool': 'mcp__tico__tico_webhook_send', 'status': 'started'}))
     if evidence == 'tokens':
         rows.append(('tokens', {'output': 4}))
     if evidence == 'unknown_tokens':
@@ -310,7 +310,7 @@ def test_fallback_limit_reason_on_job_health_and_review(api, monkeypatch, writes
     post(api, f"attempts/{fallback['id']}/started", {'thread_id': 'fallback'}, machine['token'])
     rows = [('status', {'tool_events': True})]
     if writes:
-        rows.append(('tool', {'tool': 'mcp__hub__hub_webhook_send', 'status': 'started'}))
+        rows.append(('tool', {'tool': 'mcp__tico__tico_webhook_send', 'status': 'started'}))
     rows += [('error', {'error': notice, 'limit': True}), ('diagnostic', {'interruption_complete': True})]
     post(
         api,
@@ -373,7 +373,7 @@ def test_fallback_limit_reason_never_attributes_reply_text_to_provider(api, monk
     post(api, f"attempts/{fallback['id']}/started", {'thread_id': 'fallback'}, machine['token'])
     rows = [
         ('status', {'tool_events': True}),
-        ('tool', {'tool': 'mcp__hub__hub_webhook_send', 'status': 'started'}),
+        ('tool', {'tool': 'mcp__tico__tico_webhook_send', 'status': 'started'}),
         ('diagnostic', {'interruption_complete': True}),
     ]
     post(

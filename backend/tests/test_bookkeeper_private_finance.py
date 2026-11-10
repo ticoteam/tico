@@ -49,7 +49,7 @@ def post_finance(api, token, kind, payload, key):
 
 
 def deposit_feed_id(api, token):
-    err, queue = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    err, queue = call(api, "tico_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err, queue
     return next(r for r in queue["items"] if r["label"].startswith("Acme Customer"))["feed_id"]
 
@@ -62,10 +62,10 @@ def test_a_books_check_run_categorizes_a_row_and_records_a_receipt_match(api):
         api, token, "categorize", {"feed_id": feed_id, "account_id": chart(api, "4000")}, f"cat:{feed_id}"
     )
     assert not err and posted["status"] == "committed", posted
-    err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    err, left = call(api, "tico_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and feed_id not in {r["feed_id"] for r in left["items"]}, left
 
-    err, found = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
+    err, found = call(api, "tico_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     fee = next(r for r in found["results"] if r["provider_kind"] == "wireFee")
     _library_file(api, "file-receipt", "bookkeeper")
     err, matched = ask(
@@ -140,7 +140,7 @@ def test_a_refusal_for_another_reason_is_one_plain_sentence_and_the_row_stays(ap
     assert PRIVACY not in str(out)
     reason = out["reason"]
     assert isinstance(reason, str) and "\n" not in reason and len(reason) <= 200, reason
-    err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    err, left = call(api, "tico_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
     assert _asks_and_tasks(api) == before, "a refusal files no task, asks for no approval and sends no message"
     with api.app.state.store.read() as c:
@@ -162,10 +162,10 @@ def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(ap
     )
     reason = refused.json()["reason"]
     sentence = f"The categorize was refused ({reason}), so the row stays for the next check."
-    err, noted = call(api, "hub_task_comment", {"id": made["books"], "text": sentence}, token=token)
+    err, noted = call(api, "tico_task_comment", {"id": made["books"], "text": sentence}, token=token)
     assert not err, noted
 
-    err, shown = call(api, "hub_task_show", {"id": made["books"]}, token=token)
+    err, shown = call(api, "tico_task_show", {"id": made["books"]}, token=token)
     assert not err, shown
     notes = [c["body"] for c in shown["comments"] if c["sender_id"] == BK.ACTOR]
     assert notes == [sentence], notes
@@ -175,7 +175,7 @@ def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(ap
     # Nothing asks a person to reissue or publish it: the bot may not make its task company-visible.
     err, widened = call(
         api,
-        "hub_task_update",
+        "tico_task_update",
         {"id": made["books"], "private": False, "version": shown["task"]["version"]},
         token=token,
     )
@@ -186,7 +186,7 @@ def test_the_refusal_is_noted_on_the_task_in_one_sentence_and_nobody_is_asked(ap
     after = _asks_and_tasks(api)
     assert after["tasks"] == before["tasks"] and after["requirements"] == before["requirements"], (before, after)
     assert after["messages"] == before["messages"] + 1, "only the note itself is written: no message to anyone"
-    err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    err, left = call(api, "tico_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
 
 
@@ -198,7 +198,7 @@ def test_a_private_run_never_ignores_a_row(api, carried):
     feed_id = deposit_feed_id(api, token)
     refused = post_finance(api, token, "categorize", {"feed_id": feed_id, "ignore": True}, f"ignore:{feed_id}")
     assert refused.status_code == 403 and BK.PRIVATE_FINANCE_REFUSAL in refused.text, refused.text
-    err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    err, left = call(api, "tico_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and feed_id in {r["feed_id"] for r in left["items"]}, left
 
 

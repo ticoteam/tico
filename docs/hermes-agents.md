@@ -88,8 +88,8 @@ What it installs, all inside the profile:
 - **The skill**, `skills/tico-sync/SKILL.md`, the same file for Hermes and [OpenClaw](openclaw-agents.md)
   (it is `skills/tico-sync/SKILL.md` in the repository; `update` fetches the newest from Tico). Each run it reads who
   it is and any quiet notes Tico holds for it, reads its waiting messages and its open tasks, answers every
-  person's message in that thread with `hub_message_send` and marks it read, moves the tasks it owns
-  forward with `hub_task_update` (done with a short result note, or waiting with the reason), and stops. It keeps
+  person's message in that thread with `tico_message_send` and marks it read, moves the tasks it owns
+  forward with `tico_task_update` (done with a short result note, or waiting with the reason), and stops. It keeps
   answers short and never pastes a secret. Once a week it runs the `update` command in `hermes_agent.py`.
 - **A pre-check script**, `scripts/tico-sync-check.py`. Hermes runs it before each job. It asks the saved
   heartbeat reply what is waiting, and when nothing is (and no update is due) it ends with
@@ -149,9 +149,9 @@ downloaded `hermes_agent.py` in your current folder works the same while it is t
 - **Remove the Tool.** `python3 hermes_agent.py uninstall --profile <name>` removes the timer, the
   `tico-sync` job, the skill and its pre-check script, the `.env` lines, the `mcp_servers.tico` entry and the
   credential file. It does not revoke the credential in Tico.
-- **Renamed tools (0.2.21).** The `hub_*` tools were renamed: `hub_inbox` is now
-  `hub_message_list`, `hub_say` is `hub_message_send`, `hub_ack` is `hub_message_mark_read`.
-  Old names now answer "X was renamed Y". After updating, `/reload-mcp`, change any saved prompt
+- **Renamed tools (0.6.0).** Every tool is named `tico_*` (it was `tico_*`), and older renames are gone too:
+  each `hub_<name>` is now `tico_<name>`, `hub_inbox` is `tico_message_list`, `hub_say` is `tico_message_send`.
+  An old name is an unknown tool. After updating, `/reload-mcp`, change any saved prompt
   or cron job that uses an old name, and let `doctor` find the ones you miss.
 
 ## Troubleshooting
@@ -236,7 +236,7 @@ write it.
 ## Tools on an external profile
 
 A Tools request goes to the external bot as a task. Configure the service in that Hermes profile's `config.yaml`,
-or the OpenClaw profile's tool or skill, then report its complete current declarations with `hub_tool_report`
+or the OpenClaw profile's tool or skill, then report its complete current declarations with `tico_tool_report`
 (`tico tool report '<JSON array>'` from the CLI). Each entry names the service, capabilities and scope; never include
 credential values. An empty list reports that all declarations were removed. Tico shows these declarations and the
 profile's heartbeat separately; a declaration alone does not prove that the service works.

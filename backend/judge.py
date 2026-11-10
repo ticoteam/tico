@@ -1,4 +1,4 @@
-"""Decisions as a Tico tool: `POST /api/v2/decisions`, the door behind `hub_decision_ask` and `tico decision ask`
+"""Decisions as a Tico tool: `POST /api/v2/decisions`, the door behind `tico_decision_ask` and `tico decision ask`
 (the route, the `judge.call` audit events and this module keep their old name, `judge`).
 
 The server asks its providers in this order, each failure falling through to the next (fail open), with the same keys
@@ -29,7 +29,7 @@ off. Each of them gets its model from `server_engine`, so Jev's one short try an
 sender's, and the market ask (`market.ask` events) has its own count under the same caps.
 
 Each answer carries `ref`, its `judge.call` event's id. The caller that then acts on the answer writes what it did with
-`POST /api/v2/decisions/outcome` ({ref, verdict, action}, `tico decision outcome`, `hub_decision_outcome`): one
+`POST /api/v2/decisions/outcome` ({ref, verdict, action}, `tico decision outcome`, `tico_decision_outcome`): one
 `decision.outcome` event per call, target the ref, with the call's label, so a month of a set's answers can be read
 against what was done with them. Only the caller that asked records it, and a second write for the same ref returns the
 first. Short words only, never the state. Decisions Tico makes on the server (stale suggestions, listening, live

@@ -2932,7 +2932,7 @@ def name_problem(actor):
     detail = NAME_REQUIRED
     if str(actor or "").startswith("bot:"):
         detail += (
-            " Pass a title: `title` in hub_thread_create or hub_thread_dm_group, or --title on tico thread create "
+            " Pass a title: `title` in tico_thread_create or tico_thread_dm_group, or --title on tico thread create "
             "and tico thread dm-group. Only a DM with one teammate may be unnamed."
         )
     return Problem("name_required", detail, 422)

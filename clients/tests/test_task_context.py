@@ -28,5 +28,5 @@ def test_task_context_and_notes_cli_mcp_parity(monkeypatch, capsys):
         ("tasks/#12/context", {}),
         ("meetings/transcript", {"id": "meeting-1", "offset": 0, "limit": 20000, "notes": True}),
     ]
-    assert "bot" in hubtools.offered_to(hubtools.BY_NAME["hub_task_context"])
-    assert "assistant" in hubtools.offered_to(hubtools.BY_NAME["hub_task_context"])
+    assert "bot" in hubtools.offered_to(hubtools.BY_NAME["tico_task_context"])
+    assert "assistant" in hubtools.offered_to(hubtools.BY_NAME["tico_task_context"])

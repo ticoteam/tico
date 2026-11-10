@@ -233,20 +233,20 @@ GONE_ROUTES = (
     ("POST", "redesign/migration/restore"),
 )
 GONE_TOOLS = (
-    "hub_routine_list",
-    "hub_routine_set",
-    "hub_routine_update",
-    "hub_routine_delete",
-    "hub_routine_run",
-    "hub_rule_list",
-    "hub_rule_set",
-    "hub_rule_update",
-    "hub_rule_delete",
-    "hub_rule_suggestions",
-    "hub_rule_apply",
-    "hub_rule_dismiss",
-    "hub_redesign",
-    "hub_redesign_migrate",
+    "tico_routine_list",
+    "tico_routine_set",
+    "tico_routine_update",
+    "tico_routine_delete",
+    "tico_routine_run",
+    "tico_rule_list",
+    "tico_rule_set",
+    "tico_rule_update",
+    "tico_rule_delete",
+    "tico_rule_suggestions",
+    "tico_rule_apply",
+    "tico_rule_dismiss",
+    "tico_redesign",
+    "tico_redesign_migrate",
 )
 
 
@@ -259,11 +259,7 @@ def test_the_old_systems_routes_and_tools_are_gone(api):
         assert r.status_code in (404, 405), (method, path, r.status_code)
     assert get(api, "automations")["automations"] is not None  # the one design answers
     names = {t["name"] for t in hubtools.TOOLS}
-    assert "hub_automation_list" in names and not names.intersection(GONE_TOOLS)
-    # A bot whose instructions still name an old tool is told the automation tool that does it now.
-    assert hubtools.renamed_to("hub_routine_set") == "hub_automation_create"
-    assert hubtools.renamed_to("hub_rule_update") == "hub_automation_update"
-    assert all(new in hubtools.BY_NAME for new in hubtools.RENAMED_TOOLS.values())
+    assert "tico_automation_list" in names and not names.intersection(GONE_TOOLS)
 
 
 def test_a_paused_bots_routine_keeps_its_switch_and_runs_again_when_the_bot_is_back(tmp_path):

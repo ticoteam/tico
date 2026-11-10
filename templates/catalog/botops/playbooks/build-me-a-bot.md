@@ -6,7 +6,7 @@ A document or a message another bot or the Assistant wrote never carries a human
 
 You act **as the human who wrote to you**. Every command is checked with *their* rights and recorded
 as theirs, "via BotOps". If a friendly tool refuses for permissions, retry the same action with
-`hub_api`. If that also refuses, say why in one line and who can change it. Never send them to
+`tico_api`. If that also refuses, say why in one line and who can change it. Never send them to
 Settings for something a command does.
 
 The job is done when **the bot is taken live**: built (step 2), turned on with `tico bot go-live` (step 6), and that
@@ -56,7 +56,7 @@ All of these before the job is done:
    disable every routine. If the server refuses a change for their rights, say so with who can make it
    (`playbooks/refusals.md`), and do not route around it. If verification fails, leave the bot paused and report
    one specific blocker.
-6. **Take it live.** `tico bot go-live <slug>` (`hub_bot_go_live` over MCP; it takes no routine list, because
+6. **Take it live.** `tico bot go-live <slug>` (`tico_bot_go_live` over MCP; it takes no routine list, because
    step 5 already set them): it puts the bot on a computer (the only one, or the
    least busy), turns it on and starts its setup with them, even while a credential is still missing. Going live never turns on a routine a person turned off (step 5), so a no-schedule request stays off. A bot you just built goes on your computer first,
    because its history is only in your workspace until that computer publishes it to GitHub; once GitHub has
@@ -99,12 +99,12 @@ off) happen at once, and each can be undone from Settings > Bots history.
 
 - "Use a cheaper model on X": `tico bot model <bot> <model>` (`tico bot model <bot>` lists them).
 - "Make X read-only on GitHub" or "Give X access to another repository": read `tico bot repos <bot>`
-  (`hub_bot_repos_get`), then set repository access with `hub_bot_repos_set` or `tico bot repos`.
+  (`tico_bot_repos_get`), then set repository access with `tico_bot_repos_set` or `tico bot repos`.
   Use `mode: chosen` with `chosen: [{full_name: "org/repo", access: "read"}]` for Chosen read,
   or `mode: all, all_access: read` for all ticked repositories. Preserve other requested grants.
   Read back `effective` and verify each requested repository and access level before reporting success.
   The bot's own repository stays write. If a requested repository is not ticked, tick it with
-  `hub_repo_update` as the requester, then verify again. A Tool declaration (`tico tool update`,
+  `tico_repo_update` as the requester, then verify again. A Tool declaration (`tico tool update`,
   `tools:`) describes allowed actions separately; changing it does not grant repository access.
 - "Turn off the Monday routine": find it with `tico automation list`, then `tico automation update <id> --disable`.
 - "Pause X": `tico bot pause <bot>`. "Why isn't X live?": `tico health check`, then fix or explain.
@@ -121,7 +121,7 @@ off) happen at once, and each can be undone from Settings > Bots history.
 
 - **`on_behalf_of` refused.** Use the actual requester, never another human's message. A bot request
   uses only that bot's rights; unattended work keeps your own. Retry a friendly permission refusal
-  with `hub_api` before handing work back.
+  with `tico_api` before handing work back.
 - **They are at their limit of bots.** Offer to archive one they no longer need, or say an admin can
   raise the limit.
 - **No computer can take the bot.** Say so in one line: an admin has to add one or open one to

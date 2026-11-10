@@ -60,7 +60,7 @@ rewrites the link and never signs or fetches it. An unmapped `s3://` URI shows a
 
 ## Publishing
 
-**Explicitly**, from a run (the same tools exist over MCP as `hub_file_*`):
+**Explicitly**, from a run (the same tools exist over MCP as `tico_file_*`):
 
 ```
 tico file publish reports/2026-09-29-pipeline.md [--title T] [--task ID] [--scope task|bot]
@@ -449,7 +449,7 @@ The JSON `text`/`content_base64` route still accepts files up to 10 MB for older
 `/api/v2/config` advertises `features.task_files_multipart`. An older server receives the existing
 JSON upload; the client refuses files over 10 MB before reading them. The Computer's automatic
 file publishing also hashes and uploads from disk. Video and audio extensions are accepted
-alongside the existing document and image types. The local MCP adapter can use `hub_task_attach`
+alongside the existing document and image types. The local MCP adapter can use `tico_task_attach`
 with `path` and optional `poster`; server MCP calls keep using text/base64 and cannot read server paths.
 
 Every file, version, poster, and thumbnail request checks the existing Tico rights first.
@@ -493,7 +493,7 @@ and answer contracts.
 
 ### Approved versions
 
-`tico file approved <path|FILE[@N]> [--by human|bot:SLUG|any]` (MCP `hub_file_approved`,
+`tico file approved <path|FILE[@N]> [--by human|bot:SLUG|any]` (MCP `tico_file_approved`,
 `GET /api/v2/file-approvals?file=&version=` or `?path=&digest=`, plus `&by=`) says whether that exact version is
 approved. It prints `{approved, by, at, task, question}` and exits 0 when approved, 1 when not (the answer says
 `"approved": false`), 2 on bad input. A failed call also exits 1 or 2, with an error answer instead: read the answer,
@@ -502,7 +502,7 @@ verdict counts (an answer to a [file review](tasks.md#files)); `--by` names whos
 newest matching verdict on that version decides (Request changes after Approve means not approved), a new version is
 never approved by an older one's review, and a deleted task's verdicts stop counting.
 
-`tico file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `hub_file_review`,
+`tico file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `tico_file_review`,
 `POST /api/v2/file-reviews`) gives a verdict directly, for a company where a bot moves a stage: a bot reviews another
 bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). A person
 may use it too; Decide is the usual way.

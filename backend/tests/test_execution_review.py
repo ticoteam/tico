@@ -2698,8 +2698,8 @@ def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api
 @pytest.mark.parametrize(
     'tool,label',
     [
-        ('mcp__hub__hub_release_now', 'publish release'),
-        ('mcp__hub__hub_webhook_send', 'send webhook'),
+        ('mcp__tico__tico_release_now', 'publish release'),
+        ('mcp__tico__tico_webhook_send', 'send webhook'),
     ],
 )
 def test_restart_with_hub_publish_or_send_call_is_held_and_names_it(api, tool, label):

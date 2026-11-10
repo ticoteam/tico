@@ -2847,7 +2847,7 @@ def cmd_schedule(args):
 def cmd_connector_event(args):
     """Execute one server-validated Hub calendar action from stdin.
 
-    This is the provider-local half of `hub_calendar_schedule`; the runner claims the durable
+    This is the provider-local half of `tico_calendar_schedule`; the runner claims the durable
     action first and invokes this command as the connector (`--as connector`), which writes only
     what the server leased it, so employee mail permissions and generic email sending are not broadened.
     """

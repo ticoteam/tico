@@ -174,7 +174,7 @@ def test_requester_contacts_follow_task_privacy_and_teammates_can_remove_themsel
     from backend.tests.helpers.mcp import call
 
     failed, result = call(
-        api, 'hub_task_requester_save', {'id': task['id'], 'requester_id': external['id'], 'important': True}
+        api, 'tico_task_requester_save', {'id': task['id'], 'requester_id': external['id'], 'important': True}
     )
     assert not failed, result
     changed = get(api, 'tasks/' + task['id'] + '/requesters')['requesters'][0]

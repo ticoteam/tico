@@ -111,7 +111,7 @@ everything it missed, once each and in order, over as many polls as it takes (up
 starts from the newest 40 pages). Nothing is fetched while no bot subscribes; `TICO_UPDATE_CHECK=off`
 stops the fetching, and `TICO_TEMPLATE_FEED=off` leaves the template category without a feed (it then says so and
 sends nothing). From the command line: `tico bot update <slug> --subscribe-updates templates,tico` (or `none`), or
-`update_subscriptions` on `hub_bot_update`.
+`update_subscriptions` on `tico_bot_update`.
 
 ## Branches
 
@@ -120,11 +120,11 @@ and it runs on your computer and AI subscription. Lessons committed to the repos
 
 The original's owner turns on **Allow branches** in the bot editor, or asks BotOps to do it. It is off by default;
 new Software Architect and PR Reviewer templates allow branches. Existing bots keep their settings.
-BotOps uses `hub_bot_update(slug, shared=true)` (the current name of `hub_bot_set`), or `tico bot update <bot> --shared`.
+BotOps uses `tico_bot_update(slug, shared=true)`, or `tico bot update <bot> --shared`.
 `--no-shared` turns it off. This is separate from a **shared thread**, which is a thread everyone in it can read.
 
 On the original's page, choose **Make my branch** and one of your computers. Or use
-`tico bot branch <bot> [--computer <label-or-id>]` or the MCP tool `hub_bot_branch(bot, runner_id?)`.
+`tico bot branch <bot> [--computer <label-or-id>]` or the MCP tool `tico_bot_branch(bot, runner_id?)`.
 Without a computer the CLI and tool create a planned branch. The dialog offers **Create planned branch** when
 none of your computers can host it. It starts on the next computer you add; you can also repeat the CLI command
 with an existing eligible computer to activate it.
@@ -548,8 +548,8 @@ grant removes delivery even when an old file still exists. See [credential-vault
 
 Declaring access does not provision anything. A Credential administrator grants the value to the bot;
 preflight then reports whether every declared Credential actually
-resolves. Two things need no entry: Tico itself (`hub` and the `hub_*` MCP tools come with
-every run) and the decision model behind `hub_decision_ask` (`skills/decisions/SKILL.md`), whose credential
+resolves. Two things need no entry: Tico itself (`hub` and the `tico_*` MCP tools come with
+every run) and the decision model behind `tico_decision_ask` (`skills/decisions/SKILL.md`), whose credential
 Tico holds. A bot that needs a service it has not declared stops and says so on the task; it never
 borrows another bot's credential. To let it use one, the owner grants it (Tools > Credentials), or asks BotOps in a DM, which moves the value
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
@@ -600,7 +600,7 @@ team's own frontend.
 **Registering a tool.** Someone who manages a bot (the owner, a bot administrator who owns it,
 or a human above it on the team chart) can add or remove a tool without opening its repository:
 `POST /api/v2/bots/{bot}/tools`, `DELETE /api/v2/bots/{bot}/tools/{id}`, or the MCP tools
-`hub_tool_add`, `hub_tool_list`, `hub_tool_update` and `hub_tool_remove` (`tico tool add <bot> posthog --can read
+`tico_tool_add`, `tico_tool_list`, `tico_tool_update` and `tico_tool_remove` (`tico tool add <bot> posthog --can read
 --identity "PostHog project 340585 (US)" --scope project=340585 --env POSTHOG_KEY`; a remote MCP server adds
 `--mcp-url https://... --transport http --header 'Authorization: Bearer ${VAR}'`, and `tico tool update` takes the same flags). Tico holds no
 bot repository, so it cannot write `bot.yaml` itself. It checks the entry against the same
@@ -788,9 +788,9 @@ Use `tico tool add <bot> <service> --can <verbs> --dry-run` to validate an entry
 
 ### Templates over MCP
 
-`hub_bot_create` with `template` uses the Team default model. Starter templates build directly on
+`tico_bot_create` with `template` uses the Team default model. Starter templates build directly on
 their assigned Computer, like Add from template in the app; other templates queue BotOps and return
-`setup_task_id` to watch with `hub_task_show`. Generated tasks carry the human requester's rights.
+`setup_task_id` to watch with `tico_task_show`. Generated tasks carry the human requester's rights.
 `description` preserves the requested scope and limits; `instructions` overrides the template Instructions,
 and `title_prefix` prefixes a generated setup task. New bots report to their requester unless `reports_to`
 is supplied. Leave `slug` out: Tico picks a free one from `name` (else the template's name), skipping archived and
@@ -798,9 +798,9 @@ reserved slugs, and returns it. Restore an archived bot only when asked.
 Use `build: false` to register only the record,
 for example when building it yourself on a Computer. BotOps defaults to record-only registration.
 An empty model in Add from template also inherits the Team default; choose one in Settings > Models
-if none is saved. `hub_template_list` includes Setup questions, first-routine output and draft-only status,
+if none is saved. `tico_template_list` includes Setup questions, first-routine output and draft-only status,
 and the example result. Unknown templates are refused before creating a record. To correct an existing
-record, update its `template` through the definition API or `hub_bot_update`; this changes metadata,
+record, update its `template` through the definition API or `tico_bot_update`; this changes metadata,
 without replacing the existing repository. Matching display names are allowed; responses include the
 other slugs, and the UI shows slugs beside matching names.
 
@@ -820,7 +820,7 @@ pending build; an External agent does not need a local repository.
 ## Let a bot maintain a shared checklist
 
 Make a tag or a template instance with that bot as its `owner`. It can read the tag with
-`hub_tag_show`, then edit metadata or Markdown with `hub_tag_update` and the current `version`.
+`tico_tag_show`, then edit metadata or Markdown with `tico_tag_update` and the current `version`.
 Task movers attach its key to existing tasks; owning a tag does not change task permissions.
 See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 

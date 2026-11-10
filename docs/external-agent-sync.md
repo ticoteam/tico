@@ -29,10 +29,10 @@ but Tico does not dispatch webhook calls through this sync integration.
   preserves it.
 - The transcript is copied into the human's own DM with the bot, already read, with no job queued. Resending a
   message adds nothing. Each bot in the reply carries `synced_through`: send only newer messages next time.
-- A sync with `inbox: true` (`hub_external_sync` sends it) also gets `inbox` on each bot: what the human wrote to it
+- A sync with `inbox: true` (`tico_external_sync` sends it) also gets `inbox` on each bot: what the human wrote to it
   in Tico since the last sync, oldest first, given once and then counted as delivered. The routine hands those to
   that bot; its answer comes back with the next transcript. Without `inbox: true` (a routine set up before, on
-  `hub_grokbot_sync`), `inbox` is empty and the messages keep waiting. Messages from other humans stay in Tico.
+  `tico_grokbot_sync`), `inbox` is empty and the messages keep waiting. Messages from other humans stay in Tico.
 - Images in a message are fetched once (public https only, up to 10 MB each), stored like a thread attachment and
   shown inline. One Tico cannot fetch stays in the message as a link, as do links past the first 50 in one sync.
   Nothing is fetched for a sync Tico would refuse (a bot, a malformed body, or new bots past the member's limit).
@@ -41,8 +41,8 @@ but Tico does not dispatch webhook calls through this sync integration.
 - Presence is the last sync: synced in the last 26 hours shows as synced, older as not synced lately. Nothing is
   dispatched to these bots, except a Grok Bot [delivered through the Grok Mac app](#deliver-through-the-grok-mac-app).
 
-The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/v2/external/sync`;
-`tico external sync --provider … --file …`). `hub_grokbot_sync` and `POST /api/v2/grokbot/sync` are the same with
+The tool is `tico_external_sync` with `provider` `grokbot` or `dots` (`POST /api/v2/external/sync`;
+`tico external sync --provider … --file …`). `tico_grokbot_sync` and `POST /api/v2/grokbot/sync` are the same with
 `provider: grokbot` and no inbox, for routines set up before.
 
 ## Grok Bot
@@ -61,13 +61,13 @@ The tool is `hub_external_sync` with `provider` `grokbot` or `dots` (`POST /api/
 > **Tico sync.** Use the Tico MCP tools.
 > 1. List every Bot on my account, including yourself, and the section each is in on my Bots list (Pinned, a
 >    section I made, or none).
-> 2. Call `hub_external_sync` with `provider` `grokbot`, those Bots and no messages, each with `id` (the id in
+> 2. Call `tico_external_sync` with `provider` `grokbot`, those Bots and no messages, each with `id` (the id in
 >    grok.com/bot/<id>), `name`, `description`, `section` (empty when none) and the full `instructions` verbatim,
 >    and `source` set to your own name.
 > 3. For each Bot, read its conversations and collect every message newer than the `synced_through` Tico returned
 >    for it (all of them if it is empty), oldest first, as `role` (user or bot), `text` verbatim, `at` (ISO time)
 >    and `id` if Grok gives one, and `images` for any image in the message: its https `url`, or for a file on your
->    computer `content_base64` (under 5 MB) with a `name`. Send them with `hub_external_sync`, at most 200
+>    computer `content_base64` (under 5 MB) with a `name`. Send them with `tico_external_sync`, at most 200
 >    messages per Bot per call, repeating until all are sent.
 > 4. For each Bot with `inbox` messages in any of those replies, give them to that Bot as from me, in order (each is given only once).
 > 5. Tell me in one line per Bot what Tico added and what you passed on. Change nothing else in Grok.
@@ -107,7 +107,7 @@ a connector and press **Allow** when Tico asks ([OAuth sign-in](connect-an-agent
 routine to run daily:
 
 > **Tico sync.** Use the Tico MCP tools.
-> 1. Call `hub_external_sync` with `provider` `dots`, one bot with `name` (your name), `description` and your full
+> 1. Call `tico_external_sync` with `provider` `dots`, one bot with `name` (your name), `description` and your full
 >    `instructions` verbatim, and the messages of our conversation newer than the `synced_through` Tico returned
 >    (all of them the first time), oldest first, as `role` (user or bot), `text` verbatim and `at` (ISO time). At
 >    most 200 messages per call; repeat until all are sent.

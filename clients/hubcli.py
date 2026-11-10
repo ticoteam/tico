@@ -4,7 +4,7 @@
 Thin on purpose (docs/history/hub-v2.md §5): parse the arguments, hand them to `clients/remotecli.py`,
 which makes one HTTP call against the Tico API and prints JSON on stdout. Every rule lives on
 the server (`backend/hubdb.py`), never here. A command is its tool's name (clients/hubtools.py) with
-`hub_` dropped: `tico message send` is `hub_message_send`, `tico bot go-live` is `hub_bot_go_live`.
+`tico_` dropped: `tico message send` is `tico_message_send`, `tico bot go-live` is `tico_bot_go_live`.
 
     tico whoami
     tico message send <bot|human> "<text>" [--fyi] [--conversation ID] [--ref task:ID ...] [--steer | --queue |
@@ -2294,7 +2294,7 @@ def parser():
         )
         s.set_defaults(
             fn="task follow", **({"unfollow": True} if change == "unfollow" else {})
-        )  # one tool: hub_task_follow
+        )  # one tool: tico_task_follow
     s = task.add_parser("relate", help="relate another task to this one: <id> <kind> <task>")
     s.add_argument("id")
     s.add_argument("task")
@@ -4085,14 +4085,14 @@ def parser():
         dest="sub"
     )
     s = grok.add_parser("sync", help="sync Grok Bots from a JSON file: {\"bots\": [...], \"source\": ...}")
-    s.add_argument("--file", required=True, help="the JSON body hub_grokbot_sync takes")
+    s.add_argument("--file", required=True, help="the JSON body tico_grokbot_sync takes")
     s.set_defaults(fn="grokbot sync")
     ext = sub.add_parser(
         "external", help="your bots on another platform in Tico (docs/external-agent-sync.md)"
     ).add_subparsers(dest="sub")
     s = ext.add_parser("sync", help="sync Grok Bots or Dots from a JSON file: {\"bots\": [...], \"source\": ...}")
     s.add_argument("--provider", required=True, choices=("grokbot", "dots", "muse"))
-    s.add_argument("--file", required=True, help="the JSON body hub_external_sync takes")
+    s.add_argument("--file", required=True, help="the JSON body tico_external_sync takes")
     s.set_defaults(fn="external sync")
 
     calendar = sub.add_parser("calendar", help="read or schedule company appointments").add_subparsers(dest="sub")

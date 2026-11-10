@@ -1,6 +1,6 @@
 # Finance tools
 
-Seven hub tools reach Finance. Each is an MCP tool (`hub_finance_*`) and a `tico finance` command with the same
+Seven hub tools reach Finance. Each is an MCP tool (`tico_finance_*`) and a `tico finance` command with the same
 inputs. Every call runs as its caller, a person or a bot, with that caller's own Finance rights and view: a bot
 without finance.pay cannot pay, and a bot sees only what its view covers. Payroll's private lines stay private for
 everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else reads or writes the books.
@@ -9,13 +9,13 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 
 | Tool | Command | Input | Output |
 |---|---|---|---|
-| `hub_finance_search` | `tico finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor, campaign, subscription, receipt; leave it out to search all but account, vendor, campaign, subscription and receipt), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`, `month` for campaigns, `status` for receipts), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
-| `hub_finance_report` | `tico finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, campaigns, subscriptions, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
-| `hub_finance_metric` | `tico finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion, subscriptions_monthly) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
-| `hub_finance_brief` | `tico finance brief` | none | `{lines, as_of, changed_since, version}`: a few short lines about the money you may see (your budgets, your team's, cash and burn where you see the company, Watch findings, unattributed spend); `as_of` is when those numbers last moved (backend/finance/brief.py) |
-| `hub_finance_act` | `tico finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
-| `hub_finance_action` | `tico finance action <id>` | `action_id` | the action's current status |
-| `hub_finance_inbox` | `tico finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
+| `tico_finance_search` | `tico finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor, campaign, subscription, receipt; leave it out to search all but account, vendor, campaign, subscription and receipt), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`, `month` for campaigns, `status` for receipts), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
+| `tico_finance_report` | `tico finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, campaigns, subscriptions, close, sales_tax, 1099), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close; `year` for sales_tax and 1099 | the report, rows past `top_n` folded into "Other · n"; sales_tax and 1099 are whole or an error, and only for someone who sees everything |
+| `tico_finance_metric` | `tico finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, unattributed, ad_spend, per_conversion, subscriptions_monthly) and its filters | `{value, as_of, ...}`; the budget metrics add `pace_month_end`, `spent_from` (books, platform or mixed: an ad budget reads its platform's daily spend in each month a healthy import covers, in place of that platform's charges), `platform` and `platform_as_of` |
+| `tico_finance_brief` | `tico finance brief` | none | `{lines, as_of, changed_since, version}`: a few short lines about the money you may see (your budgets, your team's, cash and burn where you see the company, Watch findings, unattributed spend); `as_of` is when those numbers last moved (backend/finance/brief.py) |
+| `tico_finance_act` | `tico finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
+| `tico_finance_action` | `tico finance action <id>` | `action_id` | the action's current status |
+| `tico_finance_inbox` | `tico finance inbox` | `kind`, `cursor`, `limit` | `{items, counts, next_cursor}`: the caller's Finance work queue; with `kind`, that kind alone, paged past its first 200 |
 
 The Finance transactions list (its feed read) leaves out an `ignored` row that the bank has ended: its `provider_status`
 is then Mercury's own word, `cancelled`, `failed`, `blocked` or `reversed` (the list shows `cancelled` as "canceled" and
@@ -28,7 +28,7 @@ it leaves the list like any other row the bank ended.
 
 A bank or card row's vendor is one identity per merchant. Its key strips what the bank adds to a name: a processor
 prefix (`SQ *`, `TST*`, `PAYPAL *`), a reference or store number and case, so `GOOGLE *ADS8812` and `GOOGLE ADS` are one
-vendor. The Transactions read (and `hub_finance_search` on `feed`) gives each bank or card row `vendor: {id, name}`: `id` is
+vendor. The Transactions read (and `tico_finance_search` on `feed`) gives each bank or card row `vendor: {id, name}`: `id` is
 the contact the key resolves to, else the key, and `name` is the contact's name. Watch's duplicate charge and price
 increase checks group by that vendor and name the finding by it.
 
@@ -37,13 +37,13 @@ view. A total that lost a hidden (private) line is marked `excl: true`, so nobod
 vendor's name and aliases show when the reader sees one of its lines in the period, or when the reader sees every contact
 (the payables view, or full detail), or when a vendor attribution rule names them or someone they manage. A vendor whose
 only lines are private never shows its name to a reader without full detail. So a spending bot sees the vendors it pays,
-with only its own spend. `hub_finance_search` `kind: vendor` returns `{id, name, aliases, month: {spend, excl, as_of}}`
+with only its own spend. `tico_finance_search` `kind: vendor` returns `{id, name, aliases, month: {spend, excl, as_of}}`
 for each vendor whose name shows (this month's spend by default), and leaves the rest out.
 
 `GET /api/v2/finance/unattributed` (and the `unattributed` metric: `{amount, lines, excl}`) is the Unattributed queue: P&L
 lines in the period with no team, teammate or attribution in force, the reader's slice only.
 
-Campaigns (`GET /api/v2/finance/campaigns?month=YYYY-MM`, `hub_finance_search` `kind: campaign`, the `campaigns` report and the
+Campaigns (`GET /api/v2/finance/campaigns?month=YYYY-MM`, `tico_finance_search` `kind: campaign`, the `campaigns` report and the
 `ad_spend` and `per_conversion` metrics) are the ad campaigns an ad account reports. Each has an owner: a team or a teammate
 set by the `campaign_owner_set` action (`campaign_id`, plus `team` or `teammate`; neither returns it to the account's
 owner), undone by `campaign_owner_undo`. With no owner set it is the account's bot (`inherited: true`). A campaign's
@@ -53,9 +53,9 @@ zero-spend campaigns follow the same rule. Clicks and conversions come from the 
 Meta's `conversions` (or its `actions`) summed over the offsite and onsite conversion action types. `per_conversion` is
 the spend over the conversions in cents, null when there are none.
 
-Receipts (`GET /api/v2/finance/receipts?status=`, `hub_finance_search` `kind: receipt`) are Library files filed to Finance as receipts. Tico reads a receipt's amount, date and vendor from the file's indexed text (text, Markdown, HTML and CSV files; a PDF or an image has none until someone sets it with `receipt_read`), with no model call. A read receipt is suggested on the bank or card row it matches: the same amount (or a total with a tip of up to 30%), the same merchant, and a date within five days. A row never holds two suggestions. `receipt_match` accepts (attaching the file to the row) or refuses a suggestion, and `receipt_match_undo` puts an accept back. Auto-attach is off unless the book sets `receipt_auto_attach_at`. The briefing's "Needs you" line counts the card charges with no receipt and the matches to check. Tico never writes receipts to QuickBooks or Xero.
+Receipts (`GET /api/v2/finance/receipts?status=`, `tico_finance_search` `kind: receipt`) are Library files filed to Finance as receipts. Tico reads a receipt's amount, date and vendor from the file's indexed text (text, Markdown, HTML and CSV files; a PDF or an image has none until someone sets it with `receipt_read`), with no model call. A read receipt is suggested on the bank or card row it matches: the same amount (or a total with a tip of up to 30%), the same merchant, and a date within five days. A row never holds two suggestions. `receipt_match` accepts (attaching the file to the row) or refuses a suggestion, and `receipt_match_undo` puts an accept back. Auto-attach is off unless the book sets `receipt_auto_attach_at`. The briefing's "Needs you" line counts the card charges with no receipt and the matches to check. Tico never writes receipts to QuickBooks or Xero.
 
-Subscriptions (`GET /api/v2/finance/subscriptions?status=`, `hub_finance_search` `kind: subscription`, the `subscriptions` report and the `subscriptions_monthly` metric) are the recurring charges a book pays: one row per vendor paid from one card or money account. The daily look (`subscriptions.detect`, run once a day from the scheduler's Finance upkeep) suggests a monthly one when the vendor charged in each of the three calendar months before this one, at amounts within 25% of each other and on the same day of the month within 5 days, and an annual one when two charges are 11 to 13 months apart. It posts nothing to QuickBooks or Xero. A person with finance.book, the Bookkeeper included, confirms it with `subscription_confirm` (`subscription_id`, `status` active, ignored or cancelled, and optionally `amount`, `cadence`, `seats`); `subscription_undo` puts back the fields from before the latest confirmation. An active subscription's charge at least 10% above its expected amount is a price increase in Watch, and an active subscription on an idle bot's card is unused, as any monthly charge is. An ignored subscription raises no Watch finding and is never suggested again; a cancelled one's charges keep Watch's usual checks. A suggested or active subscription with no charge for two periods past its next charge is cancelled by the look, and one the look cancelled is suggested again when the vendor charges again. A reader sees a subscription when they see everything, own its attribution (or manage an owner), or see its latest charge's line. `monthly` is an annual amount over twelve.
+Subscriptions (`GET /api/v2/finance/subscriptions?status=`, `tico_finance_search` `kind: subscription`, the `subscriptions` report and the `subscriptions_monthly` metric) are the recurring charges a book pays: one row per vendor paid from one card or money account. The daily look (`subscriptions.detect`, run once a day from the scheduler's Finance upkeep) suggests a monthly one when the vendor charged in each of the three calendar months before this one, at amounts within 25% of each other and on the same day of the month within 5 days, and an annual one when two charges are 11 to 13 months apart. It posts nothing to QuickBooks or Xero. A person with finance.book, the Bookkeeper included, confirms it with `subscription_confirm` (`subscription_id`, `status` active, ignored or cancelled, and optionally `amount`, `cadence`, `seats`); `subscription_undo` puts back the fields from before the latest confirmation. An active subscription's charge at least 10% above its expected amount is a price increase in Watch, and an active subscription on an idle bot's card is unused, as any monthly charge is. An ignored subscription raises no Watch finding and is never suggested again; a cancelled one's charges keep Watch's usual checks. A suggested or active subscription with no charge for two periods past its next charge is cancelled by the look, and one the look cancelled is suggested again when the vendor charges again. A reader sees a subscription when they see everything, own its attribution (or manage an owner), or see its latest charge's line. `monthly` is an annual amount over twelve.
 
 `vendor_merge {into, merge}` folds names and vendor contacts into `into` (a vendor). `merge` takes name keys (as a row reads
 them) or contact ids; every name a merged contact went by moves to `into`, and a native book archives the merged contact.
@@ -211,7 +211,7 @@ under any of those keys. Both are gated: a bot's `card_save` or `card_unsave` wa
 
 ## Card fill
 
-Card fill is not offered: `hub_finance_card_fill` is in no tool list (`hubtools.UNLISTED`) and has no `tico finance`
+Card fill is not offered: `tico_finance_card_fill` is in no tool list (`hubtools.UNLISTED`) and has no `tico finance`
 command. A call by its name still runs and returns "Card fill is not available yet"; it never takes or returns card
 details.
 

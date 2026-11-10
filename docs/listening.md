@@ -75,7 +75,7 @@ These are internal v2 APIs and may change between releases. Only the Listening b
 runs and make decisions. Receivers and configured readers can read their own destinations. Use a bot's run credential or the owner's
 personal token; every POST has an `Idempotency-Key` for safe retries ([API](api.md)). The bodies below contain fictional data.
 
-1. Save a sweep with `POST /api/v2/listening/runs` (`hub_listening_save`):
+1. Save a sweep with `POST /api/v2/listening/runs` (`tico_listening_save`):
 
    ```json
    {"source":"news","query":"example app onboarding","status":"ok","pages_read":1,"items_seen":1,"items":[{"native_id":"example-1","url":"https://example.com/posts/1","content":"How can a small team write a helpful welcome guide?"}]}
@@ -84,7 +84,7 @@ personal token; every POST has an `Idempotency-Key` for safe retries ([API](api.
    Keep `items[0].id` from the response as `<item-id>`. `status` is `ok`, `blocked`, `rate_limited` or `error`; a non-`ok`
    sweep needs a `note`. An `ok` sweep with no items means no results. A saved post is deduplicated by `(source, native_id)`;
    saving it again leaves its original content intact. Each sweep accepts at most 200 posts.
-2. Ask for a decision with `POST /api/v2/listening/decide` (`hub_listening_decide`):
+2. Ask for a decision with `POST /api/v2/listening/decide` (`tico_listening_decide`):
 
    ```json
    {"item_ids":["<item-id>"],"limit":1}
@@ -95,9 +95,9 @@ personal token; every POST has an `Idempotency-Key` for safe retries ([API](api.
    code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`, `unavailable`, `unconfigured`, `budget`, else
    `unreadable`), never the provider's error text, which can repeat the post. Every destination whose category
    clears its threshold gets one intake row. If none clears, the post remains saved and goes nowhere.
-3. As the receiver or owner, read `GET /api/v2/intake?destination=content&status=new` (`hub_listening_item_list`).
+3. As the receiver or owner, read `GET /api/v2/intake?destination=content&status=new` (`tico_listening_item_list`).
    Keep the intake row's `id` as `<intake-id>`; this differs from the saved post id. Resolve with
-   `POST /api/v2/intake/<intake-id>/resolve` (`hub_listening_item_resolve`):
+   `POST /api/v2/intake/<intake-id>/resolve` (`tico_listening_item_resolve`):
 
    ```json
    {"status":"rejected","reason":"The post has no detail our team can use."}

@@ -103,7 +103,7 @@ def test_with_assistant_acts_without_asking_off_a_rename_is_a_confirm_card_the_p
     r, attempt = assistant_turn(api, "ana-test", "Rename Test Mac to Studio Mac")
     err, card = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "computer.label", "value": "Studio Mac", "computer": rid, "on_behalf_of": "turn"},
         attempt["token"],
     )

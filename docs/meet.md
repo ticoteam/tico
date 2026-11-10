@@ -93,8 +93,8 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `DELETE /api/v2/calls/{call_id}/bots/{bot}` | Detach a bot |
 
 The same operations are `tico call list|start|show|join|token|leave|end|retry` and `tico call bot add|remove` in the
-`tico` CLI, and `hub_call_list`, `hub_call_show`, `hub_call_start`, `hub_call_join`, `hub_call_token`, `hub_call_leave`,
-`hub_call_end`, `hub_call_retry`, `hub_call_bot_add` and `hub_call_bot_remove` over MCP. The OpenAPI operations are
+`tico` CLI, and `tico_call_list`, `tico_call_show`, `tico_call_start`, `tico_call_join`, `tico_call_token`, `tico_call_leave`,
+`tico_call_end`, `tico_call_retry`, `tico_call_bot_add` and `tico_call_bot_remove` over MCP. The OpenAPI operations are
 `listCalls`, `startCall`, `getCall`, `joinCall`, `refreshCallToken`, `leaveCall`, `endCall`, `retryCallActionItems`,
 `attachCallBots` and `detachCallBot`.
 

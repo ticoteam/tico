@@ -14,7 +14,7 @@ page and the bots' turn start see the same brief, and a brief is re-issued only 
 Who gets it. `for_turn` is the turn-start hand-off (backend/execution.py): the lines a bot, or a person's Assistant
 turn, is handed, or None. It hands lines only when they differ from the fingerprint handed at this reader's last turn
 start (`delivered_fingerprint`); when they do not, it reads and compares and writes nothing. The runner renders the lines
-as standing lines (runner-rs/src/prompt.rs). `hub_finance_brief` and GET /api/v2/finance/brief return `brief` on demand
+as standing lines (runner-rs/src/prompt.rs). `tico_finance_brief` and GET /api/v2/finance/brief return `brief` on demand
 and never move the delivered fingerprint.
 
 Later steps hook in at `_later_lines`: subscription lines (step 6, subscriptions.py) and the receipt line (step 7,
@@ -244,7 +244,7 @@ def _save(
 
 
 def brief(c: sqlite3.Connection, reader: str, at: str | None = None) -> Row:
-    """The reader's brief: {lines, as_of, changed_since, version}, for the people page and hub_finance_brief. It keeps
+    """The reader's brief: {lines, as_of, changed_since, version}, for the people page and tico_finance_brief. It keeps
     one `fin_briefs` row per reader and writes only when the lines moved (call it in a write transaction)."""
     now = at or H.now()
     lines = compute(c, reader, now)

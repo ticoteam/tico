@@ -47,8 +47,8 @@ watches for each core competitor while it sets up the first map ([playbook](../t
 | `tico market watch stop <id>` | Stop watching a page |
 | `tico market watch check` | Read the watched pages now, in the background |
 
-The same four are hub tools (`hub_market_watch_add`, `hub_market_watch_list`, `hub_market_watch_stop`,
-`hub_market_watch_check`).
+The same four are hub tools (`tico_market_watch_add`, `tico_market_watch_list`, `tico_market_watch_stop`,
+`tico_market_watch_check`).
 
 ## API
 

@@ -796,7 +796,7 @@ def private_suggestion(c, who, data):
 
 # Every call Counsel may make, as (methods, path under /api/v2/), and nothing else: an allowlist, so a transport added
 # later is not Counsel's until it is named here. It is what Counsel is offered and what runs it: its tools
-# (clients/hubtools.py COUNSEL_TOOLS: hub_rules_list/get/add, hub_file_read, hub_task_comment, hub_task_close) and the
+# (clients/hubtools.py COUNSEL_TOOLS: tico_rules_list/get/add, tico_file_read, tico_task_comment, tico_task_close) and the
 # calls they make, the MCP that carries them (each call inside comes back through here), `me` (which tools it is
 # offered), and what the computer running it asks with the run's own token (its task, sessions.rs task_closed; its
 # credentials, env.rs credential-runtime). Its runner's plumbing (claim, start, events, complete) is the runner's own

@@ -259,8 +259,8 @@ Services today: **Decide** (live), **Inbox** email addresses (live) and numbers 
 **Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.30 per audio hour for live text) and **Mail** (live), with sending letters and email,
 enrichment and voice coming soon.
 A choice question (which of your labels fits) is a Decide question. Bots and agents read
-the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`tico gateway catalog [query]`,
-`tico gateway search QUERY`, `tico gateway fetch URL`, `tico gateway digest --items-file FILE`, the `hub_gateway_digest` tool, which groups many items into a summary at Low prices; Signals watch pages and releases for changes, which [market watch](market-watch.md) uses); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
+the same list with the `tico_gateway_catalog` tool and search the web with `tico_gateway_search` (`tico gateway catalog [query]`,
+`tico gateway search QUERY`, `tico gateway fetch URL`, `tico gateway digest --items-file FILE`, the `tico_gateway_digest` tool, which groups many items into a summary at Low prices; Signals watch pages and releases for changes, which [market watch](market-watch.md) uses); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `tico_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
 
 ## API keys
@@ -318,7 +318,7 @@ category or quality, cost, the reference names and their sha256. An existing fil
 
 Each image is billed at what the image model costs plus 25%, from the same cap as the other Gateway services; the price
 varies with the model and size, so it is not one number. The catalog lists the services (`tico gateway catalog images`
-and `tico gateway catalog svg`). Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and
+and `tico gateway catalog svg`). Bots use the same thing with the `tico_gateway_image` tool, which runs on the computer and
 answers the saved paths, never the image bytes.
 
 ## Videos
@@ -332,7 +332,7 @@ The Gateway keeps no video: save it when it is done, as the status command does.
 one still open after 15 minutes is given up and charged its hold, since the provider may still finish it. Only the key
 that started a job can read it.
 
-Bots use the same two things with the `hub_gateway_video` and `hub_gateway_video_status` tools. The video is priced per
+Bots use the same two things with the `tico_gateway_video` and `tico_gateway_video_status` tools. The video is priced per
 second at what the video model costs plus 25% (`tico gateway catalog video`), held when the job starts and charged when it
 ends, from the same cap as the other Gateway services.
 

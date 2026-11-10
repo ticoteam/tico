@@ -749,7 +749,7 @@ impl ClaudeHost {
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
         let mut servers = crate::mcp::claude_config(&t.settings.mcp_servers);
         if let Some(hub) = hub_mcp_server(&t.settings.env) {
-            servers.insert("hub".into(), hub);
+            servers.insert("tico".into(), hub);
         }
         // Only the hub, the bot's declared servers and the bot repo's own `.mcp.json`, for every bot:
         // `--strict-mcp-config` keeps out the operator's own servers (~/.claude.json, user settings, plugins,
@@ -2300,13 +2300,13 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_gets_only_hub_declared_and_project_mcp_servers() {
+    fn a_turn_gets_only_tico_declared_and_project_mcp_servers() {
         let dir =
             std::env::temp_dir().join(format!("claude-mcp-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join(".mcp.json"),
-            r#"{"mcpServers": {"repo": {"command": "x"}, "hub": {"command": "stale"}}}"#,
+            r#"{"mcpServers": {"repo": {"command": "x"}, "tico": {"command": "stale"}}}"#,
         )
         .unwrap();
         let (tx, _rx) = mpsc::unbounded_channel();
@@ -2335,7 +2335,8 @@ mod tests {
             serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1])
                 .unwrap();
         assert_eq!(config["mcpServers"]["repo"]["command"], "x");
-        assert_ne!(config["mcpServers"]["hub"]["command"], "stale");
+        assert_ne!(config["mcpServers"]["tico"]["command"], "stale");
+        assert!(config["mcpServers"].get("hub").is_none());
         let env = turn_env(&settings);
         assert_eq!(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false");
         // Every bot's turn, and over an inherited setting that would turn it on.

@@ -38,15 +38,16 @@ def test_an_old_pipeline_command_says_in_one_line_what_to_use(line, says):
     assert "\n" not in notice
 
 
-@pytest.mark.parametrize("name", ["hub_requirements", "hub_requirement_attach", "hub_pipeline", "hub_pipeline_manager"])
-def test_an_old_pipeline_tool_is_answered_with_what_to_use_and_calls_nothing(name):
+@pytest.mark.parametrize(
+    "name", ["tico_requirements", "tico_requirement_attach", "tico_pipeline", "tico_pipeline_manager"]
+)
+def test_an_old_pipeline_tool_is_an_unknown_tool_and_calls_nothing(name):
     assert name not in hubtools.BY_NAME
     client = Recorder()
     reply = hubtools.Protocol(client, kind="bot").handle(
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": {}}}
     )
-    error = reply["result"]["structuredContent"]
-    assert error["error"] == "removed" and "hub_task_show" in error["detail"]
+    assert reply["error"]["message"] == f"Unknown tool: {name}"
     assert client.calls == []
 
 

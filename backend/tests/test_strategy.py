@@ -512,13 +512,13 @@ def test_the_owner_runs_the_strategy_through_the_hub_tools(api):
 
     ok = lambda name, args=None, token="ana-test": call(api, name, args, token)  # noqa: E731
     err, out = ok(
-        "hub_strategy_draft",
+        "tico_strategy_draft",
         {"summary": "Acme runs rentals.", "section": ["not=No enterprise deals.", "brand=Plain words."]},
     )
     assert not err and out["sections"]["not"] == "No enterprise deals."
     assert out["sections"]["extra"]["brand"] == {"title": "Brand", "body": "Plain words."}
     err, out = ok(
-        "hub_strategy_bet_add",
+        "tico_strategy_bet_add",
         {
             "statement": "Landlords pay for bots",
             "rules_out": "Enterprise sales",
@@ -528,14 +528,14 @@ def test_the_owner_runs_the_strategy_through_the_hub_tools(api):
         },
     )
     assert not err and out["bet"]["wrong_if"]["kind"] == "text"
-    err, out = ok("hub_strategy_publish", {"note": "First"})
+    err, out = ok("tico_strategy_publish", {"note": "First"})
     assert not err and out["n"] == 1
-    err, out = ok("hub_strategy_summary", token="cara-test")
+    err, out = ok("tico_strategy_summary", token="cara-test")
     assert not err and out["n"] == 1 and "Landlords pay for bots" in out["text"]
-    err, _ = ok("hub_strategy_draft", {"summary": "Mine."}, token="cara-test")
+    err, _ = ok("tico_strategy_draft", {"summary": "Mine."}, token="cara-test")
     assert err
     err, out = ok(
-        "hub_goal_create",
+        "tico_goal_create",
         {"owner": "ana", "title": "Sign 10 landlords", "bet_id": get(api, "strategy")["bets"][0]["id"]},
     )
     assert not err and out["bet_id"]

@@ -317,8 +317,8 @@ tico lens list|run|show|runs            see Lenses (lenses.md)
 tico goal create ... --bet <id>          tico goal update <id> --bet <id>
 ```
 
-Every command has an MCP tool of the same name and arguments (`hub_strategy_show`, `hub_strategy_bet_add`,
-`hub_strategy_bet_update`, `hub_strategy_bet_retire` ...). The routes, under `/api/v2`:
+Every command has an MCP tool of the same name and arguments (`tico_strategy_show`, `tico_strategy_bet_add`,
+`tico_strategy_bet_update`, `tico_strategy_bet_retire` ...). The routes, under `/api/v2`:
 
 | Route | Who | What it does |
 |---|---|---|

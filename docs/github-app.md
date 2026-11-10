@@ -237,7 +237,7 @@ tico repo review Acme/product 7 --head <full-reviewed-commit-sha> --verdict appr
 
 Use `--verdict changes` for blocking findings. The server appends the final line
 `VERDICT: approve PR #7 head <sha>` or `VERDICT: changes PR #7 head <sha>`; leave that line out of the input file.
-The equivalent MCP tool is `hub_repo_review`; the bot-only API is `POST /api/v2/github/reviews` with
+The equivalent MCP tool is `tico_repo_review`; the bot-only API is `POST /api/v2/github/reviews` with
 `repository`, `number`, `head`, `verdict` and `body`, plus `Idempotency-Key`.
 
 The command checks the PR is open at the supplied head and sends GitHub `event: APPROVE` or
@@ -344,7 +344,7 @@ history can be published separately. The write is audited as `github.product_rep
 the same request key replay the saved receipt. It does not alter the bot-prefixed creator. When the Owner
 creates one, no bot gets access to it.
 
-The MCP tool `hub_repo_product_create` (the Owner, or a bot with Create product repositories) follows the same
+The MCP tool `tico_repo_product_create` (the Owner, or a bot with Create product repositories) follows the same
 review step. Call it with `name` and a
 stable `operation_id` to receive the preview. After reviewing the returned `org/name` and capability, call
 it again with the same `operation_id` and `confirm_repository` set to that exact `org/name`. The tool
@@ -549,7 +549,7 @@ The grouping survives server restarts and keeps at most 50 distinct notice items
 Wake rules for `pr_checks_done` and `pr_review` (in the **What wakes** automations on the Automations page) change what these do.
 
 A bot waiting on one result can arm a one-shot wake on a PR link: `tico task link <task> <pr url> --wake-once`
-(`wake_once: true` on `POST /api/v2/tasks/{id}/links` or `hub_task_link`; `--no-wake-once` disarms it). The
+(`wake_once: true` on `POST /api/v2/tasks/{id}/links` or `tico_task_link`; `--no-wake-once` disarms it). The
 owner then hears once, in the task's conversation (the head's `pr_checks_done`, so a link armed for it
 is never woken twice for one head), at the first of: every check suite, check run and status
 GitHub has reported on the PR's current head has completed (passed, or failed naming every failing suite, run

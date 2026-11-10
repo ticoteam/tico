@@ -44,7 +44,7 @@ def test_a_run_log_label_reads_the_same_under_either_name(program):
     assert turns.tool_label({'tool': 'Bash', 'summary': f'cd {program} task list'}) == 'Listing tasks'
     assert turns.tool_label({'tool': 'Bash', 'summary': f'cd web {program} task done 12'}) == 'Finishing a task'
     assert turns.tool_label({'tool': 'shell', 'summary': f'{program} release now'}) == f'Ran {program}'
-    assert turns.tool_label({'tool': f'mcp__{program}__hub_task_move'}) == 'Moving a task'
+    assert turns.tool_label({'tool': 'mcp__tico__tico_task_move'}) == 'Moving a task'
 
 
 def test_a_release_that_changes_the_cli_is_flagged_for_bots_under_either_name():

@@ -574,7 +574,7 @@ def test_owner_mcp_product_repository_tool_previews_confirms_and_replays(api, gh
                 "jsonrpc": "2.0",
                 "id": 1,
                 "method": "tools/call",
-                "params": {"name": "hub_repo_product_create", "arguments": arguments},
+                "params": {"name": "tico_repo_product_create", "arguments": arguments},
             },
             headers=auth(),
         )

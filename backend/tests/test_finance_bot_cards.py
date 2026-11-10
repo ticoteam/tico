@@ -807,11 +807,11 @@ def test_no_card_number_is_taken_stored_or_read_back(books):
             for k in _walk(output)
             if isinstance(k, str) and k.lower() in {"number", "card_number", "pan", "cvc", "cvv", "security_code"}
         }
-    for tool in ("hub_finance_card_fill", "hub_finance_search"):
+    for tool in ("tico_finance_card_fill", "tico_finance_search"):
         fields = set(hubtools.BY_NAME[tool]["inputSchema"]["properties"])
         assert not {"number", "card_number", "pan", "cvc", "cvv"} & fields
     with pytest.raises(APIError) as refused:
-        hubtools.BY_NAME["hub_finance_card_fill"]["fn"](
+        hubtools.BY_NAME["tico_finance_card_fill"]["fn"](
             None, {"card_id": coder, "merchant": "shop.example", "amount": 5_000}
         )
     assert refused.value.code == "not_available"
@@ -822,10 +822,10 @@ def test_card_fill_is_offered_to_no_one_and_still_runs_by_name():
     reaches it and is answered "not available"."""
     for local in (False, True):
         for kind in (None, *hubtools.KINDS):
-            assert "hub_finance_card_fill" not in {t["name"] for t in hubtools.listing(local, kind)}
-    assert "hub_finance_inbox" in {t["name"] for t in hubtools.listing(True, "bot")}
+            assert "tico_finance_card_fill" not in {t["name"] for t in hubtools.listing(local, kind)}
+    assert "tico_finance_inbox" in {t["name"] for t in hubtools.listing(True, "bot")}
     with pytest.raises(APIError) as refused:
-        hubtools.BY_NAME["hub_finance_card_fill"]["fn"](
+        hubtools.BY_NAME["tico_finance_card_fill"]["fn"](
             None, {"card_id": "crd_1", "merchant": "x.example", "amount": 1}
         )
     assert refused.value.code == "not_available"

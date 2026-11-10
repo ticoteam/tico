@@ -54,7 +54,7 @@
  "gateway image": "gateway_not_connected",
  "gateway search": "gateway_not_connected",
  "gateway video": "gateway_not_connected",
- "gateway video-status": "ValueError: Use the job id hub_gateway_video returned",
+ "gateway video-status": "ValueError: Use the job id tico_gateway_video returned",
  "goal checkin": "not_found",
  "goal checkin-list": "not_found",
  "goal read-back": "ValueError: changes must be a JSON array of 1 to 20 change objects",

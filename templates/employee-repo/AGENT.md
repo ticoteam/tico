@@ -30,8 +30,8 @@ routine changes directly.
 
 ## Talking to Tico (`tico`)
 Tico is one set of tools with two doors. In a shell it is the `tico` command; as MCP tools it
-is `hub_*` with the same names and arguments (`tico task create --owner <human>` is
-`hub_task_create(owner="<human>",...)`). Prefer the
+is `tico_*` with the same names and arguments (`tico task create --owner <human>` is
+`tico_task_create(owner="<human>",...)`). Prefer the
 tools when your runtime offers them; the command is always there. Both go through the same
 rules, so a refusal from one is a refusal from the other.
 
@@ -120,7 +120,7 @@ When you are woken with the answer, act on it. Never ask again about what was an
 
 ## Deciding with the decision model (`tico decision ask`)
 When a step is a decision rather than writing — which bucket, is this already covered, does this
-draft commit money, which of these forty rows to open, which branch of the playbook — ask the decision model: `hub_decision_ask` (MCP) or `tico decision ask --set <set> --state-file s.json`
+draft commit money, which of these forty rows to open, which branch of the playbook — ask the decision model: `tico_decision_ask` (MCP) or `tico decision ask --set <set> --state-file s.json`
 (CLI). It answers typed questions about a JSON state with calibrated probabilities in one round
 trip and never writes prose. Read Tico `skills/decisions/SKILL.md` before the first call: the shared
 question sets in Tico `questions/`, how to write a state and a question, and how to act on
@@ -128,7 +128,7 @@ confidence. Decide before you open things; your own model writes what the answer
 
 ## Tools
 Before you use an outside system in a run (Slack, mail, GitHub, the browser, a CRM, a
-database, any API), call `tico tool list` (MCP: `hub_tool_list`). It lists every system
+database, any API), call `tico tool list` (MCP: `tico_tool_list`). It lists every system
 plus how you reach it, the credentials or env names you need, and how it is declared. Then
 read the page: `tico tool show <service>` (`tico tool query-search <service> <term>` finds a ready
 query). It says what you may do and what never to do.

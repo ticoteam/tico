@@ -38,7 +38,7 @@ list in Tico's database, not a file:
 - **With `tico`.** `tico slack channel add '#customer_success' --reader support`, `tico slack channel list`,
   `tico slack channel remove '#customer_success' [--reader BOT]`.
 - **By asking BotOps.** "Let the support bot read #customer_success": BotOps adds it as the person who asked,
-  so a member is told who to ask. The MCP tools are `hub_slack_channel_add`, `_list`, `_remove` and `_import`.
+  so a member is told who to ask. The MCP tools are `tico_slack_channel_add`, `_list`, `_remove` and `_import`.
 
 A reader gets what is new in the channel about once an hour, as a message in its own thread
 ([slack-gateway.md](slack-gateway.md)). A bot's own `history` reads through `connectors/slack.py` follow the same
@@ -77,7 +77,7 @@ A channel can be linked to a Tico thread, and the two carry each other's message
 
 In the app, an owner or an admin links a thread in Tools > Slack (Link a thread), or in the thread's
 Who can read sheet. The same list shows each link's state, with Resume and Unlink. Elsewhere: `tico thread link-slack
-<thread> [<channel>]` (CLI), the `hub_thread_link_slack` tool (MCP), or the API. Resume is `tico thread slack-resume <link-id>`. `GET /api/v2/slack/links` reads a page
+<thread> [<channel>]` (CLI), the `tico_thread_link_slack` tool (MCP), or the API. Resume is `tico thread slack-resume <link-id>`. `GET /api/v2/slack/links` reads a page
 at a time (`limit`, `cursor`; follow `next_cursor`).
 
 ## What humans can do
@@ -114,7 +114,7 @@ when you created the task in the app. Each task sends each result once, includin
 
 This is on by default for humans linked to Slack. On your human page, under **Profile → Notifications**,
 turn off **Task results in Slack**. You can also ask BotOps to turn it off for you, or use
-`POST /api/v2/humans/<id>` with `{"notify_slack_task_done": false}` (through the API or MCP's `hub_api`).
+`POST /api/v2/humans/<id>` with `{"notify_slack_task_done": false}` (through the API or MCP's `tico_api`).
 Turning it on again uses `true`. Self-completed tasks and quiet updates do not send a DM;
 no linked Slack account or a disabled gateway means no Slack delivery. In-app notices continue.
 

@@ -4,16 +4,16 @@ A refusal is an answer. Work out which kind it is before you retry anything.
 
 Inputs: the refusal's text, with its `fix`, `link` and `retryable` fields where they are given.
 
-Done when: the refusal has had its one right answer: a retry through `hub_api` for a permissions refusal, or one Needs you item for a `retryable: false` refusal, and the run has ended.
+Done when: the refusal has had its one right answer: a retry through `tico_api` for a permissions refusal, or one Needs you item for a `retryable: false` refusal, and the run has ended.
 
 ## Permissions
-If a friendly tool is refused for permissions, retry the same action with `hub_api` before handing work back. Both use the
+If a friendly tool is refused for permissions, retry the same action with `tico_api` before handing work back. Both use the
 requester's rights. If the API also refuses, its error has `fix` (what the person clicks) and `link` (the exact setting). Ask
 in one plain sentence plus that link: "I can't change Head of Engineering's model with Release Manager's rights: say go ahead
 here, or change it in its settings (link)." Never ask for "the supported permission path".
 
 ## `retryable: false`
-Stop. Never retry it in a loop, never `sleep` and call again, and never guess another file shape or route (the one `hub_api`
+Stop. Never retry it in a loop, never `sleep` and call again, and never guess another file shape or route (the one `tico_api`
 try above aside). If a person must act, ask once: one Needs you item (`playbooks/human-tasks.md`) naming the exact fix from the
 refusal's `fix` and `link`, then end the run. Their answer, or the server, wakes you again. When woken again, if the item you
 filed for that same fix is still open, do not file another; add to it or end the run.

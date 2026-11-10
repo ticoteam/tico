@@ -207,7 +207,7 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     assert "sync job tico-sync (every 1h) is scheduled" in out
 
     # The agent's MCP door lists the inbox tools.
-    assert "hub_message_list" in {t["name"] for t in connector.mcp("tools/list")["tools"]}
+    assert "tico_message_list" in {t["name"] for t in connector.mcp("tools/list")["tools"]}
 
     # The owner writes to the bot: it waits (no job), the heartbeat counts it, and the agent reads it over MCP.
     sent = post(api, "chat/scout", {"text": "What did you find today?"})
@@ -215,13 +215,13 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (scout,)).fetchone()[0] == 0
     assert connector.run("heartbeat", "--profile", "scout")[0] == 0
     assert connector.status()["last_reply"]["waiting"]["messages"] == 1
-    (waiting,) = connector.tool("hub_message_list")["messages"]
+    (waiting,) = connector.tool("tico_message_list")["messages"]
     assert waiting["body"] == "What did you find today?"
     reply = connector.tool(
-        "hub_message_send", to="ana", text="Three leads, all in Austin.", conversation_id=sent["conversation_id"]
+        "tico_message_send", to="ana", text="Three leads, all in Austin.", conversation_id=sent["conversation_id"]
     )
     assert reply["sender_id"] == "bot:" + scout
-    assert connector.tool("hub_message_mark_read", message_id=sent["id"]) == {"read": True}
+    assert connector.tool("tico_message_mark_read", message_id=sent["id"]) == {"read": True}
     assert [m["body"] for m in get(api, f"conversations/{sent['conversation_id']}/messages")] == [
         "What did you find today?",
         "Three leads, all in Austin.",
@@ -275,9 +275,9 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     fresh = connector.token()
     assert fresh.startswith("tico-agent-") and fresh != token and "backoff" not in connector.credential()
     assert api.get("/api/v2/me", headers=headers(token)).status_code == 401
-    assert "hub_message_list" in {t["name"] for t in connector.mcp("tools/list")["tools"]}
+    assert "tico_message_list" in {t["name"] for t in connector.mcp("tools/list")["tools"]}
     assert connector.run("heartbeat", "--profile", "scout")[0] == 0
     post(api, "chat/scout", {"text": "Welcome back."})
-    assert [m["body"] for m in connector.tool("hub_message_list")["messages"]] == ["Welcome back."]
+    assert [m["body"] for m in connector.tool("tico_message_list")["messages"]] == ["Welcome back."]
     assert connector.run("doctor", "--profile", "scout")[0] == 0
     assert time.monotonic() - started < 10

@@ -177,7 +177,7 @@ The task's ⋯ menu has **Copy session ID** for the primary session, to resume i
 | `goal:on`, `goal:off` | task labels | Override `task_goal` for one task. |
 | `capture_stream` | `off` (default), `on` | Keep each run's raw provider stream, both ways, for a week (owner only; see below). |
 
-Set them with `tico bot update <slug> --session task`, `--subtask-session own`, `--task-goal on` or `--capture-stream on`, or `hub_bot_update`.
+Set them with `tico bot update <slug> --session task`, `--subtask-session own`, `--task-goal on` or `--capture-stream on`, or `tico_bot_update`.
 
 ### Capturing a run for a replay test
 

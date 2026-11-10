@@ -280,7 +280,7 @@ async function lettersOutDetail(host: Element, _id: string, ctx: InboxCtx): Prom
   const automations: LettersOutAutomations = await ctx.once('automations', () => get('/v2/automations?limit=100', {fresh: true}));
   if (!ctx.live()) return;
   const used = new Set([...rows.values()].map(row => row.automation_id).filter(Boolean));
-  const related = (Array.isArray(automations) ? automations : automations.automations || []).filter(a => used.has(a.id) || /hub_letter_(quote|send)/.test(JSON.stringify(a.flow || {})));
+  const related = (Array.isArray(automations) ? automations : automations.automations || []).filter(a => used.has(a.id) || /tico_letter_(quote|send)/.test(JSON.stringify(a.flow || {})));
   host.querySelector<HTMLElement>('[data-lo-automations]')!.innerHTML = related.length ? `<ul class="ib-autos">${related.map(a =>
     `<li><a href="#/automations/${encodeURIComponent(a.id)}">${esc(a.name || a.id)}</a>${a.enabled === false ? ' <span class="muted">· off</span>' : ''}</li>`).join('')}</ul>` : '<p class="muted">None</p>';
   return {kind: 'outbox', id: 'company', name: 'Letters out', address: ''};

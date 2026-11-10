@@ -231,7 +231,7 @@ def test_a_bots_own_secret_moves_into_the_vault_over_its_computer_and_is_then_sh
     )  # on no computer
     token = post(api, "me/tokens", {"label": "QA credential admin"}, "ben-test")["token"]
     err, requested = mcp(
-        api, "hub_credential_import", {"env": "JIRA_BASIC_AUTH", "from_bot": "finance", "wait": 0}, token=token
+        api, "tico_credential_import", {"env": "JIRA_BASIC_AUTH", "from_bot": "finance", "wait": 0}, token=token
     )
     assert not err and requested["state"] == "waiting" and JIRA not in json.dumps(requested)
     asked = post(api, "credential-imports", {"env": "JIRA_BASIC_AUTH", "bot": "finance"}, token)
@@ -264,7 +264,7 @@ def test_a_bots_own_secret_moves_into_the_vault_over_its_computer_and_is_then_sh
     # Now BotOps, as Ana, gives it to ops; ops's run gets it as its variable.
     ana = turn(api, botops, person="ana-test", text="Grant ops the Jira credential finance has")
     err, granted = mcp(
-        api, "hub_credential_grant", {"credential": "JIRA_BASIC_AUTH", "to_bot": "ops"}, token=ana["token"]
+        api, "tico_credential_grant", {"credential": "JIRA_BASIC_AUTH", "to_bot": "ops"}, token=ana["token"]
     )
     assert not err, granted
     finish(api, botops, ana)
@@ -283,7 +283,7 @@ def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, b
     ready(api, machine, ["finance"])
     ana = turn(api, botops, person="ana-test", text="Move finance's Jira credential into Credentials")
     err, waiting = mcp(
-        api, "hub_credential_import", {"env": "JIRA_BASIC_AUTH", "from_bot": "finance", "wait": 0}, token=ana["token"]
+        api, "tico_credential_import", {"env": "JIRA_BASIC_AUTH", "from_bot": "finance", "wait": 0}, token=ana["token"]
     )
     assert not err and waiting["state"] == "waiting" and JIRA not in json.dumps(waiting), waiting
     computer_reads(api, machine, {"JIRA_BASIC_AUTH": JIRA})
@@ -294,7 +294,7 @@ def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, b
         assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]
     # A variable that is not in the file is a plain failure the tool reports, not a wait.
     err, still = mcp(
-        api, "hub_credential_import", {"env": "MISSING_KEY", "from_bot": "finance", "wait": 0}, token=ana["token"]
+        api, "tico_credential_import", {"env": "MISSING_KEY", "from_bot": "finance", "wait": 0}, token=ana["token"]
     )
     assert not err and still["state"] == "waiting"
     computer_reads(api, machine, {})
@@ -302,7 +302,7 @@ def test_the_import_tool_asks_as_the_requester_and_waits_for_the_computer(api, b
         failed = c.execute("SELECT state,message FROM credential_imports WHERE env='MISSING_KEY'").fetchone()
     assert failed["state"] == "failed" and "not in that bot's secrets file" in failed["message"]
     err, again = mcp(
-        api, "hub_credential_import", {"env": "MISSING_KEY", "from_bot": "finance", "wait": 0}, token=ana["token"]
+        api, "tico_credential_import", {"env": "MISSING_KEY", "from_bot": "finance", "wait": 0}, token=ana["token"]
     )
     assert not err and again["state"] == "waiting"  # asking again is a new request, not a stale answer
     assert JIRA not in everything(api)

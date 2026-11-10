@@ -284,7 +284,7 @@ pub fn mcp_overrides(settings: &Settings) -> (Vec<String>, Env) {
             .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
             .collect();
         let server = json!({"transport": "stdio", "command": hub["command"], "args": hub["args"], "env": vars});
-        args.extend(["-c".into(), format!("mcp_servers.hub={server}")]);
+        args.extend(["-c".into(), format!("mcp_servers.tico={server}")]);
     }
     let (config, extra) = muse_config(&settings.mcp_servers, &settings.env);
     for (name, server) in config {
@@ -1419,7 +1419,7 @@ mod tests {
             .filter(|a| a.starts_with("mcp_servers."))
             .collect();
         let hub: Value =
-            serde_json::from_str(overrides[0].strip_prefix("mcp_servers.hub=").unwrap()).unwrap();
+            serde_json::from_str(overrides[0].strip_prefix("mcp_servers.tico=").unwrap()).unwrap();
         assert_eq!(hub["transport"], "stdio");
         assert_eq!(hub["env"]["HUB_TOKEN"], "${HUB_TOKEN}");
         let linear: Value =
@@ -1520,10 +1520,10 @@ mod tests {
         assert_eq!(
             tool_started(
                 "task.lifecycle.proposed",
-                &proposed("tool.mcp__hub__hub_task_list")
+                &proposed("tool.mcp__tico__tico_task_list")
             )
             .as_deref(),
-            Some("mcp__hub__hub_task_list")
+            Some("mcp__tico__tico_task_list")
         );
         assert_eq!(
             tool_started("task.lifecycle.proposed", &proposed("model.meta.response")),

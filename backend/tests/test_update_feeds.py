@@ -167,7 +167,7 @@ def test_each_choice_gets_only_its_categories_batched_into_the_next_run_and_noth
     assert not any(notes(api, slug) for slug in choices) and jobs(api, "ops") == 0
     before = snapshot(api, "ops")
     feeds.releases.insert(
-        0, release(2, "### Changed\n- `tico task show` and the MCP tool hub_task_show list relations.\n")
+        0, release(2, "### Changed\n- `tico task show` and the MCP tool tico_task_show list relations.\n")
     )
     poll(api)
     feeds.entries.insert(0, entry(2, files=("knowledge/notes.md",)))

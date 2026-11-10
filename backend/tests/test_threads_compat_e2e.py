@@ -215,7 +215,7 @@ def test_hub_history_is_the_conversation_show_alias_and_pages_back_like_the_rest
     assert [m["id"] for m in older["messages"]] == order[:-200] and older["has_more"] is False
 
 
-def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
+def test_the_conversation_tools_read_send_and_mark_read(api):
     cid = post(api, "chat/ops", {"text": "Read this back"})["conversation_id"]
     with api.app.state.store.transaction() as c:
         H.say(c, "bot:ops", "human:ana", "Done.", conversation_id=cid)
@@ -225,19 +225,7 @@ def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
         with api.app.state.store.read() as c:
             return c.execute("SELECT read_at FROM messages WHERE id=?", (note,)).fetchone()[0]
 
-    # hubtools._call answers an old name with `renamed` and the new name; it does not run the old name.
-    err, out = call(api, "hub_history", {"conversation": cid})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_conversation_show" and "messages" not in out
-    err, out = call(api, "hub_say", {"to": "ops", "text": "Said under the old name"})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_message_send"
-    err, out = call(api, "hub_ack", {"message_id": note})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_message_mark_read"
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE body='Said under the old name'").fetchone()[0] == 0
-    assert read_at() is None
-
-    # The new names answer the same request, so a bot that retries under them gets its answer.
-    err, page = call(api, "hub_conversation_show", {"conversation": cid})
+    err, page = call(api, "tico_conversation_show", {"conversation": cid})
     rest = read(api, cid)
     assert not err and page == {
         "conversation": rest["conversation"],
@@ -245,11 +233,12 @@ def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
         "has_more": rest["has_more"],
         "next_before": rest["next_before"],
     }
-    # hub_message_send answers with the message itself (POST /messages), not wrapped as the reply route wraps it.
-    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "Said under the new name", "conversation_id": cid})
+    # tico_message_send answers with the message itself (POST /messages), not wrapped as the reply route wraps it.
+    err, sent = call(api, "tico_message_send", {"to": "ops", "text": "Said under the new name", "conversation_id": cid})
     assert not err and sent["conversation_id"] == cid and sent["body"] == "Said under the new name"
     assert "Said under the new name" in [m["body"] for m in read(api, cid)["messages"]]
-    err, _ = call(api, "hub_message_mark_read", {"message_id": note})
+    assert read_at() is None
+    err, _ = call(api, "tico_message_mark_read", {"message_id": note})
     assert not err and read_at() is not None
 
 

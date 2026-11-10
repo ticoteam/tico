@@ -20,7 +20,7 @@ The card also sets **New bots get**: **Their own repo** (the default), or **All 
 
 ## Tools and commands
 
-MCP tools: `hub_repo_list`, `hub_repo_update`, `hub_bot_repos_get`, `hub_bot_repos_set`.
+MCP tools: `tico_repo_list`, `tico_repo_update`, `tico_bot_repos_get`, `tico_bot_repos_set`.
 
 ```sh
 tico repo list
@@ -91,6 +91,6 @@ Clone and fetch operations check a free-space floor of 5 GB plus twice the repos
 
 When a GitHub App is connected, a failed token request blocks GitHub Git and CLI operations. The message names the cause, for example that the App is not installed on the repository or that the repository is outside the connected organization. Machine credential helpers and askpass cannot supply wider credentials. With no App connected, the computer's existing Git login keeps working. Text supplied through GitHub CLI options such as `--comment`, `--body`, `--title`, `--notes`, `--jq`, `-m`, `-f` and `-F` does not select a repository token.
 
-Computer answers (`GET /api/v2/computers`, Operations, `hub_computer_list` and its one-computer detail) include `release`
+Computer answers (`GET /api/v2/computers`, Operations, `tico_computer_list` and its one-computer detail) include `release`
 for the installed Tico release. The legacy `version` field is the runner software version.
 A Computer that does not report its release returns an empty `release`.
