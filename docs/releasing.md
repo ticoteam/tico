@@ -613,7 +613,12 @@ at the same time, each with its own Docker names; the journey proceeds once thos
   the candidate server, move the computer to the candidate runner and check the variable, the session, the worktree
   and the rows survived and that a turn still answers once the harness's saved session is gone, roll back an update that migrates the database and never turns healthy (the pre-update
   snapshot is restored, with the server's real entrypoint running Litestream), and update once more to a third build
-  so the replaced updater has to pull its image, refresh the bundle and replace itself again.
+  so the replaced updater has to pull its image, refresh the bundle and replace itself again. When the previous
+  release is below 0.6 and the candidate is 0.6 or later (`scripts/journey_plan.py` says `fresh-start`), the seeded
+  install is not upgraded: the candidate's own start on its data volume must exit non-zero with the fresh-start
+  message and leave every database file byte-for-byte the same, the previous release must start on it again with its
+  tasks, and "Update now" to the candidate must be refused or roll back. A new previous install with no tasks is
+  then upgraded in place, and the rest of the journey runs on it.
 
 It prints a phase table with each check's start offset, duration and exit code, plus total time and starting/ending
 load. It keeps the logs in a temporary directory and prints the end of any failed log. If any build fails, the
