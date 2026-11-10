@@ -42,13 +42,27 @@ async function pushSubscribe(): Promise<void> {
   sub = sub || await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: key});
   await post('/v2/push/subscriptions', sub.toJSON());
 }
-async function pushUnsubscribe(): Promise<void> {
+async function pushUnsubscribe(opts?: ApiWriteOptions): Promise<void> {
   const reg = await pushRegistration();
   const sub = reg && await reg.pushManager.getSubscription();
   if (!sub) return;
-  await writeRequest('DELETE', '/v2/push/subscriptions', {endpoint: sub.endpoint});
+  await writeRequest('DELETE', '/v2/push/subscriptions', {endpoint: sub.endpoint}, undefined, opts);
   await sub.unsubscribe();
 }
+// Signing out ends this browser's push, so whoever uses it next is not rung for the person who left. The same links
+// decide.ts and boot-snap.ts clear on. Sign-out waits for it at most PUSH_SIGN_OUT_MS, then goes on whatever happened.
+const PUSH_SIGN_OUT_MS = 1500;
+document.addEventListener('click', e => {
+  const link = eventElement(e)?.closest<HTMLAnchorElement>('a[href]');
+  if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (!/\/(?:logout|cdn-cgi\/access\/logout)(?:[?#]|$)/.test(String(link.getAttribute('href')))) return;
+  // Without notification permission this browser holds no push subscription: nothing to wait for.
+  if (!('PushManager' in window) || !('Notification' in window) || Notification.permission !== 'granted') return;
+  e.preventDefault();
+  const href = link.href;
+  void Promise.race([pushUnsubscribe({keepalive: true, timeout: PUSH_SIGN_OUT_MS}).catch(() => {}),
+    new Promise(done => setTimeout(done, PUSH_SIGN_OUT_MS))]).then(() => { location.href = href; });
+}, true);
 // Each browser the person opens Tico in with Browser notifications on and allowed takes push too.
 function pushKeep(on: boolean | undefined) {
   if (on && 'Notification' in window && Notification.permission === 'granted') void pushSubscribe().catch(() => {});
