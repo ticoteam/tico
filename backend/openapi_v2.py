@@ -36,8 +36,9 @@ TAGS = {
     "Changelog": "Product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
-    "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
-    "ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera.",
+    "Calls": "Calls in a thread (docs/meet.md): a Google Meet, or a Tico Meet call with audio and screen share, a live "
+    "transcript posted to the thread when it ends, and bots that listen. Joining a Tico Meet call hands back a token for "
+    "audio and screen share only, never a camera; joining a Google Meet hands back its link.",
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Pages": "HTML pages bots publish and keep current (docs/pages.md): a file with a cadence, a data date and a status line.",
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
@@ -9700,7 +9701,8 @@ STABLE.extend(
         ),
     ]
 )
-# Tico Meet calls (docs/meet.md): a call belongs to a thread. Joining hands back a token for audio and screen share only.
+# Calls (docs/meet.md): a call belongs to a thread. Joining a Tico Meet call hands back a token for audio and screen share
+# only; joining a Google Meet hands back its link.
 STABLE.extend(
     [
         (
