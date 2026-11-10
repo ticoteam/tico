@@ -140,3 +140,23 @@ def test_an_ask_with_no_task_and_no_operator_files_it_for_the_rules_maker(c):
     assert [r["owner_id"] for r in rule_tasks(c)] == [ANA]
     found = no_task(c, decision_by="bot:ops", room="room-3")  # nobody to own it: the bot is woken instead
     assert (found.outcome, found.rule) == (R.WAKE, R.FAIL_OPEN)
+
+
+def test_a_move_gives_the_rules_reason_for_a_reopen_a_close_or_a_move_back_and_none_forward(c):
+    from backend.tests.helpers import engine as X
+
+    row = task(c)
+    H.task_done(c, ANA, row["id"], "Shipped")
+    carry(c, H.task(c, row["id"]), R.ACTION, {"action": "move", "stage": "To do", "note": "Customer reopened it"})
+    assert H.task(c, row["id"])["status"] == "open", "a done task moved to a work stage is reopened, with the reason"
+    X.pipeline(c, "launch", "Launch", [{"name": "Draft"}, {"name": "Review"}])
+    two = H.task_create(c, ANA, "Launch note", "Write it", "bot:cpo", lint=False, pipeline="launch")
+    found = carry(c, two, R.ACTION, {"action": "move", "stage": "Review"})  # forward: never pushed past
+    assert H.task(c, two["id"])["stage_id"] == "launch-review", found
+    carry(c, H.task(c, two["id"]), R.ACTION, {"action": "move", "stage": "Draft", "note": "Needs a rewrite"})
+    assert H.task(c, two["id"])["stage_id"] == "launch-draft", "a move back gives the reason"
+    last = c.execute(
+        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' ORDER BY rowid DESC",
+        (two["id"],),
+    ).fetchone()
+    assert last[0] == "Rule rule_x: Needs a rewrite"
