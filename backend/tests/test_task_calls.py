@@ -399,6 +399,50 @@ def test_a_private_sub_tasks_title_is_not_shown_to_someone_who_reads_only_its_pa
     assert "Salary" in json.dumps(H.task_view(c, parent["id"]))  # the engine's own read hides nothing
 
 
+def _offsite(company):
+    """A public task Ben asked for, with a private sub-task Ana reads and Ben does not. Its stage waits on it."""
+    with company.transaction() as c:
+        for slug in ("builder", "helper", "manager"):
+            X.bot(c, slug)
+        parent = _new(c, by=BEN, owner=BUILDER, title="Plan the offsite")
+        child = _new(c, by=BUILDER, owner=HELPER, title="Salary numbers for the offsite", parent_id=parent["id"])
+        c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([ANA]), child["id"]))
+        c.execute("UPDATE requirements SET kind='linked_done' WHERE stage_id='general-todo'")
+        assert H.task_private_readable(c, ANA, H.task(c, child["id"]))
+        assert not H.task_private_readable(c, BEN, H.task(c, child["id"]))
+    return parent["id"]
+
+
+def _move_through_the_store(company, who, task_id, key):
+    """A move as a route makes it: one write with an idempotency key. Returns the refusal (a Problem)."""
+    from backend.auth import Identity
+    from backend.store import Problem
+
+    with pytest.raises(Problem) as refused:
+        company.mutate(
+            Identity(who, "human"),
+            f"/api/v2/tasks/{task_id}/move",
+            key,
+            {"to": "next"},
+            lambda c: H.task_move(c, who, task_id, H.TASK_NEXT, None, None, mover=True),
+        )
+    return refused.value
+
+
+def test_a_refusal_names_a_private_sub_task_only_to_who_may_read_it_and_never_on_record(company):
+    parent = _offsite(company)
+    ben = _move_through_the_store(company, BEN, parent, "ben-1")
+    assert ben.code == "task_not_met"
+    assert "Salary" not in json.dumps([ben.detail, ben.extra]) and "A sub-task" in json.dumps(ben.extra["missing"])
+    ana = _move_through_the_store(company, ANA, parent, "ana-1")
+    assert "Salary" in json.dumps([ana.detail, ana.extra["missing"]])  # Ana reads it: she is told which
+    with company.transaction() as c:
+        kept = [r[0] for r in c.execute("SELECT detail FROM refusals WHERE rule='task_not_met'")]
+        kept += [r[0] for r in c.execute("SELECT detail FROM events WHERE action='refused'")]
+        kept += [r[0] for r in c.execute("SELECT response FROM idempotency WHERE key IN ('ben-1','ana-1')")]
+    assert len(kept) >= 6 and not [k for k in kept if "Salary" in k]  # the audit and the receipts keep neither
+
+
 def test_an_ask_names_only_someone_who_can_read_the_task(c):
     row = _new(c, by=BEN, owner=BUILDER, private=True)
     with _refused("private"):

@@ -56,9 +56,12 @@ def _refuse(
     missing: Sequence[str] = (),
     then: Sequence[str] = (),
     version: object = None,
+    kept: tuple[str, Sequence[str]] | None = None,
 ) -> NoReturn:
     """Refuse, with what the caller needs to act on it: what is `missing`, the commands allowed next (`then`) and the
-    task's `version`. They go out with the refusal (store.refused), so a bot is never left to guess."""
+    task's `version`. They go out with the refusal (store.refused), so a bot is never left to guess. `kept` is the
+    detail and what is missing as kept on record (`_said` for ON_RECORD), when they name less than the caller is
+    told."""
     extra: Row = {}
     if missing:
         extra["missing"] = list(missing)
@@ -66,7 +69,10 @@ def _refuse(
         extra["next"] = list(then)
     if version is not None:
         extra["version"] = int(str(version) or 0)
-    _h().refuse(conn, by, rule, detail, task=task_id, extra=extra)
+    stored: Row | None = None
+    if kept is not None and (kept[0] != detail or list(kept[1]) != list(missing)):
+        stored = {"detail": kept[0], "extra": {**extra, **({"missing": list(kept[1])} if kept[1] else {})}}
+    _h().refuse(conn, by, rule, detail, task=task_id, extra=extra, stored=stored)
     raise AssertionError("refuse() always raises")  # pragma: no cover
 
 
@@ -463,23 +469,47 @@ def _skipped(conn: "sqlite3.Connection", row: Row, target: Row) -> list[R.Standi
     return out
 
 
+def _said(conn: "sqlite3.Connection", viewer: str | None, row: Row, missing: Sequence[R.Standing]) -> list[str]:
+    """How each missing requirement stands, said to `viewer`: a sub-task they may not read is not named, as task_view
+    does not name it (task_calls.standing_line). None is the engine (nothing hidden); task_calls.ON_RECORD is what is
+    kept on record."""
+    from . import task_calls
+
+    hidden = task_calls.hidden_filed(conn, row, viewer)
+    return [task_calls.standing_line(each, hidden) for each in missing]
+
+
+def _lines(missing: Sequence[R.Standing], said: Sequence[str]) -> list[str]:
+    """What is missing, one line each: the requirement's name and how it stands."""
+    return [
+        f"{each.name}: {line}" if line and line != each.name else each.name
+        for each, line in zip(missing, said, strict=True)
+    ]
+
+
 def _may_push_past(conn: "sqlite3.Connection", by: str, row: Row, why: str | None, missing: list[R.Standing]) -> None:
     """Hold a forward move to what is missing. With a reason, anyone pushes past, except a requirement whose switch is
-    off, or a people-only OK when anyone but a person tries. Refuses, or returns. Writes nothing."""
-    lines = [f"{each.name}: {each.line}" if each.line and each.line != each.name else each.name for each in missing]
+    off, or a people-only OK when anyone but a person tries. Refuses, or returns. Writes nothing. The words are said
+    to `by`, and kept on record naming no private sub-task."""
+    from . import task_calls
+
+    said = _said(conn, None if by == SYSTEM else by, row, missing)
+    on_record = _said(conn, task_calls.ON_RECORD, row, missing)
+    lines, kept_lines = _lines(missing, said), _lines(missing, on_record)
     version = row.get("version")
-    for standing in missing:
+    for at, standing in enumerate(missing):
         requirement = standing.requirement
         if not (why or "").strip():
             _refuse(
                 conn,
                 by,
                 "task_not_met",
-                f"Not met: {standing.name}. {standing.line}".strip(),
+                f"Not met: {standing.name}. {said[at]}".strip(),
                 row["id"],
                 missing=lines,
                 then=_then(row, "push", "ask", "file", "snooze", "close"),
                 version=version,
+                kept=(f"Not met: {standing.name}. {on_record[at]}".strip(), kept_lines),
             )
         if not R.can_push_past(requirement):
             _refuse(
@@ -491,6 +521,7 @@ def _may_push_past(conn: "sqlite3.Connection", by: str, row: Row, why: str | Non
                 missing=lines,
                 then=_then(row, "back", "ask", "snooze", "close"),
                 version=version,
+                kept=(f"{standing.name} can't be pushed past. Move back or close.", kept_lines),
             )
         if R.people_only(requirement) and not is_human(by):
             _refuse(
@@ -502,6 +533,7 @@ def _may_push_past(conn: "sqlite3.Connection", by: str, row: Row, why: str | Non
                 missing=lines,
                 then=_then(row, "ask", "snooze", "close"),
                 version=version,
+                kept=(f"{standing.name} needs a person", kept_lines),
             )
 
 

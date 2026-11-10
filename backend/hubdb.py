@@ -1129,6 +1129,9 @@ class Refused(Exception):
         # What the caller needs to act on it, sent out beside the rule and the detail: for the task engine's refusals
         # what is missing, the commands allowed next and the task's version (store.refused).
         self.extra = {}
+        # The detail and extra as kept on record (the audit, a stored response), when they are not what the caller is
+        # told: {"detail", "extra"}. A refusal said to someone who may read a private task it names keeps it off.
+        self.stored = None
 
 
 # ----------------------------------------------------------------------------- basics
@@ -1948,20 +1951,22 @@ def writing_refusal(rule, detail):
 
 
 def refuse(
-    conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None, extra=None
+    conn, actor, rule, detail="", severity="normal", context=None, task=None, scope=None, extra=None, stored=None
 ) -> NoReturn:
     """Record a refusal, escalate it (rule 8), and raise. Never returns. `context` is what a person
     reviewing the refusal reads; a private task write keeps only what was refused. `task` is the task
     a `label` refusal was about, which _escalate counts it by. `extra` goes out with the refusal, unrecorded: what the
-    caller needs to act on it (`Refused.extra`)."""
+    caller needs to act on it (`Refused.extra`). `stored` is {"detail", "extra"} as kept on record, when the caller
+    is told more than may be kept (`Refused.stored`)."""
     if CLOSE_PROBE.get():
         probed = Refused(rule, detail, severity, task)
         probed.extra = dict(extra or {})
+        probed.stored = stored
         raise probed
     from . import task_quarantine
 
     scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
-    recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
+    recorded = "Private task write refused" if PRIVATE_WRITE.get() else (stored or {}).get("detail", detail)
     if context and PRIVATE_WRITE.get():
         # A private task's refusal keeps only what was refused.
         context = {"what": context.get("what")}
@@ -1997,6 +2002,7 @@ def refuse(
     refused = Refused(rule, detail, severity, task)
     refused.scope = scope  # survives the domain-write rollback (store.refused)
     refused.extra = dict(extra or {})
+    refused.stored = stored
     raise refused
 
 

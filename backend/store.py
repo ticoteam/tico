@@ -421,6 +421,7 @@ def refused(c, identity, exc, savepoint="domain_write"):
             task=getattr(exc, 'task', None),
             scope=getattr(exc, 'scope', None),
             context=getattr(exc, 'context', None),
+            stored=getattr(exc, 'stored', None),
         )
     except H.Refused:
         pass
@@ -2727,17 +2728,20 @@ class Store:
             except H.Refused as exc:
                 logged = None  # rolled back with the write
                 refusal = refused(c, identity, exc)
+                # What is missing and the commands allowed next ride with a refusal (Problem.extra). A private task's
+                # are its own words, so its receipt keeps only the version; any other keeps what may be kept on
+                # record (Refused.stored: a private sub-task it names is not named).
+                kept = getattr(exc, "stored", None) or {"detail": refusal.detail, "extra": refusal.extra}
+                private = getattr(exc, "private", False)
                 result = {
                     "_refusal": {
                         "code": refusal.code,
-                        "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
+                        "detail": "Private task write refused" if private else kept["detail"],
                         "status": refusal.status,
-                        # What is missing and the commands allowed next ride with a refusal (Problem.extra). A private
-                        # task's are its own words, so its receipt keeps only the version.
                         "extra": (
                             {k: v for k, v in refusal.extra.items() if k == "version"}
-                            if getattr(exc, "private", False)
-                            else dict(refusal.extra)
+                            if private
+                            else dict(kept["extra"])
                         ),
                     }
                 }
