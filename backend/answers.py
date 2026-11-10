@@ -58,6 +58,12 @@ def _feedback() -> Any:
     return feedback
 
 
+def _tc() -> Any:
+    from . import task_calls
+
+    return task_calls
+
+
 def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
     _h().refuse(conn, by, rule, detail, task=task_id)
     raise AssertionError("refuse() always raises")  # pragma: no cover
@@ -314,8 +320,8 @@ def give_to(
     if standing.state != R.WAITING:
         _refuse(conn, by, "task_requirement", "This is not waiting on anyone", task_id)
     current = standing.on
-    if by not in (current, row.get("owner_id")) and not is_human(by):
-        _refuse(conn, by, "task_requirement", "Only who it waits on, the owner or a person gives it away", task_id)
+    if not _tc().may_handle_ask(conn, by, row, requirement, recipient=current):
+        _refuse(conn, by, "identity", "Only who it waits on, whoever asked it, or who works the task gives it", task_id)
     if person == current:
         return row
     if requirement.get("visit_id"):

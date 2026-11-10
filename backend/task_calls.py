@@ -9,8 +9,10 @@ Who may act:
 - A call that works the task (done, move, close, reassign, ask, snooze, try again): the actor can work it, the same
   rule a field edit uses, plus the pipeline's manager and owner. `mover` is the caller saying a person may move any
   task (the company's owner; a route knows).
-- An answer, a give, an undo and a thumbs: whoever the engine says the requirement is asked of. No more is checked
-  here, so a bot or a person named on an OK answers it without being on the task.
+- An answer and a thumbs up: whoever the engine says the requirement is asked of, so a bot or a person named on an OK
+  answers it without being on the task.
+- Giving an ask away or sending it back with a thumbs down: who it waits on, whoever asked it, or someone who can work
+  the task. Taking an answer back: only who gave it (`may_handle_ask`).
 
 The engine's modules are loaded when a call runs, not when this module loads: hubdb imports this module, and the
 engine's modules reach back to hubdb and the store.
@@ -158,6 +160,29 @@ def _owners_done_is_work(conn: "sqlite3.Connection", actor: str, row: Row, requi
 
     if (R.get(conn, requirement_id) or {}).get("kind") == "owner_done":
         _may_work(conn, actor, row)
+
+
+def may_handle_ask(
+    conn: "sqlite3.Connection",
+    actor: str,
+    row: Row,
+    requirement: Row,
+    *,
+    recipient: str | None = None,
+    answered_by: str | None = None,
+) -> bool:
+    """Who may move an ask other than by answering it. Giving it away or withdrawing it: the person it waits on now
+    (`recipient`), whoever asked it, or someone who can work the task. Taking an answer back (`answered_by`): only who
+    gave it, and the owner's own "done" only while they can still work the task. A plain reader does neither."""
+    if actor == SYSTEM:
+        return True
+    if answered_by is not None:
+        if str(actor) != str(answered_by):
+            return False
+        return requirement.get("kind") != "owner_done" or can_work(conn, actor, row)
+    if actor in (recipient, requirement.get("added_by_id")):
+        return True
+    return can_work(conn, actor, row)
 
 
 # ----------------------------------------------------------------------------- moves
