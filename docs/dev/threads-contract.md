@@ -692,6 +692,8 @@ narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thr
  "read": {"last_read_seq": 4411},                // kind=read, only to that reader
  "counters": {"last_seq": 4411, "last_unread_seq": 4400},   // kind=counters|activity
  "message_id": "...", "unread": true, "unread_count": 2,   // kind=activity: how many of its messages are unread (§10.1)
+ "thread": {"id", "title", "name", "audience", "root_id", "parent_id", "kind", "last_message_at", "dm_with"},
+                                                 // kind=activity: enough to add a row the list does not hold
  "message_id": "...", "reactions": [{"emoji": ":+1:", "count": 2, "actors": ["human:ana", "bot:legal"]}],
                                                  // kind=reactions, only when the viewer reads that message
  "bots": [{<bot status row>}],                   // kind=bot_status, thread_id = the root (§4.10)
@@ -797,8 +799,9 @@ that thread in its batch: `message_id` is the newest of them the viewer reads, `
 `threads.unread_message_sql` for the viewer past their mark (a person's message not their own, or a delivery to them
 that counts under the task rule; one indexed lookup a row) and `unread` whether any does, so the row's `me.unread` goes
 up by `unread_count` and its root joins `catch_up_ids` without a read; the viewer's own `read` clears them; `created`, `members`, `audience`, `archived` and
-`unarchived` carry the thread view; `pinned` moves the row (a thread not on the rail is read alone,
-`GET /api/v2/threads/{id}`).
+`unarchived` carry the thread view; an `activity` event carries the thread's title, name, audience and, for a DM,
+`dm_with`, so a list adds a row it does not hold without a read; `pinned` moves the row (a thread not on the rail is read
+alone, `GET /api/v2/threads/{id}`).
 
 Browse. Open company and team roots the viewer reads and is not in (as above, pins aside), newest activity first
 (the newest `last_seq` in the open subtree), `q` a case-insensitive LIKE on the title. `member_count` counts the root's

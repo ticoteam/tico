@@ -297,7 +297,45 @@ def test_live_events_stop_when_private_owner_loses_access(api):
         H.task_reassign(c, H.KEEPER, row["id"], "human:cara", "Moved for the test")
     post(api, "tasks/" + row["id"] + "/comments", {"text": "Second packet note"})
     after, _ = seen(cursor)
-    assert "Second packet note" not in after and row["id"] not in after and "Sensitive" not in after
+    assert "Second packet note" not in after and "Sensitive" not in after
+    # A task Ben could open before leaves his lists by its id alone (events._tasks): nothing else of it.
+    told = [data for data in json.loads(after) if row["id"] in json.dumps(data)]
+    assert all({k for k in data if k not in ("seq", "actor", "at")} == {"id", "kind", "kinds", "gone"} for data in told)
+
+
+def test_a_task_event_says_what_moved_only_to_who_could_read_it_and_nothing_to_who_never_could(api):
+    """`was` (owner and status before the batch) goes to a viewer who read the task before and does now; one who
+    could never read it gets no row of it at all, not its id."""
+    from backend import events, task_engine as E
+
+    store, auth = api.app.state.store, api.app.state.auth
+    ben, cara = (Identity(f"human:{n}", "human", f"{n}@acme.example") for n in ("ben", "cara"))
+    shared = task(api, requester="human:ben", owner="human:cara")
+    secret = task(api, requester="human:ana", owner="human:ana", title="Secret packet")
+
+    def sent(who, after):
+        with store.read() as c:
+            out, *_ = events.read(
+                c, auth, who, after, topics=("tasks",), task_views=lambda rows, *a: rows, task_view=lambda r, *a, **k: r
+            )
+        return [data for *_, data in out]
+
+    with store.read() as c:
+        start = events.latest(c)
+    with store.transaction() as c:
+        H.task_reassign(c, H.KEEPER, shared["id"], "human:ana", "Moved for the test")
+        E.move(c, shared["id"], E.DONE, H.KEEPER, "Finished")
+        H.task_reassign(c, H.KEEPER, secret["id"], "human:cara", "Moved for the test")
+    (mine,) = [data for data in sent(ben, start) if data.get("id") == shared["id"]]
+    assert mine["was"] == {"owner": "human:cara", "status": "open"}
+    assert mine["task"]["status"] == E.DONE
+    assert secret["id"] not in json.dumps(sent(ben, start))  # never Ben's to read: no row, no id
+    # Cara read the shared task before and not now: its id alone, no `was`.
+    (hers,) = [data for data in sent(cara, start) if data.get("id") == shared["id"]]
+    assert hers.get("gone") is True and "was" not in hers and "task" not in hers
+    # Cara now owns the secret task, which she never read before: the task, but no `was` of who had it.
+    (now,) = [data for data in sent(cara, start) if data.get("id") == secret["id"]]
+    assert "task" in now and "was" not in now
 
 
 def test_context_search_and_fleet_do_not_disclose_revoked_sources(api):

@@ -59,6 +59,8 @@ EVENTS_DESCRIPTION = (
     "(who made it, when the viewer may know) and `at`:\n"
     "- `tasks`: `id`, `kind` (the last change), `kinds` (all distinct change kinds for this task in the batch) and "
     "`task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task (TaskEvent schema). "
+    "When the batch moved its owner or status, `was` (`owner`, `status`) is what they were, only to a viewer who could "
+    "read the task before and can now; a viewer who never could gets no event. "
     "Refetch files and linked pages when `kinds` includes `files`, even if `kind` is `update`. "
     "A `bulk: true` event without `id` means read task lists in full.\n"
     "- `meeting_items`: `meeting_id`, `kind`; refetch items. `presence`: `place`; refetch presence. "
@@ -70,11 +72,13 @@ EVENTS_DESCRIPTION = (
     "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
     "- `threads`: `thread_id`, `root_id` and `kind` (docs/dev/threads-contract.md §9); an `activity` one also carries "
     "`counters`, `message_id` (the newest message it stands for that the viewer reads), `unread` and `unread_count` "
-    "(how many of the messages it stands for are unread for the viewer: add that many), so a list bumps its row "
-    "without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
+    "(how many of the messages it stands for are unread for the viewer: add that many) and `thread` (`id`, `title`, "
+    "`name`, `audience`, `root_id`, `parent_id`, `kind`, `last_message_at`, and `dm_with`/`dm_with_count` for a DM), "
+    "so a list bumps its row, or adds one it does not hold, without reading it again; `pinned` carries `actor`, `pinned` and `pinned_for_everyone`; `bot_status` (to the "
     "root's readers, at most one a run step every 5 s) carries `bots`, the root's whole list as "
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
-    "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
+    "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`; a mention "
+    "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "
     "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
     "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
@@ -2289,6 +2293,9 @@ NEEDS_ITEM = obj(
     ask={"oneOf": [ref("TaskRequirement"), {"type": "null"}]},
     task_id={"type": ["string", "null"]},
     requirement_id={"type": ["string", "null"]},
+    message_id={"type": "string", "description": "A mention's message"},
+    conversation_id={"type": "string", "description": "The thread a mention was written in"},
+    root_id={"type": "string", "description": "A mention's root thread: the rail row it moves"},
 )
 
 # Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.
@@ -3298,6 +3305,12 @@ SCHEMAS = {
                 "description": "All change kinds for this task in the batch; files invalidates files and linked pages",
             },
             "task": ref("Task"),
+            "was": {
+                "type": "object",
+                "properties": {"owner": {"type": ["string", "null"]}, "status": {"type": ["string", "null"]}},
+                "description": "The task's owner and status before this batch moved them, only to a viewer who could "
+                "read the task then and can now (owner null where the viewer may not see it)",
+            },
             "gone": "b",
         },
         required=["seq", "actor", "at", "id", "kind", "kinds"],

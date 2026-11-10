@@ -4481,6 +4481,30 @@ def shown_name(c, v, thread):
     return shown_names(c, v, [thread]).get(thread["id"] if isinstance(thread, dict) else thread, "")
 
 
+def brief(c, principal, row):
+    """What a list needs to add a thread's row it does not hold yet, as `view` gives it: id, title, name, audience,
+    root, kind, last message time and, for a DM root, who else is in it (`dm_with`). For a live `activity` event;
+    the caller has checked the reader may read the thread."""
+    v = _as_viewer(principal)
+    row = thread_row(c, row)
+    root = root_of(c, row)
+    out = {
+        "id": row["id"],
+        "title": _shown_title(c, v, row),
+        "audience": audience_of(root),
+        "root_id": row.get("root_id") or row["id"],
+        "parent_id": row.get("parent_id"),
+        "kind": row.get("kind"),
+        "last_message_at": row.get("last_message_at"),
+    }
+    out["name"] = _name(c, v, root, out["title"])
+    if out["audience"] == "home":
+        out["home"] = {"actor": home_owner(root)}
+    if v is not None and out["audience"] in ("personal", "participants") and not row.get("parent_id"):
+        out.update(dm_with(c, v, [root]).get(root["id"]) or {})
+    return out
+
+
 def view(c, principal, row, *, follower=None, summary=None, dm=None, pins=None):
     """A thread as `principal` reads it. `summary` (subtree_summaries) makes `me.unread` and `me.activity` the whole
     subtree's, as a root row in a list shows them, in place of this thread's own, and adds `new_at`. `dm` is this row's

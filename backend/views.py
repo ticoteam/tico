@@ -1999,7 +1999,7 @@ BRIEF_FIELDS = (
 # Every @ of a person by another person that they have not answered since in the same conversation (C28): on a task
 # (its own room, or a comment in a chat the task was filed into) or in a channel. A bot's @ only marks a task unread.
 MENTIONS_SQL = (
-    "SELECT m.id, m.conversation_id, m.sender_id, m.body, m.created_at, "
+    "SELECT m.id, m.conversation_id, coalesce(cv.root_id, cv.id) AS root_id, m.sender_id, m.body, m.created_at, "
     "coalesce(cv.task_id, json_extract(CASE WHEN json_valid(m.refs) THEN m.refs END, '$.task')) AS task_id "
     "FROM message_deliveries d JOIN messages m ON m.id=d.message_id JOIN conversations cv ON cv.id=m.conversation_id "
     "WHERE d.recipient=? AND d.reason='mention' AND m.sender_id LIKE 'human:%' AND m.sender_id<>? "
@@ -2099,6 +2099,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                 "id": m["id"],
                 "message_id": m["id"],
                 "conversation_id": m["conversation_id"],
+                "root_id": m["root_id"],  # the thread a rail row stands for: a sub-thread's mention moves its root's
                 "task_id": m.get("task_id"),
                 "from_id": m["sender_id"],
                 "line": _clip(first[0] if first else "", 160),
