@@ -168,11 +168,6 @@
       "reason": "Task labels and PR links with every request intercepted: nothing reaches the hub or Slack"
     },
     {
-      "script": "ask-screen",
-      "seconds": 9.8,
-      "reason": "Tasks > You and the ask screen: an OK is bound to exactly what it shows"
-    },
-    {
       "script": "team-groups",
       "seconds": 27.926,
       "reason": "The team chart's groups: nested collapsible sections, members under their managers, Built-in bots outside"
