@@ -567,15 +567,14 @@ def _may(
     requirement: Row = standing.requirement
     kind = requirement["kind"]
     human = is_human(viewer)
-    pipe: Row = row.get("pipeline") or {}
     owner = row.get("owner_id")
     out: list[str] = []
     asked = False
     if kind in ("ok", "answer"):
         person = R.person_of(conn, requirement, row["visit"]["id"])
         asked = viewer == person or (person is None and human)
-    if kind == "owner_done" and not standing.met and (human or viewer in (owner, pipe.get("manager_id"))):
-        out.append("done")
+    if kind == "owner_done" and not standing.met and works:
+        out += ["done", "give"]
     if kind == "ok" and not standing.met:
         if answer and answer["answer"] == "no":
             if viewer in (owner, holder):
@@ -584,13 +583,12 @@ def _may(
             out += ["ok", "no"]
     if kind == "answer" and not standing.met and asked:
         out.append("answer")
-    # Give: whoever it waits on, the owner, or any person (answers.give_to); the owner's own work is given by the owner
-    # or a person, which reassigns the task.
-    if kind in ("ok", "answer") and standing.state == R.WAITING and (human or asked or viewer == owner):
-        out.append("give")
-    if kind == "owner_done" and not standing.met and (human or viewer == owner):
-        out.append("give")
-    if answer and (human or answer["by_id"] == viewer):
+    # Give: whoever it waits on, whoever asked it, or someone who works the task (may_handle_ask); the owner's own work
+    # is given by someone who works the task, which reassigns it.
+    if kind in ("ok", "answer") and standing.state == R.WAITING:
+        if works or viewer in (standing.on, requirement.get("added_by_id")):
+            out.append("give")
+    if answer and answer["by_id"] == viewer and (kind != "owner_done" or works):
         out.append("undo")
     if requirement.get("visit_id") and (works or viewer == requirement.get("added_by_id")):
         out.append("withdraw")

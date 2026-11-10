@@ -363,3 +363,22 @@ def test_only_who_gave_an_answer_takes_it_back(api):
         assert refused(api, f"answers/{aid}/undo", {}, token=token, status=403)["error"]["code"] == "identity"
         assert show(api, tid) == before
     assert post(api, f"answers/{aid}/undo", {}, token="ben-test")["status"] == "open"
+
+
+def test_the_buttons_a_reader_is_offered_are_the_ones_the_calls_allow(api):
+    """Codex review 2, 12: done and give on the owner's own work, give on someone else's ask and undo on someone else's
+    answer are offered only to whom the calls allow them."""
+    made = task(api, owner="ana")
+    tid = made["id"]
+    rid = ask(api, tid)
+    cara = show(api, tid, token="cara-test")
+    assert [r["may"] for r in cara["to_leave"]] == [[], []]
+    ana = show(api, tid)
+    assert next(r for r in ana["to_leave"] if r["kind"] == "owner_done")["may"] == ["done", "give"]
+    assert "give" in leave(ana, rid)["may"]
+    ben = show(api, tid, token="ben-test")
+    assert next(r for r in ben["to_leave"] if r["kind"] == "owner_done")["may"] == []
+    assert leave(ben, rid)["may"] == ["ok", "no", "give"]
+    post(api, f"tasks/{tid}/asks/{rid}/answer", {"value": "ok"}, token="ben-test")
+    assert "undo" in leave(show(api, tid, token="ben-test"), rid)["may"]
+    assert "undo" not in leave(show(api, tid), rid)["may"]
