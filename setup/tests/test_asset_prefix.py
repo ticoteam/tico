@@ -804,3 +804,26 @@ def test_a_runner_saved_by_name_alone_is_moved_to_its_server_scoped_record(monke
     assert [r["server_url"] for r in state.load_runners()] == ["https://other.example"]
     assert not (state.home() / "runners" / "runner-b1.json").exists()
     assert ssm.called("put_parameter")[0]["Name"] == "/tico/runner-b1/env"  # saved before the flag: tico
+
+
+def test_a_name_other_than_the_domains_saved_one_is_refused_before_any_aws_call(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    clients = d.aws_clients
+    opened = []
+    d.aws_clients = lambda region, profile: opened.append(region) or clients(region, profile)
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    before = (len(log), len(opened))
+    msg = f"{DOMAIN} is set up with --name hotmic"
+    for argv in (
+        hub_args(tmp_path, "--name", "production"),
+        ["destroy", "--domain", DOMAIN, "--name", "production", "--yes"],
+    ):
+        code, out = go(argv, deps=d)
+        assert code == 2 and msg in out and "Leave --name out or pass --name hotmic" in out, out
+    assert (len(log), len(opened)) == before
+    # Saved before --name existed: an AWS install was named from its domain.
+    state.save("old.example.com", {"domain": "old.example.com", "target": "aws", "aws_instance_id": "i-1"})
+    code, out = go(["destroy", "--domain", "old.example.com", "--name", "hotmic", "--yes"], deps=d)
+    assert code == 2 and "old.example.com is set up with --name old-example-com" in out, out
+    code, out = go(["destroy", "--domain", "old.example.com", "--name", "old-example-com", "--yes"], deps=d)
+    assert code == 0 and "Nothing tagged" in out, out

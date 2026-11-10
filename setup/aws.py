@@ -164,6 +164,24 @@ def asset_prefix(given: str | None, saved: dict | None) -> str:
     return kept
 
 
+def saved_name(saved: dict) -> str:
+    """The --name an install's saved state was set up with. Before --name was saved, an AWS install's came from its
+    domain."""
+    if saved.get("aws_name"):
+        return saved["aws_name"]
+    return slug(saved["domain"]) if saved.get("aws_instance_id") and saved.get("domain") else ""
+
+
+def check_name(given: str | None, had: str, domain: str) -> None:
+    """A domain's install keeps its name: another one would find, change or delete another install's resources."""
+    given = (given or "").strip().lower()
+    if given and had and given != had:
+        raise MissingInput(
+            f"{domain} is set up with --name {had}, and it cannot change on a later run. Leave --name out or pass "
+            f"--name {had}; another name is another install, with its own --domain."
+        )
+
+
 @dataclass
 class AwsPlan:
     name: str

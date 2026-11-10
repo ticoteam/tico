@@ -169,6 +169,8 @@ def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
             default="ubuntu",
         )
         a.get("aws_profile", "AWS profile (blank for the default credentials)", flag="--aws-profile", required=False)
+        had = {"aws_name": s.aws_name, "aws_instance_id": s.aws_instance_id, "domain": s.domain}
+        awsmod.check_name(getattr(args, "name", None), awsmod.saved_name(had), s.domain)
         s.aws_name = (getattr(args, "name", None) or s.aws_name or "").strip().lower()
         if s.aws_name and not awsmod.NAME_RE.fullmatch(s.aws_name):
             raise MissingInput(
@@ -1306,6 +1308,8 @@ def destroy(args, io: IO, deps: Deps) -> int:
     hosted.check_dns_identity(args, saved.get("dns_name", ""), saved.get("dns_zone", ""))
     if saved.get("target") in cloudmod.PROVIDERS:
         return _destroy_hint(io, saved)
+    if args.domain:
+        awsmod.check_name(args.name, awsmod.saved_name(saved), args.domain.lower())
     name = args.name or saved.get("aws_name") or (awsmod.slug(args.domain) if args.domain else "")
     if not name:
         raise MissingInput("Pass --domain or --name")
