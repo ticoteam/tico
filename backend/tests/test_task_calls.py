@@ -443,6 +443,31 @@ def test_a_refusal_names_a_private_sub_task_only_to_who_may_read_it_and_never_on
     assert len(kept) >= 6 and not [k for k in kept if "Salary" in k]  # the audit and the receipts keep neither
 
 
+def test_a_replayed_refusal_on_a_private_task_says_again_what_is_missing_to_who_may_read_it(company):
+    """The receipt keeps no private words; its replay (store.replayed_refusal, which Store.mutate runs on a replayed
+    receipt) builds `missing` and `next` again from the task for a caller who may read it."""
+    from backend import store
+
+    with company.transaction() as c:
+        for slug in ("builder", "helper", "manager"):
+            X.bot(c, slug)
+        row = _new(c, by=BEN, owner=BUILDER, private=True)
+        H.task_ask(c, BUILDER, row["id"], BEN, "Do we drop the Acme contract?", seen_version=_version(c, row["id"]))
+    first = _move_through_the_store(company, BEN, row["id"], "ben-1")
+    assert first.code == "task_not_met" and "Acme" in json.dumps(first.extra["missing"]) and first.extra["next"]
+    with company.transaction() as c:
+        stored = c.execute("SELECT response FROM idempotency WHERE key='ben-1'").fetchone()[0]
+        assert "Acme" not in stored  # never kept: built again on a replay
+        receipt = json.loads(stored)
+        replayed = store.replayed_refusal(c, BEN, receipt)["_refusal"]
+        assert (replayed["code"], replayed["detail"]) == ("task_not_met", "Private task write refused")
+        assert (replayed["extra"]["missing"], replayed["extra"]["next"]) == (
+            first.extra["missing"],
+            first.extra["next"],
+        )
+        assert store.replayed_refusal(c, "human:cara", receipt) == receipt  # may not read it: the receipt as kept
+
+
 def test_an_ask_names_only_someone_who_can_read_the_task(c):
     row = _new(c, by=BEN, owner=BUILDER, private=True)
     with _refused("private"):

@@ -443,6 +443,22 @@ def refused(c, identity, exc, savepoint="domain_write"):
     )
 
 
+def replayed_refusal(c, principal, result):
+    """A replayed receipt. One of a refusal that kept less than its caller was told (a private task's words, the name
+    of a private sub-task) says what is missing and the commands allowed next again, from the task as it is now, when
+    `principal` may read it (task_engine.refusal_extra). Anything else is the receipt as kept."""
+    refusal = result.get("_refusal") if isinstance(result, dict) else None
+    again = refusal.get("again") if isinstance(refusal, dict) else None
+    if not again:
+        return result
+    from . import task_engine
+
+    extra = task_engine.refusal_extra(c, principal, again)
+    if extra is None:
+        return result
+    return {**result, "_refusal": {**refusal, "extra": {**(refusal.get("extra") or {}), **extra}}}
+
+
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
 # days of stored responses is generous. Without a bound the table kept every mutating
 # request's response forever: most of the database file. Operation bindings share the table
@@ -2713,6 +2729,7 @@ class Store:
                     from .meeting_items import redact
 
                     result = redact(c, replay_principal, replay_auth, result)
+                result = replayed_refusal(c, replay_principal, result)
                 from .files import readable_page_refs
 
                 return readable_page_refs(c, replay_auth, replay_principal, result)
@@ -2733,6 +2750,8 @@ class Store:
                 # record (Refused.stored: a private sub-task it names is not named).
                 kept = getattr(exc, "stored", None) or {"detail": refusal.detail, "extra": refusal.extra}
                 private = getattr(exc, "private", False)
+                # What kept less than the caller was told also keeps how to say it again (replayed_refusal).
+                again = getattr(exc, "again", None) if private or getattr(exc, "stored", None) else None
                 result = {
                     "_refusal": {
                         "code": refusal.code,
@@ -2743,6 +2762,7 @@ class Store:
                             if private
                             else dict(kept["extra"])
                         ),
+                        **({"again": again} if again else {}),
                     }
                 }
             if not is_poll(operation, result):
