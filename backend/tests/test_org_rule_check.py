@@ -22,6 +22,7 @@ from backend.names import SUPPORT_ACTOR, SUPPORT_NAME
 from backend.store import H, Problem
 from backend.tests.helpers.api import claim, get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.org_rules import as_bot, edit, org, rule  # noqa: F401
+from backend.tests.helpers.org_rule_check import LAUNCH, hand_over
 from backend import bot_settings as BS
 
 
@@ -1491,19 +1492,6 @@ def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):
 
 
 # ---- Send anyway: privacy, snapshot, full inputs, a new Warn ------------------------------------------------------
-
-
-def hand_over(api):
-    """An automation of ops that assigns its run's task to Ana."""
-    step = {"id": "a", "type": "action", "do": "assign", "args": {"owner": "ana"}}
-    return post(
-        api,
-        "automations",
-        {"name": "Hand", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, "steps": [step]},
-    )["id"]
-
-
-LAUNCH = "Never share the launch date."
 
 
 def started_turn(api):

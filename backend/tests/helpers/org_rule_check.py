@@ -86,3 +86,16 @@ def not_a_friday(monkeypatch):
 
 def task_for_ops(api, title="Write the launch note"):
     return post(api, "tasks", {"owner": "ops", "title": title, "body": "Draft it."})
+
+
+def hand_over(api):
+    """An automation of ops that assigns its run's task to Ana."""
+    step = {"id": "a", "type": "action", "do": "assign", "args": {"owner": "ana"}}
+    return post(
+        api,
+        "automations",
+        {"name": "Hand", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"}, "steps": [step]},
+    )["id"]
+
+
+LAUNCH = "Never share the launch date."
