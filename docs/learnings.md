@@ -147,8 +147,8 @@ is soft-deleted and its unfinished runs are skipped.
 - **Meetings**: live company meetings (not private, not pending review): the title and summary,
   never the transcript.
 
-**Routing.** The decision model (the Tico AI Gateway when the server has a gateway key, then your own TypeSafe key if
-you set one, then the team's own AI provider; with none of them the run shows "needs a decision model"; when the team's monthly decision spend cap is
+**Routing.** The decision model (Jev: the Tico AI Gateway when the server has a gateway key, then your own TypeSafe key
+if you set one; with neither the run shows "needs a decision model"; when the team's monthly decision spend cap is
 reached, even partway through, the night sends nothing, shows "Skipped", and the same activity is read again on a later
 night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes

@@ -46,9 +46,9 @@ class Judge:
         self.store, self.needles = store, dict(needles or {COLOR: NEEDLE})
         self.calls, self.locked, self.fail, self.hold = [], [], None, None
 
-    def __call__(self, state, questions, label=None, level=None):
+    def __call__(self, state, questions, label=None):
         self.locked.append(bool(self.store.writer.queue))
-        self.calls.append({"state": state, "questions": questions, "label": label, "level": level})
+        self.calls.append({"state": state, "questions": questions, "label": label})
         if self.hold:
             self.hold.wait(5)
         if self.fail:
@@ -895,9 +895,9 @@ def test_the_check_runs_under_its_levels_deadline(ruled):
 
     left = []
 
-    def engine(state, questions, label=None, level=None):
+    def engine(state, questions, label=None):
         left.append(J.time_left(999))  # what the provider's own try may take: cut to the check's deadline
-        return judge(state, questions, label, level)
+        return judge(state, questions, label)
 
     api.app.state.judge = engine
     assert say(api, "Our favorite color is gold")["held"]
@@ -2320,21 +2320,6 @@ def test_the_send_queue_checks_a_bots_own_email_against_the_rules(ruled, monkeyp
     assert len(judge.calls) == 1
 
 
-def test_a_rule_check_asks_jev_at_low_and_never_steps_up_to_medium(ruled):
-    # Rule checks spend on Jev only: the Decide level is always Low, whatever the rule or the operation.
-    api, judge = ruled
-    color_rule(api)
-    levels = []
-
-    def engine(state, questions, label=None, level=None):
-        levels.append(level)
-        return judge(state, questions, label)
-
-    api.app.state.judge = engine
-    assert say(api, "Our favorite color is gold")["held"]
-    assert levels == ["low"]
-
-
 def test_a_rule_check_whose_jev_fails_is_unchecked_and_never_asks_the_company_model(ruled, monkeypatch):
     from clients import judge as J
 
@@ -2343,15 +2328,10 @@ def test_a_rule_check_whose_jev_fails_is_unchecked_and_never_asks_the_company_mo
     api, judge = ruled
     color_rule(api)
     judge.fail = J.JudgeError("unavailable", "Jev did not answer", retryable=True)
-    company = []
-
-    def backup(state, questions, label=None, level=None):
-        company.append(label)
-        return judge(state, questions, label)
-
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic")  # a company model on the server is never asked
+    with api.app.state.store.read() as c:
+        assert B.server_engine(api.app.state.store, c, None) is None
     assert "held" not in say(api, "Our favorite color is gold")
-    assert company == [], "the company's own model is not a rule check's fallback"
     assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["unavailable"]
 
 

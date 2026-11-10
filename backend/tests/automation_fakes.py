@@ -35,12 +35,12 @@ class Services:
     def on_hold(self):
         return False
 
-    def judge(self, values, questions, label, level):
+    def judge(self, values, questions, label):
         if "judge" in self.fail:
             raise RuntimeError("the judge is down")
         if "decide" in self.fail:  # Decide is off
             return None
-        self.judged.append({"values": values, "questions": questions, "label": label, "level": level})
+        self.judged.append({"values": values, "questions": questions, "label": label})
         return {"answers": {k: v for k, v in self.answers.items()}, "cost_usd": self.judge_cost}
 
     def act(self, do, args, ctx):

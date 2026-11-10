@@ -44,7 +44,7 @@
       {"when": [{"field": "message.category", "op": "is", "value": "promotions"}],
        "to": "archive", "next": "end", "stop": true}
     ]},
-    {"id": "ask", "type": "decide", "level": "low", "out": "q", "questions": {
+    {"id": "ask", "type": "decide", "out": "q", "questions": {
       "customer": {"type": "noul", "instructions": "Is a customer asking for help with the product or their account?"},
       "bug": {"type": "noul", "instructions": "Is it a bug report or a product problem?"},
       "billing": {"type": "noul", "instructions": "Is it about a charge, an invoice, a refund or a payment?"},

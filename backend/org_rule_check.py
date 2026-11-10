@@ -88,8 +88,8 @@ RULES_TARGET = B.RULES_TARGET  # the judge.call rows a rule check writes (`rule-
 # The most one check waits for its answer, by Decide level (Low is Jev; Medium and High are language models).
 DEADLINES = {"low": 5, "medium": 10, "high": 15}
 CONCURRENCY = 8  # calls at once, per process, when the setting names none
-# Rule checks ask Jev only: the Gateway at Low (`tico-decide-low`), or a customer's own TypeSafe key. Never a higher Decide
-# level and never the company's own model, so a check is always a Jev call or unchecked (`RULE_LEVEL`).
+# Rule checks ask Jev only, as every decision does (backend/judge.py `server_engine`): the Gateway at Low
+# (`tico-decide-low`), or a customer's own TypeSafe key, so a check is always a Jev call or unchecked (`RULE_LEVEL`).
 RULE_LEVEL = "low"
 STRICT = {"warn": 1, "block": 2, "escalate": 3}
 REPEAT_BLOCKS = 3  # the 3rd block of one rule by one bot in a UTC day escalates for the rest of that day
@@ -355,8 +355,8 @@ def calls_for(store):
 
 def _ask(calls, engine, state, questions, label, level):
     """The engine's answer within the level's deadline: (result, None) or (None, error code): `timeout`, or `busy` and
-    `breaker` at once, asking nothing. The deadline is the call's own too (`J.within`): the Gateway, Jev and a
-    company's own model each stop at it, so the thread and its slot end with it."""
+    `breaker` at once, asking nothing. The deadline is the call's own too (`J.within`): the Gateway and TypeSafe each
+    stop at it, so the thread and its slot end with it."""
     refused, probe = calls.admit()
     if refused:
         return None, refused
@@ -366,7 +366,7 @@ def _ask(calls, engine, state, questions, label, level):
     def work():
         try:
             with J.within(seconds):
-                box["result"] = B.ask(engine, state, questions, label, level)
+                box["result"] = engine(state, questions, label)
         except J.JudgeError as exc:
             box["error"] = exc.code or "error"
         except Exception as exc:  # noqa: BLE001 - a fake, a provider bug: the write never breaks on it
@@ -592,7 +592,7 @@ def check_as(
                 if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
                     return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
                 batches.append((batch, _questions(qset, batch), state))
-            engine = B.server_engine(store, c, primary, backup=False)
+            engine = B.server_engine(store, c, primary)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings)
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
@@ -1067,7 +1067,7 @@ def outside_edition(store, primary, output, to=""):
             }
             if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
                 return result("held", "too_large")
-            engine = B.server_engine(store, c, primary, backup=False)
+            engine = B.server_engine(store, c, primary)
             if engine is None:
                 return result("held", "budget" if B.over_spend_cap(c, store.settings) else "no_engine")
             if calls_today(c) >= B.daily_cap(store.settings, "bot"):

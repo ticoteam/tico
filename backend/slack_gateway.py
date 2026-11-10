@@ -70,7 +70,6 @@ import urllib.request
 
 from . import hubdb as H
 from . import people as P
-from . import providers
 from . import task_privacy as privacy
 from . import visuals
 from . import org_rule_check as OR
@@ -649,7 +648,7 @@ class Gateway:
         self._auth = None  # who may write to which bot (backend/bot_access.py)
         self.last_model, self.last_usage = "", []  # the last `ask`'s model and usage per call, for the audit
         self.last_cost = 0.0  # and what its calls cost, in USD (backend/judge.py cost_usd)
-        self.last_provider = ""  # and who answered (the Tico AI Gateway, TypeSafe, the team's LLM)
+        self.last_provider = ""  # and who answered (the Tico AI Gateway or TypeSafe)
         from .slack_threads import Bridge  # imported here: slack_threads reads this module's helpers
 
         self.bridge = Bridge(self)  # native threads: a linked channel is carried into its thread
@@ -657,18 +656,17 @@ class Gateway:
     # ------------------------------------------------------------------ start-up
     @property
     def judge(self):
-        """The Tico AI Gateway, then an own TypeSafe key (backend/judge.py `primary_engine`), then the company's own
-        provider, each failure falling through to the next; None with none of them. One short try each per pass: the
-        gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the only retry, so an outage costs one HTTP
-        attempt a minute per provider, not three, and never blocks the loop long."""
-        from .judge import fallback_engine, live, ordered, primary_engine
+        """Jev (backend/judge.py `primary_engine`): the Tico AI Gateway, then an own TypeSafe key, and no other model;
+        None with neither. One short try each per pass: the gateway's own retry (RETRY_SECONDS, up to
+        ROUTE_GIVE_UP_SECONDS) is the only retry, so an outage costs one HTTP attempt a minute per provider, not three,
+        and never blocks the loop long."""
+        from .judge import live, ordered, primary_engine
 
         if self._judge is None:
             self._judge = primary_engine(self.settings, self.store)
-        # The saved Gateway key and the company's provider are looked up each time: the owner can change either while
-        # this runs.
+        # The saved Gateway key is looked up each time: the owner can change it while this runs.
         with self.store.read() as c:
-            return ordered(live(self._judge, c, self.settings) + [fallback_engine(providers.load(c, self.settings))])
+            return ordered(live(self._judge, c, self.settings))
 
     def verify_app(self):
         """Refuse to start unless the token is the configured workspace's and app's."""

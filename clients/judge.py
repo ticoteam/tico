@@ -116,7 +116,7 @@ MAX_INSTRUCTIONS = 8_000
 MAX_LABEL = 80
 TIMEOUT = 20
 # How long a caller of the hub waits for a decision: past the longest chain the server runs (backend/judge.py
-# SLOW_CHAIN_SECONDS, 35 s, with Decisions at Medium or High), so the server's answer is not cut off.
+# CHAIN_SECONDS, 25 s), so the server's answer is not cut off.
 HUB_WAIT = 45
 RETRIES = 2
 BACKOFF = (0.5, 1.5)
@@ -512,8 +512,8 @@ def _bounded(value, low, high):
 
 # ----------------------------------------------------------------------------- transports
 def direct(api_key, model=MODEL, timeout=TIMEOUT, opener=None, sleep=time.sleep, retries=RETRIES):
-    """The TypeSafe API with a key. `opener(request, timeout)` is the seam the tests use. The server asks once,
-    briefly, and falls back to the company's own model (backend/judge.py); a direct caller keeps the retries."""
+    """The TypeSafe API (Jev) with a key. `opener(request, timeout)` is the seam the tests use. The server asks once,
+    briefly (backend/judge.py); a direct caller keeps the retries."""
     if not api_key:
         raise JudgeError("unconfigured", "no TypeSafe key")
     opener = opener or urlopen
@@ -655,8 +655,8 @@ def gateway(api_key, url, model=GATEWAY_MODEL, timeout=GATEWAY_TIMEOUT, opener=N
     return engine
 
 
-# The provider-neutral decision model: when there is no TypeSafe key, one call to the company's own model
-# provider answers the same questions. Keys are the providers' usual environment variables.
+# The company's own model providers, for writing (`llm_writer`); decisions are Jev's alone. Keys are the providers' usual
+# environment variables.
 LLM_KEYS = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
@@ -671,14 +671,6 @@ LLM_URLS = {
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
     "google": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
 }
-LLM_INSTRUCTIONS = (
-    "You judge a JSON state against typed questions. Reply with one JSON object and nothing else: "
-    "a key per question id. For `choice`, {\"probabilities\": {option: p}} over every option; for "
-    "`score`, {\"probabilities\": [p per level, in order]}; for `noul`, {\"noul\": probability the "
-    "statement is true}. Probabilities are numbers in [0,1] that sum to 1 within a question."
-)
-
-
 # The longest answer a decision call may give, on every transport. The server's spend cap reserves a call's most with
 # it (backend/judge.py `reservation`), so a call can never be billed more output than was held for it.
 MAX_OUTPUT_TOKENS = 4096
@@ -727,111 +719,6 @@ def llm_text(provider, payload):
     if provider == "google":
         return "".join(part.get("text", "") for part in payload["candidates"][0]["content"]["parts"])
     return payload["choices"][0]["message"]["content"]
-
-
-def llm_answers(raw, questions):
-    """Turn the model's probabilities into the decisions contract's answers."""
-    if not isinstance(raw, str):
-        raise JudgeError("shape", "the model did not answer with text")
-    text = raw.strip()
-    if text.startswith("```"):
-        text = text.strip("`").removeprefix("json").strip()
-    try:
-        parsed = json.loads(text)
-    except ValueError:
-        raise JudgeError("shape", "the model did not answer with JSON")
-    answers = {}
-    for qid, q in questions.items():
-        got = parsed.get(qid) if isinstance(parsed, dict) else None
-        if not isinstance(got, dict):
-            raise JudgeError("shape", f"{qid}: no answer")
-        if q["type"] == "noul":
-            try:
-                answers[qid] = {"noul": min(1.0, max(0.0, float(got.get("noul", 0.5))))}
-            except (TypeError, ValueError):
-                raise JudgeError("shape", f"{qid}: noul is not a number")
-            continue
-        raw_p = got.get("probabilities")
-        names = list(q["criteria"]) if q["type"] == "choice" else list(range(len(q["criteria"])))
-        try:
-            values = [float(raw_p[name]) for name in names] if q["type"] == "choice" else [float(v) for v in raw_p]
-        except (TypeError, KeyError, ValueError):
-            raise JudgeError("shape", f"{qid}: probabilities do not cover every option")
-        if len(values) != len(names) or any(v < 0 for v in values) or not sum(values):
-            raise JudgeError("shape", f"{qid}: probabilities are not usable")
-        total = sum(values)
-        probabilities = [v / total for v in values]
-        best = max(range(len(names)), key=probabilities.__getitem__)
-        if q["type"] == "choice":
-            answers[qid] = {
-                "choice": names[best],
-                "confidence": probabilities[best],
-                "probabilities": dict(zip(names, probabilities)),
-            }
-        else:
-            answers[qid] = {
-                "score": sum(i * p for i, p in enumerate(probabilities)),
-                "confidence": probabilities[best],
-                "probabilities": dict(enumerate(probabilities)),
-            }
-    return check_answers(answers, questions)
-
-
-def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
-    """A decision model that asks the company's own provider. Less calibrated than a purpose-built
-    classifier: the probabilities are the model's stated ones. `opener` is the test seam."""
-    if provider not in LLM_URLS or not api_key or not model:
-        raise JudgeError("unconfigured", "no provider key or model for the decision model")
-    opener = opener or urlopen
-
-    def engine(state, questions, label=None):
-        validate(state, questions, label)
-        user = json.dumps({"state": state, "questions": clean(questions)}, default=str)
-        started = time.monotonic()
-        try:
-            with (
-                one_try(timeout) as seconds,
-                opener(
-                    llm_request(provider, api_key, model, LLM_INSTRUCTIONS, user, MAX_OUTPUT_TOKENS), timeout=seconds
-                ) as response,
-            ):
-                payload = read_json(response)
-        except urllib.error.HTTPError as exc:
-            with exc:
-                raise JudgeError(
-                    "unavailable" if exc.code in (429, 529) or exc.code >= 500 else "http",
-                    f"{provider} answered {exc.code}",
-                    exc.code,
-                    retryable=exc.code in (429, 529) or exc.code >= 500,
-                )
-        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
-            raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
-        # An answer came back, so it was paid for, even when it cannot be used.
-        usage = clean_usage(
-            (payload.get("usage") or payload.get("usageMetadata")) if isinstance(payload, dict) else None
-        )
-        try:
-            text = llm_text(provider, payload)
-        except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
-            raise _paid(
-                JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
-                model,
-                usage,
-            )
-        try:
-            answers = llm_answers(text, questions)
-        except JudgeError as exc:
-            raise _paid(exc, model, usage)
-        return {
-            "model": model,
-            "answers": answers,
-            "usage": usage,
-            "ms": round((time.monotonic() - started) * 1000),
-            "provider": LLM_PROVIDERS[provider],
-        }
-
-    engine.model, engine.provider = model, LLM_PROVIDERS[provider]
-    return engine
 
 
 def _usage(payload):

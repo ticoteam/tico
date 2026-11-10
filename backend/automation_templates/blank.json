@@ -10,7 +10,7 @@
   ],
   "steps": [
     {"id": "rules", "type": "filter", "rules": []},
-    {"id": "sort", "type": "decide", "level": "high", "out": "sort", "questions": {
+    {"id": "sort", "type": "decide", "out": "sort", "questions": {
       "route": {"type": "choice", "instructions": "Where does this message belong? Pick the one that fits best.",
                 "criteria": {"me": "The owner should see it", "archive": "Nothing is asked of anyone"}}}},
     {"id": "route", "type": "filter", "rules": [

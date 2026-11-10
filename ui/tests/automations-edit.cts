@@ -1,5 +1,5 @@
 // Automations step editors (ui/app/automations-editors.ts) against the fake hub in support/automations-fake.cts: Filter
-// rules, Decide (set, level, questions, the last run's bars) and LLM (runs as, prompt) each save the flow with one PATCH
+// rules, Decide (set, questions, the last run's bars) and LLM (runs as, prompt) each save the flow with one PATCH
 // that makes a new version; Versions restores one; on a computer the spend chip, "+" between steps (no Paths except at the
 // end of a list), a step's own switch and Delete step. A phone edits in a sheet from the bottom; a computer in the right panel.
 import type {Browser, Page} from 'playwright';
@@ -9,7 +9,7 @@ const assert = require('node:assert/strict');
 const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/automations-fake.cts') as AutomationsFakeSupport.Api;
 
 type Question = {type: string; instructions: string; criteria: Record<string, string>};
-type Step = {id: string; type: string; enabled: boolean; set: string; level: string; prompt: string; do: string;
+type Step = {id: string; type: string; enabled: boolean; set: string; prompt: string; do: string;
   args: Record<string, unknown>; rules: {when: unknown[]; match: string}[]; questions: Record<string, Question>;
   paths: {steps: Step[]}[]; otherwise: {steps: unknown[]}};
 type Flow = {steps: Step[]};
@@ -64,7 +64,7 @@ async function saved(page: Page, writes: AutomationsFakeSupport.Write[], n: numb
       assert.equal(await page.locator('[data-b="qs.0.opts"]').inputValue(), 'needs-owner, reply, route, archive, watch');
       assert.match(await page.locator('.au-ed').innerText(), /reply 82%[\s\S]*money 12%/);
       await shot(page, 'phone-edit-decide');
-      await page.selectOption('[data-b="step.level"]', 'high');
+      assert.equal(await page.locator('[data-b="step.level"]').count(), 0, 'Decide asks Jev: no level to pick');
       await page.locator('[data-op="add"][data-at="qs"]').click();
       await page.fill('[data-b="qs.4.id"]', 'urgent');
       assert.equal(await page.locator('[data-b="set"]').inputValue(), '');
@@ -76,7 +76,6 @@ async function saved(page: Page, writes: AutomationsFakeSupport.Write[], n: numb
       await page.fill('[data-b="qs.4.ask"]', 'Is it urgent?');
       body = await saved(page, writes, 9);
       const d = body.steps[1]!;
-      assert.equal(d.level, 'high');
       assert.equal('set' in d, false);
       assert.deepEqual(Object.keys(d.questions), ['bucket', 'is_ask', 'money', 'legal', 'urgent']);
       assert.deepEqual(Object.keys(d.questions.bucket!.criteria), ['needs-owner', 'reply', 'route', 'archive', 'watch']);

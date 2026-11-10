@@ -184,9 +184,9 @@ A bot on the Gateway with no model of its own, for example one that waits for a 
 version. A template can start a bot on another level: its `bot.yaml` may hold
 `gateway: {level: low, fast: true}` (level `xlow`, `low`, `medium`, `high` or `xhigh`) ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
 
-**Settings → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
-`tico-decide-low`, on Jev), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
-seconds per try instead of 8). Higher costs more per question and answers slower.
+Every decision Tico makes (Decide, rule checks, pipeline judges, automation Decide steps, Slack routing) runs on Jev,
+`tico-decide-low`, and nothing else: there is no setting for it, and no other model answers when Jev fails. Skill
+screening is the one exception: it asks Decide High alone ([Skills](skills.md)).
 
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for

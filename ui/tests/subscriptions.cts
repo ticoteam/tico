@@ -35,7 +35,7 @@ type Sub = {id: string; name: string; kind: string; runtime: string; label: stri
 type Login = {[key: string]: unknown; id: string; state: string; url: string};
 // The request bodies the fake server reads (what the page sent); other fields stay unknown.
 type Body = {[key: string]: unknown; kind?: string; name?: string; secret?: string; owner_id?: string; confirm?: boolean;
-  subscription?: string; code?: string; runner_id?: string; runtime?: string; preset?: string; decide_level?: string; enabled?: string[];
+  subscription?: string; code?: string; runner_id?: string; runtime?: string; preset?: string; enabled?: string[];
   model?: string; expected_revision?: number};
 type Write = {p: string; method: string; body?: Body; confirm?: string | null};
 type Data = {machines: Machine[]; subs: Sub[]; assignments: {runner_id: string; runtime: string; subscription_id: string}[]; capable: string[];
@@ -91,7 +91,7 @@ function fixtures(): Data {
     capable: ['r1', 'r2', 'r3'],
     providers: {configured: true, enabled: ['anthropic', 'openai', 'tico'], default: {runtime: 'codex', model: 'gpt-6-luna'}, revision: 4,
       auto_fallback: true, check_models: [], check_order: [{runtime: 'grok'}, {runtime: 'codex'}], preset: 'subscriptions-gateway',
-      presets: ['subscriptions-gateway', 'subscriptions', 'gateway', 'own-keys'], decide_level: 'low', decide_levels: ['low', 'medium', 'high'],
+      presets: ['subscriptions-gateway', 'subscriptions', 'gateway', 'own-keys'],
       meeting_model: '', providers: [{id: 'anthropic', label: 'Anthropic'}, {id: 'openai', label: 'OpenAI'}, {id: 'tico', label: 'Tico', gateway: true}]},
     gateway: {connected: true, state: 'connected', working: true, automatic: true, editable: true, preview: 'tgw…x9k', url: '', default_url: 'https://gateway.tico.dev', revision: 2, spent_usd: 188, cap_usd: 1000},
     models: [
@@ -141,7 +141,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
     if (p === '/api/v2/providers' && method === 'GET') return json(data.providers);
     if (p === '/api/v2/providers' && method === 'PUT') {
       const body = req.postDataJSON() as Body; writes.push({p, method, body});
-      Object.assign(data.providers, body.preset ? {preset: body.preset} : {}, body.decide_level ? {decide_level: body.decide_level} : {}, {revision: data.providers.revision + 1});
+      Object.assign(data.providers, body.preset ? {preset: body.preset} : {}, {revision: data.providers.revision + 1});
       return json(data.providers);
     }
     if (p === '/api/v2/providers/gateway') return json(data.gateway);
@@ -299,14 +299,13 @@ async function modelsTab(browser: Browser) {
   assert.deepEqual(writes.find(w => w.p === '/api/v2/providers')!.body, {enabled: ['anthropic', 'openai', 'tico'], model: 'gpt-6-luna', expected_revision: 4, preset: 'subscriptions'});
   await page.waitForFunction(() => { const t = document.querySelector<HTMLInputElement>('[data-gateway-toggle]'); return t && !t.disabled && !t.checked; });
   // Defaults: the old controls, compact; a save leaves the preset and providers alone.
-  assert.deepEqual(await pane.locator('#set-prov .models-row label').allInnerTexts(), ['Default model', 'Decisions', 'Meeting model', 'Fall back when a plan runs out', 'Check model']);
+  assert.deepEqual(await pane.locator('#set-prov .models-row label').allInnerTexts(), ['Default model', 'Meeting model', 'Fall back when a plan runs out', 'Check model']);
   assert.equal(await pane.locator('#set-prov-model').inputValue(), 'gpt-6-luna');
-  await pane.locator('#set-prov-decide').selectOption('medium');
   const before = writes.length;
   await pane.locator('#set-prov-save').click();
   await until(page, () => writes.length > before, 'the Defaults save');
   const saved = writes.at(-1)!.body!;
-  assert.equal(saved.decide_level, 'medium');
+  assert.equal('decide_level' in saved, false);
   assert.deepEqual(saved.enabled, ['anthropic', 'openai', 'tico']);
   assert.equal('preset' in saved, false);
   // Limits: Warn at and Stop at, in runs per person.

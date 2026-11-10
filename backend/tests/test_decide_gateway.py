@@ -138,13 +138,13 @@ def net(monkeypatch):
     return internet
 
 
-def wire(api, monkeypatch, gateway_key="gw-synthetic", own_key="", team_llm=True):
-    """The server's providers as `install_judge` builds them from its settings, on the fake internet."""
+def wire(api, monkeypatch, gateway_key="gw-synthetic", own_key=""):
+    """The server's providers as `install_judge` builds them from its settings, on the fake internet. The server also
+    holds a key to the team's own provider (Anthropic), which no decision ever asks."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "an-synthetic")
     settings = api.app.state.store.settings
     settings.gateway_key, settings.gateway_url, settings.typesafe_api_key = gateway_key, GATEWAY_URL, own_key
     api.app.state.judge = B.primary_engine(settings)
-    backup = J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5") if team_llm else None
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
 
 
 def audits(api):
@@ -221,7 +221,7 @@ FAILURES = {
 
 
 @pytest.mark.parametrize("how", list(FAILURES))
-def test_when_the_gateway_fails_the_own_key_answers_then_the_team_llm_then_decide_is_off(api, monkeypatch, net, how):
+def test_when_the_gateway_fails_the_own_key_answers_then_decide_is_off(api, monkeypatch, net, how):
     wire(api, monkeypatch, own_key="ts-synthetic")
     net.fail[GATEWAY_URL] = FAILURES[how]
     code = {"revoked": "auth", "refused": "http", "bad shape": "shape"}.get(how, "unavailable")
@@ -229,24 +229,18 @@ def test_when_the_gateway_fails_the_own_key_answers_then_the_team_llm_then_decid
     # The own key answers, after one try at the Gateway.
     r = ask(api)
     assert r.status_code == 200, r.text
-    assert len(net.calls(GATEWAY_URL)) == 1 and len(net.calls(J.URL)) == 1 and not net.calls(ANTHROPIC)
+    assert len(net.calls(GATEWAY_URL)) == 1 and len(net.calls(J.URL)) == 1
     assert r.json()["model"] == "jev-1.14"
     assert audits(api)[-1]["provider"] == "TypeSafe" and audits(api)[-1]["fallback"] == code
 
-    # The own key down too: the team's LLM answers.
+    # Both down: a quick, honest answer the caller carries on from, with nothing of anyone's words in it, and no other
+    # model asked in Jev's place.
     net.fail[J.URL] = 503
-    r = ask(api)
-    assert r.status_code == 200, r.text
-    assert len(net.calls(GATEWAY_URL)) == 2 and len(net.calls(J.URL)) == 2 and len(net.calls(ANTHROPIC)) == 1
-    assert r.json()["model"] == "claude-sonnet-5-5"
-    assert audits(api)[-1]["provider"] == "Anthropic" and audits(api)[-1]["fallback"] == code
-
-    # Everything down: a quick, honest answer the caller carries on from, with nothing of anyone's words in it.
-    net.fail[ANTHROPIC] = 503
     r = ask(api)
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable"
     assert SECRET not in r.text and SECRET not in json.dumps(audits(api))
-    assert len(net.calls(GATEWAY_URL)) == 3, "the Gateway gets one try per call, never a retry"
+    assert len(net.calls(GATEWAY_URL)) == 2, "the Gateway gets one try per call, never a retry"
+    assert not net.calls(ANTHROPIC)
 
 
 @pytest.mark.parametrize("only", ["gateway key, 401", "own TypeSafe key, 403"])
@@ -257,23 +251,22 @@ def test_a_revoked_key_with_no_provider_after_it_is_decide_off_and_the_caller_ca
         monkeypatch,
         gateway_key="gw-synthetic" if gateway_only else "",
         own_key="" if gateway_only else "ts-synthetic",
-        team_llm=False,
     )
     net.fail[GATEWAY_URL if gateway_only else J.URL] = 401 if gateway_only else 403
     r = ask(api)
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable", r.text
     assert (len(net.calls(GATEWAY_URL)), len(net.calls(J.URL))) == ((1, 0) if gateway_only else (0, 1))
     assert audits(api)[-1]["error"] == "auth", "the audit still tells an admin the key was refused"
-    assert SECRET not in r.text
+    assert SECRET not in r.text and not net.calls(ANTHROPIC)
 
 
-def test_without_an_own_key_a_failed_gateway_goes_straight_to_the_team_llm(api, monkeypatch, net):
+def test_without_an_own_key_a_failed_gateway_is_decide_off(api, monkeypatch, net):
     wire(api, monkeypatch)
     net.fail[GATEWAY_URL] = 401
     r = ask(api)
-    assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
+    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable"
     assert not net.calls(J.URL), "no TypeSafe call without a TypeSafe key"
-    assert audits(api)[-1]["provider"] == "Anthropic" and audits(api)[-1]["fallback"] == "auth"
+    assert not net.calls(ANTHROPIC) and audits(api)[-1]["error"] == "auth"
 
 
 def no_own_key_settings(monkeypatch, tmp_path):
@@ -297,12 +290,9 @@ def no_own_key_settings(monkeypatch, tmp_path):
     return settings
 
 
-@pytest.mark.parametrize("team_llm", [True, False])
-def test_a_gateway_at_its_cap_with_no_own_key_never_reaches_typesafe_directly(
-    api, monkeypatch, net, tmp_path, team_llm
-):
-    """The Gateway's cap is the team's one Jev budget: at 429 cap_reached the team's LLM answers or Decide is off,
-    and no call goes to TypeSafe on another key, on the decisions route or on Slack routing."""
+def test_a_gateway_at_its_cap_with_no_own_key_never_reaches_typesafe_directly(api, monkeypatch, net, tmp_path):
+    """The Gateway's cap is the team's one Jev budget: at 429 cap_reached Decide is off, and no call goes to TypeSafe
+    on another key, on the decisions route or on Slack routing."""
     env = no_own_key_settings(monkeypatch, tmp_path)
     settings = api.app.state.store.settings
     settings.gateway_key, settings.gateway_url, settings.typesafe_api_key = (
@@ -311,23 +301,18 @@ def test_a_gateway_at_its_cap_with_no_own_key_never_reaches_typesafe_directly(
         env.typesafe_api_key,
     )
     api.app.state.judge = B.primary_engine(settings)
-    backup = J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5") if team_llm else None
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "an-synthetic")
     net.fail[GATEWAY_URL] = 429
 
     r = ask(api)
-    if team_llm:
-        assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
-        assert audits(api)[-1]["provider"] == "Anthropic" and audits(api)[-1]["fallback"] == "unavailable"
-    else:
-        assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable"
+    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable"
+    assert not net.calls(ANTHROPIC)
     assert len(net.calls(GATEWAY_URL)) == 1
     assert net.calls(J.URL) == [], "a capped Gateway never falls through to TypeSafe"
 
 
-@pytest.mark.parametrize("team_llm", [True, False])
 def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesafe_directly(
-    hub, monkeypatch, net, tmp_path, team_llm
+    hub, monkeypatch, net, tmp_path
 ):
     env = no_own_key_settings(monkeypatch, tmp_path)
     hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = (
@@ -335,8 +320,7 @@ def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesa
         env.gateway_url,
         env.typesafe_api_key,
     )
-    backup = J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5") if team_llm else None
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "an-synthetic")
     net.fail[GATEWAY_URL] = 429
     gw = G.Gateway(hub, FakeSlack(), clock=Clock())
     gw.verify_app()
@@ -345,9 +329,7 @@ def test_slack_routing_with_a_capped_gateway_and_no_own_key_never_reaches_typesa
     assert len(net.calls(GATEWAY_URL)) == 1 and net.calls(J.URL) == [], (
         "a capped Gateway never falls through to TypeSafe"
     )
-    if team_llm:
-        detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
-        assert detail["provider"] == "Anthropic" and len(net.calls(ANTHROPIC)) == 1
+    assert not net.calls(ANTHROPIC), "no other model routes in Jev's place"
 
 
 def test_a_request_the_contract_refuses_is_refused_before_any_provider_is_asked(api, monkeypatch, net):
@@ -361,13 +343,13 @@ def test_a_request_the_contract_refuses_is_refused_before_any_provider_is_asked(
 
 
 # ----------------------------------------------------------------------------- 3. what each failure costs and takes
-def test_typesafe_refusing_a_request_that_passed_the_contract_falls_through_to_the_team_llm(api, monkeypatch, net):
+def test_typesafe_refusing_a_request_that_passed_the_contract_is_decide_off(api, monkeypatch, net):
     wire(api, monkeypatch, own_key="ts-synthetic")
     net.fail[GATEWAY_URL], net.fail[J.URL] = 503, 422
     r = ask(api)
-    assert r.status_code == 200, r.text
-    assert r.json()["model"] == "claude-sonnet-5-5" and len(net.calls(J.URL)) == 1 and len(net.calls(ANTHROPIC)) == 1
-    assert audits(api)[-1]["provider"] == "Anthropic" and audits(api)[-1]["fallback"] == "unavailable"
+    assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable", r.text
+    assert len(net.calls(J.URL)) == 1 and not net.calls(ANTHROPIC)
+    assert audits(api)[-1]["error"] == "invalid"
 
 
 @pytest.mark.parametrize("bad", [[], {}, 7, None], ids=["list", "map", "number", "none"])
@@ -386,29 +368,30 @@ def test_an_unusable_answer_is_still_paid_for_and_counted_toward_the_cap_with_th
     wire(api, monkeypatch, own_key="ts-synthetic")
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 50.0
-    net.fail[GATEWAY_URL], net.fail[J.URL] = "shape", 503
+    net.fail[GATEWAY_URL] = "shape"
     r = ask(api)
-    assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
-    llm_cost = B.cost_usd(store.settings, "claude-sonnet-5-5", {"input_tokens": 300, "output_tokens": 40})
+    assert r.status_code == 200 and r.json()["model"] == "jev-1.14"
+    jev_cost = B.cost_usd(store.settings, "jev-1.14", {"input_tokens": 120, "output_tokens": 0})
     unusable, answered = spends(api)
     assert unusable == {"label": "mail-triage@1", "model": "tico-decide-low", "cost_usd": 0.000012, "unusable": True}
-    assert answered["model"] == "claude-sonnet-5-5" and answered["cost_usd"] == llm_cost and "unusable" not in answered
-    assert audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6) and B._RESERVED[0] == 0
+    assert answered["model"] == "jev-1.14" and answered["cost_usd"] == jev_cost and "unusable" not in answered
+    assert audits(api)[-1]["cost_usd"] == round(0.000012 + jev_cost, 6) and B._RESERVED[0] == 0
 
-    # Every provider answers unusably: each is still counted, the reservation is released, and once the counted spend
-    # reaches the cap the next call asks no one.
-    net.fail[ANTHROPIC] = "shape"
+    # Both answer unusably: each is still counted, the reservation is released, and once the counted spend reaches
+    # the cap the next call asks no one.
+    net.fail[J.URL] = "shape"
     r = ask(api)
     assert r.status_code == 503 and r.json()["error"]["code"] == "judge_unavailable" and B._RESERVED[0] == 0
     assert [(row["model"], row.get("unusable")) for row in spends(api)[2:]] == [
         ("tico-decide-low", True),
-        ("claude-sonnet-5-5", True),
+        ("jev-1.14", True),
     ]
-    assert audits(api)[-1]["error"] == "shape" and audits(api)[-1]["cost_usd"] == round(0.000012 + llm_cost, 6)
+    assert audits(api)[-1]["error"] == "shape" and audits(api)[-1]["cost_usd"] == round(0.000012 + jev_cost, 6)
     store.settings.decisions_monthly_usd = round(sum(row["cost_usd"] for row in spends(api)), 6)
     asked = len(net.requests)
     r = ask(api)
     assert r.status_code == 429 and r.json()["error"]["code"] == "spend_cap" and len(net.requests) == asked
+    assert not net.calls(ANTHROPIC)
 
 
 @pytest.mark.parametrize(
@@ -431,7 +414,7 @@ def test_a_usage_that_cannot_be_read_is_counted_at_the_calls_most_not_as_nothing
 
 def test_a_call_in_flight_reserves_what_every_provider_it_may_ask_could_cost(api, monkeypatch, net):
     settings = api.app.state.store.settings
-    chain = [J.GATEWAY_MODEL, J.MODEL, "claude-sonnet-5-5"]
+    chain = [J.GATEWAY_MODEL, J.MODEL]
     each = [B.reservation(settings, [model], {"team": "Acme"}, QUESTIONS) for model in chain]
     assert B.reservation(settings, chain, {"team": "Acme"}, QUESTIONS) == pytest.approx(sum(each))
     wire(api, monkeypatch, own_key="ts-synthetic")
@@ -445,12 +428,9 @@ def test_a_call_in_flight_reserves_what_every_provider_it_may_ask_could_cost(api
 
 
 def test_the_slack_gateway_counts_an_unusable_answer_with_the_one_after_it(hub, monkeypatch, net):
-    for name in J.LLM_KEYS.values():
-        monkeypatch.delenv(name, raising=False)
-    hub.settings.gateway_key, hub.settings.gateway_url, hub.settings.typesafe_api_key = "gw-synthetic", GATEWAY_URL, ""
-    monkeypatch.setattr(
-        B, "fallback_engine", lambda *args, **kwargs: J.llm("anthropic", "an-synthetic", "claude-sonnet-5-5")
-    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "an-synthetic")
+    hub.settings.gateway_key, hub.settings.gateway_url = "gw-synthetic", GATEWAY_URL
+    hub.settings.typesafe_api_key = "ts-synthetic"
     net.fail[GATEWAY_URL] = "shape"
     gw = G.Gateway(hub, FakeSlack(), clock=Clock())
     gw.verify_app()
@@ -459,10 +439,11 @@ def test_the_slack_gateway_counts_an_unusable_answer_with_the_one_after_it(hub, 
     spent = [json.loads(r["detail"]) for r in rows(hub, "SELECT detail FROM events WHERE action='judge.spend'")]
     assert [(row["model"], row.get("unusable")) for row in spent] == [
         ("tico-decide-low", True),
-        ("claude-sonnet-5-5", None),
+        ("jev-1.14", None),
     ]
     detail = json.loads(rows(hub, "SELECT detail FROM events WHERE action='judge.call'")[-1]["detail"])
-    assert detail["provider"] == "Anthropic" and detail["cost_usd"] == round(sum(row["cost_usd"] for row in spent), 6)
+    assert detail["provider"] == "TypeSafe" and detail["cost_usd"] == round(sum(row["cost_usd"] for row in spent), 6)
+    assert not net.calls(ANTHROPIC)
 
 
 class Seconds:
@@ -478,20 +459,21 @@ def test_the_providers_together_answer_within_the_chain_deadline_on_a_controlled
     monkeypatch.setattr(J, "clock", clock)
     net.clock = clock
     wire(api, monkeypatch, own_key="ts-synthetic")
-    net.fail[GATEWAY_URL] = net.fail[J.URL] = TimeoutError()
+    net.fail[GATEWAY_URL] = TimeoutError()
     r = ask(api)
-    assert r.status_code == 200 and r.json()["model"] == "claude-sonnet-5-5"
-    # The Gateway and TypeSafe take their full 8 s each; the team's LLM gets what is left of 25 s, not its own 20 s.
-    assert [req[3] for req in net.requests] == [8, 8, B.CHAIN_SECONDS - 16]
+    assert r.status_code == 200 and r.json()["model"] == "jev-1.14"
+    # The Gateway takes its full 8 s; TypeSafe gets its own 8 s within what is left of 25 s.
+    assert [req[3] for req in net.requests] == [8, 8]
 
-    net.fail[ANTHROPIC] = TimeoutError()
+    net.fail[J.URL] = TimeoutError()
     start = clock.now
-    assert ask(api).status_code == 503 and clock.now - start == B.CHAIN_SECONDS
+    assert ask(api).status_code == 503 and clock.now - start == 16
+    assert not net.calls(ANTHROPIC)
 
     # With less than a second left, a provider is not asked at all.
-    monkeypatch.setattr(B, "CHAIN_SECONDS", 16.5)
+    monkeypatch.setattr(B, "CHAIN_SECONDS", 8.5)
     asked = len(net.requests)
-    assert ask(api).status_code == 503 and [r[0] for r in net.requests[asked:]] == [GATEWAY_URL, J.URL]
+    assert ask(api).status_code == 503 and [r[0] for r in net.requests[asked:]] == [GATEWAY_URL]
 
 
 MARKER = "upstream-echo-of-the-mail"
@@ -540,7 +522,7 @@ def test_an_answer_that_trickles_in_is_cut_off_at_its_deadline_and_the_next_prov
     assert r.status_code == 200 and r.json()["model"] == "jev-1.14", "the Gateway's slow answer is not waited for"
     assert audits(api)[-1]["fallback"] == "unavailable" and clock.now - start <= J.GATEWAY_TIMEOUT + 2
     # Every provider trickling: the whole chain still ends by its deadline.
-    net.fail[J.URL] = net.fail[ANTHROPIC] = ("trickle", 2)
+    net.fail[J.URL] = ("trickle", 2)
     start = clock.now
     assert ask(api).status_code == 503 and clock.now - start <= B.CHAIN_SECONDS + 2
     # One transport on its own, outside any chain, is held to its own timeout from start to last byte.
@@ -659,8 +641,8 @@ def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes
     with pytest.raises(Stop):
         remotecli.run(type("Args", (), {"cmd": "decision", "fn": "decision ask"})())
     assert waits == [45]
-    assert J.HUB_WAIT > B.SLOW_CHAIN_SECONDS > B.CHAIN_SECONDS  # `J.from_env` through the Hub, Decisions at any level
-    assert B.SLOW_CHAIN_SECONDS + 1 < min(waits)
+    assert J.HUB_WAIT > B.CHAIN_SECONDS  # `J.from_env` through the Hub
+    assert B.CHAIN_SECONDS + 1 < min(waits)
     # The MCP tools' client keeps its ordinary deadline but waits past the chain on the routes that run one.
     from clients import tico
     from clients.tico import Client, SLOW_WAIT
@@ -682,12 +664,12 @@ def test_every_client_that_asks_for_a_decision_waits_longer_than_the_chain_takes
         ("gateway/fetch", SLOW_WAIT),
         ("tasks", 30),
     ]
-    assert SLOW_WAIT > B.SLOW_CHAIN_SECONDS and "timeout=30)" in (ROOT / "clients" / "hubmcp.py").read_text()
+    assert SLOW_WAIT > B.CHAIN_SECONDS and "timeout=30)" in (ROOT / "clients" / "hubmcp.py").read_text()
 
 
 # ----------------------------------------------------------------------------- 4. no provider at all
 def test_with_no_gateway_key_and_no_other_provider_decide_is_off_and_callers_carry_on(api, monkeypatch, net):
-    wire(api, monkeypatch, gateway_key="", team_llm=False)
+    wire(api, monkeypatch, gateway_key="")
     assert api.app.state.judge is None
     assert get(api, "judge")["configured"] is False
     r = ask(api)

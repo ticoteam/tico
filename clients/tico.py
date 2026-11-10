@@ -41,8 +41,8 @@ def inbound_wait_timeout(method, path, body, default, *, query=None):
     return max(default, wait + 10)
 
 
-# Routes the server answers only after a chain of model calls (backend/judge.py SLOW_CHAIN_SECONDS, 35 s with Decisions
-# at Medium or High): their callers wait past it.
+# Routes the server answers only after a chain of model calls (backend/judge.py CHAIN_SECONDS, 25 s, for decisions):
+# their callers wait past it.
 SLOW_POSTS = frozenset(
     {"/api/v2/decisions", "/api/v2/gateway/search", "/api/v2/gateway/fetch", "/api/v2/gateway/digest"}
 )

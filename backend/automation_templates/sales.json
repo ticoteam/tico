@@ -32,7 +32,7 @@
       {"when": [{"field": "message.category", "op": "is", "value": "promotions"}],
        "to": "archive", "next": "end", "stop": true}
     ]},
-    {"id": "ask", "type": "decide", "level": "low", "out": "q", "questions": {
+    {"id": "ask", "type": "decide", "out": "q", "questions": {
       "lead": {"type": "noul", "instructions": "Is someone new asking about buying, pricing, a quote or a demo?"},
       "customer": {"type": "noul", "instructions": "Is an existing customer asking for help or about their account?"},
       "pitch": {"type": "noul", "instructions": "Is it a vendor pitch or cold outreach?"},

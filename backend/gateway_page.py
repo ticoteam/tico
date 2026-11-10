@@ -32,7 +32,6 @@ def pick_row(found, bots):
 
 def picks(c, settings=None):
     """The Gateway picks the active bots use, most used first."""
-    record = providers.load(c, settings)
     counts = {}
     for row in c.execute(
         f"SELECT b.slug, {BS.CONFIG} AS config FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} "
@@ -56,7 +55,7 @@ def picks(c, settings=None):
             # An id from before this lineup counts under the id it is now.
             merged[found["id"]] = (found, merged.get(found["id"], (found, 0))[1] + bots)
     out = [pick_row(found, bots) for found, bots in merged.values()]
-    return sorted(out, key=lambda r: (-r["bots"], r["name"])), record["decide_level"]
+    return sorted(out, key=lambda r: (-r["bots"], r["name"]))
 
 
 def _tokens(n):
@@ -110,12 +109,11 @@ def overview(c, settings=None, *, owner=False):
     """The Tico Gateway card on Settings > Models: the connection with this month's spend against its cap, the picks in use, the models
     and the services."""
     cat = catalog(c, settings)
-    rows, decide = picks(c, settings)
+    rows = picks(c, settings)
     return {
         "connection": gateway_connection.view(c, settings, manage=owner),
         "as_of": cat.get("as_of", ""),
         "picks": rows,
-        "decide_level": decide,
         "models": models(cat),
         "services": [
             {**row, "for": row.get("for") or "", "tools": row["tools"], "details": row.get("details") or []}
