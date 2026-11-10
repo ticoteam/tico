@@ -300,16 +300,25 @@ async function personAccessLoad(p: RosterPerson) {
 }
 // The person's tasks as last read and mended since: their rows, and where the catch-up resumes.
 let PERSON_LIST: {id: string; rows: TaskBriefV3[]; cursor: string} | null = null;
+// Its reads against its live events (task-api.ts TaskFeed): a read that lands late undoes no newer event.
+let PERSON_FEED = taskFeedNew();
 // What the list holds: every task the person owns, open or finished, except a snoozed one (the server's default).
 const personOwns = (id: string) => (t: TaskBriefV3) => t.owner_id === 'human:' + id && !t.snoozed;
 async function personTasksLoad(p: RosterPerson) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;
   const owner = 'human:' + p.id;
+  if (PERSON_LIST?.id !== p.id) { PERSON_LIST = null; PERSON_FEED = taskFeedNew(); }
+  const feed = PERSON_FEED, ticket = taskFeedRead(feed);
   const read = await taskBriefsPage({owner, status: 'all'}).catch(() => null);
-  if (!$('#person-tasks') || PERSON_TASKS !== p.id) return;
+  if (!$('#person-tasks') || PERSON_TASKS !== p.id || PERSON_FEED !== feed) return;
+  const held = read ? taskFeedLanded(feed, ticket, read.cursor) : (taskFeedFailed(feed, ticket), null);
+  if (read && !held) return;   // a newer read is out
   PERSON_LIST = read ? {id: p.id, rows: read.tasks, cursor: read.cursor} : null;
+  // What came while the read was out goes over it: a task removed meanwhile stays removed.
+  const bulk = read && held ? taskRowsLive(read.tasks, held, personOwns(p.id)) === 'bulk' : false;
   personTasksDraw(p, read?.tasks || []);
+  if (bulk) void personTasksReload();
 }
 function personTasksDraw(p: RosterPerson, all: TaskBriefV3[]) {
   if (!$('#person-tasks')) return;
@@ -325,6 +334,7 @@ function personTasksDraw(p: RosterPerson, all: TaskBriefV3[]) {
 }
 // The live stream's task events, each in place by personOwns (refresh.ts liveTasksApply); nothing is read for one.
 function personTasksLive(events: LiveTaskEvent[]) {
+  events = taskFeedEvents(PERSON_FEED, events);
   const list = PERSON_LIST, p = list && PERSON_TASKS === list.id && (S.people || []).find(row => row.id === list.id);
   if (!list || !p || !$('#person-tasks')) return;
   const moved = taskRowsLive(list.rows, events, personOwns(list.id));
@@ -339,11 +349,12 @@ async function personTasksReload() {
   const list = PERSON_LIST;
   if (!list || list.id !== p.id) { void personTasksLoad(p); return; }
   try {
-    const out = await taskRowsCatchUp(list.rows, list.cursor, {owner: 'human:' + p.id, status: 'all'}, personOwns(p.id), () => PERSON_LIST === list);
+    const out = await taskRowsCatchUp(list.rows, list.cursor, {owner: 'human:' + p.id, status: 'all'}, personOwns(p.id), () => PERSON_LIST === list, PERSON_FEED);
     if (!out) return;
     if (out === 'reset') { void personTasksLoad(p); return; }
     list.cursor = out.cursor;
     if (out.moved) personTasksDraw(p, list.rows);
+    if (out.again) void personTasksReload();
   } catch { /* the next refresh tries again */ }
 }
 // "+ Add task" on a human's page: the give-a-task form in a modal, assigned to them, added by you.
