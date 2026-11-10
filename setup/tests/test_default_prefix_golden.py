@@ -3,7 +3,9 @@
 One stateful fake AWS account records every call (reads too, in order, with their arguments) through a default install,
 its re-run, a runner, `setup backup-storage` and `setup destroy --dns`. golden/default_prefix_calls.json is that same
 sequence recorded on main at eb08ac89b, before --asset-prefix; regenerate it there with
-TICO_GOLDEN_WRITE=<path> pytest setup/tests/test_default_prefix_golden.py."""
+TICO_GOLDEN_WRITE=<path> pytest setup/tests/test_default_prefix_golden.py. Its "_recorded_on" names that commit and its
+setup/ tree: once main's setup/ moves on, test_the_recording_is_of_mains_setup_as_it_is_now fails until it is
+re-recorded on main."""
 
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import itertools
 import json
 import os
 import secrets
+import subprocess
 import uuid
 from pathlib import Path
 
@@ -481,9 +484,53 @@ def test_the_default_prefix_makes_exactly_the_calls_it_made_before_asset_prefix(
         pytest.skip("main has no --asset-prefix")
     got = calls(chart, flag)
     if os.environ.get("TICO_GOLDEN_WRITE"):
-        Path(os.environ["TICO_GOLDEN_WRITE"]).write_text(json.dumps(got, indent=1) + "\n")
+        here = {"commit": _git("rev-parse", "HEAD"), "setup_tree": _git("rev-parse", "HEAD:setup")}
+        Path(os.environ["TICO_GOLDEN_WRITE"]).write_text(json.dumps({"_recorded_on": here, **got}, indent=1) + "\n")
         pytest.skip("written")
-    want = json.loads(GOLDEN.read_text())
+    want = {k: v for k, v in json.loads(GOLDEN.read_text()).items() if not k.startswith("_")}
     for step in want:
         assert got[step] == want[step], step
     assert list(got) == list(want)
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _git(*args: str) -> str:
+    """git's answer in this checkout, or "" when there is no git, no repository or no such ref."""
+    try:
+        done = subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def drift(recorded: dict) -> tuple[list[str], list[str]]:
+    """(the main refs checked, those whose setup/ tree is not the recorded one). A ref is checked only when it holds the
+    recorded commit: a main older than the recording (a stale local branch) says nothing about it."""
+    checked, moved = [], []
+    for ref in ("main", "origin/main"):
+        if not _git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"):
+            continue
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", recorded["commit"], ref], cwd=ROOT, capture_output=True, check=False
+        )
+        if ancestor.returncode != 0:
+            continue
+        checked.append(ref)
+        if _git("rev-parse", f"{ref}:setup") != recorded["setup_tree"]:
+            moved.append(ref)
+    return checked, moved
+
+
+def test_the_recording_is_of_mains_setup_as_it_is_now():
+    recorded = json.loads(GOLDEN.read_text())["_recorded_on"]
+    checked, moved = drift(recorded)
+    if not checked:
+        pytest.skip("no main or origin/main ref here that holds the recorded commit")
+    assert not moved, (
+        f"main's setup/ changed since {GOLDEN.name} was recorded at {recorded['commit'][:9]} ({', '.join(moved)}). "
+        "Re-record it on main (see this module's docstring) and update _recorded_on, then rebase this branch."
+    )
+    # The check itself catches a tree that is not main's.
+    assert drift({**recorded, "setup_tree": "0" * 40})[1] == checked
