@@ -32,6 +32,7 @@ from . import sources as SRC
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link, setup_handoff
 from . import org_rule_check
+from . import task_rule_gate
 from . import bot_home_merge
 from .roadmaps import exact_approval
 from . import cloud_access
@@ -4789,8 +4790,7 @@ def create_app(settings=None):
         handoff_preflight,
         mover,
         mutate,
-        rule_update_check,
-        rule_update_text,
+        task_rule_gate.TaskRules(auth, rule_check, rule_task_audience, rule_target, store),
         store,
         task_view,
     )
@@ -5145,7 +5145,7 @@ def create_app(settings=None):
             "note": note,
             "task_create": task_create,
             "task_update": task_update,
-            "task_owner": task_update,
+            # A hand-off (task_owner) and the other v3 task writes count their own: backend/task_moves_routes.py.
             "bulk": task_update,
             "comment": comment,
             "comment_edit": comment_edit,

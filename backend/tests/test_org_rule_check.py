@@ -2386,8 +2386,19 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
     task = task_for_ops(api)
     r = api.post(
         f"/api/v2/tasks/{task['id']}/asks",
-        json={"to": "ana", "line": "Is our favorite color blue?", "version": task["version"]},
+        json={"to": "ana", "line": "May I say our favorite color is blue?", "version": task["version"]},
         headers=headers("ops-test"),
     )
     assert r.status_code >= 400 and COLOR in r.text, r.text
     assert judge.calls and "favorite color is blue" in judge.calls[-1]["state"]["output"]
+    # Refused, not held: nothing is asked and nothing waits for a reviewer.
+    assert sql(api, "SELECT id FROM org_rule_holds") == []
+    assert sql(api, "SELECT version FROM tasks WHERE id=?", (task["id"],))[0]["version"] == task["version"]
+    # With the rule check down, the ask goes through: better one extra ask than a lost one.
+    judge.fail = TimeoutError("down")
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks",
+        json={"to": "ana", "line": "May I say our favorite color is green?", "version": task["version"]},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200 and r.json()["requirement_id"], r.text
