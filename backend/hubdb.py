@@ -3217,29 +3217,6 @@ def _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, 
     # Token saving (Dev 149): a plain bot-to-bot message waits for the target's next run unless flagged.
     from . import bot_to_bot
 
-    # A delegated verdict belongs to the requesting task's session. Keep the original on the review,
-    # quietly, and deliver once on the parent, including when the runner posts the review's final reply.
-    from .wake_rules import VERDICT_FIELDS
-
-    result_task = (
-        task(conn, _task_ref(refs.get("task")) or "")
-        if kind in ("say", "notice")
-        and is_bot(actor)
-        and is_bot(target)
-        and not refs.get("quiet")
-        and VERDICT_FIELDS.search(str(body or ""))
-        else None
-    )
-    result_parent = (
-        _subtask_result_parent(conn, result_task)
-        if result_task and result_task["owner_id"] == actor and result_task["requester_id"] == target
-        else None
-    )
-    result_key = (
-        _subtask_result_key(conn, result_task, body) if result_parent and result_parent["owner_id"] == target else None
-    )
-    if result_key:
-        refs = {**refs, "quiet": True}
     from . import rules as wake_rule_engine
 
     # A plain bot-to-bot message waits under `bot_to_bot` unless a wake rule says otherwise (backend/rules.py).
@@ -3250,8 +3227,6 @@ def _say(conn, actor, to_actor, body, conversation_id, kind, refs, in_reply_to, 
     msg = _write_message(
         conn, actor, target, body, conv, kind, refs, in_reply_to, wait_s, check_cap=True, decided=decided
     )
-    if result_key:
-        _deliver_subtask_result(conn, result_task, result_parent, body, result_key, source=msg["id"], resume_hint=True)
     if waits:
         bot_to_bot.hold(conn, msg, task(conn, on_task) if isinstance(on_task, str) and on_task else None)
     if warnings:
@@ -3504,12 +3479,6 @@ def _write_message(
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created_at"], conv["id"]))
     # A mention outside the audience grants nothing and warns the author (contract §2): carried on the result.
     mention_warnings = (threads.record(conn, message(conn, row["id"]), conv) or {}).get("warnings") or []
-    # Notes, comments and runner final replies all pass here, including quiet ones
-    # and checks requested by a person. Only the check owner may supply its verdict.
-    if kind in ("say", "notice") and wake_rules.VERDICT_FIELDS.search(str(body or "")):
-        reviewed = task(conn, message_task_id({"refs": refs or {}}, conv) or "")
-        if reviewed and reviewed["owner_id"] == actor:
-            record_verdict(conn, actor, reviewed, text=body)
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
@@ -4348,12 +4317,6 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
         event(conn, actor, "tag.detach", ident, {"task_id": task_id})
     if old != keys:
         _task_event(conn, task_id, actor, "labels", _dump(old), _dump(keys), note)
-        if actor != KEEPER and ("qa" in old) != ("qa" in keys):
-            from .repositories import metadata, save_metadata
-
-            saved = metadata(conn, "qa-default:" + task_id)
-            if saved:
-                save_metadata(conn, "qa-default:" + task_id, {**saved, "author": "qa" in keys})
 
 
 def _label_writer(conn, actor, row, labels, approval_id=None):
@@ -4528,7 +4491,7 @@ def worktree_heads(detail):
 
 @private_task_write
 def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake_once=None, release_repo=""):
-    """Attach a link to a task. A pull request link is what moves a product-lane task.
+    """Attach a link to a task.
 
     `wake_once` arms (True) or disarms (False) one wake on a pull request link: the next time its checks
     finish, it gets an approving or change-requesting review, or a release ships it, the task's owner hears
@@ -4609,12 +4572,6 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
             "UPDATE task_links SET repo=?,number=?,updated_at=? WHERE id=?",
             (match.group(1) + "/" + match.group(2), int(match.group(3)), now(), link["id"]),
         )
-        from .review_gate import engineering
-
-        if engineering(conn, row):
-            conn.execute(
-                "UPDATE task_links SET detail=? WHERE id=?", (json.dumps({"qa_default_pending": True}), link["id"])
-            )
         link = _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
     _task_event(conn, task_id, actor, "link", None, url, title)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
@@ -5023,15 +4980,7 @@ def ticket_refs(conn, ids):
 
 def task_tree(conn, task_id, visible_ids=None):
     rows = descendants(conn, task_id)
-    # A review or QA child's verdict rides along, so the parent's Subtasks list shows it (ui/app/task-code.ts).
-    nodes = {
-        r["id"]: {
-            **{k: r[k] for k in ("id", "title", "status", "owner_id")},
-            "verdict": r.get("verdict"),
-            "verdict_head": r.get("verdict_head"),
-        }
-        for r in rows
-    }
+    nodes = {r["id"]: {k: r[k] for k in ("id", "title", "status", "owner_id")} for r in rows}
     links = {}
     if nodes:
         marks = ",".join("?" * len(nodes))
@@ -5088,108 +5037,6 @@ CHECK_MODEL_SQL = (
     "SELECT m.runtime,m.model,m.harness,m.effort,m.role FROM task_check_models m "
     "JOIN tasks t ON t.id=m.task_id WHERE m.task_id=? AND m.created_by=? AND t.owner_id=?"
 )
-
-
-def _subtask_result_parent(conn, row, *, bot_only=True):
-    """The parent allowed to receive this child's result, without widening its readers."""
-    parent = task(conn, TR.parent_of(conn, row["id"]) or "")
-    if not parent or bot_only and not is_bot(parent["owner_id"]):
-        return None
-    if (
-        is_bot(parent["owner_id"]) and not bot_reads_task(conn, parent["owner_id"], parent)
-    ) or not task_private_readable(conn, parent["owner_id"], row):
-        return None
-    if (
-        task_private(conn, row)
-        and (
-            not task_private(conn, parent)
-            or not all(
-                task_private_readable(conn, who, row) for who in (parent["owner_id"], parent["requester_id"]) if who
-            )
-        )
-        and not subtask_flows_up(conn, row, parent)
-    ):
-        return None
-    return parent
-
-
-def _subtask_result_key(conn, row, text):
-    """The same gate verdict in a comment, Done note, final reply or the verdict fields is one delivery per review
-    cycle: keyed by the verdict and the head it judged, however it was given, so a new verdict or head is news."""
-    from .wake_rules import verdict_fields
-
-    if found := verdict_fields(text):
-        verdict, head = found
-    elif row.get("verdict"):
-        verdict, head = row["verdict"], row.get("verdict_head")
-    else:
-        return None
-    return _subtask_result_cycle(conn, row) + f"verdict {verdict.lower()} {(head or '').lower()}".strip()
-
-
-def _subtask_result_cycle(conn, row):
-    reopened = conn.execute(
-        "SELECT coalesce(max(rowid),0) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
-        "AND old IN ('done','closed','declined') AND new NOT IN ('done','closed','declined')",
-        (row["id"],),
-    ).fetchone()[0]
-    return f"{reopened}:"
-
-
-VERDICTS = ("approve", "changes", "pass", "fail")
-HEAD_SHA = re.compile(r"^[0-9a-f]{7,40}$")
-
-
-def _deliver_subtask_result(conn, row, parent, text, key=None, *, source=None, quiet=False, resume_hint=False):
-    """Record a result on its immediate parent once; an ended parent never starts a worker for it."""
-    if key and _one(
-        conn,
-        "SELECT 1 FROM messages WHERE conversation_id=? AND recipient_id=? "
-        "AND json_extract(refs,'$.subtask')=? "
-        "AND json_extract(refs,'$.subtask_result')=? LIMIT 1",
-        (parent["conversation_id"], parent["owner_id"], row["id"], key),
-    ):
-        return
-    refs = {"subtask": row["id"], **({"subtask_result": key} if key else {})}
-    # The parent's owner reads the verdict and the head it judged as fields, not only as prose.
-    judged = task(conn, row["id"]) or row
-    if judged.get("verdict"):
-        refs["verdict"] = judged["verdict"]
-        if judged.get("verdict_head"):
-            refs["verdict_head"] = judged["verdict_head"]
-    if source:
-        original = message(conn, source)
-        if original:
-            # Preserve the review's references and run inputs when readers' access changes later.
-            refs["inputs"] = [source]
-            refs.update({k: v for k, v in original["refs"].items() if k in ("turn_id", "run")})
-    silent = quiet or parent["status"] in ("done", "closed", "declined")
-    # What the verdict did to the ticket: a move Tico made (an approval it moved on asks no builder turn), a Fixes
-    # step or a merge to do, which goes first in the builder's queue (backend/verdict_moves.py).
-    from . import verdict_moves
-
-    moved = verdict_moves.delivery(conn, judged) if verdict_moves._verdict(judged) else None
-    if moved:
-        text = moved["say"] + "\n\n" + text
-        silent = silent or moved["quiet"]
-        if moved.get("handoff") and not silent:
-            refs[verdict_moves.HANDOFF] = moved["handoff"]
-    if resume_hint:
-        text = (
-            "Subtask result returned to this task's session. Continue this task here; the result needs "
-            "no relay, separate delivery turn or task run command.\n\n" + text
-        )
-    verdict_moves.forward(
-        conn,
-        parent,
-        parent["owner_id"],
-        text,
-        refs,
-        sources=[*(moved or {}).get("source_tasks", []), row["id"]],
-        source=source,
-        quiet_bots=silent,
-        quiet=silent,
-    )
 
 
 def _made_private(conn, actor, task_id):
@@ -5299,8 +5146,6 @@ def task_comment(
         )
         else None
     )
-    if to is None and is_bot(actor):
-        to = _verdict_to(conn, actor, row, text, refs)
     if to == actor or (to and not task_private_readable(conn, to, row)):
         to = None
     if reach is not None:
@@ -5336,24 +5181,6 @@ def task_comment(
 
         ask_ingest.on_reply(conn, actor, task_id, text, text_sources=refs.get("body_sources", []))
     return msg
-
-
-def _verdict_to(conn, actor, row, text, refs):
-    """The bot a reviewer's verdict comment goes to: the bot that filed the review under its own task, so the result
-    returns there once (say, _deliver_subtask_result). None for any other comment."""
-    from .wake_rules import VERDICT_FIELDS
-
-    requester = row.get("requester_id")
-    if (
-        actor != row["owner_id"]
-        or not is_bot(requester)
-        or requester == actor
-        or refs.get("quiet")
-        or not VERDICT_FIELDS.search(str(text or ""))
-    ):
-        return None
-    parent = _subtask_result_parent(conn, row)
-    return requester if parent and parent["owner_id"] == requester else None
 
 
 def comment_way_refs(way, defer_for=None):
@@ -5399,8 +5226,7 @@ def jobs_mark(conn):
 
 def comment_delivery(conn, msg, *, since=0):
     """What a comment write did, for its response: `woke` is true only when the write queued a bot job (the bot will
-    take a turn on it), counting the comment's own job, its carriers' and any the write caused elsewhere, such as the
-    notice a delegated review's verdict forwards to the parent task; `since` is jobs_mark from before the write.
+    take a turn on it), counting the comment's own job, its carriers' and any the write caused elsewhere; `since` is jobs_mark from before the write.
     `delivered` is true when it reached a person, who sees it in their own lists."""
     queued = conn.execute("SELECT 1 FROM jobs WHERE rowid>? OR message_id=?", (since, msg["id"])).fetchone() is not None
     delivered = (
@@ -8178,9 +8004,6 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     from . import run_diagnostics
 
     run_diagnostics.finish(conn, turn_id, exit_code, summary)
-    from . import check_pools
-
-    check_pools.capture_attempt(conn, turn_id)
     event(conn, actor, "turn.finish", turn_id, {"exit": exit_code, "est_cost_usd": usage.get("est_cost_usd")})
     return row
 
