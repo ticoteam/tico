@@ -491,35 +491,13 @@ The record `read` gives and `save` takes. Keys are the column names. `settings_v
 
 ## The cut-over
 
-In order. Each step before the last keeps the suite green.
+[pipelines-v3-cutover.md](pipelines-v3-cutover.md) is the plan, and it wins where this file says otherwise. In short:
 
-1. **Finish the additive build**: `never_stuck`, `answers`, `pipeline_settings` with General, the fault rig.
-2. **Hollow out the old engine.** Make the top-level imports of the modules to be deleted lazy. Turn the direct writers
-   in `OLD_WRITERS` and in `scripts/` into calls. Move code nobody imports out first.
-3. **Readers.** Point the screens, the bot tools, the skills and the templates at "open, done or closed, plus
-   `waiting_on`". The old statuses still exist, so tests stay green. Prompt text and a tool's list of values change in the
-   same PR.
-4. **Approvals.** Sending email, page editions and spend use approval objects today. They move to OK requirements before
-   the approvals code is deleted.
-5. **The cut-over itself**, one change:
-   - The trigger loses its first `WHEN` line and gets its `BEFORE INSERT` twin.
-   - Create, update, close, bulk and restore go through `enter`, `move` and `reassign`.
-   - **Every task that exists is kept.** Open ones go to `general-todo`, done ones to `general-done`, closed ones to
-     `general-closed`, each with one open visit, `entered_how = 'new'`. Old pipelines, stages and their settings are not
-     carried over. The migration opens the guard itself.
-   - The old statuses collapse to `open`, `done`, `closed` before the trigger goes on.
-   - The old movers, the upkeep files and their tests are deleted.
-6. **Drop the old tables** one release later.
-
-What the old funnel does today that the engine must still do at the cut-over, each in the move transaction or right
-after its commit:
-
-- tell a routine that its task ended (`rule_due.on_task_status`)
-- record the turn's result for the run view
-- deliver a closed task to whoever asked
-- wake the requester when a task is Done
-- stop work that is still running on a task that ended
-- publish GitHub checks for tasks a move affects (phase 3)
+- No task is carried over. Every task is deleted, the old tables are dropped, and every company starts on General.
+- One branch, built by tracks that each own their files, merged once.
+- Everything outside the engine uses the task calls (`backend/task_calls.py`, re-exported by hubdb). The engine calls
+  `backend/task_effects.py` at the end of every move and reassignment, for what a move must still cause.
+- The trigger loses its first `WHEN` line and gets its `BEFORE INSERT` twin.
 
 The version check must be real for bots: the bot tool reads the task, the bot decides, and the write carries the version
 the bot read. A tool that fetches the version just before it posts checks nothing.

@@ -95,10 +95,11 @@ def task_done(
     *,
     mover: bool | None = None,
 ) -> Row:
-    """The work of this stage is finished. From whoever may say so (the owner, the pipeline's manager, a person) it
-    answers the stage's "owner says done", and the engine moves the task on once everything else is met: in the last
-    stage, to Done. Where the stage does not ask for that, or from anyone else, it is a move to the next stage with
-    `note` as the reason."""
+    """The work of this stage is finished. It records completion and never pushes past anything. Where the stage asks
+    "owner says done" and that is not met, whoever may say so (the owner, the pipeline's manager, a person, the
+    engine) answers it, and the engine moves the task on once everything else is met: in the last stage, to Done.
+    Otherwise it is a forward move with no reason, refused with what is missing while anything is. To go on anyway is
+    `task_move(NEXT, why=...)`."""
     _open(conn, actor, task_id, mover)
     row = E.task(conn, task_id)
     if not row:
@@ -107,13 +108,14 @@ def task_done(
         return row
     own = next((s for s in R.standings(conn, row) if s.requirement["kind"] == "owner_done" and not s.met), None)
     pipe: Row = row.get("pipeline") or {}
-    manager = pipe.get("manager_id")
-    if own and row["status"] == "open" and (is_human(actor) or actor in (row.get("owner_id"), manager)):
+    says = is_human(actor) or actor in (row.get("owner_id"), pipe.get("manager_id"), SYSTEM)
+    if own and row["status"] == "open" and says:
         with task_effects.because(actor):
             return A.answer(
                 conn, task_id, own.requirement["id"], actor, "done", note or None, seen_version=seen_version
             )
-    return E.move(conn, task_id, NEXT, actor, note or None, seen_version)
+    with task_effects.because(actor):
+        return E.move(conn, task_id, NEXT, actor, None, seen_version)
 
 
 def task_move(
