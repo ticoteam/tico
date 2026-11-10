@@ -299,9 +299,9 @@ scripts/tico-computer -e ENV server install|uninstall|start|stop|restart|status|
 
 `-e ENV` (or `TICO_ENV`) picks a team environment.
 
-`install` links `~/.local/bin/tico-computer` and `~/.local/bin/tico`. `tico` takes the same commands and hands any
-other to `hub` (`tico task list` is `hub task list`); in a later release `tico` becomes the teamwork CLI and these
-commands stay on `tico-computer` only.
+`install` links `~/.local/bin/tico-computer` and `~/.local/bin/tico`. `tico` is the teamwork CLI (`tico task list`,
+`tico --help`); `tico install`, `tico restart` and the other computer commands above still reach `tico-computer` from
+a person's terminal, with a note, and are refused inside a bot turn.
 
 `scripts/setup-runner.sh [--env <slug>] <enrollment.json> [workspace]` does the venv, the
 enrollment, the bot service and `doctor` in one go from a file downloaded by **Add computer**, and

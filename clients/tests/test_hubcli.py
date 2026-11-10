@@ -2341,3 +2341,19 @@ def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkey
     remotecli.run(args)
     assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
     assert "hub_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}
+
+
+def test_tico_help_is_the_teamwork_help(capsys):
+    assert hubcli.main(["help"]) == 0
+    assert "task" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv, word", [(["status"], "status"), (["update"], "update")])
+@pytest.mark.parametrize("bot", ["", "ops"])
+def test_a_word_that_was_the_computers_says_where_it_went_to_a_person_only(argv, word, bot, capsys, monkeypatch):
+    monkeypatch.setenv("HUB_BOT", bot)
+    monkeypatch.delenv("HUB_EMPLOYEE", raising=False)
+    monkeypatch.setattr(hubcli, "run", lambda *a: 0)
+    assert hubcli.main(argv) == 0
+    note = f"this computer's own {word} is `tico-computer {word}`"
+    assert (note in capsys.readouterr().err) == (not bot)

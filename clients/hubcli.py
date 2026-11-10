@@ -5350,8 +5350,18 @@ def split_human(argv):
     return argv, who
 
 
+# Words that were this computer's commands under `tico` before it became the teamwork CLI (scripts/tico): a person who
+# types one is told where the computer's command is now. A bot turn is not, so it does not reach for tico-computer.
+COMPUTER_WORDS = {("status",): "status", ("update",): "update"}
+
+
 def main(argv):
     argv, who = split_human(argv)
+    if argv == ["help"]:  # `tico help` reads like `tico --help`
+        argv = ["--help"]
+    word = COMPUTER_WORDS.get(tuple(argv))
+    if word and not (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE")):
+        print(f"tico: this computer's own {word} is `tico-computer {word}`", file=sys.stderr)
     gone = removed_notice(argv)
     if gone:
         print(gone, file=sys.stderr)
