@@ -14,15 +14,28 @@ import re
 from .store import H, Problem
 from . import task_privacy as privacy
 
+ACTS_FOR_PEOPLE = ("bot:assistant", "bot:botops")  # task_asks.ACTS_FOR_PEOPLE: never a reviewer
 BY = re.compile(r"human|any|bot:[a-z0-9][a-z0-9_-]{0,63}")
 VERDICTS = ("approve", "changes")
 
 
 def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=None, verdict=None, note=""):
     """A verdict given directly (`hub file review`): a bot reviewing another bot's file, on a task it reads, when it can
-    open the file; a person may too. Recorded as a `reviewed` line like an answer's, with no question."""
+    open the file. Recorded as a `reviewed` line like an answer's, with no question. A bot's only: a person approves a
+    file by a bound OK of the version pinned when it was asked (task_asks), and their token or Assistant never gives a
+    verdict here; nor does a bot that acts for a person (the Assistant, BotOps)."""
+    from . import task_asks
     from .files import file_visible
 
+    if (
+        who.role != "bot"
+        or not H.is_bot(who.actor)
+        or getattr(who, "via", None)
+        or (who.actor in task_asks.ACTS_FOR_PEOPLE)
+    ):
+        raise Problem(
+            "forbidden", "A person approves a file by their own OK of it (ask with POST /api/v2/tasks/{id}/oks)", 403
+        )
     if verdict not in VERDICTS:
         raise Problem("validation", "A review approves or asks for changes", 422)
     task_id = auth.task(c, who, auth.resolve_task(c, who, task))["id"]
@@ -170,6 +183,38 @@ def freeze(c, by, subject, content, shows):
     return pinned, frozen, [pinned, *refs]
 
 
+# The app's auth (backend/files.py install_files sets it): an OK's giver is read as the identity the file rules check.
+AUTH = None
+
+
+def may_ok(c, person, grant):
+    """Why `person` may not OK this file version now, or None (task_asks.MAY_OK): checked at the OK, at its use and when
+    a verdict is read, so an OK counts only while its giver may still open the file, and that version is still there
+    with the bytes pinned at ask. Without the app's auth, nobody may (fail closed)."""
+    from .files import file_visible
+
+    content = grant.get("content") or {}
+    row = c.execute("SELECT * FROM bot_files WHERE id=?", (str(content.get("file") or ""),)).fetchone()
+    v = (
+        c.execute(
+            "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], content.get("version"))
+        ).fetchone()
+        if row
+        else None
+    )
+    if not row or not v or row["archived"] or (v["source_digest"] or v["digest"]) != content.get("digest"):
+        return "That file version is not there any more"
+    if AUTH is None:
+        return "Who may open this file cannot be checked now"
+    try:
+        who = AUTH.identity_for_actor(c, person)
+    except Problem:
+        return "They can no longer open this file"
+    if not file_visible(c, AUTH, who, row, {}):
+        return f"{H.actor_name(c, person)} can no longer open this file"
+    return None
+
+
 def may_see(c, auth, who, grant):
     """Whether `who` may open a file OK's preview (task_asks.SEES): only when they may open the file itself."""
     from .files import file_visible
@@ -228,6 +273,7 @@ def _verdict(c, who, versions, by="human"):
     digests = {(fid, number): digest for fid, number, digest in versions}
     marks = ", ".join("(?, ?)" for _ in versions)
     args = [part for fid, number, _ in versions for part in (fid, number)]
+    # A direct review counts only when a bot gave it (`review`); a person's verdict is a bound OK (`_asked`).
     rows = [
         {
             "created_at": r["created_at"],
@@ -244,6 +290,7 @@ def _verdict(c, who, versions, by="human"):
             f"{marks}) ORDER BY id DESC",
             args,
         ).fetchall()
+        if H.is_bot(r["actor"]) and r["actor"] not in ACTS_FOR_PEOPLE
     ]
     rows = sorted(rows + _asked(c, versions), key=lambda r: r["created_at"] or "", reverse=True)
     for r in rows:

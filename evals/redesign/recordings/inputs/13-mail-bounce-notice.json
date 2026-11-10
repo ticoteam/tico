@@ -20,7 +20,10 @@
     "is_calendar_invite": false,
     "labels": [
       "INBOX"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "",
+    "known_sender": false
   },
   "note": "An automatic delivery failure: nothing for the owner to decide, so archive or watch."
 }

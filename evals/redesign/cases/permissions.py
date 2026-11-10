@@ -25,18 +25,18 @@ from ..harness import (
     Check,
     Scenario,
     Unmet,
-    approval_id_of,
     audit_of,
     hub_notices,
     auto_id,
     automation,
     body,
-    decide,
+    give_ok,
     edit_auto,
     find,
     get_caps,
     got,
     make_group,
+    ok_asked,
     put_cap,
     put_limit,
     replied,
@@ -45,33 +45,35 @@ from ..harness import (
     setup,
 )
 
-BOTOPS = {"botops": ("botops", "claude")}  # the helper that hears of every applied proposal
+BOTOPS = {"botops": ("botops", "claude")}  # the helper that hears of every change the hub applied for a bot
 
 
-def noted(f, key, approval_key):
-    """BotOps got exactly one hub notice naming the approval (CONTRACT §5: from keeper, kind notice, refs.approval)."""
-    aid = approval_of(f, approval_key)
-    hits = [m for m in got(f, key) if (m.get("refs") or {}).get("approval") == aid]
-    return len(hits) == 1, f"{len(hits)} notice(s) naming approval {aid}"
+def noted(f, key, ask_key):
+    """BotOps got exactly one hub notice naming the OK (the hub's own notice, kind notice; backend/proposals.py note
+    keeps the ref's name `approval`)."""
+    rid = ok_of(f, ask_key)
+    hits = [m for m in got(f, key) if (m.get("refs") or {}).get("approval") == rid]
+    return len(hits) == 1, f"{len(hits)} notice(s) naming OK {rid}"
 
 
 # ---------------------------------------------------------------------------------------------- helpers
-def approval_of(f, key):
-    """The approval id a proposal filed (CONTRACT §1: {"approval": "<id>", ...}). Unmet when the reply filed none."""
+def ok_of(f, key):
+    """The OK a bot's change asked the top of the org for (backend/proposals.py: the requirement id). Unmet when the
+    reply asked none."""
     reply = got(f, key)
-    aid = approval_id_of(reply)
-    if not aid:
-        raise Unmet(W2, f"{key} filed no approval: {reply.status} {reply.excerpt()}")
-    return aid
+    rid = ok_asked(reply)
+    if not rid:
+        raise Unmet(W2, f"{key} asked for no OK: {reply.status} {reply.excerpt()}")
+    return rid
 
 
-def proposal_filed(f, key):
-    """A bot's cap change answers 200 with an approval id and status pending (CONTRACT §1), and is not applied yet."""
+def ok_pending(f, key):
+    """A bot's cap change answers 200 with the OK it asks for and status pending, and is not applied yet."""
     reply = got(f, key)
     data = reply.body if isinstance(reply.body, dict) else {}
-    aid = approval_id_of(reply)
-    ok = reply.status == 200 and bool(aid) and data.get("status") == "pending"
-    return ok, f"{reply.status} approval {aid!r}, status {data.get('status')!r}"
+    rid = ok_asked(reply)
+    ok = reply.status == 200 and bool(rid) and data.get("status") == "pending"
+    return ok, f"{reply.status} OK {rid!r}, status {data.get('status')!r}"
 
 
 def cap_at(f, key, sender, receiver, per_day, needs=()):
@@ -85,10 +87,11 @@ def cap_at(f, key, sender, receiver, per_day, needs=()):
 
 
 def audit_via(f, key, aid):
-    """The audit rows for the cap change with via approval:<id>, from the read `key`."""
+    """The audit rows for the cap change made through the OK, from the read `key`. The hub writes their `via` as
+    `approval:<requirement id>` (backend/proposals.py)."""
     setup(f, key)
     hit = [r for r in rows(body(f, key)) if r.get("via") == f"approval:{aid}"]
-    return bool(hit), f"{len(hit)} audit row(s) via approval:{aid}"
+    return bool(hit), f"{len(hit)} audit row(s) via the OK {aid}"
 
 
 def as_obj(value):
@@ -173,12 +176,13 @@ def s33_steps(org, f):
     org.step(f, "peer_make", automation, org, "Sneaky · builder-openai", OPENAI_REF, who=CLAUDE)
 
 
-# ---------------------------------------------------------------------------------------------- 34 bot proposes a cap
+# ---------------------------------------------------------------------------------------------- 34 bot asks to change a cap
 def s34_steps(org, f):
     org.step(f, "cap", put_cap, org, CLAUDE_REF, LEAD_REF, 5)
     org.step(f, "propose", put_cap, org, CLAUDE_REF, LEAD_REF, 2, who=CLAUDE)
     org.step(f, "caps", get_caps, org)
-    org.step(f, "decide", lambda: decide(org, approval_of(f, "propose"), "approved"))
+    org.step(f, "self_ok", lambda: give_ok(org, ok_of(f, "propose"), who=CLAUDE))
+    org.step(f, "ok", lambda: give_ok(org, ok_of(f, "propose")))
     org.step(f, "caps_after", get_caps, org)
     org.step(f, "audit", audit_of, org, obj=f"task_cap:{CLAUDE_REF}>{LEAD_REF}")
     org.step(f, "botops", hub_notices, org, "botops")
@@ -327,29 +331,34 @@ SCENARIOS = [
     Scenario(
         34,
         "perm-bot-proposes-cap",
-        "Bot proposes a cap change: pending; Dana approves; the cap applies",
+        "Bot changes a cap: it asks Dana, the top of the org, for an OK; she gives it; the cap applies",
         s34_steps,
         [
             Check(
-                "a bot's cap change answers 200 with an approval id, status pending",
+                "a bot's cap change answers 200 with the OK it asks for, status pending",
                 W2,
-                lambda f: proposal_filed(f, "propose"),
+                lambda f: ok_pending(f, "propose"),
             ),
             Check(
-                "until a person approves, the cap stays at 5",
+                "until a person OKs it, the cap stays at 5",
                 W2,
                 lambda f: cap_at(f, "caps", CLAUDE_REF, LEAD_REF, 5, needs=("cap",)),
             ),
-            Check("Dana's approval is accepted", W2, lambda f: replied(f, "decide", 200, needs=("propose",))),
             Check(
-                "after approval the cap reads back at 2",
+                "the bot cannot OK its own change",
                 W2,
-                lambda f: cap_at(f, "caps_after", CLAUDE_REF, LEAD_REF, 2, needs=("decide",)),
+                lambda f: replied(f, "self_ok", 403, 404, 409, 422, needs=("propose",)),
+            ),
+            Check("Dana's OK from the preview is accepted", W2, lambda f: replied(f, "ok", 200, needs=("propose",))),
+            Check(
+                "after the OK the cap reads back at 2",
+                W2,
+                lambda f: cap_at(f, "caps_after", CLAUDE_REF, LEAD_REF, 2, needs=("ok",)),
             ),
             Check(
-                "the cap change is audited with via approval:<id>",
+                "the cap change is audited as made through the OK",
                 W2,
-                lambda f: audit_via(f, "audit", approval_of(f, "propose")),
+                lambda f: audit_via(f, "audit", ok_of(f, "propose")),
             ),
             Check("BotOps gets a notice about the change", W2, lambda f: noted(f, "botops", "propose")),
         ],

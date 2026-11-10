@@ -9,7 +9,6 @@ counts plus which computers are up and the day's failed runs, so it can check th
 
 import json
 import os
-import re
 import shlex
 from datetime import datetime, timezone
 
@@ -2439,8 +2438,11 @@ NEEDS_PLATE_WARN = 10  # more items than this on one person's Needs you plate is
 NEEDS_PLATE_BAD = 25  # more than this is bad
 NEEDS_PLATE_ASKERS = 3  # the bots named on a plate, most items first
 NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_run", "broken")
-BROKEN_TASK = re.compile(r"\btask (\S+)")  # the task a rule break names (never_stuck.rules_hold)
-NEVER_STUCK_KEY = "health:never_stuck"  # registry_metadata: the hourly never-stuck reading (record_never_stuck)
+# registry_metadata: the hourly never-stuck reading (record_never_stuck). Its numbers sit under NEVER_STUCK_KEY, which an
+# Admin's SQL reads; which tasks each counts, and the breaks' words, sit under NEVER_STUCK_TASKS_KEY, which no SQL reads
+# (backend/sql.py), since they name tasks the Admin may not read.
+NEVER_STUCK_KEY = "health:never_stuck"
+NEVER_STUCK_TASKS_KEY = "health:never_stuck:tasks"
 
 
 def _plate_people(c, auth):
@@ -2517,8 +2519,9 @@ def _plate_check(c, who, auth, full):
 def never_stuck_reading(c):
     """What the never-stuck check finds over every open task: the seven rules' breaks (never_stuck.rules_hold) and
     where the ladder has the tasks (S15): waiting on nothing, on a retry, with a manager, reached a person, can't run.
-    `tasks` keeps which tasks each number counts, so someone who reads only some tasks is shown only those. It reads
-    every open task, so it runs hourly (record_never_stuck), not on each page load."""
+    `tasks` keeps which tasks each number counts, and `broken_tasks` the tasks each break is about (never_stuck.Break,
+    tied when it was found), so someone who reads only some tasks is shown only those. It reads every open task, so it
+    runs hourly (record_never_stuck), not on each page load."""
     from . import never_stuck, waiting_on
 
     breaks = never_stuck.rules_hold(c)
@@ -2534,12 +2537,10 @@ def never_stuck_reading(c):
     for part in H.chunks(ids):
         waits = waiting_on.waiting_on_many(c, part)
         tasks["cant_run"] += [tid for tid, found in waits.items() if found and found[0].state == "paused"]
-    for line in breaks:
-        named = BROKEN_TASK.search(line)
-        if named:
-            tasks["broken"].append(named.group(1))
-            if line.startswith("1:"):
-                tasks["waiting_on_nothing"].append(named.group(1))
+    about = [list(getattr(line, "tasks", ())) for line in breaks]
+    for line, ids in zip(breaks, about, strict=True):
+        if line.startswith("1:"):
+            tasks["waiting_on_nothing"] += ids
     return {
         "at": H.now(),
         "breaks": breaks[:DIAGNOSTIC_LIMIT],
@@ -2549,19 +2550,27 @@ def never_stuck_reading(c):
         "manager": len(tasks["manager"]),
         "person": len(tasks["person"]),
         "cant_run": len(tasks["cant_run"]),
-        "tasks": {key: sorted(set(found)) for key, found in tasks.items()},
+        "tasks": {key: sorted(set(found)) for key, found in tasks.items() if key != "broken"},
+        "broken_tasks": about,
     }
 
 
+NEVER_STUCK_TASKS_FIELDS = ("breaks", "tasks", "broken_tasks")
+
+
 def record_never_stuck(store):
-    """The hourly reading (backend/scheduler.py), kept for Health to show."""
+    """The hourly reading (backend/scheduler.py), kept for Health to show: its numbers under NEVER_STUCK_KEY, what
+    names a task under NEVER_STUCK_TASKS_KEY."""
     with store.read() as c:
         reading = never_stuck_reading(c)
+    numbers = {k: v for k, v in reading.items() if k not in NEVER_STUCK_TASKS_FIELDS}
+    named = {k: reading[k] for k in NEVER_STUCK_TASKS_FIELDS}
     with store.transaction() as c:
-        c.execute(
-            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (NEVER_STUCK_KEY, json.dumps(reading)),
-        )
+        for key, value in ((NEVER_STUCK_KEY, numbers), (NEVER_STUCK_TASKS_KEY, named)):
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, json.dumps(value)),
+            )
     return reading
 
 
@@ -2581,14 +2590,22 @@ def _never_stuck_check(c, visible_sql=None):
     """Health · Tasks (S15): the last hourly reading, as numbers only. Bad when any of the rules that hold at all times
     is broken. A rule break names a task and a bot, so its words are never shown: the owner and Admins (no
     `visible_sql`) get the company's numbers; anyone else gets the numbers over the tasks they may read."""
-    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (NEVER_STUCK_KEY,)).fetchone()
-    reading = json.loads(row[0]) if row else None
-    if not reading or (visible_sql and "tasks" not in reading):
+
+    def stored(key):
+        row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    reading = stored(NEVER_STUCK_KEY)
+    named = stored(NEVER_STUCK_TASKS_KEY) if visible_sql else None
+    if not reading or (visible_sql and not (named and "broken_tasks" in named)):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
     if visible_sql:
-        listed = reading["tasks"]
-        readable = _readable(c, visible_sql, sorted({tid for found in listed.values() for tid in found}))
+        listed, breaks = named["tasks"], named["broken_tasks"]
+        ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
+        readable = _readable(c, visible_sql, sorted(ids))
         counts = {key: sum(1 for tid in listed.get(key, []) if tid in readable) for key in NEVER_STUCK_COUNTS}
+        # A break counts for a reader of every task it is about; one about no task is the company's alone.
+        counts["broken"] = sum(1 for found in breaks if found and all(tid in readable for tid in found))
     else:
         counts = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
     summary = (

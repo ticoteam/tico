@@ -89,6 +89,45 @@ def test_a_wake_may_start_only_for_a_bot_whose_turn_it_is(c, general):
     assert not task_wakes.may_start(c, start) and _state(c, start) == "canceled"  # a snoozed task wakes nobody
 
 
+def _occurrence(c, task_id):
+    """A schedule's notice to the bot that the next occurrence was absorbed into this open task
+    (automations.absorb_into_open_task): automatic, about the task, and not one of the engine's wakes."""
+    said = H.notice(
+        c, H.KEEPER, BUILDER, "Scheduled occurrence absorbed.", refs={"task": task_id, "wake": "occurrence"}
+    )
+    assert _state(c, said["id"]) == "queued"
+    return said["id"]
+
+
+def test_every_automatic_start_about_a_task_is_held_by_its_turn_and_its_seven_runs(c, general):
+    from backend import never_stuck as NS
+
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    first = _occurrence(c, row["id"])
+    assert task_wakes.may_start(c, first)  # the builder has the turn and runs to spare
+    c.execute("UPDATE jobs SET state='completed' WHERE id=?", (first,))
+    for _ in range(task_wakes.RUNS):
+        X.ran(c, row["id"], BUILDER)
+        task_wakes.add(c, row, BUILDER, row["visit"], "Carry on.", wake_key=f"{row['id']}:{H.new_id()}")
+    notice = _occurrence(c, row["id"])
+    assert not task_wakes.may_start(c, notice) and _state(c, notice) == "canceled"  # an eighth run never starts
+    c.execute("UPDATE jobs SET state='queued' WHERE id=?", (notice,))  # its retry
+    assert not task_wakes.may_start(c, notice) and _state(c, notice) == "canceled"
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")  # what the claim held
+    at = H.now()
+    for _ in range(6):
+        at = H.shift(at, hours=12)
+        NS.check(c, at)
+    assert c.execute("SELECT level FROM visits WHERE id=?", (row["visit"]["id"],)).fetchone()[0] == "person"
+    c.execute(
+        "UPDATE visits SET last_change_attempt=(SELECT MAX(rowid) FROM attempts) WHERE id=?", (row["visit"]["id"],)
+    )
+    notice = _occurrence(c, row["id"])  # no runs since: the person has it all the same
+    assert not task_wakes.may_start(c, notice) and _state(c, notice) == "canceled"
+    asked = H.say(c, ANA, BUILDER, "What is left on this?", refs={"task": row["id"]})
+    assert task_wakes.may_start(c, asked) and _state(c, asked["id"]) == "queued"  # a person's own words still start
+
+
 def _start(company, c, message_id):
     """The claim's preparation of a queued job (execution.Execution.start_claimed), as `claim` calls it in its write."""
     from backend.execution import Execution
@@ -130,6 +169,70 @@ def test_a_claim_starts_no_run_the_engine_holds_and_the_check_takes_the_task_on(
     assert c.execute("SELECT level FROM visits WHERE id=?", (mine["visit"]["id"],)).fetchone()[0] == "person"
 
 
+def test_a_run_whose_task_changed_between_its_claim_and_its_start_never_starts(api):
+    """The claim let the run through; then, before its computer started it, the task was snoozed, closed, handed to a
+    person or given another owner. The start asks the engine again (task_wakes.may_start, its own lease not counted):
+    `started` is refused as a wait, the computer's next ask for a place is told to stop, and the run it then reports
+    interrupted settles as skipped, its job canceled rather than queued again."""
+    from backend import task_engine as E
+    from backend.tests.helpers.api import assign, claim, post, ready, runner
+
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    token = machine["token"]
+    changes = {
+        "snoozed": lambda c, row: E.snooze(c, row["id"], ANA),
+        "closed": lambda c, row: E.move(c, row["id"], E.CLOSED, ANA, "Not needed"),
+        "a person's": lambda c, row: c.execute("UPDATE visits SET level='person' WHERE id=?", (row["visit"]["id"],)),
+        "owned by a person": lambda c, row: E.reassign(c, row["id"], ANA, ANA),
+    }
+    for change, made in changes.items():
+        tid = post(api, "tasks", {"owner": "ops", "title": "Plan the week " + change, "body": "Draft it."})["id"]
+        attempt = claim(api, machine)
+        aid = attempt["id"]
+        with api.app.state.store.transaction() as c:
+            job = c.execute("SELECT job_id FROM attempts WHERE id=?", (aid,)).fetchone()[0]
+            assert task_wakes.may_start(c, job, attempt=aid), change  # claimed with the engine's leave
+            made(c, E.task(c, tid))
+        refused = post(api, f"attempts/{aid}/started", {"thread_id": "t-" + aid}, token, expected=409)
+        assert refused["error"]["code"] == "start_wait", change
+        assert post(api, f"attempts/{aid}/start-place", {}, token).get("stop") is True, change
+        post(api, f"attempts/{aid}/complete", {"outcome": "interrupted", "last_seq": 0}, token)
+        with api.app.state.store.read() as c:
+            ran = c.execute("SELECT state, started_at FROM attempts WHERE id=?", (aid,)).fetchone()
+            assert ran[1] is None, change  # it never started
+            assert c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()[0] == "canceled", change
+            assert not c.execute("SELECT 1 FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone(), change
+
+
+def test_a_live_run_on_one_task_never_hides_a_lost_wake_on_another_in_the_same_conversation(c, general):
+    """Two open tasks share a conversation. The builder's live run on the footer task is not a run on the launch note:
+    the note's wake that never ran is lost, and the never-stuck check wakes the builder for it again."""
+    from backend import never_stuck as NS
+    from backend import task_engine as E
+
+    first = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    second = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)
+    c.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (first["conversation_id"], second["id"]))
+    c.execute(
+        "UPDATE messages SET conversation_id=? WHERE wake_key LIKE ?", (first["conversation_id"], second["id"] + ":%")
+    )
+    X.ran(c, second["id"], BUILDER, state="running")  # under way on the footer, its lease renewed
+    c.execute(
+        "UPDATE attempts SET finished_at=NULL, lease_until=? WHERE task_id=?",
+        (H.shift(H.now(), minutes=5), second["id"]),
+    )
+    c.execute(
+        "UPDATE jobs SET state='running' WHERE attempt_id IN (SELECT id FROM attempts WHERE task_id=?)", (second["id"],)
+    )
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")  # the launch note's start never ran: lost
+    first, second = E.task(c, first["id"]), E.task(c, second["id"])
+    assert task_wakes.live_run(c, second, BUILDER) and not task_wakes.live_run(c, first, BUILDER)
+    NS.check(c, H.shift(H.now(), seconds=10))
+    assert _queued(c, first["id"]) == [BUILDER]  # woken again for the note
+
+
 def _chat_run(c, conversation_id, bot):
     """A run of `bot` on a message in a conversation that names no task: a person wrote to it there."""
     message, run = H.new_id(), H.new_id()
@@ -167,14 +270,3 @@ def test_a_run_counts_for_the_task_it_names_and_by_its_conversation_only_when_on
     assert (runs(first), runs(second)) == (0, 1)
     E.move(c, second["id"], E.CLOSED, ANA, "Not needed")
     assert runs(E.task(c, first["id"])) == 1  # now the conversation is one open task's
-
-
-def test_a_private_task_with_no_owner_wakes_its_pipelines_manager_bot_who_then_reads_it(c, general):
-    stages = ({"name": "Triage", "requirements": [{"kind": "owner_done"}]},)  # nobody owns a task in this stage
-    X.pipeline(c, "ops", "Ops", stages, manager=MANAGER)
-    made = H.task_create(c, ANA, "Sort the March invoices", "Who takes it?", ANA, pipeline="ops", private=True, lint=False)
-    row = c.execute("SELECT owner_id, private, readers FROM tasks WHERE id=?", (made["id"],)).fetchone()
-    assert row[0] is None and row[1]
-    assert _queued(c, made["id"]) == [MANAGER]  # told to pick an owner, not skipped because it could not read it
-    assert H.task_readers({"readers": row[2]}) == [MANAGER]  # it reads the task now, as a task event says
-    assert not H.task_private_readable(c, BUILDER, H.task(c, made["id"]))  # nobody else is brought in

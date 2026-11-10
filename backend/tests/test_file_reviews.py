@@ -20,6 +20,14 @@ def c(company, monkeypatch):
     monkeypatch.setattr(
         F.privacy, "task_readable", lambda conn, who, row: H.task_private_readable(conn, who.actor, row)
     )
+    # Whether the giver may still open the file is files.py's (test_task_asks_routes checks it through the routes):
+    # here, everyone may.
+    from types import SimpleNamespace
+
+    from backend import files
+
+    monkeypatch.setattr(F, "AUTH", SimpleNamespace(identity_for_actor=lambda conn, actor: Identity(actor, "human")))
+    monkeypatch.setattr(files, "file_visible", lambda *a: True)
     with company.transaction() as conn:
         X.bot(conn, "video")
         X.bot(conn, "editor")

@@ -1168,8 +1168,9 @@ def file_reports(store, auth, settings, support, signatures):
 
 
 def _send_approved(store, support):
-    """Reports the owner OK'd, sent once as whoever asked (support.file_approved uses the OK: task_asks.use). A failed
-    or over-cap send stays queued. Its ticket and current occurrence baseline are kept on its health report. Returns
+    """Reports the owner OK'd, sent once as whoever asked (support.file_approved claims the OK with task_asks.use and
+    commits, then sends). A failed or over-cap send stays queued, claimed or not, and goes again under the same
+    Idempotency-Key. Its ticket and current occurrence baseline are kept on its health report. Returns
     {signature: answer}."""
     from . import task_asks
 
@@ -1180,7 +1181,8 @@ def _send_approved(store, support):
                 "SELECT signature, approval_id FROM health_reports WHERE ticket_id IS NULL AND approval_id IS NOT NULL "
                 "ORDER BY created_at"
             ).fetchall()
-            if task_asks.standing(c, r["approval_id"]) == "ok"
+            # OK'd, or claimed by a send that never came back (support.file_approved resends it under its key).
+            if task_asks.standing(c, r["approval_id"]) in (task_asks.OK, task_asks.USED)
         ]
         today = _reports_today(c)
     sent = {}
