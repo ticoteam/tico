@@ -268,6 +268,14 @@ def answer(
         E.changed(conn, task_id, by)
         out = E.task(conn, task_id) or row
         _tell_bot(conn, out, requirement, by, value, notes, _wake_key(out, answer_id))
+    if requirement["kind"] == "answer":
+        from . import strategy_merge
+
+        merged: Any = strategy_merge
+        # A person's answer on an item the Strategy Bot merged is their answer to every original still asked of them,
+        # and the item is done. Any other task is left alone.
+        if merged.on_answer(conn, by, task_id, value):
+            out = E.task(conn, task_id) or out
     out["answer_id"] = answer_id
     return out
 
