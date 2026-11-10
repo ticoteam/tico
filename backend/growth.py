@@ -192,7 +192,7 @@ def channel_tasks(c, auth, who, slug, limit=CHANNEL_TASKS_MAX):
     rows = H._rows(
         c.execute(
             "SELECT t.id, t.title, t.owner_id, t.status, t.updated_at FROM tasks t "
-            "WHERE t.status IN ('open','doing','waiting','review','ready') "
+            "WHERE t.status='open' "
             f"AND t.id IN (SELECT id FROM tasks WHERE {auth.task_sql(c, who)}) "
             "AND t.id IN (SELECT tt.task_id FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tg.key=?) "
             "ORDER BY t.updated_at DESC LIMIT ?",

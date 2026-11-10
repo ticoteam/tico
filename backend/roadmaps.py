@@ -1,4 +1,7 @@
-"""Publication and requesters extend tasks; comments remain messages in their task thread."""
+"""Publication and requesters extend tasks; comments remain messages in their task thread.
+
+The public roadmap is off in this release: it was built on task types and steps, and comes back with the Product
+pipeline, on its stages. Its settings, a task's public fields and its requesters are kept."""
 
 import hashlib
 import json
@@ -17,6 +20,7 @@ from . import bot_settings as BS
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
 SUGGESTIONS_WAITING_MAX = 20
 VISIBILITY = "TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private'))"
+NOT_YET = 'The public roadmap is not available yet.'
 
 
 def migrate(c):
@@ -553,37 +557,5 @@ def install_internal(app, store, auth, mutate, mover):
         return mutate(request, body, work)
 
     @app.get('/api/v2/roadmap-tasks')
-    def ranked(
-        request: Request, sort: str = 'requester_count', direction: str = 'desc', limit: int = 100, offset: int = 0
-    ):
-        sorts = {
-            'requester_count': 'requester_count',
-            'external_requesters': 'external_requesters',
-            'important': 'important_requesters',
-            'organization': 'organization',
-            'size': 't.size',
-        }
-        if sort not in sorts or direction not in ('asc', 'desc'):
-            raise Problem('sort', 'Unknown roadmap sort', 422)
-        with store.read() as c:
-            who = request.state.identity
-            auth.domain(who)
-            visible = auth.task_sql(c, who)
-            limit, offset = max(1, min(limit, 100)), max(0, offset)
-            rows = c.execute(
-                'SELECT t.id,t.title,t.visibility,t.size,t.version,t.status,'
-                's.name step,coalesce(r.requester_count,0) requester_count,'
-                'coalesce(r.external_requesters,0) external_requesters,coalesce(r.internal_requesters,0) internal_requesters,'
-                'coalesce(r.important_requesters,0) important_requesters,r.organization '
-                'FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id LEFT JOIN '
-                '(SELECT task_id,count(*) requester_count,sum(actor IS NULL) external_requesters,'
-                'sum(actor IS NOT NULL) internal_requesters,sum(important) important_requesters,'
-                "min(nullif(organization,'')) organization FROM task_requesters GROUP BY task_id) r ON r.task_id=t.id "
-                "WHERE t.type_id IN (SELECT id FROM task_types WHERE role='product-roadmap') AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=t.id AND ("
-                + visible
-                + ')) '
-                'ORDER BY ' + sorts[sort] + ' ' + direction + ',t.id LIMIT ? OFFSET ?',
-                (limit + 1, offset),
-            )
-            items, after = page((dict(r) for r in rows), limit, offset)
-            return {'tasks': items, 'next_offset': after}
+    def ranked():
+        raise Problem('not_found', NOT_YET, 404)
