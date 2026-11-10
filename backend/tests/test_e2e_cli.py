@@ -88,6 +88,8 @@ def used_commands():
             found, leaf = resolve(words)
             rel = str(path.relative_to(ROOT))
             if found is None:
+                if words == ["help"]:
+                    continue  # `tico help` reads as `tico --help` (hubcli.main), not a parser command
                 stale.setdefault(words[0], rel)
                 continue
             if subparsers(leaf) is not None or leaf.get_default("fn") is None:
