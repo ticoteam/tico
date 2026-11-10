@@ -89,6 +89,8 @@ DROPPED_INDEXES = {
     "fin_vendor_aliases_contact",
     "sqlite_autoindex_fin_contacts_1",
     "sqlite_autoindex_fin_vendor_aliases_1",
+    # The Pipelines v3 cut-over drops the due-date reminder pass, and its index with it (hubdb.py, ensure_schema).
+    "tasks_due_active",
 }
 # Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
 DROPPED_TRIGGERS = {"queue_bot_message"}
