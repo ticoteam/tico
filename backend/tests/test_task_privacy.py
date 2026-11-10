@@ -19,7 +19,6 @@ def test_private_two_party_matrix(api, requester, owner):
         **{'bot:' + slug: bot_token(api, slug) for slug in ('ops', 'cpo', 'cmo')},
     }
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, 'Private matrix work', [{'name': 'Open', 'status': 'open'}], bots='work')
         task = H.task_create(
             c,
             requester,
@@ -27,7 +26,6 @@ def test_private_two_party_matrix(api, requester, owner):
             'Sensitive packet.',
             owner,
             private=True,
-            type=typ['id'],
             lint=False,
         )
         c.execute(
@@ -61,30 +59,19 @@ def test_private_two_party_matrix(api, requester, owner):
     check(parties | {'bot:cmo'})
 
 
-def test_company_read_does_not_grant_work_but_dev_type_does(api):
+def test_company_read_does_not_grant_work(api):
+    """A bot reads a company task it is not on, and does not work it. (A pipeline has no setting that lets any bot work
+    its tasks, as the old task type's `bots: work` did: who works a task is task_calls.can_work.)"""
     token = bot_token(api, 'ops')
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Build the board adapter', 'body': 'Implement the adapter.'})
     assert not task['private']
     assert get(api, 'tasks/' + task['id'], token=token)['task']['id'] == task['id']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'ops'}, token=token, expected=403)
-    typ = post(
-        api,
-        'task-types',
-        {
-            'name': 'Dev',
-            'bots': 'work',
-            'steps': [{'name': 'Todo', 'status': 'open'}, {'name': 'PR Review', 'status': 'review'}],
-        },
-    )['type']
-    task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'type': typ['id']})
-    found = get(api, 'tasks?type=' + typ['id'], token=token)['tasks']
-    assert task['id'] in {row['id'] for row in found}
-    post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/acme/example/pull/7'}, token=token)
-    task = get(api, 'tasks/' + task['id'], token=token)['task']
-    task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'step': 'PR Review'}, token=token)
-    assert task['status'] == 'review'
+    assert task['id'] in {row['id'] for row in get(api, 'tasks?pipeline=general', token=token)['tasks']}
+    post(api, 'tasks/' + task['id'] + '/owner', {'version': task['version'], 'owner': 'ops', 'why': 'Mine now'}, token=token, expected=403)
+    post(api, 'tasks/' + task['id'] + '/move', {'version': task['version'], 'to': 'done', 'why': 'Built'}, token=token, expected=403)
     task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'private': True})
     get(api, 'tasks/' + task['id'], token=token, expected=404)
+    assert task['id'] not in {row['id'] for row in get(api, 'tasks?pipeline=general', token=token)['tasks']}
 
 
 def test_private_defaults_reassignment_and_human_publication(api):
@@ -105,7 +92,9 @@ def test_private_defaults_reassignment_and_human_publication(api):
     )
     assert not explicit['private']
     post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'private': False}, token=ops, expected=422)
-    changed = post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'owner': 'cpo'})
+    changed = post(
+        api, 'tasks/' + assigned['id'] + '/owner', {'version': assigned['version'], 'owner': 'cpo', 'why': 'Cpo reviews'}
+    )
     assert changed['private']
     get(api, 'tasks/' + assigned['id'], token=ops, expected=404)
     assert get(api, 'tasks/' + assigned['id'], token=cpo)['task']['private']
@@ -309,3 +298,34 @@ def test_a_visuals_line_link_to_a_private_task_message_opens_only_for_its_reader
         response = api.get('/api/v2/tasks/' + query['task'][0], headers=headers(token))
         assert response.status_code == (200 if readable else 404), response.text
         assert ('revenue up' in response.text) == readable and (said['id'] in response.text) == readable
+
+
+def test_a_pipeline_cannot_be_made_private_so_none_promises_privacy_it_does_not_give(api):
+    """docs/pipelines-v3.md lists `pipelines.private` but defines no reader rule for it, and nothing reads it: who
+    reads a task is the task's own privacy. A private pipeline is refused, by the route and by the record's one writer,
+    on a new pipeline and on General; nothing is saved."""
+    from backend import pipeline_settings as PS
+
+    with api.app.state.store.transaction() as c:  # Ana owns General here, so she may change it
+        c.execute("UPDATE pipelines SET owner_id='human:ana' WHERE id='general'")
+    record = get(api, 'pipelines/general')['pipeline']
+    assert record['may_change']
+    legal = {
+        'name': 'Legal',
+        'goal': 'Contracts',
+        'private': True,
+        'stages': [{'name': 'Review', 'owner': 'assignee', 'requirements': [{'kind': 'owner_done'}]}],
+    }
+    # Without the switch the same new pipeline saves: the refusal is the switch's alone.
+    with api.app.state.store.read() as c:
+        assert PS.check(c, {**legal, 'private': False}) == []
+    r = api.post('/api/v2/pipelines/general', json={**record, 'private': True}, headers=headers())
+    assert r.status_code == 409 and "A pipeline can't be private yet" in r.text, r.text
+    with api.app.state.store.transaction() as c:
+        for body in ({**PS.read(c, 'general'), 'private': True}, {**legal, 'id': 'legal'}):
+            with pytest.raises(H.Refused) as refused:
+                PS.save(c, H.KEEPER, body)
+            assert "A pipeline can't be private yet" in str(refused.value)
+        assert not c.execute('SELECT 1 FROM pipelines WHERE private<>0').fetchone()
+        assert not c.execute("SELECT 1 FROM pipelines WHERE id='legal'").fetchone()
+    assert get(api, 'pipelines/general')['pipeline']['private'] is False
