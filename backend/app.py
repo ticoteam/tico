@@ -4337,11 +4337,7 @@ def create_app(settings=None):
         found = carried(c, task, requester)
         if not found or not found.get("lends") or not open_task(task):
             return None
-        if c.execute(
-            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' AND old IN (?,?,?) "
-            "LIMIT 1",
-            (task["id"], *botops_act.TERMINAL),
-        ).fetchone():
+        if botops_act.reopened_by(c, task["id"]):
             return None  # finished once: the request it carried was done, whoever reopened it
         msg = H.message(c, found.get("message_id") or "")
         if not msg or msg.get("deleted_at") or msg["sender_id"] != found.get("person") or week_old(msg["created_at"]):
