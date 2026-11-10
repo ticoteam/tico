@@ -242,6 +242,9 @@ def task_ask(
     H = _h()
     _open(conn, actor, task_id, mover)
     target = H._reach(conn, actor, person)
+    if is_bot(actor) and is_human(target):
+        # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
+        H.require_person_ask(conn, actor, target, line, "ask")
     return E.add_requirement(
         conn, task_id, actor, kind, target, line, choices=choices, shows=shows, seen_version=seen_version
     )

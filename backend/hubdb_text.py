@@ -862,18 +862,18 @@ def person_ask_refusal(person, text, where):
     """What a refusal of this ask says, or "" when it passes: what failed, what to do about it in this same turn, the
     rule and an example, so the bot fixes it in one retry. An ask refused for its length carries a rewrite to retry
     with (person_ask_rewrite), or, when none keeps the decision, the exact repair: a blocker is never left unasked
-    for want of a shorter wording. `where` is "waiting" (the waiting note) or "assign" (the body of a task given to
-    them)."""
+    for want of a shorter wording. `where` is "ask" (an ask on a task, `hub task ask`) or "assign" (the body of a task
+    given to them)."""
     text = str(text or "").strip()
     problems = lint_person_ask(text)
     if not problems:
         return ""
     name = actor_id(person)
-    place = "the waiting note (--note)" if where == "waiting" else "the first paragraph of the task body (--body)"
+    place = "the ask (the sentence in quotes)" if where == "ask" else "the first paragraph of the task body (--body)"
     fix = ""
     if len(text.split()) > LINT_ASK_WORDS or lint_sentences(text) > 2:
         rewrite, repair = person_ask_rewrite(text)
-        details = "a comment on the task" if where == "waiting" else "the body under it, after a blank line"
+        details = "a comment on the task" if where == "ask" else "the body under it, after a blank line"
         fix = (
             f' Retry once with this ask, which keeps what you need and what happens after: "{rewrite}" Put the '
             f"rest of your text in {details}, so nothing is lost."
