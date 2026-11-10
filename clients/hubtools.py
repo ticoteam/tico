@@ -5298,7 +5298,7 @@ def _bot_of(api, args):
 
 @tool(
     "hub_event_types",
-    "Every event Tico names (task.done, release.published, webhook.received, custom.<name>...), each with "
+    "Every event Tico names (task.done, task.closed, webhook.received, custom.<name>...), each with "
     "its group, a plain description, its version and an example payload (`data`). Automations (an event trigger), wake rules and "
     "outgoing webhooks read this one list; some events have an older spelling (`aliases`) that still works, and "
     "`sourceless` marks the events a rule judges with no task (webhook.received, tico.notice); `outbound` is false "

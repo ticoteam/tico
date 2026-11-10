@@ -1,7 +1,11 @@
 """Task Trigger actions, drained after the complete domain write, inside its transaction.
 
-Message rules and built-in step notices retain their existing behavior. This queue is
-request local; the execution ledger, pause state and errors are durable SQL state.
+A rule names one task event: `task.created` (hubdb.task_create), and what a move or a reassignment publishes
+(backend/task_effects.py): `task.step_changed` (a new stage, Done and Closed included), `task.done`, `task.closed`,
+`task.reopened` and `task.assigned`. Its conditions read the task as the event left it: its pipeline, stage, tags,
+owner and requester. Its action changes the task only through the task calls (rules.TASK_RUNNERS), as Tico.
+
+This queue is request local; the execution ledger, pause state and errors are durable SQL state.
 """
 
 import contextvars
@@ -11,9 +15,11 @@ from contextlib import contextmanager
 from . import hubdb as H
 from .migrations import renames
 
-TRIGGERS = ("task.created", "task.step_changed", "task.done", "task.declined", "task.closed")
-CONDITIONS = ("type", "step", "tag", "owner", "requester")
-ACTIONS = ("note", "set_wait", "relate", "move_step", "close", "wake_bot", "create_task", "send_webhook")
+TRIGGERS = ("task.created", "task.step_changed", "task.done", "task.closed", "task.reopened", "task.assigned")
+CONDITIONS = ("pipeline", "stage", "tag", "owner", "requester")
+ACTIONS = ("note", "ask", "relate", "move", "close", "wake_bot", "create_task", "send_webhook")
+# The fact an event carries about what changed, kept on the row the rule reads (the task as the event left it).
+_FACT = {"stage": "stage_id", "status": "status", "owner": "owner_id"}
 _PENDING = contextvars.ContextVar("task_trigger_pending", default=None)
 _CHAIN = contextvars.ContextVar("task_trigger_chain", default=())
 log = logging.getLogger(__name__)
@@ -81,7 +87,7 @@ def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
     if event not in TRIGGERS or H.NO_TRIGGERS.get():
         return
     state = _PENDING.get()
-    facts = {"step_id" if field == "step" else field: new} if field in ("step", "status") else {}
+    facts = {_FACT[field]: new} if field in _FACT else {}
     item = {
         "event": event,
         "task": task,
@@ -100,14 +106,11 @@ def enqueue(conn, event, task, actor, revision, *, field=None, new=None):
 
 
 def created(conn, task, actor):
+    """A new task: `task.created` only. Entering its first stage is part of being filed, not a stage change."""
     state = _PENDING.get()
     if state is not None and state["conn"] is conn:
-        # A plain SQLite connection cannot carry hubdb's `building` marker. Initial
-        # placement still counts once, after created, on those connections too.
         state["items"][:] = [i for i in state["items"] if i["task"] != task]
     enqueue(conn, "task.created", task, actor, "created")
-    if (H.task(conn, task) or {}).get("step_id"):
-        enqueue(conn, "task.step_changed", task, actor, "created")
 
 
 def state(conn, rule_id):
@@ -218,15 +221,13 @@ def judge(conn, item):
 
 
 def _run(conn, item, rule, params):
-    from . import pipeline_engine, rules as R, templating
+    from . import rules as R, templating
 
     by, row, action = rule["action_by"], item["row"], params.get("action")
     queue = _PENDING.get()
     start = len(queue["items"]) if queue else 0
     notified = unblocked(conn).copy()
     token = _CHAIN.set((rule["id"],))
-    # The Action is an automation's, whoever it writes as: held to the stage caps and On ice as one (D68, D69).
-    held = pipeline_engine.AUTOMATION.set(True)
     conn.execute("SAVEPOINT task_trigger_action")
     try:
         current = H.task(conn, row["id"])
@@ -240,7 +241,7 @@ def _run(conn, item, rule, params):
             "actor": item["actor"],
             "task": {
                 k: row.get(renames.current_column("tasks", k))
-                for k in ("id", "title", "body", "note", "status", "owner", "requester", "type_id", "step_id")
+                for k in ("id", "title", "body", "note", "status", "owner", "requester", "pipeline_id", "stage_id")
             },
         }
         if action in R.EVENT_RUNNERS:
@@ -274,15 +275,15 @@ def _run(conn, item, rule, params):
         else:
             rendered = templating.render_json(params, values)
             # Any referenced task must still be readable by the Action's author.
-            for key in ("task", "blocked_by"):
-                if rendered.get(key) and not H.task_private_readable(conn, by, H.task(conn, rendered[key]) or {}):
-                    raise ValueError("writer cannot read related task")
+            if rendered.get("task") and not H.task_private_readable(conn, by, H.task(conn, rendered["task"]) or {}):
+                raise ValueError("writer cannot read related task")
             text = str(rendered.get("note") or rendered.get("text") or "")[:1000]
             said = f"Trigger: {item['event']}. Action: {action}. Rule {rule['id']}: {text}"
             R.TASK_RUNNERS[action](conn, row["id"], rendered, said)
             detail = "Completed"
         conn.execute("RELEASE task_trigger_action")
     except Exception as exc:
+        # A refused task call is undone with everything else the Action wrote, and the triggers it queued.
         conn.execute("ROLLBACK TO task_trigger_action")
         conn.execute("RELEASE task_trigger_action")
         if queue:
@@ -292,9 +293,6 @@ def _run(conn, item, rule, params):
         # arbitrary text there. The source task retains the rule's history.
         detail = f"Action failed ({type(exc).__name__})"
         error(conn, rule["id"], detail)
-        if isinstance(exc, H.Refused) and exc.rule == "stage_full":
-            pipeline_engine.record_waiting(conn, by, row["id"], exc)  # the manager lists the card waiting for room
     finally:
-        pipeline_engine.AUTOMATION.reset(held)
         _CHAIN.reset(token)
     _history(conn, item, rule, action, detail)

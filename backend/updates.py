@@ -696,13 +696,12 @@ def request_text(
         (actor, since, until),
     ).fetchall()
     open_ = c.execute(
-        f"SELECT title, status FROM tasks WHERE owner_id=? AND {shared} AND status IN "
-        "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12",
+        f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status='open' ORDER BY updated_at DESC LIMIT 12",
         (actor,),
     ).fetchall()
     asked = c.execute(
         f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id LIKE 'human:%' "
-        "AND status IN ('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8",
+        "AND status='open' ORDER BY updated_at DESC LIMIT 8",
         (actor,),
     ).fetchall()
     goals = c.execute(
@@ -729,7 +728,7 @@ def request_text(
             f"Finished {'that week' if redo else 'this week'}:",
             line(done, lambda r: r["title"]),
             "Open:",
-            line(open_, lambda r: f"{r['title']} ({r['status']})"),
+            line(open_, lambda r: r["title"]),
             "Waiting on a person:",
             line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
             "Your goals:",
@@ -764,7 +763,7 @@ def request_text(
             f"Finished {'that day' if redo else 'since your last update'}:",
             line(done, lambda r: r["title"]),
             "Open:",
-            line(open_, lambda r: f"{r['title']} ({r['status']})"),
+            line(open_, lambda r: r["title"]),
             "Waiting on a person:",
             line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
             "Your goals:",
@@ -894,13 +893,12 @@ def draft_facts(c, author, kind, day):
         (author, since),
     ).fetchall()
     open_ = c.execute(
-        f"SELECT title, status FROM tasks WHERE owner_id=? AND {shared} AND status IN "
-        "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12",
+        f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status='open' ORDER BY updated_at DESC LIMIT 12",
         (author,),
     ).fetchall()
     asked = c.execute(
-        f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id<>? AND status IN "
-        "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8",
+        f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id<>? AND status='open' "
+        "ORDER BY updated_at DESC LIMIT 8",
         (author, author),
     ).fetchall()
     goals = c.execute(
@@ -908,10 +906,11 @@ def draft_facts(c, author, kind, day):
         "('done','dropped')) ORDER BY rank LIMIT 5",
         (author,),
     ).fetchall()
-    # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
+    # Their decisions: the stage they moved a shared task to (Done, Closed, or another stage)...
     decided = c.execute(
-        f"SELECT t.title, e.new FROM history_events e JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id "
-        f"WHERE e.actor_id=? AND e.kind='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
+        "SELECT t.title, coalesce(s.name, e.new) AS new FROM history_events e "
+        "JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id LEFT JOIN stages s ON s.id=e.new "
+        f"WHERE e.actor_id=? AND e.kind='move' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
         "ORDER BY e.created_at DESC LIMIT ?",
         (author, since, DRAFT_LIST_MAX),
     ).fetchall()
@@ -954,7 +953,7 @@ def draft_facts(c, author, kind, day):
         f"Finished {'this week' if week else 'since yesterday'}:",
         line(done, lambda r: r["title"]),
         "Open:",
-        line(open_, lambda r: f"{r['title']} ({r['status']})"),
+        line(open_, lambda r: r["title"]),
         "Waiting on someone else:",
         line(
             asked,

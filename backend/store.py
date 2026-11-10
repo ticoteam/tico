@@ -1303,7 +1303,6 @@ class Store:
 
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
-            _rules.seed_dev(c)
             from . import owner_link as _owner_link
 
             c.executescript(_owner_link.SCHEMA)
