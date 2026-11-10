@@ -2,7 +2,8 @@
 
 The Pipelines v3 cut-over deleted whole modules (task_review, answer_task, task_holds, ...). An import inside a
 function only fails when that function runs, so a missed caller passes every test that does not reach it and
-breaks in production. This reads every backend file, function-level imports included, and fails in seconds.
+breaks in production. This reads every backend file, function-level imports included, and fails in seconds. The
+tests are read too: a test file that imports a deleted module fails to collect, so its cases silently stop running.
 It checks modules, not names inside them, and resolves `backend.x`, `from backend import x`, `from backend.x
 import y` and the relative forms.
 """
@@ -16,7 +17,8 @@ BACKEND = REPO / "backend"
 
 def is_module(parts):
     path = REPO.joinpath(*parts)
-    return path.with_suffix(".py").is_file() or (path / "__init__.py").is_file()
+    # A directory with no __init__.py is a namespace package (backend/tests, backend/tests/helpers).
+    return path.with_suffix(".py").is_file() or (path / "__init__.py").is_file() or path.is_dir()
 
 
 def imported_modules(file):
@@ -53,8 +55,7 @@ def test_every_backend_import_names_a_module_that_exists():
     missing = [
         f"{file.relative_to(REPO)}:{line}: {'.'.join(module)}"
         for file in sorted(BACKEND.rglob("*.py"))
-        if "tests" not in file.relative_to(BACKEND).parts[:-1]
-        and not (file.parent.name == "migrations" and file.stem in SUPERSEDED)
+        if not (file.parent.name == "migrations" and file.stem in SUPERSEDED)
         for line, module in imported_modules(file)
         if not is_module(module)
     ]

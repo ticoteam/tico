@@ -11,7 +11,6 @@ import pytest
 
 from backend import hubdb as H
 from backend import slack_gateway as G
-from backend import task_check_backs
 from backend.config import Settings
 from backend.store import Store, encode
 from clients import judge as J
@@ -179,86 +178,6 @@ def routed_reply(gateway, hub, text="Done."):
             c, "bot:legal", "human:ana", text, conversation_id=thread["conversation_id"], in_reply_to=message["id"]
         )
     return reply["id"]
-
-
-def test_a_follow_up_answers_the_bots_open_question_task_asked_since_the_person_last_wrote(gateway, hub):
-    """No asks since step 6c: a bot's question to a person is a question task, and their Slack follow-up to the bot's
-    last line answers it when it is the one asked since they last wrote in that thread."""
-    from backend import question_tasks as QT
-
-    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
-    thread = rows(hub, "SELECT * FROM slack_threads")[0]
-    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
-    with hub.transaction() as c:
-        old = QT.ask_alone(c, "bot:legal", "human:ana", "Is the contract signed?")  # asked before Ana last wrote
-        c.execute(
-            "UPDATE tasks SET asked_at='2020-01-01T00:00:00Z', created_at='2020-01-01T00:00:00Z' WHERE id=?",
-            (old["id"],),
-        )
-        card = QT.ask_alone(c, "bot:legal", "human:ana", "Which state's law applies?")
-        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
-        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
-        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
-    with hub.read() as c:
-        # One wake: the reply is the bot's one new message, with no "done" notice after it.
-        assert [
-            r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:legal' AND rowid>?", (mark,))
-        ] == ["Delaware."]
-        row = H.task(c, card["id"])
-        assert row["status"] == "done" and "Delaware." in (row["note"] or "")
-        assert QT.is_open(H.task(c, old["id"]))
-        assert c.execute("SELECT count(*) FROM messages WHERE kind IN ('ask','answer')").fetchone()[0] == 0
-    with hub.transaction() as c:
-        # A second follow-up, with nothing asked since Ana last wrote, closes nothing.
-        H.say(c, "bot:legal", "human:ana", "Thanks.", conversation_id=thread["conversation_id"])
-        G.say_to_bot(c, "human:ana", "legal", event, "Also Texas.", {}, H.now())
-    with hub.read() as c:
-        assert QT.is_open(H.task(c, old["id"]))
-
-
-def test_a_reply_closes_no_question_while_two_are_open_and_the_bot_still_hears_it(gateway, hub):
-    """Two open questions from the bot since Ana last wrote: her reply to its last line closes neither, and the bot
-    still gets the reply."""
-    from backend import question_tasks as QT
-
-    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
-    thread = rows(hub, "SELECT * FROM slack_threads")[0]
-    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
-    with hub.transaction() as c:
-        first = QT.ask_alone(c, "bot:legal", "human:ana", "Is the contract signed?")
-        second = QT.ask_alone(c, "bot:legal", "human:ana", "Which state's law applies?")
-        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
-        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
-        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
-    with hub.read() as c:
-        assert QT.is_open(H.task(c, first["id"])) and QT.is_open(H.task(c, second["id"]))
-        assert [
-            r[0] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:legal' AND rowid>?", (mark,))
-        ] == ["Delaware."]
-
-
-def test_one_slack_answer_to_a_subtask_question_wakes_its_bot_once(gateway, hub):
-    """A question task under the bot's own task: Ana's reply closes it, and the bot is woken once, by the reply, not
-    again on its task for the same answer."""
-    from backend import question_tasks as QT
-
-    send(gateway, "<@U0BUS6WA4SY> Legal?", answers(legal=0.9))
-    thread = rows(hub, "SELECT * FROM slack_threads")[0]
-    event = {"channel": thread["channel"], "thread_ts": thread["thread_ts"]}
-    with hub.transaction() as c:
-        review = H.task_create(c, "human:ana", "Review the contract", "", "bot:legal", lint=False)
-        card = QT.ask_plain(c, "bot:legal", "human:ana", "Which state's law applies?", parent=review)
-        H.say(c, "bot:legal", "human:ana", "Which state's law applies?", conversation_id=thread["conversation_id"])
-        mark = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
-        G.say_to_bot(c, "human:ana", "legal", event, "Delaware.", {}, H.now())
-    with hub.read() as c:
-        assert H.task(c, card["id"])["status"] == "done"
-        woke = c.execute(
-            "SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "WHERE m.recipient_id='bot:legal' AND m.rowid>?",
-            (mark,),
-        ).fetchone()[0]
-        assert woke == 1, woke
 
 
 class BothJudges:
@@ -758,19 +677,9 @@ def task_reply(hub, private, attachments, title="Q3 numbers"):
     return made["id"], reply
 
 
-def set_follow_up(hub, task):
-    """Ana sets the task's follow-up time: an explicit time, which the footer shows. Returns it."""
-    with hub.transaction() as c:
-        task_check_backs.set_time(
-            c, H.task(c, task), H.shift(H.now(), hours=5), "Look at the chart", actor=H.human_actor("ana")
-        )
-        return H.task(c, task)["check_back_at"]
-
-
 def _a_task_reply_with_a_visual_links_to_that_message_in_the_task(gateway, hub):
     link_task_requester(hub)
     task, reply = task_reply(hub, False, [visual(), visual("svg", 2)])
-    followup = set_follow_up(hub, task)
     mark = len(gateway.slack.posts)
     gateway.originate()
     gateway.mirror()
@@ -779,7 +688,7 @@ def _a_task_reply_with_a_visual_links_to_that_message_in_the_task(gateway, hub):
     assert post["text"] == (
         "Here is the quarter.\n\n"
         f"<https://tico.example.com/?task={task}&amp;message={reply}|2 visuals - view in Tico>"
-        f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)\nFollow up by {followup}"
+        f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 numbers>)"
     )
 
 
@@ -789,7 +698,6 @@ def _a_task_reply_names_and_links_its_task(gateway, hub):
     task, _ = task_reply(hub, False, [], title="Q3 costs")
     with hub.transaction() as c:
         c.execute("UPDATE tasks SET number=19332, title=? WHERE id=?", ("Voice <tokens> & keys", task))
-    followup = set_follow_up(hub, task)
     mark = len(gateway.slack.posts)
     gateway.originate()
     gateway.mirror()
@@ -797,7 +705,7 @@ def _a_task_reply_names_and_links_its_task(gateway, hub):
     [post] = gateway.slack.posts[mark:]
     assert post["text"] == (
         "Here is the quarter.\n\n"
-        f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)\nFollow up by {followup}"
+        f"(sent from Legal on <https://tico.example.com/#/task/{task}|#19332 Voice &lt;tokens&gt; &amp; keys>)"
     )
 
 
@@ -814,31 +722,6 @@ def _a_task_reply_with_no_follow_up_time_has_no_follow_up_line(gateway, hub):
         "Here is the quarter.\n\n"
         f"<https://tico.example.com/?task={task}&amp;message={reply}|1 visual - view in Tico>"
         f"\n\n(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 hires>)"
-    )
-
-
-def _a_task_reply_shows_the_follow_up_line_only_for_a_time_a_person_set(gateway, hub):
-    """A check-back time nobody set explicitly is not a follow-up, so no line; once a person sets one, the line shows."""
-    link_task_requester(hub)
-    task, _ = task_reply(hub, False, [], title="Q3 plan")
-    with hub.transaction() as c:
-        c.execute("UPDATE tasks SET check_back_at=? WHERE id=?", (H.shift(H.now(), hours=3), task))
-    mark = len(gateway.slack.posts)
-    gateway.originate()
-    gateway.mirror()
-    gateway.deliver()
-    [first] = gateway.slack.posts[mark:]
-    assert "Follow up by" not in first["text"]
-    followup = set_follow_up(hub, task)
-    with hub.transaction() as c:
-        H.say(c, "bot:legal", "human:ana", "Still on it.", conversation_id=H.task(c, task)["conversation_id"])
-    gateway.originate()
-    gateway.mirror()
-    gateway.deliver()
-    assert gateway.slack.posts[-1]["text"] == (
-        "Still on it.\n\n"
-        f"(sent from Legal on <https://tico.example.com/#/task/{task}|Q3 plan>)\n"
-        f"Follow up by {followup}"
     )
 
 
@@ -1355,7 +1238,6 @@ def test_visual_and_task_replies_share_one_gateway_story(gateway, hub, subtests)
         _a_task_reply_with_a_visual_links_to_that_message_in_the_task,
         _a_task_reply_names_and_links_its_task,
         _a_task_reply_with_no_follow_up_time_has_no_follow_up_line,
-        _a_task_reply_shows_the_follow_up_line_only_for_a_time_a_person_set,
     ):
         with subtests.test(check.__name__):
             check(gateway, hub)

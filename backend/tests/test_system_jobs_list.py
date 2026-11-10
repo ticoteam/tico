@@ -286,18 +286,18 @@ def test_scheduler_jobs_and_background_passes_record_their_runs(api, monkeypatch
         kept = [r["steps"] for r in c.execute("SELECT steps FROM heartbeat_beats")]
     assert kept == [], kept
     # a failing block records its failure
-    from backend import milestone_waits
+    from backend import never_stuck
 
-    def broken(c, failures=None, task_id=None):
+    def broken(c, now=None, failures=None):
         raise RuntimeError("private words")
 
-    monkeypatch.setattr(milestone_waits, "reconcile", broken)
+    monkeypatch.setattr(never_stuck, "check", broken)
     failures = Scheduler(db(api), api.app.state.execution).tick()["failures"]  # a Heartbeat step: the rest still ran
-    assert {"milestone_waits": "RuntimeError"} in failures
-    step = step_rows(api)["milestone_waits"]
+    assert {"never_stuck": "RuntimeError"} in failures
+    step = step_rows(api)["never_stuck"]
     assert step["last_error"] == "Failed: unexpected error (RuntimeError)" and step["failed_count"] == 1
     run = runs_of(api, "heartbeat")[-1]
-    assert not run["ok"] and run["result"] == "Failed: Merge and release waits"
+    assert not run["ok"] and run["result"] == "Failed: Never-stuck check"
     assert "private" not in json.dumps(step) + json.dumps(run)
     # a background pass records one run and quiet passes fold
     for _ in range(3):

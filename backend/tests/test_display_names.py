@@ -4,7 +4,6 @@ import pytest
 from fastapi.routing import APIRoute
 
 from backend import meetings
-from backend import question_tasks as QT
 from backend.store import H
 from backend.tests.old_asks import old_ask
 from backend.tests.helpers.api import headers, post  # noqa: F401
@@ -16,7 +15,7 @@ def named_data(api):
         c.execute("UPDATE humans SET name='Ana' WHERE id='ana'")
         c.execute("UPDATE bots SET display_name='Operations' WHERE slug='ops'")
         task = H.task_create(c, 'human:ana', 'Review the plan', 'Please review the plan.', 'bot:ops')
-        # An old ask in a task's thread, read as history, and a question task under the task for a person.
+        # An old ask in a task's thread, read as history.
         ask = old_ask(
             c,
             'bot:ops',
@@ -25,7 +24,6 @@ def named_data(api):
             conversation_id=task['conversation_id'],
             refs={'task': task['id']},
         )
-        question = QT.ask_plain(c, 'bot:ops', 'human:ana', 'Which review date?', parent=task)
         notice = H.notice(c, 'bot:ops', 'human:ana', 'New task from bot:ops: Review the plan')
         meetings.snapshot(
             {
@@ -40,7 +38,7 @@ def named_data(api):
             conn=c,
         )
     doc = post(api, 'docs', {'title': 'Review plan', 'body': 'Please review the plan.'})['doc']
-    return {'task': task, 'ask': ask, 'question': question, 'notice': notice, 'doc': doc}
+    return {'task': task, 'ask': ask, 'notice': notice, 'doc': doc}
 
 
 def test_all_api_routes_keep_the_app_route_class(api):
@@ -50,7 +48,7 @@ def test_all_api_routes_keep_the_app_route_class(api):
             assert isinstance(route, api.app.router.route_class), route.path
 
 
-def test_messages_and_question_tasks_have_display_names(api, named_data):
+def test_messages_and_tasks_have_display_names(api, named_data):
     result = api.get('/api/v2/messages', headers=headers())
     assert result.status_code == 200
     inbox = result.json()
@@ -68,9 +66,6 @@ def test_messages_and_question_tasks_have_display_names(api, named_data):
     tasks = result.json()
     task = next(t for t in tasks['tasks'] if t['id'] == named_data['task']['id'])
     assert task['owner_name'] == 'Operations' and task['requester_name'] == 'Ana'
-    question = next(t for t in tasks['tasks'] if t['id'] == named_data['question']['id'])
-    assert question['ask']['sender_name'] == 'Operations'
-    assert question['ask']['recipient_name'] == 'Ana'
     assert tasks['actors']['bot:ops'] == 'Operations' and tasks['actors']['human:ana'] == 'Ana'
 
 

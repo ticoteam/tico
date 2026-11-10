@@ -9,7 +9,7 @@ from datetime import date, datetime, timezone
 import pytest
 import time_machine
 
-from backend import ask_deadlines, sleep_idle
+from backend import sleep_idle
 from backend import automation_due as D
 from backend import automation_engine as E
 from backend import automations, cloud_access, hubdb
@@ -107,35 +107,6 @@ def test_a_missed_day_catches_up_on_the_next_pass_and_the_next_occurrence_waits_
     assert get(api, f"automations/{aid}")["next_due_at"] == "2030-01-21"
     tick(api, datetime(2030, 1, 21, 0, 0, 10, tzinfo=timezone.utc))
     assert runs_of(api, aid) == ["due:2030-01-07", "due:2030-01-14", "due:2030-01-21"]
-
-
-def test_an_overdue_occurrence_stays_open_and_never_blocks_the_next(api):
-    aid = due(api, {"first_due": "2030-01-31", "repeats": "monthly", "open_days": 0, "tz": "UTC"})
-    tick(api, datetime(2030, 1, 31, 0, 0, 5, tzinfo=timezone.utc))
-    drain(api)
-    first = sql(api, "SELECT id, status FROM tasks WHERE title='Payroll' ORDER BY created_at")
-    assert len(first) == 1 and first[0]["status"] == "open"  # never closed: it is overdue by February
-    tick(api, datetime(2030, 2, 28, 0, 0, 5, tzinfo=timezone.utc))  # the clamped February day still runs
-    drain(api)
-    assert runs_of(api, aid) == ["due:2030-01-31", "due:2030-02-28"]
-    assert all(run["status"] == "ok" for run in get(api, f"automations/{aid}/runs")["runs"])
-    open_tasks = sql(
-        api, "SELECT id, due_at, occurrence FROM tasks WHERE title='Payroll' AND status='open' ORDER BY due_at"
-    )
-    assert [row["occurrence"] for row in open_tasks] == [f"{aid}:2030-01-31", f"{aid}:2030-02-28"]
-    # The day after January's due day, the bot-handed sweep leaves January's task open: it is that day's deadline.
-    for row in open_tasks[:1]:
-        with api.app.state.store.transaction() as c:
-            c.execute(
-                "UPDATE tasks SET requester_id='bot:ops', created_at='2030-01-01T00:00:00.000000Z' WHERE id=?",
-                (row["id"],),
-            )
-    with api.app.state.store.read() as c:
-        handed = [
-            t["id"]
-            for t in ask_deadlines.handed_to_people(c, "2030-02-01T00:00:00.000000Z", "2030-02-01T00:00:00.000000Z")
-        ]
-    assert open_tasks[0]["id"] not in handed
 
 
 def test_the_task_is_due_at_the_end_of_its_day_and_its_refs_name_the_occurrence(api):

@@ -12,7 +12,6 @@ from backend import threads as CORE
 from backend.store import encode
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
 from backend.tests.helpers.batch import approval_for_ana
-from backend.tests.hold_rows import set_holds
 from backend.tests.helpers.payload_budgets import clone
 
 KB = 1024
@@ -529,20 +528,3 @@ def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave
     ):
         clear()
         story(api, msg["conversation_id"] and msg)
-
-
-def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
-    store = api.app.state.store
-    task = post(api, "tasks", {"owner": "human:ana", "title": "Snoozed 0", "body": "x"})
-    note = "🔔" * 500  # 500 characters, 2,000 bytes each
-    with store.transaction() as c:
-        row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
-        clone(c, "tasks", row, 499, title=lambda i: f"Snoozed {i}")
-        for (snoozed,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Snoozed %'").fetchall():
-            set_holds(c, snoozed, snoozed_until=H.shift(H.now(), days=5), snoozed_note=note)
-    board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
-    rows = board.json()["tasks"]
-    assert len(rows) == 500
-    assert all("reason" not in h for r in rows for h in r["holds"]), "a list row carries no snooze note"
-    whole = get(api, "tasks/" + task["id"])["task"]
-    assert whole["holds"][0]["reason"] == note, "the task's own view keeps the note whole"
