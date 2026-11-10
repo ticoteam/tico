@@ -693,7 +693,13 @@ def s13(r: Rig) -> None:
     asked = r.ok(
         WRITER,
         lambda c: K.ask_ok(
-            c, WRITER, ANA, "Raise the launch ads budget by $40?", shows=raise_, subject="budget_raise:launch-ads", content=raise_
+            c,
+            WRITER,
+            ANA,
+            "Raise the launch ads budget by $40?",
+            shows=raise_,
+            subject="budget_raise:launch-ads",
+            content=raise_,
         ),
         "the writer asks Ana, an owner, for a budget raise",
     )
@@ -713,7 +719,13 @@ def s13(r: Rig) -> None:
     again = r.ok(
         WRITER,
         lambda c: K.ask_ok(
-            c, WRITER, ANA, "Raise the launch ads budget by $40?", shows=raise_, subject="budget_raise:launch-ads", content=raise_
+            c,
+            WRITER,
+            ANA,
+            "Raise the launch ads budget by $40?",
+            shows=raise_,
+            subject="budget_raise:launch-ads",
+            content=raise_,
         ),
         "the writer asks again",
     )
@@ -1158,7 +1170,7 @@ def c_runs_outside_ladder(r: Rig) -> None:
     version = r.row(task)["version"]
     r.ok(
         WRITER,
-        lambda c: E.add_requirement(c, task, WRITER, "ok", REVIEWER, "Is the copy right?", seen_version=version),
+        lambda c: E.add_requirement(c, task, WRITER, "answer", REVIEWER, "Is the copy right?", seen_version=version),
         "ask the reviewer",
     )
     r.ran(task, REVIEWER)  # the reviewer's ask wake: it stops without answering

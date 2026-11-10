@@ -173,6 +173,8 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
+    if kind == "ok" and value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
+        _refuse(conn, by, "task_requirement", "Nobody OKs their own ask", task_id)
     if kind == "ok":
         from . import task_asks
 
@@ -332,6 +334,8 @@ def give_to(
         _refuse(conn, by, "identity", "Only who it waits on, whoever asked it, or who works the task gives it", task_id)
     if person == current:
         return row
+    if kind == "ok" and requirement.get("visit_id") and person == requirement.get("added_by_id"):
+        _refuse(conn, by, "task_requirement", "Nobody OKs their own ask: give it to someone else", task_id)
     if requirement.get("visit_id"):
         conn.execute("UPDATE requirements SET person_id=? WHERE id=?", (person, requirement_id))
         H.history_event(conn, "task", task_id, by, "give", current, person, None, {"requirement": requirement_id})

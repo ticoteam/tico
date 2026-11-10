@@ -1234,6 +1234,10 @@ def add_requirement(
         _refuse(conn, by, "task_requirement", "Only an OK or an answer can be added to one task", task_id)
     if not (is_human(person) or is_bot(person)):
         _refuse(conn, by, "task_requirement", "Name who it is for", task_id)
+    if person == by:
+        _refuse(conn, by, "task_requirement", "Nobody answers their own ask: ask someone else", task_id)
+    if kind == "ok" and not is_human(person):
+        _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
     _may_name(conn, by, person, task_id)
     if not (line or "").strip():
         _refuse(conn, by, "task_requirement", "Say what you are asking, in one sentence", task_id)

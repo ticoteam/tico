@@ -257,7 +257,9 @@ def test_a_late_task_goes_to_the_manager_bot_once_and_at_three_times_the_time_to
     assert [(n["kind"], n["task_id"]) for n in W.needs(c, ANA)] == [("task", task_id)]
     assert later(days=30) == {}
     # It stays hers until a person acts: a bot changing the task does not take it out of her list.
-    E.add_requirement(c, task_id, MANAGER, "ok", REVIEWER, "OK the note", seen_version=E.task(c, task_id)["version"])
+    E.add_requirement(
+        c, task_id, MANAGER, "answer", REVIEWER, "OK the note", seen_version=E.task(c, task_id)["version"]
+    )
     assert _ladder(c, task_id)[0] == "person" and ("person", ANA) in _states(c, task_id)
     E.try_again(c, task_id, ANA)
     assert _ladder(c, task_id) == ("owner", 0)
@@ -269,7 +271,9 @@ def test_an_ask_added_while_a_person_has_the_task_wakes_nobody_until_a_person_ac
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     assert later(days=1).get("to_manager") == 1 and later(days=2) == {"to_person": 1}  # Late took it to Ana
     # A run of the manager bot that was still going asks the reviewer for an OK. Only Ana has a turn: no bot is woken.
-    E.add_requirement(c, task_id, MANAGER, "ok", REVIEWER, "OK the note", seen_version=E.task(c, task_id)["version"])
+    E.add_requirement(
+        c, task_id, MANAGER, "answer", REVIEWER, "OK the note", seen_version=E.task(c, task_id)["version"]
+    )
     assert _ladder(c, task_id)[0] == "person" and X.wakes(c, task_id, REVIEWER) == []
     assert later(days=1) == {} and _queued(c, task_id) == []
     # Ana acts: every bot that has a turn now is woken, the reviewer named on that OK too.
@@ -353,7 +357,7 @@ def test_an_answer_wakes_the_bot_that_asked_and_the_count_starts_again(c, genera
 
 def test_a_bot_named_for_an_ok_is_on_the_same_ladder(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=ANA)["id"]
-    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the wording")
+    E.add_requirement(c, task_id, ANA, "answer", REVIEWER, "OK the wording")
     assert _said(c, task_id, REVIEWER) == ["Ana asks you: OK the wording"]
     X.ran(c, task_id, REVIEWER)
     assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
@@ -393,7 +397,7 @@ def test_a_bots_fourth_snooze_in_a_stage_goes_to_the_manager_bot_on_the_same_cou
         if n < E.BOT_SNOOZES:
             X.ran(c, task_id, BUILDER)
     # Its third try is still queued. Ana asks the reviewer for an OK: the reviewer's wake is queued too.
-    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the reply")
+    E.add_requirement(c, task_id, ANA, "answer", REVIEWER, "OK the reply")
     assert _queued(c, task_id) == [BUILDER, REVIEWER]
     out = E.snooze(c, task_id, BUILDER, "The vendor is away", seen_version=E.task(c, task_id)["version"])
     assert out["note"] and not out.get("snooze")
@@ -426,7 +430,7 @@ def test_seven_runs_between_two_changes_count_every_bot_that_ran(c, general, lat
     later(seconds=10)
     # Ana asks the reviewer for an OK: a change, so the count starts over, and the reviewer is on the same count.
     since = H.now()
-    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the wording")
+    E.add_requirement(c, task_id, ANA, "answer", REVIEWER, "OK the wording")
     assert sorted(_queued(c, task_id)) == [BUILDER, REVIEWER]  # the builder's start is still its turn
     later(seconds=10)
     _run_down(c, task_id, later)
@@ -463,7 +467,7 @@ def _job(c, task_id, actor):
 
 def test_no_eighth_run_starts_even_from_a_wake_queued_before_the_seventh(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
-    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the wording")  # the builder still has work
+    E.add_requirement(c, task_id, ANA, "answer", REVIEWER, "OK the wording")  # the builder still has work
     waiting = _job(c, task_id, REVIEWER)
     assert task_wakes.may_start(c, waiting) and _job(c, task_id, REVIEWER) == waiting  # it may start now
     # Its wake stays queued while the builder runs four times and the manager bot three.
@@ -628,7 +632,7 @@ def test_a_bot_that_runs_jobs_gets_one_free_wake_per_change_and_then_its_try(c, 
 
 def test_every_bot_with_a_turn_gets_back_a_wake_it_lost_not_only_the_one_the_ladder_tries(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
-    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the wording")  # the builder still has its own work
+    E.add_requirement(c, task_id, ANA, "answer", REVIEWER, "OK the wording")  # the builder still has its own work
     asked = _said(c, task_id, REVIEWER)
     c.execute("DELETE FROM jobs WHERE bot_id='reviewer' AND state='queued'")  # the reviewer's wake goes missing
     assert later(seconds=10) == {"woken": 1} and _queued(c, task_id) == [BUILDER, REVIEWER]

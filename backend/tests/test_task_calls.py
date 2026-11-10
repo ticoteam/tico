@@ -486,6 +486,20 @@ def test_a_replayed_refusal_on_a_private_task_says_again_what_is_missing_to_who_
         assert store.replayed_refusal(c, "human:cara", receipt) == receipt  # may not read it: the receipt as kept
 
 
+def test_nobody_oks_their_own_ask_and_an_ok_is_asked_only_of_a_person(c):
+    row = _new(c, by=BEN, owner=BUILDER)
+    for to, kind in ((BUILDER, "ok"), (BUILDER, "answer"), (HELPER, "ok")):
+        with _refused("task_requirement"):
+            H.task_ask(c, BUILDER, row["id"], to, "Ship it on Monday?", kind=kind, seen_version=_version(c, row["id"]))
+    assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1  # nothing was asked
+    asked = H.task_ask(c, ANA, row["id"], BEN, "Ship it on Monday?", kind="ok")["requirement_id"]
+    with _refused("task_requirement"):
+        H.task_give(c, ANA, row["id"], asked, ANA)  # given back to the one who asked it, it would be her own OK
+    with _refused("task_requirement"):
+        H.task_answer(c, ANA, row["id"], asked, "ok")
+    H.task_ask(c, BUILDER, row["id"], HELPER, "Which day suits the launch?", seen_version=_version(c, row["id"]))
+
+
 def test_an_ask_names_only_someone_who_can_read_the_task(c):
     row = _new(c, by=BEN, owner=BUILDER, private=True)
     with _refused("private"):
