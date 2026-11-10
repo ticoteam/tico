@@ -327,6 +327,31 @@ class TaskAsk(Contract):
     version: Version | None = None
 
 
+class TaskOkGive(Contract):
+    """A person's own OK of exactly what they were shown: the `shown_hash` of the preview they opened."""
+
+    shown_hash: Annotated[str, Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")]
+
+
+class TaskOkAsk(Contract):
+    """A bot asks a person to OK exactly `content` before it does `subject` ("<kind>:<id>", task_asks.generic)."""
+
+    to: ID
+    line: Annotated[str, Field(min_length=1, max_length=300)]
+    subject: Annotated[str, Field(min_length=3, max_length=200)]
+    content: Any
+    show: list[Annotated[str, Field(min_length=1, max_length=400)]] = Field(default_factory=list, max_length=10)
+    version: Version | None = None
+
+
+class OkUse(Contract):
+    """Use an OK once, for the same subject and exactly the same content it was given for."""
+
+    subject: Annotated[str, Field(min_length=3, max_length=200)]
+    content: Any
+    note: Annotated[str, Field(max_length=300)] = ""
+
+
 class TaskAskAnswer(Contract):
     """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer)."""
 

@@ -2041,12 +2041,15 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     person may read is listed. Each item has `kind` (task, ask, paused, mention), `id`, `line`, `since` and the brief
     `task`; an ask also has the fields of its requirement in `to_leave` (`ask`). `count_only` leaves out the brief
     task and the ask's fields: a count needs neither. `task_view` is the callers' and not read here."""
-    from . import waiting_on
+    from . import strategy_merge, waiting_on
 
     if not H.is_human(who.actor):
         return []
     visible = auth.task_sql(c, who)
-    raw = waiting_on.needs(c, who.actor)
+    # The asks the Strategy Bot merged into one item stay out while that item is open; the item names them (`merged`).
+    merged = strategy_merge.hidden_by_item(c, who.actor)
+    hidden = {rid for ids in merged.values() for rid in ids}
+    raw = [i for i in waiting_on.needs(c, who.actor) if i.get("requirement_id") not in hidden]
     mentions = _mentions(c, who)
     wanted = {i["task_id"] for i in raw if i.get("task_id")} | {t for i in raw for t in i.get("tasks") or ()}
     wanted |= {m["task_id"] for m in mentions if m.get("task_id")}
@@ -2082,6 +2085,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                 "missing": it["missing"],
                 "since": it["since"],
                 "task": briefs.get(it["task_id"]),
+                **({"merged": merged[it["task_id"]]} if it["task_id"] in merged else {}),
             }
         )
     for m in mentions:

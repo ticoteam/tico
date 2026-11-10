@@ -169,3 +169,108 @@ def test_the_pipelines_read_and_save_their_settings_record(api):
     assert saved["pipeline"]["settings_version"] == record["settings_version"] + 1
     assert get(api, "pipelines/general", token="cara-test")["pipeline"]["may_change"] is False
     refused(api, "pipelines/general", {**saved["pipeline"], "goal": "x"}, token="cara-test")
+
+
+def test_a_replayed_write_answers_as_the_first_did_and_acts_once(api):
+    """The same Idempotency-Key answers the stored response, checked again against what the caller may read now
+    (backend/task_privacy.py `require_payload`), on a shared task and on a private one."""
+    shared = task(api, owner="ana")
+    private = post(
+        api, "tasks", {"title": "Salary review", "body": "Next year's bands.", "owner": "ana", "private": True}
+    )
+    for made in (shared, private):
+        key = "done-" + made["id"]
+        first = api.post(f"/api/v2/tasks/{made['id']}/done", json={"note": "Booked."}, headers=headers(key=key))
+        again = api.post(f"/api/v2/tasks/{made['id']}/done", json={"note": "Booked."}, headers=headers(key=key))
+        assert first.status_code == again.status_code == 200, again.text
+        assert again.json() == first.json() and first.json()["task"]["status"] == "done"
+        assert show(api, made["id"])["version"] == first.json()["task"]["version"]
+
+
+# ---------------------------------------------------------------------- OKs bound to what was shown
+FORUM = "forum_post:note-1"
+
+
+def ask_ok(api, bot, tid, content, to="ben"):
+    version = show(api, tid)["version"]
+    r = api.post(
+        f"/api/v2/tasks/{tid}/oks",
+        json={
+            "to": to,
+            "line": "OK to post this to the forum?",
+            "subject": FORUM,
+            "content": content,
+            "version": version,
+        },
+        headers=headers(bot),
+    )
+    assert r.status_code == 200, r.text
+    return r.json()["requirement_id"]
+
+
+def no(api, path, body, token, status):
+    r = api.post("/api/v2/" + path, json=body, headers=headers(token))
+    assert r.status_code == status, r.text
+    return r.json()
+
+
+def test_a_bot_asks_for_an_ok_only_with_a_version_and_only_for_a_generic_subject(api):
+    bot = as_bot(api)
+    made = task(api, owner="ops")
+    version = show(api, made["id"])["version"]
+    ask = {"to": "ben", "line": "OK to post this?", "subject": FORUM, "content": {"text": "Hi"}}
+    assert no(api, f"tasks/{made['id']}/oks", ask, bot, 409)["error"] == "task_changed"
+    owned = {**ask, "subject": "email_send:1", "version": version}
+    assert no(api, f"tasks/{made['id']}/oks", owned, bot, 422)["error"] == "validation"
+    rid = ask_ok(api, bot, made["id"], {"text": "Hi"})
+    assert rid == ask_ok(api, bot, made["id"], {"text": "Hi"})  # the same ask, asked again
+    item = next(i for i in get(api, "needs-you", token="ben-test")["items"] if i["kind"] == "ask")
+    assert item["requirement_id"] == rid and item["task_id"] == made["id"]
+
+
+def test_an_ok_is_only_the_asked_persons_own_click_on_exactly_what_they_were_shown(api):
+    from backend.auth import Identity
+
+    bot = as_bot(api)
+    api.app.state.auth.settings.test_identities["ben-token"] = Identity(
+        "human:ben", "human", "ben@acme.example", via_token=True
+    )
+    made = task(api, owner="ops")
+    content = {"text": "We ship on Friday."}
+    rid = ask_ok(api, bot, made["id"], content)
+    give = f"tasks/{made['id']}/asks/{rid}/ok"
+    use = {"subject": FORUM, "content": content, "note": "Posted."}
+
+    shown = get(api, f"oks/{rid}", token="ben-test")
+    assert shown["content"] == content and shown["standing"] == "waiting" and shown["task_id"] == made["id"]
+    right = shown["shown_hash"]
+    # Nothing is used before an OK, and a plain "ok" answer is not one.
+    assert no(api, f"oks/{rid}/use", use, bot, 409)["error"] == "task_ok_missing"
+    # A bot never gives an OK, not even its own ask's with the right hash.
+    assert no(api, give, {"shown_hash": right}, bot, 403)["error"] == "identity"
+    # Nor does the person through a token: only their own click in their own session.
+    assert no(api, give, {"shown_hash": right}, "ben-token", 403)["error"] == "identity"
+    # A person who is not the one asked is refused, though she opened it too.
+    cara = get(api, f"oks/{rid}", token="cara-test")["shown_hash"]
+    assert "Ben" in no(api, give, {"shown_hash": cara}, "cara-test", 409)["detail"]
+    # A hash that is not what was asked about is refused.
+    wrong = no(api, give, {"shown_hash": "0" * 64}, "ben-test", 409)
+    assert wrong["error"] == "task_changed"
+    assert get(api, f"oks/{rid}", token="ben-test")["standing"] == "waiting"
+
+    key = "ok-" + rid
+    first = api.post("/api/v2/" + give, json={"shown_hash": right}, headers=headers("ben-test", key))
+    again = api.post("/api/v2/" + give, json={"shown_hash": right}, headers=headers("ben-test", key))
+    assert first.status_code == again.status_code == 200, again.text
+    assert again.json() == first.json()
+    assert get(api, f"oks/{rid}", token="ben-test")["standing"] == "ok"
+
+    # Only whoever asked uses it, for exactly that content, once.
+    assert no(api, f"oks/{rid}/use", use, "ana-test", 403)["error"] == "identity"
+    changed = {**use, "content": {"text": "We ship on Monday."}}
+    assert no(api, f"oks/{rid}/use", changed, bot, 409)["error"] == "task_ok_changed"
+    used = api.post(f"/api/v2/oks/{rid}/use", json=use, headers=headers(bot))
+    assert used.status_code == 200, used.text
+    assert no(api, f"oks/{rid}/use", use, bot, 409)["error"] == "consumed"
+    assert get(api, f"oks/{rid}", token="ben-test")["standing"] == "used"
+    assert api.get("/api/v2/oks/nope", headers=headers("ben-test")).status_code == 404

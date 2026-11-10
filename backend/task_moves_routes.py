@@ -1,5 +1,5 @@
 """The routes that work a task (docs/dev/pipelines-v3-cutover.md, "HTTP"): done, move, owner, snooze, unsnooze, try
-again, asks and their answers, and taking an answer back.
+again, asks and their answers, OKs bound to what a person was shown (task_asks), and taking an answer back.
 
 Each route calls one task call (`H.task_done`, `H.task_move`, ...) inside the store's write and answers the task as
 JSON. None of them writes a task's status, stage or owner: the engine does. A refusal is the engine's
@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 
 from . import models as M
-from . import ask_ingest, org_rule_check, reach, task_caps
+from . import ask_ingest, org_rule_check, reach, strategy_merge, task_asks, task_caps
 from .store import H, Problem
 
 # A snooze's bare date is the start of that day here, as the bot tools say ("the start of that day, Pacific").
@@ -243,6 +243,8 @@ def register(
             done = H.task_answer(
                 c, who.actor, task_id, requirement_on(c, task_id, requirement_id), body.value, body.note, body.version
             )
+            # An answer on the Strategy Bot's merged item goes to each original it stands for.
+            strategy_merge.on_answer(c, who.actor, task_id, body.value)
             return {"answer_id": done.get("answer_id")}
 
         return work(request, tid, body, call)
@@ -265,6 +267,89 @@ def register(
             return {"feedback_id": done.get("feedback_id")} if done.get("feedback_id") else None
 
         return work(request, tid, body, call)
+
+    # ------------------------------------------------------------------ OKs bound to what was shown (task_asks)
+    def ok_task(c, who, requirement_id):
+        """The task an OK is on, when the caller may read it. 404 otherwise, alike for one that is not there."""
+        task_id = task_asks.task_of(c, requirement_id) if task_asks.grant(c, requirement_id) else None
+        if not task_id:
+            raise Problem("not_found", "No such OK", 404)
+        try:
+            auth.task(c, who, task_id)
+        except Problem:
+            raise Problem("not_found", "No such OK", 404) from None
+        return task_id
+
+    @app.get("/api/v2/oks/{requirement_id}")
+    def ok_preview(request: Request, requirement_id: str):
+        """What an OK is for, exactly as it was asked, with the `shown_hash` to send back with the OK. Opened by a
+        person in their own session, it records that they were shown it."""
+        who = request.state.identity
+        with store.transaction() as c:
+            task_id = ok_task(c, who, requirement_id)
+            shown = task_asks.preview(c, who.actor, requirement_id, own_click=task_asks.own_click(who))
+            return {**shown, "task_id": task_id}
+
+    @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/ok")
+    def task_give_ok(request: Request, tid: str, requirement_id: str, body: M.TaskOkGive):
+        """The person it is asked of OKs exactly what they were shown, by their own click. Never a bot, a token, the
+        Assistant or anyone acting for them; never content that changed since they opened it."""
+        who = request.state.identity
+        ctx = task_asks.Context(auth, auth.settings, who, app)
+
+        def write(c):
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            if task_asks.task_of(c, requirement_id) != task_id or not task_asks.grant(c, requirement_id):
+                raise Problem("not_found", "No such OK on this task", 404)
+            task_asks.give_ok(
+                c, who.actor, requirement_id, body.shown_hash, own_click=task_asks.own_click(who), ctx=ctx
+            )
+            return answer(c, who, task_id, requirement_id=requirement_id)
+
+        out = mutate(request, body, write, durable=True)
+        for after in ctx.after:
+            after()
+        return out
+
+    @app.post("/api/v2/tasks/{tid}/oks")
+    def task_ask_ok(request: Request, tid: str, body: M.TaskOkAsk):
+        """A bot asks a person to OK exactly this content before it does `subject`. Subjects whose own module asks
+        (an email, a letter, an edition...) are asked there, not here."""
+        if not task_asks.generic(body.subject):
+            raise Problem("validation", "This kind of OK is asked where the work is, not here", 422)
+
+        def call(c, who, task_id):
+            from . import task_engine
+
+            task_engine.check_version(c, who.actor, H.task(c, task_id), body.version)
+            return task_asks.ask_ok(
+                c,
+                who.actor,
+                body.to,
+                body.line,
+                shows=body.show or None,
+                subject=body.subject,
+                content=body.content,
+                task_id=task_id,
+            )
+
+        return work(request, tid, body, call)
+
+    @app.post("/api/v2/oks/{requirement_id}/use")
+    def ok_use(request: Request, requirement_id: str, body: M.OkUse):
+        """Whoever asked uses the OK, once, for the same subject and exactly the same content, just before the act."""
+        if not task_asks.generic(body.subject):
+            raise Problem("validation", "This kind of OK is used where the work is, not here", 422)
+
+        def write(c):
+            who = request.state.identity
+            task_id = ok_task(c, who, requirement_id)
+            task_asks.use(c, requirement_id, body.subject, body.content, who.actor)
+            task_asks.settle(c, requirement_id, body.note or "Done")
+            return answer(c, who, task_id, requirement_id=requirement_id)
+
+        return mutate(request, body, write, durable=True)
 
     @app.post("/api/v2/answers/{answer_id}/undo")
     def answer_undo(request: Request, answer_id: str, body: M.Empty):

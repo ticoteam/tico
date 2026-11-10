@@ -847,6 +847,39 @@ STABLE = [
         "TaskResult",
     ),
     ("/api/v2/answers/{answer_id}/undo", "post", "Tasks", "undoAnswer", "Take an answer back", "TaskResult"),
+    (
+        "/api/v2/oks/{requirement_id}",
+        "get",
+        "Tasks",
+        "previewOk",
+        "What an OK is for, exactly as asked, with the shown_hash its OK sends back",
+        "OkPreview",
+    ),
+    (
+        "/api/v2/tasks/{tid}/asks/{requirement_id}/ok",
+        "post",
+        "Tasks",
+        "giveOk",
+        "OK exactly what you were shown, by your own click: only the person asked, never a bot or anyone acting for "
+        "them",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/oks",
+        "post",
+        "Tasks",
+        "askOk",
+        "Ask a person to OK exactly this content before doing subject (kind:id); carries requirement_id",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/oks/{requirement_id}/use",
+        "post",
+        "Tasks",
+        "useOk",
+        "Use an OK once, for the same subject and exactly the same content, just before the act",
+        "TaskResult",
+    ),
     ("/api/v2/pipelines", "get", "Pipelines", "listPipelines", "Every pipeline, each as its settings record", None),
     ("/api/v2/pipelines/{pipeline_id}", "get", "Pipelines", "getPipeline", "One pipeline's settings record", None),
     (
@@ -2978,6 +3011,16 @@ SCHEMAS = {
         actors=ACTORS,
     ),
     "TaskResult": obj({"task": ref("Task")}),
+    "OkPreview": obj(
+        {
+            "requirement_id": "s",
+            "task_id": "s",
+            "subject": "s",
+            "content": {"description": "What the OK is for, exactly as it was asked"},
+            "shown_hash": "s",
+            "standing": {"enum": ["waiting", "ok", "sent_back", "withdrawn", "used"]},
+        }
+    ),
     # A task's own model (backend/task_run_models.py `of`); null when its runs use the bot's task model.
     "TaskRunChoice": obj(
         {"model": "s", "harness": "s", "runtime": "s", "reasoning_effort": "s", "set_by": "n", "set_at": "n"}
