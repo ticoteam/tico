@@ -190,7 +190,9 @@ open", without its words. It lists:
 One decision is one entry. Every change in it carries the same action id in each task's history.
 
 Only the owner sees **Undo**, and it asks once before it acts. Undo puts each task back as it was before the
-decision: its owner, its status and stage, its place in the queue and its note. A task the decision created is closed.
+decision: its owner, its status and stage, its place in the queue, its note and who follows it, and every task a close
+ended under it opens again. A task the decision created is closed. Undo never makes a task private: a task that would
+turn private going back to a bot that now keeps its tasks private stays where it is.
 Each bot whose task changed is told, including a bot that loses a task it was given. If anything happened to a task
 after the decision (someone changed it, asked or answered on it, snoozed it or filed a task under it), Undo leaves it as
 it is, and a task the decision created stays open. If Tico can't put one task back, the others are still put back.

@@ -187,6 +187,34 @@ def test_undo_of_a_close_gives_the_task_back_to_the_owner_it_had_in_its_place(c)
     assert (back["status"], back["owner_id"], back["rank"]) == ("open", "bot:finance", before["rank"])
 
 
+def test_undo_never_makes_a_task_private_giving_it_back_to_a_bot_that_now_keeps_its_tasks_private(c):
+    """Ops keeps its tasks private now: giving the task back would make it private, which the decision never did, so
+    Undo leaves it with Finance and says why."""
+    work = _filed(c, "ops", "Reconcile the vendor invoices")
+    made = _decide(c, [{"do": "reassign", "task_id": work, "owner": "finance"}])
+    BS.write(c, "ops", {"name": "ops", "runtime": "fake", "status": "active", "private_tasks_default": True})
+    SA.undo(c, OWNER, made["id"])
+    back = H.task(c, work)
+    assert (back["owner_id"], back["private"]) == ("bot:finance", 0)
+    text = SA.entry(c, made["id"], "1")["undo"]["text"]
+    assert "keeps its tasks private" in text, text
+
+
+def test_undo_of_a_reassign_gives_back_each_followers_level(c):
+    """The owner had muted the task for Ops, its owner; given back, Ops follows it muted again, and Finance no longer
+    follows it."""
+    from backend import task_followers as TF
+
+    work = _filed(c, "ops", "Reconcile the vendor invoices")
+    TF.change(c, OWNER, work, "bot:ops", notify="muted", mover=True)
+    made = _decide(c, [{"do": "reassign", "task_id": work, "owner": "finance"}])
+    SA.undo(c, OWNER, made["id"])
+    back = H.task(c, work)
+    assert back["owner_id"] == "bot:ops"
+    following = {f["actor"]: f["notify"] for f in TF.listed(c, back)}
+    assert following.get("bot:ops") == "muted" and "bot:finance" not in following, following
+
+
 # ----------------------------------------------------------------------------- through the routes
 
 

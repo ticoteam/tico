@@ -24,6 +24,7 @@ import contextvars
 
 from . import strategy_bot
 from . import hubdb as H
+from . import task_followers as TF
 from . import task_trigger_rules as triggers
 from .migrations import renames
 
@@ -348,6 +349,45 @@ def _mark(c, task_id):
     ).fetchone()[0]
 
 
+def _followers(c, row):
+    """Who follows the task's thread and how: {actor: [level, reason]}, or None for a task with no thread of its own.
+    Giving a task to a bot changes who follows it (task_followers.owner_moved), and giving it back starts the old
+    owner at `live`."""
+    tid = TF.thread_id(c, row)
+    if not tid:
+        return None
+    return {
+        actor: [notify, reason]
+        for actor, notify, reason in c.execute(
+            "SELECT actor, notify, reason FROM thread_followers WHERE thread_id=? AND following=1", (tid,)
+        )
+    }
+
+
+def _refollow(c, task, item, left):
+    """Each follower the decision changed and nobody changed since (`left`: as Undo found them) back as it was."""
+    was, then = (item.get("follows") or {}).get("before"), (item.get("follows") or {}).get("after")
+    tid = TF.thread_id(c, task)
+    if was is None or then is None or left is None or not tid:
+        return
+    for actor in sorted({*was, *then, *(_followers(c, task) or {})}):
+        if left.get(actor) != then.get(actor):
+            continue
+        if actor in was:
+            level, reason = was[actor]
+            TF._upsert(c, tid, actor, reason, level)
+            c.execute(
+                "UPDATE thread_followers SET notify=?, reason=? WHERE thread_id=? AND actor=?",
+                (level, reason, tid, actor),
+            )
+        else:
+            c.execute(
+                "UPDATE thread_followers SET following=0, reason='read', updated_at=? WHERE thread_id=? AND actor=? "
+                "AND following=1",
+                (H.now(), tid, actor),
+            )
+
+
 def _changed(c, task_id):
     """What Undo needs of a task the decision changed: its fields after, and where its history stood."""
     return {"after": _snapshot(H.task(c, task_id)), "mark": _mark(c, task_id)}
@@ -397,7 +437,7 @@ def _apply(c, change, goal_id, reason):
     row = H.task(c, change["task_id"])
     if not row:
         H.refuse(c, STRATEGY_BOT, "not-found", "Task not found")
-    before = _snapshot(row)
+    before, follows = _snapshot(row), _followers(c, row)
     # Each write is the Strategy Bot's own, at the version just read, and raises the task's version.
     if do == "reorder":
         rank = H._queue_end(c, row["owner_id"], top=True)
@@ -416,7 +456,8 @@ def _apply(c, change, goal_id, reason):
             if (H.task(c, t) or {}).get("status") == "closed"
         ]
         return {"task_id": row["id"], "made": False, "before": before, **_changed(c, row["id"]), "under": under}
-    return {"task_id": row["id"], "made": False, "before": before, **_changed(c, row["id"])}
+    after = {"before": follows, "after": _followers(c, H.task(c, row["id"]))} if follows is not None else None
+    return {"task_id": row["id"], "made": False, "before": before, **_changed(c, row["id"]), "follows": after}
 
 
 def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
@@ -611,8 +652,8 @@ def _as_read_by(c, can_read, row):
 
     def item(x):
         task_id = _task_of(x)
-        # The tasks a close ended under its task are Undo's to reopen, not a line to read: each may be private.
-        x = {k: v for k, v in x.items() if k != "under"}
+        # The tasks a close ended under its task, and who followed it, are Undo's to put back, not a line to read.
+        x = {k: v for k, v in x.items() if k not in ("under", "follows")}
         if task_id is None:
             return x
         out = {**x, "text": _say(c, x.get("text"), task_id, can_read)}
@@ -649,7 +690,7 @@ def receipt(row):
     keeps (owner, status, queue place, readers). The log with those is the owner's (GET /api/v2/strategy-bot/log)."""
 
     def item(x):
-        return {k: v for k, v in x.items() if k not in ("before", "after", "mark", "under")}
+        return {k: v for k, v in x.items() if k not in ("before", "after", "mark", "under", "follows")}
 
     return {**row, "done": [item(x) for x in row["done"]], "left": [item(x) for x in row["left"]]}
 
@@ -750,6 +791,10 @@ def _per_task(done):
         if item["task_id"] in tasks:
             first = tasks[item["task_id"]]
             first.update(after=item["after"], mark=item.get("mark"))
+            if first.get("follows") and item.get("follows"):
+                first["follows"] = {"before": first["follows"]["before"], "after": item["follows"]["after"]}
+            elif item.get("follows"):
+                first["follows"] = item["follows"]
             first["under"] = [*(first.get("under") or []), *(item.get("under") or [])]
         else:
             tasks[item["task_id"]] = dict(item)
@@ -804,6 +849,15 @@ def _restore(c, actor, task, item, since, note):
     if who:
         note(f"{TASK} was changed since by {_name(c, who)}, so Undo leaves it as it is")
         return None
+    if task["owner_id"] != before["owner_id"] and H.private_tasks_default(c, before["owner_id"]):
+        if not H.task_private(c, task):
+            # Given back, it would turn private (task_effects._follow_owner): more than the decision changed.
+            note(
+                f"{TASK} would turn private with {_name(c, before['owner_id'])}, which keeps its tasks private now, "
+                f"so it stays with {_name(c, task['owner_id'])}"
+            )
+            return None
+    left = _followers(c, task)
     # A task private since the decision (moved under a private task) is not the owner's to write: Tico puts it back.
     writer = H.KEEPER if H.task_private(c, task) else actor
     why = f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} did this on its own"
@@ -821,6 +875,7 @@ def _restore(c, actor, task, item, since, note):
         fields["note"] = before.get("note") or ""
     if fields:
         H.task_update(c, writer, task["id"], mover=True, **fields)
+    _refollow(c, task, item, left)
     return f"{TASK}: {', '.join(PLAIN[f] for f in back)} put back"
 
 
