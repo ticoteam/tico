@@ -229,6 +229,23 @@ def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, g
     assert told == [f"{parent['id']}:{parent['visit']['id']}:filed:{child['id']}"]
 
 
+def test_a_bot_cannot_close_a_persons_request_and_is_told_to_ask_them(c, general):
+    asked = X.new_task(c, ANA, "Book the flights", assignee="bot:builder")
+    with _refused("task_needs_person") as refused:
+        E.move(c, asked["id"], E.CLOSED, "bot:builder", "Not possible", seen_version=asked["version"])
+    assert "Ask Ana, in one sentence, why it can't be done" in str(refused.value)
+    assert E.task(c, asked["id"])["status"] == "open"
+    assert E.move(c, asked["id"], E.CLOSED, ANA)["status"] == "closed"  # a person closes anything
+    # A bot closes what a bot asked for, and what a task filed (and the engine closes filed tasks with their parent).
+    theirs = X.new_task(c, "bot:manager", "Tidy the labels", assignee="bot:builder")
+    closed = E.move(c, theirs["id"], E.CLOSED, "bot:builder", "Done by hand", seen_version=theirs["version"])
+    assert closed["status"] == "closed"
+    parent = X.new_task(c, ANA, "Plan the trip", assignee="bot:builder")
+    filed = X.new_task(c, ANA, "Find a hotel", assignee="bot:builder", parent=parent["id"])
+    closed = E.move(c, filed["id"], E.CLOSED, "bot:builder", "Not needed", seen_version=filed["version"])
+    assert closed["status"] == "closed"
+
+
 def test_reopen_needs_a_note_and_goes_back_to_the_stage_the_task_left(c, build):
     row = X.new_task(c, ANA, "Build the importer", "eng")
     E.fill_open_slots(c)

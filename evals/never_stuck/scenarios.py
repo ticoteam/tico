@@ -323,7 +323,6 @@ CHECKS: dict[str, Scenario] = {}
 # Scenarios that fail on this branch because of an engine bug, by the bug's name (README.md).
 FAILING: dict[int, str] = {
     3: "lost-wake-is-a-try",
-    12: "bot-closes-persons-request",
     43: "mention-not-in-needs",
 }
 
@@ -809,7 +808,8 @@ def s18(r: Rig) -> None:
 def s21(r: Rig) -> None:
     from backend import task_engine as E
 
-    task = r.task(ANA, "Spec the export", WORK, assignee=WRITER)
+    # A bot asked for it: a bot may close it (C8 keeps a person's request for a person to close).
+    task = r.task(MANAGER, "Spec the export", WORK, assignee=WRITER)
     r.to_deck(task)
     r.check()
     version = r.row(task)["version"]
@@ -863,7 +863,7 @@ def s24(r: Rig) -> None:
 
     task, sub = _filed(r)
     version = r.row(task)["version"]
-    r.ok(WRITER, lambda c: E.move(c, task, E.CLOSED, WRITER, "Customer cancelled", version), "close the task")
+    r.ok(ANA, lambda c: E.move(c, task, E.CLOSED, ANA, "Customer cancelled", version), "close the task")
     row = r.row(sub)
     expect(row["status"] == "closed", f"the filed task is {row['status']}")
     note = [e for e in r.events(sub) if e["kind"] == "move"][-1]["note"]

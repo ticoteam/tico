@@ -163,7 +163,7 @@ one of these rules, or `not-found`, and nothing else:
 task_changed         changed since you looked               (also: a bot gave no seen_version)
 task_not_met         not met: <requirement line>            (forward with no why)
 task_no_push_past    <requirement> can't be pushed past. Move back or close.
-task_needs_person    <requirement> needs a person; try again needs a person
+task_needs_person    <requirement> needs a person; try again needs a person; a bot closing a person's request
 task_stage_full      no room in <stage>
 task_why             say why
 task_no_such_stage   no such stage in this pipeline
@@ -180,6 +180,11 @@ Who must say why:
 - Back and Close: a bot. A person may leave it out.
 - Reopen: everyone gives a note.
 - Snooze: a bot.
+
+A bot can't close a person's request (C8): `move(..., CLOSED)` by a bot is refused `task_needs_person` when the task's
+requester is a person and no task filed it, and the detail tells it to ask that person, in one sentence, why it can't be
+done (they close it or reassign it). A person closes anything. A bot closes what a bot asked for and what a task filed.
+The engine closing filed tasks with the task above them (`cascade`) is not a bot.
 
 A bot sends `seen_version` with every command that takes one: move, reassign, snooze and add a requirement. A person
 may leave it out.

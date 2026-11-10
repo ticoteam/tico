@@ -395,6 +395,26 @@ def _push_past(
     return pushed
 
 
+def _may_close(conn: "sqlite3.Connection", by: str, row: Row) -> None:
+    """A bot can't close a person's request by itself (C8): a task a person asked for that no task filed. It asks the
+    person why it can't be done, and they close it or reassign it. A person closes anything; a bot closes what a bot
+    asked for and what a task filed."""
+    requester = row.get("requester_id")
+    if not is_bot(by) or not is_human(requester):
+        return
+    if conn.execute("SELECT 1 FROM links WHERE to_task_id=?", (row["id"],)).fetchone():
+        return
+    name = _h().actor_name(conn, requester)
+    _refuse(
+        conn,
+        by,
+        "task_needs_person",
+        f"{name} asked for this task, so only a person can close it. Ask {name}, in one sentence, why it can't be "
+        "done: they will close it or reassign it.",
+        row["id"],
+    )
+
+
 def move(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -429,6 +449,8 @@ def move(
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)
     else:
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
+    if kind == "closed" and not cascade:
+        _may_close(conn, by, row)
     if kind in ("back", "closed"):
         stage_effects.undo(conn, row, by, f"Closed with {row.get('title') or 'the task that filed it'}")
     if kind == "closed":
