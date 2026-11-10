@@ -346,6 +346,15 @@ class ReadIndex:
                 return False
         return True
 
+    def run_pages(self, refs):
+        """A message a run wrote inherits that run's file refusal (task_privacy.run_pages_readable)."""
+        data = H._json(refs, {}) if isinstance(refs, str) else refs
+        if not isinstance(data, dict):
+            return True
+        run = data.get("run")
+        aid = data.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
+        return not isinstance(aid, str) or not aid or self.attempt_pages(aid)
+
     def _message_sources(self, mid, cid, refs, reply):
         return self.sources({"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply})
 
@@ -367,9 +376,13 @@ class ReadIndex:
                 parent = self.direct_parent(reply)
                 if parent is not None:
                     return parent
-            return self.meetings.message_readable(
-                self.principals, {"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply}
-            ) and not self.denied.intersection(self.message_sources(mid, cid, refs, reply))
+            return (
+                self.meetings.message_readable(
+                    self.principals, {"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply}
+                )
+                and not self.denied.intersection(self.message_sources(mid, cid, refs, reply))
+                and self.run_pages(refs)
+            )
         except ValueError:
             return False
 
@@ -467,6 +480,7 @@ class ReadIndex:
                 or self.denied.intersection(self.sources(msg))
                 or not self.meetings.message_readable(self.principals, msg)
                 or not self.reply_pages(msg)
+                or not self.run_pages(msg.get("refs"))
             ):
                 return False
         except ValueError:
@@ -530,6 +544,7 @@ class ReadIndex:
                     or self.denied.intersection(self.sources(msg))
                     or not self.meetings.message_readable(self.principals, msg)
                     or not self.reply_pages(msg)
+                    or not self.run_pages(msg.get("refs"))
                 ):
                     return False
             except ValueError:
