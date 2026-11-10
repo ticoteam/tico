@@ -623,7 +623,8 @@ class Support:
         install's default person while the team rule lets bots send without asking (`RULE`), this copy names an HQ of
         its own (`from_source`) and the privacy check `check(c)` passes. Otherwise a person OKs it first: the person
         whose token or Assistant drafted it, the task's owner when that is a person, or the install's default person.
-        Returns {ticket, sent, filed_as} when it went, else {id, approval, task_id, status: pending}."""
+        Returns {ticket, sent, filed_as, status: sent, task_id} when it went, else {id, approval, task_id,
+        requirement_id, status: pending}."""
         from . import lifecycle
 
         problems = H.lint_support(payload) if isinstance(payload, dict) else ["a report is an object"]
@@ -653,7 +654,13 @@ class Support:
                     }
             key = "approval:" + _key_of(who.actor, payload)
             ticket = self._send(Identity(H.human_actor(person), "human"), payload, "bot_report", key)
-            return {"ticket": ticket, "sent": True, "filed_as": H.human_actor(person)}
+            return {
+                "ticket": ticket,
+                "sent": True,
+                "filed_as": H.human_actor(person),
+                "status": "sent",
+                "task_id": task_id or None,
+            }
 
     def file_approved(self, who, rid):
         """Send the report a person OK'd, for whoever asked for the OK. The ticket is filed as the person who OK'd it

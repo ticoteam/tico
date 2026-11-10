@@ -7,7 +7,7 @@ team, readable by one group and open to requests from everyone.
 | --- | --- |
 | **See** | The bot in the team chart and in every bot list: its name, role, who owns it and who it reports to. |
 | **Read** | Its activity: its tasks, updates, files, status and run log, routines, the threads it is in, and the activity sections of its page. |
-| **Write** | Sending it messages, chatting with it, asking it; creating or reassigning tasks to it; leaving it notes; comments that wake it. Its approvals work as they always did. |
+| **Write** | Sending it messages, chatting with it, asking it; creating or reassigning tasks to it; leaving it notes; comments that wake it. |
 
 Write access does not make a stopped bot run. Messages and comments to a paused or quarantined bot are kept until it
 is back, except that a bot's send is refused as `queue_full` once the queue held for it is full (it never counts as a
@@ -228,7 +228,6 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | Rule | On (default) | Off |
 | --- | --- | --- |
 | **Assistant acts without asking** | the Assistant does what the human asks for in their Assistant chat, as them, with their rights as the ceiling; only what it may never do there (credentials, sign-in, owner transfer, support reports, deleting people, the server connection or storage) is a card ([Assistant](assistant.md)) | the Assistant writes only the human's own tasks and changes to tasks that are theirs alone; everything else, including what they asked for in chat, is a card |
-| **People may let their Assistant decide their approvals** | each person's Assistant decides their approvals, on by default; a person turns "My assistant can decide approvals for me" off in Settings > General. Until then it approves or declines approvals addressed to them on their words in its chat, recorded and undoable ([Assistant](assistant.md#letting-it-decide-your-approvals)) | approving is the person's click on a card again, whatever their own setting |
 | **BotOps changes providers and limits without asking** (`botops_direct`) | BotOps changes the AI providers and raises spending limits for the person who asked, with their rights | a provider change, or a limit raised or removed, is a Confirm card in that person's BotOps chat; lowering a limit stays direct |
 | **BotOps manages every bot** (`botops_manages_bots`) | in its own runs (the daily update, or a routine the owner set for BotOps) BotOps manages every bot but the built-in ones: their Tools, repositories, contact and Instructions, with write access to each bot's repository in its GitHub token (below) | BotOps in its own runs changes only itself |
 | **Managers change their direct reports** (`managers_manage_reports`) | a bot changes its direct reports' model, task model, name and description, as itself, unless that manager's own switch is off; BotOps creates, archives and restores a report for it, within `report_creates_per_week` and `report_archives_per_week` ([Managers and their reports](#managers-and-their-reports)) | no bot changes a report's model, task model, name or description, or creates, archives or restores it, whatever the bots' own switches say |
@@ -238,7 +237,6 @@ The product favours getting going fast, and the owner tightens it later. Setting
 | **Members make personal tokens** | any human makes a personal API token, which sees what they see | the owner and the Admins do |
 | **Owners and admins may let Tico support in** (`support_access`) | an owner or admin may open a time-limited support session from their own request ([below](#tico-support)) | nobody can, and a live session ends |
 | **Bots send reports to the Tico team without asking** (`bot_reports_direct`, Settings > General > Team) | a bot's report to the Tico team is decided by this rule as the install's default person and sent at once, with the same checks and limits as a drafted one ([Support](support.md#a-bots-report)) | a bot's report is a `support` approval a person says yes to in Needs you first ([Support](support.md#a-bots-report)) |
-| **Bots go ahead on their recommendation** (`bots_go_ahead`, days in `go_ahead_days`, 3) | a bot's question to a person with a reversible, internal default goes ahead when nobody answers in that many days (or by the date the bot gave); sends, spending and deletes never go ahead: their question closes on its date and the bot decides without it ([Tasks](tasks.md#when-nobody-answers)) | no question goes ahead on its own; one with a date still closes on it, and one without leaves **Needs you** after two business days |
 
 Only the Owner changes them, directly in Settings or by asking BotOps to act with the Owner's rights.
 
@@ -374,11 +372,13 @@ An endpoint is an address Tico posts events to ([API](api.md#outgoing-webhooks))
 
 - **People** make and manage their own endpoints; the owner and admins manage every one. BotOps acting for a person has that
   person's rights.
-- **A bot** cannot make one on its own. Its request files a `send` approval, and the endpoint is made, owned by the person who
-  approves it, when the bot repeats the call. A bot sees every endpoint without its full address, and changes none.
+- **A bot** cannot make one on its own. Its request asks a person for an OK of those exact details, and the endpoint is
+  made, owned by the person who OK'd it from its preview, when the bot repeats the call. A bot sees every endpoint
+  without its full address, and changes none.
 - **Custom events** (`hub webhook send`, names `custom.*`) are sent by people, and by a bot only while its outbound send switch is on.
   The Strategy Bot never sends one and never causes a webhook.
-- **Privacy.** An endpoint hears of a task, approval, ask or bot only when its owner could read it themselves; the event body is built
+- **Privacy.** An endpoint hears of a task, ask or bot only when its owner could read it themselves; the event body is
+  built
   from what that person sees. Health, inbound and webhook events go to owner and admin endpoints only.
 - Plain `http://` is for `localhost` only, and only the owner switches it on for an endpoint. Every other address is `https://`
   and must resolve to a public address.
@@ -518,7 +518,7 @@ against the session again.
   It writes only the setup routes
   `backend/support_access.py` lists (`APP_WRITES`): a bot's model, fallback and context size; a computer's restart; a
   subscription allowance read (no model sign-in, and no reading of one's link and code: whoever enters the code first chooses the account a computer
-  runs on). Everything else, approvals, messages, tasks, runs, people, access and
+  runs on). Everything else, asks, messages, tasks, runs, people, access and
   credentials included, is refused `403 support_access`.
 - **Full access** (`support: full`) has the Owner's rights.
 - Neither makes or sees personal tokens, service keys, agent or SCIM credentials or credential values, signs a person in or out of Tico,
@@ -597,8 +597,9 @@ Task text cannot select another requester. A message the **Assistant** wrote for
 document, or a message **routed from Slack** cannot borrow human authority. A message from a linked Slack channel is
 written as its author with `refs.via` set to `slack`, so it counts as routed from Slack: it lends no authority to a bot.
 A human's request lends their rights for as long as the task it created, or the task that carries it (`--request-id`), is open,
-up to 30 days after they last spoke on it (filed it, sent the message it carries, or commented on it). Once a task is done,
-closed or declined, moving it back to open lends nothing again unless the requester reopened it themselves, and citing
+up to 30 days after they last spoke on it (filed it, sent the message it carries, or commented on it). Once a task is
+done
+or closed, reopening it lends nothing again unless the requester reopened it themselves, and citing
 that task stays refused even after they reply. They ask again in their own words: the run their comment on it or their
 message in their BotOps chat starts has their rights without `on_behalf_of`.
 A chat message with no open task lends them for a week, and a new task filed from a message needs that message within the week.
@@ -607,7 +608,8 @@ routing), is them asking: the run it wakes has their rights. Anyone else's comme
 On a task another bot asked BotOps for, a person's comment lends nothing either: the run keeps that bot's rights, and
 what they can't do comes to the person who commented as a Confirm card in their BotOps chat.
 On its own task BotOps never needs anyone's rights to add the task's worktree (the bot's own repository access decides; an
-owner or admin gives it in Settings > General > Repositories) or to file a question or subtask for a person under it; that ask grants
+owner or admin gives it in Settings > General > Repositories) or to ask a person on it or file a subtask for them; that
+ask grants
 nothing by itself.
 With a person's rights BotOps may give another bot repository access at once, but never take any away: setting a bot to
 own, dropping a chosen repository or turning write into read comes to that person as a Confirm card naming the grants that
@@ -620,7 +622,7 @@ of BotOps that the owner (or the product) set and only they changed. Its rights 
 built in: it changes their Tools, repositories, contact (`bot_contact`) and Instructions, and its GitHub token writes every
 bot's repository. In a bot's definition it changes only `bot_contact`; who the bot reports to, its repository link, its status
 and its template stay with the people who manage it. It never changes people or owners, never sees a Credential value, never
-turns on sending to outsiders and never archives a bot with its own rights. Every other run the keeper starts carries words
+turns on sending to outsiders and never archives a bot with its own rights. Every other run Tico starts carries words
 someone else wrote and gets only BotOps' plain rights: a service key's or a watcher's task, a stopped job's request, a routine
 BotOps set itself, an event routine, a task someone else wrote or commented on. A run a person or a
 bot asked for keeps that requester's rights, so BotOps never lends this to another bot. The team rule **BotOps manages every
@@ -665,7 +667,7 @@ only its own rights. To act for the person, BotOps cites the open task they aske
 <task id>` or `hub bot model ... --on-behalf-of <task id>` (MCP: `on_behalf_of`). The server accepts a task BotOps owns
 that the person filed themselves (not through the Assistant; one BotOps filed as them counts only as a continuation of
 their message, `--request-id`), while it is open, and only in a run the person
-started or the keeper started on its schedule (the daily update, a task's due, stall or routine notice). A run a bot or
+started or Tico started on its schedule (the daily update, a task's due or routine notice). A run a bot or
 another person started keeps that requester's rights whatever task it cites, and a run a Slack digest, a live meeting,
 a watcher or another person's task comment started lends no one's rights: anyone there wrote its words. It is recorded as
 the person's, via BotOps, like any other delegated change, and Credentials stay as above (never a value).
@@ -767,7 +769,7 @@ without knowing the route:
 `show` and `set` take `--bot`, `--computer`, `--person` or `--id` for a setting set per one of them. The class decides
 what `set` does when BotOps or the Assistant asks for a person (the same answer from either):
 
-- **direct** (reversible, inside the team, no new spend: routines, task types, tags, a bot's model, release times,
+- **direct** (reversible, inside the team, no new spend: routines, tags, a bot's model, release times,
   the privacy count): it changes at once, as that person, and the answer names the new value.
 - **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
   ownership, the Strategy Bot): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
@@ -776,7 +778,7 @@ what `set` does when BotOps or the Assistant asks for a person (the same answer 
   Strategy Bot's level and checks, company storage, turning the Assistant on). A confirm entry whose route BotOps can't yet
   put on a card is person-only until it can (`NO_CARD_YET`, empty now; the catalogue test fails once one can, so it
   goes back to confirm).
-- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own approvals and mail, and a
+- **person** (a sign-in, a secret value, an upload such as the team icon, the person's own OKs and mail, and a
   new outgoing webhook or Gateway wake URL, whose signing secret is shown only once, in Settings): BotOps answers with
   a one-line reason and the card's link.
 
@@ -792,19 +794,6 @@ trigger manages it too, as its route allows), a computer's operator, and the peo
 owner or an admin for a team rule); a person's role is the owner's alone.
 The route still makes its own check after the catalogue's, and when the route refuses a write BotOps or the Assistant
 made for a person (`hub api`), the refusal carries the same who-may line (`fix`, `who_may`).
-
-**Ask someone who can.** BotOps or the Assistant then offers "Shall I ask an admin?" ("the owner" for the owner's
-settings). On the person's yes, `hub settings ask <key> <value>` (`--to <person>` names one) sends one request to one
-person who may: the setting's Confirm card in their BotOps chat and a task on their list that the asker requested. Only
-their tap changes it, with their rights; their tap or cancel settles the task, done or declined, and the asker is told
-in the chat they asked from. A card nobody taps expires after a day (the hourly approval expiry sweep), which declines
-the task and tells the asker too; a confirm cut off before it finished (a restart) declines it and tells the asker it
-may or may not have changed, and nothing runs again. The Assistant cites the person's words for it; a bot on its own
-rights never asks, a person-only setting can't be asked for (it is typed in Settings, by someone who may or, for each
-person's own, by them), and someone who may change it is told to set it. A person has at most five asks waiting at once,
-one per setting and target (asking again for one that waits is refused, `already_asked`). The same ask again is the same
-request; one for exactly the change already waiting for that person on someone else's ask or on their own card is
-refused (`already_waiting`), so every accepted request has its own requester and is told once.
 
 `backend/tests/test_settings_catalog.py` reads every write
 the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed
@@ -897,27 +886,24 @@ and tasks follow the rule above ([Tico SQL](hub-sql.md)).
 
 Task movers (the team owner and humans on the leadership, product or engineering teams) attach
 and remove tags on any task. A bot attaches and removes a classification tag (`qa`, an area, a
-priority) on a task it manages: one it owns, one it asked for, or one of a type it manages (the
-type's manager, such as Head of Product on the Product roadmap or Head of Engineering on Dev
-tickets), and only when it can already read the task. Two kinds of tag keep their gate for a bot,
-both to add and to remove: a tag on a public roadmap (Settings → Public roadmap) needs the bot's
-exact approved publish approval, as public text does ([Roadmaps](roadmaps.md)), or a mover when the
-team does not ask bots for one; `goal:on` and `goal:off` change how Tico runs the task, so only a
-mover changes them. The same holds when a bot creates a task: it may give the new task classification
-tags, but a task created with `goal:on`, `goal:off` or a public roadmap tag is refused and nothing is
-created. A publish approval is for a task that exists, so the bot creates the task without the roadmap
-tag and then adds it with the approval, or asks a mover. A refusal says which tags need a person or an approval and why; an approval that is
-not decided yet, already used or for other tags is the same refusal. It counts
-toward the bot's quarantine once per task an hour, so retrying it cannot quarantine the bot; any
-other refusal counts as before. Lane and number stay a mover's, and nothing here makes a bot a
-mover. Creating and editing a tag is for those movers or that tag's owner, including
-a bot owner. A teammate may create a tag they own. Owner rights on a tag do not grant mover
-rights on its tasks. Tags and templates are readable by signed-in teammates; their task lists
-show only tasks each caller may read. Every edit requires the current tag version.
+priority) on a task it manages: one it owns, one it asked for, or one whose pipeline it manages,
+and only when it can already read the task. Two kinds of tag keep their gate for a bot, both to add
+and to remove: a tag on a public roadmap (Settings → Public roadmap) needs an OK of exactly that
+publication, given by a person from its preview, as public text does ([Roadmaps](roadmaps.md)), or
+a mover when the team does not ask bots for one; `goal:on` and `goal:off` change how Tico runs the
+task, so only a mover changes them. The same holds when a bot creates a task: it may give the new
+task classification tags, but a task created with `goal:on`, `goal:off` or a public roadmap tag is
+refused and nothing is created. A publication OK is for a task that exists, so the bot creates the
+task without the roadmap tag and then adds it with the OK, or asks a mover. A refusal says which
+tags need a person or an OK and why; an OK that is not given yet, already used or for other tags is
+the same refusal. It counts toward the bot's quarantine once per task an hour, so retrying it
+cannot quarantine the bot. Nothing here makes a bot a mover. Creating and editing a tag is for
+those movers or that tag's owner, including a bot owner. A teammate may create a tag they own.
+Owner rights on a tag do not grant mover rights on its tasks. Tags and templates are readable by
+signed-in teammates; their task lists show only tasks each caller may read. Every edit requires the
+current tag version.
 
-## Task types and steps
+## Pipelines
 
-The owner and humans on the leadership, product or engineering teams manage types and steps.
-Task participants use them with their existing task permissions: choosing a step checks the
-status it maps to, including the normal rules for Ready, completion notes and closing. Definitions
-are team-wide; selecting a type never grants access to additional tasks. See [Tasks](tasks.md).
+The company's owner and admins make pipelines. A pipeline's owner and its manager bot may change it, as may the
+owner and admins (`pipeline_settings.may_change`). See [Pipelines and stages](tasks.md#pipelines-and-stages).

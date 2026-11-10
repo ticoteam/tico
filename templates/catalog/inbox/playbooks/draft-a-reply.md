@@ -40,5 +40,5 @@ When `Sending` is On and a rule there covers this message, send it as a reply to
 and nobody else: `$HUB_DIR/scripts/mail.sh reply --thread <thread> --body-file out/reply.txt --issue <task id>`.
 A forward to an address the rules name is a new message to that address: `mail.sh draft --to <address> --subject "..."`,
 then `mail.sh send --draft <id>`. Tico decides every send: the answer says `"queued": true` (it goes after the undo
-window, or once a person approves it in Tico), or `"downgraded": "draft"` with Tico's reason: then leave the draft on
+window, or once a person OKs it in Tico), or `"downgraded": "draft"` with Tico's reason: then leave the draft on
 the task and say why. Everything the rules do not cover stays a request for review.

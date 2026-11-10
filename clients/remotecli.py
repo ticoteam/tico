@@ -548,9 +548,10 @@ def run(args, who=None):
 
         key = os.environ.get("HUB_OPERATION_ID")
         if fn == "support send":
-            return hubtools.support_send(client, {"approval": args.approval, "operation_id": key})
+            return hubtools.support_send(client, {"ok": args.ok, "operation_id": key})
         text = Path(args.file).read_text(encoding="utf-8") if args.file else args.message
-        return hubtools.support_report(client, {"message": text, "include_ids": not args.no_ids, "operation_id": key})
+        report = {"message": text, "include_ids": not args.no_ids, "task": args.task, "operation_id": key}
+        return hubtools.support_report(client, report)
     if args.cmd in ("api", "computer", "credential", "support", "health") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":
@@ -872,15 +873,15 @@ def run(args, who=None):
             body.update(_delivery(args))
             if getattr(args, "public", None):
                 body["public"] = True
-            if getattr(args, "approval_id", None):
-                body["approval_id"] = args.approval_id
+            if getattr(args, "ok", None):
+                body["approval_id"] = args.ok
             links = s3links.apply(client, body, ("text",))
             result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
             return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
         if sub == "comment-edit":
             body = {"text": args.text}
-            if getattr(args, "approval_id", None):
-                body["approval_id"] = args.approval_id
+            if getattr(args, "ok", None):
+                body["approval_id"] = args.ok
             links = s3links.apply(client, body, ("text",))
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":

@@ -128,10 +128,10 @@ sub-thread under it.
 
 ## Update requests
 
-A bot's daily update request is a notice from the keeper. In a thread, the request and the bot's replies to it read
+A bot's daily update request is a notice from Tico. In a thread, the request and the bot's replies to it read
 as one line, **› Update generated**. Tapping the line shows or hides them. The group holds the request, the bot's first reply to
 it, and the bot's other messages from that same run. It ends at the first message that is not one of those: a person's,
-another bot's, the keeper's, a message from another run, or a deleted or hidden one. The line stays shut until tapped. A
+another bot's, Tico's, a message from another run, or a deleted or hidden one. The line stays shut until tapped. A
 quote or a search hit opens the group it sits in. The posted update keeps its own row and is never in the group. If the
 request is deleted, its messages read as ordinary messages again.
 
@@ -203,23 +203,24 @@ Details: [threads contract §10.1](dev/threads-contract.md).
 ## Who wrote it
 
 Every line says who or what made it, from the same rule on every surface (chat, a bot's Home, a task's history and the
-Log). Nothing says "Assistant" unless the Assistant wrote it. The stored actor `keeper` is what Tico's server writes as
-when no person or bot did; it is not shown as a name.
+Log). Nothing says "Assistant" unless the Assistant wrote it. Tico's server writes under its own stored actor when no
+person or bot did; that actor is not shown as a name.
 
 | Line | How it shows |
 |---|---|
 | A person's message | Their name, as usual. |
 | A bot's message | The bot's name, as usual. |
 | The Assistant, for a person | A normal message from **<first name>'s Assistant**. |
-| A task update (a keeper line about a task) | A small gray line. Two or more in a row fold into "N task updates", collapsed by default. |
+| A task update (Tico's line about a task) | A small gray line. Two or more in a row fold into "N task updates", collapsed by default. |
 | A built-in: Follow-up timer, Earlier messages, Task roundup, Stuck check, Rule check, Health check, Maintenance | A small gray line led by its name. |
 | One of your automations | A small gray line; the name opens the automation. |
-| System (an update, a backup, a migration), or any other keeper line | A small gray line with no sender. |
+| System (an update, a backup, a migration), or any other line from Tico | A small gray line with no sender. |
 
 A gray line is always one line. Text that does not fit ends in "…"; hover over a long line to read its text.
 
 Which label a line gets changes what you see only. Who or what wakes a bot, what is delivered and what counts as
-unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), not "keeper". Task
+unread stay as they were. A bot's turn reads the same labels ("Task update", "Stuck check"), never Tico's stored actor.
+Task
 history and the Log read the same rule, from the row's actor and what it names.
 
 ## Editing and deleting

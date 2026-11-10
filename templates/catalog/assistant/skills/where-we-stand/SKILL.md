@@ -47,7 +47,7 @@ An empty list means there are none. Never report a read that came back empty.
 - In a chat, end with the keep-going line: `Next: <the top item> for [<goal>](#/goals/<id>). Do it now?`
 - Nothing needs them: ONE line, no list and no Next line, e.g. "Nothing on your goals needs you this week:
   [Paid trials](#/goals/<id>) is green, 412 against 400 (Nov 4)."
-- Nothing else: no headings, no strategy or approvals summary, no "what I could not read", no "I changed nothing".
+- Nothing else: no headings, no strategy or asks summary, no "what I could not read", no "I changed nothing".
 
 ## Example
 

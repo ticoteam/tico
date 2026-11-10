@@ -110,10 +110,20 @@ def _task_with_spec(c: Any, parent_id: str) -> tuple[dict[str, Any], Any] | None
 
 
 def _restricted(c: Any, task: dict[str, Any], file_id: str) -> bool:
-    """Whether the spec's text stays out of the bodies of tasks filed under it: a private task, or a spec page narrowed
-    to some readers (pages.audience). Its link still goes in; opening it is checked as any page is."""
+    """Whether the spec's text stays out of the bodies of tasks filed under it. The text goes down only when everyone
+    who can read the new task can read the spec: the new task's owner and privacy are not settled when its body is
+    written, so it may be read by anyone in the company, and the spec's text goes down only when anyone may read it
+    too. Kept out: a private task, a company task whose owner or requester is a bot not everyone may read (auth
+    task_row: a company task involving that bot is hidden from them), and a spec page narrowed to some readers
+    (pages.audience). Its link still goes in; opening it is checked as any page is."""
     if hub.task_private(c, task):
         return True
+    from . import teammate_access
+
+    access: Any = teammate_access
+    for party in (task.get("owner_id"), task.get("requester_id")):
+        if hub.is_bot(party) and not access.document(c, str(party))["read"]["everyone"]:
+            return True
     audience = c.execute("SELECT audience FROM pages WHERE file_id=?", (file_id,)).fetchone()
     return bool(audience and audience[0])
 

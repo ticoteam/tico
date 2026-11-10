@@ -36,7 +36,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         ids: str | None = None,
         snoozed: str | None = None,
         q: str = "",
+        pipeline: str | None = None,
+        stage: str | None = None,
+        waiting_on: str | None = None,
+        pushed_past: bool | None = None,
     ):
+        """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
+        `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
+        bot's turn, or a bot that can't run); `pushed_past=true` keeps the tasks that entered their stage pushed past
+        a requirement (false, the rest)."""
         from . import task_reads as reads
 
         who = request.state.identity
@@ -74,6 +82,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             filters.update(order=sort, visible_sql=visible_sql, q=q)
             if typed is not None:
                 filters["ids"] = [tid for tid in found.values() if tid]
+            narrow = narrowing(c, pipeline, stage, pushed_past)
+            if narrow:
+                filters["narrow"] = narrow
+            if waiting_on is not None:
+                waits_on = waited_on(c, waiting_on, visible_sql, narrow)
+                filters["ids"] = [t for t in filters["ids"] if t in waits_on] if "ids" in filters else sorted(waits_on)
 
             def brief_rows(rows):
                 # A board or a bot's task list polling many tasks needs neither their text nor their criteria.
@@ -135,6 +149,55 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     result["missing"] = [ident for ident in typed if found[ident] not in returned]
             brief_rows(rows)
             return result
+
+    def narrowing(c, pipeline, stage, pushed_past):
+        """The list's pipeline, stage and pushed-past filters as one WHERE fragment over the task's own columns, or
+        None. A pipeline or stage is matched by its rowid, so nothing a caller typed is ever part of the SQL."""
+        parts = []
+        if pipeline is not None:
+            found = c.execute("SELECT rowid FROM pipelines WHERE id=?", (pipeline,)).fetchone()
+            if not found:
+                raise Problem("pipeline", "No such pipeline", 422)
+            parts.append(f"pipeline_id=(SELECT id FROM pipelines WHERE rowid={int(found[0])})")
+        if stage is not None:
+            found = c.execute("SELECT rowid FROM stages WHERE id=?", (stage,)).fetchone()
+            if not found:
+                raise Problem("stage", "No such stage", 422)
+            parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={int(found[0])})")
+        if pushed_past is not None:
+            parts.append(
+                ("" if pushed_past else "NOT ")
+                + "EXISTS (SELECT 1 FROM visits v WHERE v.task_id=tasks.id AND v.left_at IS NULL "
+                "AND v.entered_how='pushed_past')"
+            )
+        return " AND ".join(parts) or None
+
+    WAITING_ON_CAP = 500
+
+    def waited_on(c, actor, visible_sql, narrow):
+        """The ids of the open tasks this reader may read that wait on `actor`: a person's or a bot's turn, or a bot
+        that can't run. Each task's waits are its own read (waiting_on.py), so at most WAITING_ON_CAP open tasks are
+        looked at: a wider ask is refused, to be narrowed by pipeline or stage first."""
+        from . import waiting_on as W
+
+        found = H.resolve_actor(c, actor)
+        if not found:
+            raise Problem("waiting_on", "waiting_on is a person or a bot on the roster", 422)
+        where = f"status='open' AND pipeline_id IS NOT NULL AND ({visible_sql})" + (
+            f" AND ({narrow})" if narrow else ""
+        )
+        ids = [r[0] for r in c.execute(f"SELECT id FROM tasks WHERE {where} LIMIT ?", (WAITING_ON_CAP + 1,))]
+        if len(ids) > WAITING_ON_CAP:
+            raise Problem(
+                "waiting_on",
+                f"waiting_on looks at {WAITING_ON_CAP} open tasks at most: add a pipeline or a stage",
+                422,
+            )
+        return {
+            tid
+            for tid, waits in W.waiting_on_many(c, ids).items()
+            if any(w.who == found and w.state in (W.PERSON, W.PAUSED, W.BOT) for w in waits)
+        }
 
     # ------------------------------------------------------------------ quiet notes
     def note_view(row, c):

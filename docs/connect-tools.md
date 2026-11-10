@@ -203,8 +203,8 @@ Then prove it with one read-only call.
 Start with a question, such as "What cleanings are scheduled for our office this week?", and review the answer in
 Tico. Some TIDY tools can book a job, including one that takes a request in plain language, and `can:` does not stop it:
 Tico does not filter a vendor's tools by `can:`. Use a read-only key or endpoint if TIDY offers one. Otherwise, have the
-bot ask with an approval (`hub approval request --kind spend`) and send a booking or anything that costs money only after a person
-approves it, and write that rule in the bot's instructions and the tool's `note:`.
+bot ask a person to OK it (`hub task ask --kind ok`) and send a booking or anything that costs money only after the
+person OKs it, and write that rule in the bot's instructions and the tool's `note:`.
 
 Tico doesn't run TIDY's workers or track what you spend with TIDY. It has no TIDY connector of its own: TIDY is a Tool,
 like Linear.
@@ -237,7 +237,7 @@ To bring one into your work:
 
 1. Define the role and the result you expect, and name the person or bot that owns the relationship.
 2. Agree what the provider may do, when it must ask a person, and what service and usage costs you accept. A booking
-   or payment your bot makes waits for a person's approval, as [with TIDY](#work-with-a-specialist-outside-tico).
+   or payment your bot makes waits for a person's OK, as [with TIDY](#work-with-a-specialist-outside-tico).
 3. Connect an interface the provider documents, as a Tool, or bring its reports and results into your tasks. Confirm
    the account, the access and how requests and results travel before you count on automation.
 4. Keep requests, results, escalations and decisions on the task. The provider runs its service; the owner in Tico
