@@ -265,19 +265,30 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     return None
 
 
-def live_bots(conn: "sqlite3.Connection", now: str | None = None) -> set[str]:
+class LiveBots(set[str]):
+    """`live_bots`: the bots (slugs) with a live run, and for each the tasks its live runs name (`tasks`)."""
+
+    tasks: dict[str, set[str]]
+
+
+def live_bots(conn: "sqlite3.Connection", now: str | None = None) -> LiveBots:
     """The bots (slugs) with a live run on any task: one read, on the index of active runs (one_active_attempt_per_lane).
-    The never-stuck pass reads it once and hands it to `live_run`, which then reads nothing for any other bot. A pass
-    starts no run, so the set holds for the whole pass; a run that ends during it only makes `live_run` read again."""
+    The same read keeps, for each bot, the tasks its live runs name (`attempts.task_id`), from any conversation: a
+    schedule's notice in the bot's own chat is still a run on its task. The never-stuck pass reads it once and hands it
+    to `live_run`, which then reads nothing for any other bot. A pass starts no run, so the set holds for the whole
+    pass; a run that ends during it only makes `live_run` read again."""
     H = _h()
-    return {
-        str(found[0])
-        for found in conn.execute(
-            "SELECT DISTINCT j.bot_id FROM attempts a JOIN jobs j ON j.attempt_id = a.id "
-            "WHERE a.state IN ('leased','running') AND a.lease_until > ?",
-            (now or H.now(),),
-        ).fetchall()
-    }
+    live = LiveBots()
+    live.tasks = {}
+    for bot, task_id in conn.execute(
+        "SELECT j.bot_id, a.task_id FROM attempts a JOIN jobs j ON j.attempt_id = a.id "
+        "WHERE a.state IN ('leased','running') AND a.lease_until > ?",
+        (now or H.now(),),
+    ).fetchall():
+        live.add(str(bot))
+        if task_id:
+            live.tasks.setdefault(str(bot), set()).add(str(task_id))
+    return live
 
 
 def live_run(
@@ -297,17 +308,22 @@ def live_run(
         return False
     if live is not None and H.actor_id(actor) not in live:
         return False
+    if task["id"] in getattr(live, "tasks", {}).get(H.actor_id(actor), ()):
+        return True  # a live run that names this task, from any conversation
     on_task = _on_task(conn, task)
     return bool(
         conn.execute(
             "SELECT 1 FROM (SELECT m.id FROM messages m WHERE "
-            f"{_KEY} UNION SELECT id FROM messages WHERE conversation_id = ?) w "
+            f"{_KEY} UNION SELECT id FROM messages WHERE conversation_id = ? "
+            "UNION SELECT r.message_id FROM attempts t JOIN jobs r ON r.id = t.job_id WHERE t.task_id = ? "
+            "AND t.state IN ('leased', 'running')) w "
             "CROSS JOIN jobs j ON j.message_id = w.id JOIN attempts a ON a.id = j.attempt_id "
             "JOIN messages m ON m.id = w.id "
             f"WHERE j.bot_id=? AND a.state IN ('leased', 'running') AND a.lease_until > ? AND {_ON_TASK} LIMIT 1",
             (
                 *_range(task["id"]),
                 on_task[-1] if on_task[-2] else "",  # the conversation's messages, only when it is this task's alone
+                task["id"],  # and the runs that name this task, from any conversation
                 H.actor_id(actor),
                 now or H.now(),
                 *on_task,

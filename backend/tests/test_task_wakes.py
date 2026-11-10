@@ -402,6 +402,39 @@ def test_a_live_run_on_one_task_never_hides_a_lost_wake_on_another_in_the_same_c
     assert _queued(c, first["id"]) == [BUILDER]  # woken again for the note
 
 
+def test_a_live_run_that_names_the_task_from_another_conversation_is_on_the_task(c, general):
+    """A schedule's notice about the task sits in the bot's own chat, not the task's: its live run names the task,
+    counts for it, and is the bot being on it, read from the pass's one read of live runs."""
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+    chat = H._pair_conversation(c, H.KEEPER, BUILDER, "chat")["id"]
+    assert chat != row["conversation_id"]
+    notice, run = H.new_id(), H.new_id()
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'notice','Scheduled occurrence absorbed.',?,?)",
+        (notice, chat, H.KEEPER, BUILDER, H._dump({"task": row["id"], "wake": "occurrence"}), H.now()),
+    )
+    c.execute(
+        "INSERT INTO jobs(id,message_id,bot_id,created_at,state) VALUES(?,?,?,?,'running')",
+        (notice, notice, "builder", H.now()),
+    )
+    c.execute(
+        "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, created_at, "
+        "started_at, message_id, task_id) VALUES (?,?,?,'r1',1,?,'running',?,?,?,?,?)",
+        (run, notice, "builder", run, H.shift(H.now(), minutes=5), H.now(), H.now(), notice, row["id"]),
+    )
+    task_wakes.started(c, run)
+    c.execute("UPDATE jobs SET attempt_id=? WHERE id=?", (run, notice))
+    from backend import task_engine as E
+
+    row = E.task(c, row["id"])
+    assert task_wakes.runs_since(c, row) == 1  # it counts for the task
+    live = task_wakes.live_bots(c)
+    assert task_wakes.live_run(c, row, BUILDER, live=live)  # and the bot is on it
+    assert task_wakes.live_run(c, row, BUILDER)
+
+
 def _chat_run(c, conversation_id, bot):
     """A run of `bot` on a message in a conversation that names no task: a person wrote to it there."""
     message, run = H.new_id(), H.new_id()
