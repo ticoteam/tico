@@ -62,7 +62,7 @@ function tasksURLWrite(state: TasksPageState) {
 }
 
 // openId opens one task in full over the page: the #/task/<id> address.
-function pageTasks(_forced?: string, openId = '') {
+function pageTasks(openId = '') {
   tasksLeave();
   const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
     tasks: [], pipelines: TASK_PIPELINES || [], loading: true, failed: '', seq: 0, abort: new AbortController()};
