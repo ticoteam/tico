@@ -176,7 +176,8 @@ class FakeIAM:
     exceptions = _Exc
 
     def __init__(self, role_tags=None):
-        self.calls, self.role_tags = [], role_tags
+        # role_tags: the role exists with these tags (None: no role), and so does its profile; profiles: made here.
+        self.calls, self.role_tags, self.profiles = [], role_tags, {}
 
     def _rec(self, name, **kw):
         self.calls.append((name, kw))
@@ -188,6 +189,32 @@ class FakeIAM:
         if self.role_tags is None:
             raise _Exc.NoSuchEntityException()
         return {"Tags": self.role_tags}
+
+    def create_instance_profile(self, **kw):
+        self._rec("create_instance_profile", **kw)
+        if kw["InstanceProfileName"] in self.profiles:
+            raise _Exc.EntityAlreadyExistsException()
+        self.profiles[kw["InstanceProfileName"]] = {"Tags": kw.get("Tags", []), "Roles": []}
+
+    def add_role_to_instance_profile(self, **kw):
+        self._rec("add_role_to_instance_profile", **kw)
+        self.profiles.setdefault(kw["InstanceProfileName"], {"Tags": [], "Roles": []})["Roles"].append(kw["RoleName"])
+
+    def remove_role_from_instance_profile(self, **kw):
+        self._rec("remove_role_from_instance_profile", **kw)
+        if kw["InstanceProfileName"] in self.profiles:
+            self.profiles[kw["InstanceProfileName"]]["Roles"].remove(kw["RoleName"])
+
+    def delete_instance_profile(self, **kw):
+        self._rec("delete_instance_profile", **kw)
+        self.profiles.pop(kw["InstanceProfileName"], None)
+
+    def get_instance_profile(self, InstanceProfileName):
+        p = self.profiles.get(InstanceProfileName)
+        if p is None:  # a role that exists, set up by setup, has its profile beside it
+            p = {"Tags": self.list_role_tags(RoleName=InstanceProfileName)["Tags"], "Roles": [InstanceProfileName]}
+        roles = [{"RoleName": r} for r in p["Roles"]]
+        return {"InstanceProfile": {"InstanceProfileName": InstanceProfileName, "Tags": p["Tags"], "Roles": roles}}
 
     def __getattr__(self, name):
         return lambda **kw: self._rec(name, **kw)

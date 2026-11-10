@@ -851,3 +851,43 @@ def test_an_iam_role_setup_did_not_make_is_refused_before_any_write(tmp_path):
     code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)
     assert code == 2 and "IAM role hub-hotmic already exists and was not made by this setup" in out, out
     assert [n for n, _ in log if not n.startswith(READS)] == []
+
+
+PRODUCTION = [{"Key": "team", "Value": "production"}]
+
+
+def test_an_instance_profile_setup_did_not_make_is_refused_and_never_deleted(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    iam.profiles["hub-hotmic"] = {"Tags": [], "Roles": ["production-app"]}
+    code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)
+    assert code == 2 and "IAM instance profile hub-hotmic already exists and was not made by this setup" in out, out
+    assert [n for n, _ in log if not n.startswith(READS)] == []
+    # ensure_role on its own refuses it too, rather than handing it to EC2.
+    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
+    dep = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=lambda m: None, sleep=lambda s: None)
+    with pytest.raises(MissingInput, match="IAM instance profile hub-hotmic"):
+        dep.ensure_role()
+    assert not iam.called("add_role_to_instance_profile")
+    # A tagged one holding another role is not ours either.
+    iam.profiles["hub-hotmic"] = {"Tags": HUB_TAGS, "Roles": ["production-app"]}
+    with pytest.raises(MissingInput, match="IAM instance profile hub-hotmic"):
+        dep.ensure_role()
+    # Destroy deletes the role it made but leaves a profile it did not make.
+    for tags in ([], PRODUCTION, HUB_TAGS):
+        iam.calls.clear()
+        iam.profiles["hub-hotmic"] = {"Tags": tags, "Roles": ["production-app"] if tags == HUB_TAGS else []}
+        out = []
+        aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, say=out.append, sleep=lambda s: None, names=HUB)
+        assert not iam.called("delete_instance_profile") and not iam.called("remove_role_from_instance_profile")
+        assert "left alone: IAM instance profile hub-hotmic was not made by this setup" in "\n".join(out)
+
+
+def test_a_profile_setup_made_without_its_role_gets_it_on_a_rerun():
+    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
+    iam = IAM()
+    iam.profiles["hub-hotmic"] = {"Tags": HUB_TAGS, "Roles": []}  # an earlier run stopped between the two calls
+    dep = aws.Deployer(p, fakes.FakeEC2(), iam, fakes.FakeSSM(), ACCOUNT, say=lambda m: None, sleep=lambda s: None)
+    assert dep.ensure_role() == "hub-hotmic"
+    assert iam.called("add_role_to_instance_profile") == [
+        {"InstanceProfileName": "hub-hotmic", "RoleName": "hub-hotmic"}
+    ]

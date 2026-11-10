@@ -398,6 +398,10 @@ class Deployer:
         tags = self.role_tags()
         if tags is not None and not self.n.is_ours(tags, self.p.name):
             raise not_ours("IAM role", self.n.resource(self.p.name), self.n, self.p.name)
+        n = self.n.resource(self.p.name)
+        prof = instance_profile(self.iam, n)
+        if prof is not None and not profile_is_ours(prof, n, self.n):
+            raise not_ours("IAM instance profile", n, self.n, self.p.name)
 
     def ensure_plan_bucket(self, s3, region: str) -> None:
         """Configure only setup's dedicated bucket, in the installer's account. Never adopt an unrelated bucket.
@@ -508,7 +512,11 @@ class Deployer:
             self.iam.create_instance_profile(InstanceProfileName=n, Tags=self.n.tags(self.p.name))
             self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
         except self.iam.exceptions.EntityAlreadyExistsException:
-            pass
+            prof = instance_profile(self.iam, n)
+            if not prof or not profile_is_ours(prof, n, self.n):
+                raise not_ours("IAM instance profile", n, self.n, self.p.name) from None
+            if not prof.get("Roles"):  # an earlier run stopped between creating it and adding the role
+                self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
         return n
 
     def ssm_param_arn(self) -> str:
@@ -681,6 +689,26 @@ class Deployer:
         return False
 
 
+def instance_profile(iam, name: str) -> dict | None:
+    try:
+        return iam.get_instance_profile(InstanceProfileName=name)["InstanceProfile"]
+    except iam.exceptions.NoSuchEntityException:
+        return None
+
+
+def profile_is_ours(prof: dict, name: str, names: Names) -> bool:
+    """Its own tags make it setup's <prefix>-<tagged name>, and it holds no role but setup's of that name. A profile is
+    checked apart from its role: a role being setup's says nothing about a profile of the same name."""
+    tags = {t["Key"]: t["Value"] for t in prof.get("Tags") or []}
+    tagged = tags.get(names.name_tag)
+    return (
+        bool(tagged)
+        and names.is_ours(prof.get("Tags"), tagged)
+        and names.resource(tagged) == name
+        and all(r.get("RoleName") == name for r in prof.get("Roles") or [])
+    )
+
+
 # --- destroy -----------------------------------------------------------------------------------------------
 
 
@@ -763,9 +791,15 @@ def destroy(
                     raise
                 sleep(5)
     for n in found.get("iam-role", []):
+        prof = instance_profile(iam, n)
+        if prof is not None and not profile_is_ours(prof, n, names):
+            say(f"  left alone: IAM instance profile {n} was not made by this setup; the role {n} stays with it.")
+            continue
         try:
-            iam.remove_role_from_instance_profile(InstanceProfileName=n, RoleName=n)
-            iam.delete_instance_profile(InstanceProfileName=n)
+            if prof and any(r.get("RoleName") == n for r in prof.get("Roles") or []):
+                iam.remove_role_from_instance_profile(InstanceProfileName=n, RoleName=n)
+            if prof:
+                iam.delete_instance_profile(InstanceProfileName=n)
         except iam.exceptions.NoSuchEntityException:
             pass
         iam.detach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
