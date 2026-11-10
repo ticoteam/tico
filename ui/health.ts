@@ -22,6 +22,8 @@ interface HlCheck {
   summary: string;
   status: HlStatus;
   fixes: HlFix[];
+  /** never_stuck only: the open tasks on each rung (backend/health.py _never_stuck_check). */
+  counts?: Partial<Record<HlLadderKey, number>>;
 }
 
 interface HlRuntime {
@@ -281,15 +283,13 @@ function hlFixHtml(fix: HlFix): string {
   return `<a class="ghost gs-link" href="${esc(fix.href)}"${fix.tab ? ` data-gs-tab="${esc(fix.tab)}"` : ''}>${esc(fix.label)}</a>`;
 }
 
-// Health · Tasks (S15): where the never-stuck check has the open tasks, five lines of a big number and its words. The
-// server's line says them in this order (backend/health.py _never_stuck_check); anything after them is its rule breaks.
-const HL_LADDER = ['waiting on nothing', 'on a retry', 'with a manager', 'reached a person', "can't run"];
-function hlLadderHtml(summary: string): string {
-  const found = HL_LADDER.map(words => summary.match(new RegExp(`(\\d+) ${words}[,.]`))?.[1]);
-  if (found.some(n => n === undefined)) return '';
-  const breaks = summary.slice(summary.indexOf("can't run.") + "can't run.".length).trim();
-  return `<ul class="hl-ladder">${HL_LADDER.map((words, at) => `<li><strong>${esc(found[at] ?? '')}</strong> ${esc(words)}</li>`).join('')}</ul>`
-    + (breaks ? `<p>${esc(breaks)}</p>` : '');
+// Health · Tasks (S15): where the never-stuck check has the open tasks, a big number and its words on each line.
+type HlLadderKey = 'waiting_on_nothing' | 'retry' | 'manager' | 'person' | 'cant_run' | 'broken';
+const HL_LADDER: [HlLadderKey, string][] = [['waiting_on_nothing', 'waiting on nothing'], ['retry', 'on a retry'],
+  ['manager', 'with a manager'], ['person', 'reached a person'], ['cant_run', "can't run"], ['broken', 'broken']];
+function hlLadderHtml(counts: HlCheck['counts']): string {
+  if (!counts) return '';
+  return `<ul class="hl-ladder">${HL_LADDER.map(([key, words]) => `<li><strong>${esc(String(counts[key] ?? 0))}</strong> ${esc(words)}</li>`).join('')}</ul>`;
 }
 function hlCheckHtml(check: HlCheck): string {
   const owner = check.id === 'version' && HL?.audience === 'owner';
@@ -305,7 +305,7 @@ function hlCheckHtml(check: HlCheck): string {
     + (update || (owner && busy) ? `<div data-hl-update-out>${typeof NV_OUT_HTML === 'string' ? NV_OUT_HTML : ''}</div>` : '');
   return `<li class="hl-check ${esc(check.status)}" data-hl-check="${esc(check.id)}" data-status="${esc(check.status)}">
     <span class="nav-icon hl-icon" aria-hidden="true">${HL_ICONS[check.status] || HL_ICONS.unknown}</span>
-    <div class="hl-main"><strong>${esc(check.label)}</strong>${(check.id === 'never_stuck' && hlLadderHtml(check.summary)) || `<p>${esc(check.summary)}</p>`}${result}</div>
+    <div class="hl-main"><strong>${esc(check.label)}</strong>${(check.id === 'never_stuck' && hlLadderHtml(check.counts)) || `<p>${esc(check.summary)}</p>`}${result}</div>
     <div class="hl-fixes">${check.fixes.map(hlFixHtml).join('')}${checkButton}${update}${hlReportHtml(check.status === 'bad' && {kind: 'health', title: check.label, detail: check.summary, ref: check.id, group: 'health:' + check.id})}</div></li>`;
 }
 
