@@ -20,7 +20,7 @@ yes or no in a minute.
 ## 2. Publish and attach
 
     tico file publish reports/<task id>-built.md --task <id>
-    tico task attach <id> page:<file id> --req "<requirement>"
+    tico task attach <id> page:<file id> --req "<requirement>" --version N
 
 `tico file publish` prints the file id. The requirement's name is the one `tico task show` lists for Fixes 2.
 

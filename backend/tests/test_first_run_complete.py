@@ -66,6 +66,14 @@ def sample(api):
     assert done.status_code == 200, done.text
 
 
+# Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps).
+MANAGERS = {
+    "onboarding": {"product": "product-manager", "engineering": "engineering-manager"},
+    "company_file": {"product": None, "engineering": None},
+    "sample": {"product": None, "engineering": None},
+}
+
+
 @pytest.mark.parametrize("first_run", [onboarding, company_file, sample])
 def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_nothing(environment, first_run):
     api = environment()
@@ -73,13 +81,11 @@ def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_no
     machine(api)  # the owner's computer, so the built-ins can run and BotOps is active
     first_run(api)
     after_setup = whole(api)
-    # No answer to "Software is the product" is yes: Product and Engineering come too, managed by nobody until their
-    # bots are hired (pipeline_settings.ensure_presets).
-    assert after_setup["managers"] == [
-        {"id": "engineering", "manager_id": None},
-        {"id": "general", "manager_id": "bot:task-manager"},
-        {"id": "product", "manager_id": None},
-    ]
+    # No answer to "Software is the product" is yes: Product and Engineering come too. Their managers are the default
+    # chart's Product Manager and Engineering Manager where setup started them (pipeline_settings.ensure_presets).
+    slugs = {f"bot:{r['id']}": r["slug"] for r in rows(api, "SELECT id, slug FROM bots")}
+    managers = {r["id"]: slugs.get(r["manager_id"], r["manager_id"]) for r in after_setup["managers"]}
+    assert managers == {"general": "task-manager", **MANAGERS[first_run.__name__]}
     assert {"bot": "botops", "routine_key": routines.SWEEP_KEY} in after_setup["routines"]
     restarted = environment(seed_roster=False)
     assert whole(restarted) == after_setup

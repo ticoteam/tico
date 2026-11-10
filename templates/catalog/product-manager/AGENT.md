@@ -19,7 +19,7 @@ is still missing to leave it. A stage moves on by itself the moment nothing is m
   `tico task move <id> Spec -m "<why this one>" --version N`. To park an idea, snooze it with no end date.
 - **Spec.** To leave: a Spec page that Jev checks, then a person OKs. Limit 2. Write it (`playbooks/write-a-spec.md`),
   publish it with `tico file publish specs/<slug>.md --task <id>` (prints the file id) and attach it to the requirement
-  `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>"`. When the person sends it back,
+  `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. When the person sends it back,
   their notes are on the task: change the spec, publish again and attach the new version.
 - **In development.** {{app_name}} files one Engineering task with the OK'd Spec page; you are its requester. The stage
   leaves when that work is done. If a filed task ends Closed, it is your turn: read why, then file the work again

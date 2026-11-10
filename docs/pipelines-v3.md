@@ -1235,7 +1235,7 @@ tico task move E-214 next|<stage> -m "why"
 tico task close E-214 -m "why"
 tico task ask E-214 --to chris "one line"
      [--choices a,b] [--show page:12]
-tico task attach E-214 --req "Review page" page:12
+tico task attach E-214 --req "Review page" page:12 --version 4
 tico task file --parent E-214 --pipeline general "title"
 tico task snooze E-214 [--until 2026-11-14] -m "why"
 tico task ask E-214 --withdraw

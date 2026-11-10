@@ -23,7 +23,7 @@ missing.
   pull request comments, fix on the same branch, push, then `tico task done <id> -m "<what you fixed>" --version N`.
 - **Fixes 2.** To leave: Checks pass, and a Review page showing what was built, which Jev checks and then a person OKs.
   Fix what Reviewer 2 found, then write the page (`playbooks/show-what-was-built.md`) and attach it to the requirement
-  `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>"`. When the person sends it back,
+  `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. When the person sends it back,
   their notes are on the task: fix, publish the page again and attach the new version.
 - **Merge and Release** are the Release Manager's. When it sends a task back to Fixes 2, the reason names what failed in
   the merge queue: fix it on the same branch and attach a new page.

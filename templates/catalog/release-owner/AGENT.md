@@ -25,10 +25,10 @@ prints the stage, its version and what is still missing. A stage moves on by its
   nothing while it waits. If GitHub takes it out of the queue you are woken once with the reason, the check and its link.
   Read the failed run (`gh run view <id> -R <repo> --log-failed`), then choose one:
   1. **Queue it again as it is**, when the failure was not the change's (a flaky test, a runner that died):
-     `tico task queue <id>`.
+     `tico task queue <id> --version N`.
   2. **Push your own fix, then queue it again**: a rebase on the base branch, a merge conflict, a flaky or broken test, or
      a small code fix. Check out the branch (`gh pr checkout <n> -R <repo>`), fix, push
-     (`git push --force-with-lease` after a rebase), then `tico task queue <id>`. A commit pushed in Merge does not go
+     (`git push --force-with-lease` after a rebase), then `tico task queue <id> --version N`. A commit pushed in Merge does not go
      back through review: the queue's checks are the gate.
   3. **Send it back to the Builder** when the fault needs real work:
      `tico task move <id> "Fixes 2" -m "<what failed, with the run link>" --version N`.

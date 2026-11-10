@@ -242,7 +242,6 @@ walks through tasks that already ended to reach open ones below them. Done does 
 ```python
 MET, WAITING, NOT_MET = "met", "waiting", "not_met"
 JEV, GITHUB = "jev", "github"                     # what Standing.on is when it is not an actor or a task
-PHASE_ONE = ("owner_done", "ok", "answer", "linked_done")
 NEVER_PUSHED_PAST = ("pr_merged", "in_release")
 
 def on_stage(conn, stage_id) -> list[dict]
@@ -267,9 +266,9 @@ def people_only(requirement) -> bool
 id), `line` (what is missing, one sentence), `name`, `requirement`, and `met`. A kind reads tables only. It never calls
 GitHub, Jev or a computer.
 
-Phase 1 kinds: `owner_done`, `ok`, `answer`, `linked_done`. The other five are in KINDS and say "<Name> is not built
-yet" until their track lands; `pipeline_settings` refuses to save them until then. `SETTINGS` lists the settings keys
-each kind takes.
+The nine kinds: `owner_done`, `ok`, `answer`, `linked_done`, and Product and Engineering's `page`, `pr_open`,
+`checks_pass`, `pr_merged`, `in_release`. `SETTINGS` lists the settings keys each kind takes; `pipeline_settings` refuses
+any other key.
 
 ## waiting_on.py
 

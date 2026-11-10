@@ -50,6 +50,6 @@ before handing over.
 ## 6. Hand over
 
 Publish with `tico file publish specs/<slug>.md --task <id>`; it prints the file id. Attach it to the requirement
-`tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>"`. Jev checks it, then a person OKs
+`tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. Jev checks it, then a person OKs
 it, and the task moves to In development, where {{app_name}} files the Engineering task. Put open questions and who owes
 them in a note on the task.

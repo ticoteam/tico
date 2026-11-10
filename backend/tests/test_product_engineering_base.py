@@ -2,6 +2,7 @@
 the stores every track reads (task_facts, page_verdicts, task_pages) with the fake GitHub the tests and the rig use."""
 
 import importlib
+import inspect
 import sqlite3
 
 import pytest
@@ -38,15 +39,11 @@ def test_the_migration_runs_twice_and_gives_effects_their_pr():
     assert {"repo", "number", "head_sha", "next_try_at"} <= effects
 
 
-def test_each_new_kind_says_it_is_not_built_yet_and_every_kind_has_its_settings():
-    task = {"owner_id": "bot:builder", "visit": {"id": "v"}}
-    for kind in ("page",):  # the GitHub kinds are built: backend/tests/test_github_facts_merge_queue.py
-        found = R.KINDS[kind](None, task, {"kind": kind, "line": ""}, None)
-        assert (found.state, found.on, found.line) == (
-            R.NOT_MET,
-            "bot:builder",
-            f"{R.KIND_NAMES[kind]} is not built yet",
-        )
+def test_every_kind_is_built_and_has_its_settings():
+    """Each kind computes its own standing: none is a stub saying it is not built yet."""
+    source = inspect.getsource(R)
+    assert "not built yet" not in source
+    assert {fn.__name__ for fn in R.KINDS.values()} == {f"_{kind}" for kind in R.KINDS}
     assert set(R.SETTINGS) == set(R.KINDS)
     assert R.SETTINGS["page"] == ("rubric", "at_head", "with_release")
     assert R.SETTINGS["in_release"] == ("release_repo", "prereleases")

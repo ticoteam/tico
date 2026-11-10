@@ -33,7 +33,6 @@ Row = dict[str, Any]
 MET, WAITING, NOT_MET = "met", "waiting", "not_met"
 # What a requirement waits on when it is not a person or a task: `Standing.on` for the kinds that read saved facts.
 JEV, GITHUB = "jev", "github"
-PHASE_ONE = ("owner_done", "ok", "answer", "linked_done")
 KIND_NAMES = {
     "owner_done": "Owner says done",
     "ok": "OK from someone",
@@ -274,12 +273,6 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
         line = f"{title} was closed: {why}" if why else f"{title} was closed"
         return Standing(requirement, NOT_MET, task.get("owner_id"), line, first["id"])
     return Standing(requirement, MET, line="Done")
-
-
-def _not_built(task: Row, requirement: Row) -> Standing:
-    """A kind whose standing is not built yet: the owner's turn, saying so. Save refuses these kinds on a stage until
-    they are built (pipeline_settings.PHASE), so only a row written before that refusal reaches here."""
-    return Standing(requirement, NOT_MET, task.get("owner_id"), f"{name_of(requirement)} is not built yet")
 
 
 # The five kinds the Product and Engineering pipelines bring. Each is its own function so each lands on its own:

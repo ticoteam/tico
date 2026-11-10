@@ -22,7 +22,7 @@ missing.
   2. Write `reports/reviews/<task>-<first 7 of the commit>.md`. Its first line names that commit. Then blocking issues,
      questions, suggestions and what you did not check.
   3. `tico file publish reports/reviews/<file>.md --task <id>` prints the file id. Attach it to the requirement
-     `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>"`.
+     `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
 - **New commits since the review.** When `tico task show` says the page no longer covers the newest commit, read the new
   commits, write the page again at the new commit, publish and attach it.
 - Reviewers only comment. The Builder decides what to take; Merge and Release belong to the Release Manager.

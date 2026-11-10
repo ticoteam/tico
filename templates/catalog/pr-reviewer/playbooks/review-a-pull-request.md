@@ -70,7 +70,7 @@ one file per call. The review page shows only what is attached here. If the diff
 ## 5. Finish
 
 In a review stage: publish and attach the page. `tico file publish reports/reviews/<file>.md --task <id>` prints the
-file id; then `tico task attach <id> page:<file id> --req "<requirement>"`, using the requirement `tico task show`
+file id; then `tico task attach <id> page:<file id> --req "<requirement>" --version N`, using the requirement `tico task show`
 names. The page is the whole hand-off: the stage moves on when it covers the newest commit. Commit this repository.
 
 Outside the pipeline: `tico task done <id> -m "..." --version N`: the pull request, the head commit, the number of
