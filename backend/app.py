@@ -110,7 +110,6 @@ from . import (
     access_routes,
     people_routes,
     updates_routes,
-    answers_routes,
     task_list_routes,
     task_bulk_routes,
     task_actions_routes,
@@ -2907,8 +2906,6 @@ def create_app(settings=None):
         task_view,
     )
 
-    answers_routes.register(app, auth, mutate)
-
     def task_filters(
         c,
         owner=None,
@@ -3621,9 +3618,7 @@ def create_app(settings=None):
         note = " ".join(
             filter(
                 None,
-                (
-                    usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),
-                ),
+                (usage_limits.warning(c, owner) or bot_stops.warning(c, owner) or H.setup_hold(c, owner),),
             )
         )
         return {

@@ -157,19 +157,6 @@ class PageChat(Contract):
     task_id: str | None = None
 
 
-class TakeRecommendation(Contract):
-    ask: Annotated[StrictStr, Field(min_length=1, max_length=100)]  # the bot's ask the person says yes to
-    version: Annotated[int, Field(strict=True, ge=1)] | None = (
-        None  # the card's task version: a changed task is refused
-    )
-
-
-class AsksSeen(Contract):
-    """Questions to the person that their Needs you now shows (POST /api/v2/needs-you/seen)."""
-
-    asks: Annotated[list[Annotated[StrictStr, Field(min_length=1, max_length=100)]], Field(max_length=200)]
-
-
 Lane = Literal["company", "product"]
 # A task's number: one sequence for the whole team, like one board's ticket numbers.
 TaskNumber = Annotated[int, Field(ge=1, le=999_999_999)]
