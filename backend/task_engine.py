@@ -520,6 +520,8 @@ def enter(
             (H.new_id(), parent, task_id, _part(above, "visit").get("id"), link, ts),
         )
     _event(conn, task_id, by, "move", None, first["id"], None, {"move": "new", "owner": owner, "parent": parent})
+    if above:
+        _drop_stale(conn, str(parent))  # the parent waits on it now: its owner's queued wake for the parent goes
     _owned(conn, row, _task(conn, task_id), by)
     entered = _task(conn, task_id)
     stage_effects.enter(conn, entered, by)

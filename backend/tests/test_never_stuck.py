@@ -236,6 +236,17 @@ def test_a_bot_that_cannot_run_is_not_woken_and_its_tasks_show_one_row_for_the_c
     assert _ladder(c, first) == ("owner", 1)
 
 
+def test_a_bots_queued_wake_on_its_task_is_dropped_once_it_waits_on_a_task_it_filed(c, general, later):
+    """Filing a sub-task makes the parent wait on it, so the parent's owner has no turn: a wake it still had queued for
+    the parent goes (task_engine._drop_stale), as on any other change of turn. Left queued, the claim would drop it
+    then (task_wakes.may_start) and could answer nothing; Health would count it as work handed out."""
+    parent = X.new_task(c, ANA, "Plan the launch", assignee=BUILDER)
+    assert _queued(c, parent["id"]) == [BUILDER]
+    X.new_task(c, BUILDER, "Draft the launch post", assignee=REVIEWER, parent=parent["id"])
+    assert _states(c, parent["id"])[0][0] == W.TASKS
+    assert _queued(c, parent["id"]) == []
+
+
 def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c, general, later):
     """A run whose lease lapsed after it may have acted (a tool call or a write, even before it started) is held for a
     check (execution.auto_reconcile, `job.held`), and the bot claims nothing more on that task until someone resumes or
