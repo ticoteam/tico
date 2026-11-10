@@ -38,9 +38,8 @@ for one bot at a time):
 
 Left as they are: the Assistant's rooms (it has no Home), the Strategy Bot, the Librarian's "docs" rooms (its per-person
 Q&A list reads them), Strategy rooms, task rooms, meetings, DMs (scope 'direct'), closed or archived rows, rows that are
-not exactly one person and one bot, rooms of bots synced from an outside app (the sync reads the person's room),
-federated rooms, and a room whose owner's viewer may not read the bot's Home (moving it would take their own history from
-them). An owner with no viewer (a human with no record in the registry) is not an exception: their room moves.
+not exactly one person and one bot, rooms of bots synced from an outside app (the sync reads the person's room), and
+a room whose owner's viewer may not read the bot's Home (moving it would take their own history from them). An owner with no viewer (a human with no record in the registry) is not an exception: their room moves.
 
 Not moved: tasks.conversation_id (see 1), chat goals and session epochs (a room's own state; a run in the Home starts
 its own), history (events, changes, digests), and message-keyed rows (search, links, jobs), which follow the message.
@@ -155,9 +154,9 @@ def home_for_chat(c, person, bot_ref, *, create=True):
     """The Home a person's chat with this bot goes into once the bot's chats have moved (rooms.personal_room, the chat and
     work rooms, a bot's message with no room named). Only a covered bot is one whose rooms the move took (it has home_merges
     rows): a bot the move never reached, and a fresh install's, keep their chats as they are, for one lookup. None where the
-    move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a Home linked to
-    another install, a person whose viewer is refused the Home, and a bot with no Home when `create` is False. A person
-    with no viewer (no record in the registry) gets the Home, as the move took their chat there."""
+    move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a person whose
+    viewer is refused the Home, and a bot with no Home when `create` is False. A person with no viewer (no record in the
+    registry) gets the Home, as the move took their chat there."""
     from . import threads
 
     bot = _covered_bot(c, str(bot_ref or "").strip().removeprefix("bot:"))
@@ -184,7 +183,7 @@ def home_for_chat(c, person, bot_ref, *, create=True):
     v = threads.actor_viewer(c, person)
     if v is None and not str(person).startswith("human:"):
         return None
-    if _federated(c, home_id) or (v is not None and not threads.readable(c, v, home_id)):
+    if v is not None and not threads.readable(c, v, home_id):
         return None
     return home_id
 
@@ -343,7 +342,7 @@ def _eligible(c, excluded):
         bot = bots[other]
         if not bot or row["room_key"] not in (bot["id"], bot["slug"]):
             continue  # the Assistant's, Strategy's and the Librarian's docs rooms are keyed by their role
-        if {bot["id"], bot["slug"]} & excluded or _synced(c, bot) or _federated(c, row["id"]):
+        if {bot["id"], bot["slug"]} & excluded or _synced(c, bot):
             continue
         found.setdefault(bot["id"], []).append(row)
     return found
@@ -370,21 +369,12 @@ def _synced(c, bot):
     return resolve_harness(config) in set(EXTERNAL_HARNESSES) | set(HARNESSES)
 
 
-def _federated(c, thread_id):
-    for table in ("federation_threads", "federation_members"):
-        if _table(c, table) and c.execute(f"SELECT 1 FROM {table} WHERE thread_id=? LIMIT 1", (thread_id,)).fetchone():
-            return True
-    return False
-
-
 # ----------------------------------------------------------------------------- one bot
 def _merge_bot(c, bot_id, rooms, summary):
     from . import threads
 
     bot = H.bot(c, bot_id)
     home = _home(c, bot, summary)
-    if _federated(c, home["id"]):
-        raise Skip("its Home is linked to another install")
     moving = []
     for room in rooms:
         v = threads.actor_viewer(c, room["owner_id"])
