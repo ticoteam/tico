@@ -164,6 +164,12 @@ def _build():
     )
 
     add(
+        "release.published",
+        "A release of the server's release repository was published.",
+        {"release": "v1.4.0", "repository": "acme/app", "url": "https://github.com/acme/app/releases/tag/v1.4.0"},
+        aliases=("release_published",),
+    )
+    add(
         "meeting.ready",
         "A team meeting with a transcript was imported.",
         {"id": "m1", "title": "Acme weekly sync", "source": "recorder", "ended": "2026-03-02T17:30:00Z"},

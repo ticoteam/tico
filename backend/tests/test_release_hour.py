@@ -75,13 +75,15 @@ def test_the_hour_fires_once_and_a_restart_or_a_clock_jumped_back_does_not_fire_
     assert len(fired(api)) == 2
 
 
-def test_with_nothing_waiting_the_slot_is_used_and_no_task_is_filed(api):
+def test_with_nothing_waiting_the_slot_still_files_one_task(api):
+    """The Release task is filed whether or not anything waits (request_now), so the hour never says whether hidden
+    work waits; the Release Manager closes it when nothing does."""
     setup(api, waiting=False)
     tick(api, zone_at(10, 1))
     tick(api, zone_at(10, 2))
-    assert release_tasks(api) == []
+    assert len(release_tasks(api)) == 1
     (slot,) = fired(api).values()
-    assert slot["sent"] is False and slot["reason"] == "nothing_pending"
+    assert slot["sent"] is True and slot["tasks"] == 0
 
 
 def test_with_no_release_manager_nothing_is_filed(api):
@@ -105,3 +107,41 @@ def test_a_server_down_past_the_grace_skips_the_slot_and_the_next_one_fires():
     assert RH.due_slot(cfg, zone_at(16, 0)) == zone_at(16)
     assert RH.due_slot(cfg, zone_at(1, 0, days=1)) is None
     assert RH.due_slot({**cfg, "on": False}, zone_at(10, 0)) is None
+
+
+def _schedule(api, times):
+    with api.app.state.store.transaction() as c:
+        RS.save(c, ANA, {"on": True, "times": times, "bot": "ops"})
+
+
+def test_the_fall_back_night_fires_its_hour_once_at_the_first_one_thirty(api):
+    """Nov 1 2026, 01:30 happens twice in company time (PDT, then PST). The slot is the date and the configured time,
+    never an offset-bearing instant: it fires once, at the first 01:30."""
+    from datetime import timezone
+
+    setup(api)
+    _schedule(api, ["01:30"])
+    first = datetime(2026, 11, 1, 8, 30, tzinfo=timezone.utc)  # 01:30 PDT
+    tick(api, first)
+    tick(api, first + timedelta(hours=1))  # 01:30 PST, the same wall time again
+    tick(api, first + timedelta(hours=1, minutes=20))
+    assert len(release_tasks(api)) == 1
+    assert list(fired(api)) == ["2026-11-01T01:30"]
+    assert datetime.fromisoformat(fired(api)["2026-11-01T01:30"]["at"]) == first
+
+
+def test_a_time_the_spring_gap_skips_fires_at_the_first_instant_after_it(api):
+    """Mar 14 2027, 02:30 does not exist in company time (02:00 PST becomes 03:00 PDT): the slot fires at 03:00 PDT,
+    once."""
+    from datetime import timezone
+
+    setup(api)
+    _schedule(api, ["02:30"])
+    gap_end = datetime(2027, 3, 14, 10, 0, tzinfo=timezone.utc)  # 03:00 PDT
+    tick(api, gap_end - timedelta(minutes=1))  # 01:59 PST
+    assert release_tasks(api) == []
+    tick(api, gap_end)
+    tick(api, gap_end + timedelta(minutes=30))
+    assert len(release_tasks(api)) == 1
+    assert list(fired(api)) == ["2027-03-14T02:30"]
+    assert datetime.fromisoformat(fired(api)["2027-03-14T02:30"]["at"]) == gap_end

@@ -58,7 +58,7 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
             c, "github-task-wake:" + task["id"], {"due": H.shift(H.now(), seconds=-1), "items": ["Unit tests failed"]}
         )
         assert G.flush_wakes(c) == [task["id"]]
-        assert RT.of_message(newest(c, "ops", "Unit tests failed")) == ("pr_checks", None)
+        assert RT.of_message(newest(c, "ops", "%Unit tests failed")) == ("pr_checks", None)
         # other: a keeper message nothing stamped (a Slack digest).
         conv = H.conversation(c, task["conversation_id"])
         H.feed(c, "bot:ops", "Three new posts in #general.", conv)

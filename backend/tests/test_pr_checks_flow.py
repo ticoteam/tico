@@ -160,4 +160,4 @@ def test_a_review_that_is_not_a_persons_is_a_note(api):
             c,
             c.execute("SELECT id FROM messages WHERE recipient_id='bot:cpo' ORDER BY rowid DESC LIMIT 1").fetchone()[0],
         )
-        assert msg["refs"]["rule"] == "pr_review_note" and jobs(c, "cpo") == 0
+        assert msg["refs"]["quiet"] and msg["refs"]["rule"] == "caller_quiet" and jobs(c, "cpo") == 0

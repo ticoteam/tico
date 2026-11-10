@@ -800,6 +800,43 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
         )
 
 
+def tell_owner(
+    conn: "sqlite3.Connection",
+    task_id: str,
+    text: str,
+    what: str,
+    *,
+    wake: bool = True,
+    refs: Row | None = None,
+    trigger: str | None = None,
+) -> str | None:
+    """News from outside a task for its bot owner (a pull request's checks or reviews), once per visit and `what`: a
+    wake when it is the owner's turn (`_turn_of`), the task waits on no person first, and `wake`; else a quiet note
+    it reads on its next run. Its run is
+    held to the turn and the run cap like every engine wake (task_wakes.may_start). A person owner is told nothing:
+    the task is in their Needs you. Returns the message id, or None."""
+    row = task(conn, task_id)
+    if not row or row["status"] != "open" or not is_bot(row.get("owner_id")):
+        return None
+    from . import waiting_on as W
+
+    owner = str(row["owner_id"])
+    waits = W.of(conn, row)
+    # A task that waits on a person first is theirs to move: the bot hears of it on its next run.
+    run = wake and not (waits and waits[0].state == W.PERSON) and _turn_of(conn, row)[0] == owner
+    return task_wakes.add(
+        conn,
+        row,
+        owner,
+        row["visit"],
+        task_wakes.body(conn, row, text) if run else text,
+        wake_key=f"{row['id']}:{row['visit']['id']}:{what}",
+        quiet=not run,
+        refs=refs,
+        trigger=trigger,
+    )
+
+
 def _tell_manager(conn: "sqlite3.Connection", row: Row, text: str, what: str) -> str | None:
     """One quiet note to the pipeline's manager bot, once per visit and kind of news. Nothing runs for it."""
     manager = _part(row, "pipeline").get("manager_id")

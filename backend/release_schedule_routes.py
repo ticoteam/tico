@@ -10,7 +10,7 @@ Release Manager ONE task, naming no waiting work, or answers with its unfinished
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import Request
 
@@ -118,18 +118,11 @@ def pending(c, visible_sql=None):
 
 
 def next_at(cfg, at):
-    """The next release hour after `at`, or None while the schedule is off."""
-    if not cfg["on"]:
-        return None
-    local = at.astimezone(zone())
-    best = None
-    for text in cfg["times"]:
-        hour, minute = (int(x) for x in text.split(":"))
-        point = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if point <= local:
-            point += timedelta(days=1)
-        best = point if best is None or point < best else best
-    return best
+    """The next release hour after `at`, or None while the schedule is off (release_hour.following)."""
+    from . import release_hour
+
+    found = release_hour.following(cfg, at)
+    return found.astimezone(zone()) if found else None
 
 
 def may_release(c, who):

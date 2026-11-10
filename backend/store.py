@@ -1952,8 +1952,7 @@ class Store:
                     _task_relations.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=61").fetchone():
-                    # The scheduler's due-date reminder pass reads this index, not every task row (H.TASKS_DUE_SQL).
-                    c.execute(H.TASKS_DUE_INDEX)
+                    # It made the due-date reminder index; that pass is gone (hubdb drops the index at start-up).
                     c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=62").fetchone():
                     # A day of history must not authorize every older attempt first.
