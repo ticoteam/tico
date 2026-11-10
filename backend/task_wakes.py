@@ -209,6 +209,7 @@ STATE_CAUSES = {"paused": "is paused", "quarantined": "is quarantined", "planned
 REMOVED = "was removed"
 NO_COMPUTER = "has no computer"
 RUNS_FAILING = "keeps failing its runs"
+LOGIN = "has a login to reconnect"
 COMPANY_PAUSED = "The company is paused"
 CLOUD_LOCKED = "Tico Cloud is locked"
 OUT_OF_CREDIT = "Tico Cloud is out of credit"
@@ -238,7 +239,7 @@ def cannot_run(conn: "sqlite3.Connection", actor: str | None, seen: dict[str, st
 
 
 def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
-    from . import bot_settings, cloud_access, company_pause, gateway_connection, harnesses, run_backoff
+    from . import bot_settings, cloud_access, company_pause, gateway_connection, harnesses, reconnects, run_backoff
 
     row = conn.execute("SELECT state FROM bots WHERE id=?", (bot,)).fetchone()
     if not row:
@@ -267,6 +268,8 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     held: Row = cast("Any", run_backoff).get(conn, bot) or {}
     if held.get("held_at"):
         return RUNS_FAILING  # held until a person releases it (backend/run_backoff.py)
+    if cast("Any", reconnects).bot_open(conn, bot, "login:"):
+        return LOGIN  # its computer's sign-in was refused: a person reconnects it (backend/reconnects.py)
     return None
 
 
