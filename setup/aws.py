@@ -567,14 +567,12 @@ class Deployer:
 
     def verify_plan_bucket(self, s3) -> None:
         """A --plan-bucket setup did not make: it must be one this AWS account owns before anything goes into it."""
-        try:
-            s3.head_bucket(Bucket=self.p.plan_bucket, ExpectedBucketOwner=self.account_id)
-        except Exception as e:  # botocore ClientError (403: another account's), a network error
+        code = self._s3_call(s3.head_bucket, Bucket=self.p.plan_bucket)  # 403: another account's
+        if code:
             raise MissingInput(
                 f"The starter plan bucket {self.p.plan_bucket} is not one this AWS account owns, or cannot be read "
-                f"({error_code(e) or type(e).__name__}); refusing to upload to it. Check --plan-bucket and the "
-                "AWS credentials."
-            ) from None
+                f"({code}); refusing to upload to it. Check --plan-bucket and the AWS credentials."
+            )
 
     def put_plan(self, s3, key: str, data: str) -> None:
         """The packed starter plan, for the server to copy once at first boot (remote.bootstrap_script). Plan only:
@@ -593,8 +591,12 @@ class Deployer:
         """Once the server is up and its app reads its copy. Returns "" when deleted, else the error code: the server is
         already working, and the plan stays until someone deletes it or the bucket's lifecycle rule, if it has one,
         expires it."""
+        return self._s3_call(s3.delete_object, Bucket=self.p.plan_bucket, Key=key)
+
+    def _s3_call(self, call, **kw) -> str:
+        """ "" when the call, made with this account as the expected bucket owner, worked; else its error code."""
         try:
-            s3.delete_object(Bucket=self.p.plan_bucket, Key=key, ExpectedBucketOwner=self.account_id)
+            call(**kw, ExpectedBucketOwner=self.account_id)
         except Exception as e:  # botocore ClientError, a network error; without importing botocore here
             return str(getattr(e, "response", {}).get("Error", {}).get("Code") or type(e).__name__)
         return ""
