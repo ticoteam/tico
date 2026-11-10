@@ -15,7 +15,6 @@ import pytest
 from backend import call_slots as CS
 from backend import org_rule_check as K
 from backend import thread_attention
-from backend import approval_expiry
 from backend import threads
 from backend.tests.helpers.question_tasks import keep_asking  # noqa: F401
 from backend import updates
@@ -735,6 +734,27 @@ def test_keep_blocked_and_only_the_reviewer_author_or_owner_reads_a_hold(ruled):
     post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test", expected=409)
 
 
+def read_by_run(c, aid, task):
+    """The run `aid` read `task`: a quiet notice naming it is one of the run's inputs (task_privacy.attempt_tasks)."""
+    room = c.execute(
+        "SELECT m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "WHERE a.id=?",
+        (aid,),
+    ).fetchone()[0]
+    note = H._write_message(
+        c,
+        H.KEEPER,
+        "bot:ops",
+        "Plan notes",
+        H.conversation(c, room),
+        "notice",
+        {"task": task["id"], "quiet": True},
+        None,
+        None,
+    )
+    c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, note["id"]))
+
+
 def age_holds(api, hours):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE org_rule_holds SET created_at=?", (H.shift(H.now(), hours=-hours),))
@@ -742,7 +762,7 @@ def age_holds(api, hours):
 
 def sweep_holds(api):
     with api.app.state.store.transaction() as c:
-        return approval_expiry.sweep(c, H.now())["held"]
+        return K.expire_unreviewed(c, H.now())
 
 
 def ben_needs_you(api):
@@ -1371,7 +1391,7 @@ def test_send_anyway_of_a_reply_rechecks_where_it_may_go(ruled):
     # The run read a private task Ana cannot read: the reply may not go to her now.
     with api.app.state.store.transaction() as c:
         private = H.task_create(c, "human:ben", "Private plan", "Secret.", "human:ben", lint=False, private=True)
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, private["id"]))
+        read_by_run(c, aid, private)
     view = get(api, f"rule-holds/{hold['id']}", token="ben-test")
     post(api, f"rule-holds/{hold['id']}/send", {"nonce": view["nonce"]}, token="ben-test", expected=403)
     assert hold_row(api, hold["id"])["state"] == "held" and bodies(api, "favorite color is blue") == []
@@ -1602,7 +1622,7 @@ def test_send_anyway_runs_each_routes_privacy_checks_as_the_run(ruled):
     # The run now carries a private task neither Ana nor the company task's readers may read.
     with api.app.state.store.transaction() as c:
         private = H.task_create(c, "human:ben", "Private plan", "Secret.", "human:ben", lint=False, private=True)
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, private["id"]))
+        read_by_run(c, aid, private)
     for h in held:
         send_anyway(api, h["id"], expected=403)
         assert hold_row(api, h["id"])["state"] == "held"

@@ -1186,12 +1186,13 @@ def _open_task(conn):
 
 
 def _free_title(conn, actor):
-    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    """A title the research task can still take: an open task of the same title holds it (the duplicate rule)."""
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for n in range(1, 40):
         title = SIZE_TASK if n == 1 else f"{SIZE_TASK} ({n})"
         if not conn.execute(
             f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
-            (actor, "bot:librarian", title, *H.LIVE_STATUSES),
+            (actor, "bot:librarian", title, *H.ACTIVE_STATUSES),
         ).fetchone():
             return title
     return f"{SIZE_TASK} (40)"

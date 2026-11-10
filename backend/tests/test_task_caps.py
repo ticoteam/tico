@@ -83,7 +83,17 @@ def test_closing_a_task_before_the_receiver_acts_frees_its_slot(api):
     task(api, "ops-test", "Second", owner="ana")
 
 
-def test_a_bot_asks_for_its_cap_as_an_approval_a_person_decides_and_the_hub_applies_it(api):
+def _ok(api, rid, token="ana-test", expected=200):
+    """The person opens the proposal's preview in Tico and clicks OK on it (backend/task_asks.py)."""
+    from backend import task_asks
+
+    shown = get(api, f"oks/{rid}", token=token)["shown_hash"] if expected == 200 else "unseen"
+    with api.app.state.store.read() as c:
+        task = task_asks.task_of(c, rid)
+    return post(api, f"tasks/{task}/asks/{rid}/ok", {"shown_hash": shown}, token=token, expected=expected)
+
+
+def test_a_bot_asks_for_its_cap_as_an_ok_a_person_gives_and_the_hub_applies_it(api):
     org(api)
     asked = api.put(
         "/api/v2/task-caps",
@@ -95,8 +105,8 @@ def test_a_bot_asks_for_its_cap_as_an_approval_a_person_decides_and_the_hub_appl
     assert ("bot:ops", "person:ana") not in rows(api)  # nothing applied yet
     assert [p["id"] for p in get(api, "task-caps")["proposals"]] == [aid]
     put_cap(api, {"sender": "bot:ops", "receiver": "person:ana", "per_day": 5}, token="cara-test", expected=403)
-    post(api, f"approvals/{aid}", {"decision": "approved"}, token="cara-test", expected=403)  # not hers to decide
-    assert post(api, f"approvals/{aid}", {"decision": "approved"})["decision"] == "approved"
+    _ok(api, aid, token="cara-test", expected=409)  # asked of the top of the org, not of her
+    _ok(api, aid)
     assert rows(api)[("bot:ops", "person:ana")]["per_day"] == 1
     assert get(api, "task-caps")["proposals"] == []
     audited = api.get("/api/v2/audit", params={"object": "task_cap:bot:ops>person:ana"}, headers=headers()).json()[

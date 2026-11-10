@@ -16,6 +16,7 @@ from datetime import timedelta, timezone
 
 from .. import automations, cloud_access, demo_content as D, routines, strategy_bot
 from .. import runner_states
+from ..demo_seed import say_done
 from ..scheduler import next_due
 from ..store import H
 from .automations_learnings import _hold_queued, _keep_focus, _release_held
@@ -224,11 +225,7 @@ def _work(b, runs, occurrences):
         # Every run of a routine is a task, and the bot closes it when it is done; until then the schedule absorbs
         # its next occurrence (automations._absorbed), so the bot closes it with its answer as its note.
         if task := (claim.get("task") or {}).get("id"):
-            b.write(
-                lambda c, slug=slug, task=task, note=body["text"]: H.task_update(
-                    c, H.bot_actor(slug), task, status="done", note=note
-                )
-            )
+            b.write(lambda c, slug=slug, task=task, note=body["text"]: say_done(c, H.bot_actor(slug), task, note))
         _keep_focus(b, slug)
 
 

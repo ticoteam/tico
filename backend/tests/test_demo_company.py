@@ -11,7 +11,7 @@ import pytest
 import time_machine
 from fastapi.testclient import TestClient
 
-from backend import demo, demo_seed, hubdb, judge, pipeline_engine
+from backend import demo, demo_seed, hubdb, judge, never_stuck
 from backend import demo_content as D
 from backend import usage_limits as U
 from backend.demo_sections import budgets as B
@@ -125,26 +125,37 @@ def test_the_pricing_decision_waits_for_ana(ana):
     waiting = [
         item
         for item in ana.get("/api/v2/needs-you").json()["items"]
-        if item["requester_id"] == "bot:pricing" and item["status"] == "open"
+        if item["title"] == "Raise Home Pro from $449 to $479 for December?"
     ]
-    assert len(waiting) == 1 and waiting[0]["owner_id"] == "human:ana"
+    assert [item["kind"] for item in waiting] == ["task"]
 
 
-def test_tasks_cover_every_status_and_some_have_chains(ana):
-    # As Tasks reads them: what is live, then the latest done (the weeks before hold hundreds more done).
+def test_tasks_are_open_done_or_closed_and_show_asks_snoozes_and_sub_tasks(ana):
+    """As Tasks reads them: what is open, then the latest finished (the weeks before hold hundreds more done). Every
+    task is in General, and the open ones show what they wait on: a person asked on the task, a snooze."""
     tasks = [
-        *ana.get("/api/v2/tasks?status=open,doing,waiting,review,declined&limit=200").json()["tasks"],
+        *ana.get("/api/v2/tasks?status=open&limit=200").json()["tasks"],
         *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"],
     ]
-    assert {task["status"] for task in tasks} >= {"open", "doing", "waiting", "review", "done", "closed", "declined"}
-    parents = [task for task in tasks if (task.get("children_summary") or {}).get("total")]
-    assert parents, "some tasks split into child tasks"
-    tree = ana.get(f"/api/v2/tasks/{parents[0]['id']}/tree")
-    assert tree.status_code == 200 and tree.json()
+    assert {task["status"] for task in tasks} == {"open", "done", "closed"}
+    assert {task["pipeline_id"] for task in tasks} == {"general"}
+    by_title = {task["title"]: task for task in tasks}
+    beta = by_title["Ship the calibration screen to every owner"]
+    assert (beta["turn"]["state"], beta["turn"]["who"]) == ("person", "human:eli")
+    assert by_title["Fix the Linux-only test that flakes"]["snoozed"]
+    assert by_title["Email the whole mailing list about the holiday sale"]["status"] == "closed"
+    rollout = ana.get(f"/api/v2/tasks/{by_title['Roll firmware 2.4 out in three rings']['id']}").json()["task"]
+    assert {"Watch ring 2 crash reports for 48 hours", "Write the firmware 2.4 release notes"} <= {
+        filed["title"] for filed in rollout["filed"]
+    }
 
 
-def test_no_task_is_left_stuck_for_days(ana):
-    assert ana.get("/api/v2/tasks/stuck").json()["tasks"] == []
+def test_every_rule_of_the_task_engine_holds(built):
+    """Every task has its pipeline, its stage and one open visit, and every open one waits on someone (the never-stuck
+    check's rules, read at the build's moment)."""
+    settings, _rows, _again = built
+    with closing(hubdb.connect(settings.db_path)) as c:
+        assert never_stuck.rules_hold(c) == []
 
 
 def test_a_meeting_waiting_for_review_is_not_in_the_live_list(ana):
@@ -230,10 +241,14 @@ def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
     assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= owed
 
 
-def test_the_price_decision_leads_needs_you_with_a_short_reason(ana):
-    [first, *_] = ana.get("/api/v2/needs-you").json()["items"]
-    assert first["title"] == "Raise Home Pro from $449 to $479 for December?"
-    assert 1 <= len([part for part in first["body"].split("\n\n") if part.strip()]) <= 3
+def test_the_price_decision_is_due_tomorrow_with_a_short_reason(ana):
+    [price] = [
+        task
+        for task in ana.get("/api/v2/tasks?status=open&limit=200").json()["tasks"]
+        if task["title"] == "Raise Home Pro from $449 to $479 for December?"
+    ]
+    full = ana.get(f"/api/v2/tasks/{price['id']}").json()["task"]
+    assert full["due"] and 1 <= len([part for part in full["body"].split("\n\n") if part.strip()]) <= 3
 
 
 def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
@@ -311,24 +326,9 @@ def test_the_demo_clock_also_reads_the_spend_windows(built):
 
 
 def test_the_same_date_builds_the_same_company(built):
-    """Every table, with the machine's clock either side of 07:00 UTC: the usage limits the builds save match too.
-    The one column left out is created_at on pipeline_engine.seeded events: boot stamps each from the machine's clock to
-    the microsecond, so it differs between two builds. Every other column of those rows is compared."""
+    """Every table, with the machine's clock either side of 07:00 UTC: the usage limits the builds save match too."""
     first, rows, again = built
-    with closing(sqlite3.connect(first.db_path)) as db:
-        event_columns = [column[1] for column in db.execute("PRAGMA table_info(events)")]
-    created, action = event_columns.index("created_at"), event_columns.index("action")
-
-    def unclocked(events):
-        return [
-            tuple(None if i == created else value for i, value in enumerate(row))
-            if row[action] == pipeline_engine.SEEDED
-            else row
-            for row in events
-        ]
-
-    left = {**again, "events": unclocked(again["events"])}
-    right = {**rows, "events": unclocked(rows["events"])}
+    left, right = again, rows
     if left != right:
         # Say which tables and which event row differ: a CI log cuts a pytest diff short. `first` is the build.
         mismatch = next(

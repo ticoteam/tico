@@ -5,7 +5,7 @@ An event is a dot name in a group (`task.done`) with a one-line description and 
 typical payload, in Acme's words. "Send example" posts it and the docs show it. Every payload carries its event's
 `version` (starts at 1); a change that breaks a receiver adds a new version, never edits one.
 
-`aliases` are spellings that came before the catalog and still work (`release_published`). `sourceless` marks events
+`aliases` are spellings that came before the catalog and still work (`recording.ready`). `sourceless` marks events
 that are not a message to a bot and have no task, so a rule judges them with `rules.judge_event` (scopes team,
 department and bot only). `outbound=False` marks those only rules see: an outgoing webhook cannot subscribe to them.
 `webhook.<id>` (one incoming webhook) and `custom.<x>` (anything a bot or rule sends) are not listed one by one:
@@ -31,7 +31,7 @@ class Event:
     description: str  # one short line, plain words
     example: dict  # the `data` object of a typical payload; what "Send example" posts
     version: int = 1
-    aliases: tuple = ()  # old spellings still accepted: ("release_published",)
+    aliases: tuple = ()  # old spellings still accepted: ("recording.ready",)
     sourceless: bool = False  # no task and no message: rules judge it with judge_event
     outbound: bool = True  # an outgoing webhook may subscribe to it; False for events only rules see
 
@@ -41,11 +41,13 @@ _TASK = "5b1d2c0e-7f34-4a9e-8c1b-2f6a9d3e4b10"
 
 
 def _task(**more):
+    """A task event's facts (backend/task_effects.py): where the task is, who has it and who acted."""
     return {
         "id": _TASK,
         "title": "Renew the acme.example domain",
-        "status": "doing",
-        "step": "doing",
+        "status": "open",
+        "pipeline": "general",
+        "stage": "general-todo",
         "owner_id": "bot:ops",
         "requester_id": "human:ana",
         "actor": "bot:ops",
@@ -53,8 +55,9 @@ def _task(**more):
     }
 
 
-def _change(field, old, new, **more):
-    return _task(change={"field": field, "from": old, "to": new}, **more)
+def _change(field, old, new, move=None, **more):
+    change = {"field": field, "from": old, "to": new, **({"move": move} if move else {})}
+    return _task(change=change, **more)
 
 
 def _build():
@@ -63,55 +66,33 @@ def _build():
     def add(name, description, example, aliases=(), sourceless=False, outbound=True):
         found.append(Event(name, name.split(".", 1)[0], description, example, 1, tuple(aliases), sourceless, outbound))
 
-    add("task.created", "A task was filed.", _task(status="open", step="open", actor="human:ana", parent_id=None))
+    add("task.created", "A task was filed.", _task(actor="human:ana", parent_id=None))
     add(
         "task.assigned",
         "A task was given to someone else.",
-        _change("owner", "bot:ops", "bot:finance", owner="bot:finance", actor="human:ana"),
+        _change("owner", "bot:ops", "bot:finance", owner_id="bot:finance", actor="human:ana"),
     )
-    add("task.step_changed", "A task moved to another step.", _change("step", "doing", "review", step="review"))
     add(
-        "task.state_changed",
-        "A task's state changed (open, doing, waiting, review, ready).",
-        _change("status", "open", "doing"),
+        "task.step_changed",
+        "A task moved to another stage of its pipeline, Done and Closed included.",
+        _change("stage", "general-todo", "general-done", "done", status="done", stage="general-done"),
     )
     add("task.commented", "Someone commented on a task.", _task(actor="human:ana", comment_id="c1"))
-    add("task.done", "A task was finished.", _change("status", "doing", "done", status="done"))
-    add("task.declined", "A task was declined.", _change("status", "doing", "declined", status="declined"))
     add(
-        "task.blocked",
-        "A task now waits on someone or something.",
-        _change("status", "doing", "waiting", status="waiting"),
+        "task.done",
+        "A task was finished.",
+        _change("status", "open", "done", "done", status="done", stage="general-done"),
     )
     add(
         "task.closed",
         "A task was closed without finishing.",
-        _change("status", "doing", "closed", status="closed", actor="human:ana"),
+        _change("status", "open", "closed", "closed", status="closed", stage="general-closed", actor="human:ana"),
     )
     add(
         "task.reopened",
-        "A finished task was opened again.",
-        _change("status", "done", "open", status="open", actor="human:ana"),
+        "A finished or closed task was opened again.",
+        _change("status", "done", "open", "reopen", actor="human:ana"),
     )
-
-    approval = {
-        "id": "a1",
-        "kind": "send",
-        "task_id": _TASK,
-        "requested_by_id": "bot:ops",
-        "decision_owner": "human:ana",
-    }
-    add("approval.requested", "A bot asked a person to approve something.", approval)
-    add(
-        "approval.decided",
-        "A person approved or declined a request.",
-        {**approval, "decision": "approved", "decided_by_id": "human:ana"},
-    )
-    add("approval.withdrawn", "A request was withdrawn because it no longer applies.", approval)
-
-    asked = {"id": "n1", "to": "human:ana", "from": "bot:ops", "task_id": _TASK}
-    add("needs_you.created", "Something now needs a person's answer.", asked)
-    add("needs_you.answered", "A person answered something that needed them.", asked)
 
     # Threads (docs/threads.md). Payloads are thin: ids and facts, never a message's words. An endpoint hears a thread
     # only if its owner can read the thread, message.held included. message.created is for outgoing
@@ -182,12 +163,6 @@ def _build():
         {"operation": "message", "reason": "deadline", "rules": ["r1"]},
     )
 
-    add(
-        "release.published",
-        "A Tico release was published.",
-        {"release": "v1.4.0", "url": "https://github.com/acme/app/releases/tag/v1.4.0", "tickets": [_TASK]},
-        aliases=("release_published",),
-    )
     add(
         "meeting.ready",
         "A team meeting with a transcript was imported.",

@@ -220,10 +220,10 @@ def test_an_endpoint_filter_keeps_other_departments_and_bots_out_and_leaves_comp
     post_w(
         api,
         "webhooks",
-        {"name": "x", "url": "https://hooks.acme.example/x", "filter": {"task_types": ["no-such-type"]}},
+        {"name": "x", "url": "https://hooks.acme.example/x", "filter": {"pipelines": ["no-such-pipeline"]}},
         expected=422,
     )
-    assert eng["filter"] == {"departments": ["engineering"], "bots": [], "task_types": []}
+    assert eng["filter"] == {"departments": ["engineering"], "bots": [], "pipelines": []}
     with api.app.state.store.transaction() as c:
         mine = H.task_create(c, "human:ana", "Engineering job", "x", "bot:ops", lint=False)
         other = H.task_create(c, "human:ana", "Other job", "x", "bot:cpo", lint=False)
@@ -236,7 +236,7 @@ def test_an_endpoint_filter_keeps_other_departments_and_bots_out_and_leaves_comp
     assert heard["eng"] == {mine["id"], "s1"}  # the other department's task is out; a company event passes
     assert heard["cpo"] == {other["id"]}
     updated = post_w(api, f"webhooks/{eng['id']}/update", {"filter": {}})["webhook"]
-    assert updated["filter"] == {"departments": [], "bots": [], "task_types": []}
+    assert updated["filter"] == {"departments": [], "bots": [], "pipelines": []}
 
 
 def test_replay_missing_queues_exactly_the_events_an_endpoint_lacks(api, net):

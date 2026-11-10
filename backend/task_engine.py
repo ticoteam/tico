@@ -53,26 +53,49 @@ def _refuse(
     detail: str,
     task_id: str | None = None,
     *,
+    row: Row | None = None,
     missing: Sequence[str] = (),
     then: Sequence[str] = (),
     version: object = None,
+    kept: tuple[str, Sequence[str]] | None = None,
+    to: str | None = None,
 ) -> NoReturn:
-    """Refuse, with what the caller needs to act on it: what is `missing`, the commands allowed next (`then`) and the
-    task's `version`. They go out with the refusal (store.refused), so a bot is never left to guess."""
+    """Refuse, with what the caller needs to act on it: what is `missing`, the commands allowed next (`then`, by name,
+    for `row`: `_then`) and the task's `version`. They go out with the refusal (store.refused), so a bot is never left
+    to guess. `kept` is the detail and what is missing as kept on record (`_said` for ON_RECORD), when they name less
+    than the caller is told. `to` is the stage a held forward move was going to.
+
+    The refusal carries `again`: what `refusal_extra` needs to say `missing` and `next` again from the task as it is
+    then, for a replay whose receipt could not keep them (store.replayed_refusal). Ids and names only."""
+    H = _h()
     extra: Row = {}
     if missing:
         extra["missing"] = list(missing)
-    if then:
-        extra["next"] = list(then)
+    if then and row is not None:
+        extra["next"] = _then(row, *then)
     if version is not None:
         extra["version"] = int(str(version) or 0)
-    _h().refuse(conn, by, rule, detail, task=task_id, extra=extra)
+    stored: Row | None = None
+    if kept is not None and (kept[0] != detail or list(kept[1]) != list(missing)):
+        stored = {"detail": kept[0], "extra": {**extra, **({"missing": list(kept[1])} if kept[1] else {})}}
+    again: Row | None = None
+    if row is not None and (then or missing):
+        again = {"task": row["id"], "then": list(then), "missing": bool(missing), "to": to}
+    try:
+        H.refuse(conn, by, rule, detail, task=task_id, extra=extra, stored=stored)
+    except H.Refused as refused:
+        refused.again = again
+        raise
     raise AssertionError("refuse() always raises")  # pragma: no cover
+
+
+# The commands a refusal may offer, by name (`_then`).
+THEN = ("push", "back", "ask", "file", "snooze", "close", "show")
 
 
 def _then(row: Row, *which: str) -> list[str]:
     """The commands a refusal offers, for this task at its version: `push` (go on anyway), `back`, `ask`, `file`,
-    `snooze`, `close`, `show`."""
+    `snooze`, `close`, `show` (THEN)."""
     ident, version = row["id"], row.get("version")
     said = {
         "push": f'hub task move {ident} next -m "why" --version {version}',
@@ -84,6 +107,28 @@ def _then(row: Row, *which: str) -> list[str]:
         "show": f"hub task show {ident}",
     }
     return [said[name] for name in which]
+
+
+def refusal_extra(conn: "sqlite3.Connection", viewer: str, again: Row) -> Row | None:
+    """What a refusal's caller needs to act on it, said again from the task as it is now: its `version`, the commands
+    allowed `next` and what is `missing`, by the code that first said them (`_refuse`, `_said`). For a replay of the
+    write it refused, whose receipt kept no private words (store.replayed_refusal). `again` is what the refusal
+    carried. None when `viewer` may not read the task now: the replay gives what its receipt has."""
+    H = _h()
+    row = task(conn, str(again.get("task") or ""))
+    if not row or not H.task_private_readable(conn, viewer, row):
+        return None
+    out: Row = {"version": int(row.get("version") or 0)}
+    names = [str(name) for name in again.get("then") or () if name in THEN]
+    if names:
+        out["next"] = _then(row, *names)
+    if again.get("missing") and row["status"] == "open" and row.get("visit") and row["stage"]["kind"] == "work":
+        target = stage(conn, str(again["to"])) if again.get("to") else None
+        missing = R.unmet(conn, row)
+        if target and target["pipeline_id"] == row["pipeline_id"]:
+            missing += _skipped(conn, row, target)
+        out["missing"] = _lines(missing, _said(conn, viewer, row, missing))
+    return out
 
 
 def _part(row: Row, key: str) -> Row:
@@ -249,7 +294,8 @@ def check_version(
                 "task_changed",
                 "Say which version of the task you saw",
                 row["id"],
-                then=_then(row, "show"),
+                row=row,
+                then=("show",),
                 version=row.get("version"),
             )
         return
@@ -260,7 +306,8 @@ def check_version(
             "task_changed",
             "The task changed since you looked. Read it again.",
             row["id"],
-            then=_then(row, "show"),
+            row=row,
+            then=("show",),
             version=row.get("version"),
         )
 
@@ -399,6 +446,7 @@ def enter(
             (H.new_id(), parent, task_id, _part(above, "visit").get("id"), link, ts),
         )
     _event(conn, task_id, by, "move", None, first["id"], None, {"move": "new", "owner": owner, "parent": parent})
+    _owned(conn, row, _task(conn, task_id), by)
     entered = _task(conn, task_id)
     stage_effects.enter(conn, entered, by)
     _wake_turn(conn, entered, refs=wake, trigger=trigger, source=source)
@@ -462,23 +510,51 @@ def _skipped(conn: "sqlite3.Connection", row: Row, target: Row) -> list[R.Standi
     return out
 
 
-def _may_push_past(conn: "sqlite3.Connection", by: str, row: Row, why: str | None, missing: list[R.Standing]) -> None:
+def _said(conn: "sqlite3.Connection", viewer: str | None, row: Row, missing: Sequence[R.Standing]) -> list[str]:
+    """How each missing requirement stands, said to `viewer`: a sub-task they may not read is not named, as task_view
+    does not name it (task_calls.standing_line). None is the engine (nothing hidden); task_calls.ON_RECORD is what is
+    kept on record."""
+    from . import task_calls
+
+    hidden = task_calls.hidden_filed(conn, row, viewer)
+    return [task_calls.standing_line(each, hidden) for each in missing]
+
+
+def _lines(missing: Sequence[R.Standing], said: Sequence[str]) -> list[str]:
+    """What is missing, one line each: the requirement's name and how it stands."""
+    return [
+        f"{each.name}: {line}" if line and line != each.name else each.name
+        for each, line in zip(missing, said, strict=True)
+    ]
+
+
+def _may_push_past(
+    conn: "sqlite3.Connection", by: str, row: Row, why: str | None, missing: list[R.Standing], to: str | None = None
+) -> None:
     """Hold a forward move to what is missing. With a reason, anyone pushes past, except a requirement whose switch is
-    off, or a people-only OK when anyone but a person tries. Refuses, or returns. Writes nothing."""
-    lines = [f"{each.name}: {each.line}" if each.line and each.line != each.name else each.name for each in missing]
+    off, or a people-only OK when anyone but a person tries. Refuses, or returns. Writes nothing. The words are said
+    to `by`, and kept on record naming no private sub-task."""
+    from . import task_calls
+
+    said = _said(conn, None if by == SYSTEM else by, row, missing)
+    on_record = _said(conn, task_calls.ON_RECORD, row, missing)
+    lines, kept_lines = _lines(missing, said), _lines(missing, on_record)
     version = row.get("version")
-    for standing in missing:
+    for at, standing in enumerate(missing):
         requirement = standing.requirement
         if not (why or "").strip():
             _refuse(
                 conn,
                 by,
                 "task_not_met",
-                f"Not met: {standing.name}. {standing.line}".strip(),
+                f"Not met: {standing.name}. {said[at]}".strip(),
                 row["id"],
                 missing=lines,
-                then=_then(row, "push", "ask", "file", "snooze", "close"),
+                row=row,
+                then=("push", "ask", "file", "snooze", "close"),
                 version=version,
+                kept=(f"Not met: {standing.name}. {on_record[at]}".strip(), kept_lines),
+                to=to,
             )
         if not R.can_push_past(requirement):
             _refuse(
@@ -488,8 +564,11 @@ def _may_push_past(conn: "sqlite3.Connection", by: str, row: Row, why: str | Non
                 f"{standing.name} can't be pushed past. Move back or close.",
                 row["id"],
                 missing=lines,
-                then=_then(row, "back", "ask", "snooze", "close"),
+                row=row,
+                then=("back", "ask", "snooze", "close"),
                 version=version,
+                kept=(f"{standing.name} can't be pushed past. Move back or close.", kept_lines),
+                to=to,
             )
         if R.people_only(requirement) and not is_human(by):
             _refuse(
@@ -499,8 +578,11 @@ def _may_push_past(conn: "sqlite3.Connection", by: str, row: Row, why: str | Non
                 f"{standing.name} needs a person",
                 row["id"],
                 missing=lines,
-                then=_then(row, "ask", "snooze", "close"),
+                row=row,
+                then=("ask", "snooze", "close"),
                 version=version,
+                kept=(f"{standing.name} needs a person", kept_lines),
+                to=to,
             )
 
 
@@ -539,7 +621,8 @@ def _may_close(conn: "sqlite3.Connection", by: str, row: Row) -> None:
         f"{name} asked for this task, so only a person can close it. Ask {name}, in one sentence, why it can't be "
         "done: they will close it or reassign it.",
         row["id"],
-        then=_then(row, "ask", "snooze"),
+        row=row,
+        then=("ask", "snooze"),
         version=row.get("version"),
     )
 
@@ -570,7 +653,7 @@ def move(
     pushed: list[Row] = []
     if kind in ("forward", "done"):
         missing = R.unmet(conn, row) + _skipped(conn, row, target)
-        _may_push_past(conn, by, row, why, missing)
+        _may_push_past(conn, by, row, why, missing, target["id"])
         if target["kind"] == "work" and not has_room(conn, target):
             _refuse(
                 conn,
@@ -578,7 +661,8 @@ def move(
                 "task_stage_full",
                 f"No room in {target['name']}. The task moves in when there is room.",
                 task_id,
-                then=_then(row, "snooze", "close"),
+                row=row,
+                then=("snooze", "close"),
                 version=row.get("version"),
             )
         pushed = _push_past(conn, by, row, why, missing, ts)
@@ -634,6 +718,7 @@ def move(
             **({"pushed_past": pushed} if pushed else {}),
         },
     )
+    _owned(conn, row, _task(conn, task_id), by)
     moved = _task(conn, task_id)
     if target["kind"] == "work":
         stage_effects.enter(conn, moved, by)
@@ -646,6 +731,17 @@ def move(
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, kind, by, why, revision)
     return _task(conn, task_id)
+
+
+def _owned(conn: "sqlite3.Connection", before: Row, after: Row, by: str) -> None:
+    """Who has the task now comes first, before anyone is woken or anything hears of the move: what follows a new
+    owner, its private default among it (task_effects.owner_moved), then, on a private task in a work stage, everyone
+    the stage asks is brought in to read it (task_calls.bring_in_asked). The caller reads the task again after."""
+    from . import task_calls
+
+    task_effects.owner_moved(conn, before, after, by)
+    if after["stage"]["kind"] == "work":
+        task_calls.bring_in_asked(conn, after["id"], by)
 
 
 def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -> None:

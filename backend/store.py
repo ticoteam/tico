@@ -421,6 +421,7 @@ def refused(c, identity, exc, savepoint="domain_write"):
             task=getattr(exc, 'task', None),
             scope=getattr(exc, 'scope', None),
             context=getattr(exc, 'context', None),
+            stored=getattr(exc, 'stored', None),
         )
     except H.Refused:
         pass
@@ -440,6 +441,22 @@ def refused(c, identity, exc, savepoint="domain_write"):
     return Problem(
         exc.rule, exc.detail, status, retryable=getattr(exc, "retryable", False), extra=getattr(exc, "extra", None)
     )
+
+
+def replayed_refusal(c, principal, result):
+    """A replayed receipt. One of a refusal that kept less than its caller was told (a private task's words, the name
+    of a private sub-task) says what is missing and the commands allowed next again, from the task as it is now, when
+    `principal` may read it (task_engine.refusal_extra). Anything else is the receipt as kept."""
+    refusal = result.get("_refusal") if isinstance(result, dict) else None
+    again = refusal.get("again") if isinstance(refusal, dict) else None
+    if not again:
+        return result
+    from . import task_engine
+
+    extra = task_engine.refusal_extra(c, principal, again)
+    if extra is None:
+        return result
+    return {**result, "_refusal": {**refusal, "extra": {**(refusal.get("extra") or {}), **extra}}}
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
@@ -1304,7 +1321,6 @@ class Store:
 
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
-            _rules.seed_dev(c)
             from . import owner_link as _owner_link
 
             c.executescript(_owner_link.SCHEMA)
@@ -2325,11 +2341,8 @@ class Store:
                 from . import profiles as Profiles
 
                 Profiles.migrate(c)
-                # Stale ticket review's converted automation (a no-op) is undone, once, and its team rule set from it
-                # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
                 from . import redesign_migration as Redesign
 
-                Redesign.repair_stale_review(c)
                 # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
                 # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
                 # failure here is logged, never raised: the repair is tried again at the next start.
@@ -2712,6 +2725,7 @@ class Store:
                     from .meeting_items import redact
 
                     result = redact(c, replay_principal, replay_auth, result)
+                result = replayed_refusal(c, replay_principal, result)
                 from .files import readable_page_refs
 
                 return readable_page_refs(c, replay_auth, replay_principal, result)
@@ -2727,18 +2741,24 @@ class Store:
             except H.Refused as exc:
                 logged = None  # rolled back with the write
                 refusal = refused(c, identity, exc)
+                # What is missing and the commands allowed next ride with a refusal (Problem.extra). A private task's
+                # are its own words, so its receipt keeps only the version; any other keeps what may be kept on
+                # record (Refused.stored: a private sub-task it names is not named).
+                kept = getattr(exc, "stored", None) or {"detail": refusal.detail, "extra": refusal.extra}
+                private = getattr(exc, "private", False)
+                # What kept less than the caller was told also keeps how to say it again (replayed_refusal).
+                again = getattr(exc, "again", None) if private or getattr(exc, "stored", None) else None
                 result = {
                     "_refusal": {
                         "code": refusal.code,
-                        "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
+                        "detail": "Private task write refused" if private else kept["detail"],
                         "status": refusal.status,
-                        # What is missing and the commands allowed next ride with a refusal (Problem.extra). A private
-                        # task's are its own words, so its receipt keeps only the version.
                         "extra": (
                             {k: v for k, v in refusal.extra.items() if k == "version"}
-                            if getattr(exc, "private", False)
-                            else dict(refusal.extra)
+                            if private
+                            else dict(kept["extra"])
                         ),
+                        **({"again": again} if again else {}),
                     }
                 }
             if not is_poll(operation, result):

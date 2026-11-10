@@ -95,8 +95,8 @@ def test_every_step_type_saves_and_defaults_fill():
         {"type": "listening", "destination": "acme-mentions"},
         {
             "type": "event",
-            "name": "release.published",
-            "filters": [{"field": "release.tag", "op": "matches", "value": "^v"}],
+            "name": "meeting.ready",
+            "filters": [{"field": "meeting.source", "op": "matches", "value": "^rec"}],
         },
     ],
 )
