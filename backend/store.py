@@ -421,6 +421,7 @@ def refused(c, identity, exc, savepoint="domain_write"):
             task=getattr(exc, 'task', None),
             scope=getattr(exc, 'scope', None),
             context=getattr(exc, 'context', None),
+            stored=getattr(exc, 'stored', None),
         )
     except H.Refused:
         pass
@@ -440,6 +441,22 @@ def refused(c, identity, exc, savepoint="domain_write"):
     return Problem(
         exc.rule, exc.detail, status, retryable=getattr(exc, "retryable", False), extra=getattr(exc, "extra", None)
     )
+
+
+def replayed_refusal(c, principal, result):
+    """A replayed receipt. One of a refusal that kept less than its caller was told (a private task's words, the name
+    of a private sub-task) says what is missing and the commands allowed next again, from the task as it is now, when
+    `principal` may read it (task_engine.refusal_extra). Anything else is the receipt as kept."""
+    refusal = result.get("_refusal") if isinstance(result, dict) else None
+    again = refusal.get("again") if isinstance(refusal, dict) else None
+    if not again:
+        return result
+    from . import task_engine
+
+    extra = task_engine.refusal_extra(c, principal, again)
+    if extra is None:
+        return result
+    return {**result, "_refusal": {**refusal, "extra": {**(refusal.get("extra") or {}), **extra}}}
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
@@ -652,9 +669,8 @@ EVENT_NOISE_ACTIONS = (
     "bot.repository_read",
 )
 EVENT_NOISE_RETENTION_DAYS = 7
-# Thirty days: `message.notice` as before, and `github.pull_request`, which quiet_work.settle reads back to the start of
-# the run that carried a task (no run has a length cap, so a 30-day keep is the most it can rely on). Its own mark,
-# since the old one had walked past every github.pull_request row already on disk.
+# Thirty days: `message.notice` as before, and `github.pull_request`. Its own mark, since the old one had walked past
+# every github.pull_request row already on disk.
 EVENT_SWEEP_ACTIONS = ("message.notice", "github.pull_request")
 EVENT_RETENTION_DAYS = 30
 # Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
@@ -1294,9 +1310,6 @@ class Store:
 
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
-            from . import task_rules as _task_rules
-
-            c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
 
             _teammate_access.ensure(c)  # people's and groups' See/Read/Write (docs/permissions.md)
@@ -2232,7 +2245,7 @@ class Store:
                     ("attempts_message", "attempts(message_id)"),
                     # Runs by when their record closed: bot hours, health, the usage reads.
                     ("attempts_settled", "attempts(settled_at)"),
-                    # A bot's last settled run (the team list's latest run, check_pools): one seek.
+                    # A bot's last settled run (the team list's latest run): one seek.
                     ("attempts_bot_settled", "attempts(bot_id, settled_at, id) WHERE settled_at IS NOT NULL"),
                     # A bot's runs newest first (the bot's Runs page, H.turns).
                     ("attempts_bot_created", "attempts(bot_id, created_at)"),
@@ -2708,6 +2721,7 @@ class Store:
                     from .meeting_items import redact
 
                     result = redact(c, replay_principal, replay_auth, result)
+                result = replayed_refusal(c, replay_principal, result)
                 from .files import readable_page_refs
 
                 return readable_page_refs(c, replay_auth, replay_principal, result)
@@ -2723,18 +2737,24 @@ class Store:
             except H.Refused as exc:
                 logged = None  # rolled back with the write
                 refusal = refused(c, identity, exc)
+                # What is missing and the commands allowed next ride with a refusal (Problem.extra). A private task's
+                # are its own words, so its receipt keeps only the version; any other keeps what may be kept on
+                # record (Refused.stored: a private sub-task it names is not named).
+                kept = getattr(exc, "stored", None) or {"detail": refusal.detail, "extra": refusal.extra}
+                private = getattr(exc, "private", False)
+                # What kept less than the caller was told also keeps how to say it again (replayed_refusal).
+                again = getattr(exc, "again", None) if private or getattr(exc, "stored", None) else None
                 result = {
                     "_refusal": {
                         "code": refusal.code,
-                        "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
+                        "detail": "Private task write refused" if private else kept["detail"],
                         "status": refusal.status,
-                        # What is missing and the commands allowed next ride with a refusal (Problem.extra). A private
-                        # task's are its own words, so its receipt keeps only the version.
                         "extra": (
                             {k: v for k, v in refusal.extra.items() if k == "version"}
-                            if getattr(exc, "private", False)
-                            else dict(refusal.extra)
+                            if private
+                            else dict(kept["extra"])
                         ),
+                        **({"again": again} if again else {}),
                     }
                 }
             if not is_poll(operation, result):
@@ -2787,7 +2807,7 @@ class Store:
         ring(self, seq)
 
     def enqueue_existing(self):
-        from .enqueue import external_bot_sql, parked_sql
+        from .enqueue import external_bot_sql
 
         with self.transaction() as c:
             c.execute(
@@ -2796,6 +2816,4 @@ class Store:
                 "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
                 "WHERE m.recipient_id LIKE 'bot:%' AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND NOT "
                 + external_bot_sql("m.recipient_id")
-                + " AND NOT "
-                + parked_sql()  # a card On ice starts no run (backend/enqueue.py)
             )

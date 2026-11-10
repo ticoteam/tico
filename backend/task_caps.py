@@ -7,20 +7,18 @@ and no task row is written. A task the sender closed before the receiver changed
 one making the change is the owner) is never capped; no row means no cap; 0 blocks the pair.
 
 Who sets a cap: the owner and the bot administrators (anyone), a group lead (the teammates in the groups it leads), and a
-bot for its own sends, which is an approval a person decides (kind `task_cap`, POST /api/v2/approvals/{id}); on approve the
-hub applies it itself (CONTRACT §5). The receiver must be a manager above the sender at any level of the org chart. Every
+bot for its own sends, which is a proposal the top of the org OKs from its preview (backend/proposals.py); on that OK
+the hub applies it itself (CONTRACT §5). The receiver must be a manager above the sender at any level of the org chart. Every
 change is one audit row (backend/audit_log.py) with the cap before and after. Sends are recorded, so a cap set later counts
 today's tasks.
 """
 
-import json
 from datetime import datetime, timezone
 
 from fastapi import Request
 from pydantic import Field
 
 from . import audit_log
-from . import models as M
 from .models import ID, Contract
 from .store import H, Problem
 
@@ -285,28 +283,29 @@ def apply(c, actor_, sender, receiver, per_day, via=None):
 
 
 def propose(c, who, sender, receiver, per_day):
-    """A bot's own cap as an approval a person decides (kind task_cap, the payload is the change). Returns its id."""
-    from .proposals import decider
+    """A bot's own cap as a proposal the top of the org OKs (backend/proposals.py). Returns the OK's id."""
+    from . import proposals
 
-    row = H.approval_request(
-        c, who.actor, "task_cap", {"sender": ref(sender), "receiver": ref(receiver), "per_day": per_day}, to=decider(c)
+    asked = proposals.propose(
+        c, who, "task_cap", {"sender": ref(sender), "receiver": ref(receiver), "per_day": per_day}
     )
-    return row["id"]
+    return asked["requirement_id"]
 
 
-def apply_approved(c, actor_, aid):
-    """A person approved a bot's cap change: the hub applies it, audited with the approval as `via` (backend/proposals.py
-    spends the approval and tells BotOps). The receiver must still be a manager above the sender."""
-    change = H.approval(c, aid)["payload"]
-    sender, receiver = _teammate(c, change["sender"]), _teammate(c, change["receiver"])
+def apply_approved(c, actor_, rid, change):
+    """A person OK'd a bot's cap change: the hub applies it, audited with the OK as `via` (backend/proposals.py uses
+    the OK and tells BotOps). The receiver must still be a manager above the sender."""
+    sender, receiver = _teammate(c, change.sender), _teammate(c, change.receiver)
     if receiver not in above(c, sender):
         raise Problem("validation", "The receiver is no longer a manager above the sender", 422)
-    apply(c, actor_, sender, receiver, change.get("per_day"), via=f"approval:{aid}")
+    apply(c, actor_, sender, receiver, change.per_day, via=f"approval:{rid}")
 
 
 def forget(c, teammate):
-    """A teammate moved to another group: the caps that name it go, and so do the cap approvals a person has yet to decide,
+    """A teammate moved to another group: the caps that name it go, and so do the cap proposals a person has yet to OK,
     so its new pairs start uncapped. Each removed cap is audited as the hub's own change."""
+    from . import proposals, task_asks
+
     if not teammate:
         return
     for row in c.execute(
@@ -314,10 +313,9 @@ def forget(c, teammate):
     ).fetchall():
         apply(c, H.KEEPER, row["sender"], row["receiver"], None, via="group move")
     named = ref(teammate)
-    for row in c.execute("SELECT id, payload FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
-        change = json.loads(row["payload"] or "{}")
+    for found, change in proposals.waiting(c, "task_cap"):
         if named in (change.get("sender"), change.get("receiver")):
-            H.approval_withdraw(c, row["id"], "A teammate in it moved group.")
+            task_asks.withdraw(c, found["requirement_id"], "A teammate in it moved group.")
 
 
 def may_set(c, auth, who, sender):
@@ -333,25 +331,21 @@ def may_set(c, auth, who, sender):
 
 
 def _proposals(c):
-    """The bots' cap changes a person has yet to decide: undecided approvals of kind task_cap."""
-    out = []
-    for row in c.execute(
-        "SELECT id, requested_by_id, created_at, payload FROM approvals "
-        "WHERE kind='task_cap' AND decision IS NULL ORDER BY created_at"
-    ):
-        change = json.loads(row["payload"] or "{}")
-        out.append(
-            {
-                "id": row["id"],
-                "sender": change.get("sender"),
-                "receiver": change.get("receiver"),
-                "per_day": change.get("per_day"),
-                "status": "pending",
-                "proposed_by": ref(row["requested_by_id"]),
-                "created_at": row["created_at"],
-            }
-        )
-    return out
+    """The bots' cap changes a person has yet to OK."""
+    from . import proposals
+
+    return [
+        {
+            "id": found["requirement_id"],
+            "sender": change.get("sender"),
+            "receiver": change.get("receiver"),
+            "per_day": change.get("per_day"),
+            "status": "pending",
+            "proposed_by": ref(found["asked_by_id"]),
+            "created_at": found["created_at"],
+        }
+        for found, change in proposals.waiting(c, "task_cap")
+    ]
 
 
 def tally(c, sender, receiver):

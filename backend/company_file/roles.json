@@ -316,8 +316,8 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Takes a Dev ticket that Head of Engineering has put on its step, builds the change on a branch with a test that proves it, opens the pull request and carries the ticket through review and QA fixes. It merges only when the team's merge rules allow it and the checks pass at the head.",
-   "when": "Offer when GitHub is connected and the team turns Dev tickets into code.",
+   "summary": "Takes a task Head of Engineering gives it, builds the change on a branch with a test that proves it, opens the pull request and answers its review and QA comments. It merges only when the team's merge rules allow it and the checks pass at the head.",
+   "when": "Offer when GitHub is connected and the team turns tasks into code.",
    "tags": [
     "saas",
     "github",
@@ -328,13 +328,13 @@
     "bugs and small changes wait in a queue before anyone starts on them",
     "a fix goes back and forth between the author and the reviewers for days",
     "a change is merged without a test that would have caught the bug",
-    "nobody can say which ticket a pull request came from or what it was meant to do"
+    "nobody can say which task a pull request came from or what it was meant to do"
    ],
    "recommend_when": [
     "sells_software",
     "uses_slack"
    ],
-   "first_routine": "Dev ticket build · When a Dev ticket reaches In Progress",
+   "first_routine": "Build a task · When it is given a task",
    "tools": [
     "github"
    ],
@@ -2546,39 +2546,6 @@
    "default": false
   },
   {
-   "slug": "pipeline-manager",
-   "template": "pipeline-manager",
-   "name": "Pipeline Manager",
-   "department": "operations",
-   "lead": false,
-   "core": false,
-   "summary": "Runs one pipeline: moves its cards through the stages, puts each card with the bot or person its stage needs, checks each stage's requirements and limits, and reports what is stuck and why. It does not do the work on a card, and it never changes a stage's rules.",
-   "when": "A team whose work moves through stages, such as product, engineering, growth or customer success, and whose cards wait in a stage that nobody is watching.",
-   "tags": [
-    "pipeline",
-    "stages",
-    "cards",
-    "handoffs",
-    "requirements",
-    "queue",
-    "operations",
-    "saas"
-   ],
-   "pains": [
-    "cards sit in one stage for weeks and nobody notices",
-    "a card moves on without the review or the spec its stage requires",
-    "work lands with the wrong person and comes back",
-    "a stage is full and every card waits for room nobody makes",
-    "a card says in progress and nobody has touched it for a week"
-   ],
-   "recommend_when": [
-    "has_pipeline"
-   ],
-   "first_routine": "Weekly stage report · Mondays at 09:00 team time",
-   "tools": [],
-   "default": false
-  },
-  {
    "slug": "pr",
    "template": "pr",
    "name": "PR Manager",
@@ -2987,7 +2954,7 @@
    "department": "product",
    "lead": true,
    "core": false,
-   "summary": "Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner and the product pipeline found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. Roadmap changes happen only when asked and a Tool allows them.",
+   "summary": "Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. Roadmap changes happen only when asked and a Tool allows them.",
    "when": "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place.",
    "tags": [
     "saas",
@@ -4681,7 +4648,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Tidies tasks, never the work. Once an hour on weekdays Tico checks each department's tasks in plain code: stalled or overdue asks, review tickets with no linked pull request, merged work whose step did not move, held bots and duplicates. Nothing to report means no task and no model run. Otherwise the Task Manager gets one task per department, fixes the obvious items and leaves one line in Needs you for anything it is unsure of.",
+   "summary": "Tidies tasks, never the work. Once an hour on weekdays Tico checks each department's tasks in plain code: stalled or overdue asks, merged work not yet shipped, held bots and duplicates. Nothing to report means no task and no model run. Otherwise the Task Manager gets one task per department, fixes the obvious items and leaves one line in Needs you for anything it is unsure of.",
    "when": "Built in: once an hour on weekdays it has the stalled, overdue and out-of-step tasks of each department checked, fixes the obvious ones and leaves one line per department for what it is unsure of.",
    "tags": [],
    "pains": [],

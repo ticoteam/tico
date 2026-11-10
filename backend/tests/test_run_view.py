@@ -139,7 +139,7 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
     # A run that also carried a private task is left out for whoever cannot read that task.
     hidden = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Only Ana.", "private": True})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, hidden["id"]))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (hidden["id"], aid))
     assert get(api, f"tasks/{tid}/run-view", token="cara-test")["runs"] == []
     assert [r["id"] for r in get(api, f"tasks/{tid}/run-view")["runs"]] == [aid]
 

@@ -350,7 +350,7 @@ def test_asking_for_the_market_to_be_sized_files_one_task_and_asking_again_retur
     assert len(rows) == 1 and rows[0]["owner_id"] == "bot:librarian" and "size-the-market.md" in rows[0]["body"]
     assert get(api, "market/spend")["definition"]["description"] == "Software for small landlords"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["task_id"],))
+        H.task_done(c, "human:ana", first["task_id"], "Sized")
     later = post(api, "market/spend/research", {"description": "Software for small landlords"})
     assert later["task_id"] != first["task_id"]
 

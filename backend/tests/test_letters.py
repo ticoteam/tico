@@ -1,17 +1,35 @@
-"""Letters through a fake HQ: the approval is the authority for one proof, and retries never print twice."""
+"""Letters through a fake HQ: the OK bound to one proof is the authority for it, and retries never print twice."""
 
 import json
 
 import pytest
 
-from backend import hubdb as H, letters as L
+from backend import hubdb as H, letters as L, task_asks
 from backend.tests.helpers.api import get, post, put, headers  # noqa: F401
 from backend.tests.helpers.agents import hermes_bot, credential, bot_id
 from backend.tests.helpers.mcp import call
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.member_bots import botops, turn  # noqa: F401 (fixture)
 from clients import gateway as G
-from backend.tests.helpers.letters import HQ, RECIPIENT, approve, fetch, grant, hq, quote, send
+from backend.tests.helpers.letters import HQ, RECIPIENT, fetch, grant, hq, quote, send
+
+
+def _task(api, row):
+    with api.app.state.store.read() as c:
+        return task_asks.task_of(c, row["approval_id"])
+
+
+def approve(api, row, token="ana-test", expected=200):
+    """The person opens the letter in Tico and clicks OK on it (backend/task_asks.py)."""
+    shown = get(api, "letters/" + row["id"], token=token)["shown_hash"]
+    path = f"tasks/{_task(api, row)}/asks/{row['approval_id']}/ok"
+    return post(api, path, {"shown_hash": shown}, token=token, expected=expected)
+
+
+def asked(api, row):
+    """What the letter's OK is for, as it was asked."""
+    with api.app.state.store.read() as c:
+        return task_asks.grant(c, row["approval_id"])
 
 
 def bot(api):
@@ -55,13 +73,13 @@ def test_quote_ask_approve_requotes_same_hash_and_submits_once(api, hq):
     assert row["page_count"] == 1 and row["total_micros"] == 1500000
     row = send(api, row)
     assert row["status"] == "waiting_for_ok" and not hq.jobs
-    approval = get(api, "approvals/" + row["approval_id"])
-    assert approval["payload"]["proof"] == row["proof"]
-    assert approval["payload"]["recipient"] == RECIPIENT | {"line2": ""}
+    approval = asked(api, row)
+    assert approval["content"]["approval_hash"] == row["approval_hash"]
+    assert approval["content"]["recipient"] == RECIPIENT | {"line2": ""}
     approve(api, row)
     after = fetch(api, row)
     assert after["status"] == "submitted" and len(hq.quotes) == 2 and hq.provider_submits == 1
-    assert get(api, "approvals/" + row["approval_id"])["consumed_at"]
+    assert asked(api, row)["used_at"]
     assert send(api, row)["hq_letter_id"] == after["hq_letter_id"] and hq.provider_submits == 1
 
 
@@ -115,8 +133,12 @@ def test_an_admin_can_approve_but_an_unrelated_person_cannot(api, hq):
     ident, token = bot(api)
     grant(api, ident)
     row = send(api, quote(api, token=token), token=token)
-    post(api, "approvals/" + row["approval_id"], {"decision": "approved"}, token="cara-test", expected=403)
-    post(api, "approvals/" + row["approval_id"], {"decision": "approved"}, token="ben-test")
+    with api.app.state.store.transaction() as c:
+        H.task_give(c, "human:ana", task_asks.task_of(c, row["approval_id"]), row["approval_id"], "human:cara")
+    approve(api, row, token="cara-test", expected=403)
+    with api.app.state.store.transaction() as c:
+        H.task_give(c, "human:ana", task_asks.task_of(c, row["approval_id"]), row["approval_id"], "human:ben")
+    approve(api, row, token="ben-test")
     assert fetch(api, row)["status"] == "submitted"
 
 
@@ -465,7 +487,7 @@ def test_claim_and_approval_are_durable_before_approved_and_autonomous_post(api,
                 ).fetchone()
                 assert kwargs["idempotency_key"] == "tico-letter:" + row["id"]
                 if row["approved_hash"]:
-                    assert H.approval(c, row["approval_id"])["consumed_at"]
+                    assert task_asks.standing(c, row["approval_id"]) == task_asks.USED
                 sent.append(bool(row["approved_hash"]))
         return real_hq(key, base, path, **kwargs)
 
@@ -524,7 +546,7 @@ def test_truncated_four_page_pdf_always_asks_even_for_a_known_address(api, hq):
     row = post(api, "letters/quotes", {"file_id": uploaded["file"]["id"], "recipient": RECIPIENT}, token=token)
     requested = send(api, row, token=token)
     assert requested["status"] == "waiting_for_ok" and requested["approval_reason"]
-    assert get(api, "approvals/" + requested["approval_id"])["payload"]["reason"] == requested["approval_reason"]
+    assert asked(api, requested)["content"]["reason"] == requested["approval_reason"]
     assert hq.provider_submits == 1
 
 
@@ -558,7 +580,7 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
     assert get(api, "me", delegated)["actor"] == "human:ana"
     assert get(api, "letters", delegated)["items"] == []
     get(api, "letters/" + row["id"], delegated, expected=404)
-    get(api, "approvals/" + row["approval_id"], delegated, expected=403)
+    get(api, "tasks/" + _task(api, row), delegated, expected=404)
     get(api, row["proof"].removeprefix("/api/v2/"), delegated, expected=403)
     assert call(api, "hub_letter_list", {}, token=delegated)[1]["items"] == []
     with api.app.state.store.read() as c:
@@ -607,7 +629,6 @@ def test_private_source_keeps_only_admin_metadata_and_fences_both_copies(api, hq
         assert get(api, "letters/" + row["id"], token)["redacted"]
         get(api, "files/" + source, token, expected=403)
         get(api, row["proof"].removeprefix("/api/v2/"), token, expected=403)
-        get(api, "approvals/" + row["approval_id"], token, expected=403)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_assets WHERE blob_id=?", (original["id"],))
     get(api, "files/" + source, expected=403)
@@ -821,7 +842,9 @@ def test_approved_proof_is_local_and_follows_the_record_permissions(api, hq):
 
 def test_decline_and_cancel_close_unsent_letters_and_provider_refusal_passes_through(api, hq):
     row = send(api, quote(api))
-    post(api, "approvals/" + row["approval_id"], {"decision": "declined"})
+    path = f"tasks/{_task(api, row)}/asks/{row['approval_id']}/answer"
+    post(api, path, {"value": "no", "note": "Wrong address."})
+    api.app.state.letters.drain()
     assert fetch(api, row)["status"] == "declined" and not hq.jobs
     pending = send(api, quote(api))
     assert post(api, "letters/" + pending["id"] + "/cancel", {})["status"] == "cancelled"

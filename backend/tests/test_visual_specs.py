@@ -1,13 +1,10 @@
-"""Visual specs (backend/visual_specs.py): a spec is a page on a Product roadmap card, published with its styles inlined.
-Tickets filed under the card (the builder ticket the pipeline's spawn link files) and their children (review, QA) get the
-spec's link and text. Approval is the pipeline's own "Spec approved" requirement, tested in test_pipeline_e2e."""
+"""Visual specs (backend/visual_specs.py): a spec is a page on the task it describes, published with its styles inlined.
+Tasks filed under that task, and their own sub-tasks, get the spec's link and text."""
 
 from backend import hubdb as H
-from backend import pipeline_links
 from backend import visual_specs as VS
-from backend.tests.test_files import turn
-from backend.tests.test_roadmaps import _item
-from backend.tests.test_tasks_board import api, get, headers, post  # noqa: F401  (fixture)
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401  (fixture)
 
 HTML = (
     b"<html><head><title>Export</title><script>alert('x')</script></head>"
@@ -15,23 +12,23 @@ HTML = (
 )
 
 
-def publish_spec(api, item, bot="cpo", who="ana-test", data=HTML, spec="true"):
-    """Publishes the spec page on the card, as the card's builder on a new turn."""
+def publish_spec(api, task_id, bot="cpo", who="ana-test", data=HTML, spec="true"):
+    """Publishes the spec page on the task, as its owner bot on a new turn."""
     attempt = turn(api, bot, who)[1]
     return api.post(
         "/api/v2/pages",
-        params={"name": "exports.html", "task": item["id"], "spec": spec},
+        params={"name": "exports.html", "task": task_id, "spec": spec},
         content=data,
         headers={**headers(attempt["token"]), "Content-Type": "text/html"},
     )
 
 
+def described(api, title):
+    return post(api, "tasks", {"owner": "cpo", "title": title, "body": "Spec."})
+
+
 def file_under(api, parent, title="Build it", body="Do the work."):
-    child = post(
-        api,
-        "tasks",
-        {"owner": "cpo", "title": title, "body": body, "relations": [{"task": parent["id"], "kind": "parent"}]},
-    )
+    child = post(api, "tasks", {"owner": "cpo", "title": title, "body": body, "parent": parent["id"]})
     return child, get(api, "tasks/" + child["id"])["task"]["body"]
 
 
@@ -46,24 +43,23 @@ def test_styles_are_inlined_before_the_head_closes_and_the_page_keeps_its_markup
     assert VS.page_text(HTML) == "Exports Pick a range, then download."
 
 
-def test_a_spec_goes_on_a_product_roadmap_card_only(api):
-    general = post(api, "tasks", {"owner": "cpo", "title": "Not a card", "body": "x"})
-    r = publish_spec(api, general)
-    assert r.status_code == 422, r.text
+def test_a_spec_goes_on_a_task(api):
+    assert publish_spec(api, "").status_code == 422
+    assert publish_spec(api, "not-a-task").status_code == 422
 
 
-def test_the_published_spec_is_stored_with_its_styles_as_the_cards_spec(api):
-    item = _item(api, "Exports stored", step="Spec")
-    assert publish_spec(api, item).status_code == 200
+def test_the_published_spec_is_stored_with_its_styles_as_the_tasks_spec(api):
+    item = described(api, "Exports stored")
+    assert publish_spec(api, item["id"]).status_code == 200
     with api.app.state.store.read() as c:
         spec = VS.spec_page(c, item["id"])
     assert spec is not None
     assert b":root" in VS._files.blobs.get(spec["digest"])
 
 
-def test_a_ticket_filed_under_the_card_and_its_review_child_get_the_spec_link_and_text(api):
-    item = _item(api, "Exports child", step="Spec")
-    assert publish_spec(api, item).status_code == 200
+def test_a_task_filed_under_it_and_that_tasks_own_sub_task_get_the_spec_link_and_text(api):
+    item = described(api, "Exports child")
+    assert publish_spec(api, item["id"]).status_code == 200
     ticket, body = file_under(api, item)
     assert body.startswith("Do the work.")
     assert "Spec page: " in body and "/#/page/" in body and "Pick a range, then download." in body
@@ -72,8 +68,8 @@ def test_a_ticket_filed_under_the_card_and_its_review_child_get_the_spec_link_an
 
 
 def test_an_archived_spec_is_not_handed_down(api):
-    item = _item(api, "Exports archived", step="Spec")
-    assert publish_spec(api, item).status_code == 200
+    item = described(api, "Exports archived")
+    assert publish_spec(api, item["id"]).status_code == 200
     with api.app.state.store.transaction() as c:
         live = VS.spec_page(c, item["id"])
         c.execute("UPDATE bot_files SET archived=1 WHERE id=?", (live["id"],))
@@ -81,15 +77,15 @@ def test_an_archived_spec_is_not_handed_down(api):
     assert body == "Do the work."
 
 
-def test_a_card_without_a_spec_leaves_the_body_alone(api):
-    item = _item(api, "No spec", step="Spec")
+def test_a_task_without_a_spec_leaves_the_body_alone(api):
+    item = described(api, "No spec")
     _, body = file_under(api, item)
     assert body == "Do the work."
 
 
 def test_a_narrowed_spec_gives_the_link_and_not_the_text(api):
-    item = _item(api, "Exports narrowed", step="Spec")
-    assert publish_spec(api, item).status_code == 200
+    item = described(api, "Exports narrowed")
+    assert publish_spec(api, item["id"]).status_code == 200
     with api.app.state.store.transaction() as c:
         live = VS.spec_page(c, item["id"])
         c.execute("UPDATE pages SET audience=? WHERE file_id=?", ('{"people":["ana"]}', live["id"]))
@@ -98,20 +94,42 @@ def test_a_narrowed_spec_gives_the_link_and_not_the_text(api):
     assert "Spec: " not in body  # nor the page's title
 
 
-def test_a_private_card_gives_the_link_and_not_the_text(api):
-    item = _item(api, "Exports private", step="Spec")
-    assert publish_spec(api, item).status_code == 200
+def test_a_private_task_gives_the_link_and_not_the_text(api):
+    item = described(api, "Exports private")
+    assert publish_spec(api, item["id"]).status_code == 200
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", ('["human:ana"]', item["id"]))
-        card = H.task(c, item["id"])
+        task = H.task(c, item["id"])
         spec = VS.spec_page(c, item["id"])
-        assert VS._restricted(c, card, spec["id"])
+        assert VS._restricted(c, task, spec["id"])
 
 
-def test_a_neutral_spawn_and_its_children_carry_nothing_of_the_spec(api):
-    item = _item(api, "Exports neutral", step="Spec")
-    assert publish_spec(api, item).status_code == 200
-    neutral, body = file_under(api, item, body=pipeline_links.NEUTRAL_BODY)
-    assert body == pipeline_links.NEUTRAL_BODY
-    _, child = file_under(api, neutral, title="Review it", body="Check the diff.")
-    assert child == "Check the diff."
+class _Blobs:
+    def get(self, digest):
+        return HTML
+
+
+class _Files:
+    blobs = _Blobs()
+
+
+def test_task_create_hands_the_spec_down_two_levels_below_the_task_it_describes(company, monkeypatch):
+    """Below the routes: H.task_create asks child_body, which walks the parent and the grandparent."""
+    with company.transaction() as c:
+        top = H.task_create(c, "human:ana", "Exports", "Spec.", "bot:cpo", lint=False)
+        monkeypatch.setattr(VS, "_files", _Files())
+        monkeypatch.setattr(
+            VS,
+            "spec_page",
+            lambda c, task_id: {"id": "f1", "title": "Exports", "digest": "d"} if task_id == top["id"] else None,
+        )
+        child = H.task_create(
+            c, "human:ana", "Build exports", "Do the work.", "bot:cpo", parent_id=top["id"], lint=False
+        )
+        below = H.task_create(
+            c, "human:ana", "Review exports", "Check it.", "bot:cpo", parent_id=child["id"], lint=False
+        )
+        apart = H.task_create(c, "human:ana", "Something else", "Other.", "bot:cpo", lint=False)
+    assert "Spec page: " in child["body"] and "Pick a range, then download." in child["body"]
+    assert "Spec page: " in below["body"] and below["body"].startswith("Check it.")
+    assert apart["body"] == "Other."

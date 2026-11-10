@@ -1,20 +1,18 @@
 """A bot's work on a task stops because an account or a credential needs a person: one card in the task's thread.
 
 The card says what broke in one line ("Sales Bot can't reach Google (ana@acme.example).") and carries the fix: the
-person's own Connect Google, the computer's sign-in pop-up, or a credential card. The task waits on the card, a
-recorded wait like a milestone's (hubdb.wait_detail, wake_rules.parked): it is in the fixer's Needs you under
-connect (hubdb.needs_you), and no news spends turns on it meanwhile. It is no question task: a bot that names a
-person with --on asks them in one, and this card is the ask here. When the account
-works again the card says "Reconnected" and the task's owner gets ONE wake on that task, through the one wake path
-(H._wake, refs `reconnected`, an AWAITED kind in backend/wake_rules.py).
+person's own Connect Google, the computer's sign-in pop-up, or a credential card. The card is a Paused cause of the
+task (`pending`, `hold`: what is missing and who fixes it), which the engine reads; the task's status is never
+touched, and no news spends turns on it meanwhile (wake_rules.parked). When the account works again the card says
+"Reconnected" and the task's owner gets ONE wake on that task, through the one wake path (H._wake, refs
+`reconnected`, an AWAITED kind in backend/wake_rules.py).
 
 One row per task and connection key (`task_reconnects`), so a second failure on the same task reuses its card and
 several tasks can wait on one key; Needs you folds them into one item (views.fold_reconnects). A card is live while
 its task is unfinished, still has the owner it was opened for, and the card's bot is not archived; a card that stops
-being live is retired (its task ended or moved on, `moved`, `bot_gone`) and asks nothing. The wake waits until nothing
-else holds the task: a fix while another card or hold stands is owed, and the last hold to clear delivers every owed
-line in one wake (`deliver`, from here, from task_holds.refresh, or folded into the next wake H._wake sends it). The
-keys:
+being live is retired (its task ended or moved on, `moved`, `bot_gone`) and asks nothing. The wake waits until no
+other card stands on the task: a fix while another card stands is owed, and the last card to be fixed delivers every
+owed line in one wake (`deliver`, or folded into the next wake H._wake sends it). The keys:
 
 - `google:<account>`: the connector's Google sign-in for that mailbox was refused (backend/connectors.py health).
   Each refusing service (mail, calendar) is kept per account in `google_signin_refusals`, apart from the shared
@@ -141,7 +139,7 @@ def view(row):
 
 # ------------------------------------------------------------------------------------------------ writes
 def open(c, task_id, bot, key, service, label, person, fix, message_id=None, owner=None):
-    """Card the task and set it waiting for `person` to fix it, once per task and key: a second failure finds the
+    """Card the task for `person` to fix, once per task and key: a second failure finds the
     live card and changes nothing. `bot` is the bot the account is for; `owner` the task's owner (that bot, unless
     BotOps asks for another bot's credential). `message_id` is a card already posted (a credential card); otherwise
     one is written to `person` in the task's thread. Only a live task with that owner, and a person who can read it.
@@ -166,7 +164,7 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
         return dict(found)
     # A new credential card for the same key (another person asked to save it) replaces the old card.
     if found:
-        _retire(c, dict(found), refresh=False)
+        _retire(c, dict(found))
     # A closed card on the same key is history: this failure is a new card (an owed line about the old fix is moot).
     c.execute("DELETE FROM task_reconnects WHERE task_id=? AND key=?", (task_id, key))
     record = {
@@ -208,7 +206,7 @@ def open(c, task_id, bot, key, service, label, person, fix, message_id=None, own
         "VALUES(:task_id,:key,:bot,:owner,:service,:label,:person,:fix,:message_id,:created_at)",
         record,
     )
-    _wait(c, row, f"Reconnect {label} so {_bot_name(c, bot)} can go on.")
+    H._recount(c, row["owner_id"])
     if key.startswith("login:"):
         _fold_hold(c, bot)
     H.event(c, H.KEEPER, "task.reconnect_wait", task_id, {"key": key, "bot": bot, "person": person})
@@ -240,21 +238,6 @@ def _unfold_hold(c, bot):
         run_backoff.raise_hold_item(c, None, bot)
 
 
-def _wait(c, row, note):
-    """The task waits on its card: in the fixer's Needs you, out of the stall sweeps. The row is written first, so
-    the hold's reason names it (task_holds.reason)."""
-    H = _H()
-    if row["status"] != "waiting":
-        H._set_status(c, H.KEEPER, row, "waiting", note=note)
-    else:
-        from . import task_holds
-
-        task_holds.refresh(c, row["id"])
-    # The status event already carries the note; the card says it in the thread.
-    c.execute("UPDATE tasks SET note=?,version=version+1,updated_at=? WHERE id=?", (note, H.now(), row["id"]))
-    H._recount(c, row["owner_id"])
-
-
 def _reads(c, row):
     """Whether the card's person can still read its task (a task made private, or a manager moved, may stop that)."""
     return _H().task_private_readable(c, row["person"], {"id": row["task_id"]})
@@ -263,8 +246,8 @@ def _reads(c, row):
 def access_changed(c, task_id):
     """The task was made private (hubdb): a card whose person cannot read it now is retired (a credential card's request
     canceled) and opened again for the first fixer who can (`person_for`). A credential card is the bot's to ask again
-    (a new request, through the API) and a Google card only its mailbox's person can fix, so those stay retired; the
-    task stops waiting on them, and its bot is told when nothing else holds it."""
+    (a new request, through the API) and a Google card only its mailbox's person can fix, so those stay retired, and
+    the task carries on once nothing pauses it."""
     if not _present(c):
         return
     H = _H()
@@ -282,7 +265,7 @@ def access_changed(c, task_id):
         if not _reads(c, w)
     ]
     for wait in gone:
-        _retire(c, wait, refresh=False)
+        _retire(c, wait)
         person = person_for(c, None, wait["bot"], row) if wait["service"] == "login" else None
         if person:
             open(
@@ -296,11 +279,6 @@ def access_changed(c, task_id):
                 json.loads(wait["fix"] or "{}"),
                 owner=wait["owner"],
             )
-    if gone:
-        from . import task_holds
-
-        names = ", ".join(dict.fromkeys(task_holds.name(c, w["person"]) for w in gone))
-        task_holds.refresh(c, task_id, f"{names} cannot see this task now")
 
 
 def _close(c, wait, ended, at=None):
@@ -324,7 +302,7 @@ def _close(c, wait, ended, at=None):
     return True
 
 
-def _retire(c, wait, refresh=True, cleared=None):
+def _retire(c, wait):
     """The card stopped standing (its task ended or changed hands, its bot was archived): it asks nothing now, and a
     credential card's request is canceled, so nobody saves a credential the task no longer needs."""
     if not _close(c, wait, "retired"):
@@ -335,10 +313,6 @@ def _retire(c, wait, refresh=True, cleared=None):
             "UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=? AND status='pending'",
             (_H().now(), request),
         )
-    if refresh:
-        from . import task_holds
-
-        task_holds.refresh(c, wait["task_id"], cleared)
     if wait["key"].startswith("login:"):
         _unfold_hold(c, wait["bot"])
 
@@ -417,9 +391,7 @@ def dropped(c, request_id):
 
 def _said(c, wait):
     if wait["ended"] == "canceled":
-        from . import task_holds
-
-        return f"{task_holds.name(c, wait['person'])} canceled the card for {wait['label']}: it was not saved."
+        return f"{_H().actor_name(c, wait['person'])} canceled the card for {wait['label']}: it was not saved."
     return f"{wait['label']} is " + ("saved" if wait["service"] == "secret" else "reconnected") + "."
 
 
@@ -449,18 +421,12 @@ def _unclaim(c, waits):
         c.execute("UPDATE task_reconnects SET woke_at=NULL WHERE task_id=? AND key=?", (w["task_id"], w["key"]))
 
 
-def deliver(c, task_id, why="", cleared=None):
-    """The task's owed reconnect wake, once nothing holds it: back to the working step it held, and ONE wake with
-    every owed line. Another open card or hold keeps it owed: the last to clear delivers it (`cleared` names a hold
-    task_holds.refresh just saw clear). Answers whether it woke the task."""
+def deliver(c, task_id, why=""):
+    """The task's owed reconnect wake, once no other card stands on it: ONE wake with every owed line. Another open
+    card keeps it owed: the last to be fixed delivers it. Answers whether it woke the task."""
     H = _H()
     row = H.task(c, task_id)
     if not row or row["status"] not in H.ACTIVE_STATUSES or pending(c, task_id):
-        return False
-    if row["status"] == "waiting" and H.waiting_for(c, row):
-        from . import task_holds
-
-        task_holds.refresh(c, task_id)
         return False
     if not c.execute(
         f"SELECT 1 FROM task_reconnects WHERE task_id=? AND owner=? AND {OWED} LIMIT 1", (task_id, row["owner_id"])
@@ -472,21 +438,11 @@ def deliver(c, task_id, why="", cleared=None):
     if not owed:
         return False
     said = " ".join(_said(c, w) for w in owed)
-    if row["status"] == "waiting":
-        # Back to the working step it held, without the generic assignment wake: the wake below tells it once.
-        note = f"{cleared}; nothing left to wait on" if cleared else said
-        step = H._one(c, "SELECT status FROM task_steps WHERE id=?", (row.get("step_id"),))
-        kept = (
-            row.get("step_id") if step and step["status"] in H.ACTIVE_STATUSES and step["status"] != "waiting" else None
-        )
-        H._set_status(c, H.KEEPER, row, "open", step=kept, note=note, skip_step_wake=(row["owner_id"],))
-        c.execute("UPDATE tasks SET note=?,version=version+1 WHERE id=?", (note, row["id"]))
-        row = H.task(c, row["id"])
-        H._recount(c, row["owner_id"])
+    H._recount(c, row["owner_id"])
     keys = [w["key"] for w in owed]
     H.event(c, H.KEEPER, "task.reconnected", row["id"], {"keys": keys, "why": why})
     head = "Reconnected" if all(w["ended"] == "fixed" for w in owed) else "Reconnect card closed"
-    text = f"{head}: {row['title']}\n{said}" + (f" {cleared}." if cleared else "") + " Continue."
+    text = f"{head}: {row['title']}\n{said} Continue."
     if not H._wake(
         c,
         row,
@@ -502,9 +458,8 @@ def deliver(c, task_id, why="", cleared=None):
 
 
 def fold_into(c, task_row, body, refs):
-    """A wake to a task's owner while a reconnect wake is owed and no card still stands (a milestone, a hold that
-    cleared by its own path): the owed lines ride on it, so the bot hears them once and is not woken twice
-    (H._wake). Returns (body, refs)."""
+    """A wake to a task's owner while a reconnect wake is owed and no card still stands: the owed lines ride on it, so
+    the bot hears them once and is not woken twice (H._wake). Returns (body, refs)."""
     if (
         (refs or {}).get(WAKE_REF)
         or not _present(c)
@@ -514,11 +469,8 @@ def fold_into(c, task_row, body, refs):
         ).fetchone()
     ):
         return body, refs
-    # Another hold still stands (a child, a question, another card): the wake its last clearing sends carries the news.
-    from . import task_holds
-
-    row = _H().task(c, task_row["id"])
-    if not row or row["status"] == "waiting" and task_holds.holds(c, row):
+    # Another card still stands: the wake its fix sends carries the news.
+    if pending(c, task_row["id"]):
         return body, refs
     owed = _claim_owed(c, task_row["id"], task_row.get("owner_id"))
     if not owed:
@@ -540,8 +492,7 @@ def _release_sign_in_holds(c, bots):
 
 def moved(c, task_id, field, old, new):
     """A task's status or owner changed (H._task_event): an unfinished task's cards stand only with the owner they
-    were opened for; an ended task's cards are retired. The task's reason follows its next refresh or the stranded
-    sweep: the owner column is written after this event."""
+    were opened for; an ended task's cards are retired (task_effects calls this on every move and reassign)."""
     if old == new or field not in ("status", "owner") or not _present(c):
         return
     H = _H()
@@ -550,7 +501,7 @@ def moved(c, task_id, field, old, new):
     rows = H._rows(c.execute("SELECT * FROM task_reconnects WHERE task_id=? AND fixed_at IS NULL", (task_id,)))
     for wait in rows:
         if field == "status" or wait["owner"] != new:
-            _retire(c, wait, refresh=False)
+            _retire(c, wait)
     # A fix still owed as a wake is news for the owner it was opened for, on a task still going: not after that.
     c.execute(
         f"UPDATE task_reconnects SET woke_at=? WHERE task_id=? AND {OWED}"
@@ -561,11 +512,11 @@ def moved(c, task_id, field, old, new):
 
 def bot_gone(c, bot):
     """The bot was archived (settings_admin.archive_bot): the cards for its accounts ask nothing now. A task another
-    bot owns that waited only on one (BotOps asking for its credential) goes back to work."""
+    bot owns that was paused only on one (BotOps asking for its credential) carries on."""
     if not _present(c):
         return
     for wait in _H()._rows(c.execute("SELECT * FROM task_reconnects WHERE bot=? AND fixed_at IS NULL", (bot,))):
-        _retire(c, wait, cleared=f"{_bot_name(c, bot)} was archived")
+        _retire(c, wait)
 
 
 # ------------------------------------------------------------------------------------------------ reads
@@ -583,7 +534,7 @@ def pending(c, task_id):
 
 
 def tasks_for(c, person):
-    """The waiting tasks with a standing card `person` fixes, oldest card first (hubdb.needs_you)."""
+    """The open tasks with a standing card `person` fixes, oldest card first."""
     if not _present(c):
         return []
     H = _H()
@@ -598,11 +549,12 @@ def tasks_for(c, person):
         if _reads(c, r)
     )
     rows = (H.task(c, task_id) for _, task_id in found)
-    return [t for t in rows if t and t["status"] == "waiting"]
+    return [t for t in rows if t and t["status"] == "open"]
 
 
 def hold(c, task_id):
-    """The standing card as a hold (task_holds.holds, hubdb.wait_detail): {"why", "on", "what"}, or None."""
+    """The standing card as a Paused cause: {"why", "on", "what"} (what is missing, who fixes it, the fix), or
+    None."""
     card = pending(c, task_id)
     if not card:
         return None

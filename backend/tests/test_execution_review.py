@@ -485,7 +485,7 @@ def test_each_kind_of_sparse_evidence_alone_holds_the_run(api, evidence):
     else:
         with api.app.state.store.transaction() as c:
             c.execute(
-                'INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
+                'INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6',
                 (H.new_id(), 'spend', attempt['message']['id'], 'bot:finance', H.now(), H.shift(H.now(), seconds=1)),
             )
     post(api, f"attempts/{attempt['id']}/complete", body, machine['token'])
@@ -720,7 +720,7 @@ def test_a_lapse_in_tico_s_update_window_resumes_on_the_next_sweep_and_asks_nobo
     no_one_asked(api)
     body = resumed_body(api, machine)
     assert "by Tico's update" in body and 'Check what already happened first' in body
-    assert 'No consumed approval or named irreversible outside action was recorded.' in body
+    assert 'No used OK or named irreversible outside action was recorded.' in body
 
 
 def test_a_restart_the_computer_reports_during_tico_s_update_is_retried_by_the_sweep(api):
@@ -1029,12 +1029,12 @@ def test_a_run_that_only_read_but_consumed_an_approval_is_held(api):
     with api.app.state.store.transaction() as c:
         started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
         c.execute(
-            "INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
+            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6",
             (H.new_id(), 'spend', message['id'], 'bot:ops', started, started),
         )
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]  # the card never says "only read" of it
-    assert review['stopped'] == 'changed' and review['acted'] == [] and 'approval' in review['reason']
+    assert review['stopped'] == 'changed' and review['acted'] == [] and 'used OK' in review['reason']
 
 
 def test_a_run_that_read_then_hopped_to_a_silent_host_is_held_and_never_called_read_only(api):
@@ -2474,10 +2474,9 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
     ready(api, machine, ['ops'])
     target_task = None
     if live_match == 'no_task_conversation':
-        target = post(api, 'chat/ops', {'text': 'A stopped request'})
+        post(api, 'chat/ops', {'text': 'A stopped request'})
     else:
         target_task = post(api, 'tasks', {'owner': 'ops', 'title': 'Stopped request', 'body': 'Read this.'})
-        target = target_task
     target_attempt = claim(api, machine)
     post(api, f"attempts/{target_attempt['id']}/started", {'thread_id': 'stopped'}, machine['token'])
     post(
@@ -2778,19 +2777,15 @@ def test_restart_legacy_program_only_event_does_not_hide_possible_action(api, pr
     assert 'synthetic-private-marker' not in review['reason']
 
 
-def test_restart_read_only_run_ignores_another_runs_approval_and_merge(api):
-    """An approval another message consumed and a merge another run caused never hold this run."""
+def test_restart_read_only_run_ignores_another_runs_merge(api):
+    """A merge another run caused never holds this run. (An OK the bot used while the run was cut off does: the OK is
+    the bot's, not the message's.)"""
     from backend.store import H
 
     add_recovery_reviewer(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None)])
     with api.app.state.store.transaction() as c:
         started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
-        # Another lane's approval, consumed while this run was cut off, names another message.
-        c.execute(
-            "INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
-            (H.new_id(), 'spend', 'message-elsewhere', 'bot:ops', started, started),
-        )
         # Another run's merge on this run's task, inside the report window.
         task = H.task_create(c, 'human:ana', 'Something else', 'Do something else.', 'bot:ops')
         c.execute(
@@ -2812,12 +2807,12 @@ def test_restart_run_that_consumed_its_own_approval_is_held(api):
     with api.app.state.store.transaction() as c:
         started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
         c.execute(
-            "INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
+            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6",
             (H.new_id(), 'spend', message['id'], 'bot:ops', started, started),
         )
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
-    assert review['stopped'] == 'changed' and 'approval' in review['reason']
+    assert review['stopped'] == 'changed' and 'used OK' in review['reason']
 
 
 def test_restart_safe_shell_run_card_names_the_restart_not_only_read(api):
@@ -2905,7 +2900,7 @@ def test_a_clean_stop_run_that_consumed_an_approval_is_still_held(api):
     with api.app.state.store.transaction() as c:
         started = c.execute("SELECT started_at FROM attempts WHERE id=?", (attempt['id'],)).fetchone()[0]
         c.execute(
-            "INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)",
+            "INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6",
             (H.new_id(), 'spend', message['id'], 'bot:ops', started, started),
         )
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
