@@ -36,6 +36,7 @@ There is no OK that expires: Late handles one nobody gives.
 import contextvars
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn, cast
@@ -419,6 +420,38 @@ def task_of(conn: "sqlite3.Connection", requirement_id: str) -> str | None:
         "SELECT v.task_id FROM requirements r JOIN visits v ON v.id = r.visit_id WHERE r.id=?", (requirement_id,)
     ).fetchone()
     return str(found[0]) if found else None
+
+
+# The tasks filed for an OK asked of a person (`?`): their own Assistant's turn reads these as she does, so it can send
+# one back on her word. Only a task filed for the OK: it holds nothing but the ask. Twin of `filed_for`.
+FILED_FOR_SQL = (
+    "SELECT v.task_id FROM ok_grants g JOIN requirements r ON r.id = g.requirement_id "
+    "JOIN visits v ON v.id = r.visit_id WHERE g.filed = 1 AND g.asked_of_id = ?"
+)
+
+
+def filed_for(conn: "sqlite3.Connection", person: str, task_id: object) -> bool:
+    """Whether `task_id` is a task filed for an OK asked of `person`."""
+    return bool(
+        person and conn.execute(FILED_FOR_SQL + " AND v.task_id = ? LIMIT 1", (person, str(task_id))).fetchone()
+    )
+
+
+def assistant_actor() -> str:
+    """The install's Assistant as an actor (TICO_ASSISTANT_BOT, as backend/config.py reads it)."""
+    return "bot:" + (os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo")
+
+
+def assistant_for(person: object, carried: object) -> bool:
+    """Whether a read as `person` carried by `carried` is that person's own Assistant turn: her rights, the Assistant
+    carrying them (backend/auth.py chat_person, tico_principal)."""
+    return is_human(person) and carried == assistant_actor()
+
+
+def assistant_reads_own_ok(conn: "sqlite3.Connection", person: object, carried: object, task_id: object) -> bool:
+    """The person's own Assistant reads the task filed for an OK asked of her, as she does, so it can send it back on
+    her word (it never gives one: refuses_ok_by). Another person's Assistant, or the Assistant on its own, does not."""
+    return assistant_for(person, carried) and filed_for(conn, str(person), task_id)
 
 
 def acting_for_people(by: str) -> bool:
