@@ -370,6 +370,8 @@ def _apply(c, change, goal_id, reason):
         )
         return {"task_id": made["id"], "made": True, "before": None, "after": _snapshot(H.task(c, made["id"]))}
     row = H.task(c, change["task_id"])
+    if not row:
+        H.refuse(c, STRATEGY_BOT, "not-found", "Task not found")
     before = _snapshot(row)
     # Each write is the Strategy Bot's own, at the version just read, and raises the task's version.
     if do == "reorder":
