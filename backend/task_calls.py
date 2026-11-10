@@ -688,10 +688,16 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
         _h().prime_task_delegated(conn, ids, viewer)
 
 
-def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None) -> list[str]:
+def hidden_filed(
+    conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None, *, kept: bool = False
+) -> list[str]:
     """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read (`_readable`).
     Their titles and ids are not theirs to see: not in what the task waits on, not in a requirement's standing, not
-    in a refusal."""
+    in a refusal (waiting_on.unnamed says what they are told instead).
+
+    `kept`: the words are a wake or a note kept in the task's thread, read later by whoever reads the task, not only by
+    `viewer`. A private task filed there is hidden too unless its words may reach every reader of this one
+    (H.subtask_flows_up)."""
     visit: Row = row.get("visit") or {}
     if row.get("status") != "open" or not visit:
         return []
@@ -699,7 +705,15 @@ def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visib
     if viewer is None or not filed:
         return []
     readable = _readable_rows(conn, viewer, filed, visible_sql)
-    return [other for other in filed if other not in readable]
+    H = _h()
+    return [
+        other
+        for other in filed
+        if other not in readable
+        or kept
+        and H.task_private(conn, readable[other])
+        and not H.subtask_flows_up(conn, readable[other], row)
+    ]
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:

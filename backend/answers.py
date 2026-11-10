@@ -240,7 +240,13 @@ def _wake(
     sources = [str(ref) for ref in cast("list[object]", shows)] if isinstance(shows, list) else []
     _, refs = _h().sourced_text(lead, sources)
     return task_wakes.add(
-        conn, row, target, row["visit"], task_wakes.body(conn, row, lead), wake_key=wake_key, refs=refs or None
+        conn,
+        row,
+        target,
+        row["visit"],
+        task_wakes.body(conn, row, lead, to=target),
+        wake_key=wake_key,
+        refs=refs or None,
     )
 
 

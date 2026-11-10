@@ -9,7 +9,7 @@ was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes o
 """
 
 import json
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, cast
 
 from . import run_triggers
@@ -43,21 +43,35 @@ def key(task_id: str, visit_id: str, level: str = "owner", try_n: int = 0) -> st
     return f"{task_id}:{visit_id}:{level}:{try_n}"
 
 
-def body(conn: "sqlite3.Connection", task: Row, lead: str = "") -> str:
-    """What a bot reads when it is woken for a task: the stage, what is missing, and how its run may end."""
+def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | None) -> str:
+    """What a bot reads when it is woken for a task: the stage, what is missing, and how its run may end. Said to `to`,
+    whom it wakes, in words kept in the task's thread: a task this one filed is named only as `told` allows."""
+    from . import waiting_on as W
+
     stage: Row = task.get("stage") or {}
     pipeline: Row = task.get("pipeline") or {}
     lines = [lead.strip()] if lead.strip() else []
     lines.append(f"{task.get('title') or 'A task'} is in {stage.get('name', '?')} ({pipeline.get('name', '?')}).")
     missing = [s for s in R.standings(conn, task) if not s.met]
     if missing:
+        shown = told(conn, task, to)
         lines.append("Missing to leave this stage:")
-        for s in missing:
+        for s in (W.unnamed(each, shown) for each in missing):
             waits = f" Waiting on {s.on}." if s.state == R.WAITING and s.on else ""
             lines.append(f"- {s.name}: {s.line}.{waits}" if s.line and s.line != s.name else f"- {s.name}.{waits}")
     lines.append(f"Version {task.get('version')}. Send it with every command on this task.")
     lines.append(ENDINGS)
     return "\n".join(lines)
+
+
+def told(conn: "sqlite3.Connection", task: Row, to: str | None) -> Callable[[str], bool]:
+    """Whether a wake or a note to `to` about open task `task` may name a task it filed (waiting_on.unnamed): `to` may
+    open it, and, since the words are kept in the task's thread for whoever reads the task later, a private one only
+    when its words may reach them all (task_calls.hidden_filed, `kept`)."""
+    from . import task_calls
+
+    hidden = set(task_calls.hidden_filed(conn, task, to, kept=True))
+    return lambda task_id: task_id not in hidden
 
 
 # What a wake's refs hold that is the engine's or the run's own. A caller's refs never set one, and a folded wake never
@@ -195,7 +209,12 @@ def ask(conn: "sqlite3.Connection", task: Row, requirement: Row | None, who: str
         f"You are asked: {line}" if staged else f"{H.actor_name(conn, requirement.get('added_by_id'))} asks you: {line}"
     )
     return add(
-        conn, task, bot, visit, body(conn, task, lead), wake_key=f"{task['id']}:{visit['id']}:ask:{requirement['id']}"
+        conn,
+        task,
+        bot,
+        visit,
+        body(conn, task, lead, to=bot),
+        wake_key=f"{task['id']}:{visit['id']}:ask:{requirement['id']}",
     )
 
 

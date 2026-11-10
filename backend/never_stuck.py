@@ -454,7 +454,7 @@ def _snoozed_since(conn: "sqlite3.Connection", visit: Row, since: str) -> bool:
 
 def _wake(conn: "sqlite3.Connection", row: Row, target: str | None, lead: str, level: str, n: int, epoch: str) -> bool:
     key = f"{row['id']}:{row['visit']['id']}:{level}:{n}:{epoch}"
-    text = task_wakes.body(conn, row, lead)
+    text = task_wakes.body(conn, row, lead, to=target)
     return bool(task_wakes.add(conn, row, target, row["visit"], text, level=level, try_n=n, wake_key=key))
 
 
@@ -582,12 +582,15 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             # No bot has a turn: it waits on a person, another task or the outside, and the manager bot looks once. A
             # bot that cannot run is one row for its cause in a person's list, and its tasks carry on when the cause is
             # fixed: nothing is sent for it.
+            waits_on = W.unnamed(head, task_wakes.told(conn, fresh, manager)).line  # a sub-task it may not be told of
             lead = (
-                f"{said} It waits on: {head.line}. Look once: push past with a reason where that is allowed, "
+                f"{said} It waits on: {waits_on}. Look once: push past with a reason where that is allowed, "
                 "reassign it, snooze it or close it."
             )
             key = f"{row['id']}:{visit['id']}:late"
-            if task_wakes.add(conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead), wake_key=key):
+            if task_wakes.add(
+                conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead, to=manager), wake_key=key
+            ):
                 done["woken"] += 1
     elif not visit.get("late_person_at"):
         _late_look_lost(conn, row, manager, done, seen)

@@ -456,6 +456,29 @@ def test_a_private_sub_tasks_title_is_not_shown_to_someone_who_reads_only_its_pa
     assert "Salary" in json.dumps(H.task_view(c, parent["id"]))  # the engine's own read hides nothing
 
 
+def test_the_wake_that_says_a_tasks_sub_tasks_ended_names_only_those_everyone_who_reads_it_may_read(c):
+    """Codex review 2: the wake on the parent, kept in its thread, says each filed task ended. One the woken bot may not
+    open, or a private one whose readers are not the parent's (Ben reads the parent and its thread, not it), is "A
+    sub-task": that it ended, never its title."""
+    from backend import task_privacy
+
+    parent = _new(c, by=BEN, owner=BUILDER, title="Plan the offsite")
+    hidden = _new(c, by=ANA, owner=HELPER, title="Salary numbers", parent_id=parent["id"], private=True)
+    own = _new(c, by=BUILDER, owner=HELPER, title="Venue shortlist", parent_id=parent["id"], private=True)
+    shared = _new(c, by=BUILDER, owner=HELPER, title="Book the coach", parent_id=parent["id"])
+    assert not H.task_private_readable(c, BUILDER, H.task(c, hidden["id"]))
+    assert not H.task_private_readable(c, BEN, H.task(c, own["id"]))
+    for child in (own, shared, hidden):
+        H.task_done(c, HELPER, child["id"], "Here.", _version(c, child["id"]))
+    (wake,) = c.execute(
+        "SELECT id, recipient_id, body FROM messages WHERE wake_key LIKE ?", (f"{parent['id']}:%:filed:%",)
+    ).fetchall()
+    assert wake["recipient_id"] == BUILDER
+    assert "Salary" not in wake["body"] and "Venue" not in wake["body"], wake["body"]
+    assert "Book the coach: Done" in wake["body"] and wake["body"].count("A sub-task: Done") == 2, wake["body"]
+    assert task_privacy.message_readable(c, BEN, H.message(c, wake["id"]))  # Ben reads it in the parent's thread
+
+
 def test_a_task_names_the_tasks_it_filed_and_the_one_that_filed_it_only_to_who_may_read_them(c):
     """Nobody who may not read a private task learns its title, its id, its status or that it exists: the parent's
     `filed` leaves it out whole, and the child's `filed_by` says nothing of a private parent."""
