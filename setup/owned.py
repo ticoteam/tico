@@ -338,7 +338,7 @@ class StrictDeployer(Deployer):
         """This install's server. Once its launch is recorded, that instance is read by its id and nothing else: a tag
         listing is eventually consistent, and missing a server there must never lead to launching a second one."""
         if self.ids.get("instance"):
-            inst = self.recorded_instance()
+            inst = self.recorded_row("instance")
             if inst is not None or self.ids.get("instance"):
                 return inst
         r = self.ec2.describe_instances(
@@ -353,28 +353,30 @@ class StrictDeployer(Deployer):
             )
         return found[0] if found else None
 
-    def recorded_instance(self) -> dict | None:
-        """The recorded instance, read by its id: used in any state short of terminated. Terminated or unknown, it is
-        refused (never replaced by a launch), unless this install's own destroy journalled terminating it; then the
-        record is closed and None returned, so the next launch is a new server under a new ClientToken."""
-        iid = self.ids["instance"]
-        inst = described(self.ec2, "instance", iid, self.sleep)
-        state_now = ((inst or {}).get("State") or {}).get("Name", "")
-        if inst is not None and state_now not in ("shutting-down", "terminated"):
-            if not self.n.is_ours(inst.get("Tags"), self.p.name):
-                raise not_ours("EC2 instance", iid, self.n, self.p.name)
-            return inst
-        if iid in (self.ids.get("terminated") or []):
-            for k in ("instance", "instance_token", "volumes", "enis", "terminated"):
-                self.ids.pop(k, None)
+    def recorded_row(self, kind: str) -> dict | None:
+        """The resource this install recorded making (`kind`: instance, eip or sg), read by its id and nothing else: any
+        state short of terminated is used. Gone (terminated, or unknown after a bounded wait) it is refused, never
+        replaced, unless this install's own destroy journalled deleting it; then the record is closed and None returned,
+        so the next create is a new resource (an instance under a new ClientToken)."""
+        rid = self.ids[kind]
+        what, verb, refusal, extra = RECORDED[kind]
+        row = described(self.ec2, kind, rid, self.sleep)
+        state_now = ((row or {}).get("State") or {}).get("Name", "")
+        if row is not None and state_now not in ("shutting-down", "terminated"):
+            if not self.n.is_ours(row.get("Tags"), self.p.name):
+                raise not_ours(what, rid, self.n, self.p.name)
+            if undelete(self.ids, kind, rid):  # a delete journalled but never made: still this install's
+                self.save()
+            return row
+        if close_deleted(self.ids, kind, extra):
             self.save()
             return None
-        why = f"is {state_now}" if inst is not None else "is not known to EC2 (after waiting about 30 seconds)"
+        why = f"is {state_now}" if row is not None else "is not known to EC2 (after waiting about 30 seconds)"
+        keys = " and ".join(f'"{k}"' for k in (kind, *extra[:1]))
         raise MissingInput(
-            f"EC2 instance {iid}, which this install recorded launching, {why}, and setup did not terminate it; "
-            "refusing to launch another server. Check it in the EC2 console (Instances, tag "
-            f"{self.n.install_tag}={self.n.install_id}). If it is gone for good and should be replaced, remove "
-            f'"instance" and "instance_token" under "aws_ids" in {self.record} and run setup again.'
+            f"{what} {rid}, which this install recorded {verb}, {why}, and setup did not delete it; refusing to "
+            f"{refusal}. Check it in the EC2 console (tag {self.n.install_tag}={self.n.install_id}). If it is gone for "
+            f'good and should be replaced, remove {keys} under "aws_ids" in {self.record} and run setup again.'
         )
 
     def put_env(self, env_text: str, *, company_file=False) -> None:
@@ -442,9 +444,12 @@ class StrictDeployer(Deployer):
         for g in self.ec2.describe_security_groups(Filters=flt)["SecurityGroups"]:
             if self.n.is_ours(g.get("Tags"), self.p.name):
                 self.j.adopt("sg", g["GroupId"], "Security group", g["GroupId"], name=row_name(g))
-        for a in self.ec2.describe_addresses(Filters=flt)["Addresses"]:
-            if self.n.is_ours(a.get("Tags"), self.p.name):
-                self.j.adopt("eip", a["AllocationId"], "Elastic IP", a["AllocationId"], name=row_name(a))
+        if self.ids.get("eip"):  # recorded: read by its id, never looked for in a listing
+            self.recorded_row("eip")
+        else:
+            for a in self.ec2.describe_addresses(Filters=flt)["Addresses"]:
+                if self.n.is_ours(a.get("Tags"), self.p.name):
+                    self.j.adopt("eip", a["AllocationId"], "Elastic IP", a["AllocationId"], name=row_name(a))
         if s3 is not None and self.p.plan_bucket:  # setup's own plan bucket
             owned = {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
             if bucket_proof(s3, owned, self.n, self.p.name, "--name") == "ours":
@@ -742,8 +747,15 @@ class StrictDeployer(Deployer):
         self.ec2.authorize_security_group_ingress(GroupId=gid, IpPermissions=perms)
 
     def ensure_eip(self) -> tuple[str, str]:
-        """AllocateAddress takes no ClientToken: a retry cannot ask EC2 for the address an earlier call made. An open
-        intent (an answer that was lost) is waited for while EC2's listing catches up, and never allocated again."""
+        """AllocateAddress takes no ClientToken: a retry cannot ask EC2 for the address an earlier call made. A recorded
+        allocation is read by its id (recorded_row), never looked for in a listing or allocated again. An open intent
+        (an answer that was lost) is waited for while EC2's listing catches up, and never allocated again; an intent whose
+        call provably made nothing is closed."""
+        if self.ids.get("eip"):
+            row = self.recorded_row("eip")
+            if row is not None:
+                return row["AllocationId"], row["PublicIp"]
+        name = self.n.resource(self.p.name)
         waits = (1, 2, 4, 8, 16) if (self.ids.get("intents") or {}).get("eip") is not None else ()
         for wait in (*waits, None):
             r = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
@@ -754,20 +766,26 @@ class StrictDeployer(Deployer):
             if wait is not None:
                 self.sleep(wait)
         if waits:
-            name = self.n.resource(self.p.name)
+            tag = f"{self.n.install_tag}={self.n.install_id}"
             raise MissingInput(
                 f"Setup's last run asked EC2 for an Elastic IP ({name}) but never heard back, and none with this "
-                "install's tags is listed yet; refusing to allocate a second one. Check by hand in the EC2 console "
-                f"(Elastic IPs, tag {self.n.install_tag}={self.n.install_id}) after a few minutes and run setup again. "
-                "If there is none, remove the \"eip\" entry under \"intents\" in this install's state.json first."
+                "install's tags is listed yet; refusing to allocate a second one. Check, after a few minutes: "
+                f"aws ec2 describe-addresses --region {self.p.region} --filters "
+                f"Name=tag:{self.n.install_tag},Values={self.n.install_id} (or the EC2 console, Elastic IPs, tag {tag}). "
+                "If it lists an address, run setup again: it is found and kept. If it lists none, remove \"eip\" "
+                f'under "intents" under "aws_ids" in {self.record}, then run setup again.'
             )
-        self.j.intend("eip", name=self.n.resource(self.p.name))
-        a = self.ec2.allocate_address(
-            Domain="vpc",
-            TagSpecifications=[
-                {"ResourceType": "elastic-ip", "Tags": self.n.tags(self.p.name, self.n.resource(self.p.name))}
-            ],
-        )
+        self.j.intend("eip", name=name)
+        try:
+            a = self.ec2.allocate_address(
+                Domain="vpc",
+                TagSpecifications=[{"ResourceType": "elastic-ip", "Tags": self.n.tags(self.p.name, name)}],
+            )
+        except Exception as e:
+            if made_nothing(e):  # provably no address: the intent is closed, and a re-run simply allocates
+                self.ids["intents"].pop("eip", None)
+                self.save()
+            raise
         self.j.made("eip", a["AllocationId"])
         return a["AllocationId"], a["PublicIp"]
 
@@ -807,7 +825,7 @@ class StrictDeployer(Deployer):
         # Journalled before the call, and sent again on a retry: EC2 answers a repeated ClientToken with the instance it
         # already launched, so a lost answer never makes a second server.
         # The token stays with the install for its life (instance_token): a launch call repeated for any reason is
-        # answered with the same server. Only this install's own destroy closes it (recorded_instance).
+        # answered with the same server. Only this install's own destroy closes it (recorded_row).
         token = self.ids.get("instance_token") or self.j.token("instance")
         self.ids["instance_token"] = token
         self.j.intend("instance", name=n, token=token)
@@ -884,6 +902,52 @@ class StrictDeployer(Deployer):
             )
         if not at:
             self.ec2.associate_address(AllocationId=alloc, InstanceId=iid, AllowReassociation=False)
+
+
+# kind: (what, how it was made, what a gone one does not lead to, the record's other keys a delete closes with it)
+RECORDED = {
+    "instance": ("EC2 instance", "launching", "launch another server", ("instance_token", "volumes", "enis")),
+    "eip": ("Elastic IP", "allocating", "allocate another", ()),
+    "sg": ("Security group", "creating", "create another", ()),
+}
+
+
+def deleting(ids: dict, kind: str, rid: str, save: Callable[[], None]) -> None:
+    """Journalled right before setup's own delete call: a later run that finds the recorded resource gone knows setup
+    deleted it, and may make another."""
+    gone = ids.setdefault("deleted", {})
+    gone[kind] = sorted({*gone.get(kind, []), rid})
+    save()
+
+
+def undelete(ids: dict, kind: str, rid: str) -> bool:
+    gone = (ids.get("deleted") or {}).get(kind) or []
+    if rid in gone:
+        gone.remove(rid)
+        return True
+    return False
+
+
+def close_deleted(ids: dict, kind: str, extra: tuple[str, ...] = ()) -> bool:
+    """When setup itself deleted the recorded `kind`: its record (and `extra` keys) closed, True."""
+    if not undelete(ids, kind, ids.get(kind, "")):
+        return False
+    for k in (kind, *extra):
+        ids.pop(k, None)
+    return True
+
+
+def made_nothing(e: Exception) -> bool:
+    """A create call that provably made nothing: botocore stopped it before any request left, or AWS answered its one
+    and only attempt (no retries) with a 4xx. Anything else (no answer, a 5xx, an answer after retries, an interrupted
+    process) may have made the resource."""
+    if type(e).__name__ in ("ParamValidationError", "NoCredentialsError", "PartialCredentialsError", "NoRegionError"):
+        return True
+    meta = getattr(e, "response", None)
+    info = meta.get("ResponseMetadata") if isinstance(meta, dict) else None
+    if not isinstance(info, dict) or info.get("RetryAttempts") != 0 or not info.get("HTTPStatusCode"):
+        return False
+    return 400 <= int(info["HTTPStatusCode"]) < 500 and bool(error_code(e))
 
 
 NOT_FOUND = {
@@ -1083,9 +1147,8 @@ def destroy(
             (insts.append(i) if still("instance", i, rows, "InstanceId") else left(f"instance {i}"))
     if insts:
         refuse_foreign_attached(ec2, insts, name, names, ids)
-        # Journalled first: a later run that finds the recorded server terminated knows setup did it, and may make another.
-        ids["terminated"] = sorted({*(ids.get("terminated") or []), *insts})
-        save()
+        for i in insts:
+            deleting(ids, "instance", i, save)
         ec2.terminate_instances(InstanceIds=insts)
         say("  waiting for the instance to terminate ...")
         ec2.get_waiter("instance_terminated").wait(InstanceIds=insts)
@@ -1107,6 +1170,7 @@ def destroy(
                 )
             else:
                 # EC2 has no conditional release: an association made in the instant after this read is not caught.
+                deleting(ids, "eip", a, save)
                 ec2.release_address(AllocationId=a)
     for g in found.get("security-group", []):
         if still("sg", g, ec2.describe_security_groups(Filters=flt)["SecurityGroups"], "GroupId"):

@@ -503,7 +503,7 @@ def test_a_lost_allocate_address_is_waited_for_and_never_allocated_twice():
         else:
             with pytest.raises(MissingInput, match="Elastic IP") as e:
                 d.ensure_eip()
-            assert "by hand" in str(e.value) and ids["intents"]["eip"] and "eip" not in ids
+            assert "describe-addresses" in str(e.value) and ids["intents"]["eip"] and "eip" not in ids
             assert sum(sleeps) <= 60
         assert len(ec2.called("allocate_address")) == 1, lag
 
@@ -2705,9 +2705,104 @@ def test_a_recorded_instance_missing_from_a_listing_is_read_by_its_id_and_never_
     d.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n")
     ec2.terminate_instances = lambda **kw: [i.update(State={"Name": "terminated"}) for i in ec2.instances]
     owned.destroy(ec2, IAM(), fakes.FakeSSM(), {"instance": ["i-1"]}, print, lambda s: None, HUB_ID, "hotmic", ids)
-    assert ids["terminated"] == ["i-1"]
+    assert ids["deleted"] == {"instance": ["i-1"]}
     d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
     assert d.launch_or_reuse({"sg": "sg-1", "alloc": ""}, "#!/bin/bash\n") == ("i-2", True)
     tokens = [kw["ClientToken"] for kw in ec2.called("run_instances")]
     assert ids["instance"] == "i-2" and len(set(tokens)) == 2 and ids["instance_token"] == tokens[-1]
-    assert "terminated" not in ids
+    assert ids["deleted"] == {"instance": []}
+
+
+class AllocatingEC2(NotFoundEC2):
+    """Each AllocateAddress makes a new address (eipalloc-1, -2, ...), as EC2 does."""
+
+    def allocate_address(self, **kw):
+        a = super().allocate_address(**kw)
+        a["AllocationId"] = f"eipalloc-{len(self.eips)}"
+        return a
+
+    def release_address(self, **kw):
+        super().release_address(**kw)
+        self.eips = [a for a in self.eips if a["AllocationId"] != kw["AllocationId"]]
+
+
+def test_a_recorded_elastic_ip_missing_from_a_listing_is_read_by_its_id_and_never_allocated_again():
+    # Codex review 6, part 1, case 11: with an allocation recorded (made, or adopted by preflight after a lost answer) but
+    # missing from the next tag listing, setup allocated a second address and recorded it over the first. A recorded
+    # AllocationId is now read by its id; missing, it is waited for and refused, never allocated again or overwritten.
+    p = hub_plan(domain=DOMAIN)
+    for how in ("made", "lost answer, adopted by preflight"):
+        ec2, ids = AllocatingEC2(), {}
+        d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+        if how == "made":
+            d.ensure_eip()
+        else:
+            ids["intents"] = {"eip": {"name": "hub-hotmic", "type": "eip"}}
+            ec2.allocate_address(Domain="vpc", TagSpecifications=[{"Tags": HUB_ID.tags("hotmic", "hub-hotmic")}])
+            d.preflight()
+        assert ids["eip"] == "eipalloc-1"
+        ec2.hide("eipalloc-1", 99)  # every listing misses it from now on
+        again = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+        again.preflight()
+        assert again.ensure_eip() == ("eipalloc-1", "203.0.113.9"), how
+        assert ids["eip"] == "eipalloc-1" and len(ec2.called("allocate_address")) == 1, how
+
+    # Gone (EC2 does not know it, after a wait), and not released by setup: refused with the step, never allocated.
+    ec2.eips, slept = [], []
+    d = owned.StrictDeployer(p, ec2, IAM(), fakes.FakeSSM(), ACCOUNT, sleep=slept.append, ids=ids, record="S.json")
+    with pytest.raises(MissingInput) as e:
+        d.ensure_eip()
+    said = str(e.value)
+    assert "eipalloc-1" in said and "refusing to allocate another" in said and '"eip" under "aws_ids" in S.json' in said
+    assert slept == [1, 2, 4, 8, 16] and ids["eip"] == "eipalloc-1" and len(ec2.called("allocate_address")) == 1
+
+    # Released by this install's own destroy (journalled first): the next run allocates a new one.
+    ec2, ids = AllocatingEC2(), {}
+    d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+    d.ensure_eip()
+    owned.destroy(
+        ec2, IAM(), fakes.FakeSSM(), {"elastic-ip": ["eipalloc-1"]}, print, lambda s: None, HUB_ID, "hotmic", ids
+    )
+    assert ids["deleted"] == {"eip": ["eipalloc-1"]} and not ec2.eips
+    assert strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids).ensure_eip()[0] == "eipalloc-1"
+    assert len(ec2.called("allocate_address")) == 2 and ids["eip"] == "eipalloc-1" and ids["deleted"] == {"eip": []}
+
+
+def test_an_elastic_ip_intent_whose_call_provably_made_nothing_is_closed_and_any_other_names_the_exact_check():
+    # Codex review 6, "tried and held" 3-4: an interruption that leaves an eip intent with no allocation made a plain
+    # re-run refuse until someone checked the console. Where setup can prove the call made nothing (the request never
+    # left, or EC2 answered its single attempt with a 4xx), it closes the intent itself; else the refusal names the
+    # exact check: the region, the tag filter, and the entry to remove from which file.
+    p = hub_plan(domain=DOMAIN)
+    unsent = type("ParamValidationError", (Exception,), {})("bad parameter")
+    refused = ClientError("AddressLimitExceeded")
+    refused.response["ResponseMetadata"] = {"HTTPStatusCode": 400, "RetryAttempts": 0}
+    for err in (unsent, refused):
+        ec2, ids = AllocatingEC2(), {}
+        real = ec2.allocate_address
+        ec2.allocate_address = lambda **kw: (_ for _ in ()).throw(err)
+        d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+        with pytest.raises(type(err)):
+            d.ensure_eip()
+        assert not (ids.get("intents") or {}).get("eip"), err  # nothing was made: no intent left open
+        ec2.allocate_address = real
+        assert strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids).ensure_eip()[0] == "eipalloc-1"
+    # Ambiguous: the process stopped after the intent was saved (or the answer was lost). Refused, with the exact check.
+    for err in (Lost("allocate_address"), ClientError("InternalError")):
+        ec2, ids = AllocatingEC2(), {}
+        ec2.allocate_address = lambda **kw: (_ for _ in ()).throw(err)
+        d = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids=ids)
+        with pytest.raises(type(err)):
+            d.ensure_eip()
+        assert ids["intents"]["eip"]
+        d = owned.StrictDeployer(
+            p, ec2, IAM(), fakes.FakeSSM(), ACCOUNT, sleep=lambda s: None, ids=ids, record="S.json"
+        )
+        with pytest.raises(MissingInput) as e:
+            d.ensure_eip()
+        said = str(e.value)
+        assert (
+            "aws ec2 describe-addresses --region us-west-2 --filters Name=tag:hub-setup-install,Values=0123456789abcdef"
+            in said
+        ), said
+        assert 'remove "eip" under "intents" under "aws_ids" in S.json' in said, said
