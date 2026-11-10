@@ -6,7 +6,6 @@ JOBS = {
         "Every beat: move a task on when everything it needs is met, wake whoever has its turn, end snoozes that are "
         "due, and hand a task that is Late or not moving to its pipeline's manager, then to a person.",
     ),
-    "assigned_tasks": ("open", 'Start assigned tasks on a free computer, up to each bot\'s "Keep N going".'),
     "task_manager_report": (
         "open",
         "Task Manager: per department, list tasks that say Paused, held bots, runs waiting for their owner's review, "
@@ -17,7 +16,7 @@ JOBS = {
         "Bookkeeper: read its Finance work queue; open one Books check task only when something is new.",
     ),
 }
-WAKES = {"assigned_tasks", "heartbeat"}
+WAKES = {"heartbeat"}
 
 
 def describe_job(row):

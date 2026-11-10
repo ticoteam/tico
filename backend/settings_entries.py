@@ -897,17 +897,6 @@ ENTRIES = TEAM_RULES + [
         words="manager report model task name description",
     ),
     S(
-        "bot.keep_tasks_going",
-        "Keep tasks going",
-        BOTS + " > Bot editor",
-        "bot",
-        "direct",
-        "POST",
-        "bots/{bot}/keep-tasks-going",
-        "keep_tasks_going",
-        card=_card("bots"),
-    ),
-    S(
         "bot.turns_at_once",
         "Turns at once",
         BOTS + " > Bot editor",
@@ -1760,7 +1749,6 @@ ALIASES = {
 
 # Writes on a Settings page that change no setting: one-off actions, and why each needs no entry.
 NOT_SETTINGS = {
-    ("POST", "approvals/{x}/undo"): "undoes one approval; nothing to set",
     ("POST", "jobs/{x}/reconcile"): "settles one stopped run; nothing to set",
     ("POST", "system/storage/tico/check"): "checks the storage connection",
     ("POST", "setup/company/people/{x}/invite"): "sends one invitation from setup",
