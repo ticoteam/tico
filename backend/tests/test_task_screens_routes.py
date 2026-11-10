@@ -157,3 +157,17 @@ def test_waiting_on_narrows_the_changes_since_a_cursor(api):
     post(api, "tasks", {"title": "Order the cake", "body": "As discussed.", "owner": "cara"})
     seen = get(api, f"tasks?waiting_on=ben&changed_after={cursor}")
     assert [t["id"] for t in seen["tasks"]] == [bens["id"]]
+
+
+def test_a_pipelines_mark_counts_only_the_tasks_the_reader_may_read(api):
+    product(api)
+    hidden = post(
+        api,
+        "tasks",
+        {"title": "Quiet acquisition", "body": "As discussed.", "owner": "ben", "pipeline": "product", "private": True},
+    )
+    assert api.get("/api/v2/tasks/" + hidden["id"], headers=headers("cara-test")).status_code == 404
+    mine = {p["id"]: p for p in get(api, "factories")["pipelines"]}["product"]
+    assert mine["open"] == 1 and mine["mark"] == "needs_person"
+    theirs = {p["id"]: p for p in get(api, "factories", token="cara-test")["pipelines"]}["product"]
+    assert theirs["open"] == 0 and theirs["mark"] is None
