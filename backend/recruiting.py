@@ -341,7 +341,7 @@ def end_draft(c, row, why):
     person: nothing drafts a seat's description in the background any more."""
     task = H.task(c, row["draft_task"]) if row["draft_task"] else None
     if task and task["status"] in H.ACTIVE_STATUSES:
-        H.task_update(c, task["owner_id"], task["id"], status="declined", note=why[:500])
+        H.attempt(c, H.task_close, task["owner_id"], task["id"], why[:500], task["version"])
 
 
 # ------------------------------------------------------------------ 1. the job description, drafted from the title
@@ -1013,9 +1013,6 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
         "UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated_at=?,updated_by=? WHERE id=?",
         (now, who.actor, slug, now, who.actor, row["id"]),
     )
-    from . import pipeline_setup  # a pipeline bound to this seat takes the new bot as its manager
-
-    pipeline_setup.seat_filled(c, who.actor, row["id"], slug)
     # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
     c.execute(
         "UPDATE seats SET reports_to=?,updated_at=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",

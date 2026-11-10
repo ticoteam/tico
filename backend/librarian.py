@@ -94,13 +94,13 @@ def research_target(c, target):
 
 
 def free_title(c, actor, want):
-    """A title this request can still open: the hub refuses a second live task with the same one."""
-    marks = ",".join("?" * len(H.LIVE_STATUSES))
+    """A title this request can still open: Tico refuses a second open task with the same one."""
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for n in range(1, 20):
         title = want if n == 1 else f"{want} ({n})"
         if not c.execute(
             f"SELECT 1 FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status IN ({marks})",
-            (actor, "bot:" + LIBRARIAN, title, *H.LIVE_STATUSES),
+            (actor, "bot:" + LIBRARIAN, title, *H.ACTIVE_STATUSES),
         ).fetchone():
             return title
     raise Problem("busy", "The " + NAME + " already has many research requests from you for this page", 409)
