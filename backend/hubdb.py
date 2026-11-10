@@ -9859,3 +9859,30 @@ def task_origin(conn, row):
         if row.get("body") == body:
             origins.add(actor)
     return next(iter(origins)) if len(origins) == 1 and len(candidates) == 1 else None
+
+
+# ----------------------------------------------------------------------------- the task calls
+# Done, move, close, reassign, asks, answers and snooze (backend/task_calls.py), under the names every caller uses:
+# H.task_move(...). Imported last: task_calls reads hubdb when a call runs, not when it loads.
+from .task_calls import (  # noqa: E402
+    CLOSED as TASK_CLOSED,
+    DONE as TASK_DONE,
+    NEXT as TASK_NEXT,
+    REOPEN as TASK_REOPEN,
+    can_work as task_can_work,
+    attempt as attempt,
+    task_answer as task_answer,
+    task_answer_undo as task_answer_undo,
+    task_ask as task_ask,
+    task_close as task_close,
+    task_done as task_done,
+    task_give as task_give,
+    task_move as task_move,
+    task_reassign as task_reassign,
+    task_snooze as task_snooze,
+    task_thumbs as task_thumbs,
+    task_try_again as task_try_again,
+    task_unsnooze as task_unsnooze,
+    task_waits as task_waits,
+    task_withdraw_ask as task_withdraw_ask,
+)
