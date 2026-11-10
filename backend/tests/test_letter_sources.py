@@ -8,11 +8,19 @@ from pathlib import Path
 
 import pytest
 
-from backend import blobs, events as E, letters as L
+from backend import blobs, events as E, letters as L, task_asks
 from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
-from backend.tests.helpers.letters import hq, quote, send, approve, grant, fetch  # noqa: F401
+from backend.tests.helpers.letters import hq, quote, send, grant, fetch  # noqa: F401
 from backend.tests.helpers.agents import hermes_bot, bot_id, credential
 from backend.tests.threads_e2e import create_thread
+
+
+def approve(api, row, token="ana-test"):
+    """The person opens the letter in Tico and clicks OK on it (backend/task_asks.py)."""
+    shown = get(api, "letters/" + row["id"], token=token)["shown_hash"]
+    with api.app.state.store.read() as c:
+        task = task_asks.task_of(c, row["approval_id"])
+    return post(api, f"tasks/{task}/asks/{row['approval_id']}/ok", {"shown_hash": shown}, token=token)
 
 
 def read_letters(api, token, after):
