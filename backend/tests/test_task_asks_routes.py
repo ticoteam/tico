@@ -306,3 +306,95 @@ def test_the_assistant_and_botops_never_give_a_bound_ok_from_its_preview(api):
         status, _, _, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/ok", token, {"shown_hash": shown})
         assert status in (403, 409), token
     assert standing(api, rid) == K.WAITING
+
+
+# ----------------------------------------------------------------------------- finding 5: an OK never widens who sees
+def test_an_ok_filed_for_a_subject_is_private_to_its_parties_and_its_title_names_nothing_of_it(api):
+    """A bot asks Ben to OK an email whose subject line is confidential. The task filed for it is private, reaches Ben,
+    and is titled only for the kind of act; Cara, a teammate, can neither read it nor open its preview."""
+    as_bot(api)
+    secret = {"subject": "Acquisition of Globex: terms", "to": ["ceo@globex.example"]}
+    with api.app.state.store.transaction() as c:
+        asked = K.ask_ok(
+            c,
+            "bot:ops",
+            "human:ben",
+            "Send this email?",
+            shows=[],
+            subject="email_send:e1",
+            content=secret,
+            title="Send: Acquisition of Globex: terms",
+        )
+        task = H.task(c, asked["task_id"])
+    assert task["title"] == "Send an email" and task["private"]
+    rid, tid = asked["requirement_id"], asked["task_id"]
+    assert get(api, f"oks/{rid}", token="ben-test")["content"] == secret
+    for path in (f"oks/{rid}", f"tasks/{tid}"):
+        r = api.get("/api/v2/" + path, headers=headers("cara-test"))
+        assert r.status_code == 404 and "Globex" not in r.text, path
+
+
+def test_an_owned_oks_preview_on_a_task_others_read_shows_only_to_its_parties(api):
+    """The same email OK asked on a company-visible task Cara reads: she sees the task, never what the OK is for."""
+    as_bot(api)
+    with api.app.state.store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Outreach", "Reach out.", "bot:ops", lint=False, private=False)["id"]
+        asked = K.ask_ok(
+            c,
+            "bot:ops",
+            "human:ben",
+            "Send this email?",
+            shows=[],
+            subject="email_send:e2",
+            content={"subject": "Globex terms"},
+            task_id=tid,
+        )
+    rid = asked["requirement_id"]
+    assert api.get(f"/api/v2/tasks/{tid}", headers=headers("cara-test")).status_code == 200
+    r = api.get(f"/api/v2/oks/{rid}", headers=headers("cara-test"))
+    assert r.status_code == 404 and "Globex" not in r.text
+    assert get(api, f"oks/{rid}", token="ben-test")["content"] == {"subject": "Globex terms"}
+    # A generic kind shows to whoever reads the task, as before.
+    tid2 = bots_task(api, "ops-bot-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid2,))
+    rid2 = ask(api, "ops-bot-test", tid2)
+    assert api.get(f"/api/v2/oks/{rid2}", headers=headers("cara-test")).status_code == 200
+
+
+# ----------------------------------------------------------------------------- Needs you: a batch never gives a bound OK
+def test_a_needs_you_batch_never_gives_a_bound_ok_but_sends_one_back(api):
+    """Ben walks Needs you through the batch routes. The bound OK is shown preview-only: deciding OK is refused, a
+    send back is kept and applied on commit, and the OK is never given."""
+    bot = as_bot(api)
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid)
+    status, code, detail, out = call(api, "POST", "batch", "ben-test", {})
+    assert status == 200, (status, code, detail)
+    batch = out
+    keys = [batch["item"]["key"]] if batch.get("item") else []
+    n = None
+    for i in range(1, batch["total"] + 1):
+        if batch.get("item") and batch["item"]["key"] == "ask:" + rid:
+            n = i
+            break
+        _, _, _, batch = call(api, "POST", f"batch/{out['id']}/next", "ben-test", {})
+        keys.append((batch.get("item") or {}).get("key"))
+    assert n is not None, keys
+    assert batch["item"]["preview_only"]
+    status, _, detail, _ = call(
+        api, "POST", f"batch/{out['id']}/respond", "ben-test", {"kind": "decide", "decision": "ok", "item": n}
+    )
+    assert status in (409, 422) and "preview" in (detail or ""), (status, detail)
+    status, code, detail, _ = call(
+        api,
+        "POST",
+        f"batch/{out['id']}/respond",
+        "ben-test",
+        {"kind": "decide", "decision": "send_back", "text": "Say Thursday.", "item": n},
+    )
+    assert status == 200, (status, code, detail)
+    status, code, detail, done = call(api, "POST", f"batch/{out['id']}/commit", "ben-test", {})
+    assert status == 200 and done["errors"] == [], (status, code, detail, done)
+    assert standing(api, rid) == K.SENT_BACK
+    assert use(api, rid, bot)[0] == 409
