@@ -72,7 +72,7 @@ function nativeVisualRepaint() {
     if (el.pageData && typeof pageCard === 'function' && pageSrc(el.pageData)) el.replaceWith(pageCard(el.pageData, {size: el.pageSize}));
   if (typeof PG !== 'undefined' && PG?.page && PG.shown === PG.page.version && pageSrc(PG.page) && !document.querySelector('#pg-view .pg-body iframe'))
     void pageFullBody(PG);
-  // The Decide card's body (its note is left alone) and a task's question box (its ticks and note kept as a draft);
+  // The ask screen's thing (drawn again from what it holds) and a task's question box (its ticks and note kept as a draft);
   // neither while an answer from it is on its way, so its controls stay off.
   if (typeof DEC !== 'undefined' && DEC && !DEC.busy) decidePaintBody(DEC);
   if (typeof qcardRedraw === 'function')
