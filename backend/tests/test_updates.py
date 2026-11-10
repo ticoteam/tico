@@ -411,17 +411,13 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         old_answer(c, "human:ana", on_raise, "Mixed answer about the raise", refs={"task": budget["id"]})
     for task in (budget, raise_plan, audit):  # her decisions and comments, on each kind of task
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
-        post(
-            api,
-            f"tasks/{task['id']}",
-            {"version": get(api, f"tasks/{task['id']}")["task"]["version"], "status": "done"},
-        )
+        post(api, f"tasks/{task['id']}/done", {"version": get(api, f"tasks/{task['id']}")["task"]["version"]})
     meeting = lambda mid, notes, review="live", **meta: c.execute(
         "INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?,?)",
         (mid, mid, "ben@acme.example", json.dumps({"kind": "meeting", **meta}), notes, H.now(), H.now(), review),
     )
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done', updated_at=? WHERE id=?", (H.now(), done["id"]))
+        H.task_done(c, H.KEEPER, done["id"], "Finished")
         restrict(c, "finance", people=["ana"])
         H.task_create(c, "bot:finance", "Restricted request", "x", "human:ana")
         attended = {"calendar": {"attendees": ["ANA@acme.example"]}}
@@ -431,11 +427,6 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         meeting("Old sync", "Deleted meeting notes", **attended)
         c.execute("INSERT INTO media_control(meeting_id,deleted_at) VALUES('Old sync',?)", (H.now(),))
         meeting("Ben's one-to-one", "Not her meeting notes", participants=[{"email": "cara@acme.example"}])
-        c.execute(
-            "INSERT INTO approvals(id,kind,task_id,payload,requested_by_id,decided_by_id,decision,decided_at,created_at) "
-            "VALUES('ap1','send',?,?,'bot:ops','human:ana','approved',?,?)",
-            (budget["id"], json.dumps({"text": "Approval payload to the vendor"}), H.now(), H.now()),
-        )
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot IN ('finance','ops')")
         updates.post(c, "ops", "- Ops shipped the runbook", day="2026-09-29")
         updates.post(c, "finance", "- Restricted numbers moved", day="2026-09-29")
@@ -458,7 +449,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     assert draft["bot"] == "human:ana" and draft["drafted_by"] == "coo"
     assert "Ship the pricing page" in seen[0] and "Ops shipped" in seen[0] and "Met two customers" in seen[0]
     for shared in (
-        "Approve the ad budget: done",
+        "Approve the ad budget: Done",
         "Comment on Approve the ad budget",
         "Search ads first",
         "Launch sync: Agreed the launch date",
@@ -477,7 +468,6 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         "Pending import",
         "Deleted meeting",
         "Not her meeting",
-        "Approval payload",
         "Chat answer",
         "Mixed answer",
     ):

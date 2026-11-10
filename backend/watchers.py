@@ -77,7 +77,7 @@ def defang(text, c=None):
 
 
 def live(task):
-    return bool(task) and task["status"] not in ("closed", "declined")
+    return bool(task) and task["status"] != "closed"
 
 
 def _open(c, auth, bot, title, body, owner=None, *, incident=False):
