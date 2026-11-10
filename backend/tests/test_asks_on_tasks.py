@@ -40,7 +40,9 @@ def test_a_bot_asking_again_on_the_same_task_replaces_its_open_ask(c):
     assert R.get(c, first["requirement_id"])["withdrawn_at"]
     assert _asks(c) == [(row["id"], again["requirement_id"])], "one card for Ana, with the latest wording"
     shown = [r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["kind"] == "answer"]
-    assert [(r["line"], r["choices"]) for r in shown] == [("Run the vendor trial this week?", ["This week", "Next month"])]
+    assert [(r["line"], r["choices"]) for r in shown] == [
+        ("Run the vendor trial this week?", ["This week", "Next month"])
+    ]
 
 
 def test_another_bot_or_another_task_or_a_person_asks_on_its_own(c):

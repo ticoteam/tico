@@ -46,8 +46,7 @@ def waiting_task(api, machine, wait, requester="human:ana"):
 
 @pytest.mark.parametrize(
     "wait,requester",
-    [(w, "human:ana") for w in ["nothing", "child", "person", "snooze"]]
-    + [("nothing", "bot:ops")],
+    [(w, "human:ana") for w in ["nothing", "child", "person", "snooze"]] + [("nothing", "bot:ops")],
 )
 def test_a_persons_comment_on_a_waiting_task_starts_the_bots_turn(api, wait, requester):
     machine = task_bot(api, lanes=True, others=("cpo",))

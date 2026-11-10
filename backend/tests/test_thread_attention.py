@@ -264,7 +264,12 @@ def test_a_dm_with_only_a_bot_is_counted_on_the_bot_not_listed(api):
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, "human:ana", "Close Q3", "Book what Q3 needs.", "bot:finance", lint=False)
         H.task_ask(
-            c, "bot:finance", work["id"], "human:ana", "Book the Q3 accrual?", seen_version=H.task(c, work["id"])["version"]
+            c,
+            "bot:finance",
+            work["id"],
+            "human:ana",
+            "Book the Q3 accrual?",
+            seen_version=H.task(c, work["id"])["version"],
         )
     # Its question is an ask on a task in Needs you (answered there, which a plain reply is not), so the DM stays out of
     # Inbox.
