@@ -1,15 +1,13 @@
 """Steer, queue, defer (backend/delivery.py): a deferred item's deadline starts one run per session, once, and only
-for an active bot; a defer rides along only on a turn in its own session; new tasks, chat messages and notes take the
-same words; the older names still work."""
+for an active bot; a defer rides along only on a turn in its own session; chat messages and notes take the same words. A
+task is never deferred: a task for a bot wakes it."""
 
 import pytest
 
 from backend import delivery
 from backend.store import H
-from backend.tests.helpers.api import claim, get, headers, post
-from backend.tests.helpers.mcp import call
+from backend.tests.helpers.api import claim, headers, post
 from backend.tests.helpers.tasks_board import bot_token
-from clients import hubcli, hubtools
 from backend.tests.helpers.delivery import fired, job_of, rows, setup, tick
 
 
@@ -22,8 +20,6 @@ def test_a_deadline_starts_one_run_for_its_session_once(api):
             "owner": "ops",
             "title": "Plan the launch",
             "body": "For the team.",
-            "delivery": "defer",
-            "defer_for": "never",
         },
     )
     path = f"tasks/{task['id']}/comments"
@@ -47,37 +43,6 @@ def test_a_deadline_starts_one_run_for_its_session_once(api):
     assert attempt["deferred"].split("\n")[0] == "Deferred since your last turn: 2 comments"
     assert "Billing first." in attempt["deferred"] and "Then the docs." not in attempt["deferred"]
     assert {r["how"] for r in rows(api, bot="ops")} == {"carried"}
-
-
-def test_deferred_tasks_batch_into_one_run_that_carries_them_all(api):
-    machine = setup(api)
-    tasks = [
-        post(
-            api,
-            "tasks",
-            {"owner": "ops", "title": title, "body": "Check on your next run.", "delivery": "defer", "defer_for": "1h"},
-        )
-        for title in ("Refunds", "Signups")
-    ]
-    assert all(t["next_run"] and t["next_run_waiting"] for t in tasks)
-    assert [r["kind"] for r in rows(api, bot="ops")] == ["task", "task"]
-
-    tick(api, 61)
-    tick(api, 62)
-    assert len(fired(api)) == 1
-    attempt = post(api, "jobs/claim", {"next_run": True}, token=machine["token"])["attempt"]
-    assert sorted(t["id"] for t in attempt["next_run"]) == sorted(t["id"] for t in tasks)
-    assert attempt["deferred"] == "Deferred since your last turn: 2 tasks"
-    assert {r["how"] for r in rows(api, bot="ops")} == {"carried"}
-
-
-def test_the_stalled_task_check_leaves_a_deferred_task_to_its_deadline(api):
-    setup(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Watch refunds", "body": "x", "delivery": "defer"})
-    with api.app.state.store.read() as c:
-        assert task["id"] not in {t["id"] for t in H.stalled_tasks(c, at=H.shift(H.now(), hours=2))}
-        c.execute("UPDATE deferrals SET settled_at=?, how='carried' WHERE item=?", (H.now(), task["id"]))
-        assert task["id"] in {t["id"] for t in H.stalled_tasks(c, at=H.shift(H.now(), hours=2))}
 
 
 def test_a_paused_bot_is_not_woken_until_it_is_active_again(api):
@@ -119,8 +84,6 @@ def test_ending_a_task_cancels_its_deferrals_permanently(api):
                 "owner": "ops",
                 "title": f"Plan the launch {status}",
                 "body": "For the team.",
-                "delivery": "defer",
-                "defer_for": "never",
             },
         )
         held = post(
@@ -152,8 +115,6 @@ def test_a_closed_tasks_deferred_message_is_moot_without_the_close_hook(api):
                 "owner": "ops",
                 "title": f"Plan the launch {via}",
                 "body": "For the team.",
-                "delivery": "defer",
-                "defer_for": "never",
             },
         )
         held = post(
@@ -213,8 +174,6 @@ def test_an_open_tasks_deferred_comment_still_fires(api):
             "owner": "ops",
             "title": "Plan the launch",
             "body": "For the team.",
-            "delivery": "defer",
-            "defer_for": "never",
         },
     )
     held = post(
@@ -300,25 +259,6 @@ def test_on_a_task_a_bot_filed_a_comment_reaches_it_only_by_an_at_mention(api):
     assert later["sent_as"]["delivery"] == "steer"
 
 
-def test_a_new_task_takes_queue_or_defer_but_not_steer(api):
-    setup(api)
-    r = api.post(
-        "/api/v2/tasks", json={"owner": "ops", "title": "Plan", "body": "x", "delivery": "steer"}, headers=headers()
-    )
-    assert r.status_code == 422, r.text
-    r = api.post(
-        "/api/v2/tasks",
-        json={"owner": "ops", "title": "Plan", "body": "x", "delivery": "queue", "next_run": True},
-        headers=headers(),
-    )
-    assert r.status_code == 422, r.text
-    queued = post(api, "tasks", {"owner": "ops", "title": "Plan", "body": "x", "delivery": "queue"})
-    assert queued["next_run"] is False
-    # The older flag is a deferred task with the default day.
-    older = post(api, "tasks", {"owner": "ops", "title": "Watch refunds", "body": "x", "next_run": True})
-    assert older["next_run"] is True and rows(api, item=older["id"])[0]["due_at"] > H.shift(H.now(), hours=23)
-
-
 def test_a_chat_message_steers_by_default_queues_when_asked_and_defers_with_no_deadline(api):
     machine = setup(api)
     first = post(api, "chat/ops", {"text": "Morning numbers?"})
@@ -343,26 +283,12 @@ def test_a_chat_message_steers_by_default_queues_when_asked_and_defers_with_no_d
     assert row["kind"] == "message" and row["due_at"] is None and row["conversation_id"] == held["conversation_id"]
 
 
-def test_notes_take_a_deadline_and_the_old_names_still_work(api):
+def test_notes_take_a_deadline(api):
     setup(api)
     note = post(api, "notes", {"to": "ops", "text": "Check the refunds.", "defer_for": "4h"})["note"]
     assert rows(api, item=note["id"])[0]["kind"] == "note"
     plain = post(api, "notes", {"to": "ops", "text": "Check the signups."})["note"]
     assert rows(api, item=plain["id"])[0]["due_at"] is None
-
-    parse = hubcli.parser().parse_args
-    for flag in ("--next-run", "--quiet"):
-        assert parse(["task", "create", "--owner", "ops", "--title", "Watch refunds", flag]).next_run is True
-    assert hubcli.delivery_of(
-        parse(["task", "create", "--owner", "ops", "--title", "Watch refunds", "--defer", "4h"])
-    ) == {"delivery": "defer", "defer_for": "4h"}
-    assert parse(["task", "defer", "T1", "--next-run"]).fn == parse(["task", "later", "T1", "--next-run"]).fn
-    assert hubtools.CALL_ALIASES["hub_task_defer"] == "hub_task_later" and "hub_task_defer" not in hubtools.BY_NAME
-    task = post(api, "tasks", {"owner": "ops", "title": "Watch refunds", "body": "x", "next_run": True})
-    for route in ("later", "defer"):
-        post(api, f"tasks/{task['id']}/{route}", {"next_run": True})
-    is_error, payload = call(api, "hub_task_defer", {"id": task["id"], "next_run": True})
-    assert is_error is False, payload
 
 
 def test_a_chat_delivery_that_cannot_apply_is_refused(api):
@@ -408,8 +334,6 @@ def test_deferred_comments_older_than_the_history_page_are_written_out_not_dropp
             "owner": "ops",
             "title": "Plan the launch",
             "body": "For the team.",
-            "delivery": "defer",
-            "defer_for": "never",
         },
     )
     path = f"tasks/{task['id']}/comments"
@@ -439,8 +363,6 @@ def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api)
             "owner": "ops",
             "title": "Plan the launch",
             "body": "For the team.",
-            "delivery": "defer",
-            "defer_for": "never",
         },
     )
     path = f"tasks/{task['id']}/comments"

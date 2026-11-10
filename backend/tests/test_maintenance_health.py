@@ -33,8 +33,6 @@ from backend import (
     replication,
     routines,
     support,
-    task_check_backs,
-    task_roundup,
 )
 from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
@@ -326,49 +324,6 @@ def test_the_idle_load_is_taken_from_a_computer_only(environment):
     api, _ = built(environment)
     r = api.post("/api/v2/runners/idle-load", json={"sampled_at": H.now(), "busy": []}, headers=signed_in())
     assert r.status_code == 403
-
-
-def test_a_release_approval_ready_past_the_setting_is_one_finding_counted_not_repeated(environment, readers):
-    api, _ = built(environment)
-    store = api.app.state.store
-    settings = dataclasses.replace(store.settings, release_approval_wait_minutes=5)
-    release = {
-        "url": "https://github.com/acme/tico/releases/tag/v1.2.0",
-        "version": "1.2.0",
-        "commit": "c" * 40,
-        "content_sha256": "a" * 64,
-    }
-    with store.transaction() as c:
-        appr = H.approval_request(c, "bot:coo", "publish", release)
-        blog = H.approval_request(
-            c, "bot:coo", "publish", {"url": "https://acme.example/blog", "content_sha256": "b" * 64}
-        )
-        c.execute(
-            "UPDATE approvals SET ready_since=? WHERE id IN (?,?)",
-            (H.shift(H.now(), minutes=-4), appr["id"], blog["id"]),
-        )
-    key = "release_approval_wait:" + appr["id"]
-    assert keys(api, settings, "release_approval_wait") == []  # under the setting: nothing yet
-    with store.transaction() as c:
-        c.execute(
-            "UPDATE approvals SET ready_since=? WHERE id IN (?,?)",
-            (H.shift(H.now(), minutes=-6), appr["id"], blog["id"]),
-        )
-    assert keys(api, settings, "release_approval_wait") == [key]  # a blog post's wait is not a release's
-    run(api, settings=settings)
-    run(api, settings=settings)  # a noisy check: its second run files it
-    (task,) = botops_tasks(api)
-    with store.read() as c:
-        who = H.person_name(c, H.actor_id(appr["decision_owner"]))
-    assert f"has waited 6 min on {who}" in task["title"] and "1.2.0 (commit cccccccccccc)" in task["body"]
-    run(api, settings=settings)  # seen again: counted, one task, no second one
-    assert finding(api, key)["occurrences"] == 3 and len(botops_tasks(api)) == 1
-    zero = dataclasses.replace(settings, release_approval_wait_minutes=0)
-    assert keys(api, zero, "release_approval_wait") == []  # 0 turns the check off
-    with store.transaction() as c:
-        H.approval_decide(c, appr["decision_owner"], appr["id"], "declined")
-    run(api, settings=zero)
-    assert finding(api, key)["present"] == 0
 
 
 def fake_check(check_id, hits, label="Runs past their lease"):
@@ -1490,7 +1445,7 @@ def _part_held_by_rule(api, runner, monkeypatch, hq=None, comments=None, clock=N
     real = rules.judge
 
     def held(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided=None):
-        if (refs or {}).get("wake") == "task_roundup":
+        if (refs or {}).get("wake") == "health":
             return rules.Decision(rules.NOTE, rules.MANAGER_NOTE, rules.HOLD_ROW)
         return real(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
 
@@ -1584,71 +1539,6 @@ def _part_private_title(api, runner, monkeypatch, hq=None, comments=None, clock=
     (text,) = said(api, shared, "Health wake: ")
     assert f"(task {shared})" in text and "a private health task" in text
     assert secret not in text and private not in text
-
-
-def _part_find_stuck(api, runner, monkeypatch, hq=None, comments=None, clock=None):
-    code_findings = _code_findings(monkeypatch)
-    store, auth = api.app.state.store, api.app.state.auth
-    monkeypatch.setattr(M, "_start", lambda store, auth, run_id, only, wait: M._execute(store, auth, run_id, only))
-    code_findings[:] = [item("push_stuck", key="push_stuck:A")]
-    with store.transaction() as c:
-        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','find_stuck','check_health')")
-        follow_up = H.task_create(
-            c,
-            H.KEEPER,
-            "Chase the quote",
-            "Check whether the quote came in.",
-            H.bot_actor(MH.BOTOPS),
-            lint=False,
-            quiet_notice=True,
-        )["id"]
-        task_check_backs.set_time(
-            c,
-            H.task(c, follow_up),
-            H.shift(H.now(), hours=-40),
-            "Check the quote",
-            actor=H.bot_actor(MH.BOTOPS),
-            at=H.shift(H.now(), hours=-42),
-        )
-
-    first = M.get_run(store, M.tick(store, auth, clock.at))
-    steps = {s["step"]: s for s in first["steps"]}
-    assert first["ok"] == 1, first
-    assert steps["find_stuck"]["woke"] == 1 and MH.BOTOPS in steps["find_stuck"]["details"]["woken"]
-    assert steps["check_health"]["woke"] == 0
-    health_task = registry(api, "push_stuck")["task"]
-    assert wake_marker(api) == [health_task] and wake_jobs(api) == []
-    with store.read() as c:
-        (body,) = [
-            r[0]
-            for r in c.execute(
-                "SELECT m.body FROM messages m JOIN jobs j ON j.message_id=m.id WHERE j.bot_id=? AND m.body LIKE ?",
-                (MH.BOTOPS, task_roundup.HEADING + "%"),
-            )
-        ]
-        assert follow_up[:8] in body and "Check the quote" in body
-        assert H.task(c, follow_up)["check_back_at"] is None
-        assert (
-            c.execute("SELECT count(*) FROM events WHERE action=? AND target=?", (L.BOT_ACTION, MH.BOTOPS)).fetchone()[
-                0
-            ]
-            == 1
-        )
-
-    clock.at += timedelta(hours=1)
-    second = M.get_run(store, M.tick(store, auth, clock.at))
-    steps = {s["step"]: s for s in second["steps"]}
-    assert second["ok"] == 1, second
-    assert steps["find_stuck"]["status"] == "skipped" and steps["find_stuck"]["reason"] == "not due"
-    assert steps["check_health"]["woke"] == 1 and wake_marker(api) is None
-    assert [job["task"] for job in wake_jobs(api)] == [health_task]
-    with store.read() as c:
-        assert (
-            c.execute("SELECT count(*) FROM events WHERE action=? AND target=?", (L.BOT_ACTION, MH.BOTOPS)).fetchone()[
-                0
-            ]
-            == 2
-        )
 
 
 def _part_one_hit(api, runner, monkeypatch, hq=None, comments=None, clock=None):
@@ -1986,7 +1876,7 @@ def test_a_grouped_wake_once_held_by_rule_gate_and_caps_then_wakes_once(environm
 
 
 def test_a_grouped_wake_hides_a_private_title_and_find_stuck_hands_botops_its_list(environment, monkeypatch, clock):
-    _story(environment, monkeypatch, [_part_private_title, _part_find_stuck], clock=clock)
+    _story(environment, monkeypatch, [_part_private_title], clock=clock)
 
 
 def test_a_production_check_is_one_botops_task_and_the_health_page_links_it(environment, monkeypatch):

@@ -669,9 +669,8 @@ EVENT_NOISE_ACTIONS = (
     "bot.repository_read",
 )
 EVENT_NOISE_RETENTION_DAYS = 7
-# Thirty days: `message.notice` as before, and `github.pull_request`, which quiet_work.settle reads back to the start of
-# the run that carried a task (no run has a length cap, so a 30-day keep is the most it can rely on). Its own mark,
-# since the old one had walked past every github.pull_request row already on disk.
+# Thirty days: `message.notice` as before, and `github.pull_request`. Its own mark, since the old one had walked past
+# every github.pull_request row already on disk.
 EVENT_SWEEP_ACTIONS = ("message.notice", "github.pull_request")
 EVENT_RETENTION_DAYS = 30
 # Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
@@ -1311,9 +1310,6 @@ class Store:
 
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
-            from . import task_rules as _task_rules
-
-            c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
 
             _teammate_access.ensure(c)  # people's and groups' See/Read/Write (docs/permissions.md)
@@ -2249,7 +2245,7 @@ class Store:
                     ("attempts_message", "attempts(message_id)"),
                     # Runs by when their record closed: bot hours, health, the usage reads.
                     ("attempts_settled", "attempts(settled_at)"),
-                    # A bot's last settled run (the team list's latest run, check_pools): one seek.
+                    # A bot's last settled run (the team list's latest run): one seek.
                     ("attempts_bot_settled", "attempts(bot_id, settled_at, id) WHERE settled_at IS NOT NULL"),
                     # A bot's runs newest first (the bot's Runs page, H.turns).
                     ("attempts_bot_created", "attempts(bot_id, created_at)"),
@@ -2811,7 +2807,7 @@ class Store:
         ring(self, seq)
 
     def enqueue_existing(self):
-        from .enqueue import external_bot_sql, parked_sql
+        from .enqueue import external_bot_sql
 
         with self.transaction() as c:
             c.execute(
@@ -2820,6 +2816,4 @@ class Store:
                 "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
                 "WHERE m.recipient_id LIKE 'bot:%' AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND NOT "
                 + external_bot_sql("m.recipient_id")
-                + " AND NOT "
-                + parked_sql()  # a card On ice starts no run (backend/enqueue.py)
             )
