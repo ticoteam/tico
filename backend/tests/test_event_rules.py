@@ -216,9 +216,13 @@ def test_the_ledger_forgets_a_delivery_after_thirty_days(api):
 def test_the_listing_endpoint_names_the_catalog(api):
     setup(api)
     out = get(api, "event-types")["items"]
-    assert {"webhook.received", "task.done", "release.published"} <= {e["name"] for e in out}
-    assert [e["name"] for e in get(api, "event-types?group=approval")["items"]] == [
-        "approval.requested",
-        "approval.decided",
-        "approval.withdrawn",
+    assert {"webhook.received", "task.done", "meeting.ready"} <= {e["name"] for e in out}
+    assert [e["name"] for e in get(api, "event-types?group=task")["items"]] == [
+        "task.created",
+        "task.assigned",
+        "task.step_changed",
+        "task.commented",
+        "task.done",
+        "task.closed",
+        "task.reopened",
     ]

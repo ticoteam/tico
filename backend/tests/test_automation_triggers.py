@@ -59,15 +59,18 @@ def test_a_task_received_runs_its_owners_automation_only(api):
     assert len(done) == 1 and done[0]["status"] == "ok" and done[0]["trigger_ref"].startswith("task:")
 
 
-def test_a_task_received_without_a_type_reaches_its_automation_as_the_general_type(api):
-    """A task made with no type keeps a NULL type_id on its row; the trigger reads it as the general type, as the
-    task flow does, so a filter on task.type_id matches it (docs/tasks.md)."""
+def test_a_task_received_reaches_its_automation_with_its_pipeline_and_stage(api):
+    """A task filed with no pipeline is in General's first stage: a filter on task.pipeline_id and task.stage_id
+    matches it."""
     aid = make(
         api,
         {
             "type": "task_received",
             "to": "bot:ops",
-            "filters": [{"field": "task.type_id", "op": "is", "value": "general"}],
+            "filters": [
+                {"field": "task.pipeline_id", "op": "is", "value": "general"},
+                {"field": "task.stage_id", "op": "is", "value": "general-todo"},
+            ],
         },
     )
     post(api, "tasks", {"owner": "ops", "title": "Untyped check", "body": "Please."})

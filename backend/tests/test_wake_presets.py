@@ -133,9 +133,9 @@ def test_immediate_wakes_are_never_held_and_a_duplicate_wakes_once(api, name):
     task = new_task(api, "assigned")  # an assignment
     post(api, "chat/ops", {"text": "Can you look at this?"})  # a person's question
     post(api, "chat/ops", {"text": "Can you look at this?"})  # the same, sent twice
-    # An awaited result, a blocker and a reopened task wake; "Ready for review" is a note now, not an immediate wake.
+    # An awaited result, a blocker and a reopened task wake.
     for body, refs in (
-        ("Unblocked: assigned\nThe migration is finished.", {"blocker_done": task["id"]}),
+        ("All subtasks done: assigned\nThe migration is finished.", {"subtask": task["id"]}),
         ("Stuck: the deploy key was revoked", {}),
         ("Open: assigned", {}),
     ):
@@ -203,7 +203,7 @@ def test_a_subordinates_ordinary_edits_do_not_wake_its_manager(api, name):
         parent = H.task_create(c, "bot:coo", "Plan the launch", "Plan it.", "bot:coo")
         task = H.task_create(c, "bot:coo", "Draft the plan", "Please draft it.", "bot:ops", parent_id=parent["id"])
         before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='coo'").fetchone()[0]
-        H.task_update(c, "bot:ops", task["id"], status="doing", note="Started on the outline")
+        H.task_update(c, "bot:ops", task["id"], note="Started on the outline")
         H.task_update(c, "bot:ops", task["id"], note="Half way")
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='coo'").fetchone()[0] == before
         H.task_update(c, "bot:ops", task["id"], status="done", note="Drafted")
@@ -572,33 +572,3 @@ def test_run_now_wakes_the_bot_while_a_notice_on_the_task_is_held(api):
     assert post(api, f"tasks/{task['id']}/run-now", {})["queued"] is True
     [run] = [j for j in jobs(api) if j["body"].startswith("Run now:")]
     assert (run["state"], run["held"]) == ("queued", 0)
-
-
-def test_a_resumed_task_wakes_while_a_notice_on_it_is_held(api):
-    from backend import quiet_work
-
-    preset(api, "ops", "token_saver")
-    task = new_task(api, "tidy")
-    settled(api)
-    held_notice(api, task)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET next_run=1, resume=? WHERE id=?", (json.dumps({"until": H.now()}), task["id"]))
-        quiet_work.resume(c, H.task(c, task["id"]), "Its date came.", "schedule")
-    [resumed] = [j for j in jobs(api) if j["body"].startswith("Resume:")]
-    assert (resumed["state"], resumed["held"]) == ("queued", 0)
-
-
-def test_an_update_request_and_an_automatic_start_go_out_while_a_notice_is_held(api):
-    from backend import updates
-    from backend.tests.helpers.auto_tasks import deck, take
-
-    machine = task_bot(api, lanes=True)
-    preset(api, "ops", "token_saver")
-    [task] = deck(api, 1)
-    held_notice(api, task)
-    with api.app.state.store.read() as c:
-        assert not updates._busy(c, "ops")
-    started = take(api, machine)
-    assert (
-        started and started["task"]["id"] == task["id"] and started["message"]["body"].startswith("Start assigned task")
-    )

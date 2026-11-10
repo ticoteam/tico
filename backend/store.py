@@ -1304,7 +1304,6 @@ class Store:
 
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
-            _rules.seed_dev(c)
             from . import owner_link as _owner_link
 
             c.executescript(_owner_link.SCHEMA)
@@ -2325,11 +2324,8 @@ class Store:
                 from . import profiles as Profiles
 
                 Profiles.migrate(c)
-                # Stale ticket review's converted automation (a no-op) is undone, once, and its team rule set from it
-                # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
                 from . import redesign_migration as Redesign
 
-                Redesign.repair_stale_review(c)
                 # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
                 # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
                 # failure here is logged, never raised: the repair is tried again at the next start.
