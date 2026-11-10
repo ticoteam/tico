@@ -1,6 +1,6 @@
 template: release-notes
 slug: release-notes
-name: "Release Manager"
+name: "Release Notes Writer"
 required: false
 bootstrap: false
 group: engineering

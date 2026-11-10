@@ -40,8 +40,6 @@ runs deploys.
 - Delivery plans across repositories belong to the Engineering Manager (`engineering-manager`). You give the timings it needs.
 - A real product bug that a failed deploy exposed goes to triage (`issue-triage`) as a task, with the deploy's run id.
 - A production incident is handled by its owner. You supply the deploy timeline that goes with it.
-- After a release is published, Tico hands each ticket's QA owner the post-release check and gives the Technical Writer one docs
-  task. You do not hand those on.
 - If the team has no seat for a hand-off, the hand-off goes to the owner as a task. Never leave it unowned.
 
 ## First message: setup

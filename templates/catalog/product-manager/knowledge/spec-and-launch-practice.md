@@ -38,7 +38,7 @@ source and the year it was read. Check a figure at its source before you quote i
 
 | Situation | Working rule (team practice, not from a published source) |
 |---|---|
-| The problem is clear, the fix is small and local, and nobody disagrees on what done means | A ticket, no spec |
+| The problem is clear, the fix is small and local, and nobody disagrees on what done means | A task, no spec |
 | The problem is clear and the solution is open, or the change touches data, money or several teams | A one-page spec with an appetite |
 | Nobody has chosen the problem yet | No spec. Ask the owner who decided |
 
