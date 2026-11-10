@@ -198,3 +198,69 @@ def test_a_pre_update_copy_does_not_use_up_the_settle_window(api, hosted, monkey
     assert hosted.tick(T0 + HU.SETTLE_S + 700) == "updating"  # the copy took about 11 minutes of the hour
     assert hosted.tick(T0 + 2 * HU.SETTLE_S + 700) == "done"  # the window resumes counting after the copy
     assert events(hosted.store, "system.update.finished")[-1][1]["outcome"] == "timed_out"
+
+
+# ---- 0.6 starts fresh: a 0.5 server with tasks is never moved to 0.6 (docs/updates.md, "From 0.5 to 0.6") ----
+
+FRESH = {"version": "0.6.0", "request_id": "hu_" + "f" * 16}
+
+
+def _one_task(api):
+    from backend.tests.helpers.cards import task
+
+    return task(api, "coo", "Ship the spring catalog")
+
+
+def _no_tasks(store):
+    with store.transaction() as c:
+        c.execute("DELETE FROM tasks")
+
+
+def test_support_cannot_pull_a_0_5_server_with_tasks_to_0_6_and_hq_is_told_why(api, hosted, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("TICO_VERSION", "0.5.216")
+    _one_task(api)
+    hosted.hq.target = FRESH
+    assert hosted.tick(T0) == "done" and hosted.updater.started == []
+    hosted.tick(T0 + 60)
+    assert hosted.hq.bodies[-1]["done"] == {
+        "request_id": FRESH["request_id"],
+        "outcome": "failed",
+        "message": releases.FRESH_WORDS,
+    }
+    assert api.get("/api/v2/config", headers=headers()).json()["update"]["scheduled"] == ""
+
+
+def test_a_0_5_server_with_no_tasks_still_takes_0_6(api, hosted, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("TICO_VERSION", "0.5.216")
+    _no_tasks(hosted.store)
+    hosted.hq.target = FRESH
+    assert hosted.tick(T0) == "updating" and hosted.updater.started == ["0.6.0"]
+
+
+def test_the_owner_cannot_update_a_0_5_server_with_tasks_to_0_6(api, hosted, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("TICO_VERSION", "0.5.216")
+    _one_task(api)
+    for target in ("0.6.0", "v0.6.0-rc.1"):
+        r = api.post("/api/v2/system/update", json={"version": target}, headers=headers())
+        assert r.status_code == 409 and r.json()["error"]["code"] == "fresh_start", r.text
+    assert hosted.updater.started == []
+    r = api.post("/api/v2/system/update", json={"version": "0.5.217"}, headers=headers())
+    assert r.status_code == 200 and hosted.updater.started == ["0.5.217"]
+
+
+def test_a_0_5_server_with_tasks_is_not_offered_0_6_and_says_why(api, hosted, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("TICO_VERSION", "0.5.216")
+    _one_task(api)
+    offer = {"current": "0.5.216", "latest": "0.6.0", "available": True, "managed": False, "message": None}
+    monkeypatch.setattr(releases, "notice", lambda: dict(offer))
+    update = api.get("/api/v2/config", headers=headers()).json()["update"]
+    assert update["available"] is False and update["held"] == releases.FRESH_WORDS
+    health = api.get("/api/v2/health", headers=headers()).json()
+    version = next(c for c in health["checks"] if c["id"] == "version")
+    assert version["summary"] == "v0.6.0 is out. " + releases.FRESH_WORDS + "."
+    monkeypatch.setattr(releases, "check_now", lambda: {**offer, "checking": False})
+    checked = api.post("/api/v2/system/update/check", headers=headers()).json()
+    assert checked["available"] is False and checked["held"] == releases.FRESH_WORDS
+    # A patch of 0.5 is offered as always.
+    offer.update(latest="0.5.217")
+    assert api.get("/api/v2/config", headers=headers()).json()["update"]["available"] is True
