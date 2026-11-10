@@ -397,8 +397,15 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     is one entry per cause (`kind` "paused") for the person who can fix it, with the tasks it holds up, not one per
     task. A read: nothing is stored, so nothing can fall out of step with the tasks. A snoozed task is set aside and
     is not listed."""
-    out: list[Row] = []
-    paused: dict[str, Row] = {}
+    return needs_by_person(conn).get(person, [])
+
+
+def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
+    """Every person's Needs you (`needs`), by person, from one pass over the open tasks: each task and its waits are
+    read once, whoever they are for, where asking `needs` for each person reads every task again for each. A person
+    with nothing to act on has no key."""
+    out: dict[str, list[Row]] = {}
+    paused: dict[str, dict[str, Row]] = {}
     seen: dict[str, str | None] = {}
     fixers: dict[str, str | None] = {}
     rows = conn.execute(
@@ -410,31 +417,34 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
         if row is None:  # the query lists only tasks on the engine
             raise LookupError(f"task {task_id} is not on the engine")
         waits = of(conn, row, seen)
-        mine = [wait for wait in waits if wait.state == PERSON and wait.who == person]
-        work = [wait for wait in mine if not wait.ask]
-        for wait in [wait for wait in mine if wait.ask] + work[:1]:
-            out.append(
-                {
-                    "kind": "ask" if wait.ask else "task",
-                    "task_id": task_id,
-                    "number": row.get("number"),
-                    "title": row.get("title"),
-                    "pipeline_id": row["pipeline_id"],
-                    "stage_id": row["stage_id"],
-                    "requirement_id": wait.requirement_id if wait.ask else None,
-                    "line": wait.line,
-                    "missing": [each.line for each in (work if not wait.ask else [wait])],
-                    "since": min((each.since or "" for each in work), default="") if not wait.ask else wait.since,
-                }
-            )
+        people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who})
+        for person in people:
+            mine = [wait for wait in waits if wait.state == PERSON and wait.who == person]
+            work = [wait for wait in mine if not wait.ask]
+            for wait in [wait for wait in mine if wait.ask] + work[:1]:
+                out.setdefault(person, []).append(
+                    {
+                        "kind": "ask" if wait.ask else "task",
+                        "task_id": task_id,
+                        "number": row.get("number"),
+                        "title": row.get("title"),
+                        "pipeline_id": row["pipeline_id"],
+                        "stage_id": row["stage_id"],
+                        "requirement_id": wait.requirement_id if wait.ask else None,
+                        "line": wait.line,
+                        "missing": [each.line for each in (work if not wait.ask else [wait])],
+                        "since": min((each.since or "" for each in work), default="") if not wait.ask else wait.since,
+                    }
+                )
         for wait in waits:
             if wait.state != PAUSED or not wait.who:
                 continue
             if wait.who not in fixers:
                 fixers[wait.who] = _fixer(conn, wait.who, seen.get(actor_id(wait.who)))
-            if fixers[wait.who] != person:
+            fixer = fixers[wait.who]
+            if not fixer:
                 continue
-            entry = paused.setdefault(
+            entry = paused.setdefault(fixer, {}).setdefault(
                 wait.line,
                 {"kind": "paused", "line": wait.line, "bots": [], "tasks": [], "since": wait.since or ""},
             )
@@ -443,8 +453,12 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
             if task_id not in entry["tasks"]:
                 entry["tasks"].append(task_id)
             entry["since"] = min(entry["since"], wait.since or "")
-    out.extend(paused.values())
-    return sorted(out, key=lambda item: (item["since"] or "", item.get("task_id") or "", item["line"]))
+    for fixer, entries in paused.items():
+        out.setdefault(fixer, []).extend(entries.values())
+    return {
+        person: sorted(items, key=lambda item: (item["since"] or "", item.get("task_id") or "", item["line"]))
+        for person, items in out.items()
+    }
 
 
 def _fixer(conn: "sqlite3.Connection", bot: str, cause: str | None) -> str | None:

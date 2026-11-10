@@ -200,6 +200,34 @@ def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
     assert [n["tasks"] for n in W.needs(c, ANA) if n["kind"] == "paused"] == [[paused]]  # the company owner fixes it
 
 
+def test_every_persons_needs_you_comes_from_one_pass_over_the_tasks(c, general, monkeypatch):
+    """The never-stuck check compares each person's turns with their Needs you. One pass builds every person's list:
+    each task is read once, not once a person, and each list is the one `needs` gives that person."""
+    ben = "human:ben"
+    c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='reviewer'")
+    his = X.new_task(c, ANA, "Call the bank", assignee=ben)["id"]
+    hers = X.new_task(c, ANA, "Renew the lease", assignee=ANA)["id"]
+    asked = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    E.add_requirement(c, asked["id"], "bot:builder", "ok", ben, "OK the headline", seen_version=asked["version"])
+    E.add_requirement(c, his, ANA, "answer", ANA, "Which bank?")
+    paused = X.new_task(c, ANA, "Check the facts", assignee="bot:reviewer")["id"]
+    c.execute("UPDATE bots SET state='paused' WHERE id='reviewer'")
+    reads: list[str] = []
+    task = E.task
+    monkeypatch.setattr(E, "task", lambda conn, task_id, *a, **k: reads.append(task_id) or task(conn, task_id, *a, **k))
+    every = W.needs_by_person(c)
+    assert sorted(reads) == sorted({his, hers, asked["id"], paused})  # each open task once
+    assert set(every) == {ANA, ben}
+    assert {(n["kind"], n.get("task_id")) for n in every[ben]} == {
+        ("task", his),
+        ("ask", asked["id"]),
+        ("paused", None),
+    }
+    assert {(n["kind"], n.get("task_id")) for n in every[ANA]} == {("task", hers), ("ask", his)}
+    for person in (ANA, ben, "human:nobody"):
+        assert W.needs(c, person) == every.get(person, [])
+
+
 def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee=ANA)
     E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "OK the wording")
