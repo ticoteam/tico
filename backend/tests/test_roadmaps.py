@@ -81,6 +81,13 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
     )
     assert 'public title' in refused['error']['detail']
     post(api, 'tasks/' + draft['id'], {'version': draft['version'], 'visibility': 'public'}, expected=422)
+    # There are no task types to default to public any more: public text alone keeps the task private.
+    unasked = post(
+        api,
+        'tasks',
+        {'owner': 'cpo', 'title': 'Research sorting', 'body': 'Internal draft', 'public_title': 'Sorting'},
+    )
+    assert unasked['visibility'] == 'private'
     task = post(
         api,
         'tasks',
@@ -88,6 +95,7 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
             'owner': 'cpo',
             'title': 'Research search again',
             'body': 'Internal draft',
+            'visibility': 'public',
             'public_title': 'Better search',
             'public_summary': 'Find more',
         },

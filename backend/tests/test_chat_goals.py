@@ -229,18 +229,14 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
         },
         machine['token'],
     )
-    with api.app.state.store.transaction() as c:  # the owner tells another bot, in the task's room
-        conv = H.conversation(c, task['conversation_id'])
-        H._write_message(
+    with api.app.state.store.transaction() as c:  # the owner asks another bot on the task: its turn, in the task's room
+        H.task_ask(
             c,
             'bot:ops',
+            task['id'],
             'bot:product-design',
-            'The summary is drafted.',
-            conv,
-            'say',
-            {'task': task['id'], 'needs_action': True},
-            None,
-            None,
+            'Is the summary right?',
+            seen_version=H.task(c, task['id'])['version'],
         )
     other = claim(api, machine)
     assert other['bot'] == 'product-design' and other['task']['id'] == task['id'] and other['chat_goal'] is None
@@ -271,9 +267,11 @@ def test_handing_the_task_to_a_person_ends_the_old_owners_task_goal(api):
 def test_a_done_tasks_goal_is_met_even_when_the_bot_signs_off_waiting(api):
     machine, task = task_goal_world(api)
     attempt = claim(api, machine)
+    # The run starts first: a turn whose task finished before it started is refused (execution.held_before_start).
+    post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'fake-thread'}, machine['token'])
     with api.app.state.store.transaction() as c:  # the bot marks its task done, then says what it waits on elsewhere
         H.task_done(c, 'bot:ops', task['id'], 'Published.', H.task(c, task['id'])['version'])
-    goal_event(api, machine, attempt, 'paused', 'Waiting on: Ana to "close" it.')
+    goal_event(api, machine, attempt, 'paused', 'Waiting on: Ana to "close" it.', started=False)
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
     assert goal['status'] == 'met' and goal['note'] == 'Waiting on: Ana to "close" it.'
     assert get(api, 'tasks/' + task['id'])['task']['status'] == 'done'
