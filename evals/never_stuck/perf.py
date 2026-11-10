@@ -20,8 +20,9 @@ from . import world as Wd
 from .world import ANA, BEN, BUILDER, CARA, GENERAL, REVIEWER, WRITER, World
 
 
-def fill(world: World, count: int, rng: random.Random) -> dict[str, int]:
-    """`count` open General tasks. Returns how many of each kind."""
+def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) -> dict[str, int]:
+    """`count` open General tasks. Returns how many of each kind. With `queued`, each bot task's wake is still queued
+    (its bot has not taken it yet); else every wake had its run and the task waits for its next try."""
     from backend import task_engine as E
     from backend.store import H
 
@@ -42,6 +43,8 @@ def fill(world: World, count: int, rng: random.Random) -> dict[str, int]:
                 kinds["snoozed"] += 1
             else:
                 kinds["a bot's turn"] += 1
+        if queued:
+            return dict(kinds)
         # Every wake so far had its run, which ended: the bots' tasks wait for their next try.
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
         c.execute(
@@ -55,13 +58,66 @@ def fill(world: World, count: int, rng: random.Random) -> dict[str, int]:
     return dict(kinds)
 
 
-def measure(count: int = 10_000, seed: int = 1, profile: bool = True) -> dict[str, Any]:
+# The rows one task on the engine is made of, as `fill` makes them: what `clone` copies.
+CLONED = ("conversations", "tasks", "visits", "requirements", "snoozes", "messages", "jobs", "attempts")
+_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def clone(world: World, times: int) -> int:
+    """Copy every task `fill` made `times` more times, row by row (CLONED), each id given a new one wherever it is
+    written (a column, a wake key, refs): many tasks in seconds, where making each through the engine takes 10-25 ms.
+    Returns how many open tasks there are then. The copies are placed as they were, past the guard that has every new
+    task enter() a stage (tasks_enter_only, put back after)."""
+    with world.tx() as c:
+        guard = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='tasks_enter_only'").fetchone()
+        if guard:
+            c.execute("DROP TRIGGER tasks_enter_only")
+        rows: dict[str, tuple[list[str], list[tuple[Any, ...]]]] = {}
+        ids: set[str] = set()
+        for table in CLONED:
+            cursor = c.execute(f'SELECT * FROM "{table}"')
+            names = [d[0] for d in cursor.description]
+            found = [tuple(row) for row in cursor.fetchall()]
+            if table == "requirements":
+                found = [row for row in found if row[names.index("visit_id")]]  # a stage's own stay as they are
+            rows[table] = (names, found)
+            ids |= {str(row[names.index("id")]) for row in found}
+        for n in range(1, times + 1):
+            new = {old: old[:-6] + f"{n:06x}" for old in ids}
+
+            def swap(value: Any, new: dict[str, str] = new) -> Any:
+                if not isinstance(value, str):
+                    return value
+                return new.get(value) or _ID.sub(lambda m: new.get(m.group(), m.group()), value)
+
+            for table, (names, found) in rows.items():
+                number = names.index("number") if table == "tasks" else -1
+                c.executemany(
+                    f'INSERT INTO "{table}" ({", ".join(names)}) VALUES ({", ".join("?" * len(names))})',
+                    [
+                        tuple(
+                            value + n * 1_000_000 if i == number and isinstance(value, int) else swap(value)
+                            for i, value in enumerate(row)
+                        )
+                        for row in found
+                    ],
+                )
+        if guard:
+            c.execute(guard[0])
+        return int(c.execute("SELECT COUNT(*) FROM tasks WHERE status='open'").fetchone()[0])
+
+
+def measure(
+    count: int = 10_000, seed: int = 1, profile: bool = True, *, copies: int = 0, queued: bool = False
+) -> dict[str, Any]:
+    """One pass over `count` tasks made through the engine, times 1 + `copies` (`clone`)."""
     from backend import never_stuck as NS
 
     rng = random.Random(seed)
     with World(seed) as world:
         started = time.perf_counter()
-        kinds = fill(world, count, rng)
+        kinds = fill(world, count, rng, queued=queued)
+        count = clone(world, copies) if copies else count
         made = time.perf_counter() - started
         world.shift(30)
         with world.tx() as c:
@@ -103,6 +159,7 @@ def measure(count: int = 10_000, seed: int = 1, profile: bool = True) -> dict[st
             "seconds": round(seconds, 3),
             "statements": statements,
             "statements_per_task": round(statements / count, 1),
+            "live_reads": sum("lease_until >" in s for s in trace),  # reads of live runs: once a pass, not a task
             "top_statements": shapes.most_common(12),
             "profile": top,
         }

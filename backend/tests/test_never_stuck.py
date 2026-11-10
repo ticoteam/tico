@@ -793,6 +793,10 @@ def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, ge
     for sql in reads:
         plan = " | ".join(str(found[-1]) for found in c.execute("EXPLAIN QUERY PLAN " + sql).fetchall())
         assert "SCAN m" not in plan and "SCAN messages" not in plan, (sql, plan)
+        # A read of the task's wakes is not by the bot's own messages either (messages_to_delivered): a bot's every
+        # message, read for each task.
+        task_wakes_read = "wake_key >=" in sql and "FROM attempts" not in sql
+        assert not task_wakes_read or "messages_wake_key" in plan, (sql, plan)
     assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
 
 

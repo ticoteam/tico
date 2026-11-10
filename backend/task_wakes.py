@@ -458,7 +458,7 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visi
     found = conn.execute(
         "SELECT m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), "
         "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
-        f"WHERE {_KEY} AND m.rowid > ? AND m.recipient_id=? "
+        f"WHERE {_KEY} AND m.rowid > ? AND +m.recipient_id=? "
         "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
         (*_range(f"{task['id']}:{visit.get('id')}"), 0 if whole_visit else _marks(task)[1], actor),
     ).fetchone()
@@ -486,7 +486,7 @@ def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | Non
     reads_inbox: str = cast("Any", enqueue).external_bot_sql("m.recipient_id")
     found = conn.execute(
         f"SELECT m.id, m.read_at FROM messages m WHERE {_KEY} AND m.rowid > ? "
-        "AND m.recipient_id=? AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 "
+        "AND +m.recipient_id=? AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 "
         f"AND json_extract(m.refs, '$.job') IS NULL AND {reads_inbox} ORDER BY m.rowid DESC LIMIT 1",
         (*_range(f"{task['id']}:{visit.get('id')}"), _marks(task)[1], actor),
     ).fetchone()
@@ -502,7 +502,7 @@ def told_in_visit(conn: "sqlite3.Connection", task: Row, actor: str | None) -> s
         return None
     visit: Row = task.get("visit") or {}
     found = conn.execute(
-        f"SELECT 1 FROM messages m WHERE {_KEY} AND m.recipient_id=? "
+        f"SELECT 1 FROM messages m WHERE {_KEY} AND +m.recipient_id=? "
         "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 LIMIT 1",
         (*_range(f"{task['id']}:{visit.get('id')}"), actor),
     ).fetchone()
