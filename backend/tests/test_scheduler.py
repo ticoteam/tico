@@ -38,22 +38,23 @@ def test_the_finance_sweep_commits_its_money_actions_durably(api, monkeypatch):
 
     store = api.app.state.store
     real = store.transaction
-    opened, seen = [], []
+    # Keyed by connection: the tick's Finance workers open transactions on their own threads meanwhile.
+    durable_of, seen = {}, []
 
     def sweep(c, at=None, most=200):
-        seen.append(opened[-1])
+        seen.append(durable_of.get(id(c)))
         return []
 
     @contextmanager
     def transaction(durable=False):
-        opened.append(durable)
         with real(durable) as c:
+            durable_of[id(c)] = durable
             yield c
 
     monkeypatch.setattr(finance, "ok_sweep", sweep)
     monkeypatch.setattr(store, "transaction", transaction)
     Scheduler(store, api.app.state.execution).tick()
-    assert seen == [True], "the sweep ran once, in a durable transaction"
+    assert seen == [True], f"the sweep ran once, in a durable transaction: {seen}"
 
 
 def test_saved_nightly_learnings_never_runs_beside_maintenance(api, monkeypatch):
