@@ -119,7 +119,13 @@ def test_goal_migration_numbers_and_idempotency(api):
     assert hubdb.MIGRATIONS[15] == SCHEMA
 
 
-def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api):
+@pytest.mark.parametrize('ruled', [False, True])
+def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api, ruled):
+    """With a company rule in force the done note is the fixed "Goal met.": the harness's words were never checked."""
+    if ruled:
+        from backend.tests.helpers.org_rules import rule
+
+        rule(api, {'kind': 'internal', 'text': 'Never name the board.', 'who': {'bots': ['ops']}})
     machine = runner(api)
     assign(api, machine, 'ops')
     with api.app.state.store.transaction() as c:
@@ -163,7 +169,7 @@ def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api
                 "SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=?", (task['id'],)
             )
         ]
-    assert notes == ['The summary is in Docs.']
+    assert notes == ['Goal met.' if ruled else 'The summary is in Docs.']
 
 
 def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_completes_the_task(api):

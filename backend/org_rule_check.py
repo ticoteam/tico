@@ -47,7 +47,8 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   Messages and task comments have a place through their thread (a task comment's is its task's conversation). Mail and
   drafts have none, so a `where` rule never meets them.
 - Fails open: checks Off, no engine, Decide's monthly cap, the day's call cap, the deadline, an error or a malformed
-  answer let the output through with a `rules.unchecked` event. Events never carry the text.
+  answer let the output through with a `rules.unchecked` event. Events never carry the text. Any other failure of the
+  check (a fault here, not the judge) is a 503 and the write is not made.
 - Bounded: at most `rule_check_concurrency` calls run at once in this process (`call_slots.Calls`); with every slot in
   use the output goes through unchecked at once (`busy`), never waiting for one. After BREAKER_FAILURES timeouts or
   errors in a row no call is made for BREAKER_SECONDS (`breaker`), then one call probes. Each level has its own
@@ -148,6 +149,7 @@ AUDIENCE = {}
 # The request path of the write being checked (app.mutate sets it): kept on a hold, so Send anyway runs that path's
 # privacy guard again as the bot (task_privacy.guard_write).
 PATH = contextvars.ContextVar("org_rule_path", default="")
+CHECK_FAILED = "The rule check could not run, so nothing was written. Try again."
 SUMMARY_RULES, SUMMARY_CHARS, SUMMARY_NAMES = 3, 200, 10  # a hold summary's rule previews, their length, its names
 
 
@@ -457,6 +459,42 @@ def _place_now(c, place, author, recipients):
     return place or None
 
 
+def _judged(store, engine, qset, level, operation, batch, questions, state, draft, is_person):
+    """One call of a check, on one batch of its rules: (the ids of the rules it found broken, or None; the error code;
+    the `judge.call` event's id, or None when nothing was asked)."""
+    result, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
+    if error in ("busy", "breaker", "budget"):
+        return None, error, None  # nothing was asked: no judge.call row
+    if result is not None and not isinstance(result, dict):
+        result, error = None, "shape"
+    broken = None
+    if result is not None and not error:
+        try:
+            answers = J.check_answers(result.get("answers"), questions)
+            cut = float(qset["thresholds"]["broken"])
+            broken = [batch[int(qid[1:]) - 1]["id"] for qid in questions if J.noul(answers, qid) >= cut]
+        except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError, IndexError):
+            error = "shape"
+    detail = {
+        "label": qset["label"],
+        "questions": len(questions),
+        "operation": operation,
+        "level": level,
+        "rules": [r["id"] for r in batch],
+        **({"draft": True} if draft else {}),
+        **({"people": True} if is_person else {}),
+    }
+    if result is not None:
+        detail.update(B.audit_detail(result))
+    if error or broken is None:
+        detail["error"] = error or "shape"
+    else:
+        detail["broken"] = len(broken)
+    with store.transaction() as c:
+        call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
+    return broken, (None if broken is not None else error or "shape"), call["id"]
+
+
 @SRC.scoped("rule-check")
 def check_as(
     store,
@@ -479,9 +517,10 @@ def check_as(
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
     (`checked_as` reads both from an identity). `place`: the write's place, or a function of (c, principal,
     recipients) that reads it inside the check's read (`place_for`). Returns the verdict `apply` reads, or None when
-    nothing is checked (no rule matches, checks are off, no principal). Never raises: a failure is a verdict marked
-    unchecked. `skip`: (rule id, version) pairs already decided (Send anyway asks only the rules changed or added
-    since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
+    nothing is checked (no rule matches, checks are off, no principal). Only the judge being out (a timeout, an error
+    or a malformed answer from it, the breaker, no engine, the budget) is a verdict marked unchecked; any other
+    failure raises a 503 `Problem` (`CHECK_FAILED`), so the write fails. `skip`: (rule id, version) pairs already
+    decided (Send anyway asks only the rules changed or added since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
     where an outside message came from (`inbound`), kept on the verdict and its hold."""
     author = principal
     if not author:
@@ -538,73 +577,65 @@ def check_as(
                     "call": hit[1],
                     **({"unchecked_rules": unchecked} if unchecked else {}),
                 }
-            questions = _questions(qset, rules[: J.MAX_QUESTIONS])
-            state = {
-                "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(rules[: J.MAX_QUESTIONS], 1)],
-                "operation": OPERATIONS.get(operation, operation),
-                "output": output,
-                "from": _names(c, [author])[0],
-                "to": _names(c, recipients),
-                "context": context or {},
-            }
-            if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
-                return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
+            # Every matching rule is judged: one call per MAX_QUESTIONS rules, never silently the first ones only.
+            batches = []
+            for at in range(0, len(rules), J.MAX_QUESTIONS):
+                batch = rules[at : at + J.MAX_QUESTIONS]
+                state = {
+                    "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(batch, 1)],
+                    "operation": OPERATIONS.get(operation, operation),
+                    "output": output,
+                    "from": _names(c, [author])[0],
+                    "to": _names(c, recipients),
+                    "context": context or {},
+                }
+                if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
+                    return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
+                batches.append((batch, _questions(qset, batch), state))
             engine = B.server_engine(store, c, primary, backup=False)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings)
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
-            if calls_today(c, people=is_person) >= B.daily_cap(store.settings, "human" if is_person else "bot"):
+            cap = B.daily_cap(store.settings, "human" if is_person else "bot")
+            if calls_today(c, people=is_person) + len(batches) > cap:
                 return {**verdict, "outcome": "unchecked", "error": "day_cap"}
-        result, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
-        if error in ("busy", "breaker", "budget"):
-            return {**verdict, "outcome": "unchecked", "error": error}  # nothing was asked: no judge.call row
-        if result is not None and not isinstance(result, dict):
-            result, error = None, "shape"
-        broken = None
-        if result is not None and not error:
-            try:
-                answers = J.check_answers(result.get("answers"), questions)
-                cut = float(qset["thresholds"]["broken"])
-                broken = [rules[int(qid[1:]) - 1]["id"] for qid in questions if J.noul(answers, qid) >= cut]
-            except (J.JudgeError, AttributeError, KeyError, TypeError, ValueError, IndexError):
-                error = "shape"
-        detail = {
-            "label": qset["label"],
-            "questions": len(questions),
-            "operation": operation,
-            "level": level,
-            "rules": [r["id"] for r in rules[: J.MAX_QUESTIONS]],
-            **({"draft": True} if draft else {}),
-            **({"people": True} if is_person else {}),
-        }
-        if result is not None:
-            detail.update(B.audit_detail(result))
-        if error:
-            detail["error"] = error
-        else:
-            detail["broken"] = len(broken)
+        broken, failed, errors, calls = [], [], [], []
+        for batch, questions, state in batches:
+            found, error, call = _judged(
+                store, engine, qset, level, operation, batch, questions, state, draft, is_person
+            )
+            calls += [call] if call else []
+            if found is None:
+                failed += [r["id"] for r in batch]
+                errors.append(error)
+            else:
+                broken += found
+        call = calls[0] if calls else None
+        if failed and len(failed) == len(rules):
+            return {**verdict, "outcome": "unchecked", "error": errors[0], "call": call}
+        if failed:
+            # Some calls answered and some did not (the judge out part-way): what was found holds or warns, and the
+            # rules not judged are recorded unchecked. Not cached: the next try asks again.
+            return {
+                **verdict,
+                "broken": broken,
+                "outcome": "broken" if broken else "pass",
+                "call": call,
+                "error": errors[0],
+                "unchecked_rules": failed,
+            }
         with store.transaction() as c:
-            call = H.event(c, H.KEEPER, "judge.call", qset["label"], detail)
-            if broken is not None:
-                # A partial check (past MAX_QUESTIONS rules) keeps which rules it left out, so a retry that hits the
-                # cache still records them unchecked.
-                unchecked = [r["id"] for r in rules[J.MAX_QUESTIONS :]]
-                stored = {"broken": broken, "unchecked": unchecked} if unchecked else broken
-                c.execute(
-                    "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
-                    (key, json.dumps(stored), call["id"], H.now()),
-                )
-                c.execute("DELETE FROM org_rule_verdicts WHERE created_at<?", (H.shift(H.now(), days=-CACHE_DAYS),))
-        if len(rules) > J.MAX_QUESTIONS and broken is not None:
-            verdict["unchecked_rules"] = [r["id"] for r in rules[J.MAX_QUESTIONS :]]
-        if broken is None:
-            return {**verdict, "outcome": "unchecked", "error": error or "shape", "call": call["id"]}
-        return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "call": call["id"]}
-    except Exception as exc:  # noqa: BLE001 - the check never stops the write
-        LOG.warning("Rule check failed: %s", type(exc).__name__)
-        if verdict is not None:
-            return {**verdict, "outcome": "unchecked", "error": "error"}
-        return None
+            c.execute(
+                "INSERT OR REPLACE INTO org_rule_verdicts(digest, broken, call_id, created_at) VALUES(?,?,?,?)",
+                (key, json.dumps(broken), call, H.now()),
+            )
+            c.execute("DELETE FROM org_rule_verdicts WHERE created_at<?", (H.shift(H.now(), days=-CACHE_DAYS),))
+        return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "call": call}
+    except Exception as exc:
+        # Only the judge being out fails open (`_ask` turns its failures into error codes: a timeout, an error, a
+        # malformed answer, the breaker). Anything else is a fault here: the write fails, never goes unchecked.
+        LOG.exception("Rule check failed")
+        raise Problem("rule_check", CHECK_FAILED, 503, retryable=True) from exc
 
 
 def structured_check(c, author, operation, *, targets=(), contacts=()):
@@ -721,7 +752,7 @@ def _warn_structured(c, verdict, warned, tell):
     return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in warned], "text": told}}
 
 
-def _structured_apply(c, verdict, payload, replay, tell):
+def _structured_apply(c, verdict, payload, replay, tell, judged_text=None):
     """A structured verdict inside the write. The Directory's check runs again here on the same input (it calls no engine,
     so it runs under the write's lock), and what it finds now holds the write. A check that cannot complete holds it too
     (fail closed; its class is the reason). A judged block the verdict was checked with (`judged`) holds it with the
@@ -781,6 +812,7 @@ def _structured_apply(c, verdict, payload, replay, tell):
         tell,
         check="structured",
         error=now["error"],
+        judged=judged_text,
     )
 
 
@@ -1259,7 +1291,7 @@ def _people(recipients, author):
     return sorted({r for r in recipients or () if r and r != author})
 
 
-def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audience_now=None):
+def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audience_now=None, judged=None):
     """The verdict inside the write. Returns None to deliver as is; {"warn": line, ...} to deliver with the warning
     line on the recipient's copy; {"held": view} to write nothing and answer with the hold. `payload` is the text the
     reviewer reads, `replay` what Send anyway needs to run the normal write. `tell` also leaves the bot a note (a
@@ -1269,7 +1301,9 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     `audience_now`: the recipients the write reads now (the route's audience, read inside the write). Every verdict
     belongs to the audience it checked, including a route recorded with `outcome=no_rules` when no rule matched,
     so a different one comes back as {"moved": True}. A refused verdict
-    (`refused`) raises its error here, so the write fails with it."""
+    (`refused`) raises its error here, so the write fails with it. `judged`: the whole text the check judged, when the
+    reviewer's `payload` leaves some of it out (a private task's words): a hold keeps it where only Send anyway's
+    recheck reads it (`hold_input`), never shown."""
     if verdict and "refused" in verdict:
         raise verdict["refused"]
     if verdict and "applied" in verdict:
@@ -1282,7 +1316,7 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     if audience_now is not None and _people(audience_now, author) != list(verdict["recipients"]):
         return {"moved": True}
     if verdict.get("check") == "structured":
-        return _structured_apply(c, verdict, payload, replay, tell)
+        return _structured_apply(c, verdict, payload, replay, tell, judged)
     if verdict["outcome"] in ("broken", "too_large"):
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
         # cannot run here (no engine under the write lock), so the output goes through unchecked.
@@ -1320,20 +1354,21 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
     mode = strictest["if_broken"]
     if too_large and mode == "warn":
         # Every rule it meets is Warn: delivered, its line saying it went unchecked. A Block or Escalate rule holds it.
+        # `local` is a cause here the caller put on this path (the day's calls spent: backend/task_rule_gate.py).
+        cause = verdict.get("local") or "too_large"
         H.event(
             c,
             author,
             "rules.unchecked",
             operation,
-            {"operation": operation, "reason": "too_large", "rules": [r["id"] for r in broken]},
+            {"operation": operation, "reason": cause, "rules": [r["id"] for r in broken]},
         )
-        line = (
-            f"Warning: {_author_name(c, author)}'s message was too long to check against the rule "
-            f"'{strictest['text']}'."
-        )
+        could_not = "was too long to check" if cause == "too_large" else "could not be checked"
+        line = f"Warning: {_author_name(c, author)}'s message {could_not} against the rule '{strictest['text']}'."
         told = (
-            f"Your {OPERATIONS.get(operation, operation)} was delivered with a warning: it is too long to check "
-            f"against the rule '{strictest['text']}'."
+            f"Your {OPERATIONS.get(operation, operation)} was delivered with a warning: it "
+            + ("is too long to check" if cause == "too_large" else "could not be checked today")
+            + f" against the rule '{strictest['text']}'."
         )
         if tell:
             _tell_bot(c, author, told)
@@ -1360,11 +1395,24 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None, audie
         if tell:
             _tell_bot(c, author, told)
         return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken], "text": told}}
-    return _write_hold(c, verdict, broken, strictest, mode, repeat, too_large, payload, replay, tell)
+    return _write_hold(c, verdict, broken, strictest, mode, repeat, too_large, payload, replay, tell, judged=judged)
 
 
 def _write_hold(
-    c, verdict, broken, strictest, mode, repeat, too_large, payload, replay, tell, *, check="judged", error=None
+    c,
+    verdict,
+    broken,
+    strictest,
+    mode,
+    repeat,
+    too_large,
+    payload,
+    replay,
+    tell,
+    *,
+    check="judged",
+    error=None,
+    judged=None,
 ):
     """The hold a write is held in, written and told. `broken` are the rules that hold it, `strictest` the one the hold
     is on and `mode` its outcome (`block` or `escalate`; an escalation with no reviewer is a block). `check` is the check
@@ -1389,6 +1437,9 @@ def _write_hold(
         if task_id is None and reviewer:
             task_id = _review_task(c, hold_id, author, strictest, reviewer)
     text = payload if isinstance(payload, str) else json.dumps(payload, sort_keys=True, default=str)
+    # The whole text the check judged, kept only when the reviewer's copy leaves some of it out.
+    judged = judged if isinstance(judged, str) or judged is None else json.dumps(judged, sort_keys=True, default=str)
+    judged = judged if judged and judged != text else None
     body = (replay or {}).get("body") or {}
     if operation == "task_answer":
         asked = H.answer_question(c, body.get("target") or {})
@@ -1424,6 +1475,9 @@ def _write_hold(
             # The entities and addresses the Directory walk started from: a structured recheck (Send anyway, an
             # approved mail or letter) walks from the same recipients. Older holds have neither and recheck without.
             **{k: list(verdict[k]) for k in ("targets", "contacts") if verdict.get(k)},
+            # What the check read when the reviewer's text leaves some of it out (a private task's words). Only
+            # `recheck` reads it: never a hold's view, its list, its events or its answer.
+            **({"text": judged} if judged else {}),
         },
     }
     matched = (
@@ -1485,7 +1539,10 @@ def _write_hold(
         why = f"the Directory rules could not be checked ({error}), so it is held until a person checks it"
         quoted = ""
     else:
-        why = "it is too long to check against the rule" if too_large else "it broke the rule"
+        why = "it broke the rule"
+        if too_large:
+            local = verdict.get("local")
+            why = f"it {'could not be checked today' if local else 'is too long to check'} against the rule"
         quoted = f" '{strictest['text']}'"
     told = (
         f"Your {OPERATIONS.get(operation, operation)} was held: {why}{quoted}. "
@@ -1519,7 +1576,10 @@ def warn_line(gate):
 
 
 # A warning line as apply writes it (`warn`), alone in its paragraph at the head of a text warned_note built.
-WARN_LINE = re.compile(r"Warning: [^\n]*'s message (?:may break|was too long to check against) the rule '[^\n]*'\.")
+WARN_LINE = re.compile(
+    r"Warning: [^\n]*'s message (?:may break|was too long to check against|could not be checked against) "
+    r"the rule '[^\n]*'\."
+)
 
 
 def unwarned(text):
@@ -2115,7 +2175,7 @@ def recheck(store, primary, hold, audience=None, auth=None):
         prov.get("authenticated") or hold["author"],
         prov.get("via") or "",
         hold["operation"],
-        stored.get("text") or "",
+        shown.get("text") or stored.get("text") or "",
         people,
         context=shown.get("context") or None,
         obj=shown.get("obj") or "",
