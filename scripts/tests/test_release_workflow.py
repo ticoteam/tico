@@ -13,7 +13,7 @@ JOBS = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["job
 CORE = {"validated", "runner-changes", "release"}
 
 
-def _runs(jobs, name, results, outputs, *, cancelled=False, inherited=()):
+def _runs(jobs, name, results, outputs, *, cancelled=False, inherited=(), ref="v0.6.1"):
     def parents(name):
         needs = jobs[name].get("needs", [])
         return [needs] if isinstance(needs, str) else needs
@@ -36,17 +36,23 @@ def _runs(jobs, name, results, outputs, *, cancelled=False, inherited=()):
 
     condition = condition.removeprefix("${{").removesuffix("}}").strip()
     condition = re.sub(r"needs\.([\w-]+)\.(?:outputs\.([\w-]+)|result)", value, condition)
+    condition = condition.replace("github.ref_name", repr(ref))
     condition = re.sub(r"!(?!=)", " not ", condition).replace("&&", " and ").replace("||", " or ")
     return bool(
         eval(
             condition.strip(),
             {"__builtins__": {}},
-            {"cancelled": lambda: cancelled, "success": lambda: success, "always": lambda: True},
+            {
+                "cancelled": lambda: cancelled,
+                "success": lambda: success,
+                "always": lambda: True,
+                "contains": lambda haystack, needle: needle in haystack,
+            },
         )
     )
 
 
-def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failures=()):
+def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failures=(), ref="v0.6.1"):
     outputs = {
         "validated": {
             "published": "true" if published else "false",
@@ -57,7 +63,7 @@ def _schedule(*, published=False, dry_run=False, build=True, enabled=True, failu
     }
     results = {}
     for name in JOBS:
-        if _runs(JOBS, name, results, outputs):
+        if _runs(JOBS, name, results, outputs, ref=ref):
             results[name] = "failure" if name in failures else "success"
         else:
             results[name] = "skipped"
@@ -82,6 +88,16 @@ def test_release_build_and_carry_forward_schedules(published):
         *([] if published else ["release"]),
     }
     assert _schedule(published=published, enabled=False)["companies"] == "skipped"
+
+
+@pytest.mark.parametrize("ref", ["v0.6.0-rc.1", "v1.2.0-beta", "v1.0.0-0"])
+def test_a_prerelease_builds_the_generic_apps_and_no_company_app(ref):
+    # A company's installed apps update from its own bucket's latest.json: a prerelease must never move it.
+    results = _schedule(ref=ref)
+    assert results["company-matrix"] == results["companies"] == "skipped"
+    assert {"desktop", "desktop-assets", "recorder", "recorder-assets", "macos", "macos-assets"} <= {
+        name for name, result in results.items() if result == "success"
+    }
 
 
 def test_dry_run_and_failed_validation_never_start_optional_jobs():
