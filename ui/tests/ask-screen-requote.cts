@@ -26,7 +26,6 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
 const letter = (id: string, rid: string, blob: string) => ({id, approval_id: rid, status: 'waiting_for_ok', proof: `/api/v2/files/${blob}`,
   recipient: {name: 'Jo Rivera', address_line1: '1 Main St', address_city: 'Springfield'}, mail_class: 'usps_first_class', page_count: 2,
   total_micros: 1840000, shown_hash: 'c'.repeat(64)});
-const gate = () => { let open!: () => void; const p = new Promise<void>(r => { open = r; }); return {p, open}; };
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
