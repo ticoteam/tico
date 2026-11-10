@@ -1394,18 +1394,27 @@ def _readable_held_for(c, who, auth, bots):
             for a in c.execute(f"SELECT id, started_at, finished_at FROM attempts WHERE id IN ({marks})", part):
                 attempt_times[a["id"]] = a
     out = {bot: [] for bot in bots}
-    for row in kept:
-        job = jobs.get(row["job_id"])
-        if not job or quiet_source_wait(c, job, started_counts=started_counts, attempt_times=attempt_times):
-            continue
+    shown_jobs = [
+        row
+        for row in kept
+        if (job := jobs.get(row["job_id"]))
+        and not quiet_source_wait(c, job, started_counts=started_counts, attempt_times=attempt_times)
+    ]
+    task_of = {}
+    for row in shown_jobs:
         message = H.message(c, row["id"])  # parsed refs: a comment or notice names its task there
-        task_id = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
+        task_of[row["id"]] = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
+    # Every wake is on a task now: the tasks, their tags and the fence are read once for all the bots' stopped runs.
+    task_ids = sorted({tid for tid in task_of.values() if tid})
+    H.prime_tasks(c, task_ids)
+    fenced = set()
+    for part in H.chunks(task_ids):
+        marks = ",".join("?" * len(part))
+        fenced.update(r[0] for r in c.execute(f"SELECT id FROM tasks WHERE id IN ({marks}) AND {fence}", part))
+    for row in shown_jobs:
+        task_id = task_of[row["id"]]
         task = H.task(c, task_id) if task_id else None
-        readable = bool(
-            task
-            and H.task_private_readable(c, actor, task)
-            and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND {fence}", (task["id"],)).fetchone()
-        )
+        readable = bool(task and H.task_private_readable(c, actor, task) and task["id"] in fenced)
         if task and not readable:
             out[row["held_bot"]].append((row, None, False))
         else:
