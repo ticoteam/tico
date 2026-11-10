@@ -109,7 +109,7 @@ def test_a_decision_works_bot_tasks_through_the_task_calls_and_undo_puts_them_ba
     assert (back["status"], back["stage_id"], back["closed_at"]) == ("open", "general-todo", None)
     assert H.task(c, new)["status"] == "closed"
     assert H.task(c, first)["owner_id"] == "bot:finance"
-    assert "its owner was changed since" in undone["undo"]["text"], undone["undo"]["text"]
+    assert "was changed since by" in undone["undo"]["text"], undone["undo"]["text"]
 
 
 def test_undo_gives_a_task_back_to_its_bot_and_tells_both_bots_quietly(c):
@@ -133,6 +133,29 @@ def test_the_strategy_bot_does_not_close_a_task_a_person_asked_for_it_proposes_i
     assert made["state"] == "proposed" and not made["done"], made
     assert made["left"][0]["rule"] == "task_needs_person"
     assert H.task(c, asked)["status"] == "open"
+
+
+def test_undo_leaves_a_task_alone_when_anything_happened_to_it_since(c):
+    """Undo restores only a task nothing happened to since the decision. A task it made that someone asked about,
+    snoozed or filed a sub-task under stays open, the sub-task with it; a task it gave away that its new owner
+    snoozed stays with them. Each says why."""
+    made = _decide(
+        c,
+        [{"do": "create", "owner": "ops", "title": title} for title in ("Call the vendor", "Plan Q3", "Fix signup")],
+    )
+    asked, snoozed, parent = (x["task_id"] for x in made["done"])
+    H.task_ask(c, OWNER, asked, OWNER, "Which vendor do you mean?")
+    H.task_snooze(c, OWNER, snoozed, "After the board meeting")
+    sub = H.task_create(c, OWNER, "Write the signup test", "Work it.", "bot:ops", parent_id=parent, lint=False)["id"]
+    given = _filed(c, "ops", "Reconcile the vendor invoices")
+    moved = _decide(c, [{"do": "reassign", "task_id": given, "owner": "finance"}])
+    H.task_snooze(c, "bot:finance", given, "Waiting on the bank statement", seen_version=H.task(c, given)["version"])
+    SA.undo(c, OWNER, made["id"])
+    SA.undo(c, OWNER, moved["id"])
+    assert [H.task(c, t)["status"] for t in (asked, snoozed, parent, sub)] == ["open"] * 4
+    assert H.task(c, given)["owner_id"] == "bot:finance"
+    text = SA.entry(c, made["id"], "1")["undo"]["text"] + SA.entry(c, moved["id"], "1")["undo"]["text"]
+    assert text.count("changed since") == 4, text
 
 
 # ----------------------------------------------------------------------------- through the routes
@@ -160,8 +183,8 @@ def proposals(api):
 
 def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_owner_undoes_it(api):
     """Spec test 12: a decision made alone is one entry in the log with its reason, every task event it wrote carries
-    its action id, and Undo puts the tasks back and tells their bots; a field a person changed since keeps their
-    change, and the owner is told what wasn't restored. Below level 3, or for any other bot, nothing is decided."""
+    its action id, and Undo puts the tasks back and tells their bots; a task a person changed since stays as they
+    left it, and the owner is told what wasn't restored. Below level 3, or for any other bot, nothing is decided."""
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     bot(api, "finance")
@@ -205,7 +228,7 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
     assert undone["state"] == "undone"
     assert task(api, stale)["status"] == "open" and task(api, new)["status"] == "closed"
     assert task(api, first)["owner_id"] == "bot:finance"  # the person's later edit stays
-    assert "owner was changed since" in undone["undo"]["text"]
+    assert '"Write the onboarding email" was changed since by' in undone["undo"]["text"]
     with api.app.state.store.read() as c:
         told = c.execute(
             "SELECT COUNT(*) FROM messages m WHERE m.sender_id=? AND m.body LIKE '%undid a decision%'", (H.KEEPER,)
@@ -319,8 +342,8 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
 def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     """Spec test 12, Undo's edges: a later move in the queue (even one back to where the decision put it), a task it
     made that a person took on, two changes to one task, a close of a task with a note, and a task whose restore is
-    refused. Each later edit stays and is named; the rest goes back; a form holding the task from before the decision
-    or the Undo gets a version conflict."""
+    refused. A task someone changed since stays whole as they left it and is named; the rest goes back; a form holding
+    the task from before the decision or the Undo gets a version conflict."""
     strategy_token = with_strategy_bot(api)
     for slug in ("ops", "finance", "coo"):
         bot(api, slug)
@@ -366,11 +389,11 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     post(api, f"tasks/{ticket}", {"version": held, "due": "2099-01-01T00:00:00+00:00"}, expected=409)
     text = undone["undo"]["text"]
     now = {t: task(api, t) for t in (moved, back, twice, refused, ticket, new)}
-    # The person's place in the queue stays, and the owner still goes back.
-    assert now[moved]["owner_id"] == "bot:ops" and now[moved]["rank"] == -50
-    assert now[back]["owner_id"] == "bot:ops" and now[back]["rank"] == decided
-    assert '"Write the onboarding email": its place in the queue was changed since by' in text
-    assert '"Clean up old reports": its place in the queue was changed since by' in text
+    # A task a person moved in the queue since stays with the bot it was given to, where they put it.
+    assert now[moved]["owner_id"] == "bot:finance" and now[moved]["rank"] == -50
+    assert now[back]["owner_id"] == "bot:finance" and now[back]["rank"] == decided
+    assert '"Write the onboarding email" was changed since by' in text
+    assert '"Clean up old reports" was changed since by' in text
     # Two moves of one task go back to where it started, with no later edit claimed.
     assert now[twice]["rank"] == start[twice]["rank"] and '"Draft the pricing page": its' not in text.split("Not")[-1]
     # The closed task is open again, with its note.

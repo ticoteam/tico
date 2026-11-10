@@ -574,7 +574,8 @@ def install(app, store, auth, mutate, settings):
     @app.post("/api/v2/strategy-bot/log/{action_id}/undo")
     def strategy_bot_undo(request: Request, action_id: str, body: M.Empty):
         """The owner, on their own click, undoes one decision the Strategy Bot made alone: the tasks it changed go back
-        where nobody changed them since, a later change is kept and named, and each bot whose task changed is told."""
+        unless anything happened to them since (those stay as they are and are named), and each bot whose task changed
+        is told."""
         who = request.state.identity
 
         def work(c):
