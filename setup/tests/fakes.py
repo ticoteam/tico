@@ -424,4 +424,11 @@ class FakeRoute53:
 
 
 class InvalidChangeBatch(Exception):
-    pass
+    """As botocore raises it: a ClientError carrying Route 53's 400 answer."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.response = {
+            "Error": {"Code": "InvalidChangeBatch", "Message": message},
+            "ResponseMetadata": {"HTTPStatusCode": 400},
+        }

@@ -144,6 +144,16 @@ def apply(client, zone_id: str, changes: list[dict], names: Names = DEFAULT_NAME
         )
 
 
+def refused(e: Exception) -> bool:
+    """Route 53 answered a ChangeResourceRecordSets call with a 4xx error (botocore's ClientError): a batch is all or
+    nothing, so none of it was made. No answer, or a 5xx, may have come after the change was made. GetChange cannot
+    settle that: it needs the change id, which came back only in the answer that was lost."""
+    meta = getattr(e, "response", None)
+    if not isinstance(meta, dict) or not meta.get("Error", {}).get("Code"):
+        return False
+    return int(meta.get("ResponseMetadata", {}).get("HTTPStatusCode") or 400) < 500
+
+
 def describe(rs: dict) -> str:
     target = (
         rs["AliasTarget"]["DNSName"] if "AliasTarget" in rs else ", ".join(v["Value"] for v in rs["ResourceRecords"])

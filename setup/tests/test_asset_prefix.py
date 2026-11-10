@@ -1852,3 +1852,57 @@ def test_a_record_set_matches_this_installs_only_when_every_routing_field_is_equ
         assert route53.recorded(r53, "Z1", DOMAIN, [made]) == ([], [theirs]), extra
     r53 = FakeRoute53(ZONE, [dict(made)])
     assert route53.recorded(r53, "Z1", DOMAIN, [made]) == ([made], [])
+
+
+class Refused(Exception):
+    """As botocore's ClientError: Route 53 answered, and refused the whole batch."""
+
+    def __init__(self, code: str, status: int = 400):
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+
+
+def test_a_refused_route53_batch_leaves_no_pending_record_and_a_lost_answer_is_adopted_only_exactly(tmp_path):
+    # Codex review 4: a CREATE Route 53 refused made nothing, so its journalled record set must not stay "pending": a
+    # record set someone else makes later with the same values would be taken for this install's. A lost answer (no
+    # reply, or a 5xx) may have made it, so it stays pending; the re-run adopts it only when it is exactly what was
+    # journalled. There is no change id to ask GetChange about: it came back in the answer that was lost.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    r53 = d.route53_client("")._inner
+    real = r53.change_resource_record_sets
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    for err in (Refused("InvalidChangeBatch"), Refused("Throttling")):
+
+        def refuse(**kw):
+            r53.calls.append(("change_resource_record_sets", kw))
+            raise err
+
+        r53.change_resource_record_sets = refuse
+        try:
+            code = go(argv, deps=d)[0]
+        except Refused:
+            code = None
+        assert code != 0 and r53.records == []
+        assert state.load(DOMAIN)[0].get("dns_pending", []) == [], err
+    for err in (Lost("change_resource_record_sets"), Refused("InternalError", 500)):
+
+        def lose(**kw):
+            real(**kw)
+            raise err
+
+        r53.records, r53.change_resource_record_sets = [], lose
+        try:
+            code = go(argv, deps=d)[0]
+        except (Lost, Refused):
+            code = None
+        assert code != 0 and len(r53.records) == 1
+        (pending,) = state.load(DOMAIN)[0]["dns_pending"]
+        assert route53.key(pending) == route53.key(r53.records[0]), err
+        r53.change_resource_record_sets = real
+        code, out = go(argv, deps=d)
+        assert code == 0, out
+        saved = state.load(DOMAIN)[0]
+        assert [route53.key(rs) for rs in saved["dns_records"]] == [route53.key(pending)]
+        assert saved.get("dns_pending", []) == []
+        s = state.load(DOMAIN)[0]
+        state.save(DOMAIN, {**s, "dns_records": []})

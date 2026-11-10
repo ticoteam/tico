@@ -732,7 +732,13 @@ def _route53_strict(io: IO, s: Settings, client, zid: str, records) -> bool:
     # Journalled before the call: if its answer is lost, the retry finds exactly these and knows them for its own.
     s.dns_zone_id, s.dns_pending = zid, created
     save_dns(s)
-    route53.apply(client, zid, changes, awsmod.Names(s.asset_prefix, s.install_id))
+    try:
+        route53.apply(client, zid, changes, awsmod.Names(s.asset_prefix, s.install_id))
+    except Exception as e:
+        if route53.refused(e):  # Route 53 answered and made none of it: nothing of it is this install's
+            s.dns_pending = []
+            save_dns(s)
+        raise  # else the answer was lost: the record sets stay journalled, and the re-run adopts them only exactly
     io.say("  Route 53 records written." if changes else "  Route 53 records already point here; left as they are.")
     gone = {route53.key(c["ResourceRecordSet"]) for c in changes if c["Action"] == "DELETE"}
     now = [rs for rs in s.dns_records + kept + created if route53.key(rs) not in gone]
@@ -745,7 +751,7 @@ def save_dns(s: Settings) -> None:
     saved = state.load(s.domain)[0]
     if saved:  # at once, also if this run stops later
         keys = ("dns_zone_id", "dns_records", "dns_pending")
-        state.save(s.domain, {**saved, **{k: v for k, v in s.public().items() if k in keys}})
+        state.save(s.domain, {**saved, **{k: getattr(s, k) for k in keys}})  # an emptied list too
 
 
 def owned_dns(s: Settings, zone_id: str) -> list[dict]:
