@@ -66,6 +66,16 @@ ON_OK: dict[str, str] = {
     "proposal": "backend.proposals:ok_given",
 }
 
+# Subject kinds whose module asks and uses its OKs itself: a bot's generic ask (POST /api/v2/tasks/{id}/oks) and use
+# (POST /api/v2/oks/{id}/use) never name one.
+OWNED = ("email_send", "letter", "edition", "board", "proposal", "support", "webhook", "publish")
+
+
+def generic(subject: str) -> bool:
+    """Whether a bot may ask for and use an OK of this subject through the generic routes: any kind but OWNED."""
+    return bool(kind_of(subject)) and ":" in str(subject) and kind_of(subject) not in OWNED
+
+
 # Set while give_ok answers its own requirement, so the engine's refusal of a plain OK lets that one through.
 _GIVING: contextvars.ContextVar[str | None] = contextvars.ContextVar("task_asks_giving", default=None)
 
