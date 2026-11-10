@@ -4,14 +4,10 @@ by `GET /api/v2/system-routines` for Settings > Routines. Spec acceptance tests 
 
 from datetime import datetime, timedelta, timezone
 
-from backend import judge as B
-from backend import ask_deadlines
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.helpers.stale_review import FakeDecide, stale  # noqa: F401
 from backend.tests.helpers.tasks_board import api, get, headers, post  # noqa: F401
-from clients import judge as J
 
 
 def rows(api, token="ana-test"):
@@ -31,25 +27,21 @@ def test_the_jobs_list_and_each_run_record(api):
     with store.read() as c:
         hidden = SR.not_applying(c, store.settings)  # a job that cannot run here is left out (Job.applies)
     assert "directory_sync" in hidden and "topic_fresh" not in hidden
-    assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS if job.key not in hidden] + [
-        "task-rule-close-after-done"
-    ]
+    assert [j["key"] for j in data["jobs"]] == [job.key for job in SR.JOBS if job.key not in hidden]
     assert {k for k, j in jobs.items() if j["controllable"]} == {
-        "stale_review",
         "kpi_asks",
         "task_manager_report",
         "bookkeeper_check",
-    } - hidden, "Ask go-ahead's switch is on its Heartbeat step (test_heartbeat.py)"
-    assert {k for k, j in jobs.items() if j["ai"]} == {"stale_review", "thread_rank"}
+    } - hidden
+    assert {k for k, j in jobs.items() if j["ai"]} == {"thread_rank"}
     assert "learnings" not in jobs, "Learn runs in Maintenance"
     # Housekeeping has no switch; Task roundup and Learn run in Maintenance.
     assert all(j["needed"] == (j["group"] == "housekeeping" and not j["controllable"]) for j in jobs.values())
-    assert "task_roundup" not in jobs
-    assert jobs["stale_review"]["schedule"] == "Hourly"
-    assert jobs["still_needed"]["group"] == "reminders"
-    for key in ("heartbeat", "waiting_checks", "gateway_check", "billing_check", "directory_sync"):
+    assert "task_roundup" not in jobs and "stale_review" not in jobs
+    assert jobs["never_stuck_reading"]["schedule"] == "Hourly"
+    for key in ("heartbeat", "never_stuck_reading", "gateway_check", "billing_check", "directory_sync"):
         assert SR.BY_KEY[key].group == "housekeeping"
-    for key in ("due_reminders", "ask_deadlines", "approval_expiry", "stall_checks", "snooze_ends"):
+    for key in ("deferred", "drop_unreadable", "never_stuck"):
         assert key not in jobs, "a Heartbeat step, listed on the Heartbeat (backend/heartbeat.py)"
     assert all(j.get("records", True) for j in jobs.values()), "every job writes its runs"
     # a scheduler tick records each run with its result and next run
@@ -65,7 +57,7 @@ def test_the_jobs_list_and_each_run_record(api):
     assert "learnings" not in jobs
     # The steps that were jobs of their own: each one's last run and result on its Heartbeat row.
     steps = {s["key"]: s for s in get(api, "heartbeat")["steps"]}
-    for key in ("ask_deadlines", "approval_expiry", "stall_checks", "due_reminders", "snooze_ends"):
+    for key in ("deferred", "drop_unreadable", "never_stuck"):
         assert steps[key]["last_run_at"] and steps[key]["last_result"] and not steps[key]["last_error"], key
     # a quiet job every tick keeps one row not one per tick
     scheduler = Scheduler(store, api.app.state.execution)
@@ -117,20 +109,22 @@ def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_ol
     store = api.app.state.store
     # a failed run shows failed with a plain reason and still counts as a scheduler failure
 
+    from backend import go_live
+
     def broken(conn, at=None):
         raise RuntimeError("Ana's private note text")
 
-    monkeypatch.setattr(ask_deadlines, "sweep", broken)
+    monkeypatch.setattr(go_live, "expire", broken)
     result = Scheduler(store, api.app.state.execution).tick()
-    assert {"ask_deadlines": "RuntimeError"} in result["failures"]
+    assert {"go_live": "RuntimeError"} in result["failures"]
     steps = {s["key"]: s for s in get(api, "heartbeat")["steps"]}
-    assert steps["ask_deadlines"]["last_error"] == "Failed: unexpected error (RuntimeError)"
-    assert steps["ask_deadlines"]["failed_24h"] == 1
+    assert steps["go_live_expiry"]["last_error"] == "Failed: unexpected error (RuntimeError)"
+    assert steps["go_live_expiry"]["failed_24h"] == 1
     jobs, _ = rows(api)
-    assert jobs["heartbeat"]["last"]["ok"] is False and jobs["heartbeat"]["last"]["result"] == "Failed: Ask go-ahead"
+    assert jobs["heartbeat"]["last"]["ok"] is False and jobs["heartbeat"]["last"]["result"] == "Failed: Go-live expiry"
     assert "private" not in str(jobs) + str(steps), "an exception's own text never shows"
     # each wrapped block still reports its old failure name
-    from backend import approval_expiry, billing_check, go_live, goal_asks, still_needed
+    from backend import billing_check, goal_asks
     from backend import goals as G
 
     # The pass refreshes one live goal per transaction; an empty registry has no refresh to fail.
@@ -146,9 +140,6 @@ def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_ol
         (G, "refresh"),
         (goal_asks, "sync"),
         (go_live, "expire"),
-        (ask_deadlines, "sweep"),
-        (approval_expiry, "sweep"),
-        (still_needed, "sweep"),
         (billing_check, "read_later"),
     ):
         monkeypatch.setattr(module, name, broken)
@@ -161,9 +152,6 @@ def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_ol
         "goals",
         "goal_asks",
         "go_live",
-        "ask_deadlines",
-        "approval_expiry",
-        "still_needed",
         "billing_check",
         "gateway",
     ):
@@ -171,60 +159,6 @@ def test_a_failed_run_shows_a_plain_reason_and_each_wrapped_block_reports_its_ol
     jobs, _ = rows(api)
     assert jobs["goal_colours"]["last"]["ok"] is False
     assert jobs["goal_colours"]["last"]["result"] == "Failed: unexpected error (RuntimeError)"
-
-
-def test_a_stale_review_shows_its_route_spend_and_each_fallback(stale):
-    # a stale review answered by the gateway shows gateway and this months spend
-    api, store, task = stale
-    task("Ship the export button", pr="merged")
-    run = SR.Run("stale_review")
-    from backend import stale_review
-
-    stale_review.words(run, stale_review.run_pass(store, engine=FakeDecide("update")))
-    SR.write(store, run)
-    with store.transaction() as c:  # what `judge.metered` writes for a paid call
-        H.event(c, H.KEEPER, "judge.spend", "stale-review@1", {"label": "stale-review@1", "cost_usd": 0.42})
-        H.event(c, H.KEEPER, "judge.spend", "listening@2", {"label": "listening@2", "cost_usd": 9.0})
-    jobs, _ = rows(api)
-    row = jobs["stale_review"]
-    assert row["last"]["result"] == "1 checked, 1 suggestion" and row["last"]["ok"]
-    assert row["route"] == "Gateway" and row["fallback"] is None
-    assert row["spent_this_month_usd"] == 0.42, "only this job's question set"
-    # gateway down falls back to own key then company ai and the row says so
-
-    task("Ship the export page", pr="merged")
-    with store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='stale_review'")  # the next hour's pass
-
-    def gateway(state, questions, label=None):
-        raise J.JudgeError("unavailable", "down")
-
-    gateway.provider = J.GATEWAY_PROVIDER
-    own = FakeDecide("update", provider=J.TYPESAFE_PROVIDER)
-    own.provider = J.TYPESAFE_PROVIDER
-    chain = B.ordered([gateway, own])
-    from backend import stale_review
-
-    run = stale_review.words(SR.Run("stale_review"), stale_review.run_pass(store, engine=chain))
-    SR.write(store, run)
-    jobs, _ = rows(api)
-    assert jobs["stale_review"]["route"] == "Company key"
-    assert jobs["stale_review"]["fallback"] == "Ran on your own key: Gateway unavailable"
-
-    # ...and with the own key down too, the company's AI answers.
-    task("Ship the import button", pr="merged")
-    own.fail = J.JudgeError("auth", "refused")
-    llm = FakeDecide("update", provider=next(iter(J.LLM_PROVIDERS.values())))
-    llm.provider = llm.provider
-    with store.transaction() as c:
-        c.execute("DELETE FROM registry_metadata WHERE key='stale_review'")  # the next hour's pass
-    run = stale_review.words(
-        SR.Run("stale_review"), stale_review.run_pass(store, engine=B.ordered([gateway, own, llm]))
-    )
-    SR.write(store, run)
-    jobs, _ = rows(api)
-    assert jobs["stale_review"]["route"] == "Company AI"
-    assert jobs["stale_review"]["fallback"] == "Ran on company AI: Gateway unavailable"
 
 
 def test_learn_without_a_model_stays_in_maintenance_and_a_failed_directory_sync_shows_fixed_words(api, monkeypatch):

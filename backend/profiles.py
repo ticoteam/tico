@@ -304,13 +304,6 @@ def config_of(c, bot):
     return H._json(row[0], {}) or {} if row else {}
 
 
-def sweeps_on(c, bot):
-    """Whether the task roundup lists this bot its sweep lines (rules.sweeps_on): a reviewer, lead, responder or monitor gets
-    only its questions and its own follow-ups on it, and so does a custom profile with sweeps off."""
-    spec = spec_of(config_of(c, bot))
-    return True if spec is None else bool(spec["sweeps"])
-
-
 # ---------------------------------------------------------------------------------------------------- the tasks it takes
 def is_review_task(c, row, *, parent_id=None):
     """One classification for creation, assignment, pull, wakes and Health.
