@@ -404,7 +404,7 @@ def _reword(conn, task, item):
     title, body = _ask(conn, item, strategy_bot.name(conn))
     if H.TITLE_LINT == "refuse" and H.lint_title(title):
         return
-    with isolated(conn, "goal_ask_reword", task["id"]):
+    with isolated(conn, "goal_ask_reword", task["id"], private=True):
         H.task_update(
             conn,
             G.AUTO_ACTOR,
@@ -429,7 +429,7 @@ def _relist(conn, task, item):
     if ours and task["title"] != title and not (H.TITLE_LINT == "refuse" and H.lint_title(title)):
         changes["title"] = _free_title(conn, task["owner_id"], title)
     if changes:
-        with isolated(conn, "goal_ask_relist", task["id"]):
+        with isolated(conn, "goal_ask_relist", task["id"], private=True):
             H.task_update(conn, G.AUTO_ACTOR, task["id"], quiet=True, seen_version=task.get("version"), **changes)
 
 
@@ -522,7 +522,7 @@ def sync(conn, owner_id, at=None, reads=None):
             continue
         if again and not has_room(key[2]):
             continue  # asked again on a day with room; until then it stays as the person left it
-        with isolated(conn, "goal_ask_close", row["task_id"]):
+        with isolated(conn, "goal_ask_close", row["task_id"], private=True):
             if task and task["status"] in LIVE:
                 if again:
                     note = f"Still needed: {_still_needed(want[key])}. Asked again in a new task."
