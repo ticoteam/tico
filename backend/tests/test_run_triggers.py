@@ -44,12 +44,6 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
         # status_or_relation: a task handed to the bot.
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:ops")
         assert RT.of_message(newest(c, "ops", "New task from")) == ("status_or_relation", None)
-        # A subtask finishing names the subtask it was.
-        child = H.task_create(
-            c, "bot:ops", "Pull the bank file", "For the parent.", "bot:finance", parent_id=task["id"]
-        )
-        H.task_update(c, "bot:finance", child["id"], status="done", note="Pulled.")
-        assert RT.of_message(newest(c, "ops", "")) == ("status_or_relation", child["id"])
         # comment: a bot writes on the task.
         H.task_comment(c, "bot:finance", task["id"], "The bank file is in.")
         said = newest(c, "ops", "The bank file is in.")
@@ -64,12 +58,6 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
         conv = H.conversation(c, task["conversation_id"])
         H.feed(c, "bot:ops", "Three new posts in #general.", conv)
         assert RT.of_message(newest(c, "ops", "Three new posts")) == ("other", None)
-        # schedule: a snooze that ends.
-        quiet(c)
-        H.TS.snooze(c, "human:ana", task["id"], H.shift(H.now(), days=1))
-    Scheduler(store, api.app.state.execution).tick(H.parse_ts(H.shift(H.now(), days=1)) + timedelta(seconds=1))
-    with store.read() as c:
-        assert RT.of_message(newest(c, "ops", "Snooze over")) == ("schedule", None)
     # person_message: a person writes to the bot.
     said = post(api, "chat/ops", {"text": "How is the cash warning?"})
     with store.read() as c:
@@ -200,7 +188,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
         get(api, f"conversations/{task['conversation_id']}/messages", token)
     elif case == "task_update":
         version = get(api, "tasks/" + task["id"], token)["task"]["version"]
-        post(api, "tasks/" + task["id"], {"version": version, "status": "doing"}, token)
+        post(api, "tasks/" + task["id"], {"version": version, "title": "Check the bank feed today"}, token)
     elif case == "comment":
         post(api, f"tasks/{task['id']}/comments", {"text": "Feed checked: two new lines."}, token)
     elif case == "message":
@@ -217,7 +205,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
         assert r_file.status_code == 200, r_file.text
     elif case == "task_finished":
         with api.app.state.store.transaction() as c:
-            H.task_close(c, H.human_actor("ana"), task["id"], "Not needed.", quiet=True)
+            H.task_close(c, H.human_actor("ana"), task["id"], "Not needed.")
     finish(api, r, attempt, "Nothing new." if case == "reply_to_person" else "")
     row = turn(api, attempt)
     assert row["outcome"] == ("acted" if case in WRITES else NO_WRITES[case])
@@ -545,7 +533,7 @@ def test_the_weekly_table_is_read_only_and_follows_who_may_read_the_bot(api):
 
 
 def test_open_task_states_match_the_board():
-    assert set(RT.OPEN_TASK) == set(H.ACTIVE_STATUSES) | {"blocked"}
+    assert set(RT.OPEN_TASK) == set(H.ACTIVE_STATUSES) == {"open"}
     with pytest.raises(ValueError):
         RT.stamp({}, "nudge")
     assert RT.counts("task.comment") and not RT.counts("status.set") and not RT.counts("attempt.started")
@@ -646,21 +634,31 @@ def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(a
         old = H.turn_start(c, "bot:ops", "ops")  # a run with no result, as runs before this were
         before = H.turn(c, old["id"])
         runs = {}
-        for name in ("accepted", "edited", "overridden", "own"):
+        for name in ("accepted", "edited", "overridden", "given", "own"):
             task = H.task_create(c, ana, f"Recheck the {name} cash warning", "Before the deadline.", "bot:ops")
             runs[name] = (task["id"], H.turn_start(c, "bot:ops", "ops", task_id=task["id"])["id"])
-            H.task_update(c, "bot:ops", task["id"], status="done", note="Rechecked.")
-        H.task_close(c, ana, runs["accepted"][0])
+            if name not in ("accepted", "given"):
+                H.task_done(c, "bot:ops", task["id"], "Rechecked.", H.task(c, task["id"])["version"])
+        # Accepted: Done by someone else's act (the engine's effects say so for a move into Done that is not the bot's).
+        H.task_done(c, ana, runs["accepted"][0], "Checked it myself.")
         H.task_update(c, ana, runs["edited"][0], body="Before the deadline, with the March file.")
-        H.task_close(c, ana, runs["edited"][0])  # after its edit: still one, `edited`
-        H.task_update(c, ana, runs["overridden"][0], status="open", note="Not yet: the March file is missing.")
-        H.task_update(c, "bot:ops", runs["own"][0], status="doing")  # the bot moving its own result is no verdict
+        H.task_move(c, ana, runs["overridden"][0], H.TASK_REOPEN, "Not yet: the March file is missing.")
+        H.task_reassign(c, ana, runs["given"][0], ana, "I will do this one.")
         got = {
             r[0]: (r[1], json.loads(r[2]))
             for r in c.execute("SELECT target, actor, detail FROM events WHERE action='turn.outcome'")
         }
-        assert c.execute("SELECT count(*) FROM events WHERE action='turn.outcome'").fetchone()[0] == len(got) == 3
-        for name, to in (("accepted", "closed"), ("edited", "done"), ("overridden", "open")):
+        # The bot's own done is no verdict: `own` has none.
+        assert c.execute("SELECT count(*) FROM events WHERE action='turn.outcome'").fetchone()[0] == len(got) == 4
+        for name, frm, to in (
+            ("accepted", "done", "done"),
+            ("edited", "done", "done"),
+            ("overridden", "done", "open"),
+            ("given", "open", "open"),
+        ):
             task_id, turn_id = runs[name]
-            assert got[turn_id] == (ana, {"task_id": task_id, "outcome": name, "from": "done", "to": to})
+            assert got[turn_id] == (
+                ana,
+                {"task_id": task_id, "outcome": name if name != "given" else "overridden", "from": frm, "to": to},
+            ), name
         assert H.turn(c, old["id"]) == before

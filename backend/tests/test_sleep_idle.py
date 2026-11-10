@@ -63,13 +63,12 @@ def hq(api, monkeypatch):
     monkeypatch.setattr(sleep_idle, "POLICY", {"at": None, "minutes": None})
     fake.clock = clock
     service(api).started = 0  # the server has been up longer than any setting
-    system_jobs(api)  # no system job or release hour is near, whatever the hour the test runs at
+    system_jobs(api)  # no system job is near, whatever the hour the test runs at
     return fake
 
 
 def system_jobs(api, **on):
-    """Every controlled system job off except the ones named (`key=(preset, "HH:MM")`), releases off, Maintenance paused."""
-    from backend import release_flow
+    """Every controlled system job off except the ones named (`key=(preset, "HH:MM")`), Maintenance paused."""
     from backend import system_routines as SR
 
     config = {key: {"on": False} for key in SR.CONTROLS}
@@ -77,7 +76,6 @@ def system_jobs(api, **on):
     with api.app.state.store.transaction() as c:
         for key, value in (
             (SR.CONFIG_KEY, config),
-            (release_flow.KEY, {"on": False}),
             (maintenance.REGISTRY_KEY, {"paused": True}),
         ):
             c.execute(
@@ -279,10 +277,10 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
     zone = SR.zone()
     noon = datetime(2026, 10, 26, 12, 0, tzinfo=zone)  # Monday noon, company time
     hq.clock[0] = noon.timestamp()
-    system_jobs(api, ask_deadlines=("daily", "03:30"), kpi_asks=("15m", "09:00"))
+    system_jobs(api, task_manager_report=("daily", "03:30"), kpi_asks=("15m", "09:00"))
     with api.app.state.store.transaction() as c:  # today's 03:30 run already happened
         c.execute(
-            "INSERT INTO system_runs(id,job,started_at) VALUES('asks','ask_deadlines',?)",
+            "INSERT INTO system_runs(id,job,started_at) VALUES('asks','task_manager_report',?)",
             (sleep_idle.stamp(noon.timestamp() - 8.5 * 3600),),
         )
     with api.app.state.store.read() as c:

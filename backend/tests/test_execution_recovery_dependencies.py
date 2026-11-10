@@ -63,7 +63,7 @@ def test_overlap_wait_is_visible_and_reviewed_within_five_minutes_of_freeing(api
 @pytest.mark.parametrize('ready_fallback', [False, True])
 def test_known_reset_keeps_new_person_messages_queued_or_uses_ready_fallback(api, monkeypatch, ready_fallback):
     machine = two_bots(api, monkeypatch)
-    first_message = post(api, 'chat/ops', {'text': 'First request'})
+    post(api, 'chat/ops', {'text': 'First request'})
     first = claim(api, machine, bot='ops')
     limit(api, machine, first, errors=('Usage limit',), limit_resets_at='2026-10-19T02:40:00Z')
     at(monkeypatch, '2026-10-19T02:20:00.000000Z', api)
@@ -122,10 +122,9 @@ def test_interrupted_fallback_waits_for_reset_only_with_positive_empty_evidence(
         with api.app.state.store.transaction() as c:
             aid = H.new_id()
             c.execute(
-                'INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
+                'INSERT INTO ok_grants(requirement_id,subject,asked_by_id,used_by_id,ok_at,used_at) SELECT ?1, ?2, ?4, ?4, ?5, ?6',
                 (aid, 'spend', fallback['message']['id'], 'bot:ops', H.now(), H.now()),
             )
-            H.event(c, 'bot:ops', 'approval.consume', aid, {'kind': 'spend', 'attempt_id': fallback['id']})
     post(
         api,
         f"attempts/{fallback['id']}/events",
@@ -179,24 +178,6 @@ def test_shell_run_ignores_another_runs_task_merge(api):
             (H.new_id(), task['id'], 'pr', 'https://example.com/acme/app/pull/9', H.now(), H.now()),
         )
     assert [d['state'] for d in sweep(api)] == ['queued']
-
-
-@pytest.mark.parametrize('this_attempt', [False, True])
-def test_approval_consumer_attempt_overrides_request_message_association(api, this_attempt):
-    machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
-    with api.app.state.store.transaction() as c:
-        approval = H.new_id()
-        c.execute(
-            'INSERT INTO approvals(id,kind,message_id,requested_by_id,created_at,consumed_at) VALUES(?,?,?,?,?,?)',
-            (approval, 'spend', 'prior-request' if this_attempt else message['id'], 'bot:ops', H.now(), H.now()),
-        )
-        token = H.RUN.set(attempt['id'] if this_attempt else 'different-attempt')
-        try:
-            H.event(c, 'bot:ops', 'approval.consume', approval, {'kind': 'spend'})
-        finally:
-            H.RUN.reset(token)
-    result = sweep(api)
-    assert job_state(api, attempt['job_id']) == ('uncertain' if this_attempt else 'queued')
 
 
 @pytest.mark.parametrize('named_fallback,release', [(False, 'reset'), (True, 'reset'), (True, 'try-now')])

@@ -40,15 +40,23 @@ def skips(c):
 
 
 def parked_task(c, title="Build 2/9", blocker_title="Build 1/9"):
-    """cpo's task, filed by ops, blocked by an open task of ops's."""
-    blocker = H.task_create(c, "bot:ops", blocker_title, "First", "bot:ops")
+    """cpo's task, filed by ops, parked on its pull request armed with `wake_once`; and another open task of ops's,
+    related to nothing, for news that is not about it."""
+    other = H.task_create(c, "bot:ops", blocker_title, "First", "bot:ops")
     task = H.task_create(c, "bot:ops", title, "Second", "bot:cpo")
     c.execute(
-        "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
-        (blocker["id"], task["id"], H.now()),
+        "INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,detail) "
+        "VALUES(?,?,'pr',?,'PR','open','bot:cpo',?,?)",
+        (
+            H.new_id(),
+            task["id"],
+            f"https://github.com/o/r/pull/{abs(hash(title)) % 100000}",
+            H.now(),
+            json.dumps({"wake_once": {"by": "bot:cpo", "at": H.now()}}),
+        ),
     )
     c.execute("DELETE FROM jobs")
-    return H.task(c, task["id"]), blocker
+    return H.task(c, task["id"]), other
 
 
 def as_cause(actor):

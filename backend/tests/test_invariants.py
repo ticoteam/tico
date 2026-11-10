@@ -91,37 +91,6 @@ def test_a_run_past_its_lease_by_ten_minutes_fires_and_a_recent_or_finished_one_
     assert sweep(api)["lease_overdue"] == 0, "a finished run has no lease to lose"
 
 
-def test_a_bot_task_in_progress_with_no_run_for_an_hour_fires_and_one_with_a_queued_run_does_not(api, monkeypatch):
-    stuck = post(api, "tasks", {"owner": "ops", "title": "Draft the notes", "body": "x"})["id"]
-    waiting = post(api, "tasks", {"owner": "ops", "title": "Pick a venue", "body": "x"})["id"]
-    store = api.app.state.store
-    # One example at most, and the busy task is the older: it must not use up the limit ahead of the stuck one.
-    monkeypatch.setattr(I, "LIMIT", 1)
-    with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='doing', updated_at=? WHERE id=?", (ago(hours=2), stuck))
-        c.execute("UPDATE tasks SET status='doing', updated_at=? WHERE id=?", (ago(hours=3), waiting))
-        # Finish the first task's run and leave the second task's run queued.
-        c.execute("UPDATE jobs SET state='completed' WHERE id=(SELECT id FROM jobs ORDER BY created_at LIMIT 1)")
-    assert sweep(api)["task_stuck"] == 1
-    assert stuck in examples(api, "task_stuck")
-
-
-def test_a_question_to_a_person_who_has_since_left_fires_and_one_to_a_present_person_does_not(api):
-    from backend import question_tasks as QT
-
-    store = api.app.state.store
-    with store.transaction() as c:
-        left = QT.ask_alone(c, "bot:ops", "human:ana", "Which vendor?")["id"]
-        QT.ask_alone(c, "bot:ops", "human:ana", "Which budget?")  # to a person still present
-        # Ana left after the first question was asked: its person is now one not on the roster.
-        c.execute("UPDATE tasks SET owner_id='human:gone' WHERE id=?", (left,))
-    assert sweep(api)["owner_unreachable"] == 1
-    assert left in examples(api, "owner_unreachable"), "the example is the task id, never the person"
-    with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (left,))
-    assert sweep(api)["owner_unreachable"] == 0, "a closed question is no longer open"
-
-
 def test_the_same_rule_refusing_one_bot_more_than_twenty_times_in_a_day_fires(api):
     store = api.app.state.store
     with store.transaction() as c:
@@ -372,9 +341,8 @@ def test_a_quiet_sweep_writes_no_run_record(api):
 
 
 def test_every_check_reads_through_an_index_not_a_scan_of_a_big_table(api):
-    """EXPLAIN QUERY PLAN for each statement the checks run: no full scan of a table that grows with use. A scan of
-    tasks_open_questions is allowed: it is a partial index holding only the open question tasks. The refusal log is read
-    only through refusals_actor_ts, one bot at a time."""
+    """EXPLAIN QUERY PLAN for each statement the checks run: no full scan of a table that grows with use. The refusal
+    log is read only through refusals_actor_ts, one bot at a time."""
     store = api.app.state.store
     ctx = I.Ctx(now=stamp(NOW), at=NOW)
     big = {
@@ -382,7 +350,6 @@ def test_every_check_reads_through_an_index_not_a_scan_of_a_big_table(api):
         "tasks",
         "messages",
         "jobs",
-        "approvals",
         "refusals",
         "automations",
         "webhook_sends",
@@ -391,7 +358,7 @@ def test_every_check_reads_through_an_index_not_a_scan_of_a_big_table(api):
         "flight_requests",
         "flight_process",
     }
-    bounded = {"tasks_open_questions"}
+    bounded = set()
     statements = []
     with store.read() as c:
         c.set_trace_callback(lambda sql: statements.append(sql) if sql.lstrip().upper().startswith("SELECT") else None)
