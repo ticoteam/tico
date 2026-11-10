@@ -924,3 +924,27 @@ def test_an_alias_or_cname_at_the_hostname_is_refused_too(tmp_path):
         code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)
         assert code == 2 and f"Route 53 already has {existing['Type']} {DOMAIN}" in out, out
         assert [n for n, _ in log if not n.startswith(READS)] == []
+
+
+def test_a_hub_runner_that_fails_at_launch_keeps_its_prefix_for_the_retry(monkeypatch):
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://other.example"]
+    argv += ["--label", "b1", "--aws-region", "us-west-2"]
+
+    def refused(**kw):
+        raise RuntimeError("InsufficientInstanceCapacity")
+
+    ec2.run_instances = refused
+    with pytest.raises(RuntimeError):
+        go([*argv, "--asset-prefix", "hub"], deps=d)
+    assert ssm.called("put_parameter")[0]["Name"] == "/hub/runner-b1/env"
+    (saved,) = state.load_runners()
+    assert saved["asset_prefix"] == "hub" and saved["instance_id"] == ""
+    io = fakes.CaptureIO()
+    assert not runner_setup.doctor_runners(io, d, "https://other.example") and "not launched yet" in io.text
+    del ec2.run_instances  # the capacity is back
+    assert go(argv, deps=d)[0] == 0
+    assert {c["Name"] for c in ssm.called("put_parameter")} == {"/hub/runner-b1/env"}
+    assert state.load_runners()[0]["instance_id"] == "i-1"

@@ -344,6 +344,8 @@ def run_runner(args, io: IO, deps: Deps) -> int:
         existing = d.find_instance()
         if existing:
             io.say(f"  {existing['InstanceId']} already exists for this name; not creating a second one.")
+        # Before the first AWS write: a retry after a failure from here on keeps this prefix without the flag.
+        save_aws_runner(s, plan, label, existing["InstanceId"] if existing else "")
         d.put_env(join_env(s.server_url, get_code(), label))
         prep = d.prepare()
         script = bootstrap_script(
@@ -438,6 +440,10 @@ def doctor_runners(io: IO, deps: Deps, server_url: str) -> bool:
         if r["target"] == "ssh":
             sh = deps.ssh_shell(r["ssh_host"], r.get("ssh_port", 22), r.get("ssh_identity", ""))
         elif r["target"] == "aws":
+            if not r.get("instance_id"):
+                io.say("  not launched yet: its setup stopped before the box started; run `tico setup runner` again")
+                ok = False
+                continue
             _, _, ssm, _ = deps.aws_clients(r["aws_region"], r.get("aws_profile", ""))
             sh = remote.SSMShell(ssm, r["instance_id"], deps.sleep)
         else:
