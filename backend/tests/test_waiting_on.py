@@ -191,7 +191,7 @@ def test_a_person_who_left_or_was_removed_is_never_chosen(c, general):
     }
     X.left(c, ben)
     assert W.needs(c, ben) == []
-    # Each falls through to the next person who is here: the manager bot's owner, Ana.
+    # Each falls through to the next person who is here: the first person above the manager bot, Ana.
     assert _states(c, his) == [("person", ANA)]
     assert [(w.state, w.who, w.ask) for w in W.waiting_on(c, asked["id"])] == [("person", ANA, True)]
     assert _states(c, stuck) == [("person", ANA), ("person", ANA)]
@@ -230,3 +230,33 @@ def test_a_person_who_cannot_sign_in_is_never_chosen_and_someone_who_can_always_
     assert NS.rules_hold(c) == []
     monkeypatch.setattr(W, "person_for", lambda conn, row: None)  # a turn that names nobody is a broken rule
     assert NS.rules_hold(c) == [f"3: task {task_id} is a person's turn that names nobody"]
+
+
+def test_the_top_of_the_ladder_is_the_first_person_above_the_manager_bot_on_the_org_chart(c, general):
+    """C16: the person the ladder reaches is the first person above the pipeline's manager bot on the org chart, not
+    the person whose computer it runs on. Someone on the way who cannot act is passed over to the next one up; with
+    nobody above it, the company's owner."""
+    from backend import access as Access
+    from backend.views import roster
+
+    for slug, name in (("bo", "Bo"), ("cy", "Cy"), ("di", "Di")):
+        c.execute("INSERT INTO humans(id,name,email) VALUES(?,?,?)", (slug, name, f"{slug}@acme.example"))
+    whole = roster(c)
+    people = [
+        *whole["people"],
+        {"id": "bo", "name": "Bo", "reports_to": "di"},
+        {"id": "cy", "name": "Cy"},
+        {"id": "di", "name": "Di"},
+    ]
+    Access.save_roster(c, {**whole, "people": people})
+    c.execute("UPDATE pipelines SET owner_id=NULL WHERE id='general'")
+    # The manager reports to Bo and runs on Cy's computer; the builder runs on Cy's too.
+    c.execute("UPDATE bot_config SET reports_to='human:bo', owner_id='cy' WHERE bot='manager'")
+    c.execute("UPDATE bot_config SET reports_to='bot:manager', owner_id='cy' WHERE bot='builder'")
+    task_id = X.new_task(c, "bot:reviewer", "Write the launch note", assignee="bot:builder")["id"]
+    c.execute("UPDATE visits SET level='person', person_id=NULL WHERE task_id=?", (task_id,))
+    assert W.person_for(c, E.task(c, task_id)) == "human:bo"
+    X.no_sign_in(c, "human:bo")  # passed over: the next person up
+    assert W.person_for(c, E.task(c, task_id)) == "human:di"
+    c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='manager'")  # nobody above it: the company's owner
+    assert W.person_for(c, E.task(c, task_id)) == W.company_person(c)

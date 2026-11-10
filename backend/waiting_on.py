@@ -74,13 +74,15 @@ class Wait:
 
 def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     """The person a task falls to when no bot can take it further: the one the ladder already chose, else the task's
-    owner where that is a person, else the pipeline's owner or manager where that is a person, else the owner of its
-    manager bot, else the owner of the bot that has the task, else whoever asked for it, else the company owner, else
-    the person who has been here longest. Anyone on the way who left, was removed or cannot sign in is skipped, and on
-    a private task anyone who cannot read it. A private task then falls to a person on its reader list, a group's by
-    its members now (`H.reader_actors`). None only when nobody can sign in, or nobody who can reads it. The never-stuck
+    owner where that is a person, else the pipeline's owner or manager where that is a person, else the first person
+    above its manager bot on the org chart (C16), else the company owner, else the person who has been here longest.
+    Anyone on the way who left, was removed or cannot sign in is skipped, and on a private task anyone who cannot read
+    it. A private task then falls to whoever asked for it, else a person on its reader list, a group's by its members
+    now (`H.reader_actors`). None only when nobody can sign in, or nobody who can reads it. The never-stuck
     check hands a task to this same person (never_stuck._person)."""
-    H = task_wakes._h()
+    from . import hubdb
+
+    H: Any = hubdb
     if not H.task_private(conn, row):
         return next(_people_for(conn, row), None)
     # A private task falls only to a person who may read it already: the engine never adds a reader. None when no
@@ -94,7 +96,9 @@ def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
 def _readers(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:
     """The people on a private task's reader list who can act, each group by its members now, in a stable order. Read
     only once the ladder's own people are passed over."""
-    H = task_wakes._h()
+    from . import hubdb
+
+    H: Any = hubdb
     if "readers" not in row:
         found = conn.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()
         row = {**row, "readers": found[0] if found else None}
@@ -109,16 +113,51 @@ def _people_for(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:
     pipe: Row = row.get("pipeline") or {}
     for found in (visit.get("person_id"), row.get("owner_id"), pipe.get("owner_id"), pipe.get("manager_id")):
         if R.active_person(conn, found):
-            yield found
-    for bot in (pipe.get("manager_id"), row.get("owner_id")):
-        owner = _bot_owner(conn, bot)
-        if owner:
-            yield owner
-    if R.active_person(conn, row.get("requester_id")):
-        yield row["requester_id"]
+            yield str(found)
+    # C16: the top of the ladder is the first person above the pipeline's manager bot on the org chart, now; with none,
+    # the company's owner. Not the person whose computer a bot runs on (that person fixes a bot that cannot run).
+    above = person_above(conn, pipe.get("manager_id"))
+    if above:
+        yield above
     fallback = company_person(conn)
     if fallback:
         yield fallback
+    # Only a private task gets this far (person_for skips who cannot read it): whoever asked for it reads it.
+    if R.active_person(conn, row.get("requester_id")):
+        yield row["requester_id"]
+
+
+def person_above(conn: "sqlite3.Connection", bot: object) -> str | None:
+    """The first person above a bot on the current org chart (people.org_parent: its `reports_to`, else its team's
+    group or lead, else the founder) who can act; one who cannot is passed over for the next one up. None for anything
+    that is not a bot, or when nobody above it can act."""
+    if not is_bot(bot):
+        return None
+    from . import hubdb, people, views
+
+    # Untyped modules: their reads get their types here.
+    H: Any = hubdb
+    P: Any = people
+    V: Any = views
+    roster: Row = V.roster(conn, shared=True)
+    entries: Row = V.entries(conn, shared=True)
+    archived = {str(found["id"]) for found in H.bots(conn) if found.get("state") == "archived"}
+    groups: Row = roster.get("org_groups") or {}
+    node: str = P.org_parent("bot", actor_id(bot), roster, entries, archived, True)
+    seen: set[str] = set()
+    while node and node not in seen:
+        seen.add(node)
+        kind, _, ident = node.partition(":")
+        if kind == "p":
+            if R.active_person(conn, human_actor(ident)):
+                return human_actor(ident)
+            node = P.org_parent("person", ident, roster, entries, archived, True)
+        elif kind == "g":
+            group: Row = groups.get(ident) or {}
+            node = f"p:{group['reports_to']}" if group.get("reports_to") else ""
+        else:
+            node = P.org_parent("bot", ident, roster, entries, archived, True)
+    return None
 
 
 def company_person(conn: "sqlite3.Connection") -> str | None:
