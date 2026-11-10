@@ -170,6 +170,10 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
     if kind == "ok":
         from . import task_asks
 
+        # The Assistant and BotOps never answer OK to an OK, bound or plain, whichever caller brings it here: the value
+        # is already stripped (answer), so " ok " is "ok".
+        if value == OK and task_asks.acting_for_people(by):
+            _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
         # An OK bound to exact content is given only through its preview, with the hash of what was shown
         # (task_asks.give_ok). A send back stays a plain answer.
         refused = task_asks.refuses_plain_ok(conn, requirement["id"], value)

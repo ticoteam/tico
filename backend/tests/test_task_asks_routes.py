@@ -487,3 +487,29 @@ def test_an_ok_sent_back_stays_dead_when_the_send_back_is_undone(api):
         given2 = c.execute("SELECT answer_id FROM ok_grants WHERE requirement_id=?", (rid2,)).fetchone()[0]
     assert call(api, "POST", f"answers/{given2}/undo", "ben-test", {})[0] == 200
     assert use(api, rid2, bot)[0] == 409
+
+
+@pytest.mark.parametrize("value", [" ok ", "\tok\n", "OK", " Ok"])
+def test_the_assistant_never_answers_ok_with_space_or_case_around_it(api, value):
+    """Codex review 2, finding 3: the Assistant's guard compared the raw value, and the engine stripped it after: " ok "
+    answered a plain OK as the person. The value is normalised before the guard, and the engine refuses it too."""
+    as_bot(api)
+    ids = api.app.state.auth.settings.test_identities
+    ids["ana-assistant-confirmed"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant", confirmed=True)
+    tid = bots_task(api, "ops-bot-test")
+    with api.app.state.store.transaction() as c:
+        version = H.task(c, tid)["version"]
+        rid = H.task_ask(c, "bot:ops", tid, "human:ana", "OK?", kind="ok", seen_version=version)["requirement_id"]
+    status, code, _, _ = call(
+        api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ana-assistant-confirmed", {"value": value}
+    )
+    assert status in (403, 409, 422) and code != "ok", (status, code)
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM answers WHERE requirement_id=? AND answer='ok'", (rid,)).fetchone()
+    # The engine itself refuses it, whoever calls it, while the request is the Assistant's.
+    token = H.VIA.set("assistant")
+    try:
+        with api.app.state.store.transaction() as c, pytest.raises(H.Refused):
+            H.task_answer(c, "human:ana", tid, rid, value)
+    finally:
+        H.VIA.reset(token)

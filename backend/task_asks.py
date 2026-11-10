@@ -354,6 +354,13 @@ def task_of(conn: "sqlite3.Connection", requirement_id: str) -> str | None:
     return str(found[0]) if found else None
 
 
+def acting_for_people(by: str) -> bool:
+    """Whether this write is the Assistant's or BotOps': as itself, or acting for a person in this request (H.VIA,
+    set by backend/app.py for the whole request). The engine's answer refuses them an OK (backend/answers.py)."""
+    H = _h()
+    return by in ACTS_FOR_PEOPLE or str(H.VIA.get() or "") in ("assistant", "botops")
+
+
 def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: object) -> str | None:
     """For the engine's answer check: the refusal's words when `value` is an OK of a requirement that has a grant and
     it is not give_ok answering it, else None. A send back and an undo stay plain answers."""
@@ -372,7 +379,7 @@ def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, 
     """For an answer route, before the engine: the refusal's words when the Assistant or BotOps (acting for a person,
     confirmed or not, or as itself) answers `ok` to an OK requirement, bound or plain, else None. A send back, a look
     again and a question's answer stay theirs to give."""
-    if value != "ok":
+    if str(value or "").strip().casefold() != "ok":
         return None
     acting = str(getattr(who, "via", "") or "") in ("assistant", "botops")
     actors = {str(getattr(who, name, "") or "") for name in ("actor", "task_actor")}
