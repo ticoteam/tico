@@ -56,6 +56,7 @@ class PushSubscriptionRow(TypedDict):
     created_at: str
     last_ok_at: str | None
     failed_at: str | None
+    failures: int
     gone_at: str | None
 
 

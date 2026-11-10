@@ -47,6 +47,8 @@ PER_PERSON = 20  # browsers kept per person; a new one past this drops the oldes
 JWT_SECONDS = 12 * 3600  # RFC 8292 allows at most 24 hours
 RING_TTL = 60  # a ring nobody sees within a minute is stale: the call shows on the thread instead
 WORKERS = 4
+RETIRE_FAILURES = 3  # failed sends in a row, with no success between them ...
+RETIRE_AFTER = 86400  # ... over at least this long, retire a subscription
 B64URL = re.compile(r"[A-Za-z0-9_-]+={0,2}")
 
 _PRIVATE = {}  # sealed text -> its private key, so a send unseals once per install
@@ -181,9 +183,9 @@ class EndpointBody(M.Contract):
 
 
 def person(who):
-    """The person acting as themselves: a browser's push subscription is theirs alone, never a bot's, a computer's,
-    or BotOps' or the Assistant's acting for them."""
-    if who.role not in ("owner", "human") or who.via or who.task_actor:
+    """The person signed in to this browser as themselves: a browser's push subscription is theirs alone, never a bot's,
+    a computer's, BotOps' or the Assistant's acting for them, or a personal token's (an agent outside the browser)."""
+    if who.role not in ("owner", "human") or who.via or who.task_actor or who.via_token:
         raise Problem("forbidden", "Only a person, signed in as themselves, turns on push for their browser", 403)
     return "human:" + H.actor_id(who.actor)
 
@@ -226,7 +228,7 @@ def subscribe(c, who, body):
         "INSERT INTO push_subscriptions(id, actor, endpoint, p256dh, auth, created_at) VALUES(?,?,?,?,?,?) "
         "ON CONFLICT(endpoint) DO UPDATE SET actor=excluded.actor, p256dh=excluded.p256dh, auth=excluded.auth, "
         "created_at=CASE WHEN push_subscriptions.actor=excluded.actor THEN push_subscriptions.created_at "
-        "ELSE excluded.created_at END, failed_at=NULL, gone_at=NULL",
+        "ELSE excluded.created_at END, failed_at=NULL, failures=0, gone_at=NULL",
         (H.new_id(), actor, endpoint, p256dh, auth, now),
     )
     extra = c.execute(
@@ -335,12 +337,34 @@ def _send_one(store, vault, row, message, ttl, urgency, label):
     except Exception as exc:  # noqa: BLE001
         log.warning("push send failed: %s", type(exc).__name__)
         status = 0
-    column = "last_ok_at" if 200 <= status < 300 else "gone_at" if status in (404, 410) else "failed_at"
-    with store.transaction() as c:
-        c.execute(f"UPDATE push_subscriptions SET {column}=? WHERE id=?", (H.now(), row["id"]))
-        if column == "last_ok_at":
-            c.execute("UPDATE push_subscriptions SET failed_at=NULL WHERE id=?", (row["id"],))
+    try:
+        _record(store, row["id"], status)
+    except Exception:  # a send pool's future is never read: the failure is logged here or nowhere
+        log.exception("push outcome not recorded")
     return status
+
+
+def _record(store, row_id, status):
+    """A send's outcome on its row. 2xx clears the failure streak; 404 or 410 retires the row; anything else adds to
+    the streak, and a streak of RETIRE_FAILURES that has lasted RETIRE_AFTER retires it too, so a browser that stopped
+    answering is not tried for ever while a short outage on this server's side retires none."""
+    now = H.now()
+    with store.transaction() as c:
+        if 200 <= status < 300:
+            c.execute(
+                "UPDATE push_subscriptions SET last_ok_at=?, failed_at=NULL, failures=0 WHERE id=?", (now, row_id)
+            )
+        elif status in (404, 410):
+            c.execute("UPDATE push_subscriptions SET gone_at=? WHERE id=?", (now, row_id))
+        else:
+            c.execute(
+                "UPDATE push_subscriptions SET failed_at=COALESCE(failed_at, ?), failures=failures+1 WHERE id=?",
+                (now, row_id),
+            )
+            c.execute(
+                "UPDATE push_subscriptions SET gone_at=? WHERE id=? AND gone_at IS NULL AND failures>=? AND failed_at<=?",
+                (now, row_id, RETIRE_FAILURES, H.shift(now, seconds=-RETIRE_AFTER)),
+            )
 
 
 def ring_hook(app, call_id, actors, payload):
