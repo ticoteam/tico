@@ -408,6 +408,9 @@ def an_older_releases_roster_add_retries_after_the_upgrade(api):
         c.execute("DROP TABLE idempotency")
         c.execute("ALTER TABLE idempotency_legacy RENAME TO idempotency")
         restore_config(c)
+        # A database from before the Pipelines v3 cut-over opens only with no task in it (migrations.refuse_old_tasks);
+        # the complete company's own (the Bookkeeper's first asks) go.
+        c.execute("DELETE FROM tasks")
         forget_from(c, "0050")
 
     class Issuer:
@@ -1257,7 +1260,11 @@ def test_a_0_2_file_without_a_strategy_imports_as_before_and_adds_nothing_to_str
     assert "version: 0.2\n" in text
     assert "strategy" not in preview_and_import(api, text)
     assert api.get("/api/v2/strategy", headers=signed_in()).json()["bets"] == []
-    for table in ("entities", "market_sizes", "entity_watches", "market_insights"):
+    # The company is complete once imported (Onboarding.complete_company): the Bookkeeper's outside obligations name the
+    # authority each is owed to (finance/tax.py seed_dues), which is Finance's, not the file's.
+    owed = "name='IRS' OR name LIKE '% tax authority'"
+    assert rows(api, f"SELECT * FROM entities WHERE NOT ({owed})") == [], "entities"
+    for table in ("market_sizes", "entity_watches", "market_insights"):
         assert rows(api, f"SELECT * FROM {table}") == [], table
     assert {r["bet_id"] for r in rows(api, "SELECT bet_id FROM goals")} <= {None}
 

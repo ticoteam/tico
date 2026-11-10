@@ -667,6 +667,7 @@ def apply(onboarding, c, who, text, fingerprint):
         "",
         {"fingerprint": fingerprint, "bots": sorted(body.selected), "seats": record["company_import"]["seats"]},
     )
+    onboarding.complete_company(c)  # what a start would complete, now that the chart's live bots exist
     return onboarding.view(c, who)
 
 

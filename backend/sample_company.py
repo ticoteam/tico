@@ -152,6 +152,7 @@ def load(onboarding, c, who):
     }
     onboarding._store(c, record, who.actor)
     H.event(c, who.actor, "onboarding.sample_loaded", "", {"bots": sorted(slugs.values()), "tasks": len(tasks)})
+    onboarding.complete_company(c)  # its bots are active now: what a start would complete for them, now
     return onboarding.view(c, who)
 
 
