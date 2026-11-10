@@ -323,7 +323,7 @@ def register(
             from . import task_engine
 
             task_engine.check_version(c, who.actor, H.task(c, task_id), body.version)
-            return task_asks.ask_ok(
+            asked = task_asks.ask_ok(
                 c,
                 who.actor,
                 body.to,
@@ -333,6 +333,7 @@ def register(
                 content=body.content,
                 task_id=task_id,
             )
+            return {"requirement_id": asked["requirement_id"]}
 
         return work(request, tid, body, call)
 
