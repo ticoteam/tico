@@ -15,7 +15,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core, stage_effects, task_effects
@@ -145,15 +145,39 @@ def pipeline(conn: "sqlite3.Connection", pipeline_id: str) -> Row | None:
     return _h()._one(conn, "SELECT * FROM pipelines WHERE id=?", (pipeline_id,))
 
 
+_STAGES_SQL = (
+    "SELECT * FROM stages WHERE pipeline_id IN (%s) AND retired_at IS NULL "
+    "ORDER BY CASE kind WHEN 'work' THEN 0 WHEN 'done' THEN 1 ELSE 2 END, position, id"
+)
+
+
+def _stages_of(conn: "sqlite3.Connection", pipeline_ids: list[str]) -> dict[str, list[Row]]:
+    out: dict[str, list[Row]] = {pipeline_id: [] for pipeline_id in pipeline_ids}
+    if pipeline_ids:  # one statement however many (the ids go in as one JSON list)
+        listed = (json.dumps(pipeline_ids),)
+        for found in _h()._rows(conn.execute(_STAGES_SQL % "SELECT value FROM json_each(?)", listed)):
+            out[str(found["pipeline_id"])].append(found)
+    return out
+
+
 def stages(conn: "sqlite3.Connection", pipeline_id: str) -> list[Row]:
-    """A pipeline's stages in order: its work stages, then Done, then Closed."""
-    return _h()._rows(
-        conn.execute(
-            "SELECT * FROM stages WHERE pipeline_id=? AND retired_at IS NULL "
-            "ORDER BY CASE kind WHEN 'work' THEN 0 WHEN 'done' THEN 1 ELSE 2 END, position, id",
-            (pipeline_id,),
-        )
-    )
+    """A pipeline's stages in order: its work stages, then Done, then Closed. Read once in a snapshot (or for many
+    pipelines together by `prime_stages`); a write reads them again (read_cache)."""
+    from . import read_cache
+
+    return read_cache.value(conn, ("stages", pipeline_id), lambda: _stages_of(conn, [pipeline_id])[pipeline_id])
+
+
+def prime_stages(conn: "sqlite3.Connection", pipeline_ids: Iterable[str]) -> None:
+    """Read the stages of many pipelines together, for the `stages` reads that follow in this snapshot."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    unread = sorted({str(p) for p in pipeline_ids if p and ("stages", str(p)) not in values})
+    for pipeline_id, found in _stages_of(conn, unread).items():
+        values.setdefault(("stages", pipeline_id), found)
 
 
 def stage(conn: "sqlite3.Connection", stage_id: str) -> Row | None:

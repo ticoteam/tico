@@ -6191,13 +6191,41 @@ def _task_party(conn, actor, row):
     lent its rights to for now, or a party to a task above it."""
     if task_participant(conn, actor, row):
         return True
-    if _one(
-        conn,
-        "SELECT 1 FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>? LIMIT 1",
-        (row["id"], actor, now()),
-    ):
+    if task_delegated(conn, row["id"], actor):
         return True
     return task_ancestor_party(conn, actor, row)
+
+
+_DELEGATED_SQL = (
+    "SELECT DISTINCT task_id FROM task_delegations WHERE delegate=? AND expires_at>? "
+    "AND task_id IN (SELECT value FROM json_each(?))"
+)
+
+
+def task_delegated(conn, task_id, actor):
+    """Whether the task lends `actor` its rights for now (task_delegations), once a snapshot (or for many tasks
+    together by `prime_task_delegated`); a write reads it again (read_cache)."""
+    from . import read_cache
+
+    def build():
+        return bool(conn.execute(_DELEGATED_SQL, (actor, now(), json.dumps([task_id]))).fetchone())
+
+    return read_cache.value(conn, ("task_delegated", task_id, actor), build, shared=True)
+
+
+def prime_task_delegated(conn, task_ids, actor):
+    """`task_delegated` of many tasks for one actor, one statement, for the checks that follow in this snapshot."""
+    from . import read_cache
+
+    values = read_cache.cache(conn)
+    if values is None:
+        return
+    unread = sorted({str(t) for t in task_ids if t and ("task_delegated", str(t), actor) not in values})
+    if not unread:
+        return
+    lent = {str(r[0]) for r in conn.execute(_DELEGATED_SQL, (actor, now(), json.dumps(unread)))}
+    for task_id in unread:
+        values.setdefault(("task_delegated", task_id, actor), task_id in lent)
 
 
 def _work_said(stopped, canceled):

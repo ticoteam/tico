@@ -1955,8 +1955,8 @@ class Store:
                     # tasks.waiting_on, which 20261106112609_derived_waiting drops: it ran before this step.
                     c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=60").fetchone():
-                    # Every task-to-task relationship in task_relations; tasks.parent_id and
-                    # tasks.blocked_by move into it and are dropped (hubdb migration 30 does the same).
+                    # Every task-to-task relationship in task_relations; the old tasks.parent_id and tasks.blocked_by
+                    # are dropped (hubdb migration 30 does the same).
                     from . import task_relations as _task_relations
 
                     _task_relations.migrate(c)
