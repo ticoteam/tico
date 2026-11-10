@@ -1115,8 +1115,8 @@ def s52(r: Rig) -> None:
 # ----------------------------------------------------------------------------- bugs the seeded runs found
 
 
-@bug("runs-outside-ladder", "A snooze ends while another bot is asked: 8 runs without a change")
-def b_runs_outside_ladder(r: Rig) -> None:
+@extra("runs-outside-ladder", "A snooze ends while another bot is asked: still at most 7 runs without a change")
+def c_runs_outside_ladder(r: Rig) -> None:
     from backend import task_engine as E
 
     task = r.task(ANA, "Approve the copy", assignee=WRITER)
@@ -1134,9 +1134,10 @@ def b_runs_outside_ladder(r: Rig) -> None:
         lambda c: E.snooze(c, task, WRITER, "Waiting on legal", _h().shift(r.w.now(), seconds=600), version),
         "snooze",
     )
-    r.later(minutes=11)  # the snooze ends: a change. Every run from here on changes nothing.
+    r.later(minutes=11)  # the snooze ends. Neither it nor its end is a change (R1): the reviewer's run above counts.
     runs = r.ladder(task)
-    expect(len(runs) <= 7, f"{len(runs)} bot runs without a change before a person was asked: {runs}")
+    expect(len(runs) <= 6, f"{len(runs)} bot runs after the reviewer's one, without a change: {runs}")
+    expect(all(bot != WRITER for bot, _, _ in runs), f"the writer, who asked and waits, was woken: {runs}")
 
 
 @extra(

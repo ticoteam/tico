@@ -193,19 +193,31 @@ A bot sends `seen_version` with every command that takes one: move, reassign, sn
 may leave it out.
 
 A bot's fourth snooze in one stage is not applied. The visit goes to level `manager` with its next try due at once, so
-the never-stuck check wakes the manager bot on its next pass. Wakes still queued for anyone but the manager bot are
-canceled. The result carries `note`.
+the never-stuck check wakes the manager bot on its next pass. Wakes still queued for a bot that has no turn now are
+canceled; a bot named on an OK or an answer that still waits keeps its own. The result carries `note`.
 
-A snooze sets a task aside in one stage: any move ends it. A move, a reassign and a snooze cancel every wake still
-queued for the task, whoever it was for.
+A snooze sets a task aside in one stage: any move ends it. A snooze and its end are not a change: the ladder's count and
+level are kept, so setting a task aside earns no runs. When a snooze ends no wake is written: the visit's next try is due
+at once (no gap after the bot's last run), and the never-stuck check wakes whoever has the turn on its next pass, as
+the next try. At level `person` nobody is woken. A person's Try again is the way to start the count over.
+
+A move and a snooze cancel every wake still queued for the task, whoever it was for. Every other change (a reassign, an
+ask added or withdrawn, an answer, a filed task ending, try again, `changed`) and every hand-over cancels the wakes still
+queued for a bot that has no turn on the task now, and keeps those of a bot that still has one (`waiting_on.turns`).
+A bot has at most one wake queued per task (`task_wakes.add` folds a second into it).
+
+Only whoever has the turn is woken. Entering a stage, a reassign, try again and a filed task ending wake the one bot
+the ladder would wake (`waiting_on.turn`): the bot with the task's own work, before a bot named on an OK or an answer;
+the manager bot when the task has no owner. News meant for a bot with no turn (an answer to its ask, a send back, a
+thumbs-down) goes to whoever has the turn, naming the bot it was for.
 
 A filed task that was deleted counts as closed, not done, for Linked work done.
 
 What `move()` does, in order, in one transaction: check the version; work out the kind; for forward, check requirements
 through `task_requirements.unmet`, then room; for back and close, `stage_effects.undo`; close the visit (its task
 requirements are withdrawn with it); open the guard, write `stage_id, owner_id, status, version + 1, updated_at`, close the
-guard; open the new visit; run the stage's on-enter through `stage_effects.enter`; write the owner's wake through
-`task_wakes.add`; write one `history_events` row (`kind` = `move`, `old` and `new` are stage ids, `note` is the why,
+guard; open the new visit; run the stage's on-enter through `stage_effects.enter`; write the wake of whoever has the
+turn (`waiting_on.turn`) through `task_wakes.add`; write one `history_events` row (`kind` = `move`, `old` and `new` are stage ids, `note` is the why,
 `data` has the move kind, both owners and anything pushed past). After the caller commits, the route calls
 `fill_open_slots` and pushes to screens.
 
@@ -214,11 +226,11 @@ never-stuck check does it, on its next pass.
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
-a task without moving it (reassign, snooze, unsnooze, add or withdraw a requirement, try again, a filed task ending,
-`changed`) starts the ladder again: tries 0, level `owner`, next look in `FIRST_TRY_S`. One exception: a task that Late
+a task without moving it (reassign, add or withdraw a requirement, try again, a filed task ending, `changed`) starts
+the ladder again: tries 0, level `owner`, next look in `FIRST_TRY_S`. One exception: a task that Late
 brought to a person stays with that person until a person acts.
 
-A requirement that names a bot wakes that bot once, when it is added.
+A requirement that names a bot wakes that bot once, when it is added. That bot is on the task's count from then on.
 
 Closing a task closes every open task under it, however deep, with the same actor and the note "Closed with <task>". It
 walks through tasks that already ended to reach open ones below them. Done does not close anything.
@@ -269,6 +281,9 @@ def of(conn, row, seen=None, standings=None) -> list[Wait]       # the same, for
 def person_for(conn, row) -> str | None                          # the person a task falls to
 def company_person(conn) -> str | None                           # the company owner, else whoever has been here longest
 def holder(conn, row) -> str | None                              # who has the task's own work now
+def turns(conn, row, waits=None) -> set[str]                     # the bots whose turn it is (Paused ones too, and the
+                                                                 # manager bot at level manager); none at level person
+def turn(conn, row, waits=None, *, paused=False) -> str | None   # the one bot the ladder wakes now
 ```
 
 `Wait` has `state`, `who`, `line`, `requirement_id`, `since`, `until`, `ask`. `who` is an actor for `person`, `paused` and `bot`,
@@ -308,14 +323,17 @@ person, or a bot named to approve. Without it the wait is the task's own work. T
 def key(task_id, visit_id, level="owner", try_n=0) -> str        # <task id>:<visit id>:<level>:<try>
 def body(conn, task, lead="") -> str                             # the stage, what is missing, the five endings
 def add(conn, task, target, visit, text, *, level="owner", try_n=0, wake_key=None, quiet=False) -> str | None
-    # None when the key exists or there is nobody to tell
+    # None when the key exists or there is nobody to tell. A wake still queued for that bot and task is folded in:
+    # its words first, then these, and it is canceled, so one run starts. A quiet note folds nothing.
 def cannot_run(conn, actor, seen=None) -> str | None   # why this bot cannot run now; None when it can
 def cause_line(conn, actor, cause) -> str       # the cause as a sentence: "Builder has no computer"
 def queued(conn, task_id, actor) -> bool        # a wake for this task is waiting for this bot, held ones included
 def live_run(conn, task, actor, now=None) -> bool      # a run on this task whose lease is still renewed
 def last_run(conn, task, actor) -> dict | None  # the bot's newest run on the task: `state`, `finished_at`
+def runs_since(conn, task, since) -> int        # bot runs started on the task since then, whoever ran
 def woken_since(conn, task_id, actor, since) -> bool   # a wake about the task was written for them since then
-def drop(conn, task_id, keep=None) -> int       # cancel every wake still queued for the task, but `keep`'s
+def drop(conn, task_id, keep=None) -> int       # cancel every wake still queued for the task, but `keep`'s (one bot
+                                                # or several)
 def cancel(conn, wake_key) -> int                # cancel one wake by its key, while no run has taken it
 ```
 
@@ -336,6 +354,8 @@ reconnect, and over a limit.
 ```python
 GAPS = (120, 900, 3600)   # seconds a bot is left alone before try 1, 2 and 3
 TRIES = 3
+OWNER_RUNS = 4            # the owner's start and 3 tries
+RUNS = 7                  # then the manager bot's 3 tries: bot runs one visit may start between two changes
 LATE_PERSON = 3           # times a stage's expected time before a late task lands in a person's list
 
 def check(conn, now=None, failures=None) -> dict[str, int]
@@ -363,13 +383,18 @@ What a pass does with one task:
   2 minutes, then the task goes up: to the pipeline's manager bot, if it is a bot that can run and is not the one that
   just tried, else to a person. The manager bot's first try is sent in the same pass and says who tried. A try is
   counted even when its wake could not be written, so the ladder always climbs. Going up cancels the wakes no run has
-  taken yet: for anyone but the manager bot when it goes to the manager bot, every one when it goes to a person. A run
-  already going is left alone.
+  taken yet: for a bot with no turn when it goes to the manager bot (a bot named on an OK or an answer that still
+  waits keeps its wake), every one when it goes to a person. A run already going is left alone.
+- Seven runs: every bot run that started on the task since the visit's last change counts (`task_wakes.runs_since`),
+  whoever it was for and whatever woke it. With 4 the owner gets no more tries and the task goes up; with 7 the manager
+  bot gets none and it goes to a person.
 - Level `person`: nothing more is sent. The task is in that person's Needs you until a person acts (`try_again`,
   reassign, an answer, a move).
 - Late: when the time in this visit, less the time snoozed, passes the stage's expected time, `late_told_at` is set,
-  once per visit. A bot's turn goes to the manager bot on the same 3 tries. A task that waits on a person, on other
-  tasks or on the outside gets one wake to the manager bot, keyed `<task>:<visit>:late`. A paused task gets nothing:
+  once per visit. A bot's turn (even beside a person's ask) goes to the manager bot on the same 3 tries, at level
+  `owner` only: never a second set, never down from a person. A task where no bot has a turn, that waits on a person,
+  on other tasks or on the outside, gets one wake to the manager bot, keyed `<task>:<visit>:late`, within the 7 runs. A
+  paused task gets nothing:
   its cause is already in a person's list. At 3 times the expected time `late_person_at` is set and the task goes to a
   person, unless it is already a person's turn or paused.
 

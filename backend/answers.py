@@ -200,19 +200,31 @@ def _wake(conn: "sqlite3.Connection", row: Row, target: str | None, lead: str, w
     return task_wakes.add(conn, row, target, row["visit"], task_wakes.body(conn, row, lead), wake_key=wake_key)
 
 
+def _whose(conn: "sqlite3.Connection", row: Row, bot: str | None) -> str | None:
+    """Who gets news meant for `bot`: the bot itself while it has a turn on the task, else the one bot whose turn it is
+    now (`waiting_on.turn`), so only whoever has the turn is woken (R2). None when it is nobody's turn, or a
+    person's."""
+    if is_bot(bot) and bot in W.turns(conn, row):
+        return bot
+    return W.turn(conn, row, paused=True)
+
+
 def _tell_bot(
     conn: "sqlite3.Connection", row: Row, requirement: Row, by: str, value: str, notes: str | None, key: str
 ) -> None:
     """After an answer that left the task where it is: a send back is the bot's turn, with the notes word for word; an
     answer to something that was added to this task (a question or an OK) goes to the bot that asked, with the ask and
-    the answer. A question's answer is never a send back, whatever it says."""
+    the answer. A question's answer is never a send back, whatever it says. A bot that has no turn on the task now is
+    not woken: whoever has the turn gets the words."""
     steered = R.steers(requirement["kind"], value)
     if steered and value == NO:
-        _wake(conn, row, W.holder(conn, row), f"{_name(conn, by)} sent this back: {notes}", key)
+        _wake(conn, row, _whose(conn, row, W.holder(conn, row)), f"{_name(conn, by)} sent this back: {notes}", key)
     elif requirement.get("visit_id") and not steered:
         asker = requirement.get("added_by_id")
-        target = asker if is_bot(asker) else W.holder(conn, row)
+        target = _whose(conn, row, asker if is_bot(asker) else W.holder(conn, row))
         lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}": {value}'
+        if is_bot(asker) and target != asker:
+            lead = f'{_name(conn, by)} answered "{R.name_of(requirement)}", asked by {_name(conn, asker)}: {value}'
         _wake(conn, row, target, lead, key)
 
 
@@ -402,8 +414,11 @@ def thumbs_down(
     feedback_id = _rate(conn, by, row, visit, requirement, bot, "down", reason)
     if send_back and still_asked and requirement.get("visit_id"):
         out = E.withdraw_requirement(conn, requirement_id, by, reason) or E.task(conn, task_id) or row
+        target = _whose(conn, out, bot) if out["status"] == "open" else None
         lead = f'{_name(conn, by)} sent back your ask "{R.name_of(requirement)}": {reason}'
-        _wake(conn, out, bot, lead, f"{task_id}:{visit['id']}:thumbs_down:{feedback_id}")
+        if target != bot:
+            lead = f'{_name(conn, by)} sent back {_name(conn, bot)}\'s ask "{R.name_of(requirement)}": {reason}'
+        _wake(conn, out, target, lead, f"{task_id}:{visit['id']}:thumbs_down:{feedback_id}")
     out["feedback_id"] = feedback_id
     return out
 

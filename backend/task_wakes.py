@@ -3,9 +3,11 @@
 
 A wake is a row in `messages` with a `wake_key`: `<task id>:<visit id>:<level>:<try>`. The key is unique, so writing the
 same wake twice is one wake. It is written in the same transaction as the move that causes it. The body says what is
-missing and the five ways a run may end.
+missing and the five ways a run may end. A bot has at most one wake queued per task: a second one carries the first's
+words before its own, and the first is canceled, so one run starts and nothing said is lost.
 """
 
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any, cast
 
 from . import run_triggers
@@ -69,7 +71,8 @@ def add(
     quiet: bool = False,
 ) -> str | None:
     """Wake `target` about `task`, once per key. Returns the message id, or None when this wake was already written or
-    there is nobody to tell."""
+    there is nobody to tell. A wake still queued for `target` about this task is folded into this one: its words come
+    first, and it is canceled. A quiet note starts no run and folds nothing."""
     H = _h()
     if not target:
         return None
@@ -78,6 +81,15 @@ def add(
         return None
     if not H._actor_exists(conn, target) or not H.task_private_readable(conn, target, task):
         return None
+    waiting: list[Any] = []
+    if not quiet and H.is_bot(target):
+        waiting = conn.execute(
+            "SELECT j.id, m.body FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.bot_id=? "
+            "AND j.state='queued' AND m.wake_key LIKE ? ESCAPE '\\' ORDER BY m.created_at, m.rowid",
+            (H.actor_id(target), _like(task["id"])),
+        ).fetchall()
+        if waiting:
+            text = "\n\n".join([*(str(found[1] or "") for found in waiting), text])
     refs: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
     refs["version"] = task.get("version")
     if quiet:
@@ -95,6 +107,8 @@ def add(
     )
     if not message:
         return None
+    for found in waiting:  # folded into this one
+        conn.execute("UPDATE jobs SET state='canceled' WHERE id=? AND state='queued'", (found[0],))
     conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
     return message["id"]
 
@@ -198,6 +212,18 @@ def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | 
     return {"state": found[0], "finished_at": found[1]} if found else None
 
 
+def runs_since(conn: "sqlite3.Connection", task: Row, since: str) -> int:
+    """How many bot runs started on this task since `since` (the visit's last change), whoever ran: the count the
+    never-stuck ladder holds to 7. A run that started at the very time of the change counts: the bound is never read
+    short."""
+    found = conn.execute(
+        "SELECT COUNT(*) FROM attempts a JOIN jobs j ON j.id = a.job_id JOIN messages m ON m.id = j.message_id "
+        "WHERE (m.wake_key LIKE ? ESCAPE '\\' OR m.conversation_id = ?) AND COALESCE(a.started_at, a.created_at) >= ?",
+        (_like(task["id"]), task.get("conversation_id") or "", since),
+    ).fetchone()
+    return int(found[0]) if found else 0
+
+
 def woken_since(conn: "sqlite3.Connection", task_id: str, actor: str | None, since: str) -> bool:
     """A wake about this task was written for `actor` at or after `since`."""
     return bool(
@@ -222,15 +248,18 @@ def queued(conn: "sqlite3.Connection", task_id: str, actor: str | None) -> bool:
     )
 
 
-def drop(conn: "sqlite3.Connection", task_id: str, keep: str | None = None) -> int:
-    """Cancel every wake still queued for this task, whoever it is for: the turn they were about is over. With `keep`,
-    that bot's wakes stay queued. A run that already took its wake is left alone. Returns how many."""
+def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] | None = None) -> int:
+    """Cancel every wake still queued for this task, whoever it is for: the turn they were about is over. With `keep`
+    (a bot, or several), those bots' wakes stay queued. A run that already took its wake is left alone. Returns how
+    many."""
     H = _h()
-    kept = H.actor_id(keep) if H.is_bot(keep) else None
+    keeping = [keep] if isinstance(keep, str) else list(keep or ())
+    kept = sorted({str(H.actor_id(bot)) for bot in keeping if H.is_bot(bot)})
     cursor = conn.execute(
-        "UPDATE jobs SET state='canceled' WHERE state='queued' AND bot_id IS NOT ? AND message_id IN "
-        "(SELECT id FROM messages WHERE wake_key LIKE ? ESCAPE '\\')",
-        (kept, _like(task_id)),
+        "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+        "(SELECT id FROM messages WHERE wake_key LIKE ? ESCAPE '\\')"
+        + (f" AND bot_id NOT IN ({','.join('?' * len(kept))})" if kept else ""),
+        (_like(task_id), *kept),
     )
     return cursor.rowcount
 
