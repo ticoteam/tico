@@ -241,25 +241,14 @@ ASK_GONE = (
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
 CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
-# `review` and `ready` belong to the product lane (a PR is open; a PR is merged and waits for
-# a deploy). To everything that only knows the company lane they are a kind of `doing`.
-TASK_STATUSES = SV.TASK_STATUSES
-ACTIVE_STATUSES = ("open", "doing", "waiting", "review", "ready")  # still on the board
-TASK_ENDED = {"done": "marked done", "closed": "closed", "declined": "declined"}
-# tasks_due_active (TASKS_DUE_INDEX) is built from this list. An existing index keeps the list it was created with, so
-# changing it needs that index under a new name and a migration, or upgraded hubs quietly scan every task again.
-BOARD_STATUSES = ACTIVE_STATUSES + ("declined",)  # visible until a person reassigns or closes it
-LIVE_STATUSES = ACTIVE_STATUSES + ("done",)  # not closed, not declined
-# A seeded type has no step of these statuses: a waiting task stays in the working step it is in (a Waiting tag shows
-# it), and a declined one goes to its type's closed step (`_task_state`, `retire_held_steps`). A team may still add a
-# waiting step of its own, a column for parked work that only a move by hand fills; a declined step it may not add.
-# The Product roadmap keeps its public Declined.
-HELD_STATUSES = ("waiting", "declined")
-STEP_STATUSES = tuple(s for s in TASK_STATUSES if s not in HELD_STATUSES)
-MADE_STEP_STATUSES = tuple(s for s in TASK_STATUSES if s != "declined")  # what a type's own step may be
-OWNER_STATUSES = ("open", "doing", "waiting", "review", "done", "declined")  # what the owner may set
-# `ready` is a fact the hub learns (the PR merged), not a claim a bot makes: movers and the
-# keeper set it, an owning bot does not.
+# A task is open, done or closed. Where it stands in its pipeline and what it waits on are the engine's
+# (task_engine, waiting_on), never a status.
+TASK_STATUSES = ("open", "done", "closed")
+ACTIVE_STATUSES = ("open",)  # not yet finished
+TASK_ENDED = {"done": "marked done", "closed": "closed"}
+# tasks_due_active (TASKS_DUE_INDEX) is built from ACTIVE_STATUSES, word for word with TASKS_DUE_SQL.
+# The numbered start-up step that seeded the old General type's steps (PIPELINES_SCHEMA) reads this list, as it was.
+STEP_STATUSES = ("open", "doing", "review", "ready", "done", "closed")
 # The product lane is retired. Old rows may still say 'product' (so it is
 # still a lane to read and filter), but every new or moved task is company work.
 TASK_LANES = ("company", "product")
@@ -268,7 +257,6 @@ LANE_TEAMS = ("product", "engineering")  # store.py's one-time lane migration (h
 # parent. Keyed on the roster team in
 # registry/people.yaml, so adding a mover is a roster edit. The environment owner always may.
 MOVER_TEAMS = ("leadership", "product", "engineering")
-MOVER_FIELDS = ("lane", "number")  # what only a mover changes (a parent or blocker: task_relations)
 # Labels are a mover's too, except that a bot may change a classification label on a task it manages
 # (_label_writer). Labels Tico acts on stay a mover's: a task goal (execution.task_goal) ...
 WORKFLOW_LABELS = ("goal:on", "goal:off")
@@ -2023,10 +2011,8 @@ def refuse(conn, actor, rule, detail="", severity="normal", context=None, task=N
     scope = scope or task_quarantine.source(conn, actor, task or REFUSAL_TASK.get() or (context or {}).get("task"))
     recorded = "Private task write refused" if PRIVATE_WRITE.get() else detail
     if context and PRIVATE_WRITE.get():
-        # A private task's refusal keeps only what was refused, and the stage (and the pipeline entered, `entry`) a
-        # capped move waited for: the actor named it, and the pipeline manager lists the card as waiting for room from it
-        # (pipeline_exceptions.waiting_room), only to readers of the card.
-        context = {"what": context.get("what"), **{k: context[k] for k in ("stage", "entry") if context.get(k)}}
+        # A private task's refusal keeps only what was refused.
+        context = {"what": context.get("what")}
     row = {
         "id": new_id(),
         "created_at": now(),
@@ -2099,7 +2085,7 @@ def open_children(conn, task_id):
         for r in _rows(
             conn.execute(
                 f"SELECT * FROM {TASKS} tasks WHERE id IN (" + TR.CHILD_IDS + ") "
-                "AND status NOT IN ('done','closed','declined') ORDER BY created_at,id",
+                "AND status='open' ORDER BY created_at,id",
                 (task_id,),
             )
         )
@@ -2245,7 +2231,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     # ten refusals, three of them lint on one task title.
     # A move the one task engine refused (backend/task_engine.py, every rule starts `task_`) says what to send
     # instead: a newer version, a reason, a requirement still missing. It is a correction too.
-    if rule in ("lint", "queue_full", "stage_full", "on_ice") or str(rule).startswith("task_"):
+    if rule in ("lint", "queue_full") or str(rule).startswith("task_"):
         return
     slug = actor_id(actor)
     day = ts[:10]
@@ -2275,7 +2261,7 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     for refused in _rows(
         conn.execute(
             "SELECT rule, detail, created_at FROM refusals WHERE actor=? AND created_at>=? "
-            "AND rule NOT IN ('lint','queue_full','stage_full','on_ice') AND substr(rule, 1, 5) != 'task_' "
+            "AND rule NOT IN ('lint','queue_full') AND substr(rule, 1, 5) != 'task_' "
             "ORDER BY created_at, id",
             (actor, since),
         )
@@ -4843,15 +4829,15 @@ def children_summaries(conn, task_ids, visible_sql="1"):
         "WITH RECURSIVE tree(root,id,live,direct) AS ("
         f"SELECT r.to_task,r.from_task,1,1 FROM task_relations r WHERE r.to_task IN ({marks}) "
         f"AND r.kind='parent' AND {seen} UNION "
-        "SELECT tree.root,r.from_task,tree.live AND parent.status NOT IN ('done','closed','declined'),0 "
+        "SELECT tree.root,r.from_task,tree.live AND parent.status='open',0 "
         "FROM tree JOIN tasks parent ON parent.id=tree.id "
         f"JOIN task_relations r ON r.to_task=tree.id AND r.kind='parent' WHERE {seen}), "
         "prs AS (SELECT task_id,count(*) total,sum(state IN ('merged','shipped')) merged "
         "FROM task_links WHERE kind='pr' AND coalesce(state,'open')!='closed' "
         "AND task_id IN (SELECT id FROM tree) GROUP BY task_id) "
-        "SELECT tree.root,count(*) total,sum(t.status IN ('done','closed','declined')) done,"
-        "sum(tree.live AND t.status NOT IN ('done','closed','declined')) open,"
-        "sum(tree.direct) direct_total,sum(tree.direct AND t.status IN ('done','closed','declined')) direct_done,"
+        "SELECT tree.root,count(*) total,sum(t.status IN ('done','closed')) done,"
+        "sum(tree.live AND t.status='open') open,"
+        "sum(tree.direct) direct_total,sum(tree.direct AND t.status IN ('done','closed')) direct_done,"
         "sum(coalesce(prs.total,0)) prs_total,sum(coalesce(prs.merged,0)) prs_merged "
         "FROM tree JOIN tasks t ON t.id=tree.id LEFT JOIN prs ON prs.task_id=t.id GROUP BY tree.root",
         task_ids,
@@ -6298,7 +6284,7 @@ def _work_said(stopped, canceled):
 
 
 def stop_ended_work(conn, actor, task_id, status):
-    """A task closed or declined: the bot work on it stops (execution.end_task_work). Its queued runs are canceled and its
+    """A task closed: the bot work on it stops (execution.end_task_work). Its queued runs are canceled and its
     running turns asked to stop, never the turn that makes the close. One history event on the task counts them."""
     from . import execution
 
@@ -6695,13 +6681,12 @@ def setup_finished(conn, slug, archived=False):
     found = _open_setup_reminder(conn, slug)
     if found:
         name = (bot(conn, slug) or {}).get("display_name") or slug
-        task_update(
+        attempt(
             conn,
+            task_done,
             KEEPER,
             found["id"],
-            status="done",
-            strict=False,
-            note=f"{name} was archived." if archived else f"{name} finished onboarding; its work starts now.",
+            f"{name} was archived." if archived else f"{name} finished onboarding; its work starts now.",
         )
 
 
@@ -6723,7 +6708,7 @@ def bot_review_tasks(conn, bot_id, owner, title):
     rows = conn.execute(
         "SELECT id,body,status FROM tasks WHERE owner_id=? AND "
         "(title=? OR (requester_id=? AND instr(body,?)>0)) "
-        "ORDER BY (status IN ('open','doing','waiting','review','ready')) DESC,created_at DESC",
+        "ORDER BY (status='open') DESC,created_at DESC",
         (owner, title, KEEPER, BOT_REVIEW_ID.format(id=bot_id)),
     ).fetchall()
     named = ((row, _BOT_REVIEW_ID.search(str(row["body"] or ""))) for row in rows)
@@ -7784,11 +7769,9 @@ def tasks(
         args.append(str(label).strip().lower())
     if status:
         wanted = [status] if isinstance(status, str) else list(status)
-        # These two hot paths use matching partial indexes. The values are fixed constants,
-        # while every other caller remains parameterized.
-        if tuple(wanted) == BOARD_STATUSES:
-            where.append("status IN ('open','doing','waiting','review','ready','declined')")
-        elif tuple(wanted) == ("done", "closed"):
+        # The finished list's hot path uses a matching partial index (tasks_finished_lane_time). The values are fixed
+        # constants, while every other caller remains parameterized.
+        if tuple(wanted) == ("done", "closed"):
             where.append("status IN ('done','closed')")
         else:
             where.append(f"status IN ({','.join('?' * len(wanted))})")
@@ -7856,9 +7839,6 @@ def tasks_due_for_bots(conn, through):
     the reminder pass needs every one of them, however many tasks the hub holds.
     """
     return _rows(conn.execute(TASKS_DUE_SQL, (through,)))
-
-
-FLOW_STATUSES = ("created",) + TASK_STATUSES
 
 
 def task_flow(
