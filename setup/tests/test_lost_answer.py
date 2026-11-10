@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import types
+
 import pytest
 from botocore.exceptions import ClientError
 
@@ -143,3 +145,83 @@ def test_the_default_prefix_still_takes_the_first_listed_default_subnet():
     p = aws.plan_aws(domain="hub.example.com", front_door="caddy", region="us-west-2", name="hotmic")
     d = aws.Deployer(p, ZonedEC2(order=("subnet-b", "subnet-a")), fakes.FakeIAM(), fakes.FakeSSM(), ACCOUNT)
     assert d.public_subnet() == "subnet-b"
+
+
+# --- finding 2: only an error that proves the allocation made nothing closes its intent --------------------------------
+
+
+def allocate_failing(err):
+    ec2, ids = fakes.FakeEC2(), {}
+
+    def fail(**kw):
+        raise err
+
+    ec2.allocate_address = fail
+    with pytest.raises(type(err)):
+        dep(plan(), ec2, ids).ensure_eip()
+    return ids
+
+
+@pytest.mark.parametrize(
+    "err",
+    [
+        # A credential refresh while signing a retry: STS's own error, not the allocation's answer.
+        client_error("ExpiredToken", "AssumeRole", status=403),
+        # EC2's answer to a retried attempt: the first may have landed.
+        client_error("AddressLimitExceeded", "AllocateAddress", retries=1),
+        # EC2's answer, but not one that proves nothing was made.
+        client_error("RequestExpired", "AllocateAddress"),
+        client_error("InternalError", "AllocateAddress", status=500),
+        ConnectionError("read timeout"),
+    ],
+)
+def test_an_elastic_ip_intent_stays_open_unless_the_error_proves_nothing_was_allocated(err):
+    assert (allocate_failing(err).get("intents") or {}).get("eip"), err
+
+
+@pytest.mark.parametrize("code", ["AddressLimitExceeded", "UnauthorizedOperation", "InvalidParameterValue"])
+def test_the_allocations_own_single_attempt_refusal_closes_its_intent(code):
+    assert not (allocate_failing(client_error(code, "AllocateAddress")).get("intents") or {}).get("eip")
+
+
+def test_strict_mode_allocates_an_elastic_ip_through_a_single_attempt_ec2_client():
+    built = []
+
+    class Once(fakes.FakeEC2):
+        pass
+
+    once = Once()
+
+    def client(name, config=None):
+        built.append((name, config))
+        return once
+
+    ec2 = fakes.FakeEC2()
+    ec2.setup_session = types.SimpleNamespace(client=client)
+    alloc, _ = dep(plan(), ec2, {}).ensure_eip()
+    assert [n for n, _ in built] == ["ec2"] and built[0][1].retries["max_attempts"] == 1
+    assert once.called("allocate_address") and not ec2.called("allocate_address")
+    assert alloc == "eipalloc-1"
+
+
+def test_make_clients_keeps_its_session_for_strict_mode_and_makes_no_other_call(monkeypatch):
+    made = []
+
+    class Session:
+        def __init__(self, region_name=None, profile_name=None):
+            pass
+
+        def client(self, name, config=None):
+            made.append((name, config))
+            return types.SimpleNamespace(get_caller_identity=lambda: {"Account": ACCOUNT})
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(Session=Session))
+    ec2, *_ = aws.make_clients("us-west-2")
+    assert isinstance(ec2.setup_session, Session) and made == [
+        ("ec2", None),
+        ("iam", None),
+        ("ssm", None),
+        ("sts", None),
+    ]

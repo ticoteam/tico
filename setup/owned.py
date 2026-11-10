@@ -873,14 +873,15 @@ class StrictDeployer(Deployer):
                 "If it lists an address, run setup again: it is found and kept. If it lists none, remove \"eip\" "
                 f'under "intents" under "aws_ids" in {self.record}, then run setup again.'
             )
+        ec2 = single_attempt(self.ec2)
         self.j.intend("eip", name=name)
         try:
-            a = self.ec2.allocate_address(
+            a = ec2.allocate_address(
                 Domain="vpc",
                 TagSpecifications=[{"ResourceType": "elastic-ip", "Tags": self.n.tags(self.p.name, name)}],
             )
         except Exception as e:
-            if made_nothing(e):  # provably no address: the intent is closed, and a re-run simply allocates
+            if made_nothing(e, "AllocateAddress"):  # provably no address: the intent is closed; a re-run allocates
                 self.ids["intents"].pop("eip", None)
                 self.save()
             raise
@@ -1100,17 +1101,49 @@ def close_deleted(ids: dict, kind: str, extra: tuple[str, ...] = ()) -> bool:
     return True
 
 
-def made_nothing(e: Exception) -> bool:
-    """A create call that provably made nothing: botocore stopped it before any request left, or AWS answered its one
-    and only attempt (no retries) with a 4xx. Anything else (no answer, a 5xx, an answer after retries, an interrupted
-    process) may have made the resource."""
+# Codes EC2 answers only to a request it refused outright (malformed, unauthorized, over a limit): nothing was made.
+REFUSED_UNMADE = frozenset(
+    {
+        "AddressLimitExceeded",
+        "AuthFailure",
+        "Blocked",
+        "InvalidParameter",
+        "InvalidParameterCombination",
+        "InvalidParameterValue",
+        "MissingParameter",
+        "OptInRequired",
+        "UnauthorizedOperation",
+        "UnknownParameter",
+        "UnsupportedOperation",
+    }
+)
+
+
+def single_attempt(ec2):
+    """The EC2 client for a create whose error decides that nothing was made: botocore's automatic retries off, so the
+    error is the first attempt's own (a retry's error says nothing of what the first did). A client setup did not build
+    (a test's fake) is used as it is."""
+    session = getattr(ec2, "setup_session", None)
+    if session is None:
+        return ec2
+    from botocore.config import Config
+
+    return session.client("ec2", config=Config(retries={"max_attempts": 1, "mode": "standard"}))
+
+
+def made_nothing(e: Exception, operation: str) -> bool:
+    """A create call that provably made nothing: botocore stopped it before any request left, or EC2 answered that very
+    operation's one and only attempt with a code that refuses the request outright (REFUSED_UNMADE). Anything else (no
+    answer, a 5xx, another 4xx, an answer after retries, another service's error such as a credential refresh's, an
+    interrupted process) may have made the resource."""
     if type(e).__name__ in ("ParamValidationError", "NoCredentialsError", "PartialCredentialsError", "NoRegionError"):
         return True
     meta = getattr(e, "response", None)
     info = meta.get("ResponseMetadata") if isinstance(meta, dict) else None
-    if not isinstance(info, dict) or info.get("RetryAttempts") != 0 or not info.get("HTTPStatusCode"):
+    if getattr(e, "operation_name", None) != operation or not isinstance(info, dict):
         return False
-    return 400 <= int(info["HTTPStatusCode"]) < 500 and bool(error_code(e))
+    status = int(info.get("HTTPStatusCode") or 0)
+    return info.get("RetryAttempts") == 0 and 400 <= status < 500 and error_code(e) in REFUSED_UNMADE
 
 
 NOT_FOUND = {

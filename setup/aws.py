@@ -318,7 +318,9 @@ def make_clients(region: str, profile: str = ""):
     except ImportError:
         raise SystemExit("The AWS target needs boto3: pip install boto3") from None
     s = boto3.Session(region_name=region, profile_name=profile or None)
-    return s.client("ec2"), s.client("iam"), s.client("ssm"), s.client("sts").get_caller_identity()["Account"]
+    ec2 = s.client("ec2")
+    ec2.setup_session = s  # strict mode builds its single-attempt EC2 client from it (owned.single_attempt)
+    return ec2, s.client("iam"), s.client("ssm"), s.client("sts").get_caller_identity()["Account"]
 
 
 def make_s3(region: str, profile: str = ""):
