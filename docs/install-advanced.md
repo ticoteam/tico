@@ -42,7 +42,7 @@ token) limited to the backup bucket, in `LITESTREAM_ACCESS_KEY_ID` and `LITESTRE
 lowercase letters, digits and dashes, starting with a letter; not the starts AWS keeps: `aws`, `ssm`, `sthree`, `sg`, `sg-`,
 two dashes in a row). With `--asset-prefix hub --name acme`: tags
 `ManagedBy=hub-setup` and `hub-setup-name=acme`, resources `hub-acme`, settings `/hub/acme/env`, backup bucket
-`hub-backup-<domain>-<account>` with user `hub-backup-acme`. It is saved with the install the first time; later runs,
+`hub-backup-<domain>-<install id>` with user `hub-backup-acme`, starter plan bucket `hub-setup-plans-<install id>`. It is saved with the install the first time; later runs,
 `runner`, `doctor`, `destroy` and `backup-storage` read it and refuse a different one. Names on the server itself
 (`/opt/tico`, the containers, `TICO_*` settings) stay.
 
@@ -58,11 +58,14 @@ A self-install's `--company-file` goes through a private, encrypted bucket setup
 public access blocked and a one-day expiry rule. Setup keeps its bucket name and chart for retries. The server role
 can read only this install's plan prefix. Creating the bucket needs permission to create/tag S3 buckets and configure
 public access blocking, ownership controls, encryption and lifecycle rules. A failure stops before the chart upload.
-Setup refuses an existing bucket without this install's ownership tags; the one exception is an untagged bucket whose name this install saved a claim on just before creating it (a run that stopped before tagging it). The empty bucket remains after the chart is
+Setup creates each bucket with its tags in the CreateBucket call (this needs a current boto3), never creates a name
+that already exists, and refuses an existing bucket without this install's tags. The empty bucket remains after the chart is
 deleted. With an explicit `--plan-bucket BUCKET`
 (and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup first checks the
-bucket belongs to the credentials' AWS account (and every object call names that account as the expected owner), then puts the packed
-plan at `plans/<name>/<sha256>` in that bucket before launch, grants the server's role `s3:GetObject` on
+bucket belongs to the credentials' AWS account (and every object call names that account as the expected owner); under
+another `--asset-prefix` the bucket must also carry this install's id tag (setup names it, and keeps the id for the
+re-run). It then puts the packed plan at `plans/<name>/<sha256>` in that bucket before launch, only where no object is
+(an install from before install ids puts it as before), and later deletes only the object it recorded writing; grants the server's role `s3:GetObject` on
 `plans/<name>/*` only, and names the key and its sha256 in the `.env`. At first boot the server copies it to
 `/opt/tico/company-file/plan.b64` (0400, the server's user), refuses to start on a sha256 mismatch, and the app reads it
 from `TICO_COMPANY_FILE` (the server mounts that folder by its absolute path, `TICO_COMPANY_FILE_DIR`). A copy the app can't use (missing, unreadable, empty or too big)

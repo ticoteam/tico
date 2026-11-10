@@ -77,18 +77,15 @@ def create_s3(
     names: awsmod.Names = awsmod.DEFAULT_NAMES,
     ids: dict | None = None,
     save: Callable[[], None] = lambda: None,
-    claims: str = "",
-    claim: Callable[[str, bool], None] | None = None,
 ) -> dict[str, str]:
-    """Returns the .env values. `claims`/`claim`: the bucket names this setup saved a claim on before creating them,
-    and how to save one (aws.ensure_bucket). Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest.
+    """Returns the .env values. `ids`/`save`: the backup user's UserId, kept as it is made. Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest.
     Only a bucket (in this account) and a user that carry both of this install's tags are reused; anything else of the
     same name is refused before the first write."""
     bucket = names.backup_bucket(domain, account_id)
     owned = {"Bucket": bucket, "ExpectedBucketOwner": account_id}
     pick = "--domain or another --asset-prefix"
     try:
-        proof = awsmod.bucket_proof(s3, owned, names, name, claims, pick)
+        proof = awsmod.bucket_proof(s3, owned, names, name, pick)
     except MissingInput:
         raise
     except Exception as e:
@@ -104,7 +101,7 @@ def create_s3(
         raise awsmod.not_ours("IAM user", user, names, name)
     if user_exists and ids.get("backup_user") and user_id != ids["backup_user"]:
         raise awsmod.not_ours("IAM user", user, names, name)
-    awsmod.ensure_bucket(s3, owned, region, names, name, proof, claim or (lambda b, on: None), pick)
+    awsmod.ensure_bucket(s3, owned, region, names, name, proof, pick)
     say(f"  created bucket {bucket}" if proof == "absent" else f"  bucket {bucket} exists; keeping it")
     s3.put_public_access_block(
         **owned,

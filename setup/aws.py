@@ -98,7 +98,10 @@ class Names:
         return "Tico server" if self.prefix == DEFAULT_PREFIX else "Server"
 
     def backup_bucket(self, domain: str, account_id: str) -> str:
-        """Bucket names are global; the account id keeps two companies' names from colliding."""
+        """Bucket names are global; the account id keeps two companies' names from colliding. Under another prefix a new
+        install's ends in its id instead: no one else holds that name, so CreateBucket never meets an existing bucket."""
+        if self.install_id and self.prefix != DEFAULT_PREFIX:
+            return f"{self.prefix}-backup-{slug(domain)[:28].rstrip('-')}-{self.install_id}"
         return f"{self.prefix}-backup-{slug(domain)[:30]}-{account_id}"[:63].rstrip("-")
 
     def backup_user(self, name: str) -> str:
@@ -205,17 +208,8 @@ def check_name(given: str | None, had: str, domain: str) -> None:
 
 
 # --- buckets setup makes -------------------------------------------------------------------------------------------
-# A bucket is setup's when it carries both tags, or, untagged, when setup saved a claim on its name (the name and when)
-# before it sent the create call: a run that stopped between the create and the tagging. Nothing else is ever adopted.
-
-
-def claimed(claims: str, bucket: str) -> bool:
-    return any(c.split("@")[0] == bucket for c in claims.split())
-
-
-def with_claim(claims: str, bucket: str, on: bool) -> str:
-    rest = [c for c in claims.split() if c.split("@")[0] != bucket]
-    return " ".join(rest + ([f"{bucket}@{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"] if on else []))
+# A bucket is setup's only when it carries this install's tags, which it gets in the CreateBucket call itself: there is
+# never an untagged bucket of setup's, so an untagged one is never adopted.
 
 
 def error_code(e: Exception) -> str:
@@ -231,8 +225,8 @@ def bucket_tags(s3, owned: dict) -> list[dict]:
         raise
 
 
-def bucket_proof(s3, owned: dict, names: Names, name: str, claims: str, pick: str) -> str:
-    """Reads only: "absent", "ours" (both tags) or "claimed" (untagged, claimed by this setup); else refused."""
+def bucket_proof(s3, owned: dict, names: Names, name: str, pick: str) -> str:
+    """Reads only: "absent" or "ours" (this install's tags); else refused."""
     try:
         s3.head_bucket(**owned)
     except Exception as e:
@@ -242,36 +236,31 @@ def bucket_proof(s3, owned: dict, names: Names, name: str, claims: str, pick: st
     tags = bucket_tags(s3, owned)
     if names.is_ours(tags, name):
         return "ours"
-    if not tags and claimed(claims, owned["Bucket"]):
-        return "claimed"
     raise not_ours("S3 bucket", owned["Bucket"], names, name, pick)
 
 
-def ensure_bucket(
-    s3, owned: dict, region: str, names: Names, name: str, proof: str, claim: Callable[[str, bool], None], pick: str
-) -> None:
-    """After bucket_proof: tags a claimed bucket, or claims the name, creates the bucket and tags it at once."""
-    bucket, tagging = owned["Bucket"], {"TagSet": names.tags(name)}
-    if proof == "claimed":
-        s3.put_bucket_tagging(**owned, Tagging=tagging)
-        return
+def ensure_bucket(s3, owned: dict, region: str, names: Names, name: str, proof: str, pick: str) -> None:
+    """After bucket_proof found no bucket of the name: creates it with its tags in the same call. Never called for a name
+    that exists (us-east-1's CreateBucket answers success for one this account holds, and resets its ACLs)."""
     if proof != "absent":
         return
-    claim(bucket, True)  # saved before the create call, so a retry after a failure below knows the bucket for setup's
-    location = {} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}
+    bucket, config = owned["Bucket"], {"Tags": names.tags(name)}
+    if region != "us-east-1":
+        config["LocationConstraint"] = region
     try:
-        s3.create_bucket(Bucket=bucket, **location)
+        s3.create_bucket(Bucket=bucket, CreateBucketConfiguration=config)
     except Exception as e:
         if error_code(e) in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):  # made by someone since the read
-            claim(bucket, False)
             raise not_ours("S3 bucket", bucket, names, name, pick) from None
+        if type(e).__name__ == "ParamValidationError":  # a boto3 from before CreateBucket took tags
+            raise SystemExit(
+                "Setup creates S3 buckets with their tags, which needs a current boto3: pip install -U boto3"
+            ) from None
         raise
-    # us-east-1 answers success for a bucket this account already holds: one with tags was not made by this call. (One
-    # made untagged in the instant between the read and the create stays indistinguishable: S3 has no exclusive create.)
-    if bucket_tags(s3, owned):
-        claim(bucket, False)
+    # A bucket made in the instant between the read and the create, in this account, under a deterministic name (the
+    # default prefix's backup bucket) is told apart only by its tags; a name ending in the install id has no such instant.
+    if not names.is_ours(bucket_tags(s3, owned), name):
         raise not_ours("S3 bucket", bucket, names, name, pick)
-    s3.put_bucket_tagging(**owned, Tagging=tagging)
 
 
 def check_account(had: str, account: str, what: str) -> None:
@@ -551,15 +540,15 @@ class Deployer:
             raise not_ours("IAM instance profile", n, self.n, self.p.name)
         self.same("profile", prof.get("InstanceProfileId", ""), "IAM instance profile", n)
 
-    def ensure_plan_bucket(self, s3, region: str, claims: str = "", claim=None) -> None:
+    def ensure_plan_bucket(self, s3, region: str) -> None:
         """Configure only setup's dedicated bucket, in the installer's account. Never adopt an unrelated bucket.
         Every safety setting precedes the first chart upload. Re-running repairs an interrupted configuration.
         """
         owned = {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
         try:
             # A collision is an error, never permission to reuse someone else's name.
-            proof = bucket_proof(s3, owned, self.n, self.p.name, claims, "--name")
-            ensure_bucket(s3, owned, region, self.n, self.p.name, proof, claim or (lambda b, on: None), "--name")
+            proof = bucket_proof(s3, owned, self.n, self.p.name, "--name")
+            ensure_bucket(s3, owned, region, self.n, self.p.name, proof, "--name")
         except MissingInput:
             raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.") from None
         s3.put_public_access_block(
@@ -603,24 +592,47 @@ class Deployer:
                 f"The starter plan bucket {self.p.plan_bucket} is not one this AWS account owns, or cannot be read "
                 f"({code}); refusing to upload to it. Check --plan-bucket and the AWS credentials."
             )
+        n = self.n
+        if n.install_id and n.prefix != DEFAULT_PREFIX:
+            # Owned by the account is not enough there: the account holds others' buckets too. Only one tagged for this
+            # install takes its plan.
+            owned = {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
+            tags = {t["Key"]: t["Value"] for t in bucket_tags(s3, owned)}
+            if tags.get(n.install_tag) != n.install_id:
+                raise MissingInput(
+                    f"The starter plan bucket {self.p.plan_bucket} is not tagged for this install; refusing to upload "
+                    f"to it. Tag it {n.install_tag}={n.install_id} (this install's id, kept for the re-run) and run "
+                    "setup again, or leave --plan-bucket out."
+                )
 
     def put_plan(self, s3, key: str, data: str) -> None:
         """The packed starter plan, for the server to copy once at first boot (remote.bootstrap_script). Plan only:
         the env names the key and its sha256, never the plan."""
         if not key.startswith(f"plans/{self.p.name}/"):
             raise ValueError("a starter plan key is plans/<this server's name>/<sha256>")
-        s3.put_object(
-            Bucket=self.p.plan_bucket,
-            Key=key,
-            Body=data.encode("ascii"),
-            ContentType="text/plain",
-            ExpectedBucketOwner=self.account_id,
-        )
+        body = {"Body": data.encode("ascii"), "ContentType": "text/plain", "ExpectedBucketOwner": self.account_id}
+        if not self.n.install_id:  # an install saved before ids: as before
+            s3.put_object(Bucket=self.p.plan_bucket, Key=key, **body)
+            return
+        try:  # only where no object is: one already at the key is never overwritten
+            s3.put_object(Bucket=self.p.plan_bucket, Key=key, IfNoneMatch="*", **body)
+        except Exception as e:
+            if error_code(e) != "PreconditionFailed":
+                raise
+            # A retry of this install's own put (the key is the plan's sha256), or something else's: then refused.
+            if self.ids.get("plan_object") != key:
+                raise MissingInput(
+                    f"s3://{self.p.plan_bucket}/{key} already exists and this install did not record writing it; "
+                    "refusing to overwrite it."
+                ) from None
+        self.keep("plan_object", key)
 
     def delete_plan(self, s3, key: str) -> str:
         """Once the server is up and its app reads its copy. Returns "" when deleted, else the error code: the server is
         already working, and the plan stays until someone deletes it or the bucket's lifecycle rule, if it has one,
         expires it."""
+        if self.n.install_id and self.ids.get("plan_object") != key:
+            return "NotWrittenByThisInstall"  # only the object this install recorded writing is ever deleted
         return self._s3_call(s3.delete_object, Bucket=self.p.plan_bucket, Key=key)
 
     def _s3_call(self, call, **kw) -> str:

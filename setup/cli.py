@@ -263,10 +263,6 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     ids = record.setdefault("aws_ids", {})
     state.save_backup(domain, record)
 
-    def claim(bucket: str, on: bool) -> None:
-        record["bucket_claims"] = awsmod.with_claim(record.get("bucket_claims", ""), bucket, on)
-        state.save_backup(domain, record)
-
     values = bk.create_s3(
         deps.aws_s3(args.aws_region, args.aws_profile),
         iam,
@@ -278,8 +274,6 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
         names=names,
         ids=ids,
         save=lambda: state.save_backup(domain, record),
-        claims=record.get("bucket_claims", ""),
-        claim=claim,
     )
     io.say("\nOn the server, before the installer (the key is shown once; keep it out of shell history and chat):")
     io.say(f"  export LITESTREAM_ACCESS_KEY_ID={values['LITESTREAM_ACCESS_KEY_ID']}")

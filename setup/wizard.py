@@ -386,12 +386,6 @@ def gather_backup(io: IO, args, s: Settings, dry: bool) -> None:
         a.get("backup_secret", "Secret access key (hidden)", secret=True, env="LITESTREAM_SECRET_ACCESS_KEY")
 
 
-def save_claim(s: Settings, bucket: str, on: bool) -> None:
-    """A bucket setup is about to create (or found was not its own after all), saved with the install at once."""
-    s.bucket_claims = awsmod.with_claim(s.bucket_claims, bucket, on)
-    state.save(s.domain, {**state.load(s.domain)[0], **s.public()})
-
-
 def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> bool:
     """Creates the bucket and its credentials for `aws` and `r2`; False (after saying why) when that fails."""
     if s.backup not in ("aws", "r2") or s.backup_url:
@@ -414,8 +408,6 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
                 names=awsmod.Names(s.asset_prefix, s.install_id),
                 ids=s.aws_ids,
                 save=lambda: state.save(s.domain, {**state.load(s.domain)[0], **s.public()}),
-                claims=s.bucket_claims,
-                claim=lambda bucket, on: save_claim(s, bucket, on),
             )
         else:
             account_id = s.cf_account_id
@@ -804,7 +796,9 @@ def run(args, io: IO, deps: Deps) -> int:
     hosted.gather(args, s, dry)
     if s.target == "aws" and s.company_file_data and not s.plan_bucket and not s.hosted:
         # Saved before any cloud writes, so retries use the same bucket and chart. No credentials in its name.
-        s.plan_bucket = awsmod.Names(s.asset_prefix).plan_bucket(secrets.token_hex(16))
+        # Under another prefix, a new install's ends in its id: a name no one else holds.
+        own = s.install_id if s.asset_prefix != awsmod.DEFAULT_PREFIX else ""
+        s.plan_bucket = awsmod.Names(s.asset_prefix).plan_bucket(own or secrets.token_hex(16))
         s.plan_bucket_region = s.aws_region
         s.plan_bucket_managed = True
     st.gather_runtime(args, s)
@@ -1052,12 +1046,7 @@ def _aws(
     plan_s3 = deps.aws_s3(s.plan_bucket_region or s.aws_region, s.aws_profile) if plan.plan_bucket else None
     if plan_s3 and s.plan_bucket_managed:
         try:
-            d.ensure_plan_bucket(
-                plan_s3,
-                s.plan_bucket_region or s.aws_region,
-                claims=s.bucket_claims,
-                claim=lambda bucket, on: save_claim(s, bucket, on),
-            )
+            d.ensure_plan_bucket(plan_s3, s.plan_bucket_region or s.aws_region)
         except Exception as exc:
             code = str(getattr(exc, "response", {}).get("Error", {}).get("Code") or type(exc).__name__)
             raise MissingInput(

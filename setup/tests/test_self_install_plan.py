@@ -151,9 +151,10 @@ def test_managed_bucket_region_privacy_and_no_unowned_adoption(region):
     s3 = PlanS3()
     d.ensure_plan_bucket(s3, region)
     (create,) = s3.called("create_bucket")
+    config = {"Tags": aws.DEFAULT_NAMES.tags(NAME)}  # tagged in the create call itself
     assert create == {
         "Bucket": "tico-setup-plans-test",
-        **({} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}),
+        "CreateBucketConfiguration": config if region == "us-east-1" else {**config, "LocationConstraint": region},
     }
     assert s3.called("put_bucket_encryption")[0]["ServerSideEncryptionConfiguration"]["Rules"][0][
         "ApplyServerSideEncryptionByDefault"

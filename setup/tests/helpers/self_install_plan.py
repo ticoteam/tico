@@ -24,7 +24,7 @@ class PlanS3:
     def create_bucket(self, **kw):
         self.calls.append(("create_bucket", kw))
         assert not self.exists
-        self.exists = True
+        self.exists, self.tagset = True, kw.get("CreateBucketConfiguration", {}).get("Tags", [])
 
     def put_bucket_tagging(self, **kw):
         self.calls.append(("put_bucket_tagging", kw))

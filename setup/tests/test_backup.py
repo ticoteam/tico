@@ -26,7 +26,7 @@ class FakeS3:
 
     def create_bucket(self, **kw):
         self.calls.append(("create_bucket", kw))
-        self.exists = True
+        self.exists, self.tags = True, kw.get("CreateBucketConfiguration", {}).get("Tags", [])
 
     def put_bucket_tagging(self, **kw):
         self.calls.append(("put_bucket_tagging", kw))
@@ -89,7 +89,7 @@ def test_the_bucket_is_versioned_encrypted_private_and_expires_old_versions():
     s3, iam, values = make()
     (created,) = s3.called("create_bucket")
     assert created["Bucket"] == "tico-backup-tico-example-com-123456789012"
-    assert created["CreateBucketConfiguration"] == {"LocationConstraint": "us-west-2"}
+    assert created["CreateBucketConfiguration"] == {"LocationConstraint": "us-west-2", "Tags": OURS}  # tagged at birth
     assert s3.called("put_bucket_versioning")[0]["VersioningConfiguration"] == {"Status": "Enabled"}
     assert s3.called("put_bucket_encryption")[0]["ServerSideEncryptionConfiguration"]["Rules"][0][
         "ApplyServerSideEncryptionByDefault"

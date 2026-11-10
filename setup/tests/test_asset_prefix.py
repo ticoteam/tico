@@ -37,7 +37,7 @@ class S3:
 
     def create_bucket(self, **kw):
         self._rec("create_bucket", kw)
-        self.tagsets[kw["Bucket"]] = []
+        self.tagsets[kw["Bucket"]] = kw.get("CreateBucketConfiguration", {}).get("Tags", [])
 
     def put_bucket_tagging(self, **kw):
         self._rec("put_bucket_tagging", kw)
@@ -171,7 +171,7 @@ def test_the_default_backup_names_are_todays():
     (pol,) = iam.called("put_user_policy")
     assert (pol["UserName"], pol["PolicyName"]) == ("tico-backup-acme", "tico-backup")
     assert values["TICO_BACKUP_URL"] == f"s3://{bucket}/tico"
-    assert s3.called("put_bucket_tagging")[0]["Tagging"]["TagSet"] == [
+    assert s3.called("create_bucket")[0]["CreateBucketConfiguration"]["Tags"] == [
         {"Key": "ManagedBy", "Value": "tico-setup"},
         {"Key": "tico-setup-name", "Value": "acme"},
     ]
@@ -522,7 +522,7 @@ def test_hub_backup_names():
     assert values["TICO_BACKUP_URL"] == f"s3://{bucket}/hub"
     assert (
         iam.called("create_user")[0]["Tags"]
-        == s3.called("put_bucket_tagging")[0]["Tagging"]["TagSet"]
+        == s3.called("create_bucket")[0]["CreateBucketConfiguration"]["Tags"]
         == [
             {"Key": "ManagedBy", "Value": "hub-setup"},
             {"Key": "hub-setup-name", "Value": "acme"},
@@ -677,8 +677,9 @@ def test_a_hub_install_sends_no_tico_in_any_aws_name_tag_path_policy_or_bucket(t
                 assert "tico" not in s.lower(), (name, key, s[:300])
     user_data = "\n".join(on_server)
     assert "--name /hub/hotmic/env " in user_data and "/tico/hotmic" not in user_data
-    assert f"TICO_BACKUP_URL=s3://hub-backup-hub-hotmicapp-com-{HOTMIC_ACCOUNT}/hub" in user_data
-    assert re.search(r"TICO_COMPANY_FILE_S3=s3://hub-setup-plans-[0-9a-f]{32}/plans/hotmic/[0-9a-f]{64}", user_data)
+    install = state.load(DOMAIN)[0]["install_id"]  # buckets under another prefix end in the install id
+    assert f"TICO_BACKUP_URL=s3://hub-backup-hub-hotmicapp-com-{install}/hub" in user_data
+    assert re.search(rf"TICO_COMPANY_FILE_S3=s3://hub-setup-plans-{install}/plans/hotmic/[0-9a-f]{{64}}", user_data)
 
 
 def test_later_runs_read_the_saved_prefix_and_refuse_another(tmp_path):
@@ -764,7 +765,7 @@ def test_a_backup_bucket_another_prefix_made_is_refused_before_any_write():
     assert all(c[1].get("ExpectedBucketOwner") == ACCOUNT for c in s3.calls[before:])
 
 
-def test_an_untagged_backup_bucket_is_refused_and_a_new_one_is_tagged_first():
+def test_an_untagged_backup_bucket_is_refused_and_a_new_one_is_tagged_in_its_create_call():
     s3, iam = S3(), IAM()
     bucket = aws.DEFAULT_NAMES.backup_bucket("tico.example.com", ACCOUNT)
     s3.tagsets[bucket] = []  # exists, made by someone else
@@ -775,7 +776,8 @@ def test_an_untagged_backup_bucket_is_refused_and_a_new_one_is_tagged_first():
     assert [n for n, _ in s3.calls] == ["head_bucket", "get_bucket_tagging"] and not iam.calls
     s3, _, _ = created_backup()
     writes = [n for n, _ in s3.calls if n not in ("head_bucket", "get_bucket_tagging")]
-    assert writes[:2] == ["create_bucket", "put_bucket_tagging"]
+    assert writes[0] == "create_bucket" and "put_bucket_tagging" not in writes
+    assert s3.called("create_bucket")[0]["CreateBucketConfiguration"]["Tags"] == aws.DEFAULT_NAMES.tags("acme")
 
 
 def test_a_runner_takes_its_own_servers_prefix_not_another_servers_runner_of_the_same_name(monkeypatch):
@@ -1102,46 +1104,40 @@ def test_a_bucket_that_appears_between_the_read_and_the_create_is_never_adopted(
         assert [n for n, _ in s3.calls] == ["head_bucket", "create_bucket", "get_bucket_tagging"]
 
 
-def test_a_bucket_setup_made_but_could_not_tag_is_finished_by_the_retry_and_only_with_its_claim():
+def test_an_untagged_bucket_is_never_adopted_even_one_an_earlier_run_claimed():
+    # Codex review 3, case 4: a claim saved before a create that never reached AWS let someone else's untagged bucket
+    # of that name be adopted and retagged. Buckets are tagged in the create call now, so none of setup's is untagged.
     iam, s3 = IAM(), S3()
-    s3.put_bucket_tagging = lambda **kw: (_ for _ in ()).throw(ClientError("SlowDown"))
     d = fakes.deps()
     d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
     d.aws_s3 = lambda region, profile: s3
-    argv = ["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2"]
-    with pytest.raises(ClientError):
-        go(argv, deps=d)
     bucket = aws.DEFAULT_NAMES.backup_bucket("laptop.example.com", ACCOUNT)
-    assert s3.tagsets[bucket] == [] and state.load_backup("laptop.example.com")["bucket_claims"].startswith(
-        bucket + "@"
-    )
-    del s3.put_bucket_tagging
-    assert go(argv, deps=d)[0] == 0  # the claim saved before the create: setup's own bucket, tagged now
-    assert aws.DEFAULT_NAMES.is_ours(s3.tagsets[bucket], "laptop-example-com")
-    # Without the claim, the same untagged bucket is someone else's.
-    s3.tagsets[bucket] = []
-    claimless = state.load_backup("laptop.example.com")
-    del claimless["bucket_claims"]
-    state.save_backup("laptop.example.com", claimless)
-    code, out = go(argv, deps=d)
+    state.save_backup("laptop.example.com", {"bucket_claims": f"{bucket}@2026-11-10T00:00:00Z"})
+    s3.tagsets[bucket] = []  # someone else's, made after the claim
+    code, out = go(["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2"], deps=d)
     assert code == 2 and "was not made by this setup" in out, out
-
-
-def test_the_plan_bucket_setup_made_but_could_not_tag_is_finished_with_its_claim():
+    assert not s3.called("put_bucket_tagging") and not s3.called("create_bucket") and not iam.calls
     p = aws.plan_aws(
         domain="a.example", front_door="caddy", region="us-east-1", name="acme", plan_bucket="tico-setup-plans-x"
     )
-    d = aws.Deployer(p, None, None, None, ACCOUNT)
-    s3, claims = S3(), []
-    s3.put_bucket_tagging = lambda **kw: (_ for _ in ()).throw(ClientError("SlowDown"))
-    with pytest.raises(ClientError):
-        d.ensure_plan_bucket(s3, "us-east-1", claim=lambda b, on: claims.append((b, on)))
-    assert claims == [("tico-setup-plans-x", True)] and s3.tagsets["tico-setup-plans-x"] == []
-    del s3.put_bucket_tagging
+    s3.tagsets["tico-setup-plans-x"] = []
     with pytest.raises(SystemExit, match="refusing to reuse"):
-        d.ensure_plan_bucket(s3, "us-east-1")  # no claim: never adopted
-    d.ensure_plan_bucket(s3, "us-east-1", claims="tico-setup-plans-x@2026-11-10T00:00:00Z")
-    assert aws.DEFAULT_NAMES.is_ours(s3.tagsets["tico-setup-plans-x"], "acme")
+        aws.Deployer(p, None, None, None, ACCOUNT).ensure_plan_bucket(s3, "us-east-1")
+    assert not s3.called("put_bucket_tagging")
+
+
+def test_a_boto3_too_old_to_tag_a_bucket_at_creation_stops_before_making_one():
+    class ParamValidationError(Exception):
+        pass
+
+    s3 = S3()
+    s3.create_bucket = lambda **kw: (_ for _ in ()).throw(ParamValidationError("Unknown parameter Tags"))
+    p = aws.plan_aws(
+        domain="a.example", front_door="caddy", region="us-west-2", name="acme", plan_bucket="tico-setup-plans-x"
+    )
+    with pytest.raises(SystemExit, match="pip install -U boto3"):
+        aws.Deployer(p, None, None, None, ACCOUNT).ensure_plan_bucket(s3, "us-west-2")
+    assert "tico-setup-plans-x" not in s3.tagsets
 
 
 def test_destroy_never_terminates_an_instance_that_would_take_a_volume_setup_did_not_make():
@@ -1358,3 +1354,75 @@ def test_two_installs_sharing_a_prefix_and_name_never_touch_each_others_resource
     # The first install's re-run still owns everything it made.
     code, out = go(hub_args(tmp_path), deps=d)
     assert code == 0 and "already exists; reusing it" in out, out
+
+
+def test_a_new_hub_installs_buckets_end_in_its_install_id_and_an_existing_name_is_never_created_again():
+    # Codex review 3, case 3: us-east-1's CreateBucket answers success for a bucket this account holds, and resets its
+    # ACLs. Names ending in the install id are held by no one else, and a name head_bucket finds is never created.
+    names = aws.Names("hub", "0123456789abcdef")
+    assert names.backup_bucket("hub.hotmicapp.com", ACCOUNT) == "hub-backup-hub-hotmicapp-com-0123456789abcdef"
+    long = names.backup_bucket("x" * 60 + ".example.com", ACCOUNT)
+    assert len(long) <= 63 and long.endswith("-0123456789abcdef")
+    assert (
+        aws.Names("tico", "0123456789abcdef").backup_bucket("a.example", ACCOUNT) == f"tico-backup-a-example-{ACCOUNT}"
+    )
+    for tags in ([], PRODUCTION, aws.Names("hub", "fedcba9876543210").tags("acme")):
+        s3, iam = S3(), IAM()
+        s3.tagsets[names.backup_bucket("a.example", ACCOUNT)] = tags
+        with pytest.raises(MissingInput, match="was not made by this setup"):
+            backup.create_s3(
+                s3, iam, domain="a.example", region="us-east-1", account_id=ACCOUNT, name="acme", say=print, names=names
+            )
+        assert not s3.called("create_bucket") and not iam.calls
+
+
+class ObjectS3(S3):
+    """Objects too: a put with IfNoneMatch="*" fails where one exists, as S3's conditional write does."""
+
+    def __init__(self):
+        super().__init__()
+        self.objects = {}
+
+    def put_object(self, **kw):
+        self._rec("put_object", kw)
+        if kw.get("IfNoneMatch") == "*" and (kw["Bucket"], kw["Key"]) in self.objects:
+            raise ClientError("PreconditionFailed")
+        self.objects[(kw["Bucket"], kw["Key"])] = kw["Body"]
+
+    def delete_object(self, **kw):
+        self._rec("delete_object", kw)
+        self.objects.pop((kw["Bucket"], kw["Key"]), None)
+
+
+def test_an_explicit_plan_bucket_must_be_tagged_for_this_install_and_its_objects_are_never_overwritten():
+    # Codex review 3, case 8: owned by the account is not enough when the account holds production's buckets, and an
+    # object at the plan's key was overwritten, then deleted.
+    install, saved = "0123456789abcdef", []
+    p = aws.plan_aws(
+        domain="a.example",
+        front_door="caddy",
+        region="us-east-1",
+        name="acme",
+        plan_bucket="prod-assets",
+        prefix="hub",
+        install_id=install,
+    )
+    d = aws.Deployer(p, None, None, None, ACCOUNT, ids={}, save=lambda: saved.append(dict(d.ids)))
+    s3 = ObjectS3()
+    s3.tagsets["prod-assets"] = PRODUCTION
+    with pytest.raises(MissingInput, match=f"Tag it hub-setup-install={install}"):
+        d.verify_plan_bucket(s3)
+    s3.tagsets["prod-assets"] = PRODUCTION + [{"Key": "hub-setup-install", "Value": install}]
+    d.verify_plan_bucket(s3)
+    key = "plans/acme/" + "a" * 64
+    s3.objects[("prod-assets", key)] = b"production's"
+    with pytest.raises(MissingInput, match="did not record writing it"):
+        d.put_plan(s3, key, "ours")
+    assert s3.objects[("prod-assets", key)] == b"production's" and d.delete_plan(s3, key)
+    assert s3.objects[("prod-assets", key)] == b"production's" and not s3.called("delete_object")
+    # Its own: written only where nothing is, recorded, and only then deleted; a retry of a lost response is its own.
+    other = "plans/acme/" + "b" * 64
+    d.put_plan(s3, other, "ours")
+    assert saved[-1]["plan_object"] == other
+    d.put_plan(s3, other, "ours")
+    assert d.delete_plan(s3, other) == "" and ("prod-assets", other) not in s3.objects
