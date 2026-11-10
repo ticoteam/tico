@@ -236,18 +236,6 @@ def live_masks(unsettled):
 # caller may read: a bucket of one run would otherwise tell them that run exists, what it cost and whether it acted.
 # `{all_table}` may only narrow what is counted, never add a row.
 DERIVED = {
-    # Who each waiting task waits on (spec D8, step 6b): the person owning its oldest open question task, a subtask or a
-    # blocker (question_tasks.waiting_on). Read over the caller's own views, so a card they cannot read names nobody.
-    "task_waits": (
-        ("tasks", "task_relations"),
-        """
-        SELECT t.id AS task_id,
-               (SELECT q.owner_id FROM {task_relations} r JOIN {tasks} q ON q.id=r.from_task
-                WHERE r.to_task=t.id AND r.kind IN ('parent','blocks') AND q.questions IS NOT NULL AND q.answer IS NULL
-                  AND q.status IN ('open','doing','waiting','review','ready') AND q.owner_id LIKE 'human:%'
-                ORDER BY q.created_at, q.id LIMIT 1) AS waiting_on
-        FROM {tasks} t WHERE t.status='waiting'""",
-    ),
     # Runs per week (Monday, UTC), bot, trigger and purpose, with tokens and outcome (backend/run_triggers.py).
     # A run from before triggers were recorded reads `unknown`, and is counted, never dropped. Input is the run's
     # measured usage (every primary and fallback segment). A run from before measured usage has its one-number
@@ -559,24 +547,9 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "task_assets": by_task,
         "task_links": by_task,
         "task_roles": by_task,
-        # A task's moves to Blocked and snoozes, open and past (migration 0075), read with their task.
-        "task_holds": by_task,
         # A relation is read only when the caller may read both of its tasks.
         "task_relations": "from_task IN (SELECT id FROM tasks) AND to_task IN (SELECT id FROM tasks)",
         "message_assets": by_message,
-        "approvals": (
-            "(task_id IS NULL OR "
-            + by_task
-            + ") AND "
-            + by_message
-            + " AND ("
-            + (
-                "1"
-                if owner
-                else f"requested_by_id={me} OR message_id IN (SELECT id FROM messages WHERE recipient_id={me})"
-            )
-            + ")"
-        ),
         "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"),
         "bot_status_history": bots_visible("bot"),
@@ -605,8 +578,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "attempt_inputs": by_attempt,
         "attempt_conversations": by_attempt,
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
-        "task_types": "1",
-        "task_steps": "1",
         "humans": TA.sql_visible(c, who, "id", bare="human", unseen=unseen),
         # Recruiting seats are roles on the company chart that everyone sees (backend/lifecycle.py): their titles,
         # job descriptions and reporting lines. Never a bare "1" (the same reason as intake_items below).
@@ -943,11 +914,12 @@ def materialize(conn, index, tables, inner, function, private):
     create("known_tasks", "SELECT id FROM main.tasks")
     create("denied_tasks", sorted(index.denied))
     create("unreadable_rooms", sorted(index.unreadable_rooms()))
+    # A run on a denied task (its `attempts.task_id`) is never a fast yes.
     create(
         "run_carriers",
         sorted(
             aid
-            for tid, aid in conn.execute("SELECT id,carried_by FROM main.tasks WHERE carried_by IS NOT NULL")
+            for aid, tid in conn.execute("SELECT id,task_id FROM main.attempts WHERE task_id IS NOT NULL")
             if tid in index.denied
         ),
     )
@@ -1275,8 +1247,6 @@ def connect(path, c, auth, who, trace=None, seconds=None):
                 "market_figures",
                 "market_sources",
                 "listen_runs",
-                "task_types",
-                "task_steps",
             }:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.
