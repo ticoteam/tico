@@ -170,7 +170,7 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
   assert.deepEqual(mended, {ids: ['a', 'b'], title: 'A2', next: 'p2.2', count: 5, ops: 3});
 
   // The task board: a task changed elsewhere is redrawn from the event; the list is not read again.
-  await page.evaluate(() => { location.hash = '#/board'; });
+  await page.evaluate(() => { location.hash = '#/tasks'; });
   // The board shows working steps only, so Done's page is not read.
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading
     && document.querySelector('#task-body .tl-row, #task-body .bcard'), null, {timeout: t(8000)})

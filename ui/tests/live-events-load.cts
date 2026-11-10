@@ -95,7 +95,7 @@ const task = (over?: TaskFields) => ({id: 't1', title: 'Draft the release notes'
   };
 
   // The task board: new tasks arrive whole and changes in place; no list is read again.
-  await page.goto('https://tico-ui.test/#/board');
+  await page.goto('https://tico-ui.test/#/tasks');
   await page.waitForFunction(() => (window as unknown as PageWin).__liveStream && TASKS_ST && !TASKS_ST.loading
     && document.querySelector('#task-body .tl-row, #task-body .bcard'), null, {timeout: t(8000)});
   await settle();

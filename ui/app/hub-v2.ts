@@ -111,14 +111,14 @@ const personDisplay = (id: unknown) => {
   return (p && p.name) || titleCase(id);
 };
 // What a sender, "added by" or "by" slot says for the keeper: it happened automatically.
-const KEEPER_LABEL = 'Automatic';
+const AUTOMATIC_LABEL = 'Automatic';
 const actorLabel = (a: unknown): string => {
   const slug = actorSlug(a);
   if (slug) return botDisplayName(slug);
   const pid = actorPerson(a);
   if (pid) return pid === S.me?.id ? 'You' : personDisplay(pid);
   // The keeper is the server itself, never the Assistant or the app: a row it wrote is labelled by its source (rowSource).
-  return a === 'keeper' ? KEEPER_LABEL : String(a || '');
+  return a === 'keeper' ? AUTOMATIC_LABEL : String(a || '');
 };
 // Notices the hub writes for bots to read carry raw ids ("New task from human:sam"); people see names.
 const plainActors = (text: unknown) => String(text ?? '').replace(/\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])/g,
