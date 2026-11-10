@@ -74,7 +74,8 @@ messages      + wake_key, unique where not null
 `open`).
 
 `tasks.version` goes up by one on every move and every reassign, and on nothing else the engine does. A snooze, an
-answer and an added requirement leave it alone.
+answer and an added requirement leave it alone. After the cut-over a field edit (a new title, a label) raises it too.
+It says "this row changed since you looked", not progress: `progress_mark` does not read it.
 
 `answers.answer` values: `done` (owner_done), `ok` and `no` (ok, and a page's person OK), `again` (the owner asks the
 person to look again after a `no`), the chosen choice (answer), `give` (a stage's OK given to the person in `notes`),
@@ -142,8 +143,9 @@ def changed(conn, task_id, by) -> None
     # Something the task waits on changed outside a move (an answer came or was taken back). The ladder starts again.
     # Whoever calls it also wakes the bot it hands the turn to.
 def progress_mark(conn, visit_id, standings=None) -> str
-    # What tells a task that changed from one that did not: its version, this visit's answers, added requirements,
-    # filed tasks and snoozes, and where each requirement stands. A comment is not a change.
+    # What tells a task that changed from one that did not: this visit's answers, added requirements, filed tasks and
+    # snoozes, and where each requirement stands. A comment is not a change, nor the task's version (a field edit
+    # raises it); a move and a reassign start the ladder again themselves.
 
 def task(conn, task_id) -> dict | None
     # The row plus `visit` (the open one), `stage`, `pipeline` and `snooze` (the open one or None).

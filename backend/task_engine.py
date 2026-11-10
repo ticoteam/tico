@@ -650,12 +650,13 @@ def reassign(
 
 
 def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence[R.Standing] | None = None) -> str:
-    """What the never-stuck check compares to tell a task that changed from one that did not: the task's version, the
-    answers, added requirements, filed tasks and snoozes of this visit, and where each requirement stands (so a PR
-    that opened or a check that finished is a change). A comment is not a change. `standings` saves reading them
-    again when the caller has them."""
+    """What the never-stuck check compares to tell a task that changed from one that did not: the answers, added
+    requirements, filed tasks and snoozes of this visit, and where each requirement stands (so a PR that opened or a
+    check that finished is a change). A comment is not a change, and neither is the task's version: it says the row
+    changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign start the
+    ladder again themselves. `standings` saves reading them again when the caller has them."""
     found = conn.execute(
-        "SELECT v.task_id, t.version, "
+        "SELECT v.task_id, "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
         "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id AND a.undone_at IS NOT NULL), "
         "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id), "
@@ -665,7 +666,7 @@ def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence
         " WHERE l.visit_id = v.id AND COALESCE(c.status, 'closed') <> 'open'), "
         "(SELECT COUNT(*) FROM snoozes z WHERE z.task_id = v.task_id AND z.visit_id = v.id), "
         "(SELECT COUNT(*) FROM snoozes z WHERE z.task_id = v.task_id AND z.visit_id = v.id AND z.ended_at IS NOT NULL) "
-        "FROM visits v JOIN tasks t ON t.id = v.task_id WHERE v.id=?",
+        "FROM visits v WHERE v.id=?",
         (visit_id,),
     ).fetchone()
     if not found:
