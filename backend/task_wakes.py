@@ -270,6 +270,40 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     return None
 
 
+# A bot that can run may still be held on one task: its turn asked for a worktree it has no room for (D12). The wait
+# wakes the task once the worktree is ready (backend/worktree_waits.py), so until then it is Paused, not the bot's turn.
+WORKTREE_WAITING = "is waiting for a free worktree"
+WORKTREE_RESERVED = "is waiting for its worktree to be set up"
+
+
+def task_cause(
+    conn: "sqlite3.Connection", task_id: str, actor: str | None, waits: dict[str, str] | None = None
+) -> str | None:
+    """Why this bot cannot run on this task though it can run: an open worktree wait of this task's, or None. `waits`
+    is `worktree_holds` read once for a pass over many tasks."""
+    if not _h().is_bot(actor):
+        return None
+    found = worktree_holds(conn, (task_id,)) if waits is None else waits
+    state = found.get(task_id)
+    return None if state is None else WORKTREE_RESERVED if state == "reserved" else WORKTREE_WAITING
+
+
+def worktree_holds(conn: "sqlite3.Connection", task_ids: Collection[str] | None = None) -> dict[str, str]:
+    """Task id -> state of its open worktree wait ("waiting" before "reserved": one still waiting for room says so).
+    Every task's with no `task_ids`. One read; none when the table was never made."""
+    from . import worktree_waits
+
+    if not cast("Any", worktree_waits)._exists(conn):
+        return {}
+    sql = "SELECT task_id, max(state) FROM worktree_waits WHERE state IN ('waiting','reserved')"
+    if task_ids is None:
+        rows = conn.execute(sql + " GROUP BY task_id").fetchall()
+    else:
+        ids = list(task_ids)
+        rows = conn.execute(sql + f" AND task_id IN ({','.join('?' * len(ids))}) GROUP BY task_id", ids).fetchall()
+    return {str(task): str(state) for task, state in rows}
+
+
 class LiveBots(set[str]):
     """`live_bots`: the bots (slugs) with a live run, and for each the tasks its live runs name (`tasks`)."""
 

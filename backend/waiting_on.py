@@ -169,7 +169,7 @@ def _turn(
     Paused wait's line is the cause as a sentence: "Builder has no computer"."""
     if not who or is_human(who):
         return Wait(PERSON, who, line, requirement_id, since, ask=ask)
-    cause = task_wakes.cannot_run(conn, who, seen)
+    cause = task_wakes.cannot_run(conn, who, seen) or task_wakes.task_cause(conn, row["id"], who)
     if cause:
         return Wait(PAUSED, who, task_wakes.cause_line(conn, who, cause), requirement_id, since, ask=ask)
     return Wait(BOT, who, line, requirement_id, since, ask=ask)
