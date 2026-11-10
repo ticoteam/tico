@@ -10,6 +10,7 @@ counts plus which computers are up and the day's failed runs, so it can check th
 import json
 import os
 import shlex
+import sqlite3
 from datetime import datetime, timezone
 
 from . import (
@@ -2630,6 +2631,29 @@ def _never_stuck_check(c, visible_sql=None):
     return check
 
 
+def _claimed_oks_check(c):
+    """How many reports to Tico support a person's OK click claimed (support.ok_given) and Maintenance has not
+    delivered yet (support.claimed): a number only, for the owner and Admins. Finance actions commit in the click's own
+    transaction, so none of them ever waits here."""
+    from . import support
+
+    try:
+        waiting = len(support.claimed(c))
+    except sqlite3.OperationalError:  # an install that never made the tables: nothing was claimed
+        waiting = 0
+    if not waiting:
+        check = _check("claimed_oks", "OK'd sends", "ok", "Nothing OK'd waits to be sent.")
+    else:
+        check = _check(
+            "claimed_oks",
+            "OK'd sends",
+            "warn",
+            f"{_plural(waiting, 'report')} to Tico support OK'd and not sent yet; Maintenance tries again each run.",
+        )
+    check["counts"] = {"claimed_not_delivered": waiting}
+    return check
+
+
 def _prime_claims(c, settings=None):
     """What the claim check reads (execution._claim_refusal) for every bot and every computer the page checks, read once
     in set queries (claim_loads.read) and handed to each check the page makes, so the page makes a few statements
@@ -3613,6 +3637,8 @@ def view(c, who, settings, auth, github, config):
     # Tasks (S15): where the never-stuck ladder has them, from its hourly reading, as numbers: the company's for the
     # owner and Admins, the tasks they may read for anyone else.
     checks.append(_never_stuck_check(c, None if full else auth.task_sql(c, who)))
+    if full:
+        checks.append(_claimed_oks_check(c))
 
     checks.extend(_aged_pr_checks(c, who, auth, full, kind))
 

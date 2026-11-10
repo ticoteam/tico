@@ -3,6 +3,7 @@
 /api/v2/tasks/{id}/oks) and its use (POST /api/v2/oks/{rid}/use). Each case is one way an act could have gone ahead
 without a named, entitled person's own click on that exact content."""
 
+import json
 import threading
 
 import pytest
@@ -357,12 +358,13 @@ def test_an_owned_oks_preview_on_a_task_others_read_shows_only_to_its_parties(ap
     r = api.get(f"/api/v2/oks/{rid}", headers=headers("cara-test"))
     assert r.status_code == 404 and "Globex" not in r.text
     assert get(api, f"oks/{rid}", token="ben-test")["content"] == {"subject": "Globex terms"}
-    # A generic kind shows to whoever reads the task, as before.
+    # A generic kind too: only its parties open its preview, whoever reads the task.
     tid2 = bots_task(api, "ops-bot-test")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid2,))
     rid2 = ask(api, "ops-bot-test", tid2)
-    assert api.get(f"/api/v2/oks/{rid2}", headers=headers("cara-test")).status_code == 200
+    assert api.get(f"/api/v2/oks/{rid2}", headers=headers("cara-test")).status_code == 404
+    assert api.get(f"/api/v2/oks/{rid2}", headers=headers("ben-test")).status_code == 200
 
 
 # ----------------------------------------------------------------------------- Needs you: a batch never gives a bound OK
@@ -620,3 +622,77 @@ def test_the_generic_routes_take_only_known_kinds_and_a_budget_raise_only_from_w
     as_member(api, "ben@acme.example")
     assert use(api, rid, bot, money, raise_ + "-3")[:2] == (409, "task_ok_missing")
     assert standing(api, rid) != K.USED
+
+
+# ----------------------------------------------------------------------------- review 2, finding 6: parties only
+def test_what_an_ok_is_for_shows_only_to_its_parties_in_every_read_of_its_task(api):
+    """A bot asks Ben, who manages it, to OK a reply on a task the whole company reads; the line and what it shows name
+    a confidential deal. Cara reads the task, its list row and its brief: she learns that it waits on a person, never
+    what for, and the preview is not hers. Ben, a party, reads it all, in the task and in his Needs you."""
+    from backend.tests.helpers.api import as_member
+
+    bot = as_bot(api)
+    as_member(api, "ben@acme.example")  # Ben is a party as the one asked, not as an Admin
+    tid = bots_task(api, bot, title="Answer the ticket")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
+    status, code, detail, out = call(
+        api,
+        "POST",
+        f"tasks/{tid}/oks",
+        bot,
+        {
+            "to": "ben",
+            "line": "Post the Globex merger terms to TK-9?",
+            "subject": "hq_reply:TK-9",
+            "content": {"text": "Globex pays 40M."},
+            "show": ["page:globex-terms"],
+            "version": version(api, tid),
+        },
+    )
+    assert status == 200, (status, code, detail)
+    rid = out["requirement_id"]
+    task = api.get(f"/api/v2/tasks/{tid}", headers=headers("cara-test"))
+    assert task.status_code == 200 and "Globex" not in task.text and "globex" not in task.text, task.text
+    ok = next(r for r in (task.json().get("task") or task.json())["to_leave"] if r["requirement_id"] == rid)
+    assert (ok["line"], ok["shows"], ok["asked_by"]) == (K.PRIVATE_LINE, [], None)
+    listed = api.get("/api/v2/tasks", params={"status": "open"}, headers=headers("cara-test"))
+    assert listed.status_code == 200 and "Globex" not in listed.text, listed.text
+    assert api.get(f"/api/v2/oks/{rid}", headers=headers("cara-test")).status_code == 404
+    # Ben, the one asked, reads what it is for, in the task and in Needs you.
+    mine = api.get(f"/api/v2/tasks/{tid}", headers=headers("ben-test")).json()
+    ok = next(r for r in (mine.get("task") or mine)["to_leave"] if r["requirement_id"] == rid)
+    assert ok["line"] == "Post the Globex merger terms to TK-9?" and ok["shows"] == ["page:globex-terms"]
+    item = next(i for i in get(api, "needs-you", token="ben-test")["items"] if i.get("requirement_id") == rid)
+    assert item["line"] == "Post the Globex merger terms to TK-9?"
+
+
+# ----------------------------------------------------------------------------- review 2, finding 8: the OK's events
+def test_the_audit_of_an_ok_reads_only_to_its_parties_whoever_reads_its_task(api):
+    """ok.asked, ok.given, ok.used and ok.not_done name what the OK was for. On a task the whole company reads, Cara
+    finds none of them, through the SQL route or the event check (task_privacy.event_readable, which passed an event
+    with no task named); Ben, the one asked, passes the check for each, and each names its task."""
+    from backend import task_privacy
+
+    bot = as_bot(api)
+    tid = bots_task(api, bot, title="Answer the ticket")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
+    rid = ask(api, bot, tid, subject="hq_reply:TK-9")
+    assert give(api, tid, rid)[0] == 200
+    assert use(api, rid, bot, subject="hq_reply:TK-9")[0] == 200
+    with api.app.state.store.transaction() as c:
+        K.not_done(c, rid, "HQ refused it")
+    query = {"sql": "SELECT action, detail FROM events WHERE target=? AND action LIKE 'ok.%'", "params": [rid]}
+    # The SQL route: the owner reads the company's whole audit, Ben his own OK, Cara nothing of it.
+    for token, seen in ((None, 4), ("ben-test", 1), ("cara-test", 0)):
+        r = api.post("/api/v2/sql", json=query, headers=headers(token) if token else headers())
+        assert r.status_code == 200, r.text
+        assert len(r.json()["rows"]) == seen, (token, r.text)
+    with api.app.state.store.read() as c:
+        events = [dict(row) for row in c.execute("SELECT * FROM events WHERE target=? AND action LIKE 'ok.%'", (rid,))]
+        assert {e["action"] for e in events} == {"ok.asked", "ok.given", "ok.used", "ok.not_done"}
+        for event in events:
+            assert json.loads(event["detail"])["task"] == tid, event
+            assert not task_privacy.event_readable(c, "human:cara", event), event
+            assert task_privacy.event_readable(c, "human:ben", event), event

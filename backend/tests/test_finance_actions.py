@@ -167,6 +167,26 @@ def test_decline_someone_else_and_a_lost_right_never_commit(books):
         assert _count(c, "fin_budgets") == 5
 
 
+def test_the_hourly_sweep_never_claims_a_given_ok_only_the_click_does(books):
+    """The lead's rule on Codex's upkeep review, item 2: a background job never claims an OK. An OK given without its
+    click's own step (ON_OK "finance") stays unused and its action waits: the sweep commits nothing. The click
+    (ok_given, as task_asks.give_ok runs it) claims the OK and commits, once."""
+    with books.transaction() as c:
+        parent = _software(c)
+        asked = _coder_asks(c, parent, "k-sweep")
+        before = _count(c, "fin_budgets")
+        give(c, "human:cara", asked.approval_id)  # given, but no click step ran
+        assert FA.ok_sweep(c, AT) == []
+        assert FA.action(c, str(asked.action_id)).status == "needs_approval"
+        assert task_asks.grant(c, asked.approval_id)["used_at"] is None
+        assert _count(c, "fin_budgets") == before
+        # What the click's step (ok_given) runs, at the books' own clock.
+        assert FA.approval_decided(c, asked.approval_id, AT).status == "committed"
+        assert FA.action(c, str(asked.action_id)).status == "committed"
+        assert task_asks.grant(c, asked.approval_id)["used_at"] is not None
+        assert FA.ok_sweep(c, AT) == [] and _count(c, "fin_budgets") == before + 1
+
+
 def test_a_withdrawn_ok_ends_the_action(books):
     with books.transaction() as c:
         parent = _software(c)

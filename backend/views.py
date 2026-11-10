@@ -2117,6 +2117,11 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             item["ask"] = next(
                 (r for r in views[item["task_id"]].get("to_leave") or () if r["requirement_id"] == item["id"]), None
             )
+            # What the task waits on says only "a person's OK" for a bound OK (waiting_on); its own line is this
+            # person's to read when they are one of its parties, as their read of the task gives it.
+            if item["ask"] and item["ask"]["kind"] == "ok":
+                item["line"] = item["ask"]["line"]
+                item["missing"] = [item["ask"]["line"]]
     return sorted(items, key=needs_key)
 
 

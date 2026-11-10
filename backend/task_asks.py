@@ -38,7 +38,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core
 
@@ -79,6 +79,13 @@ def _finance_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -
     from .finance import actions
 
     module: Any = actions  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
+def _support_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import support
+
+    module: Any = support  # its functions are typed loosely
     return module.ok_given(conn, grant, ctx)
 
 
@@ -124,14 +131,21 @@ def _file_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | N
     return module.may_ok(conn, person, grant)
 
 
+def owner_or_admin(conn: "sqlite3.Connection", person: str) -> bool:
+    """Whether `person` is the company's owner or an Admin now."""
+    from . import access
+
+    if not is_human(person):
+        return False
+    found: Row = _h().human(conn, person) or {}
+    email = str(found.get("email") or "").strip().lower()
+    return bool(email) and email in set(access.owner_and_admin_emails(conn))
+
+
 def _admin_or_manager(conn: "sqlite3.Connection", person: str, grant: Row) -> bool:
     """Whether `person` is the company's owner or an Admin, or the manager of the bot that asked (its org chart's
     reports_to): who answers for a bot's own work."""
-    from . import access
-
-    found: Row = _h().human(conn, person) or {}
-    email = str(found.get("email") or "").strip().lower()
-    if email and email in set(access.owner_and_admin_emails(conn)):
+    if owner_or_admin(conn, person):
         return True
     asker = str(grant.get("asked_by_id") or "")
     if not is_bot(asker):
@@ -173,6 +187,7 @@ ON_OK: dict[str, Callable[..., object]] = {
     "finance": _finance_ok,
     "letter": _letter_ok,
     "proposal": _proposal_ok,
+    "support": _support_ok,
 }
 
 # Subject kinds whose module asks and uses its OKs itself: a bot's generic ask (POST /api/v2/tasks/{id}/oks) and use
@@ -212,10 +227,9 @@ FREEZE: dict[str, Callable[..., Any]] = {
     "file": _file_freeze,
 }
 
-# Who may open an OK's preview beyond the task's own read check, by the subject's kind, called as
-# fn(conn, auth, who, grant) -> bool. A file's preview names the file, so it follows the file's own reader check (a
-# page's audience). An OWNED kind with none here shows its preview only to its parties: who asked, who it is asked of
-# now or was asked of, and who OK'd it. Anyone else gets "No such OK".
+# Who of an OK's parties (`party`) may open its preview, by the subject's kind, called as fn(conn, auth, who, grant)
+# -> bool. A file's preview names the file, so it also follows the file's own reader check (a page's audience). A kind
+# with none here shows its preview to its parties. Anyone else gets "No such OK".
 SEES: dict[str, Callable[..., bool]] = {
     "file": _file_may_see,
 }
@@ -544,24 +558,92 @@ def show(conn: "sqlite3.Connection", person: str, requirement_id: str, content: 
     return digest
 
 
-def may_see(conn: "sqlite3.Connection", auth: object, who: object, requirement_id: str) -> bool:
-    """Whether `who`, who reads the OK's task, may also open its preview: the subject's own reader check (SEES), or
-    for an OWNED kind, only its parties. Other kinds show to whoever reads the task."""
+# What anyone but an OK's parties reads where the OK's own line would be: on the task, in what it waits on, in lists
+# and briefs. That the task waits on a person is all they learn: never what for, nor what it shows.
+PRIVATE_LINE = "Waits on a person's OK"
+
+
+def party(conn: "sqlite3.Connection", actor: object, row: Row) -> bool:
+    """Whether `actor` is one of the OK's parties: who asked, who it was asked of (and gave it), or the company's owner
+    or an Admin. Nobody else, not whoever the ask was handed to, nor anyone who reads its task."""
+    who = str(actor or "")
+    if not who:
+        return False
+    if who in {row["asked_by_id"], row.get("asked_of_id"), row.get("ok_by_id")} - {None, ""}:
+        return True
+    return owner_or_admin(conn, who)
+
+
+def hidden_from(conn: "sqlite3.Connection", viewer: object, requirement_id: str) -> bool:
+    """Whether the requirement is a bound OK whose line, shows and answer note `viewer` may not read. A None viewer is
+    the engine's own code, which reads everything."""
+    if viewer is None:
+        return False
     row = grant(conn, requirement_id)
+    return bool(row) and not party(conn, viewer, row)
+
+
+def event_hidden(conn: "sqlite3.Connection", principals: object, target: object) -> bool:
+    """Whether an audit event about a bound OK (its target is the OK's requirement: ok.asked, ok.given, ok.used,
+    ok.not_done) is hidden from the reader: every one of `principals` (one actor, or a person and whom they act as)
+    must be a party of the OK. Reading its task is not enough, as for the OK's line (party)."""
+    if not isinstance(target, str) or not target:
+        return False
+    row = grant(conn, target)
     if not row:
         return False
-    kind = kind_of(row["subject"])
-    check = SEES.get(kind)
-    if check:
-        return bool(check(conn, auth, who, row))
-    if kind not in OWNED:
-        return True
-    from . import task_requirements as R
+    many = isinstance(principals, (tuple, list, set))
+    viewers = list(cast("tuple[object, ...]", principals)) if many else [principals]
+    return any(not party(conn, viewer, row) for viewer in viewers)
 
-    actor = str(getattr(who, "actor", "") or "")
-    requirement = _requirement(conn, requirement_id)
-    now = R.person_of(conn, requirement, str(requirement.get("visit_id") or "")) if requirement else None
-    return actor in {row["asked_by_id"], row.get("asked_of_id"), row.get("ok_by_id"), now} - {None, ""}
+
+def bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
+    """Whether a requirement is a bound OK (has a grant)."""
+    return conn.execute("SELECT 1 FROM ok_grants WHERE requirement_id=?", (requirement_id,)).fetchone() is not None
+
+
+def private_history(conn: "sqlite3.Connection", viewer: object, events: list[Row]) -> list[Row]:
+    """A task's history as `viewer` reads it: an event about a bound OK they are no party of (its ask, an answer to it,
+    a give) keeps what happened and loses its words: the ask's line becomes PRIVATE_LINE, a note goes. An event about
+    an ask that showed pages carries them as its words' provenance (`body_sources`), for files.readable_page_refs."""
+    shows_of: dict[str, list[str]] = {}
+    for event in events:
+        data: Any = event.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(data or "null")
+            except ValueError:
+                data = None
+        found: Row = data if isinstance(data, dict) else {}  # pyright: ignore[reportUnknownVariableType]
+        rid = str(found.get("requirement") or "")
+        if not rid and event.get("field") == "requirement":
+            rid = str(event.get("new") or "")
+        if not rid:
+            continue
+        if hidden_from(conn, viewer, rid):
+            event["note"] = PRIVATE_LINE if event.get("field") == "requirement" else ""
+        if rid not in shows_of:
+            requirement = _requirement(conn, rid) or {}
+            shown: Any = requirement.get("shows")
+            if isinstance(shown, str):
+                try:
+                    shown = json.loads(shown or "null")
+                except ValueError:
+                    shown = None
+            shows_of[rid] = [str(ref) for ref in cast("list[object]", shown)] if isinstance(shown, list) else []
+        if shows_of[rid]:
+            event["body_sources"] = shows_of[rid]
+    return events
+
+
+def may_see(conn: "sqlite3.Connection", auth: object, who: object, requirement_id: str) -> bool:
+    """Whether `who`, who reads the OK's task, may also open its preview: only its parties (`party`), and of those
+    only whom the subject's own reader check lets read it (SEES: a file's audience). Anyone else gets "No such OK"."""
+    row = grant(conn, requirement_id)
+    if not row or not party(conn, getattr(who, "actor", ""), row):
+        return False
+    check = SEES.get(kind_of(row["subject"]))
+    return bool(check(conn, auth, who, row)) if check else True
 
 
 def preview(conn: "sqlite3.Connection", viewer: str, requirement_id: str, *, own_click: bool) -> Row:
@@ -692,6 +774,18 @@ def _authority(conn: "sqlite3.Connection", person: str, row: Row) -> str | None:
     return None
 
 
+def claimed_problem(conn: "sqlite3.Connection", requirement_id: str, *, authority: bool = True) -> str | None:
+    """Why an OK its click claimed (used) may not be delivered now, or None when it may: it was not given up on
+    (not_done), and, with `authority` (rule C, rechecked before the first delivery of an act queued on the click, such
+    as a report to Tico support), the person who gave it is still here and still entitled to give it."""
+    row = grant(conn, requirement_id)
+    if not row or not row.get("used_at") or not row.get("ok_by_id"):
+        return "No OK claimed this"
+    if conn.execute("SELECT 1 FROM events WHERE action='ok.not_done' AND target=?", (requirement_id,)).fetchone():
+        return "It was given up on"
+    return _authority(conn, str(row["ok_by_id"]), row) if authority else None
+
+
 def passes(conn: "sqlite3.Connection", requirement_id: str, subject: str, content: object, by: str) -> bool:
     """Whether `use` would pass now. A read for code that decides on every pass (the email queue): it records no
     refusal."""
@@ -721,7 +815,7 @@ def use(conn: "sqlite3.Connection", requirement_id: str, subject: str, content: 
     ).rowcount
     if not spent:
         _refuse(conn, by, "consumed", "This OK was already used")
-    H.event(conn, by, "ok.used", requirement_id, {"subject": subject})
+    H.event(conn, by, "ok.used", requirement_id, {"subject": subject, "task": task_of(conn, requirement_id)})
 
 
 def revoke(conn: "sqlite3.Connection", requirement_id: str) -> None:
@@ -755,8 +849,8 @@ def not_done(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
     row = grant(conn, requirement_id)
     if not row or not row.get("used_at"):
         return
-    H.event(conn, SYSTEM, "ok.not_done", requirement_id, {"subject": row["subject"], "why": why[:300]})
     task_id = task_of(conn, requirement_id)
+    H.event(conn, SYSTEM, "ok.not_done", requirement_id, {"subject": row["subject"], "why": why[:300], "task": task_id})
     if row.get("filed") and task_id and _task_status(conn, task_id) == "open":
         H.attempt(conn, H.task_close, SYSTEM, task_id, why)
 

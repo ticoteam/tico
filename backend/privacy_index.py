@@ -425,6 +425,11 @@ class ReadIndex:
     def event(self, target, actor, ts, detail):
         if not self.content(H._json(detail, {}) or {}) or not self.content(target):
             return False
+        from . import task_asks
+
+        # An event about a bound OK reads only to the OK's parties (task_asks.party), whoever reads its task.
+        if task_asks.event_hidden(self.c, self.principals, target):
+            return False
         if target in self.tags() and not self.tag(target, False):
             return False
         msg = self.target_message(target)

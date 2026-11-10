@@ -212,6 +212,18 @@ def holder(conn: "sqlite3.Connection", row: Row) -> str | None:
     return row["owner_id"]
 
 
+def _bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
+    from . import task_asks
+
+    return task_asks.bound(conn, requirement_id)
+
+
+def _private_line() -> str:
+    from . import task_asks
+
+    return task_asks.PRIVATE_LINE
+
+
 def _turn(
     conn: "sqlite3.Connection",
     row: Row,
@@ -279,6 +291,10 @@ def of(
         requirement = standing.requirement
         since = requirement["created_at"] if requirement.get("visit_id") else entered
         line = standing.line or standing.name
+        if requirement["kind"] == "ok" and requirement.get("visit_id") and _bound(conn, requirement["id"]):
+            # A bound OK's line may name what it is for: what the task waits on goes to everyone who reads the task,
+            # its lists and briefs, so it only says that it waits on a person (task_asks.PRIVATE_LINE).
+            line = _private_line()
         if standing.state == R.WAITING and requirement["kind"] == "linked_done":
             if standing.on not in on_tasks:
                 on_tasks.add(standing.on or "")
