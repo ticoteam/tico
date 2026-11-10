@@ -171,3 +171,14 @@ def test_a_pipelines_mark_counts_only_the_tasks_the_reader_may_read(api):
     assert mine["open"] == 1 and mine["mark"] == "needs_person"
     theirs = {p["id"]: p for p in get(api, "factories", token="cara-test")["pipelines"]}["product"]
     assert theirs["open"] == 0 and theirs["mark"] is None
+
+
+def test_only_the_screens_preferences_are_kept_and_each_is_small(api):
+    for key in ("ui.rails", "org.history", "org.mine", "tasks.view", "tasks.pins", "pipeline.rail_hidden"):
+        assert post(api, "preferences/" + key, {"value": {"at": 1}})["value"] == {"at": 1}
+    for key in ("onboarding.progress", "librarian.market_setup", "changelog.read", "anything.else"):
+        r = api.post(f"/api/v2/preferences/{key}", json={"value": {"skipped": 1}}, headers=headers())
+        assert r.status_code == 422, (key, r.text)
+        assert api.get(f"/api/v2/preferences/{key}", headers=headers()).status_code == 422
+    r = api.post("/api/v2/preferences/org.history", json={"value": {"items": ["x" * 5000]}}, headers=headers())
+    assert r.status_code == 422, r.text
