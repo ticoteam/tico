@@ -155,7 +155,9 @@ def test_done_tells_the_private_tasks_owner_and_its_wait_clears(api):
             r
             for r in (
                 json.loads(m[0] or "{}")
-                for m in c.execute("SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops'")
+                for m in c.execute(
+                    "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops'"
+                )
             )
             if r.get("task") == row["id"] and r.get("wake") == "task_turn" and r.get("news") != "assignment"
         ]

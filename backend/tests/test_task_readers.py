@@ -82,7 +82,10 @@ def test_the_readers_answer_comes_back_to_the_task_and_nowhere_wider(api):
     attempt = run_on(api)
     child = post(api, "tasks", subtask(row["id"], "ben"), attempt["token"])
     done = post(
-        api, "tasks/" + child["id"] + "/done", {"version": child["version"], "note": "Approved: go with the plan."}, "ben-test"
+        api,
+        "tasks/" + child["id"] + "/done",
+        {"version": child["version"], "note": "Approved: go with the plan."},
+        "ben-test",
     )
     assert (done.get("task") or done)["status"] == "done"
     # Ben's answer wakes the bot that owns the task, which can act on its task with it: its turn on the task again.
@@ -232,7 +235,12 @@ def test_a_question_reaches_one_reader(api):
     def ask(to):
         return api.post(
             f"/api/v2/tasks/{row['id']}/asks",
-            json={"to": to, "line": "Ship the zip fix in the next release?", "choices": ["Yes", "No"], "version": seen(api, row, attempt)},
+            json={
+                "to": to,
+                "line": "Ship the zip fix in the next release?",
+                "choices": ["Yes", "No"],
+                "version": seen(api, row, attempt),
+            },
             headers=headers(attempt["token"]),
         )
 

@@ -340,7 +340,9 @@ def _launch(api):
     from backend.tests.helpers.engine import pipeline
 
     with api.app.state.store.transaction() as c:
-        return pipeline(c, "launch", "Launch", stages=[{"name": "Plan", "by_hand": True}, {"name": "Build", "by_hand": True}])
+        return pipeline(
+            c, "launch", "Launch", stages=[{"name": "Plan", "by_hand": True}, {"name": "Build", "by_hand": True}]
+        )
 
 
 def test_a_deleted_task_whose_stage_was_removed_comes_back_in_the_first_stage(api):
@@ -361,9 +363,9 @@ def test_a_deleted_task_whose_stage_was_removed_comes_back_in_the_first_stage(ap
         c.execute("DELETE FROM stages WHERE id=?", (launch["stages"]["Build"],))
     assert post(api, "tasks/52/restore", {}, token="ben-test")["restored"] == ticket["id"]
     with store.read() as c:
-        assert c.execute("SELECT number, pipeline_id, stage_id, status FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[
-            :
-        ] == (52, "launch", launch["stages"]["Plan"], "open")
+        assert c.execute(
+            "SELECT number, pipeline_id, stage_id, status FROM tasks WHERE id=?", (ticket["id"],)
+        ).fetchone()[:] == (52, "launch", launch["stages"]["Plan"], "open")
 
 
 def test_a_task_filed_with_a_check_model_deletes_and_comes_back_with_it(api):
@@ -566,9 +568,7 @@ def test_a_task_deleted_before_the_column_renames_comes_back_with_every_value(ap
             (json.dumps(["web"]), ticket["id"]),
         )
         before = dict(
-            c.execute(
-                "SELECT acceptance, labels, conversation_id FROM tasks WHERE id=?", (ticket["id"],)
-            ).fetchone()
+            c.execute("SELECT acceptance, labels, conversation_id FROM tasks WHERE id=?", (ticket["id"],)).fetchone()
         )
         participants = c.execute(
             "SELECT participants FROM conversations WHERE id=?", (before["conversation_id"],)

@@ -67,8 +67,20 @@ def test_company_read_does_not_grant_work(api):
     assert not task['private']
     assert get(api, 'tasks/' + task['id'], token=token)['task']['id'] == task['id']
     assert task['id'] in {row['id'] for row in get(api, 'tasks?pipeline=general', token=token)['tasks']}
-    post(api, 'tasks/' + task['id'] + '/owner', {'version': task['version'], 'owner': 'ops', 'why': 'Mine now'}, token=token, expected=403)
-    post(api, 'tasks/' + task['id'] + '/move', {'version': task['version'], 'to': 'done', 'why': 'Built'}, token=token, expected=403)
+    post(
+        api,
+        'tasks/' + task['id'] + '/owner',
+        {'version': task['version'], 'owner': 'ops', 'why': 'Mine now'},
+        token=token,
+        expected=403,
+    )
+    post(
+        api,
+        'tasks/' + task['id'] + '/move',
+        {'version': task['version'], 'to': 'done', 'why': 'Built'},
+        token=token,
+        expected=403,
+    )
     task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'private': True})
     get(api, 'tasks/' + task['id'], token=token, expected=404)
     assert task['id'] not in {row['id'] for row in get(api, 'tasks?pipeline=general', token=token)['tasks']}
@@ -93,7 +105,9 @@ def test_private_defaults_reassignment_and_human_publication(api):
     assert not explicit['private']
     post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'private': False}, token=ops, expected=422)
     changed = post(
-        api, 'tasks/' + assigned['id'] + '/owner', {'version': assigned['version'], 'owner': 'cpo', 'why': 'Cpo reviews'}
+        api,
+        'tasks/' + assigned['id'] + '/owner',
+        {'version': assigned['version'], 'owner': 'cpo', 'why': 'Cpo reviews'},
     )
     assert changed['private']
     get(api, 'tasks/' + assigned['id'], token=ops, expected=404)
