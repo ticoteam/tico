@@ -9816,19 +9816,24 @@ def thread_task(api, args):
     "spending, changing people, access or settings, archiving or deleting, activating a bot. Give the exact "
     "API operation; it is shown to them as a Confirm / Cancel card and runs only when they click, as them. "
     "Several actions go on ONE card, never one card each: path /api/v2/assistant/batch, body {\"actions\": "
-    "[{\"path\": \"/api/v2/tasks/<id>\", \"body\": {\"close\": true}}, {\"path\": \"/api/v2/approvals/<id>\", "
-    "\"body\": {\"decision\": \"declined\", \"note\": \"<reason>\"}}, {\"path\": \"/api/v2/tasks/<id>/comments\", "
-    "\"body\": {\"text\": \"<their words>\"}}, ...]} (up to 100). Approving goes on a card only when the person's "
-    "message names it (approve, merge, publish, send, spend); 'clear my queue' never approves. "
+    "[{\"path\": \"/api/v2/tasks/<id>/move\", \"body\": {\"to\": \"closed\", \"why\": \"<reason>\", \"version\": N}}, "
+    "{\"path\": \"/api/v2/tasks/<id>/asks/<requirement_id>/answer\", \"body\": {\"value\": \"ok\" | \"no\" | "
+    "\"<answer>\", \"note\": \"<their words>\", \"version\": N}}, {\"path\": \"/api/v2/tasks/<id>/comments\", "
+    "\"body\": {\"text\": \"<their words>\"}}, ...]} (up to 100); N is the version hub_task_show printed. An OK goes "
+    "on a card only when the person's message names it (approve, merge, publish, send, spend); 'clear my queue' never "
+    "OKs anything. "
     "The Strategy Bot may propose one owner-confirmed org-chart change as POST /api/v2/seats/batch with body "
     "{\"seats\":[{\"title\":\"...\",\"description\":\"...\",\"reports_to\":\"...\",\"team\":\"...\"}]} . "
     "Use hub_org_models for published recommendations; no seat is added before the owner confirms. "
-    "A task action, decline or answer the person clearly asked for needs no card: pass on_behalf_of to that tool instead. "
+    "A task action or answer the person clearly asked for needs no card: pass on_behalf_of to that tool instead. "
     "Nothing here runs until they confirm.",
     {
         "summary": _s("One plain sentence saying what will happen if they confirm"),
         "method": {"enum": ["POST", "PUT", "PATCH", "DELETE"], "default": "POST"},
-        "path": _s("The API path, e.g. /api/v2/approvals/<id> or /api/v2/tasks/<id>/comments"),
+        "path": _s(
+            "The API path, e.g. /api/v2/tasks/<id>/move, /api/v2/tasks/<id>/asks/<requirement_id>/answer or "
+            "/api/v2/tasks/<id>/comments"
+        ),
         "body": {"type": "object", "description": "The JSON body of that request"},
         "for_person": _s(
             "Only the Assistant's own background run: the person (human:<id>) whose Assistant chat gets the card"
