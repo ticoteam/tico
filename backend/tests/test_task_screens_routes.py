@@ -216,3 +216,22 @@ def test_only_the_screens_preferences_are_kept_and_each_is_small(api):
         assert api.get(f"/api/v2/preferences/{key}", headers=headers()).status_code == 422
     r = api.post("/api/v2/preferences/org.history", json={"value": {"items": ["x" * 5000]}}, headers=headers())
     assert r.status_code == 422, r.text
+
+
+def test_a_sub_task_the_reader_may_not_open_is_named_by_neither_title_nor_id(api):
+    # A bot's task waits on what it filed (waiting_on.py): here, a sub-task private to ben.
+    parent = post(api, "tasks", {"title": "Plan the launch", "body": "x", "owner": "ops"})
+    child = post(
+        api,
+        "tasks",
+        {"title": "Quiet acquisition", "body": "x", "owner": "ben", "parent": parent["id"], "private": True},
+    )
+    assert api.get("/api/v2/tasks/" + child["id"], headers=headers("cara-test")).status_code == 404
+    mine = get(api, "tasks/" + parent["id"])["task"]
+    assert mine["turn"]["state"] == "tasks" and mine["turn"]["who"] == child["id"]
+    row = next(t for t in get(api, "tasks?brief=true", token="cara-test")["tasks"] if t["id"] == parent["id"])
+    full = get(api, "tasks/" + parent["id"], token="cara-test")["task"]
+    for turn in (row["turn"], full["turn"], *full["waits"]):
+        assert turn["line"] == "A sub-task" and turn["who"] is None, turn
+    for req in full["to_leave"]:
+        assert req["who"] != child["id"] and "Quiet acquisition" not in (req["standing"] or ""), req

@@ -634,7 +634,7 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
     hidden = hidden_filed(conn, row, viewer)
     for wait in waits:
         if wait["state"] == W.TASKS and wait["who"] in hidden:
-            wait["line"] = "A sub-task"
+            wait["line"], wait["who"] = "A sub-task", None  # neither its title nor its id
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
@@ -649,7 +649,7 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
                 "line": R.name_of(requirement),
                 "met": standing.met,
                 "standing": standing_line(standing, hidden),
-                "who": None if standing.met else standing.on,
+                "who": None if standing.met or standing.on in hidden else standing.on,
                 "asked_by": requirement.get("added_by_id") if requirement.get("visit_id") else None,
                 "choices": requirement.get("choices"),
                 "shows": requirement.get("shows") or [],
