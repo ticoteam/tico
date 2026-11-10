@@ -298,12 +298,21 @@ async function personAccessLoad(p: RosterPerson) {
   card.hidden = false;
   $('#person-access-edit').onclick = () => teammateEditAccess('human', p.id, p.name || p.id, () => personAccessLoad(p));
 }
+// The person's tasks as last read and mended since: their rows, and where the catch-up resumes.
+let PERSON_LIST: {id: string; rows: TaskBriefV3[]; cursor: string} | null = null;
+// What the list holds: every task the person owns, open or finished, except a snoozed one (the server's default).
+const personOwns = (id: string) => (t: TaskBriefV3) => t.owner_id === 'human:' + id && !t.snoozed;
 async function personTasksLoad(p: RosterPerson) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;
   const owner = 'human:' + p.id;
-  const all = await taskBriefs({owner, status: 'all'}).catch(() => [] as TaskBriefV3[]);
+  const read = await taskBriefsPage({owner, status: 'all'}).catch(() => null);
   if (!$('#person-tasks') || PERSON_TASKS !== p.id) return;
+  PERSON_LIST = read ? {id: p.id, rows: read.tasks, cursor: read.cursor} : null;
+  personTasksDraw(p, read?.tasks || []);
+}
+function personTasksDraw(p: RosterPerson, all: TaskBriefV3[]) {
+  if (!$('#person-tasks')) return;
   const active = all.filter(t => t.status === 'open');
   const finished = all.filter(t => t.status !== 'open');
   const first = firstName(p.name) || p.id;
@@ -314,9 +323,28 @@ async function personTasksLoad(p: RosterPerson) {
   const link = $('#person-tasks [data-person-task-add]');
   if (link) link.onclick = (ev: Event) => { ev.preventDefault(); personTaskModal(p); };
 }
-function personTasksReload() {
+// The live stream's task events, each in place by personOwns (refresh.ts liveTasksApply); nothing is read for one.
+function personTasksLive(events: LiveTaskEvent[]) {
+  const list = PERSON_LIST, p = list && PERSON_TASKS === list.id && (S.people || []).find(row => row.id === list.id);
+  if (!list || !p || !$('#person-tasks')) return;
+  const moved = taskRowsLive(list.rows, events, personOwns(list.id));
+  if (moved === 'bulk') personTasksReload();
+  else if (moved) personTasksDraw(p, list.rows);
+}
+// The 2-minute refresh, a bulk change and this page's own writes: what changed since the list's cursor
+// (GET /v2/tasks?changed_after); a full read only without a cursor or when the server says it is too old.
+async function personTasksReload() {
   const p = PERSON_TASKS && (S.people || []).find(row => row.id === PERSON_TASKS);
-  if (p && $('#person-tasks')) void personTasksLoad(p);
+  if (!p || !$('#person-tasks')) return;
+  const list = PERSON_LIST;
+  if (!list || list.id !== p.id) { void personTasksLoad(p); return; }
+  try {
+    const out = await taskRowsCatchUp(list.rows, list.cursor, {owner: 'human:' + p.id, status: 'all'}, personOwns(p.id), () => PERSON_LIST === list);
+    if (!out) return;
+    if (out === 'reset') { void personTasksLoad(p); return; }
+    list.cursor = out.cursor;
+    if (out.moved) personTasksDraw(p, list.rows);
+  } catch { /* the next refresh tries again */ }
 }
 // "+ Add task" on a human's page: the give-a-task form in a modal, assigned to them, added by you.
 function personTaskModal(p: RosterPerson) {
@@ -350,7 +378,7 @@ function personTaskModal(p: RosterPerson) {
       toast(`Task for ${p.name || p.id} created`);
       d.close();
       await v2Refresh();
-      personTasksReload();
+      void personTasksReload();
     } catch (e) { msg.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`; btn.disabled = false; }
   };
   if (!d.open) d.showModal();

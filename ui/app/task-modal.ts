@@ -533,7 +533,7 @@ async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then:
     if (here() && then !== false) void taskModalShow(task, d);       // the server's answer, at once
     // Closing says so with Undo for a while (S5): Undo reopens it.
     if (body.close) toast('Closed', false, {label: 'Undo', run: () => taskMove(id, 'reopen', task.version).then(r => { if (here()) void taskModalShow(r.task, d); }, e => toast(errorMessage(e, ''), true))});
-    if (BOT) void loadBotTasksV2(BOT.slug);
+    if (BOT) void botTasksCatchUp(BOT.slug);
     void personTasksReload();
     if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     roadmapRankingRefresh();

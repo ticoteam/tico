@@ -41,9 +41,9 @@ async function refresh(force = false): Promise<void> {
   const reviewing = $('#main .req[open]') || [...document.querySelectorAll('#main .issue-compose:not([hidden])')].some(form => !form.closest('details:not([open])'));
   if (force || !reviewing) {
     if (TASKS_ST && isTasksRoute(S.route)) void (force ? tasksLoad(TASKS_ST) : tasksCatchUp(TASKS_ST));   // a delta from the list's cursor
-    // The Active column beside the chat was loaded once and never again, so a task the bot closed
-    // stayed listed until a reload. The poll redraws it too.
-    if (BOT && BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
+    // A bot's tasks catch up from their cursor too (bot-tasks.ts); a forced refresh reads them whole.
+    if (BOT && BOT.loaded.has('tasks')) void (force ? loadBotTasksV2(BOT.slug) : botTasksCatchUp(BOT.slug));
+    if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) void personTasksReload();
   }
 }
 
@@ -69,6 +69,7 @@ interface LiveTaskEvent {
   task_id?: unknown;
   gone?: unknown;
   bulk?: unknown;
+  kinds?: unknown;
   task?: {id?: unknown; lane?: unknown; links?: unknown; owner_id?: unknown; requester_id?: unknown; type_id?: unknown} | null;
 }
 function liveTasksApply(events: LiveTaskEvent[]): void {
@@ -81,18 +82,12 @@ function liveTasksApply(events: LiveTaskEvent[]): void {
   }
   // The Tasks page puts each event's task in place (tasks-page.ts); it reads nothing.
   if (events.length) tasksLiveApply(events);
-  // These read whole lists, so at most every 15 s and not in a hidden tab (liveThrottle).
-  if (BOT) {
-    const me = 'bot:' + BOT.slug;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me || d.task?.requester_id === me)) liveThrottle('bot-tasks', () => {
-      if (!BOT || BOT.slug !== me.slice(4)) return;
-      if (BOT.loaded.has('tasks')) void loadBotTasksV2(BOT.slug);
-    });
-  }
-  if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) {
-    const me = 'human:' + PERSON_TASKS;
-    if (events.some(d => d.bulk || d.gone || d.task?.owner_id === me)) liveThrottle('person-tasks', personTasksReload);
-  }
+  // A bot's page puts each in place too (bot-tasks.ts); it reads nothing.
+  if (BOT) botTasksLive(BOT.slug, events);
+  // And a person's page (person-page.ts).
+  if (typeof PERSON_TASKS !== 'undefined' && PERSON_TASKS) personTasksLive(events);
+  // And My dashboard's My tasks (dashboard.ts).
+  dashTasksLive(events);
   const open = TASK_CHAT;   // read again: a stop above may have cleared it
   if (open && events.some(d => d.bulk || String(d.id) === String(open.id))) taskChatLive(open);
 }
@@ -125,8 +120,9 @@ function liveWire(): void {
       if (BOT) botNeedsChanged(BOT.slug);
     }, 200);
   }).catch(() => {}));
-  // My dashboard reads itself again when what its cards show may have moved (ui/app/dashboard.ts dashFollow).
-  for (const topic of ['tasks', 'needs-list', 'threads']) liveOn(topic, dashFollow);
+  // My dashboard puts each change in its cards (ui/app/dashboard.ts); it reads nothing for them.
+  liveOn('needs-list', dashNeedsLive);
+  liveOn('threads', dashThreadsLive);
   // Away longer than the server keeps: read everything once.
   liveOn('reset', () => { pagesAccessRefresh(); liveSoon('refresh', () => refresh(true), 100); });
   liveStart();

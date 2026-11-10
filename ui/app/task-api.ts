@@ -117,6 +117,48 @@ async function taskChanges(query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sor
   const res = await get<Partial<TaskChanges>>(`/v2/tasks?${p}`, {fresh: true});
   return {tasks: res.tasks || [], gone: (res.gone || []).map(String), cursor: res.cursor || '', reset: !!res.reset};
 }
+
+// ---- lists fed by the live stream
+// Each list puts an event's task in place by its own rule and never reads the whole list because an event came (Chris,
+// Nov 3). Its catch-up is a changed_after delta from the cursor its last read gave. The Tasks page, a bot's page, a
+// person's page and My dashboard share these.
+/** A row a live list holds: a list row, or a task as an event or a write carries it. */
+type TaskLiveRow = {id: string};
+/** One task as the viewer reads it now, into `rows` by the list's rule `has`: in place, added first, or out when `has`
+ * says no or the task is gone or unreadable (null). True when the rows moved. */
+function taskRowsPut<T extends TaskLiveRow>(rows: T[], t: T | null, id: string, has: (t: T) => boolean): boolean {
+  const i = rows.findIndex(x => String(x.id) === id), keep = !!t && has(t);
+  if (t && keep && i >= 0) rows[i] = t;
+  else if (t && keep) rows.unshift(t);
+  else if (i >= 0) rows.splice(i, 1);
+  else return false;
+  return true;
+}
+/** The task an event carries, or null when the event says it is gone or the viewer can no longer read it. */
+const taskOfEvent = <T extends TaskLiveRow>(d: LiveTaskEvent): T | null => d.gone ? null : (d.task as T | null | undefined) ?? null;
+const taskEventId = (d: LiveTaskEvent) => String(d.id ?? d.task_id ?? '');
+/** A burst of live task events onto `rows`: true when they moved, 'bulk' when one change named many tasks (the list then
+ * catches up from its cursor; nothing is read for the others). */
+function taskRowsLive<T extends TaskLiveRow>(rows: T[], events: LiveTaskEvent[], has: (t: T) => boolean): boolean | 'bulk' {
+  if (events.some(d => d.bulk)) return 'bulk';
+  let moved = false;
+  for (const d of events) moved = taskRowsPut(rows, taskOfEvent<T>(d), taskEventId(d), has) || moved;
+  return moved;
+}
+/** Catches `rows` up from `cursor` (taskChanges under the list's own `query`): the rows that changed go through
+ * taskRowsPut, the ones `gone` come out. `still()` is asked once the answer is in: false drops it (the list was read
+ * again meanwhile). Answers the next cursor, or 'reset' when only a full read will do (no cursor, or too old). */
+async function taskRowsCatchUp<T extends TaskLiveRow>(rows: T[], cursor: string, query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sort'>,
+  has: (t: T) => boolean, still: () => boolean): Promise<{cursor: string; moved: boolean} | 'reset' | null> {
+  if (!cursor) return 'reset';
+  const out = await taskChanges(query, cursor);
+  if (!still()) return null;
+  if (out.reset) return 'reset';
+  let moved = false;
+  for (const id of out.gone) moved = taskRowsPut(rows, null, id, has) || moved;
+  for (const t of out.tasks) moved = taskRowsPut(rows, t as unknown as T, String(t.id), has) || moved;
+  return {cursor: out.cursor || cursor, moved};
+}
 async function needsYou(): Promise<NeedsEntry[]> {
   const res = await get<{items?: NeedsEntry[]}>('/v2/needs-you', {fresh: true});
   return res.items || [];

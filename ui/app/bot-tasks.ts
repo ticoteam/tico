@@ -24,6 +24,12 @@ interface BotFilterRead {
 type BotListTask = TaskBriefV3 & {created_at?: string | null; updated_at?: string | null; done_at?: string | null; closed_at?: string | null};
 interface BotTaskList {
   tasks?: BotListTask[];
+  cursor?: string;
+}
+// A bot's own tasks as its page last had them (BOT_TASKS_CACHE): the rows, and where their catch-up resumes.
+interface BotTasksSeen {
+  owned: {tasks: BotListTask[]};
+  cursor: string;
 }
 // The pill's state for a bot (ui/app/pill.ts): what is typed, the files on it and which bot it goes to.
 interface BotPillState {
@@ -85,9 +91,113 @@ async function loadBotTasksV2(slug: string) {
     if (!seen) $('#t-open').innerHTML = '<div class="err">Could not load the tasks. They will show on the next refresh.</div>';
     return;
   }
-  BOT_TASKS_CACHE.set(slug, {owned});
+  // The open read's cursor: the ended read may be the browser's kept copy (304), its cursor older, never newer.
+  BOT_TASKS_CACHE.set(slug, {owned, cursor: open?.cursor || ''});
   botTasksRender(slug, owned);
   await filtered;
+}
+
+// ---- live: the stream's task events in place (refresh.ts liveTasksApply); nothing is read for one
+// The bot's own tasks: the ones it holds, open or finished (Done recently keeps the last two weeks of them).
+const botOwns = (slug: string) => (t: BotListTask) => t.owner_id === 'bot:' + slug;
+function botTasksLive(slug: string, events: LiveTaskEvent[]): void {
+  const seen = BOT_TASKS_CACHE.get(slug);
+  if (!seen || !BOT?.loaded.has('tasks')) return;
+  const moved = taskRowsLive(seen.owned.tasks, events, botOwns(slug));
+  if (moved === 'bulk') { void botTasksCatchUp(slug); return; }
+  const filtered = botTaskFilterLive(slug, events);
+  if (moved) botTasksRender(slug, seen.owned);
+  else if (filtered) botTaskFilterPaint(slug);
+}
+// The 2-minute refresh, this page's own writes and a finished turn: the bot's tasks from their cursor
+// (GET /v2/tasks?changed_after), a full read only when there is none or the server says it is too old. The filter tabs
+// are read once with it: Needs you and "Waiting on me" turn on every wait of a task, which a list row does not carry.
+async function botTasksCatchUp(slug: string): Promise<void> {
+  const seen = BOT_TASKS_CACHE.get(slug);
+  if (!seen || !$('#t-open') || BOT?.slug !== slug) { if (BOT?.slug === slug) void loadBotTasksV2(slug); return; }
+  try {
+    const out = await taskRowsCatchUp(seen.owned.tasks, seen.cursor, {owner: slug, status: [...V2_ACTIVE, ...V2_ENDED].join(','), snoozed: 'all'},
+      botOwns(slug), () => BOT_TASKS_CACHE.get(slug) === seen && BOT?.slug === slug);
+    if (!out) return;
+    if (out === 'reset') { void loadBotTasksV2(slug); return; }
+    seen.cursor = out.cursor;
+    if (out.moved) botTasksRender(slug, seen.owned);
+  } catch { /* the next refresh tries again */ }
+  await botTaskFilterRead(slug);
+}
+// Whether a task belongs in a filter tab, by its rows (backend/bot_task_tabs.py tab_sql), as the viewer reads it now:
+// true, false, or null when a row turns on what a list row does not carry (every wait of the task: Needs you, waiting
+// on me), which the refresh's read of the tabs then settles.
+function botTabHas(tab: BotTaskTabEntry, t: TaskAny, slug: string): boolean | null {
+  const me = myActor(), it = 'bot:' + slug, row = t as TaskAny & {created_at?: string | null; updated_at?: string | null; turn?: TaskWaitV3 | null;
+    done_at?: string | null; closed_at?: string | null; labels?: string[]; routine_id?: string | null; body?: string | null};
+  if (row.owner_id !== it && row.requester_id !== it) return false;
+  const ago = (days: number) => new Date(Date.now() - days * 86400e3).toISOString().slice(0, 19);
+  const party = (actor: string | null | undefined, value: BotSidebarValue) =>
+    value === 'this_bot' ? actor === it : value === 'me' ? actor === me : value === 'others' ? ![me, it].includes(actor || '') : actor === value;
+  const list = (value: BotSidebarValue) => (Array.isArray(value) ? value : [value]).map(String);
+  const finished = row.status === 'done' || row.status === 'closed';
+  let window: number | null = BOT_DONE_RECENT_DAYS;
+  for (const {field, value} of tab.conditions || []) {
+    let hit: boolean;
+    if (field === 'status') hit = list(value).includes(row.status);
+    else if (field === 'stage') hit = list(value).includes(String(row.stage_id ?? ''));
+    else if (field === 'pipeline') hit = list(value).includes(String(row.pipeline_id ?? ''));
+    else if (field === 'assigned_to') hit = party(row.owner_id, value);
+    else if (field === 'asked_by') hit = party(row.requester_id, value);
+    else if (field === 'needs' || field === 'waiting_on' && value === 'me') return null;
+    else if (field === 'waiting_on') {
+      // The engine's headline wait (the row's `turn`), on the bot's open tasks only.
+      const head = row.turn, who = head?.who ?? null;
+      hit = row.status === 'open' && !!head && (value === 'person' ? head.state === 'person' && who !== it
+        : value === 'bot' ? (head.state === 'bot' || head.state === 'paused') && !!who && who !== it
+        : value === 'any' ? who !== it : ![it, me].includes(who || ''));
+    }
+    else if (field === 'created_within') hit = String(row.created_at || '') >= ago(Number(value));
+    else if (field === 'updated_within') hit = String(row.updated_at || '') >= ago(Number(value));
+    else if (field === 'done_within') { window = null; hit = String(row.done_at || row.closed_at || '') >= ago(Number(value)); }
+    else if (field === 'due') {
+      const day = String(row.due_at || '').slice(0, 10), today = new Date().toISOString().slice(0, 10);
+      hit = !!day && (value === 'overdue' ? day < today && row.status === 'open'
+        : day >= today && day <= new Date(Date.now() + Number(value) * 86400e3).toISOString().slice(0, 10));
+    }
+    else if (field === 'label') hit = (row.labels || []).includes(String(value));
+    else return null;
+    if (!hit) return false;
+  }
+  if (finished && window && String(row.done_at || row.closed_at || row.updated_at || '') < ago(window)) return false;
+  // A routine's finished runs are on no tab.
+  return !(finished && (row.routine_id || /from schedule/.test(String(row.body || ''))));
+}
+// The filter tabs as the server counted them, mended from the events: a held task's row in place, a task joining or
+// leaving a tab its rows decide, and a gone or unreadable one out of every tab. True when anything moved.
+function botTaskFilterLive(slug: string, events: LiveTaskEvent[]): boolean {
+  const got = BOT_TASK_FILTERED.get(slug);
+  if (!got) return false;
+  const tabs = botTaskTabList(slug);
+  let moved = false;
+  for (const d of events) {
+    const id = taskEventId(d), t = taskOfEvent<TaskAny & {created_at?: string | null}>(d);
+    if (t) {
+      if (got.tasks.has(id)) { got.tasks.set(id, t); moved = true; }
+    }
+    for (const tab of Object.values(got.tabs)) {
+      const layout = tabs.find(x => x.key === tab.key && x.name === tab.name);
+      const has = !t ? false : layout ? botTabHas(layout, t, slug) : null;
+      const at = tab.ids.indexOf(id);
+      if (has === null) continue;
+      if (!has && at >= 0) { tab.ids.splice(at, 1); tab.count = Math.max(0, Number(tab.count) - 1); moved = true; }
+      else if (has && at < 0 && t) {
+        // Newest first, as the server pages it; one older than the last held row is on a later page.
+        const created = String(t.created_at || ''), byCreated = (x: string) => String((got.tasks.get(x) as {created_at?: string} | undefined)?.created_at || '');
+        const before = tab.ids.findIndex(x => byCreated(x) < created);
+        if (before >= 0 || !tab.next) { tab.ids.splice(before >= 0 ? before : tab.ids.length, 0, id); got.tasks.set(id, t); }
+        tab.count = Number(tab.count) + 1;
+        moved = true;
+      }
+    }
+  }
+  return moved;
 }
 // Default tab identities and Done recently. [key, label, count id]; the ids predate the tabs. A bot that is not
 // on Tico's task list (Issues) shows these four.
@@ -307,13 +417,12 @@ function botNeedsPaint(slug: string): Set<string> {
   list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(botTaskRowHTML).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
   return new Set(items.map(t => String(t.id)));
 }
-// Needs you changed: refresh filter membership and supplement deduplication.
+// Needs you changed: the Needs you tab is drawn again from the list the app holds (botNeedsPaint adds this bot's items
+// it does not show yet). Nothing is read for it (Nov 3): which tasks the tab's own rule takes turns on every wait of a
+// task, which no row carries, so the 2-minute refresh's tab read settles that (botTasksCatchUp).
 function botNeedsChanged(slug: string) {
   const seen = BOT_TASKS_CACHE.get(slug);
-  if (seen && BOT?.loaded?.has('tasks')) {
-    botTasksRender(slug, seen.owned);
-    void botTaskFilterRead(slug);
-  }
+  if (seen && BOT?.loaded?.has('tasks')) botTasksRender(slug, seen.owned);
 }
 function botTasksRender(slug: string, owned: {tasks: BotListTask[]}) {
   if (!$('#t-open') || BOT?.slug !== slug) return;
@@ -391,7 +500,7 @@ async function v2PillTask(P: BotPillState, text: string) {
     toast(`Task for ${empName(P.slug)} created`);
     await v2Refresh();
     if (typeof P.slug === 'string' && BOT?.slug === P.slug) {   // N: the bot's slug is a string here
-      void loadBotTasksV2(P.slug);
+      void botTasksCatchUp(P.slug);
     }
   } catch (e) { toast(errorMessage(e, ''), true); }
   P.sending = false;

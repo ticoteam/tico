@@ -235,13 +235,10 @@ async function tasksCatchUp(state: TasksPageState | null): Promise<void> {
   if (!state.cursor) { await tasksLoad(state); return; }
   const seq = state.seq;
   try {
-    const out = await taskChanges(query, state.cursor);
-    if (TASKS_ST !== state || seq !== state.seq) return;
-    if (out.reset) { await tasksLoad(state); return; }
-    state.cursor = out.cursor || state.cursor;
-    const gone = new Set(out.gone);
-    state.tasks = state.tasks.filter(t => !gone.has(String(t.id)));
-    for (const t of out.tasks) tasksTaskPut(state, t, null, false);
+    const out = await taskRowsCatchUp(state.tasks, state.cursor, query, t => tasksViewHas(state, t), () => TASKS_ST === state && seq === state.seq);
+    if (!out) return;
+    if (out === 'reset') { await tasksLoad(state); return; }
+    state.cursor = out.cursor;
     tasksRender(state);
   } catch { /* the next refresh tries again */ }
 }
@@ -251,14 +248,8 @@ function tasksTaskPut(state: TasksPageState, t: TaskAny | null, id: string | nul
   let moved = false;
   // You: Needs you says what is on it; a task's change only redraws the item that shows it.
   for (const it of state.needs) if (t && it.task && String(it.task.id) === key) { it.task = {...it.task, ...t} as typeof it.task; moved = true; }
-  if (state.pipeline || state.archive) {
-    const row = t as TaskBriefV3 | null;   // a full task carries every list field
-    const i = state.tasks.findIndex(x => String(x.id) === key), keep = !!row && tasksViewHas(state, row);
-    if (row && keep && i >= 0) state.tasks[i] = row;
-    else if (row && keep) state.tasks.unshift(row);
-    else if (i >= 0) state.tasks.splice(i, 1);
-    moved ||= keep || i >= 0;
-  }
+  // A full task carries every list field.
+  if (state.pipeline || state.archive) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row)) || moved;
   if (moved && draw) tasksRender(state);
   return moved;
 }
