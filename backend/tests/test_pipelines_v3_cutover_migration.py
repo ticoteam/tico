@@ -328,3 +328,42 @@ def test_a_tico_05_database_with_no_tasks_starts_and_keeps_everything_but_the_ol
         assert c.execute("SELECT id FROM pipelines").fetchall() == [("general",)]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
     boot(path)  # and it starts again
+
+
+def _files(directory):
+    return {path.name: path.read_bytes() for path in sorted(directory.iterdir())}
+
+
+@pytest.mark.parametrize("left", ["no log", "log and index", "log only"])
+def test_a_refused_tico_05_database_is_left_byte_for_byte_as_it_was(tmp_path, left):
+    """Its only task is in the write-ahead log, not yet in the file: the refusal must read the log to see it, and leave
+    the file, its -wal and its -shm (where there are any) unchanged, and make no new file. A read-write check merged
+    the log into the file on close, and a plain read-only one writes the -shm or makes it."""
+    made, path = tmp_path / "made", tmp_path / "old" / "hub.sqlite"
+    made.mkdir()
+    path.parent.mkdir()
+    writer = sqlite3.connect(made / "hub.sqlite", isolation_level=None)
+    writer.execute("PRAGMA journal_mode=WAL")
+    writer.executescript(OLD)
+    writer.execute("PRAGMA user_version=71")
+    writer.execute(migrations.TABLE)
+    writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Old', 'doing')")
+    if left == "no log":
+        writer.close()  # the last connection merges the log and removes it
+    for name in ("hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm"):  # what a server that stopped without closing left
+        if (made / name).exists() and not (left == "log only" and name.endswith("-shm")):
+            shutil.copyfile(made / name, path.parent / name)
+    writer.close()
+    before = _files(path.parent)
+    assert set(before) == {
+        "no log": {"hub.sqlite"},
+        "log and index": {"hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm"},
+        "log only": {"hub.sqlite", "hub.sqlite-wal"},
+    }[left]
+    with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):
+        migrations.preflight(path)
+    with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):
+        boot(path)
+    assert _files(path.parent) == before

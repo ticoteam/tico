@@ -37,9 +37,11 @@ before its first migration.
 import hashlib
 import importlib.util
 import re
+import shutil
 import sqlite3
+import tempfile
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from .. import hubdb as H
@@ -178,12 +180,39 @@ def _verify(recorded, known):
             )
 
 
+@contextmanager
+def _read_only(path):
+    """A connection that reads the database as it is, with what its write-ahead log holds, and changes no byte of it,
+    of its -wal or of its -shm, and makes no file next to it. A read-write connection would merge the log into the
+    file when it closes; a plain read-only one still writes the -shm index and makes a missing -wal and -shm.
+    - No log (a clean stop): the file alone is the database, read as immutable (no locks, no -shm, no -wal).
+    - A log and its index (a running server, or one that stopped without closing): the index is opened read-only, and
+      SQLite reads the log itself where the index cannot be trusted.
+    - A log without its index (copied without it): the file and its log are read from a copy, since SQLite reads a log
+      only through an index it can write."""
+    wal, shm = Path(f"{path}-wal"), Path(f"{path}-shm")
+    uri = path.resolve().as_uri()
+    if not wal.is_file() or wal.stat().st_size == 0:
+        with closing(sqlite3.connect(f"{uri}?mode=ro&immutable=1", uri=True)) as conn:
+            yield conn
+    elif shm.is_file():
+        with closing(sqlite3.connect(f"{uri}?mode=ro&readonly_shm=1", uri=True)) as conn:
+            yield conn
+    else:
+        with tempfile.TemporaryDirectory() as scratch:
+            copy = Path(scratch) / path.name
+            shutil.copyfile(path, copy)
+            shutil.copyfile(wal, f"{copy}-wal")
+            with closing(sqlite3.connect(copy)) as conn:
+                yield conn
+
+
 def preflight(path, *, adopt_legacy=False, directory=None):
     """Refuse a database this code must not open, before anything writes to it. A missing or empty file is new."""
     path = Path(path)
     if not path.is_file() or path.stat().st_size == 0:
         return
-    with closing(sqlite3.connect(str(path))) as conn:
+    with _read_only(path) as conn:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not tables:
             return
