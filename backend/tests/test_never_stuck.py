@@ -870,3 +870,32 @@ def test_a_bot_whose_ok_a_stage_needs_is_woken_beside_the_owner_and_a_lost_wake_
     c.execute("DELETE FROM messages WHERE recipient_id=? AND wake_key LIKE ?", (REVIEWER, row["id"] + ":%"))
     # Never told at all (as before, when entry woke only the owner): the owner's next try does not cover it.
     assert NS.rules_hold(c) == [f"2: task {row['id']} is {REVIEWER}'s turn with no run, no wake and no next try"]
+
+
+def test_the_rules_check_reads_a_persons_needs_you_once_and_finds_each_task_in_it_by_its_id(c, general, monkeypatch):
+    """Speed: one person with 5,000 tasks in Needs you. The check reads the list once per reading and indexes it by
+    task, so each task is found by its id: a scan of the whole list for every task was 25 million looks."""
+    tasks = [X.new_task(c, ANA, title, assignee=ANA)["id"] for title in ("Call the bank", "Sign the lease", "Pay rent")]
+    assert NS.rules_hold(c) == []
+    reads = {"needs": 0, "items": 0}
+
+    class Item(dict):
+        def get(self, key, default=None):
+            reads["items"] += 1
+            return super().get(key, default)
+
+        def __getitem__(self, key):
+            reads["items"] += 1
+            return super().__getitem__(key)
+
+    real = W.needs
+
+    def needs(conn, person):
+        reads["needs"] += 1
+        found = [Item(item) for item in real(conn, person)]
+        return found + [Item(kind="task", task_id=f"other-{n}") for n in range(5_000 - len(found))]
+
+    monkeypatch.setattr(NS.W, "needs", needs)
+    assert NS.rules_hold(c) == []
+    assert reads["needs"] == 1
+    assert reads["items"] <= 5_000 + 10 * len(tasks), reads  # each item looked at once, not once per task

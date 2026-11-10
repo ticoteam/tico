@@ -483,7 +483,7 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     H = _h()
     broken: list[str] = []
     seen: dict[str, str | None] = {}
-    needs: dict[str, list[Row]] = {}
+    needs: dict[str, dict[str, list[Row]]] = {}  # each person's Needs you, read once and indexed by task
     someone: bool | None = None  # whether anyone can sign in: read once, when a turn names nobody
     now: str = H.now()
     live = task_wakes.live_bots(conn, now)
@@ -529,8 +529,10 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
         people = {wait.who for wait in waits if wait.state == W.PERSON and wait.who}
         for person in sorted(people):
             if person not in needs:
-                needs[person] = W.needs(conn, person)
-            listed = [item for item in needs[person] if item.get("task_id") == task_id]
+                needs[person] = {}
+                for item in W.needs(conn, person):
+                    needs[person].setdefault(str(item.get("task_id")), []).append(item)
+            listed = needs[person].get(task_id, [])
             mine = [wait for wait in waits if wait.state == W.PERSON and wait.who == person]
             asks = [wait.requirement_id for wait in mine if wait.ask]
             want = len(asks) + (1 if any(not wait.ask for wait in mine) else 0)
