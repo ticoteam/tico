@@ -70,6 +70,18 @@ def test_the_vapid_token_names_the_endpoints_origin_expires_within_a_day_and_has
     assert jwt.get_unverified_header(token) == {"alg": "ES256", "typ": "JWT"}
 
 
+def test_the_vapid_subject_is_the_https_address_else_the_owner_else_a_placeholder():
+    from types import SimpleNamespace as Settings
+
+    assert W._subject(Settings(public_url="https://tico.acme.example", owner_email="ana@acme.example")) == (
+        "https://tico.acme.example"
+    )
+    assert W._subject(Settings(public_url="http://127.0.0.1:8765", owner_email="ana@acme.example")) == (
+        "mailto:ana@acme.example"
+    )
+    assert W._subject(Settings(public_url="http://127.0.0.1:8765", owner_email="")) == "mailto:push@localhost"
+
+
 def browser():
     """A browser's push keys: its private key (to read what it is sent) and the subscription JSON it would post."""
     private, auth = ec.generate_private_key(ec.SECP256R1()), os.urandom(16)
@@ -105,10 +117,11 @@ def test_a_person_manages_only_their_own_browsers_and_bots_are_refused(api):
     assert unsubscribe(api, "ben-test", mine).json() == {"subscribed": False}
     assert mine not in rows(api)
     # Bots, and anyone acting for a person, never hold a browser's subscription or read the key.
-    api.app.state.store.settings.test_identities["for-ben"] = Identity(
-        "human:ben", "human", "ben@acme.example", via="assistant"
-    )
-    for token in (bot_token(api, "ops"), "for-ben"):
+    identities = api.app.state.store.settings.test_identities
+    identities["for-ben"] = Identity("human:ben", "human", "ben@acme.example", via="assistant")
+    # A personal API token is Ben, but not Ben's browser: an agent outside it never manages its push.
+    identities["ben-token"] = Identity("human:ben", "human", "ben@acme.example", via_token=True, token_label="muse")
+    for token in (bot_token(api, "ops"), "for-ben", "ben-token"):
         assert subscribe(api, token, mine).status_code == 403
         assert unsubscribe(api, token, mine).status_code == 403
         assert api.get("/api/v2/push/key", headers=headers(token)).status_code == 403
@@ -201,19 +214,58 @@ def test_a_ring_reaches_only_the_rung_peoples_live_browsers_and_a_410_retires_on
     assert [e for e, _, _ in sent] == [cara]
 
 
-def test_a_failed_send_is_recorded_and_the_ring_still_returns(api, monkeypatch):
+def test_failed_sends_retire_a_browser_only_after_a_streak_that_lasts_a_day(api, monkeypatch, caplog):
     monkeypatch.setattr(W, "_pool", lambda: Now())
     endpoint = "https://fcm.googleapis.com/fcm/send/ben"
     assert subscribe(api, "ben-test", endpoint).status_code == 200
     browser_notifications(api, "ben-test", "ben")
+    answers = []
 
-    def refuse(endpoint, body, headers):
-        raise OSError("network down")
+    def transmit(endpoint, body, headers):
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
-    monkeypatch.setattr(W, "transmit", refuse)
-    call_ring.ring(api.app, "c1", ["human:ben"], {"title": "Ana", "tag": "call-c1"})
-    row = rows(api)[endpoint]
-    assert row["failed_at"] and not row["gone_at"]
+    monkeypatch.setattr(W, "transmit", transmit)
+
+    def ring():
+        call_ring.ring(api.app, "c1", ["human:ben"], {"title": "Ana", "tag": "call-c1"})
+        return rows(api)[endpoint]
+
+    # A network failure and a push service's 500s, all within the hour: counted, not retired.
+    answers += [OSError("network down"), 500, 503]
+    for _ in range(3):
+        row = ring()
+    assert row["failures"] == 3 and row["failed_at"] and not row["gone_at"]
+    # A success ends the streak.
+    answers.append(201)
+    row = ring()
+    assert row["failures"] == 0 and row["failed_at"] is None and row["last_ok_at"]
+    # A streak of three that began over a day ago retires it.
+    answers += [500, 500]
+    ring()
+    assert ring()["failures"] == 2
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE push_subscriptions SET failed_at=? WHERE endpoint=?", ("2026-01-01T00:00:00.000000Z", endpoint)
+        )
+    answers.append(500)
+    assert ring()["gone_at"]
+    # An outcome that cannot be written is logged, not lost in a future nobody reads.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE push_subscriptions SET gone_at=NULL, failures=0, failed_at=NULL WHERE endpoint=?", (endpoint,)
+        )
+
+    def broken(store, row_id, status):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(W, "_record", broken)
+    answers.append(201)
+    with caplog.at_level("ERROR", logger=W.log.name):
+        ring()
+    assert "push outcome not recorded" in caplog.text
 
 
 def test_the_private_key_is_sealed_and_never_in_an_answer(api, monkeypatch):
