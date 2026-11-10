@@ -171,15 +171,28 @@ class TaskRules:
         self.auth, self.rule_check, self.store = auth, rule_check, store
         self.rule_task_audience, self.rule_target = rule_task_audience, rule_target
 
-    def audience(self, c, who, row, to=None):
-        """A task write's audience: the task's owner and requester, and the person it hands the task or the ask to."""
-        return self.rule_task_audience(c, row, who.actor, "", *([self.rule_target(c, who, to)] if to else []))
+    def audience(self, c, who, row, to=None, also=None):
+        """A task write's audience: the task's owner and requester, the person it hands the task or the ask to (`to`,
+        as the caller names them), and anyone else it reaches (`also(c)`: actors, such as whoever asked what an
+        answer answers)."""
+        extra = [self.rule_target(c, who, to)] if to else []
+        return self.rule_task_audience(c, row, who.actor, "", *extra, *(also(c) if also else ()))
 
-    def check(self, who, tid, operation, said, *, to=None, hands_over=False):
+    @staticmethod
+    def place(row):
+        """A task write's place, as `where:` reads it: its task's conversation, the thread its comments are in."""
+
+        def place(c, author, recipients):
+            return org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
+
+        return place
+
+    def check(self, who, tid, operation, said, *, to=None, also=None, hands_over=False):
         """The verdict for one task write by `who`, outside the write, or None (nothing to check). `said` is the
-        write's (label, text) pairs; `to` who it reaches besides the task's people; `hands_over` that it gives the
-        task to `to`. A task the caller may not read is `org_rule_check.refused`. Any other error is a refusal too:
-        the write never goes unchecked because this failed."""
+        write's (label, text) pairs; `to` who it reaches besides the task's people, `also(c)` anyone else; `hands_over`
+        that it gives the task to `to`. The write's place is its task's thread (`place`). A task the caller may not
+        read is `org_rule_check.refused`. Any other error is a refusal too: the write never goes unchecked because
+        this failed."""
         try:
             if not org_rule_check.author_of(who, self.auth.settings.assistant_bot):
                 return None
@@ -200,9 +213,10 @@ class TaskRules:
                     who,
                     operation,
                     text,
-                    lambda c: self.audience(c, who, row, to),
+                    lambda c: self.audience(c, who, row, to, also),
                     obj=f"{row['id']}@{row['version']}",
                     context={"task": row["title"]},
+                    place=self.place(row),
                     track_route=True,  # the audience is kept even when no rule matches: apply compares it
                 )
             )
@@ -210,7 +224,7 @@ class TaskRules:
             LOG.exception("Task rule check failed")
             return org_rule_check.refused(Problem("rule_check", FAILED, 503, retryable=True))
 
-    def apply(self, c, who, task_id, verdict, said, replay, *, to=None, hands_over=False, ask=False):
+    def apply(self, c, who, task_id, verdict, said, replay, *, to=None, also=None, hands_over=False, ask=False):
         """The verdict inside the write: the gate (`org_rule_check.apply`), or a refusal. The task and the audience
         are read again here and must be the ones checked (`obj_now`, `audience_now`): a task edited, handed over or
         given new people since its check is a 409 (`task_changed`, nothing written; sent again, it is checked again),
@@ -223,7 +237,7 @@ class TaskRules:
         row = H.task(c, task_id)
         if "applied" not in verdict:
             obj_now = org_rule_check.current_obj(c, verdict.get("obj")) if verdict.get("obj") else None
-            audience_now = self.audience(c, who, row, to)
+            audience_now = self.audience(c, who, row, to, also)
             if not org_rule_check.holds(verdict) and stale(verdict, obj_now, audience_now):
                 raise Problem("task_changed", CHANGED, 409, retryable=True)
         else:

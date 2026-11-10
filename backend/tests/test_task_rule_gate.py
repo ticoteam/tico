@@ -420,3 +420,31 @@ def test_send_anyway_of_a_private_hand_off_rechecks_a_new_rule_on_the_whole_task
     r = api.post(f"/api/v2/rule-holds/{held['id']}/send", json={"nonce": view["nonce"]}, headers=headers("ben-test"))
     assert r.status_code == 409 and "launch date" in r.text, r.text
     assert row(api, task["id"])["owner_id"] == "bot:ops"
+
+
+def test_a_rule_scoped_to_the_tasks_thread_holds_a_write_on_the_task(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    [found] = sql(api, "SELECT conversation_id FROM tasks WHERE id=?", (task["id"],))
+    rule(
+        api,
+        {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "where": [f"thread:{found['conversation_id']}"]},
+    )
+    assert done_by_ops(api, task, "Our favorite color is red.")["held"]
+    assert row(api, task["id"])["status"] != "done"
+
+
+def test_an_answer_reaches_whoever_asked_and_a_rule_with_them_holds_it(ruled):
+    api, _ = ruled
+    task = task_for_ops(api)
+    asked = ops(api, f"tasks/{task['id']}/asks", {"to": "ben", "line": "Which color do we use?", "version": 1})
+    with api.app.state.store.transaction() as c:  # asked by another bot on the task than its owner
+        c.execute("UPDATE requirements SET added_by_id='bot:finance' WHERE id=?", (asked["requirement_id"],))
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "with": {"bots": ["finance"]}})
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/asks/{asked['requirement_id']}/answer",
+        json={"value": "Our favorite color is red."},
+        headers=headers("ben-test"),
+    )
+    assert r.status_code == 200 and r.json()["held"], r.text
+    assert sql(api, "SELECT 1 FROM answers WHERE requirement_id=?", (asked["requirement_id"],)) == []

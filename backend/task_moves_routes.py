@@ -96,12 +96,14 @@ def register(
     # on what the recipient reads: `carry`).
     writes = {}
 
-    def says(operation, model, said, call, *, to=None, hands_over=False, ask=False):
+    def says(operation, model, said, call, *, to=None, also=None, hands_over=False, ask=False):
+        """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker)."""
         writes[operation] = {
             "model": model,
             "said": said,
             "call": call,
             "to": to or (lambda body: None),
+            "also": also,
             "hands_over": hands_over,
             "ask": ask,
         }
@@ -125,6 +127,7 @@ def register(
             spec["said"](body),
             replay,
             to=spec["to"](body),
+            also=reached(spec, params),
             hands_over=spec["hands_over"],
             ask=spec["ask"],
         )
@@ -133,16 +136,27 @@ def register(
         out = spec["call"](c, who, task_id, body, gate, params or {}, ingest) or {}
         return {**out, **org_rule_check.answer(gate)}
 
-    def check(caller, tid, body, operation):
+    def reached(spec, params):
+        """The write's `also`, bound to its params: a function of the connection, or None."""
+        also = spec["also"]
+        return (lambda c: also(c, params or {})) if also else None
+
+    def check(caller, tid, body, operation, params=None):
         """The verdict for this write, outside the store's write."""
         spec = writes[operation]
         return task_rules.check(
-            caller, tid, operation, spec["said"](body), to=spec["to"](body), hands_over=spec["hands_over"]
+            caller,
+            tid,
+            operation,
+            spec["said"](body),
+            to=spec["to"](body),
+            also=reached(spec, params),
+            hands_over=spec["hands_over"],
         )
 
     def checked(request, tid, body, operation, params=None):
         """A route's write: checked outside the store's write, then made through its verdict inside it."""
-        rc = check(request.state.identity, tid, body, operation)
+        rc = check(request.state.identity, tid, body, operation, params)
         return work(request, tid, body, lambda c, who, task_id: gated(c, who, task_id, body, rc, operation, params))
 
     def replays():
@@ -166,7 +180,8 @@ def register(
             def audience(c, bot, data):
                 body = spec["model"].model_validate(data["body"])
                 row = auth.task(c, bot, auth.resolve_task(c, bot, data["task"]))
-                return task_rules.audience(c, bot, row, spec["to"](body))
+                also = reached(spec, data.get("params"))
+                return task_rules.audience(c, bot, row, spec["to"](body), also)
 
             return replay, audience
 
@@ -365,7 +380,12 @@ def register(
         strategy_merge.on_answer(c, who.actor, task_id, body.value)
         return {"answer_id": done.get("answer_id")}
 
-    says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call)
+    def asker(c, params):
+        """Whoever asked what an answer answers: the answer reaches them too."""
+        found = c.execute("SELECT added_by_id FROM requirements WHERE id=?", (params.get("requirement_id"),)).fetchone()
+        return [found[0]] if found and found[0] else []
+
+    says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call, also=asker)
 
     @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/answer")
     def task_answer(request: Request, tid: str, requirement_id: str, body: M.TaskAskAnswer):
