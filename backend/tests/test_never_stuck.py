@@ -308,6 +308,31 @@ def test_a_late_task_that_waits_on_a_person_gets_one_look_from_the_manager_bot(c
     assert later(days=30) == {} and _visit(c, mine)["late_told_at"] is None  # the day is for bots only
 
 
+def test_a_late_look_whose_wake_was_lost_is_written_again_once(c, general, later):
+    """Being told Late is not the look: when the manager bot's wake for it goes missing, the next pass writes it again,
+    with the same words, once, on the same budget and only to a manager bot that reads the task."""
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    task_id = row["id"]
+    X.ran(c, task_id, BUILDER)
+    E.add_requirement(c, task_id, BUILDER, "answer", ANA, "Card or invoice?", seen_version=row["version"])
+    assert later(hours=24) == {"late": 1, "woken": 1}
+    first = _said(c, task_id, MANAGER)
+    _lose(c, task_id)
+    assert _queued(c, task_id) == []
+    assert later(seconds=10) == {"woken": 1} and _queued(c, task_id) == [MANAGER]
+    assert _said(c, task_id, MANAGER) == first * 2  # the same words
+    assert later(seconds=10) == {}  # queued again: nothing more
+    _lose(c, task_id)
+    assert later(seconds=10) == {} and _queued(c, task_id) == []  # once: Late's 3 times still takes it to a person
+    # A look the manager bot took is not lost.
+    other = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)
+    X.ran(c, other["id"], BUILDER)
+    E.add_requirement(c, other["id"], BUILDER, "answer", ANA, "Which footer?", seen_version=other["version"])
+    assert later(hours=24) == {"late": 1, "woken": 1}
+    X.ran(c, other["id"], MANAGER)
+    assert later(seconds=10) == {} and _queued(c, other["id"]) == []
+
+
 def test_an_answer_wakes_the_bot_that_asked_and_the_count_starts_again(c, general, later):
     row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
     task_id = row["id"]

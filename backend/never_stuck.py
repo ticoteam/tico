@@ -436,14 +436,7 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             # A bot's turn: Late hands the task to the manager bot, once per visit, on the same 3 tries. Never a second
             # set, and never back down from a person.
             _to_manager(conn, fresh, manager, f"{said} {_name(conn, target)} has it.", at, done)
-        elif (
-            head
-            and not W.turns(conn, fresh, waits)
-            and manager
-            and level == "owner"
-            and manager != head.who
-            and task_wakes.runs_since(conn, fresh) < RUNS
-        ):
+        elif head and _looks(conn, fresh, waits, manager, head.who):
             # No bot has a turn: it waits on a person, another task or the outside, and the manager bot looks once. A
             # bot that cannot run is one row for its cause in a person's list, and its tasks carry on when the cause is
             # fixed: nothing is sent for it.
@@ -454,6 +447,8 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             key = f"{row['id']}:{visit['id']}:late"
             if task_wakes.add(conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead), wake_key=key):
                 done["woken"] += 1
+    elif not visit.get("late_person_at"):
+        _late_look_lost(conn, row, manager, done, seen)
     if spent >= LATE_PERSON * minutes * 60 and not visit.get("late_person_at"):
         conn.execute("UPDATE visits SET late_person_at=? WHERE id=?", (at, visit["id"]))
         fresh = E.task(conn, row["id"]) or row
@@ -462,6 +457,43 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             # Still there at 3 times the expected time: one person's list, once. Already a person's turn, or paused
             # with its cause in a person's list: nothing.
             _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
+
+
+def _looks(conn: "sqlite3.Connection", row: Row, waits: list[W.Wait], manager: str | None, head: str | None) -> bool:
+    """The manager bot looks at a late task once: no bot has a turn, the task is still the owner's, the manager bot is
+    not who it waits on, and the visit has runs left since its last change."""
+    return bool(
+        manager
+        and not W.turns(conn, row, waits)
+        and (row["visit"].get("level") or "owner") == "owner"
+        and manager != head
+        and task_wakes.runs_since(conn, row) < RUNS
+    )
+
+
+def _late_look_lost(
+    conn: "sqlite3.Connection", row: Row, manager: str | None, done: dict[str, int], seen: dict[str, str | None]
+) -> None:
+    """Being told Late is not the look: when the manager bot's wake for it was lost (its job is gone and no run of the
+    manager bot on the task started since), it is written again with the same words, once, while the look is still
+    due, on the same budget, and only to a manager bot that reads the task (`_manager`, `task_wakes.add`)."""
+    visit = row["visit"]
+    key = f"{row['id']}:{visit['id']}:late"
+    told = conn.execute("SELECT id FROM messages WHERE wake_key=?", (key,)).fetchone()
+    if (
+        not told
+        or not manager
+        or task_wakes.live_run(conn, row, manager)
+        or task_wakes.queued(conn, row["id"], manager)
+    ):
+        return
+    lost = task_wakes.lost(conn, row, manager, whole_visit=True)
+    if not lost or lost["id"] != str(told[0]):
+        return
+    waits = W.of(conn, row, seen)
+    if waits and _looks(conn, row, waits, manager, waits[0].who):
+        if task_wakes.add(conn, row, manager, visit, lost["body"], wake_key=f"{key}:again"):
+            done["woken"] += 1
 
 
 # ----------------------------------------------------------------------------- the rules that hold at all times
