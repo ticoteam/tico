@@ -16,6 +16,7 @@ import json
 import sys
 from pathlib import Path
 
+from . import needs_shape
 from .sources import KINDS as SOURCE_KINDS
 
 VERSION = "2.0.0"
@@ -920,7 +921,49 @@ STABLE = [
         "Pipelines",
         "createFactory",
         "Make a factory (the company's owner and Admins)",
-        None,
+        "FactoryCreated",
+    ),
+    (
+        "/api/v2/preferences/{key}",
+        "get",
+        "Team",
+        "getPreference",
+        "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, "
+        "tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share); null when unset",
+        "PreferenceValue",
+    ),
+    (
+        "/api/v2/preferences/{key}",
+        "post",
+        "Team",
+        "setPreference",
+        "Keep one of your own preferences; a value is at most 4 KB",
+        "PreferenceValue",
+    ),
+    (
+        "/api/v2/release-schedule",
+        "get",
+        "Pipelines",
+        "getReleaseSchedule",
+        "The daily release: on or off, its hours, the Release Manager and Technical Writer, the next hour, how many "
+        "tasks you may read wait for a release, and what you may do",
+        "ReleaseSchedule",
+    ),
+    (
+        "/api/v2/release-schedule",
+        "patch",
+        "Pipelines",
+        "updateReleaseSchedule",
+        "Turn the daily release on or off, set its hours, or name the Release Manager and Technical Writer (owner, Admins)",
+        "ReleaseSchedule",
+    ),
+    (
+        "/api/v2/release/now",
+        "post",
+        "Pipelines",
+        "releaseNow",
+        "Ask the Release Manager for a release now: one task, or the open one named, or why nothing was sent",
+        "ReleaseNowResult",
     ),
     ("/api/v2/tasks/{tid}/files", "get", "Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList"),
     (
@@ -3099,6 +3142,32 @@ SCHEMAS = {
             ),
         }
     ),
+    "FactoryCreated": obj({"factory": obj({"id": "s", "name": "s", "goal": "s"}, required=["id", "name"])}),
+    "PreferenceValue": obj({"key": "s", "value": {"description": "Any JSON value, or null when unset"}}),
+    "ReleaseSchedule": obj(
+        {
+            "on": "b",
+            "times": items({"type": "string"}),
+            "bot": "s",
+            "writer": "s",
+            "zone": "s",
+            "release_manager": "n",
+            "technical_writer": "n",
+            "next": "n",
+            "last": {"type": ["object", "null"]},
+            "pending": {"type": "integer", "description": "Open tasks you may read waiting for a release"},
+            "can_change": "b",
+            "can_release": "b",
+        }
+    ),
+    "ReleaseNowResult": obj(
+        {
+            "sent": "b",
+            "reason": {"enum": ["no_release_manager", "nothing_pending", "already_open", None]},
+            "task": "n",
+            "tasks": {"type": "integer", "description": "Every task waiting for a release, readable or not"},
+        }
+    ),
     "SupportReportResult": obj(
         {
             "status": {"enum": ["sent", "pending"], "description": "sent: filed now; pending: a person OKs it first"},
@@ -4234,10 +4303,28 @@ SCHEMAS = {
             "items": items(
                 {
                     "type": "object",
-                    "required": NEEDS_ITEM["required"],
+                    "required": ["id", "kind", "title", "body", "subject", "created_at", "actions"],
                     "additionalProperties": True,
                     "properties": {
-                        **NEEDS_ITEM["properties"],
+                        "id": {"type": "string", "description": "<kind>:<what it is about>"},
+                        "title": {"type": "string"},
+                        "body": {"type": ["string", "null"]},
+                        "subject": {
+                            "oneOf": [
+                                obj({"type": {"enum": ["proposal", "kpi", "strategy"]}, "id": "s"}),
+                                {"type": "null"},
+                            ],
+                            "description": "The one thing it is about; null for an ask standing for several things",
+                        },
+                        "created_at": {
+                            "type": ["number", "null"],
+                            "description": "When its task was filed; null while it is not filed yet",
+                        },
+                        "actions": items({"enum": list(needs_shape.ACTIONS)})
+                        | {
+                            "description": "The writes that settle it: "
+                            + "; ".join(f"`{k}` {v}" for k, v in needs_shape.ACTIONS.items())
+                        },
                         "kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
                         "goal_id": {"type": "string"},
                         "options": {

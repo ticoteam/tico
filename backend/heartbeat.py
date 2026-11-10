@@ -162,11 +162,6 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     refresh_conflicts(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
     reconcile_worktree_prs(github_app)
-    # A merged pull request's review page: built, published on the ticket, and its link written to the pull request.
-    from . import review_pages
-
-    if ctx.app is not None:
-        review_pages.tick(github_app, pages=ctx.app.state.pages, blobs=ctx.app.state.blobs, paced=True)
     return "Done", True
 
 

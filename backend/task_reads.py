@@ -246,7 +246,7 @@ def brief(c, rows, visible_sql="1"):
     for row in rows:
         turn = turns.get(row["id"])
         if turn and turn["state"] == "tasks" and turn["who"] not in shown:
-            turn["line"] = "A sub-task"
+            turn["line"], turn["who"] = "A sub-task", None  # neither its title nor its id
         if turn:
             turn["running"] = row["id"] in running
         row["turn"] = turn

@@ -607,14 +607,8 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         if merge_wake:
             detail["merged_wake"] = True
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
-        if state == "merged" and link["state"] not in ("merged", "shipped"):
-            from . import review_pages
-
-            # A merge read on refresh has no webhook behind it, so its page is queued here too. queue() is idempotent:
-            # a second merge event finds the page already queued and changes nothing.
-            review_pages.queue(c, task, link["id"])
-            if merge_wake:
-                merged.append(link)
+        if state == "merged" and link["state"] not in ("merged", "shipped") and merge_wake:
+            merged.append(link)
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         changed = [
             field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)

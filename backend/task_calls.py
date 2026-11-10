@@ -134,16 +134,30 @@ def _open(conn: "sqlite3.Connection", actor: str, task_id: str, mover: bool | No
         _refuse(conn, actor, "not-found", "No such task")
     if actor != SYSTEM and not H.task_private_readable(conn, actor, row):
         _refuse(conn, actor, "not-found", "No such task")
-    if work and not can_work(conn, actor, row, mover):
+    if work:
+        _may_work(conn, actor, row, mover)
+    return row
+
+
+def _may_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | None = None) -> None:
+    if not can_work(conn, actor, row, mover):
         _refuse(
             conn,
             actor,
             "identity",
             "This task is worked by its owner, whoever asked for it, their managers, and its pipeline's manager. "
             "Comment on it, or file a new task.",
-            task_id,
+            row["id"],
         )
-    return row
+
+
+def _owners_done_is_work(conn: "sqlite3.Connection", actor: str, row: Row, requirement_id: str) -> None:
+    """Answering the owner's own "done" finishes the stage, and giving it away hands the task over: /done and /owner
+    by another road, so the same reader may do them, refused as those are."""
+    from . import task_requirements as R
+
+    if (R.get(conn, requirement_id) or {}).get("kind") == "owner_done":
+        _may_work(conn, actor, row)
 
 
 # ----------------------------------------------------------------------------- moves
@@ -391,7 +405,8 @@ def task_answer(
     result carries `answer_id`."""
     from . import answers as A
 
-    _open(conn, actor, task_id, work=False)
+    row = _open(conn, actor, task_id, work=False)
+    _owners_done_is_work(conn, actor, row, requirement_id)
     with task_effects.because(actor):
         return A.answer(conn, task_id, requirement_id, actor, value, note, seen_version=seen_version)
 
@@ -410,6 +425,7 @@ def task_give(
 
     H = _h()
     row = _open(conn, actor, task_id, work=False)
+    _owners_done_is_work(conn, actor, row, requirement_id)
     bring_in(conn, actor, row, H.resolve_actor(conn, person) or person)
     with task_effects.because(actor):
         return A.give_to(
@@ -618,7 +634,7 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
     hidden = hidden_filed(conn, row, viewer)
     for wait in waits:
         if wait["state"] == W.TASKS and wait["who"] in hidden:
-            wait["line"] = "A sub-task"
+            wait["line"], wait["who"] = "A sub-task", None  # neither its title nor its id
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
@@ -633,7 +649,7 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
                 "line": R.name_of(requirement),
                 "met": standing.met,
                 "standing": standing_line(standing, hidden),
-                "who": None if standing.met else standing.on,
+                "who": None if standing.met or standing.on in hidden else standing.on,
                 "asked_by": requirement.get("added_by_id") if requirement.get("visit_id") else None,
                 "choices": requirement.get("choices"),
                 "shows": requirement.get("shows") or [],

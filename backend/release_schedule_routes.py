@@ -102,13 +102,17 @@ def technical_writer(c, cfg=None):
     return _named(c, (cfg or load(c))["writer"], (WRITER,))
 
 
-def pending(c):
-    """The open tasks waiting for a release: in a stage with an "In a release" requirement, oldest first."""
+def pending(c, visible_sql=None):
+    """The open tasks waiting for a release: in a stage with an "In a release" requirement, oldest first. With
+    `visible_sql`, only those a reader may read: what a person is shown. A release itself moves them all."""
+    seen = f" AND t.id IN (SELECT id FROM tasks WHERE {visible_sql})" if visible_sql else ""
     return [
         r[0]
         for r in c.execute(
             "SELECT t.id FROM tasks t WHERE t.status='open' AND EXISTS (SELECT 1 FROM requirements r "
-            "WHERE r.stage_id=t.stage_id AND r.kind='in_release' AND r.withdrawn_at IS NULL) ORDER BY t.created_at, t.id"
+            "WHERE r.stage_id=t.stage_id AND r.kind='in_release' AND r.withdrawn_at IS NULL)"
+            + seen
+            + " ORDER BY t.created_at, t.id"
         )
     ]
 
@@ -158,16 +162,17 @@ def view(c, who, auth):
         "technical_writer": technical_writer(c, cfg),
         "next": nxt.isoformat() if nxt else None,
         "last": fired[max(fired)] if isinstance(fired, dict) and fired else None,
-        "pending": len(pending(c)),
+        "pending": len(pending(c, auth.task_sql(c, who))),
         "can_change": bool(auth.bot_admin(who)),
         "can_release": may_release(c, who),
     }
 
 
-def request_now(c, actor, note=""):
+def request_now(c, actor, note="", visible_sql=None):
     """ONE task for the Release Manager, or its unfinished Release task. `sent` is false, with a `reason`
     (no_release_manager, nothing_pending, already_open), when no new task was filed. A person's note is heard even
-    with nothing waiting for a release: work often reaches main with no task."""
+    with nothing waiting for a release: work often reaches main with no task. The task the requester files names
+    only the waiting tasks they may read (`visible_sql`), and counts the rest."""
     manager = release_manager(c)
     if not manager:
         return {"sent": False, "reason": "no_release_manager", "task": None, "tasks": 0}
@@ -188,7 +193,11 @@ def request_now(c, actor, note=""):
         else f"{TITLE}requested by {H.actor_name(c, actor)}"
     )
     lines = [f"Asked by {H.actor_name(c, actor)}" + (f": {note}" if note else ".")]
-    lines += [f"- {tid}" for tid in waiting[:60]]
+    readable = set(pending(c, visible_sql)) if visible_sql else set(waiting)
+    named = [tid for tid in waiting if tid in readable][:60]
+    lines += [f"- {tid}" for tid in named]
+    if len(waiting) > len(named):
+        lines.append(f"- and {len(waiting) - len(named)} more")
     task = H.task_create(c, actor, title, "\n".join(lines), owner, deduplicate=False)
     H.event(c, actor, "release.requested", task["id"], {"tasks": len(waiting)})
     return {"sent": True, "reason": None, "task": task["id"], "tasks": len(waiting)}
@@ -224,4 +233,4 @@ def register(app, auth, mutate, store):
         with store.read() as c:
             if not may_release(c, who):
                 raise Problem("forbidden", "Only a person, the Release Manager or a releasing pipeline's manager", 403)
-        return mutate(request, body, lambda c: request_now(c, who.actor, body.note or ""))
+        return mutate(request, body, lambda c: request_now(c, who.actor, body.note or "", auth.task_sql(c, who)))
