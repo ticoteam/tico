@@ -1163,13 +1163,19 @@ def test_a_task_change_card_carries_the_version_the_assistant_saw_and_never_a_fr
     path = f"/api/v2/tasks/{launch['id']}"
     for body in (
         {"summary": "Rename it", "path": path, "body": {"title": "Launch plan"}},
-        {"summary": "Rename all", "path": assistant.BATCH_PATH, "body": {"actions": [{"path": path, "body": {"title": "X"}}]}},
+        {
+            "summary": "Rename all",
+            "path": assistant.BATCH_PATH,
+            "body": {"actions": [{"path": path, "body": {"title": "X"}}]},
+        },
     ):
         refused = api.post("/api/v2/assistant/actions", json=body, headers=headers("ana-test"))
         assert refused.status_code == 422 and "version" in refused.text, refused.text
     seen = launch["version"]
     card = post(
-        api, "assistant/actions", {"summary": "Rename it", "path": path, "body": {"title": "Launch plan", "version": seen}}
+        api,
+        "assistant/actions",
+        {"summary": "Rename it", "path": path, "body": {"title": "Launch plan", "version": seen}},
     )["action"]
     assert card["body"]["version"] == seen
     # Someone changes the task after the Assistant read it.
@@ -1180,45 +1186,87 @@ def test_a_task_change_card_carries_the_version_the_assistant_saw_and_never_a_fr
         assert H.task(c, launch["id"])["title"] == "Plan the launch, v2"
 
 
-def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
-    """The cards an assistant wrote for "close these" carried `{"status": "closed"}`: a card like that, new or already
-    waiting, closes the task, with the version the Assistant saw."""
+def test_a_close_or_owner_card_runs_through_the_tasks_own_route_and_an_ok_stays_the_persons_tap(api):
+    """Cards for "close these" carried `{"status": "closed"}` or `{"close": true}` on `POST /api/v2/tasks/{id}`, which
+    takes field edits only. A card like that, new or already waiting, closes through `/move` with the version the
+    Assistant saw; a new owner goes through `/owner`; a card that mixes a move with field edits is refused. An OK is
+    never a card, alone or as a bulk step."""
     import json
 
     with api.app.state.store.transaction() as c:
-        tasks = [H.task_create(c, "human:ana", f"Old task {i}", "Stale.", "bot:ops") for i in range(3)]
+        tasks = [H.task_create(c, "human:ana", f"Old task {i}", "Stale.", "bot:ops") for i in range(4)]
+    path = lambda t: f"/api/v2/tasks/{t['id']}"
     # One stored before this release, exactly as the assistant wrote it.
     stale = post(
-        api,
-        "assistant/actions",
-        {"summary": "Close old task 0", "path": f"/api/v2/tasks/{tasks[0]['id']}", "body": {"version": 1}},
+        api, "assistant/actions", {"summary": "Close old task 0", "path": path(tasks[0]), "body": {"version": 1}}
     )["action"]
     with api.app.state.store.transaction() as c:
         stored = json.dumps({"status": "closed", "version": tasks[0]["version"]})
         c.execute("UPDATE assistant_actions SET body=? WHERE id=?", (stored, stale["id"]))
     done = post(api, f"assistant/actions/{stale['id']}/confirm", {})["action"]
     assert done["status"] == "done", done["result"]
-    # A new one is stored as the close it is, and so is each step of a bulk card.
+    # A new one is stored as the move it is, and so is each step of a bulk card.
     fresh = post(
         api,
         "assistant/actions",
         {
             "summary": "Close old task 1",
-            "path": f"/api/v2/tasks/{tasks[1]['id']}",
+            "path": path(tasks[1]),
             "body": {"status": "closed", "note": "Stale", "version": tasks[1]["version"]},
         },
     )["action"]
-    assert fresh["body"] == {"close": True, "note": "Stale", "version": tasks[1]["version"]}
-    step = {"path": f"/api/v2/tasks/{tasks[2]['id']}", "body": {"status": "closed", "version": tasks[2]["version"]}}
+    assert (fresh["path"], fresh["body"]) == (
+        path(tasks[1]) + "/move",
+        {"to": "closed", "why": "Stale", "version": tasks[1]["version"]},
+    )
+    step = {"path": path(tasks[2]), "body": {"close": True, "version": tasks[2]["version"]}}
     bulk = post(
         api,
         "assistant/actions",
         {"summary": "Close the rest", "path": assistant.BATCH_PATH, "body": {"actions": [step]}},
     )["action"]
+    assert bulk["body"]["actions"][0]["path"] == path(tasks[2]) + "/move"
     for action in (fresh, bulk):
         assert post(api, f"assistant/actions/{action['id']}/confirm", {})["action"]["status"] == "done"
     with api.app.state.store.read() as c:
-        assert [H.task(c, t["id"])["status"] for t in tasks] == ["closed"] * 3
+        assert [H.task(c, t["id"])["status"] for t in tasks[:3]] == ["closed"] * 3
+    # A new owner goes through /owner.
+    give = post(
+        api,
+        "assistant/actions",
+        {
+            "summary": "Give it to Ana",
+            "path": path(tasks[3]),
+            "body": {"owner": "human:ana", "version": tasks[3]["version"]},
+        },
+    )["action"]
+    assert give["path"] == path(tasks[3]) + "/owner"
+    assert {k: give["body"][k] for k in ("owner", "version")} == {"owner": "human:ana", "version": tasks[3]["version"]}
+    assert post(api, f"assistant/actions/{give['id']}/confirm", {})["action"]["status"] == "done"
+    with api.app.state.store.read() as c:
+        assert H.task(c, tasks[3]["id"])["owner_id"] == "human:ana"
+        version = H.task(c, tasks[3]["id"])["version"]
+    mixed = {
+        "summary": "Rename and close",
+        "path": path(tasks[3]),
+        "body": {"title": "X", "close": True, "version": version},
+    }
+    refused = api.post("/api/v2/assistant/actions", json=mixed, headers=headers("ana-test"))
+    assert refused.status_code == 422 and "one thing" in refused.text, refused.text
+    # An OK is the person's own click on its preview: never a card, alone or beside a close.
+    ok = {"path": path(tasks[3]) + "/asks/r-1/ok", "body": {}}
+    for card in (
+        {"summary": "OK it", **ok},
+        {
+            "summary": "Close and OK",
+            "path": assistant.BATCH_PATH,
+            "body": {"actions": [ok, {"path": path(tasks[3]), "body": {"close": True, "version": version}}]},
+        },
+    ):
+        refused = api.post("/api/v2/assistant/actions", json=card, headers=headers("ana-test"))
+        assert refused.status_code in (403, 422), refused.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, tasks[3]["id"])["status"] != "closed"
 
 
 @pytest.mark.parametrize("text", ["help", "what is waiting on me?", "open tasks"])
