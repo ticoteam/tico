@@ -7,7 +7,7 @@ The outcome is a credit note and a corrected invoice prepared for review, and th
 
 ## 1. Find the cause
 
-    hub task show <id>
+    tico task show <id>
 
 Read the invoice and its source (contract, usage, hours). Name what was wrong: amount, rate, period, PO number, contact, tax, or a duplicate. If the invoice
 was right and the customer disagrees, say so with the source. That is a conversation for the account owner, not a credit.

@@ -8,10 +8,10 @@ export, and the first routine checked.
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub market segment tree
-    hub strategy show --section serve
-    hub goal list --all
+    tico task show <id>
+    tico market segment tree
+    tico strategy show --section serve
+    tico goal list --all
 
 Find the segment named in your title in the tree. Note whether the Strategy page marks it Us (served now) or Next (not
 served yet), and any goal that names this segment or its activation. Do not ask what these already say.
@@ -29,7 +29,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 1. Which customer segment do you own, and how is a customer counted in it? (Default: the segment named in your title.)
 2. What counts as activated for this segment, over what window, and how long is the retention window? (Default: 14 days to activate; retention at 30 and 90 days.)
 3. Where do this segment's problems arrive, and who can send the usage export each week? (Default: support tasks, call notes and the export attached to the task.)
-4. Which goal or KPI does this segment's product outcome serve, and what is its target? (Default: the goal `hub goal list` names for it; if there is none, say so.)
+4. Which goal or KPI does this segment's product outcome serve, and what is its target? (Default: the goal `tico goal list` names for it; if there is none, say so.)
 5. Who reads the weekly review, and who answers when your manager cannot? (Default: your manager, Mondays at 08:00; then the owner.)
 
 ## 4. Record
@@ -47,11 +47,11 @@ If no export is attached, say which export is needed and for which dates, and st
 
 ## 6. Check the routine
 
-Setup switched your routine on. Check it with `hub automation list` (if it shows off, `hub automation update <id> --enable`)
+Setup switched your routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id> --enable`)
 and tell the human in one line what it does: "I will review this segment each Monday at 08:00 from the exports you
 attach." They can change it or turn it off at any time. Nothing needs approval.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. Last, once the answers and the first review
 are recorded, and not before, run:
 
-    hub bot setup-done
+    tico bot setup-done

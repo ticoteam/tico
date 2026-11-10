@@ -6,7 +6,7 @@ or updates one internal Dev ticket for Engineering. It changes no dependencies o
 
 ```sh
 cargo run --locked --manifest-path tools/trust-list-check/Cargo.toml -- --repo . --ref origin/main
-# Explicitly write findings through the authenticated, cloud-backed hub CLI:
+# Explicitly write findings through the authenticated, cloud-backed tico CLI:
 cargo run --locked --manifest-path tools/trust-list-check/Cargo.toml -- --repo . --ref origin/main --apply
 ```
 
@@ -63,11 +63,11 @@ The operator should create the following routine on Upgrades, preserving its exi
 > retry a refused write, create a second ticket manually, or close an Engineering ticket. Do not add
 > this command to PR checks, required checks or release gates. Save the scan receipt in your repository.
 
-An operator who owns Upgrades can create it with `hub automation create --file -`: a JSON flow with
+An operator who owns Upgrades can create it with `tico automation create --file -`: a JSON flow with
 `"owner": "bot:upgrades"`, the trigger `{"type": "schedule", "cron": "23 8 * * *", "tz": "Etc/UTC"}`, and one
 `bot_turn` step on `"bot": "upgrades"` whose `prompt` is the text above. Send `"enabled": false` until the team's
-approval policy allows that write, then turn it on with `hub automation update <id> --enable`. Afterwards check it
-with `hub automation show <id>` (schedule and next run) and run the first check with `hub automation run <id>`. An ordinary
+approval policy allows that write, then turn it on with `tico automation update <id> --enable`. Afterwards check it
+with `tico automation show <id>` (schedule and next run) and run the first check with `tico automation run <id>`. An ordinary
 scheduled finding does not run or fail any PR workflow; no workflow or required-check setting is changed.
 
 ## Focused verification

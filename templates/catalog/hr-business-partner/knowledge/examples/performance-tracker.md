@@ -30,5 +30,5 @@ Nothing has been sent to managers. First draft, not yet reviewed.
   goes on page one of the sheet.
 
 ## Sources
-- Review tasks T-505 to T-520, `hub team show`, `hub calendar list`, read 2026-09-30
+- Review tasks T-505 to T-520, `tico team show`, `tico calendar list`, read 2026-09-30
 ```

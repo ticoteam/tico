@@ -12,8 +12,8 @@ to the task, and the export is deleted from the working tree.
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub team show
+    tico task show <id>
+    tico team show
 
 Then `knowledge/mandatory.md`, last week's tracker and the newest completion export on the tasks.
 
@@ -40,8 +40,8 @@ on any course request that has no answer yet.
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-training-tracker.md` in the shape of `knowledge/examples/training-tracker.md` (counts by team), then
-`hub file publish reports/YYYY-MM-DD-training-tracker.md --scope task --task <id>`. Put the per-manager lists on the task for
-review. Delete the export, commit, and `hub task done <id> -m "..." --version N`.
+`tico file publish reports/YYYY-MM-DD-training-tracker.md --scope task --task <id>`. Put the per-manager lists on the task for
+review. Delete the export, commit, and `tico task done <id> -m "..." --version N`.
 
 ## When a source fails
 

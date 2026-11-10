@@ -296,8 +296,8 @@ CONTENT = {
         "title": "Weekly numbers",
         "cron": "0 7 * * 1",
         "timezone": "America/Los_Angeles",
-        "text": "Each Monday: set this month's rows for every channel and Unknown with `hub growth cohort set`, "
-        "log last week's readings for the KPIs you own with `hub kpi log`, read `hub growth numbers` back, "
+        "text": "Each Monday: set this month's rows for every channel and Unknown with `tico growth cohort set`, "
+        "log last week's readings for the KPIs you own with `tico kpi log`, read `tico growth numbers` back, "
         "and close this task with a short note.",
     },
     "run": "Week of {week}: {units} units. {split}. Logged {readings} readings and set {rows} month rows.",

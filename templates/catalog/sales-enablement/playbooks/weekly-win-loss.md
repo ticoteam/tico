@@ -7,14 +7,14 @@ lost in buyers' words, what it adds to the pattern, and one thing to change. Not
 
 ## 1. Find the closed deals
 
-    hub task show <id>
+    tico task show <id>
 
 From the Account Executive's review, the Sales Operations Manager's report or a CRM read: every deal won or lost since last
 Friday, with amount, segment, competitor and the recorded reason. Also deals marked lost quietly.
 
 ## 2. Read the evidence
 
-For each, `hub meeting search "<customer>"` and read the last two or three calls, then the seller's notes.
+For each, `tico meeting search "<customer>"` and read the last two or three calls, then the seller's notes.
 Extract four to six decision drivers: what the buyer valued, feared, compared, and who decided. Each is a
 quote or close paraphrase with call and timestamp. Where the evidence and the recorded reason disagree,
 say so; the correction is for the deal's owner and `sales-ops`.
@@ -35,6 +35,6 @@ For each seller in `knowledge/ramp/`, list milestones due this week and the call
 
 ## 6. Write and hand over
 
-Write `reports/YYYY-MM-DD-win-loss.md` in the shape of `knowledge/examples/win-loss.md`, `hub file publish`
-it, commit, and `hub task done <id> -m "..." --version N`: deals covered, the change proposed, calls not
+Write `reports/YYYY-MM-DD-win-loss.md` in the shape of `knowledge/examples/win-loss.md`, `tico file publish`
+it, commit, and `tico task done <id> -m "..." --version N`: deals covered, the change proposed, calls not
 imported. Once a quarter (the last Friday), add the synthesis: patterns by segment and competitor, counts.

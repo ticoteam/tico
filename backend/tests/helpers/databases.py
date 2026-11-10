@@ -5,7 +5,7 @@ from clients.tico import APIError
 
 
 class FakeHub:
-    """The two hub calls `hub db` makes: who am I, and record this query."""
+    """The two hub calls `tico db` makes: who am I, and record this query."""
 
     def __init__(self, actor="bot:ops", catalog=None, fail_audit=False):
         self.actor, self.catalog, self.fail_audit, self.audits = actor, catalog or {}, fail_audit, []

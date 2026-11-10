@@ -38,7 +38,7 @@ The same history is available to signed-in users through the stable API and MCP:
   `hub_changelog_mark_read` accepts `ids` from that result. Listing does not mark anything read.
   For a catch-up request, list unread changes, show the user the summary, and acknowledge the
   entries shown when they ask to mark them read.
-- CLI: `hub changelog list --unread` and `hub changelog mark-read <entry-id>`.
+- CLI: `tico changelog list --unread` and `tico changelog mark-read <entry-id>`.
 
 ## Manual server update
 

@@ -3,7 +3,7 @@
 Schedule: Wednesdays at 09:00 team time (routine `weekly-usage-readout`), after setup. Budget 40 minutes. The outcome is one page the Head of Product reads in five minutes.
 Nothing is written to any data source.
 
-Inputs: `knowledge/definitions.md`, `knowledge/launches.md`, last week's readout, and the product data read through `hub db` (read only).
+Inputs: `knowledge/definitions.md`, `knowledge/launches.md`, last week's readout, and the product data read through `tico db` (read only).
 
 Done when: the readout is in the shape of `knowledge/examples/usage-readout.md`, every number names its definition and period, every query is saved in `queries/`, and anything that moved has passed `skills/check-event-counts-before-a-trend/SKILL.md`.
 
@@ -11,10 +11,10 @@ Done when: the readout is in the shape of `knowledge/examples/usage-readout.md`,
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub db list
+    tico task show <id>
+    tico db list
 
-Then `knowledge/definitions.md`, `knowledge/launches.md` and last week's readout. `hub db doctor <name>`
+Then `knowledge/definitions.md`, `knowledge/launches.md` and last week's readout. `tico db doctor <name>`
 on each source; a failing one is the first line of the report.
 
 ## 2. Adoption per recent launch
@@ -43,5 +43,5 @@ drop to zero is usually a broken event. Run `skills/check-event-counts-before-a-
 ## 6. Write and hand over
 
 Write `reports/YYYY-MM-DD-usage-readout.md` in the shape of `knowledge/examples/usage-readout.md`, with the
-queries saved as `queries/YYYY-MM-DD-usage-readout.sql`. `hub file publish reports/YYYY-MM-DD-usage-readout.md`,
-commit, and `hub task done <id> -m "..." --version N`: the headline and the biggest caveat.
+queries saved as `queries/YYYY-MM-DD-usage-readout.sql`. `tico file publish reports/YYYY-MM-DD-usage-readout.md`,
+commit, and `tico task done <id> -m "..." --version N`: the headline and the biggest caveat.

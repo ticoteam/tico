@@ -233,11 +233,11 @@ BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
 MESSAGE_KINDS = ("say", "notice", "steer")
 # Kinds old rows may still have, read as history only: nothing writes an ask or an answer in a message (a question
-# to a person is an ask on a task, `hub task ask`; to a bot, a DM flagged needs-action).
+# to a person is an ask on a task, `tico task ask`; to a bot, a DM flagged needs-action).
 OLD_MESSAGE_KINDS = ("ask", "answer")
 ASK_GONE = (
-    "asks are gone: ask a person on a task with hub task ask <task> --to <person> \"<question>\" --version N; "
-    "ask a bot with hub message send <bot> \"<question>\" --needs-action"
+    "asks are gone: ask a person on a task with tico task ask <task> --to <person> \"<question>\" --version N; "
+    "ask a bot with tico message send <bot> \"<question>\" --needs-action"
 )
 CONVERSATION_KINDS = ("chat", "ask", "task", "notice")
 CONVERSATION_SCOPES = ("direct", "personal", "shared", "task")
@@ -1632,7 +1632,7 @@ def migrate(conn, adopt_legacy=False):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS bot_file_versions_pending ON bot_file_versions(blob_id) WHERE media_state='pending'"
     )
-    # Quiet notes (`hub note`): a line left for a bot's next run, asking nothing. `carried_by` is
+    # Quiet notes (`tico note`): a line left for a bot's next run, asking nothing. `carried_by` is
     # the attempt that took it there; a canceled note never goes.
     conn.execute(
         "CREATE TABLE IF NOT EXISTS notes(id TEXT PRIMARY KEY, from_actor TEXT NOT NULL, "
@@ -2747,7 +2747,7 @@ def _botops_only(conn, actor, target):
         actor,
         "botops-only",
         "The Health Monitor gives its fixes to BotOps, not to a person: file it with "
-        "`hub task create --owner botops` (or hand a task to it with `hub task update <id> --owner botops`), and "
+        "`tico task create --owner botops` (or hand a task to it with `tico task update <id> --owner botops`), and "
         "BotOps decides who to ask",
     )
 
@@ -3938,8 +3938,8 @@ def task_reopen_hint(conn, actor, row):
     if row['status'] == 'closed' and is_bot(actor) and (actor != row['requester_id'] or is_human(closer)):
         return f"ask {actor_name(conn, closer)} to reopen it, or file a new task"
     if actor == row['owner_id'] or is_human(actor) or (actor == row['requester_id'] and row['status'] == 'closed'):
-        return f"reopen it with `hub task move {row['id']} reopen -m \"why\" --version N`, or file a new task"
-    return f"ask the owner to reopen it with `hub task move {row['id']} reopen`, or file a new task"
+        return f"reopen it with `tico task move {row['id']} reopen -m \"why\" --version N`, or file a new task"
+    return f"ask the owner to reopen it with `tico task move {row['id']} reopen`, or file a new task"
 
 
 def _number_free(conn, actor, number):
@@ -6011,7 +6011,7 @@ def task_update(
             actor,
             "close",
             f"{actor_name(conn, closer)} closed this task, so it stays closed. Add anything new as a comment "
-            "(hub task comment).",
+            "(tico task comment).",
         )
     if number is not None and number == row.get("number"):
         number = None  # sent back unchanged

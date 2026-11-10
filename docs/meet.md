@@ -92,7 +92,7 @@ same as a call that does not exist. `call_meeting` (409) when the live meeting's
 | `POST /api/v2/calls/{call_id}/bots` | Attach bots. Body: `bots`, 1 to 10 slugs |
 | `DELETE /api/v2/calls/{call_id}/bots/{bot}` | Detach a bot |
 
-The same operations are `hub call list|start|show|join|token|leave|end|retry` and `hub call bot add|remove` in the
+The same operations are `tico call list|start|show|join|token|leave|end|retry` and `tico call bot add|remove` in the
 `hub` CLI, and `hub_call_list`, `hub_call_show`, `hub_call_start`, `hub_call_join`, `hub_call_token`, `hub_call_leave`,
 `hub_call_end`, `hub_call_retry`, `hub_call_bot_add` and `hub_call_bot_remove` over MCP. The OpenAPI operations are
 `listCalls`, `startCall`, `getCall`, `joinCall`, `refreshCallToken`, `leaveCall`, `endCall`, `retryCallActionItems`,

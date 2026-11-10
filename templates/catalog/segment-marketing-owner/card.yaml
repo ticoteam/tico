@@ -43,15 +43,15 @@ prerequisites:
     why: "Optional. A shared channel spend report, if the team keeps one there, gives the spend side of the split a source."
     required: false
 onboarding:
-  - ask: "Which customer segment do you own, and how is a customer counted in it? (Default: the segment named in your title, as `hub market segment tree` lists it.)"
+  - ask: "Which customer segment do you own, and how is a customer counted in it? (Default: the segment named in your title, as `tico market segment tree` lists it.)"
     why: "Every number and every test here is scoped to this segment."
-  - ask: "Which goal does this segment serve, and what are its new customers per month, its floor and its cost per customer ceiling? (Default: the goal `hub goal list --all` names for it, with its KPI's target, or none said plainly.)"
+  - ask: "Which goal does this segment serve, and what are its new customers per month, its floor and its cost per customer ceiling? (Default: the goal `tico goal list --all` names for it, with its KPI's target, or none said plainly.)"
     why: "The number is read against these three."
-  - ask: "What is this segment's monthly budget, and which channels may spend on it? (Default: the channels in `hub growth channel list` that already spend on it, with the budget the Growth Team Manager (`growth-team-manager`) sets.)"
+  - ask: "What is this segment's monthly budget, and which channels may spend on it? (Default: the channels in `tico growth channel list` that already spend on it, with the budget the Growth Team Manager (`growth-team-manager`) sets.)"
     why: "Sets the spend limit for every ask and idea."
   - ask: "Where do this segment's sign-ups and customers come from, and who sends the monthly export? (Default: the sign-up export on the task, and the segment field in the CRM where it is connected.)"
     why: "Sets the sources. I never ask for a login."
-  - ask: "Which claims may this segment's copy make, and who reads the weekly review? (Default: `hub brand show --section claims`, with the Brand Owner for new claims; the Growth Team Manager (`growth-team-manager`), Tuesdays at 09:00.)"
+  - ask: "Which claims may this segment's copy make, and who reads the weekly review? (Default: `tico brand show --section claims`, with the Brand Owner for new claims; the Growth Team Manager (`growth-team-manager`), Tuesdays at 09:00.)"
     why: "Copy is checked against these before it goes anywhere."
 first_routine:
   title: "Weekly segment growth review"

@@ -16,8 +16,8 @@ decides exceptions, and the task is updated. The booking is not changed in this 
 2. Follow `skills/offer-reschedule-options/SKILL.md`: find the slots, state the effect on any deposit or fee exactly as the
    rules say, and never waive one.
 3. Draft the reply with the options, in the team's voice. If the request breaks a rule, say which rule and send the question
-   to the person who decides exceptions, with `hub task create --owner <person>`.
+   to the person who decides exceptions, with `tico task create --owner <person>`.
 4. Attach the options and the draft to the task. Apply the change only when the task asks for it, a granted Tool allows it,
    and a person has confirmed the new slot.
-5. Finish with `hub task done <id> -m "..." --version N`: the request, the options offered, and what is waiting on
+5. Finish with `tico task done <id> -m "..." --version N`: the request, the options offered, and what is waiting on
    the customer or a person.

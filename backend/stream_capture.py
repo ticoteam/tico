@@ -1,4 +1,4 @@
-"""A run's raw provider stream, kept for a week to turn into a replay fixture (`hub run export --fixture`).
+"""A run's raw provider stream, kept for a week to turn into a replay fixture (`tico run export --fixture`).
 
 A bot whose `capture_stream` is on has its runner record every frame it wrote to the harness and every
 frame it read back (runner-rs/src/capture.rs), scrubbed of the turn's secrets and capped at about 5 MB.
@@ -204,7 +204,7 @@ def export(c, who, auth, aid, full=True):
             **diagnostics,
             "truncated": bool(cap["truncated"]),
             "captured": cap["created_at"],
-            "fixture": f"hub run export {aid} --fixture",
+            "fixture": f"tico run export {aid} --fixture",
         }
     # A deleted message's text is not served again; the stream may still hold it until the week is out.
     message = (

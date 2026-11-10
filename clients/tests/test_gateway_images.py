@@ -1,4 +1,4 @@
-"""`hub gateway image` and the `hub_gateway_image` tool (clients/hubtools.py): the references are read and checked on this
+"""`tico gateway image` and the `hub_gateway_image` tool (clients/hubtools.py): the references are read and checked on this
 computer before anything is sent, an existing file is never overwritten, the images are saved beside each other with a
 sidecar that says how each was made (prompt, category, model, cost, reference names and sha256), and the client sends the
 Gateway's shape (clients/gateway.py `image`). The Gateway is mocked: nothing is sent anywhere."""

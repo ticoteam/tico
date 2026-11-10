@@ -1369,7 +1369,7 @@ class SettingsAdmin:
 
         # The change applies at once. The bot's session is the bot's runtime's business: the
         # hub asks for no checkpoint turn and rebuilds nothing; a bot that wants what was said
-        # before reads it with `hub conversation show`.
+        # before reads it with `tico conversation show`.
         c.execute("UPDATE bot_transitions SET state='prepared',updated_at=? WHERE id=?", (H.now(), transition_id))
         self._apply(c, who, c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone())
         return self.get(c, who, transition_id)

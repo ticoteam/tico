@@ -179,12 +179,12 @@ def stops_for(c, cause, task):
         return [
             {
                 "how": "Turn the automation off",
-                "command": f"hub automation update {cause['id']} --disable",
+                "command": f"tico automation update {cause['id']} --disable",
                 "note": "its runs stop; `--enable` turns it back on",
             },
             {
                 "how": "Change what it does",
-                "command": f"hub automation update {cause['id']} --file -",
+                "command": f"tico automation update {cause['id']} --file -",
                 "note": "a JSON object with the fields to change, on stdin; a change to its steps is a new version",
             },
         ]
@@ -192,7 +192,7 @@ def stops_for(c, cause, task):
         return [
             {
                 "how": "Retire the rule",
-                "command": f"hub rules retire {cause['id']} --version {cause.get('version', 1)}",
+                "command": f"tico rules retire {cause['id']} --version {cause.get('version', 1)}",
                 "note": "its due dates come back",
             }
         ]
@@ -200,10 +200,10 @@ def stops_for(c, cause, task):
         slug = (H.bot(c, H.actor_id(cause["bot"])) or {}).get("slug") or H.actor_id(cause["bot"])
         title = (task or {}).get("title") or "its work"
         return [
-            {"how": "Pause the bot until its source is fixed", "command": f"hub bot pause {shlex.quote(slug)}"},
+            {"how": "Pause the bot until its source is fixed", "command": f"tico bot pause {shlex.quote(slug)}"},
             {
                 "how": "Have BotOps fix the bot's source",
-                "command": "hub task create --owner botops --title " + shlex.quote(f"Stop {slug} filing: {title[:60]}"),
+                "command": "tico task create --owner botops --title " + shlex.quote(f"Stop {slug} filing: {title[:60]}"),
                 "note": "BotOps reads the cause and files the fix in the bot's code",
             },
         ]
@@ -211,7 +211,7 @@ def stops_for(c, cause, task):
         return [
             {
                 "how": "Close the parent task",
-                "command": f"hub task close {cause['id']}",
+                "command": f"tico task close {cause['id']}",
                 "note": "its open children stay as they are",
             }
         ]

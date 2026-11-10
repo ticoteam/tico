@@ -9,7 +9,7 @@ is pushed.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/versioning.md`, `knowledge/voice.md` and `knowledge/labels.md`.
 
@@ -46,11 +46,11 @@ semantic versioning, suggest a date-based name in its own style. A person record
 5. **Left out**: counts by reason.
 
 Record the draft's SHA-256 on the task (`shasum -a 256 <file>`). What gets published must match that hash; any edit needs a new approval.
-Then `hub file publish reports/YYYY-MM-DD-release-notes.md`.
+Then `tico file publish reports/YYYY-MM-DD-release-notes.md`.
 
 ## 6. Finish
 
-Commit, then `hub task done <id> -m "..." --version N`: the suggested version and why, changes included, changes unclassified,
+Commit, then `tico task done <id> -m "..." --version N`: the suggested version and why, changes included, changes unclassified,
 and which repository or range you could not read. Publishing is a human's step, and the approved text is the text that goes out.
 
 ## When a source fails

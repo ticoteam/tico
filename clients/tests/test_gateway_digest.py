@@ -1,4 +1,4 @@
-"""`hub gateway digest` (clients/hubcli.py, clients/remotecli.py): the items are read from a JSON file and sent as the
+"""`tico gateway digest` (clients/hubcli.py, clients/remotecli.py): the items are read from a JSON file and sent as the
 tool's `items`, with the focus and style, to the server's digest route. The server is faked: nothing is sent anywhere."""
 
 import json

@@ -7,13 +7,13 @@ description: Find who owns the next step of a stalled goal or task, draft one sh
 When to use: a goal or task has had no change past the stalled threshold in `knowledge/rhythm.md`.
 
 Steps:
-1. Find the owner of the next step with `hub goal show <id>` or `hub task show <id>`. If no owner is named, say so on
+1. Find the owner of the next step with `tico goal show <id>` or `tico task show <id>`. If no owner is named, say so on
    the item and ask the human who owns it, once.
 2. Check `knowledge/open-loops.md`. If you already asked this person about this item this week, do not ask again.
    Say so in the brief.
 3. Draft one nudge of one or two sentences. It names the item, how long it has been quiet, and the one thing you
    need from the person.
-4. Send it only when the task asks for it and a granted Tool allows it (`hub message send --fyi <person> "..."`),
+4. Send it only when the task asks for it and a granted Tool allows it (`tico message send --fyi <person> "..."`),
    and within the limit of ten unsolicited messages to a human a day. Otherwise leave it as a draft under the item
    in the brief.
 5. Add a line to `knowledge/open-loops.md`: the item, who was asked, the date, and what came back or "no reply yet".

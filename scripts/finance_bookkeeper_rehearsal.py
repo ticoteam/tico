@@ -7,7 +7,7 @@ a card processor, or a paid model.
   1 built path and guards   live: the demo refuses archive (409 system_bot) and group move (422 built_in); code: test_c1_*
   2 tools and refusals      code: test_c2_* (the bot's own tools/list, denied and held calls)
   3 triggers and quiet runs code: test_c3_* (seeded routines, a quiet check, known gaps)
-  4 instructions vs code    code: test_c4_* (hub commands and kinds the playbooks name)
+  4 instructions vs code    code: test_c4_* (tico commands and kinds the playbooks name)
   5 approvals               code: test_c5_* (partial: the bot holds pay and cannot decide approvals)
   6 failures                code: test_c6_* (a failed sync tells its owner once per failure run, no BotOps)
   7 demo identity           live: the demo serves the built Bookkeeper with its default rights

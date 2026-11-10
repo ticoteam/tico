@@ -420,7 +420,7 @@ def _item(c, settings, bot, fails, kind, error):
         f"Last error: {error or 'none was reported'}\n\n"
         f"Tico tries one run of {name} on its own, first in {PROBE_FIRST // 60} minutes and then at growing intervals, and "
         f"releases it when one completes. To start it sooner, check its last runs in Runs, fix the cause and release "
-        f"{name} (Settings > Bots > {name}, or `hub bot release {bot}`). Everything queued for it is kept.",
+        f"{name} (Settings > Bots > {name}, or `tico bot release {bot}`). Everything queued for it is kept.",
     )
 
 

@@ -140,16 +140,16 @@ switched in, and the old one is deleted.
 
 ## Reading it from the CLI and tools
 
-Owners and admins can read the page and its editions from the hub CLI and the MCP tools. These are read-only: nothing
+Owners and admins can read the page and its editions from the tico CLI and the MCP tools. These are read-only: nothing
 here publishes an edition, changes transparency or adds a reader.
 
 | CLI | Tool | Shows |
 |---|---|---|
-| `hub company-page` | `hub_company_page` | Transparency, public address and last update |
-| `hub audiences list` | `hub_audiences_list` | Audiences, built in and added |
-| `hub editions list [--audience ID] [--status S]` | `hub_editions_list` | Editions, newest first |
-| `hub editions show ID` | `hub_editions_show` | One edition's text, status, checks and OK |
-| `hub readers list` | `hub_readers_list` | Readers (owners and admins only) |
+| `tico company-page` | `hub_company_page` | Transparency, public address and last update |
+| `tico audiences list` | `hub_audiences_list` | Audiences, built in and added |
+| `tico editions list [--audience ID] [--status S]` | `hub_editions_list` | Editions, newest first |
+| `tico editions show ID` | `hub_editions_show` | One edition's text, status, checks and OK |
+| `tico readers list` | `hub_readers_list` | Readers (owners and admins only) |
 
 The matching API is under `/api/v2` (`company-page`, `audiences`, `editions`, `readers`).
 

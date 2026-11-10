@@ -7,7 +7,7 @@ The outcome is a copy table engineers can paste from, with every state covered.
 
 ## 1. Read the spec
 
-    hub task show <id>
+    tico task show <id>
 
 Read the spec's problem, acceptance criteria and edge cases. List every state the screen can be in:
 empty, loading, filled, error (each kind), success, no permission, offline. A state the spec does not
@@ -16,7 +16,7 @@ describe is a question for the Product Manager, not a guess. Follow `skills/cove
 ## 2. Check the words
 
 Use the glossary's names. If the feature needs a new noun, propose one with the reason and two
-alternatives, and check `hub doc ask "what do we call <thing>?"` so help articles and product agree.
+alternatives, and check `tico doc ask "what do we call <thing>?"` so help articles and product agree.
 
 ## 3. Write the table
 
@@ -32,4 +32,4 @@ ways? Cut every word that does not help.
 
 ## 5. Hand over
 
-`hub file publish copy/<spec-slug>.md --task <id>`, commit, and `hub task done <id> -m "..." --version N`: the path, new terms proposed, and questions for the Product Manager.
+`tico file publish copy/<spec-slug>.md --task <id>`, commit, and `tico task done <id> -m "..." --version N`: the path, new terms proposed, and questions for the Product Manager.

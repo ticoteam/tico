@@ -8,7 +8,7 @@ When to use: each time you summarise an application for a hiring manager, and wh
 
 Steps:
 1. Open `knowledge/roles/<role>.md` and use the criteria as the manager wrote them. If the required list is missing or
-   empty, stop and ask one question with `hub task ask <id> --to <person> "<question>" --version N`. Screening against your own idea of a good candidate is the
+   empty, stop and ask one question with `tico task ask <id> --to <person> "<question>" --version N`. Screening against your own idea of a good candidate is the
    failure this skill prevents.
 2. Read the application once in full. Then note each line a criterion could match. A name, a photo, a date of birth, a
    graduation year, a postcode or a gap in employment is not a criterion and is never a signal.

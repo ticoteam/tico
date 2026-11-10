@@ -1221,7 +1221,7 @@ def _wake_text(params, values, ctx, default):
     if ctx.get("content"):
         parts.append(str(ctx["content"]))
     if ctx.get("cut") and ctx.get("trigger") and ctx.get("delivery") and not isinstance(ctx.get("trigger"), dict):
-        parts.append(f"The rest: `hub trigger delivery {ctx['trigger']} {ctx['delivery']} --part 2`.")
+        parts.append(f"The rest: `tico trigger delivery {ctx['trigger']} {ctx['delivery']} --part 2`.")
     return "\n\n".join(parts)
 
 

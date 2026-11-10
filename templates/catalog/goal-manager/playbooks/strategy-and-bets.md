@@ -3,14 +3,14 @@
 Read this before you draft a strategy, judge a bet, file a goal proposal, or read a KPI's reading.
 
 ## The strategy
-- The strategy has one draft and numbered published versions. The draft is the owner's and only they see it. `hub strategy show`
+- The strategy has one draft and numbered published versions. The draft is the owner's and only they see it. `tico strategy show`
   is the published version, with its bets, `goals_by_bet` and `health_by_bet`.
 - The sections are `serve`, `sell`, `proof` (how we know they want it), `now` (why now), `know` (what we know that others don't),
   `how` (how we sell) and `not` (what we won't do), plus any extra the owner adds. `proof_since` says when proof last changed. The owner writes and publishes it, never you; your drafts are proposals.
 - A bet is `proposed`, `active` or `retired`. Three to five bets (at most seven active). Every active bet has a `rules_out` and a
   `wrong_if`: a KPI with a threshold, a market entity, or a sentence with a check-by date.
-- Goals carry the bet they serve (`--bet` on `hub goal create|update`). Drafting is `playbooks/draft-the-strategy.md`; a bet whose
-  wrong-if trips is `playbooks/bet-tripped.md`. A lens (`hub lens list`) is a set of questions run against the published strategy;
+- Goals carry the bet they serve (`--bet` on `tico goal create|update`). Drafting is `playbooks/draft-the-strategy.md`; a bet whose
+  wrong-if trips is `playbooks/bet-tripped.md`. A lens (`tico lens list`) is a set of questions run against the published strategy;
   `playbooks/run-a-lens.md`.
 
 ## Goals
@@ -32,16 +32,16 @@ Read this before you draft a strategy, judge a bet, file a goal proposal, or rea
   colours are `playbooks/status-pass.md`.
 
 ## Talking to Tico: the commands
-Read with `hub strategy show`, `hub strategy versions`, `hub strategy diff --from <n> --to <n>`, `hub lens list`, `hub lens show`,
-`hub goal list`, `hub goal show`, `hub kpi list`, `hub kpi show`, `hub goal checkin-list`, the market with `hub doc search --market`,
-`hub market show <id>` and `hub market delta`, customers with `hub growth numbers` and `hub meeting search`, and the bots' state
-with `hub health check`.
-Write with `hub kpi log`, `hub goal refresh`, `hub goal checkin`, `hub proposal create` and `hub lens run`. Nothing else changes a
-goal, a KPI or the strategy. An org change the owner asked for through their Assistant is `hub group update|delete` or
-`hub org reports-to`, where the server lets you. At level 3 only, `hub goal strategy-bot-decide` changes bot tasks. `hub strategy draft`,
-`hub strategy bet` and `hub strategy publish` are the owner's, never yours. The MCP tools have the same names (`hub_strategy_show`,
+Read with `tico strategy show`, `tico strategy versions`, `tico strategy diff --from <n> --to <n>`, `tico lens list`, `tico lens show`,
+`tico goal list`, `tico goal show`, `tico kpi list`, `tico kpi show`, `tico goal checkin-list`, the market with `tico doc search --market`,
+`tico market show <id>` and `tico market delta`, customers with `tico growth numbers` and `tico meeting search`, and the bots' state
+with `tico health check`.
+Write with `tico kpi log`, `tico goal refresh`, `tico goal checkin`, `tico proposal create` and `tico lens run`. Nothing else changes a
+goal, a KPI or the strategy. An org change the owner asked for through their Assistant is `tico group update|delete` or
+`tico org reports-to`, where the server lets you. At level 3 only, `tico goal strategy-bot-decide` changes bot tasks. `tico strategy draft`,
+`tico strategy bet` and `tico strategy publish` are the owner's, never yours. The MCP tools have the same names (`hub_strategy_show`,
 `hub_lens_run`...).
-Ask a human a question with `hub task create --owner <person>`, another bot with `hub message send <bot> "<question>" --needs-action`; answer a bot's question with
-`hub message send <bot> "<answer>"`. A source you need and do not have is one task for the owner, at most once per source: look for an open task
+Ask a human a question with `tico task create --owner <person>`, another bot with `tico message send <bot> "<question>" --needs-action`; answer a bot's question with
+`tico message send <bot> "<answer>"`. A source you need and do not have is one task for the owner, at most once per source: look for an open task
 first.
 The exact arguments, by job, are in `playbooks/commands.md`.

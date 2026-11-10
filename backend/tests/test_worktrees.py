@@ -1407,7 +1407,7 @@ def test_a_checkout_stuck_past_the_deadline_fails_once_owned_and_retries_on_the_
     assert told() == 1
     with api.app_state.store.read() as c:
         assert (
-            '`hub task worktree add Acme/product`'
+            '`tico task worktree add Acme/product`'
             in c.execute(  # nothing checked out: add starts it
                 "SELECT body FROM messages WHERE body LIKE '%Setup did not finish%'"
             ).fetchone()[0]
@@ -1460,7 +1460,7 @@ def _a_retry_after_the_deadline_keeps_the_setup_phase_and_names_the_registered_s
         told = c.execute(
             "SELECT body FROM messages WHERE recipient_id='bot:cmo' AND body LIKE '%Setup did not finish%'"
         ).fetchone()[0]
-    assert '`hub task worktree setup Acme/product`' in told  # the folder exists: setup resumes it in place
+    assert '`tico task worktree setup Acme/product`' in told  # the folder exists: setup resumes it in place
     again = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     assert again['link_id'] == link['link_id'] and again['checkout_state'] == 'setup_running'
     assert {k: again[k] for k in proof} == proof
@@ -1499,7 +1499,7 @@ def _the_registered_setup_retry_after_the_deadline_clears_the_failure_at_its_fir
     state, detail = stored()  # expired, with the phase and proof the setup command resumes from
     assert state == 'pending' and detail['pending_expired'] and detail['checkout_state'] == 'setup_running'
     assert {k: detail[k] for k in proof} == proof
-    # `hub task worktree setup` straight away, no add: its first progress report clears the failure.
+    # `tico task worktree setup` straight away, no add: its first progress report clears the failure.
     assert patch(state='pending', checkout_state='setup_running', setup_pending=True, **proof).status_code == 200
     state, detail = stored()
     assert state == 'pending' and 'pending_expired' not in detail and detail['checkout_state'] == 'setup_running'

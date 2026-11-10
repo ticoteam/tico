@@ -46,13 +46,13 @@ def test_an_automation_or_parent_task_is_named_with_a_stop_that_parses(api):
     assert origin["cause"]["type"] == "automation" and origin["cause"]["id"] == aid
     assert origin["siblings"]["made"] == 1  # a list task ref on another run message does not break it
     assert origin["cause"]["name"] == "Morning check"
-    assert origin["stop"][0]["command"] == f"hub automation update {aid} --disable"
+    assert origin["stop"][0]["command"] == f"tico automation update {aid} --disable"
     for stop in origin["stop"]:
         cli.parse_args(shlex.split(stop["command"])[1:])
 
     origin = get(api, "origins/" + child["id"])
     assert origin["cause"] == {"type": "parent_task", "id": parent["id"], "title": "Parent work"}
-    assert origin["stop"][0]["command"] == f"hub task close {parent['id']}"
+    assert origin["stop"][0]["command"] == f"tico task close {parent['id']}"
     assert origin["siblings"]["made"] == 1
 
 

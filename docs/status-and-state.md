@@ -165,7 +165,7 @@ Enforcement: trigger on insert and update of `state`. NOT NULL.
 
 ### Runs
 
-API v2, the live events, webhooks, the MCP tools, the hub CLI and the web app call an attempt a run until Release 2
+API v2, the live events, webhooks, the MCP tools, the tico CLI and the web app call an attempt a run until Release 2
 moves the table: a field is `run_id` (the attempt's id), an object is `run`, a list is `runs`. `run.state` comes from
 `attempts.state` by one fixed map (`backend/runs.py`, `STATE`):
 

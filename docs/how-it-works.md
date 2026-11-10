@@ -32,7 +32,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
 | Strategy Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
-| Task Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `hub task-manager status` |
+| Task Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `tico task-manager status` |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: its Home or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
 
@@ -62,7 +62,7 @@ Words are defined in the [Glossary](glossary.md).
   it; a person's default), **Queue** goes right after that turn or now when the bot is idle, and **Defer** wakes
   nobody until the bot's next turn there or a deadline. Chat says which, and Stop and redirect ends the turn so the next
   one starts with that message. A requesting bot steers its delegated task's running turn with
-  `hub message send --steer --ref task:<id>`.
+  `tico message send --steer --ref task:<id>`.
   A bot's question to a person is an ask on its task, and it lands in their **Needs you**
   ([Asks and OKs](tasks.md#asks-and-oks)). An OK on one exact action (send this email, spend, publish) is an ask bound
   to
@@ -74,7 +74,7 @@ Words are defined in the [Glossary](glossary.md).
   supports (`parent_id`, optional) and a colour with a one-line note. The colour is set automatically
   from the goal's KPIs (or its owner's check-ins and tasks) by the built-in **Strategy Bot**; a human
   may override it, and it stays theirs until they hand it back. `done` or `dropped` when it ends. A task
-  may name the goal it serves. Bots read theirs with `hub goal list`; nothing is pushed into a run.
+  may name the goal it serves. Bots read theirs with `tico goal list`; nothing is pushed into a run.
 - **KPI** — a measure that stands on its own: a name, definition, unit, direction, cadence and one owner.
   A goal links to zero or more KPIs and the target lives on the link (an improvement by a deadline, or a
   range to stay inside). Readings are facts with a period, evidence and a quality; they are never edited,
@@ -143,7 +143,7 @@ proposes anything with a side effect for their own click ([The Assistant](assist
 Assistant too: it hands strategy and goal work to the Strategy Bot, research to the Librarian and bot work to BotOps. There is no shared
 Tico chat page and no Tico Live; humans can also act across Tico through their own external agent over Tico's
 MCP ([Connect an external agent](connect-an-agent.md)).
-The database itself is readable with plain SQL (`hub sql`, the SQL page, `POST /api/v2/sql`):
+The database itself is readable with plain SQL (`tico sql`, the SQL page, `POST /api/v2/sql`):
 one `SELECT` at a time, each caller seeing only what the JSON API would show it, credentials never
 ([Querying Tico with SQL](hub-sql.md)).
 
@@ -173,8 +173,8 @@ Build) are signed in on the Mac and never leave it. Bot Credentials are stored i
 `_shared.env` and declared profiles migrate into grants on upgrade; new runs do not load those files.
 Model API keys stored in Tico are separate from local subscription logins.
 Each run gets a scoped credential in `HUB_API_URL`/`HUB_TOKEN`; the bot talks to hub.acme.example
-through the `hub` CLI (`scripts/hub`) or Tico's MCP tools (`hub_*`, the same names with
-underscores: `hub task create` is `hub_task_create`), and downloads attachments with
+through the `tico` CLI (`scripts/hub`) or Tico's MCP tools (`hub_*`, the same names with
+underscores: `tico task create` is `hub_task_create`), and downloads attachments with
 `clients/files.py`. The tool schema is `clients/hubtools.py` and is the contract; the two are
 one implementation behind two transports. Codex and Claude runs get the MCP server for free
 (the runner spawns `clients/hubmcp.py` with the run's credential); anything that speaks MCP
@@ -188,7 +188,7 @@ bounded calendar snapshot, limited to the team owner's or the bot operator's cal
 claims it once, creates the Google event and invitations locally, and reports the result. Bots must
 see `succeeded` before saying the appointment exists. This path grants no generic Gmail authority.
 
-One of those tools is a second model, the decision model. `hub_decision_ask` (`hub decision ask`) sends a JSON state and typed
+One of those tools is a second model, the decision model. `hub_decision_ask` (`tico decision ask`) sends a JSON state and typed
 questions to the decision model, and gets a calibrated answer per question back:
 a choice with a confidence, a score on ordered levels, or the probability a statement is true (yes/no, choice and score: the question format of OpenRouter's Decisions API).
 It writes no prose, so a bot uses it to decide (sort a listing, dedupe, route, gate a draft) and
@@ -200,7 +200,7 @@ state (`backend/judge.py`); the decisions themselves are versioned files in `que
 **Bot ids** — a bot has a stable id and a renameable slug. A bot made before ids keeps its slug as its id; a bot made now
 gets a UUIDv7 id. Everything that names a bot stores the id (`bot:<id>` actors, task owners, automations, the org
 chart, assignments, runner readiness), and every API path, MCP tool and `hub` command that names a bot takes the id
-or the slug. A rename (`slug` on `POST /api/v2/bots/<bot>/definition`, `hub bot update <bot> --new-slug S`, the Slug
+or the slug. A rename (`slug` on `POST /api/v2/bots/<bot>/definition`, `tico bot update <bot> --new-slug S`, the Slug
 field in the bot's settings) changes only the label: the old slug stops naming a UUID bot and may be taken by
 another, and no slug may equal another bot's id. Built-in bots keep their slug. **Folders**: a bot made now gets
 `folder: bot-<slug it was made with>` in its configuration, and the runner uses that folder name
@@ -264,7 +264,7 @@ all finished wakes the task's owner while the task is its turn (`pr_checks_done`
 work wakes (an assignment, a blocker, a routine, a due date, a snooze ending, a finished sub-task) and anything
 no rule names waits as a note (`default_note`). Teams, pipelines, departments, bots and
 single tasks can override these with rules of their own (the **What wakes** automations on the Automations page). Every message to a bot records the
-rule that decided it, and every run records the rule that woke it, so `rule_weekly` in `hub sql` shows runs, tokens and
+rule that decided it, and every run records the rule that woke it, so `rule_weekly` in `tico sql` shows runs, tokens and
 runs that did nothing per rule ([Querying Tico with SQL](hub-sql.md)).
 
 Urgent task news covered by an existing urgent rule can still reach the bot when the task waits on an open
@@ -292,8 +292,8 @@ that only read) and consumed no approval, is resumed once, each with a note in t
 record (`job.auto_reconcile` in the event log). A run whose lease lapsed (its computer dropped) counts shell calls as
 reads too when it wrote nothing to Tico and the computer judged each whole line read-only: every part of it (between
 `|`, `;`, `&&`, `||` and newlines) is setup such as `cd` or `export`, a program that only reads (`grep`, `cat`, `wc`)
-or a `hub` read (`hub task list`, `hub needs-you show`), with no outside action, no output to a file and no `$(...)`,
-backtick or heredoc. `curl -X POST ... && hub task list` is held, and so is any line from a computer too old to judge
+or a `hub` read (`tico task list`, `tico needs-you show`), with no outside action, no output to a file and no `$(...)`,
+backtick or heredoc. `curl -X POST ... && tico task list` is held, and so is any line from a computer too old to judge
 it. When such a
 run that answered a person's message is held instead, that person gets one notice in the chat: it stopped, and when
 it will pick up again. A busy bot's runs are settled too: the scheduler waits only
@@ -339,7 +339,7 @@ note cancellation, page changes, file reviews, task pins, and moves that keep th
 Two or more distinct tasks/chats in the remaining count, or any refusal with no attributable task/chat, still
 quarantine the whole bot. A run's source takes precedence over the task its refused write names. Escape quarantines
 always stop the whole bot and require a person to clear them. The cooldown resets only the held source's count;
-`hub api POST /api/v2/bots/<bot>/quarantine/clear` also clears its task/chat holds, with the same management permission.
+`tico api POST /api/v2/bots/<bot>/quarantine/clear` also clears its task/chat holds, with the same management permission.
 The hold leaves the task's status, snooze and dependencies intact, and BotOps still receives the refused-write review.
 
 A quarantine stops each affected running turn through the runner's normal Stop response, carrying
@@ -505,7 +505,7 @@ fails within a minute again waits twice as long (up to 8 hours). The try is the 
 message ahead of the rest; only one is handed out per window, however many lanes or computers the bot has. A run that completes
 normally releases the bot (its Needs-you item closes, event `bot.run_recovered`), so a provider outage or a network drop that has
 ended lets every bot it held go again without anyone, while a bot that is really broken makes only a few runs a day. A try that
-fails after more than a minute changes nothing. **Release** (Settings → Bots, `hub bot release <bot>`,
+fails after more than a minute changes nothing. **Release** (Settings → Bots, `tico bot release <bot>`,
 `POST /api/v2/bots/{bot}/release`, MCP `hub_bot_release`) lifts the hold and its Needs-you item at once; `GET /api/v2/bots/{bot}/budget`
 shows the hold's `next_try_at`.
 
@@ -527,12 +527,12 @@ fails again is held again. A held run whose task finished meanwhile is canceled 
 ended.
 
 **Run budgets.** Each bot has `turns_per_hour` (default 300) and `turns_per_day` (default 2500); the owner and administrators set the
-team defaults (`GET/POST /api/v2/settings/turn-budgets`, `hub team budget [--hour N] [--day N]`), and a bot's owner, operator or BotOps
-sets its own (`GET/POST /api/v2/bots/{bot}/budget` with `expected_revision`, `hub bot budget <bot> [--hour N|default] [--day N|default]`,
+team defaults (`GET/POST /api/v2/settings/turn-budgets`, `tico team budget [--hour N] [--day N]`), and a bot's owner, operator or BotOps
+sets its own (`GET/POST /api/v2/bots/{bot}/budget` with `expected_revision`, `tico bot budget <bot> [--hour N|default] [--day N|default]`,
 MCP `hub_bot_budget`). 0 is no limit. Runs are counted when Tico hands them out. A run that would pass the budget is not started and
 the bot is held with: "Tico stopped <bot>: <n> runs in the last hour. This looks like a runaway loop, not normal work. Check its last
 runs, then release it or raise its budget." (a day budget says "in the last day"). A person's own message is never refused by a budget,
-and queued work is kept. `hub bot budget <bot> release` (or Release) lifts the hold and the count starts from then; raising the budget
+and queued work is kept. `tico bot budget <bot> release` (or Release) lifts the hold and the count starts from then; raising the budget
 above the count lifts it too. Health shows `turn_budget` and the operator gets one Needs-you item.
 For example, a failed fallback that did nothing can retry after the reset; a stopped payment run that used an approval needs review.
 
@@ -580,13 +580,13 @@ it is. Tico never ends a thread, never asks the bot for a checkpoint before a mo
 change, and never rebuilds history into a prompt (a fresh session on a task starts from the task's last
 checkpoint, [Tasks](tasks.md)): when the conversation fills the model's window
 the runtime compacts it, and a run carries only what the thread said since the bot last answered.
-A bot that wants what was said before reads it with `hub conversation show <conversation id>`: the
+A bot that wants what was said before reads it with `tico conversation show <conversation id>`: the
 newest 200 messages, then `--before <next_before>` for each older page. Every run's prompt names the
 thread and that command, because a compacted session, or one on a new model, no longer holds
 all of it. The runner fast-forwards the checkout from origin before the run, and
 pulls or clones any `reads:` sibling repos beside it.
 
-**A bot needs you.** It adds an ask to its task (`hub task ask <id> --to <you> "<question>"`, or `--kind ok` for
+**A bot needs you.** It adds an ask to its task (`tico task ask <id> --to <you> "<question>"`, or `--kind ok` for
 an OK) or files a sub-task for you to do. The ask, or the first paragraph of a task it gives you, must say in one
 or two plain sentences what it needs and what happens after, with no ids, file paths or tool names; Tico refuses
 it otherwise. The task stays in its stage until you answer ([Asks and OKs](tasks.md#asks-and-oks)).
@@ -595,7 +595,7 @@ all pipelines ([Needs you](tasks.md#needs-you)). The tab and Tasks badges share 
 There is no priority; anyone may push a task past its stage or move it back
 ([Pipelines and stages](tasks.md#pipelines-and-stages)).
 
-**A bot finishes.** It commits its repository and says done with a note (`hub task done <id> -m "<note>"`), and
+**A bot finishes.** It commits its repository and says done with a note (`tico task done <id> -m "<note>"`), and
 the reply is saved in the thread. When that was the last stage, the task is Done, behind the archive button on
 **Tasks**, with the bot's note, and a bot that requested it gets a *Finished: <title>* message
 (`/api/v2/messages?unread=1`). A task
@@ -609,7 +609,7 @@ the change is live on the next run once that checkout has it: push, and pull on 
 if you edited elsewhere. Do not edit while the bot is running there.
 
 **You change a routine.** Routines are automations in Tico (`docs/routines.md`): edit one on the
-Automations page, or a bot changes its own with `hub automation update`. The change is in
+Automations page, or a bot changes its own with `tico automation update`. The change is in
 the table at once; a sleeping Mac does not block it. **You change a bot's switches.** Tools
 read `tools:` from the Mac checkout each time a bot sends or posts; whether a send goes is decided by Tico's send queue under the sending policy a person sets in Tico (On their own, Ask first or Never). Model, effort, computer, humans, name,
 status and reporting line are changed in **Settings → Bots**, not in the file.
@@ -643,7 +643,7 @@ snooze ending wakes a Lead, Manager and Monitor; a Responder has no routines. Th
 Custom bot that keeps them on); a Reviewer, Lead, Responder or Monitor is listed only its asks and its own follow-up
 times. Doers pull open tasks themselves; the others start a task only when it is handed to them.
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
-again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `hub bot profile <bot> [name]`, MCP
+again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `tico bot profile <bot> [name]`, MCP
 `hub_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices
 with a line each); the bot's owner, operator, a person it reports up to, or BotOps may. The profile also shows on every bot read.
 
@@ -667,8 +667,8 @@ not shown again and only its hash is kept. Then:
 
 ```
 export HUB_API_URL=https://hub.acme.example HUB_TOKEN=tico_pt_...
-hub whoami            # human:<you>
-hub sql "SELECT slug FROM bots"
+tico whoami            # human:<you>
+tico sql "SELECT slug FROM bots"
 curl -H "Authorization: Bearer $HUB_TOKEN" https://hub.acme.example/api/v2/bots
 ```
 
@@ -687,10 +687,10 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `backend/` | the cloud API, authorization, write layer, scheduler, backups (FastAPI, SQLite) |
 | `runner-rs/` | the local runner (`tico-runner`): enrolment, readiness, leases, runs, harnesses, updates |
 | `runner_support/` | the runner's Python helpers: the `python -m runner_support run` shim, connectors, Close call and meeting import, catalog set-up, the update process |
-| `clients/` | what bots and the runner call: the `hub` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
+| `clients/` | what bots and the runner call: the `tico` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
 | `connectors/` | shared Slack, mail/calendar and browser adapters bots use instead of vendor APIs |
-| `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `hub tool show <service>`, with the learnings bots add |
-| `questions/` | the question sets the decision model answers (`hub_decision_ask`, `hub decision ask`, `mail inbox --decisions`, the meeting brain): one versioned JSON file per decision, with its thresholds |
+| `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `tico tool show <service>`, with the learnings bots add |
+| `questions/` | the question sets the decision model answers (`hub_decision_ask`, `tico decision ask`, `mail inbox --decisions`, the meeting brain): one versioned JSON file per decision, with its thresholds |
 | `ui/` | the web interface (`index.html`, `app/` scripts, `styles/`, feature scripts, browser tests; see `ui/README.md`) |
 | `app/` | the native macOS shell around hub.acme.example |
 | `infra/` | the EC2 stack, release packaging, deploy and restore scripts |
@@ -705,10 +705,10 @@ To reopen a finished task, open it from the archive and choose **Reopen** with a
 ([Done, closed and reopen](tasks.md#done-closed-and-reopen)). A bot has one ask of its own open on a task at a
 time; asking again replaces it.
 
-An ordinary bot-to-bot `hub message send` starts work but does not return the receiving bot's
+An ordinary bot-to-bot `tico message send` starts work but does not return the receiving bot's
 final answer. To get an answer back, send it flagged `--needs-action`
-(`hub message send <bot> "<question>" --needs-action`). A bot receiving an ordinary message that asks for a reply
-sends that reply explicitly with `hub message send`. Humans' replies are delivered automatically.
+(`tico message send <bot> "<question>" --needs-action`). A bot receiving an ordinary message that asks for a reply
+sends that reply explicitly with `tico message send`. Humans' replies are delivered automatically.
 
 A bot never answers an ask for a person. A person answers it in **Needs you**, and the bot hears the answer
 once.

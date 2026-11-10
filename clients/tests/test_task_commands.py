@@ -1,4 +1,4 @@
-"""The task engine's bot commands (docs/dev/pipelines-v3-cutover.md, Bot commands): each `hub task ...` line and its
+"""The task engine's bot commands (docs/dev/pipelines-v3-cutover.md, Bot commands): each `tico task ...` line and its
 MCP tool send the same request to the plan's route, with the version the bot was given; none reads the task to find
 one. A refusal says what is missing and what the bot may run next. The API is a recorder; no server runs."""
 
@@ -211,7 +211,7 @@ def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeyp
     for kind in ("blocks", "blocked_by"):
         with pytest.raises(ValueError) as refused:
             hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": kind})
-        assert str(refused.value) == hubtools.BLOCKING_GONE and "hub task file --parent" in str(refused.value)
+        assert str(refused.value) == hubtools.BLOCKING_GONE and "tico task file --parent" in str(refused.value)
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
     cli = Recorder()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
@@ -241,7 +241,7 @@ def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
 
 
 def test_label_as_taught_needs_no_version_and_guards_the_labels_with_the_version_it_read(monkeypatch):
-    # policies/handoffs.md teaches `hub task label <id> --add x` with no version: a label change only adds or takes
+    # policies/handoffs.md teaches `tico task label <id> --add x` with no version: a label change only adds or takes
     # off what it names, so it runs at the version it read, and a change made in between is refused (task_changed).
     api = Recorder(task={"id": "T1", "version": 7, "labels": ["bug"]})
     hubtools.task_label(api, {"id": "T1", "add": ["pricing-page"]})
@@ -376,7 +376,7 @@ REFUSAL = APIError(
     409,
     extra={
         "missing": ["Checks pass (lint, unit)"],
-        "next": ['hub task move E-214 next -m "why" --version 12', 'hub task close E-214 -m "why" --version 12'],
+        "next": ['tico task move E-214 next -m "why" --version 12', 'tico task close E-214 -m "why" --version 12'],
         "version": 12,
     },
 )
@@ -414,8 +414,8 @@ def test_the_cli_prints_a_refusal_as_lines_and_exits_two(monkeypatch, capsys):
         "Missing:",
         "  Checks pass (lint, unit)",
         "You can:",
-        '  hub task move E-214 next -m "why" --version 12',
-        '  hub task close E-214 -m "why" --version 12',
+        '  tico task move E-214 next -m "why" --version 12',
+        '  tico task close E-214 -m "why" --version 12',
     ]
 
 
@@ -423,7 +423,7 @@ def test_a_stale_version_says_which_version_the_task_has_now():
     changed = {"error": "task_changed", "detail": "Changed since you looked.", "version": 13}
     assert hubtools.refusal_text(changed, "T1").splitlines() == [
         "Changed since you looked.",
-        "It is version 13 now: run `hub task show T1` and decide again.",
+        "It is version 13 now: run `tico task show T1` and decide again.",
     ]
 
 
@@ -461,7 +461,7 @@ def test_the_old_engines_tools_are_gone_and_a_call_by_one_says_what_to_use():
 
 
 def test_task_show_text_names_people_and_bots_and_a_filed_task_by_its_title():
-    """`hub task show` names the owner, whose turn it is and who a requirement waits on from the answer's `actors`
+    """`tico task show` names the owner, whose turn it is and who a requirement waits on from the answer's `actors`
     (backend/names.py), never as `human:morgan`; a wait on a filed task reads as its title, with its id last."""
     task = {
         "id": "T1",

@@ -34,9 +34,9 @@ PagerDuty's postmortem template schedules its review within five business days o
 4. **Check the facts.** Every time, number and cause has a source. Anything inferred is marked "approx." with why.
    Two sources that disagree are both listed with their dates.
 5. **Hand over.** Put the draft on the task, labelled "Draft for incident lead review". Add the action items to
-   `knowledge/actions.md` as "proposed". Ask the incident lead with `hub task ask <id> --to <person> "<question>" --version N` only about missing owners,
-   dates or conflicting facts. Create action-item tasks with `hub task create` only when the task asks for them.
-6. **Finish.** Commit, then `hub task done <id> -m "..." --version N`: the incident, the path, the gaps, and who must review.
+   `knowledge/actions.md` as "proposed". Ask the incident lead with `tico task ask <id> --to <person> "<question>" --version N` only about missing owners,
+   dates or conflicting facts. Create action-item tasks with `tico task create` only when the task asks for them.
+6. **Finish.** Commit, then `tico task done <id> -m "..." --version N`: the incident, the path, the gaps, and who must review.
 
 ## Output
 

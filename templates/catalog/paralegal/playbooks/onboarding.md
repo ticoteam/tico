@@ -4,15 +4,15 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 
 Inputs: the team's standard NDA and template, any NDA attached to an open task, the team docs, and the answers the human gives.
 Outcome: five recorded answers; the standard, the variations and the template list written down, with blanks where none were given; a real NDA checked; the executed-agreement index started; the first routine checked.
-Done when: `state.md` says `Setup: finished`, `hub bot setup-done` has run, and the first NDA check is on the task.
+Done when: `state.md` says `Setup: finished`, `tico bot setup-done` has run, and the first NDA check is on the task.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc search "NDA"
-    hub doc search "non-disclosure"
+    tico task show <id>
+    tico doc search "NDA"
+    tico doc search "non-disclosure"
 
 Look for the team's NDA template and signed NDAs in the team docs, and NDAs attached to open tasks. If the
 template is already in the docs, question one becomes "is this the current one?".
@@ -54,18 +54,18 @@ signed against its own standard. Write it in the shape of `knowledge/examples/nd
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows as off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will run the NDA desk every
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows as off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will run the NDA desk every
 weekday at 09:00, and a human sends and signs everything." They can change it or turn it off any time; there is
 nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
-or to leave it off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to
+or to leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to
 turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then
 nothing you have runs on its own. Run it once the answers and the first result are recorded, not before.

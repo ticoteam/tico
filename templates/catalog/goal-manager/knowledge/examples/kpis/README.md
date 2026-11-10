@@ -1,7 +1,7 @@
 # The shape of a KPI folder
 
 Copy `activation-rate/` to `kpis/<slug>/` in your repository, where `<slug>` is the KPI's `slug` from
-`hub kpi list`. The files:
+`tico kpi list`. The files:
 
 - `definition.md`: the KPI's definition as Tico holds it, its version, and the exact counting rules.
 - `sources.md`: where each input comes from, who owns that system, and how late it lags.

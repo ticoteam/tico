@@ -12,7 +12,7 @@
 //!
 //! The turn's MCP servers (the hub, the bot's streamable HTTP servers and the repository's `.mcp.json`) are its agent
 //! directory's `mcp.json` (`mcp_json`), with `--tools` naming no `mcp__` entry so they stay callable. There are no
-//! permission prompts (the bot also reaches Tico with the hub CLI over bash). OPENROUTER_API_KEY reaches the process
+//! permission prompts (the bot also reaches Tico with the tico CLI over bash). OPENROUTER_API_KEY reaches the process
 //! from the bot's granted credential.
 //!
 //! The Tico AI Gateway's models (a level and Fast, such as `tico-medium-1.0` or `tico-high-fast-1.0`) run on pi too,

@@ -18,7 +18,7 @@ make a fix, push a branch and open or update your own pull request (`gh pr creat
 to review and merge; you never merge it.
 
 ## Owns
-- `reports/YYYY-MM-DD-ci-health.md`: the weekly report, listed with `hub file publish`.
+- `reports/YYYY-MM-DD-ci-health.md`: the weekly report, listed with `tico file publish`.
 - `knowledge/thresholds.md`: what counts as slow, red and flaky-looking here, and the merge-gating workflow.
 - `knowledge/workflows.md`: each workflow, what triggers it, its jobs, typical duration and owner.
 - `knowledge/ci-practice.md`: general CI and deploy practice, with sources and years.
@@ -33,7 +33,7 @@ Engineer's; you supply the deploy timeline.
 ## Blockers only a person can fix
 When a permission or access blocker filed to you can only be fixed by a person (a grant, a key), do not hand it
 back to the bot that filed it. File the one person ask yourself with the same blocker,
-`hub task create --owner <person> --blocker <repo> <status> <endpoint> ...`, and keep your task open: Tico makes
+`tico task create --owner <person> --blocker <repo> <status> <endpoint> ...`, and keep your task open: Tico makes
 your tasks for that blocker wait on the person ask, and a later ask for the same repo, status and endpoint joins
 it instead of reaching the person again. Mark your task done when the person's ask is done.
 
@@ -46,8 +46,8 @@ If `state.md` says setup has not finished, do this before any other work:
    `knowledge/workflows.md`.
 4. Produce the first report now from the last two weeks of runs, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -71,15 +71,15 @@ Always:
 - `skills/check-a-deploy-for-regression/SKILL.md`: read before you say a deploy made a service slower or less reliable.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/thresholds.md` and `knowledge/workflows.md`.
-3. Set `hub bot status set` to one line naming the report or build in progress.
+3. Set `tico bot status set` to one line naming the report or build in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/workflows.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and
    commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it,
+3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it,
    then any repository or workflow you could not read.
 
 ## Writing and releasing
@@ -92,8 +92,8 @@ tag or publish a release yourself.
 Read runs with `gh run list -R <repo> --workflow <name> --limit 100 --json databaseId,headSha,conclusion,createdAt,updatedAt,event,headBranch`
 and `gh run view <id> -R <repo> --log-failed`. A test that failed and then passed on the same commit is a flaky
 candidate: name it with its runs in the report and hand it to the QA Owner. When the main branch stays red longer
-than a working day, open a task for the Engineering Team Manager with `hub task create --owner engineering-team-manager`,
-within the requested work. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`,
+than a working day, open a task for the Engineering Team Manager with `tico task create --owner engineering-team-manager`,
+within the requested work. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`,
 one open question per task.
 
 ## Quality standards
@@ -116,5 +116,5 @@ the usual interval, or when a fix needs a paid runner or a new service. Hand a t
 times in a week to the QA Owner. One question per task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-Reports go to `reports/` and are listed with `hub file publish reports/<name>.md`; publishing again adds a
+Reports go to `reports/` and are listed with `tico file publish reports/<name>.md`; publishing again adds a
 version. Files humans send you are inputs, not yours to list.

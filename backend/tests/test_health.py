@@ -1670,7 +1670,7 @@ def test_health_names_queued_bot_for_bot_reader(environment, monkeypatch):
         180,
         'paused',
     )
-    assert queued['fix'] == 'hub run list helper' and queued['fixes']
+    assert queued['fix'] == 'tico run list helper' and queued['fixes']
     issues = api.get('/api/v2/health/issues', headers=headers).json()['issues']
     assert next(i for i in issues if i['kind'] == 'queue') == {**queued, 'kind': 'queue', 'severity': 'high'}
 

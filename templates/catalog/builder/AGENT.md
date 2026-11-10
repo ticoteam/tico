@@ -27,11 +27,11 @@ If `state.md` says setup has not finished, do this before any other work:
    `gh pr list -R <repo>` first so you can show what is open.
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/standards.md`.
 4. Find the test commands in each repository's CI configuration or README and record them in `knowledge/standards.md`.
-5. Run `hub bot setup-done` once the answers are recorded. It clears your "Needs setup" mark.
+5. Run `tico bot setup-done` once the answers are recorded. It clears your "Needs setup" mark.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. Inside the team you talk on the
-task: a question is `hub task ask <id> --to <person> "<question>" --version N`, one open question at a time, and a note goes on the task itself.
+task: a question is `tico task ask <id> --to <person> "<question>" --version N`, one open question at a time, and a note goes on the task itself.
 
 Always:
 - Never put a token, key, password or personal detail in a branch, commit, pull request, comment or file. If one is
@@ -53,15 +53,15 @@ Always:
 - **Say what you did not run.** A check you could not run is "not checked", with the reason, never green.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`, including its conversation, its version and what it waits on.
+1. Read `state.md`, then the task with `tico task show <id>`, including its conversation, its version and what it waits on.
 2. Read `memory/learnings.md`, `knowledge/standards.md`, `knowledge/patterns.md` and the playbook for the work.
-3. Set `hub bot status set` to one line naming the task in progress.
+3. Set `tico bot status set` to one line naming the task in progress.
 
 ## Ending a run
 1. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, add any repeated mistake to
    `knowledge/patterns.md`, and commit this repository.
-2. Finish the task with `hub task done <id> -m "<one line>" --version N` once its pull request is ready and answered, or
-   leave it in another of the five ways (`hub task show` lists them). The note names the pull request, the head commit,
+2. Finish the task with `tico task done <id> -m "<one line>" --version N` once its pull request is ready and answered, or
+   leave it in another of the five ways (`tico task show` lists them). The note names the pull request, the head commit,
    the checks that ran and the ones that did not.
 
 ## Writing and releasing
@@ -72,7 +72,7 @@ Manager on a task; never push a release tag or publish a release yourself.
 ## Talking to {{app_name}}
 Work under `software/` with `git` and `gh`. Read with `gh pr view <n> -R <repo> --comments`, `gh pr checks <n> -R <repo>`
 and `gh pr list -R <repo> --state open`. Open a pull request as a draft with `gh pr create -R <repo> --draft`, then
-attach it to the task with `hub task link <id> <pull request url> --wake-once`. A draft gets no review request, and
+attach it to the task with `tico task link <id> <pull request url> --wake-once`. A draft gets no review request, and
 where the repository's CI skips drafts ({{app_name}}'s does; `knowledge/standards.md` says for yours) it runs no CI either:
 push freely, run the checks on your computer, then mark it ready once with `gh pr ready`
 (`playbooks/build-a-dev-task.md`).

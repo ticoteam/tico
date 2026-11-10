@@ -8,9 +8,9 @@ next step with a date and an owner on both sides.
 
 ## 1. Read the call
 
-    hub task show <id>
-    hub meeting search "<customer>"
-    hub meeting read <meeting-id>
+    tico task show <id>
+    tico meeting search "<customer>"
+    tico meeting read <meeting-id>
 
 Note, with timestamps: the problem in the buyer's words, what they need to see next, who else must say
 yes (the decision maker, the signer, IT or security, procurement), dates they mentioned, and any question
@@ -36,4 +36,4 @@ for the seller. Put the exact text and recipients on the task. Send a recap only
 ## 5. Hand over
 
 If the buyer asked for a proposal or sent a questionnaire, open `playbooks/proposal-or-rfp.md` as a
-follow-on task. `hub task done <id> -m "..." --version N`: the next step and date, what is ready to act on.
+follow-on task. `tico task done <id> -m "..." --version N`: the next step and date, what is ready to act on.

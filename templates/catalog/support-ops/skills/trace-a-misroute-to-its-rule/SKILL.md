@@ -9,7 +9,7 @@ to fix a misroute.
 
 Steps:
 1. Take the ticket and its history: where it was created, each queue or group it reached, and the time of each move.
-   Use the export, the tool's ticket audit, or a sample from `hub file list`. Name the source.
+   Use the export, the tool's ticket audit, or a sample from `tico file list`. Name the source.
 2. List every rule, trigger and automation that can act on that kind of ticket, from the configuration export or
    `knowledge/config-map.md`. Include the ones that are switched off, and say so.
 3. Put them in the order the tool runs them (`knowledge/rule-order-and-timers.md`). Say which order you used and

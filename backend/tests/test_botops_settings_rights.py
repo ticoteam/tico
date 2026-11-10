@@ -33,7 +33,7 @@ def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(a
     ):
         err, result = mcp(api, name, args, cara["token"])
         assert err, (name, result)
-    # The same through a plain `hub api` call with no on_behalf_of: the route still checks Cara, not BotOps.
+    # The same through a plain `tico api` call with no on_behalf_of: the route still checks Cara, not BotOps.
     assert act(api, cara, "PATCH", "release-schedule", {"on": True}, ref=None).status_code == 403
 
 

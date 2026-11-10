@@ -188,7 +188,7 @@ def test_go_live_that_cannot_finish_tells_the_person_once(api, monkeypatch):
         told = c.execute(
             "SELECT body FROM messages WHERE recipient_id='human:ana' AND body LIKE '%going live could not finish%'"
         ).fetchall()
-        assert len(told) == 1 and "hub bot go-live cpo" in told[0]["body"]
+        assert len(told) == 1 and "tico bot go-live cpo" in told[0]["body"]
 
 
 def test_go_live_for_a_repository_github_does_not_have_names_the_fix(api, monkeypatch):
@@ -202,7 +202,7 @@ def test_go_live_for_a_repository_github_does_not_have_names_the_fix(api, monkey
             Problem(
                 "github_repo_missing",
                 "The repository acme/bot-cpo does not exist yet on GitHub. "
-                "Create it with BotOps: `hub bot repo-create cpo`.",
+                "Create it with BotOps: `tico bot repo-create cpo`.",
                 409,
             ),
         ),
@@ -211,7 +211,7 @@ def test_go_live_for_a_repository_github_does_not_have_names_the_fix(api, monkey
     ready(api, machine, [])
     refused = post(api, "bots/cpo/go-live", {"computer": "Studio Mac"}, expected=409)["error"]
     assert refused["code"] == "repository_missing" and not refused["retryable"]
-    assert "hub bot repo-create cpo" in refused["detail"] and "hub bot go-live cpo" in refused["detail"]
+    assert "tico bot repo-create cpo" in refused["detail"] and "tico bot go-live cpo" in refused["detail"]
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM assignments WHERE bot='cpo'").fetchone()
 
@@ -256,7 +256,7 @@ def test_a_go_live_that_breaks_while_finishing_never_fails_the_heartbeat(api, mo
     ready(api, machine, ["cpo"])
     assert _record(api)["failed"]["code"] == "finish_error"
     told = _notices(api)
-    assert len(told) == 1 and "error in Tico" in told[0] and "hub bot go-live cpo" in told[0]
+    assert len(told) == 1 and "error in Tico" in told[0] and "tico bot go-live cpo" in told[0]
     assert "bogus" not in told[0] and "validation" not in told[0].lower()
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "planned"
@@ -292,7 +292,7 @@ def test_a_waiting_go_live_shows_in_health_and_expires_with_one_notice(api, monk
     ready(api, machine, ["cpo"])  # a late report finishes nothing and tells nobody again
     assert _record(api)["failed"]["code"] == "expired"
     told = _notices(api)
-    assert len(told) == 1 and "within 7 days" in told[0] and "hub bot go-live cpo" in told[0]
+    assert len(told) == 1 and "within 7 days" in told[0] and "tico bot go-live cpo" in told[0]
     assert seen("ana-test") is None
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "planned"

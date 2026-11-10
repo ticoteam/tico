@@ -8,7 +8,7 @@ no record changes.
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/ladder.md`, `knowledge/customers.md`, `knowledge/voice.md` and last week's pack. Find the newest aging export and its as-of date. If it
 is older than 3 days, say so in the first line.
@@ -31,11 +31,11 @@ draft carries the recipient, subject, body and the export row it rests on.
 ## 5. Write the pack and hand it over
 
 Write `reports/YYYY-MM-DD-ar-followup.md` in the shape of `knowledge/examples/ar-pack.md`: headline, aging with DSO, needs you now, drafts, held back,
-could not read, sources. Publish it with `hub file publish reports/YYYY-MM-DD-ar-followup.md`. Attach the drafts to the task. Send a reminder only when
+could not read, sources. Publish it with `tico file publish reports/YYYY-MM-DD-ar-followup.md`. Attach the drafts to the task. Send a reminder only when
 the task asks for it, the text is exactly the approved draft, and mail sending is on in Tico. Otherwise the drafts stay on the task.
 
 ## 6. Finish
 
-Update `knowledge/customers.md` with what you learned. Commit, then `hub task done <id> -m "..." --version N`: overdue amount, drafts ready, who
+Update `knowledge/customers.md` with what you learned. Commit, then `tico task done <id> -m "..." --version N`: overdue amount, drafts ready, who
 needs a human, and which sources you could not read. A mailbox or export that failed is named; an unread source is not an empty one. Always finish the
 task: an open routine task absorbs the next.

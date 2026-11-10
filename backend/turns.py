@@ -109,7 +109,7 @@ def build_steps(rows):
     return steps[:STEP_LIMIT]
 
 
-# A shell call's events name the program it runs (the runner's summary: `npm`, or `hub task close`), never its
+# A shell call's events name the program it runs (the runner's summary: `npm`, or `tico task close`), never its
 # arguments. These tool names are shells.
 SHELL_TOOLS = {"bash", "shell"}
 # The words a shell line may start with before its work (`cd web && npm test`, `export X=1 && npm test`). The runner
@@ -207,7 +207,7 @@ CLI_NAMES = ("tico", "hub")  # the teamwork CLI, and its old name
 
 def hub_words(text):
     """A Tico CLI call's words, lowercased and split on anything but letters and digits, from a shell summary
-    (`tico task show`, or `hub task show` under the CLI's old name) or an MCP tool name (`mcp__hub__hub_task_show`, or
+    (`tico task show`, or `tico task show` under the CLI's old name) or an MCP tool name (`mcp__hub__hub_task_show`, or
     `mcp__tico__hub_task_show` as people's own agents name the server). None for any other tool."""
     words = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
     if words[:1] == ["mcp"]:
@@ -258,7 +258,7 @@ def strip_setup(words):
 
 def shell_label(summary):
     """A shell call's label from its summary, or None when the summary is neither a hub command nor one program from
-    SHELL_PROGRAMS. A setup prefix (`cd web &&`) is skipped first, so `cd web && hub task list` reads as the hub command.
+    SHELL_PROGRAMS. A setup prefix (`cd web &&`) is skipped first, so `cd web && tico task list` reads as the hub command.
     A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's command list):
     its phrase when it has one, else just `Ran hub`, since an old stored summary can hold argument words."""
     words = strip_setup(summary.split())

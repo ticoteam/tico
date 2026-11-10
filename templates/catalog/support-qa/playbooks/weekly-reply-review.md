@@ -12,7 +12,7 @@ Done when: every sampled reply is scored or listed as unscored with its reason, 
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/scorecard.md`, `knowledge/calibration.md` and `knowledge/patterns.md`.
 
@@ -47,11 +47,11 @@ Write `reports/YYYY-MM-DD-reply-review.md` in the shape of `knowledge/examples/r
 how the sample was drawn, the pass rate and trend, patterns, replies that were excellent, drafted
 coaching, unscored replies and why, sources. Then:
 
-    hub file publish reports/YYYY-MM-DD-reply-review.md
+    tico file publish reports/YYYY-MM-DD-reply-review.md
 
 ## 7. Finish
 
-Commit, then `hub task done <id> -m "..." --version N`: replies reviewed, pass rate, the top pattern
+Commit, then `tico task done <id> -m "..." --version N`: replies reviewed, pass rate, the top pattern
 and any source you could not read. Always finish it: an open routine task absorbs the next.
 
 ## When a source fails

@@ -55,7 +55,7 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   deadline (DEADLINES), and the call itself is cut off then (`J.within`), so an abandoned call never runs on to the
   Gateway's own timeout holding its slot.
 - Cache: verdicts are kept by a digest of the check input, the matched rules and versions, the set and the level, so
-  `hub rules check` on a draft and then sending it costs one call.
+  `tico rules check` on a draft and then sending it costs one call.
 """
 
 import contextvars
@@ -1228,12 +1228,12 @@ def _review_task(c, hold_id, author, rule, reviewer):
 
 
 def appeal_line(c, hold_id, reviewer, author=""):
-    """How a bot's held output is appealed (its own `hub rules appeal`). A person's hold has no such line: they ask the
+    """How a bot's held output is appealed (its own `tico rules appeal`). A person's hold has no such line: they ask the
     reviewer themselves."""
     if author and H.is_human(author):
         return ""
     name = H.person_name(c, H.actor_id(reviewer)) if reviewer else ""
-    return f"Think it's wrong? Ask {name or 'your manager'}: `hub rules appeal {hold_id}`"
+    return f"Think it's wrong? Ask {name or 'your manager'}: `tico rules appeal {hold_id}`"
 
 
 def current_obj(c, obj):
@@ -2858,7 +2858,7 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/rules/check")
     def rules_check(request: Request, body: DraftCheck):
-        """A bot checks a draft as the write it will be (`hub rules check`): the same input, and the verdict cached, so
+        """A bot checks a draft as the write it will be (`tico rules check`): the same input, and the verdict cached, so
         sending that exact draft costs no second call. A person's draft is checked as theirs."""
         who = request.state.identity
         found = checked_as(who, store.settings.assistant_bot)

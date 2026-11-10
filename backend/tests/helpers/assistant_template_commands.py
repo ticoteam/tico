@@ -67,10 +67,12 @@ def variants(argv):
 
 
 def argv_of(text):
-    """The argv after `hub`, with placeholders filled, or None when the line is prose rather than a command."""
+    """The argv after `tico`, with placeholders filled, or None when the line is prose rather than a command. The CLI's
+    own top-level answers (`tico --version`, and `tico help`, which clients/hubcli.py main reads as --help) print and
+    exit, so they are not parsed."""
     if "<group>" in text or "--help" in text or text.endswith("..."):
         return None
-    text = COMMENT.sub("", text)  # a shell comment after the command: `hub decision ask --list  # the shared sets`
+    text = COMMENT.sub("", text)  # a shell comment after the command: `tico decision ask --list  # the shared sets`
     filled = VERSION.sub("--version 1", PLACEHOLDER.sub("1", text))
     try:
         tokens = shlex.split(filled)
@@ -83,6 +85,8 @@ def argv_of(text):
         if depth == 0 and not opens and not closes:
             argv.append(token)
         depth = max(0, depth + opens - closes)
+    if argv in (["--version"], ["help"]):
+        return None
     return argv or None
 
 

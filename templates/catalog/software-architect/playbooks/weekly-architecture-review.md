@@ -13,7 +13,7 @@ the top five debt items are ranked with their scores, and the report is publishe
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/decision-rules.md`, `knowledge/system-map.md`, `knowledge/tech-debt.md` and last week's
 review. Check whether last week's proposed ADRs were committed and whether open questions were answered.
@@ -27,7 +27,7 @@ New or changed documents in the design folders and linked docs since last week. 
 
 Merged pull requests since last week that meet `knowledge/decision-rules.md`: a new service or package
 manifest, a new data store or migration pattern, a new external API client, a public API change. Also
-decisions in imported meetings (`hub meeting search`). For each with no ADR, follow
+decisions in imported meetings (`tico meeting search`). For each with no ADR, follow
 `skills/write-an-adr-from-a-decision/SKILL.md` and write the proposed ADR in `adr/NNNN-<title>.md` (context, decision,
 status "proposed", consequences) from what the pull request and the meeting say, marking what you had to infer.
 
@@ -48,4 +48,4 @@ pull requests and the system map). When a pattern repeats, change `knowledge/dec
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-architecture-review.md` in the shape of `knowledge/examples/architecture-review.md`,
-`hub file publish` it, commit, then `hub task done <id> -m "..." --version N`.
+`tico file publish` it, commit, then `tico task done <id> -m "..." --version N`.

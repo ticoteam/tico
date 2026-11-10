@@ -15,7 +15,7 @@ Nothing on GitHub changes.
 
 ## Steps
 
-1. **Read where things stand.** `hub task show <id>`, then the inputs above. For each fix planned last week, check
+1. **Read where things stand.** `tico task show <id>`, then the inputs above. For each fix planned last week, check
    whether it landed and whether its number moved.
 2. **Read the runs.** For each workflow, over the last 14 days and the 14 before: runs, failure rate, median and slowest
    duration. Use medians over the window, not single runs.
@@ -33,7 +33,7 @@ Nothing on GitHub changes.
    log shows it.
 6. **Write three fix plans.** Choose by time saved times people blocked: the slowest merge-gating job, the flakiest
    test, the most common failure cause. For each: the file and job, the change, the expected effect, and how to verify it.
-7. **Write and hand over.** Write the report, `hub file publish` it, commit, then run `hub task done <id> -m "..." --version N` with the headline and the path.
+7. **Write and hand over.** Write the report, `tico file publish` it, commit, then run `tico task done <id> -m "..." --version N` with the headline and the path.
 
 ## Output
 

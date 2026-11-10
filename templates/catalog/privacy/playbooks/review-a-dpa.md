@@ -8,7 +8,7 @@ summary for a human, not legal advice. Nothing is signed or sent.
 
 ## 1. Read it whole
 
-    hub task show <id>
+    tico task show <id>
 
 Read the DPA, its annexes (processing description, security measures, subprocessor list, transfer clauses) and
 whatever main agreement it attaches to. Name any annex that is missing.
@@ -30,7 +30,7 @@ annex against `knowledge/subprocessors.md`: a vendor missing from either side is
 ## 4. Hand over
 
 Write `reports/dpas/<party>.md`: three lines first (what it is, how many differences, the one that matters most),
-then the table, then questions for counsel, then **Summary for a human, not legal advice.** `hub file publish`
+then the table, then questions for counsel, then **Summary for a human, not legal advice.** `tico file publish`
 it and put it on the task. The reply to the customer is a human's.
 
 ## Done when

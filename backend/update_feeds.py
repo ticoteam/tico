@@ -202,7 +202,7 @@ def _sections(body):
 # these (`authored`).
 TICO_REASONS = (
     "it removes or deprecates something; check what your Instructions rely on",
-    "it changes MCP tools, hub commands or the API; check the tools your Instructions use",
+    "it changes MCP tools, tico commands or the API; check the tools your Instructions use",
     "no MCP, hub command, API or removal entries",
 )
 TEMPLATE_OTHER = "it changes only the template's other files"

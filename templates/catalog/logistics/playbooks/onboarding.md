@@ -6,15 +6,15 @@ claim deadlines, a first weekly delivery report, and the first routine checked.
 
 Done when: all five answers are in `state.md` under `## Answers`, `knowledge/carriers.md` exists with each claim deadline
 marked read or "not found", the first report is attached and labelled, the routine is checked and logged in
-`memory/decisions.md`, and `hub bot setup-done` has run.
+`memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc search "carrier rates"
-    hub task list
+    tico task show <id>
+    tico doc search "carrier rates"
+    tico task list
 
 Open tasks about late or missing parcels are the first rows of `knowledge/exceptions.md`. If a
 shipment export is attached, note its columns (order, carrier, service, ship date, promised date,
@@ -47,17 +47,17 @@ not yet reviewed". Customer updates are on the task, not sent.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send this report every Monday at 08:00 and work exceptions as each export arrives." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will send this report every Monday at 08:00 and work exceptions as each export arrives." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

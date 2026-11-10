@@ -7,12 +7,12 @@ The outcome is five recorded answers, a real draft of this week's summary on the
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub task list
-    hub update list --kind weekly
+    tico task show <id>
+    tico task list
+    tico update list --kind weekly
 
 Check what you can already reach: the repositories in your GitHub access (`gh pr list -R <repo> --state all --limit 30`),
-the other engineering bots' tasks and reports, imported standups (`hub meeting search --since YYYY-MM-DD`). Do not ask what
+the other engineering bots' tasks and reports, imported standups (`tico meeting search --since YYYY-MM-DD`). Do not ask what
 these already say. If you cannot read a repository, that is a gap to name, and a task for the owner if they want it connected.
 
 ## 2. Introduce yourself in three lines
@@ -39,17 +39,17 @@ Read the last two weeks of merged and open pull requests in the named repositori
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you this summary every Monday at 09:00, and I will not assign or message anyone." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you this summary every Monday at 09:00, and I will not assign or message anyone." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

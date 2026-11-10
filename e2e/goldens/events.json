@@ -76,7 +76,7 @@
         "id": "<id2>",
         "message": {
           "answered_by_id": null,
-          "body": "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n- coo (coo): Lead\n- doc-updater (doc-updater): Doer\n- finance (finance): Doer\n- inbox (inbox): Doer\n- ops (ops): Doer\nChange one in Settings > Bots > Edit, or with `hub bot profile <bot> <name>`.",
+          "body": "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n- coo (coo): Lead\n- doc-updater (doc-updater): Doer\n- finance (finance): Doer\n- inbox (inbox): Doer\n- ops (ops): Doer\nChange one in Settings > Bots > Edit, or with `tico bot profile <bot> <name>`.",
           "conversation_id": "<id1>",
           "created_at": "<time>",
           "deleted_at": null,
@@ -222,7 +222,7 @@
         "id": "<id6>",
         "message": {
           "answered_by_id": null,
-          "body": "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n- cpo (cpo): Lead\n- product-design (product-design): Doer\nChange one in Settings > Bots > Edit, or with `hub bot profile <bot> <name>`.",
+          "body": "Tico gave each of your bots a profile, which decides what wakes it and what tasks it takes:\n- cpo (cpo): Lead\n- product-design (product-design): Doer\nChange one in Settings > Bots > Edit, or with `tico bot profile <bot> <name>`.",
           "conversation_id": "<id5>",
           "created_at": "<time>",
           "deleted_at": null,

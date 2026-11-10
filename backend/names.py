@@ -33,7 +33,7 @@ ACTOR_KEYS = (
     "proposed_by",
 )
 # Keys whose actor ids go into `actors` only, with no `_name` beside them: a task's waits and requirements name who
-# they wait on (`who`), who asked (`asked_by`) and who answered (`by`), and `hub task show` prints those names.
+# they wait on (`who`), who asked (`asked_by`) and who answered (`by`), and `tico task show` prints those names.
 LISTED_KEYS = ("who", "asked_by", "by")
 ID = re.compile(r"\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])")
 # Tico support in a session a person opened (backend/support_access.py): no roster row, always this name.

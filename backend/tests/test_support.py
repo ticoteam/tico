@@ -349,7 +349,7 @@ def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_
 
 
 # ----------------------------------------------------------------------------- a bot's report, approved by a person
-REPORT = "hub task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
+REPORT = "tico task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
 
 
 def as_bot(api, slug="coo"):
@@ -484,7 +484,7 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
         row = c.execute("SELECT content FROM ok_grants WHERE requirement_id=?", (approval["id"],)).fetchone()[0]
         c.execute(
             "UPDATE ok_grants SET content=? WHERE requirement_id=?",
-            (row.replace("hub task update", "hub task delete"), approval["id"]),
+            (row.replace("tico task update", "tico task delete"), approval["id"]),
         )
     r = send(api, bot, approval["id"])
     assert r.status_code == 409 and "hash" in r.json()["error"]["detail"]
@@ -881,7 +881,7 @@ def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(envir
 
 
 def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypatch):
-    """Criterion 3: `hub support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
+    """Criterion 3: `tico support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
     from clients import hubtools
 
     calls = []

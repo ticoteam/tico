@@ -100,7 +100,7 @@ class SupportTicket(Contract):
     # What the person is asking for: help, help with setting up (backend/support_asks.py setup_snapshot), or feedback.
     kind: Literal["support", "setup", "feedback"] = "support"
     # Who is filing, for HQ's queue (`source`; HQ owns the list): the person's own app sends nothing, so `person`; only
-    # BotOps' `hub support file` says `botops`, kept only when BotOps makes the request. It sorts tickets at HQ and
+    # BotOps' `tico support file` says `botops`, kept only when BotOps makes the request. It sorts tickets at HQ and
     # grants nothing.
     source: Literal["person", "botops"] = "person"
 

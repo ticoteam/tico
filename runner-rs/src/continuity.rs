@@ -130,19 +130,19 @@ impl Session {
         };
         Some(format!(
             "New session: your previous session here {because}, so this turn starts a new one without its transcript; {seed}. \
-             {read} before acting; `hub task show` and `hub conversation show` have anything older."
+             {read} before acting; `tico task show` and `tico conversation show` have anything older."
         ))
     }
 }
 
 /// Told to a resumed session whose last turn here was interrupted (a restart or a Stop): it may have acted.
 pub const AFTER_INTERRUPT: &str = "Your previous turn in this session was interrupted before it finished (a restart or a Stop), and it may \
-    already have done part of its work. Check what it did (`git status`, `git log`, `hub task show`) before repeating any step.";
+    already have done part of its work. Check what it did (`git status`, `git log`, `tico task show`) before repeating any step.";
 
 /// Told to a resumed session after a turn on another harness ran in a side session: that turn's replies and work
 /// are not in this transcript.
 pub const AFTER_SIDE: &str = "Since your last turn here, a turn ran in a separate side session (a fallback harness), and its replies are in \
-    the conversation below. Check what it did (`git log`, `hub task show`) before relying on your own picture of the work.";
+    the conversation below. Check what it did (`git log`, `tico task show`) before relying on your own picture of the work.";
 
 /// That the turn began a new session or resumed one, and why, for a server that takes it (`run_session`; an older
 /// one refuses the field, and a refused result would never arrive).

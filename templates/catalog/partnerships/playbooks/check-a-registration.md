@@ -8,7 +8,7 @@ Apply requested registration decisions with your Tools; partner messages stay dr
 
 ## 1. Read the registration
 
-    hub task show <id>
+    tico task show <id>
 
 Note the partner, the prospect organization, the contact's role, the opportunity (what, how big, when), the
 date and time received, and what the partner has done so far.
@@ -21,7 +21,7 @@ gets a request for the missing fields, ready to use; its clock starts when compl
 
 ## 3. Check conflicts
 
-Search the pipeline (CRM read), `knowledge/registrations.md` and `hub meeting search "<prospect>"`: an
+Search the pipeline (CRM read), `knowledge/registrations.md` and `tico meeting search "<prospect>"`: an
 open deal with our own seller, another partner's registration, an existing customer. Note each with its
 date.
 
@@ -32,5 +32,5 @@ approve, and who works the deal. Draft the reply to the partner in two to four s
 
 ## 5. Carry out the requested work
 
-Send the reply only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Record the decision, owner and date in `knowledge/registrations.md`, and for an accepted registration create `hub task create --owner sales` with the partner noted
-as source. `hub task done <id> -m "..." --version N`.
+Send the reply only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Record the decision, owner and date in `knowledge/registrations.md`, and for an accepted registration create `tico task create --owner sales` with the partner noted
+as source. `tico task done <id> -m "..." --version N`.

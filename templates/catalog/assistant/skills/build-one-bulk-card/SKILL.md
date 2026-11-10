@@ -13,14 +13,14 @@ description: "Puts several changes a human must confirm onto one Confirm card, g
 
 ## Steps
 
-1. Read the list from the record: `hub needs-you show` for the asks and tasks waiting on them (with ids), and `hub task list` or `hub task list --all` for their tasks, each row with its version. Work from what is there, not from memory.
+1. Read the list from the record: `tico needs-you show` for the asks and tasks waiting on them (with ids), and `tico task list` or `tico task list --all` for their tasks, each row with its version. Work from what is there, not from memory.
 2. Drop what you should not propose. Leave out anything on the NEVER list (outside messages, spending, deletions, sign-ins, tokens), anything that needs their judgement, and every OK to send, spend or publish: that is their own tap on its preview. Say why in the reply.
 3. Group the rest by kind and age: "6 questions from one bot", "20 tasks with no activity for 60 days".
 4. Build one batch of up to 100 steps, each a path and a body, for the changes that need the click, for example:
    - `{"path": "/api/v2/tasks/<id>/move", "body": {"to": "closed", "why": "<reason>", "version": <N>}}`
    - `{"path": "/api/v2/tasks/<id>/asks/<requirement id>/answer", "body": {"value": "<their words>", "version": <N>}}`
 5. Propose it once:
-   `hub assistant propose --summary "<the groups, with counts, and the action>" --path /api/v2/assistant/batch --body '<the batch JSON>'`
+   `tico assistant propose --summary "<the groups, with counts, and the action>" --path /api/v2/assistant/batch --body '<the batch JSON>'`
 6. Tell the human in one line what happens on confirm: how many steps, and that any step that fails is listed while the rest still run.
 
 ## Checks before you finish

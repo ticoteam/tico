@@ -922,7 +922,7 @@ def reach_for(c, who, person, parent):
 # subtask under it for another bot, which reads that subtask and nothing above it: not the parent, its other subtasks
 # or the run's other work, only the words the filer writes. A private task with a person on it stays that person's to
 # widen: the refusal names them and the route to them.
-SEALED_ROUTE = "ask them with `hub task ask`, or have them file the subtask"
+SEALED_ROUTE = "ask them with `tico task ask`, or have them file the subtask"
 COPIED_WORDS = 12
 
 
@@ -1083,7 +1083,7 @@ def sealed_words(kept, title, body):
 FROM_PRIVATE = True
 COMPANY_REFUSAL = (
     "Private task work cannot create company-visible tasks: its owning bot may file one from private "
-    "work, in its own words (`hub task create --from-private`)"
+    "work, in its own words (`tico task create --from-private`)"
 )
 FILE_ID = re.compile(r"\bfile-[0-9a-f]{24}\b")
 
@@ -1106,7 +1106,7 @@ def from_private(c, who, owner, parent):
     if private_meetings(c, meeting_sources(c).attempt(who.attempt_id)):
         raise Problem("privacy", "Private meeting work cannot create company-visible tasks", 403)
     if not H.is_bot(owner or ""):
-        raise Problem("privacy", "A task from private work is for a bot: ask a person with `hub task ask`", 403)
+        raise Problem("privacy", "A task from private work is for a bot: ask a person with `tico task ask`", 403)
     if parent and not H.task_private(c, parent):
         raise Problem(
             "privacy", "File a task from private work under the private task it comes from, or with no parent", 403

@@ -1,4 +1,4 @@
-"""`hub health check`: what is wrong with the bots this person may see, most urgent first (docs/permissions.md scopes it).
+"""`tico health check`: what is wrong with the bots this person may see, most urgent first (docs/permissions.md scopes it).
 
 Read from the records the server already holds, per bot: not on a computer, its computer offline, failing runs, a
 credential it declares but does not have, setup that never finished, paused (and paused over a limit), quarantined.
@@ -113,29 +113,29 @@ def check(c, who, auth, settings):
                 "quarantined",
                 HIGH,
                 f"{name} is stopped: it did something it may not.",
-                f"hub api POST /api/v2/bots/{slug}/quarantine/clear",
+                f"tico api POST /api/v2/bots/{slug}/quarantine/clear",
             )
         elif state == "planned":
             if (bot["created_at"] or "") < stuck_before:
-                add(bot, "stuck_setup", MEDIUM, f"{name} is still being set up.", f"hub bot go-live {slug}")
+                add(bot, "stuck_setup", MEDIUM, f"{name} is still being set up.", f"tico bot go-live {slug}")
         elif state == "paused":
             reason = (one(c, PAUSE_REASON_SQL, (bid,)) or {"reason": ""})["reason"] or ""
             if "limit" in reason.lower():
                 add(
-                    bot, "paused_over_limit", HIGH, f"{name} is paused: it went over a limit.", f"hub bot resume {slug}"
+                    bot, "paused_over_limit", HIGH, f"{name} is paused: it went over a limit.", f"tico bot resume {slug}"
                 )
             else:
-                add(bot, "paused", LOW, f"{name} is paused.", f"hub bot resume {slug}")
+                add(bot, "paused", LOW, f"{name} is paused.", f"tico bot resume {slug}")
         elif state == "active":
             if not where and not external:
-                add(bot, "not_placed", HIGH, f"{name} is on, but no computer runs it.", f"hub bot place {slug}")
+                add(bot, "not_placed", HIGH, f"{name} is on, but no computer runs it.", f"tico bot place {slug}")
             elif where and where[0] not in online and where[0] not in resting:
                 add(
                     bot,
                     "computer_offline",
                     HIGH,
                     f"{name} cannot run: its computer, {where[1]}, is offline.",
-                    "hub computer list",
+                    "tico computer list",
                 )
             if bid in lacking:
                 label, why = lacking[bid]
@@ -149,7 +149,7 @@ def check(c, who, auth, settings):
                     "repository_missing",
                     HIGH,
                     f"{name} cannot run on {label}: {why}",
-                    f"hub bot repo-create {slug} --empty (or `hub bot place {slug}` back on the computer that held its repository)"
+                    f"tico bot repo-create {slug} --empty (or `tico bot place {slug}` back on the computer that held its repository)"
                     if unpublished and not branch
                     else clone,
                 )
@@ -159,7 +159,7 @@ def check(c, who, auth, settings):
                     "needs_setup",
                     MEDIUM,
                     f"{name} is waiting for its first setup with its owner.",
-                    f"hub bot go-live {slug}",
+                    f"tico bot go-live {slug}",
                 )
         if state == "active":
             try:
@@ -172,7 +172,7 @@ def check(c, who, auth, settings):
                     "paused_over_limit",
                     HIGH,
                     f"{name} is paused: it reached its spending limit.",
-                    f"hub api PUT usage/limits/{slug} (a card: raising a limit is their click)",
+                    f"tico api PUT usage/limits/{slug} (a card: raising a limit is their click)",
                 )
             elif met and met["scope"] == "budget":
                 add(
@@ -189,7 +189,7 @@ def check(c, who, auth, settings):
                     "paused_over_limit",
                     HIGH,
                     f"{name} is paused: {met['name']} reached its {met['period']} spending limit.",
-                    f"hub api PUT usage/pools/{where} (a card: raising a limit is their click)",
+                    f"tico api PUT usage/pools/{where} (a card: raising a limit is their click)",
                 )
         if failed.get(bid):
             n = failed[bid]
@@ -198,7 +198,7 @@ def check(c, who, auth, settings):
                 "failing_runs",
                 HIGH if n >= 3 else MEDIUM,
                 f"{name} had {n} failed or expired attempt{'s' if n != 1 else ''} in the last 24 hours.",
-                f"hub run list {slug} --since 24h",
+                f"tico run list {slug} --since 24h",
             )
         if state in ("active", "paused"):
             try:
@@ -231,7 +231,7 @@ def check(c, who, auth, settings):
                         "missing_credential",
                         HIGH,
                         f"{name} needs {what}: {tool['env']} is not set.",
-                        f"hub credential request {tool['env']} --for-bot {slug}",
+                        f"tico credential request {tool['env']} --for-bot {slug}",
                     )
     issues.sort(key=lambda i: (ORDER[i["severity"]], i["name"].lower(), i["kind"]))
     counts = {level: sum(1 for i in issues if i["severity"] == level) for level in (HIGH, MEDIUM, LOW)}

@@ -2,21 +2,21 @@
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 25 minutes.
 
-Inputs: `hub task show <id>`, the open roles on the recruiting board (`hub task list --owner recruiting`),
-`hub team show`, and any role file the Recruiter already keeps with written criteria.
+Inputs: `tico task show <id>`, the open roles on the recruiting board (`tico task list --owner recruiting`),
+`tico team show`, and any role file the Recruiter already keeps with written criteria.
 
 Outcome: five recorded answers in `state.md`, a search file and a do-not-contact list, a first slate of up to five profiles
 for one role, and the first routine checked.
 
-Done when: the answers, the first result and the routine check are recorded, and `hub bot setup-done` has run.
+Done when: the answers, the first result and the routine check are recorded, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub task list --owner recruiting
-    hub team show
+    tico task show <id>
+    tico task list --owner recruiting
+    tico team show
 
 Check which roles are open and whether the Recruiter already keeps a role file. Do not ask what those already say.
 
@@ -54,16 +54,16 @@ write `reports/YYYY-MM-DD-sourcing-slate.md`. Contact no one. Label it "First dr
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off, run
-`hub automation update <id> --enable`), and tell the human in one line what it does: "I will build a slate every Tuesday at 09:00
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, run
+`tico automation update <id> --enable`), and tell the human in one line what it does: "I will build a slate every Tuesday at 09:00
 and put each message up for review." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave
-it off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then nothing you
 have runs on its own. Run it once the answers and the first result are recorded, not before.

@@ -23,7 +23,7 @@ a human this week.**
 
 ## Pipeline
 - Open deals 41 (last week 39); 4 won and 2 lost. Source: CRM read 2026-09-25 and the sales roll-up of 2026-09-24.
-- Forecast: commit 310k, best case 420k, gap to target 80k (`hub goal list`, quarter target).
+- Forecast: commit 310k, best case 420k, gap to target 80k (`tico goal list`, quarter target).
 
 ## Calendar, next six weeks
 - Mon 2026-09-28: two sends on one day (launch email and partner newsletter). Newsletter owner to move one.

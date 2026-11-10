@@ -14,7 +14,7 @@ ran on the new head, and the task note names the head and any comment you did no
 ## 1. Read every comment
 
     gh pr view <n> -R <repo> --comments
-    hub task show <id>
+    tico task show <id>
 
 Read each reviewer comment and, for QA, the failing test and the head it judged.
 
@@ -36,6 +36,6 @@ that did not run is "not checked".
 
 ## 5. Finish
 
-    hub task done <id> -m "<head sha>: fixed <list>; declined <list with one line each>; checks run <list>" --version N
+    tico task done <id> -m "<head sha>: fixed <list>; declined <list with one line each>; checks run <list>" --version N
 
 Merge only under `skills/check-the-merge-rules-at-the-head/SKILL.md`, with the checks green at the head, and never before.

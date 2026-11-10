@@ -4,17 +4,17 @@ Runs once, on the first message or task you receive, while `state.md` says setup
 finished. Budget 20 minutes. The outcome is five recorded answers, the save policy written down, a
 first retention report from the last four weeks, and the first routine checked.
 
-Inputs: the task list, `hub team show`, the cancellation and downgrade requests of the last four weeks, and the policy the Librarian cites.
+Inputs: the task list, `tico team show`, the cancellation and downgrade requests of the last four weeks, and the policy the Librarian cites.
 
-Done when: the five answers are in `state.md`, the save policy and the reasons log are written, the first report is on the task, the routine is checked, and `hub bot setup-done` has run.
+Done when: the five answers are in `state.md`, the save policy and the reasons log are written, the first report is on the task, the routine is checked, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub team show
-    hub task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
-    hub doc ask "What is our cancellation and refund policy?"
+    tico team show
+    tico task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
+    tico doc ask "What is our cancellation and refund policy?"
 
 Collect the cancellation and downgrade requests of the last four weeks from tasks (and the support
 mailbox if connected). Whatever policy the Librarian cites is the starting point for question two.
@@ -48,17 +48,17 @@ not yet reviewed". Prepare replies for any open request, send none.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this report every Friday at 10:00." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will write this report every Friday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

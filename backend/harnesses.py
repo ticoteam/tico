@@ -16,7 +16,7 @@ HARNESS_CATALOG = (
     {"id": "cursor", "label": "Cursor Agent", "runtime": "cursor"},
     {"id": "musecode", "label": "Muse Code (Meta)", "runtime": "musecode"},
     # An external agent: it runs somewhere Tico does not manage, holds its own model and
-    # provider, and reaches the hub with a bot credential over MCP or the `hub` CLI. No
+    # provider, and reaches the hub with a bot credential over MCP or the `tico` CLI. No
     # runner claims work for it; it reads its inbox on its own schedule (docs/hermes-agents.md).
     {"id": "hermes", "label": "hermes", "runtime": "hermes", "external": True},
     # OpenClaw is the same kind of agent (docs/openclaw-agents.md): its own model, a standing credential,

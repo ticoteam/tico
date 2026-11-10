@@ -23,7 +23,7 @@
     {
       "file": "clients/tests/test_hubcli.py",
       "seconds": 29.89,
-      "reason": "The hub CLI as bots run it: exit codes are the contract"
+      "reason": "The tico CLI as bots run it: exit codes are the contract"
     },
     {
       "file": "runner_support/tests/test_redact.py",

@@ -5,16 +5,16 @@ finished. Budget 25 minutes. The outcome is five recorded answers, the tools, de
 files written, a first weekly IT page, and the first routine checked.
 
 Done when: all five answers are in `state.md` under `## Answers`, the knowledge files exist, the first page is attached
-and labelled, the routine is checked and logged in `memory/decisions.md`, and `hub bot setup-done` has run.
+and labelled, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub team show
-    hub task list
-    hub doc ask "Which tools does the team use, and how do people get access to them?"
+    tico task show <id>
+    tico team show
+    tico task list
+    tico doc ask "Which tools does the team use, and how do people get access to them?"
 
 Open tasks about laptops, passwords, access or Wi-Fi are your first requests. Log them with their
 original dates.
@@ -43,21 +43,21 @@ forwarding set by the manager's choice).
 ## 5. Produce the first result now
 
 Follow `playbooks/weekly-it-page.md`. Attach it labelled "First draft, not yet reviewed". A leaver in
-`hub team show` whose accounts you cannot confirm removed goes at the top.
+`tico team show` whose accounts you cannot confirm removed goes at the top.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "you will get this page every Monday at 09:30, and I will work requests as they come in between." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "you will get this page every Monday at 09:30, and I will work requests as they come in between." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

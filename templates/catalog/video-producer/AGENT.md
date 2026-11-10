@@ -21,13 +21,13 @@ names as its mover. Good looks like a final the owner could publish unedited, wi
 ## Stages and who moves them
 Run `python3 software/pipeline.py status projects/<slug> --task <project task>` to see where a project stands, and
 `next` for the one step. Pass `--owner NAME` when `pipeline.yaml` has no `owner`.
-- **Mover is `owner` or `person:<name>`**: `next` prints two steps. First `hub file publish <path>` for each file,
-  which gives its file id and version. Then `hub task ask <id> --to <person> "line" --kind ok --show file:<id>@<n>
-  --version N` on the project task, one `--show` per file, with the version `hub task show` printed. The OK is for those
+- **Mover is `owner` or `person:<name>`**: `next` prints two steps. First `tico file publish <path>` for each file,
+  which gives its file id and version. Then `tico task ask <id> --to <person> "line" --kind ok --show file:<id>@<n>
+  --version N` on the project task, one `--show` per file, with the version `tico task show` printed. The OK is for those
   exact versions only. Start the next stage only after they come back OK'd.
-- **Mover is `bot:<slug>`**: `next` prints two steps. First `hub file publish <path>` for each file, which gives its
-  file id and version. Then a `hub task create` hand-off to that bot, with `<FILE@N>` placeholders filled from that
-  output and the `hub file review <FILE@N> --approve|--changes --task <this task>` command for each file. Only that
+- **Mover is `bot:<slug>`**: `next` prints two steps. First `tico file publish <path>` for each file, which gives its
+  file id and version. Then a `tico task create` hand-off to that bot, with `<FILE@N>` placeholders filled from that
+  output and the `tico file review <FILE@N> --approve|--changes --task <this task>` command for each file. Only that
   bot's verdict counts for its stage; a person's verdict does not.
 - **Mover is `self`**: work on the stage. Touch `.done` in its folder once every shot or the cut is finished;
   `next` moves on only then. The project's spend is the sum of `cost_usd` over the self-moved stages, and it may not
@@ -45,12 +45,12 @@ Run `python3 software/pipeline.py status projects/<slug> --task <project task>` 
 - Exact UI, prices and logos are added in post from the source file, never generated.
 
 ## Files
-- Every asset is a Tico file. Publish it with `hub file publish <path>` before you ask for its review, and show the
+- Every asset is a Tico file. Publish it with `tico file publish <path>` before you ask for its review, and show the
   exact version you ask about (`--show file:<FILE@N>`).
 - Every made file gets a sidecar `<file>.json` beside it: `{"stage", "kind", "prompt", "model", "cost_usd", "parents",
   "tool", "at"}`. `parents` lists the files it was made from as `path@version`. Write the real `cost_usd`, and leave the
   field out when the cost is not known.
-- Gateway images: `hub gateway image PROMPT --category storyboard|character|photo|graphic`. It writes its own sidecar
+- Gateway images: `tico gateway image PROMPT --category storyboard|character|photo|graphic`. It writes its own sidecar
   next to the image; keep it.
 - Before the next stage uses an OK'd file, `python3 software/pipeline.py gate <file>` must exit 0.
 
@@ -72,7 +72,7 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated. Set `owner`, the movers and `budget_usd` in
    `pipeline.yaml` from them only after the owner says yes on the task.
 4. Make one storyboard sheet from the first brief as a draft, and put it up for review. Publish nothing.
-5. Log the decisions in `memory/decisions.md`, then run `hub bot setup-done` once the answers and the first sheet are
+5. Log the decisions in `memory/decisions.md`, then run `tico bot setup-done` once the answers and the first sheet are
    recorded.
 
 ## Skills
@@ -80,19 +80,19 @@ If `state.md` says setup has not finished, do this before any other work:
 - `skills/label-real-generated-and-staged-footage/SKILL.md`: read before any cut is reviewed or any file is published.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `knowledge/production-checklist.md`, `memory/learnings.md` and the playbook the task names.
 3. Run `python3 software/pipeline.py status` on the project, so you start from where it really stands.
 
 ## Ending a run
 1. Add the smallest fix against anything that went wrong: a line in the playbook or the checklist, with its date.
 2. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: what is made, where it is, the stage it is waiting at and
+3. Finish with `tico task done <id> -m "..." --version N`: what is made, where it is, the stage it is waiting at and
    who moves it, and anything you could not check.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read the record with `hub task show <id>` and `hub task list` first. Ask the requester one
-question with `hub task ask <id> --to <person> "<question>" --version N`. A decision for a person is the same ask, with
+Work arrives as tasks. Read the record with `tico task show <id>` and `tico task list` first. Ask the requester one
+question with `tico task ask <id> --to <person> "<question>" --version N`. A decision for a person is the same ask, with
 the files it turns on (`--show file:<path>`).
 Finish every task you were given, even when the answer is "not yet".
 

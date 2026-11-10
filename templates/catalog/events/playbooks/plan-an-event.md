@@ -11,10 +11,10 @@ Done when: the brief is at `reports/<event>/brief.md` with goal, budget and foll
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
 Find the event, the date and who asked. If the goal or the budget is unknown, propose defaults from
-`knowledge/rules.md` and past results, and ask once with `hub task ask <id> --to <person> "<question>" --version N`.
+`knowledge/rules.md` and past results, and ask once with `tico task ask <id> --to <person> "<question>" --version N`.
 
 ## 2. Decide whether it is worth it
 
@@ -40,4 +40,4 @@ Draft the promotion and follow-up emails and posts in `reports/<event>/`. Send a
 
 ## 5. Put it up for review
 
-On the task: the brief path, the amount and supplier, and the staffing needs. Make a booking only when the task asks for it and a granted Tool allows it, add the event to `knowledge/calendar.md`, and create the staffing tasks the task asks for. `hub task done <id> -m "..." --version N`.
+On the task: the brief path, the amount and supplier, and the staffing needs. Make a booking only when the task asks for it and a granted Tool allows it, add the event to `knowledge/calendar.md`, and create the staffing tasks the task asks for. `tico task done <id> -m "..." --version N`.

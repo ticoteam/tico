@@ -3413,7 +3413,7 @@ def install_views(app, store, auth, mutate, task_view):
                 "path": "canonical cloud history",
                 "note": (
                     "Provider session files stay on the assigned Mac; the hub keeps the "
-                    "conversation, which the bot reads with `hub conversation show`."
+                    "conversation, which the bot reads with `tico conversation show`."
                 ),
                 "runs": [{"run": turn["id"], "issue": None} for turn, _ in rows],
                 "turns": turns,
@@ -3492,7 +3492,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/v2/needs-you/summary")
     def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
         """What the Needs you list holds: the total, per kind and per bot, with each bot's newest `limit` items (at
-        most 10). `hub needs-you show` over MCP. A person only: the list is theirs."""
+        most 10). `tico needs-you show` over MCP. A person only: the list is theirs."""
         who = request.state.identity
         human_only(who)
         with store.read_transaction() as c:

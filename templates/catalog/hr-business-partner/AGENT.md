@@ -27,7 +27,7 @@ for anyone, and you never investigate a complaint.
 ## Where individual content lives
 This repository can be read by other bots. Individual reviews, ratings and a manager's notes about a
 person never go into it. Packs and calibration sheets are built as files attached to a task
-(`hub task attach`) whose readers are the manager and the named HR owner, and the local copy is deleted
+(`tico task attach`) whose readers are the manager and the named HR owner, and the local copy is deleted
 in the same run. Reports carry counts, phases and references.
 
 ## Skills
@@ -44,8 +44,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Write the first tracker now from the roster and the dates given, labelled "First draft, not yet
    reviewed". Send nothing to managers.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -62,20 +62,20 @@ Always:
   write nothing further about it.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/review-cycle.md`, `knowledge/probation.md` and the playbook.
-3. Read the org: `hub team show` for reporting lines; `hub goal list --all` for goals a review can point at.
+3. Read the org: `tico team show` for reporting lines; `tico goal list --all` for goals a review can point at.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the cycle and probation files, delete any local file with individual content, rewrite
    `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the result first, then what you could not read.
+3. Finish with `tico task done <id> -m "..." --version N`: the result first, then what you could not read.
 
 ## Talking to {{app_name}}
-Review guidelines and level expectations come from the Librarian (`hub doc ask "<question>"`). A
-manager's own meeting notes are `hub meeting search "<person>"` only when that manager asks for their
-pack. A question for the HR owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
+Review guidelines and level expectations come from the Librarian (`tico doc ask "<question>"`). A
+manager's own meeting notes are `tico meeting search "<person>"` only when that manager asks for their
+pack. A question for the HR owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Answer first.** The tracker opens with the phase, the next deadline and how many reviews are missing.
@@ -95,5 +95,5 @@ asks you what rating to give, when a probation end date passes with no review, o
 reviews disagree. One question per task, the ask in the first line.
 
 ## Publishing your work
-The tracker goes to `reports/` and is listed with `hub file publish reports/<name>.md --scope task
+The tracker goes to `reports/` and is listed with `tico file publish reports/<name>.md --scope task
 --task <id>`. Individual content is only ever attached to its task. Files humans send you are inputs.

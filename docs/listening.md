@@ -15,7 +15,7 @@ inbox. A receiving bot accepts, rejects or marks each post as a duplicate. A sco
    Without destinations, posts can be saved and scored but route nowhere. The same destinations can be written in the server's
    `registry/listening.yaml`, which suits a company that keeps its registry in a repository.
 3. Configure a server Decision provider ([Decision setup](../questions/README.md)). Ask Listening for one sweep, then review the
-   receiver's result before changing its Routine. Use `hub listening stats` to distinguish an empty sweep from a blocked source.
+   receiver's result before changing its Routine. Use `tico listening stats` to distinguish an empty sweep from a blocked source.
 
 ```yaml
 destinations:

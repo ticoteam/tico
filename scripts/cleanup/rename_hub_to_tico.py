@@ -11,7 +11,8 @@ command line:
   - inside a backtick span on its line,
   - on a line of a fenced block, or at the start of a line (after indentation, a list marker, `>` or `$ `),
   - after a shell separator (`$(`, `(`, `;`, `&&`, `||`, `|`),
-  - right after a quote (`"hub task list"`, `f"hub task show {id}"`), or after the CLI's own `usage:`, `Example:` or
+  - right after a quote or a backtick (`"hub task list"`, `f"hub task show {id}"`, a span wrapped from the line
+    above), or after the CLI's own `usage:`, `Example:` or
     `Did you mean:` in its output.
 Inside backticks and quotes the CLI's old command words (its renames and removals) count too, since those spans name
 a command; at the start of a line they do not, so wrapped prose such as "hub status page" stays.
@@ -83,7 +84,7 @@ def patterns():
 FENCE = re.compile(r"^\s*(```|~~~)")
 LINE_START = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)]|>|\$|#|//|///|//!|--)\s+)*$")
 SHELL_BEFORE = re.compile(r"(?:\$\(|[(;|]|&&|\|\|)\s*$")
-QUOTE_BEFORE = re.compile(r"""["'][ \t]*$""")
+QUOTE_BEFORE = re.compile(r"""(?:["'][ \t]*|`)$""")  # a backtick right before: a span opened on the line above
 # The CLI's own output, quoted in tests and docs: `usage: hub task show`, `Example: ...`, `Did you mean: ...`.
 OUTPUT_BEFORE = re.compile(r"(?:usage|Example|Did you mean):[ \t]+$")
 

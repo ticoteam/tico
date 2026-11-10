@@ -7,16 +7,16 @@ said this week, which opportunities gained evidence, and one thing worth testing
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/opportunities.md` (the outcome and the open decision), `knowledge/privacy.md` and last week's digest.
 
 ## 2. Collect what is new
 
-    hub meeting search --since YYYY-MM-DD
-    hub doc search "interview"
+    tico meeting search --since YYYY-MM-DD
+    tico doc search "interview"
 
-Also tasks that carry interview notes or feedback exports (`hub task list`), and the Customer Insights Analyst's latest
+Also tasks that carry interview notes or feedback exports (`tico task list`), and the Customer Insights Analyst's latest
 report if the team runs one. List each source: what it is, when, and whether you can read it.
 
 ## 3. Snapshot each new source
@@ -39,12 +39,12 @@ to test it that a human can run in a week. Do not choose the solution. Follow `s
 
 `reports/YYYY-MM-DD-research-digest.md` in the shape of `knowledge/examples/research-digest.md`: the finding
 first, new snapshots, opportunities with source counts, the thing to test, what you could not read. Then
-`hub file publish reports/YYYY-MM-DD-research-digest.md`. Competitor facts you found go to
-`hub market report`, not into this digest.
+`tico file publish reports/YYYY-MM-DD-research-digest.md`. Competitor facts you found go to
+`tico market report`, not into this digest.
 
 ## 7. Finish
 
-Commit, then `hub task done <id> -m "..." --version N`: the headline, sources read and unread. Always finish it.
+Commit, then `tico task done <id> -m "..." --version N`: the headline, sources read and unread. Always finish it.
 
 ## When a source fails
 

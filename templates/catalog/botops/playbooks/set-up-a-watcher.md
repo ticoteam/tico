@@ -58,5 +58,5 @@ its output.
 
 ## 5. Finish
 
-`hub task done <id> -m "..." --version N`: what wakes the bot, how often, that it costs no model runs, and which credential
+`tico task done <id> -m "..." --version N`: what wakes the bot, how often, that it costs no model runs, and which credential
 names the owner must put on the computer (names only, never values).

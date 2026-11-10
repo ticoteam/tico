@@ -1,6 +1,6 @@
 """A task comment's delivery (docs/tasks.md, Conversation; backend/delivery.py): steer reaches the bot's running turn
 now, queue runs right after it, defer waits for the bot's next turn on the task or its deadline, goal sets the task
-session's goal. The API, the hub CLI and the MCP tool share one rule, tested here."""
+session's goal. The API, the tico CLI and the MCP tool share one rule, tested here."""
 
 import pytest
 

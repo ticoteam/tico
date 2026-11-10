@@ -51,7 +51,7 @@ summary then covers only the samples that finished.
 ## Surfaces
 
 Production gives the Assistant the hub two ways: the hub as an MCP server (`clients/hubmcp.py`, the tool listing for its
-kind, here `assistant`, about 200 tools that Claude Code defers behind tool search) and the `hub` CLI on PATH. `--surface`
+kind, here `assistant`, about 200 tools that Claude Code defers behind tool search) and the `tico` CLI on PATH. `--surface`
 picks which the run has: `both` (the default, production) attaches the MCP server and keeps `hub` on PATH; `mcp` attaches
 the server and takes `hub` off PATH; `cli` is the old harness with no MCP server. An MCP `tools/call` is turned into the
 same canonical line the CLI logs (the typed command words, then the id, then `--key value` per argument), so one set of

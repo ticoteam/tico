@@ -602,11 +602,11 @@ minutes:
 Set it as the owner, with the Tico Gateway connected in Settings → Models:
 
 ```
-hub relay wake-url set https://wake.acme.example/start-tico
+tico relay wake-url set https://wake.acme.example/start-tico
 ```
 
-The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `hub relay wake-url show` shows the address, who set
-it and when; `hub relay wake-url off` stops the calls. The address must be public https with no user or password.
+The answer shows a signing secret (`whsec_...`) once. Tico does not keep it. `tico relay wake-url show` shows the address, who set
+it and when; `tico relay wake-url off` stops the calls. The address must be public https with no user or password.
 
 The call is signed as [Standard Webhooks](https://www.standardwebhooks.com) (`webhook-id`, `webhook-timestamp`,
 `webhook-signature`) with that secret. Check it before you start anything, so a stranger who finds the address cannot start your

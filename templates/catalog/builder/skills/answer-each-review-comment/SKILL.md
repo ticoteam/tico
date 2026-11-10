@@ -15,7 +15,7 @@ Steps:
 3. Act on it in a commit whose message names the comment: "Round the refund total once, per review on refund.py:88."
 4. Reply to each comment on the pull request with the action or the reason. One reply per comment.
 5. Do not argue a blocking bug away on taste. A declined blocking comment goes to the task's owner as a question
-   (`hub task ask`) before you finish the task.
+   (`tico task ask`) before you finish the task.
 6. Count what is still open on the head. Finish the task only when no blocking comment is open.
 
 Checks before you finish:

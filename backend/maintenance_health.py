@@ -496,7 +496,7 @@ def _check_hold_checks(c):
                 f"{since[:16].replace('T', ' ')} UTC); {title}. Every turn on it since then ({tries}) "
                 "stopped on the limit, and Tico retries it after every reset.",
                 f"BotOps: wait for {model}'s limit to reset; or switch the check model: {name} declines "
-                "this check and files it again on another model (hub task child --check-model); or drop "
+                "this check and files it again on another model (tico task child --check-model); or drop "
                 f"the check: {name} declines it. A declined check's queued turn is let go.",
             )
         )
@@ -666,7 +666,7 @@ def _bot_checks(c, settings=None):
                         f"A task worktree of {label} failed",
                         f"{label}: {error[:400]}",
                         (
-                            f"Run `hub task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
+                            f"Run `tico task worktree add {r['repo']} --task {r['task_id']}` on the owner's current computer. "
                             "Unpushed work stayed on the retired computer."
                             if r['state'] == 'retired'
                             else "BotOps: save any unique work in that worktree on a branch, then remove its link so "
@@ -736,7 +736,7 @@ def _stop_checks(c):
                 f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
                 f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
                 f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
-                f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {row.get('slug', bot)}). "
+                f"BotOps: read {name}'s last runs, fix the cause, then release it (tico bot release {row.get('slug', bot)}). "
                 "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                 "Its queued work is kept.",
                 subject=kind,
@@ -757,7 +757,7 @@ def _stop_checks(c):
                 f"{hold['budget']}. Held since {str(hold['held_at'])[:16]} UTC. This looks like a runaway "
                 "loop, not normal work.",
                 f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
-                f"(hub bot release {row.get('slug', bot)}) or raise its budget (hub bot budget {row.get('slug', bot)} --{hold['window']} N).",
+                f"(tico bot release {row.get('slug', bot)}) or raise its budget (tico bot budget {row.get('slug', bot)} --{hold['window']} N).",
                 subject=hold["window"],
                 severity=BAD,
             )
@@ -778,7 +778,7 @@ def _stop_checks(c):
                 "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
                 "up to an hour. The server log has the traceback.",
                 f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
-                f"now, release {name} (hub bot release {row.get('slug', bot)}); one that fails again is held with a longer "
+                f"now, release {name} (tico bot release {row.get('slug', bot)}); one that fails again is held with a longer "
                 "wait.",
                 severity=BAD,
             )

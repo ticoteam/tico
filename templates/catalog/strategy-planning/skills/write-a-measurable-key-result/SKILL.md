@@ -8,7 +8,7 @@ When to use: when drafting key results for a new objective, or fixing one that c
 
 Steps:
 1. Name the metric in one line and the unit it is counted in. A key result is an outcome you can count, not a task.
-2. Find the baseline in a dated source: `hub kpi show <kpi id>` or the goal's reading. Write it with its source and date.
+2. Find the baseline in a dated source: `tico kpi show <kpi id>` or the goal's reading. Write it with its source and date.
    If there is no reading, write "no baseline" and the gap. Do not estimate one.
 3. Set the target and the date it is due. A target with no date cannot be graded.
 4. Propose an owner from the request and mark it "to confirm". If no owner is named, write "owner missing".

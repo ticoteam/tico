@@ -59,7 +59,7 @@ People and groups have the same three levels, with the same audiences (Everyone,
 
 | Level | A person | A group |
 | --- | --- | --- |
-| **See** | Them in the team chart, the people lists, the @ picker, their page and photo, and `hub sql`. | It in the team chart, the group lists, team pages and `hub sql`. |
+| **See** | Them in the team chart, the people lists, the @ picker, their page and photo, and `tico sql`. | It in the team chart, the group lists, team pages and `tico sql`. |
 | **Read** | Their Home. | Its Home. |
 | **Write** | DMs to them, and adding them to a thread. | Posting to it, and adding it to a thread. |
 
@@ -96,7 +96,7 @@ shown row above), the people and group lists, the @ picker, the group choices of
 report order, the bots' rows (`/api/employees`, `/api/v2/bots`, a bot's detail and `/api/v2/org`: operator, owners,
 users, team, department and who they report to), messages and tasks in answers and the event stream (`from_actor`,
 `to_actor`, a conversation's participants, a task's `owner`, `requester`, `closed_by`, `origin_actor` and
-`from_person`, which read `""`), the stream's actors, and `hub sql` (`humans` rows, `humans.teams`, `bot_config`'s
+`from_person`, which read `""`), the stream's actors, and `tico sql` (`humans` rows, `humans.teams`, `bot_config`'s
 `team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `bot_settings.extra`,
 `conversations.participants`, `messages.sender_id` and `to_actor`, `tasks.owner_id`, `requester` and `closed_by`,
 and the `actor` of `events` and of a task's `history_events` rows, which read `''`), and their page, photo and access answer the same
@@ -114,7 +114,7 @@ PUT  /api/v2/humans/cara/access          PUT  /api/v2/groups/legal/access
 ```
 
 The GET answers `{target, see, read, write, default, revision, you, teams}`; `revision` is `0` until the first save,
-and a stale one answers `409 version_conflict`. `hub human access <id>` and `hub group access <id>` (with `--see`,
+and a stale one answers `409 version_conflict`. `tico human access <id>` and `tico group access <id>` (with `--see`,
 `--read`, `--write`, each `everyone` or `ben,group:legal,bot:analyst`), and the MCP tools `hub_human_access` and
 `hub_group_access`, do the same; BotOps uses them with the rights of the person who asked, with or without
 `on_behalf_of`, and can put them to the person as a Confirm card. Each save writes an audit row
@@ -157,7 +157,7 @@ for the owner.
 **Credential administrators** are the owner and the Admins, so a team gets going without the owner storing every credential. When the
 server names its own list with `TICO_CREDENTIAL_ADMINS` it is that list (the owner and whoever it names), nobody else: the Admins
 are then not credential administrators. The owner may turn **Admins store credentials** off ([Team rules](#team-rules)). A member is
-never one, but stores a credential for a bot they own or manage (a chat card, or BotOps with `hub credential set --for-bot`), granted to
+never one, but stores a credential for a bot they own or manage (a chat card, or BotOps with `tico credential set --for-bot`), granted to
 that bot at once, unless the owner turns **Members store credentials for their bots** off. They replace only a credential they stored, never
 read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 
@@ -210,7 +210,7 @@ audience when Read was Everyone), never more; See was left as it was. A bot pins
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
 pinned there ([Company](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who
-asked (`hub card`, `hub pin`).
+asked (`tico card`, `tico pin`).
 
 ## History's Log
 
@@ -243,7 +243,7 @@ Only the Owner changes them, directly in Settings or by asking BotOps to act wit
 **Groups.** A group is a sub-team of humans and bots, and groups nest ([the team chart](org-chart.md)). Owners and admins add, rename, move
 and remove groups and put humans and bots in them; members read them. A group is an access audience, so moving a human or a bot into a
 group, or a group under another, can change who reads a bot. BotOps does this as the person who asked it (`POST`, `PATCH` and `DELETE`
-on `/api/v2/groups` through `hub api`, or `hub group update`), with that person's own rights: an owner or an admin, at once; a member is
+on `/api/v2/groups` through `tico api`, or `tico group update`), with that person's own rights: an owner or an admin, at once; a member is
 refused. The Strategy Bot only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
 same rights. Built-in bots stay outside groups.
 
@@ -314,7 +314,7 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 | Door | What is checked | Default |
 |---|---|---|
 | Webhooks | A call whose automation opens a task for a bot or starts a bot's turn, and a rule's `create_task` on `webhook.received`. In a JSON body, only its strings of three words or more, not ids, numbers or links | Warn |
-| Mail | An inbound message a bot reads (`hub inbound read`): the subject and body | Warn |
+| Mail | An inbound message a bot reads (`tico inbound read`): the subject and body | Warn |
 | Ideas | The public roadmap's suggestion form: the title and summary | Warn |
 | Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
 | Documents | A document or a link that Counsel reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
@@ -375,7 +375,7 @@ An endpoint is an address Tico posts events to ([API](api.md#outgoing-webhooks))
 - **A bot** cannot make one on its own. Its request asks a person for an OK of those exact details, and the endpoint is
   made, owned by the person who OK'd it from its preview, when the bot repeats the call. A bot sees every endpoint
   without its full address, and changes none.
-- **Custom events** (`hub webhook send`, names `custom.*`) are sent by people, and by a bot only while its outbound send switch is on.
+- **Custom events** (`tico webhook send`, names `custom.*`) are sent by people, and by a bot only while its outbound send switch is on.
   The Strategy Bot never sends one and never causes a webhook.
 - **Privacy.** An endpoint hears of a task, ask or bot only when its owner could read it themselves; the event body is
   built
@@ -416,9 +416,9 @@ A bot's **direct reports** are the bots whose `reports_to` is it. Its manager bo
 itself: the manager is the actor, and the change is recorded with `via: report_manager`, so the settings history names the
 manager:
 
-- its **model** (`POST /api/v2/bots/{bot}/model`, `hub bot model`, MCP `hub_bot_model`);
+- its **model** (`POST /api/v2/bots/{bot}/model`, `tico bot model`, MCP `hub_bot_model`);
 - its **task model** (`POST /api/v2/bots/{bot}/task-model`, the bot editor; there is no hub or MCP command for it);
-- its **name and description** (`POST /api/v2/bots/{bot}/definition`, `hub bot update`, MCP `hub_bot_update`).
+- its **name and description** (`POST /api/v2/bots/{bot}/definition`, `tico bot update`, MCP `hub_bot_update`).
 
 It does not change the report's instructions, status, place on the team chart (`reports_to`), owners, access or computer.
 Its instructions are changed by a **next-run task** the manager files for the report, which the report does when it next runs.
@@ -537,12 +537,12 @@ stops the reports, and what was recorded stays until it is 14 days old. **Delete
 `DELETE /api/v2/computers/<id>/performance`, removes it now. Each change is in the audit log (`runner.performance`,
 `runner.performance_erased`).
 
-Every person and bot of the company reads it: **Performance** in a computer's pop-up in Settings > Computers, `hub computer performance <computer>`,
+Every person and bot of the company reads it: **Performance** in a computer's pop-up in Settings > Computers, `tico computer performance <computer>`,
 or `GET /api/v2/computers/<id or label>/performance?hours=24` (1 to 336). A report holds numbers and process names only (the
 program's own name, never its arguments), and the turns shown are the server's own record of what ran. A bot the
 reader may not see (its **See** access) shows as "another bot", without its model or turn.
 
-`hub computer list` is readable by company bots, including computers closed to placement of members' bots.
+`tico computer list` is readable by company bots, including computers closed to placement of members' bots.
 Computers a bot could not otherwise read expose only discovery fields and load, without operator identity,
 repositories or recent logs. Full detail, placement and change controls keep their existing permissions. Each row includes `latest_sample` (timestamp,
 `cpu_pct`, `mem_pct`, memory used/total, swap used/total and running turns) and a plain `overloaded` flag.
@@ -556,7 +556,7 @@ started yet. Running turns continue, and new starts resume when the flag clears
 ([Turn counts](computers.md#turn-counts)).
 
 Runs carry `load_start` and `load_end` with CPU %, memory %, running turns and the sample timestamp in
-`hub run list`. Current computers take a reading at start and completion; older computers use a recent
+`tico run list`. Current computers take a reading at start and completion; older computers use a recent
 sample with its original timestamp. Unavailable readings are null. A run's saved snapshots remain after
 rolling samples expire. Diagnostics off suppresses new readings and snapshots; deleting computer history
 also removes saved snapshots for that computer.
@@ -572,9 +572,9 @@ An owner should be able to say "build me a Jira bot, and add Sam" in chat with B
 human whose own chat message started its current run**, checked with that human's rights and recorded as theirs, "via BotOps"
 (events, settings history). Not more than they may do: a member cannot edit another human's bot through BotOps any more than by hand.
 
-For unfinished work, BotOps can create a continuation task with `hub task create --request-id <originating message id>`.
+For unfinished work, BotOps can create a continuation task with `tico task create --request-id <originating message id>`.
 The server checks that the request came from the human's own BotOps chat and keeps that human as requester.
-Progress with `hub task update <id> --brief --note "..."` stays on the task; chat still shows its link and status.
+Progress with `tico task update <id> --brief --note "..."` stays on the task; chat still shows its link and status.
 
 Every BotOps tool uses the requester's rights by default. A human's chat or task uses that human's full rights.
 A task lends its human requester's rights only when BotOps has owned it since it was filed or the requester moved it
@@ -584,7 +584,7 @@ When the person asks BotOps in their chat to take over one of their tasks, that 
 work; the move itself is BotOps', so later runs on that task lend nothing (they ask again or move it themselves).
 A bot's message or task uses only that bot's rights, including its Credential grants; BotOps never lends it a human's
 or its own wider access. The one exception is a person's own request the bot hands on: a bot filing a BotOps task may cite
-the person's message (`hub task create --owner botops --request-id turn`, or the message id). When that person wrote it
+the person's message (`tico task create --owner botops --request-id turn`, or the message id). When that person wrote it
 to the bot themselves, in their 1:1 chat with it (the app or a Slack DM) or as a comment on an open task they asked it for,
 in the conversation the bot's run is working on and within the last week, BotOps' run on the task files and updates tasks, docs,
 goals and KPIs with the person's rights while the task is open and has never been finished (`botops_act.CARRIED`, an
@@ -613,7 +613,7 @@ ask grants
 nothing by itself.
 With a person's rights BotOps may give another bot repository access at once, but never take any away: setting a bot to
 own, dropping a chosen repository or turning write into read comes to that person as a Confirm card naming the grants that
-would stop. The same change made in Settings > General > Repositories (or `hub bot repos`) says which grants stopped applying.
+would stop. The same change made in Settings > General > Repositories (or `tico bot repos`) says which grants stopped applying.
 A message cited by id (`on_behalf_of`) must be the requester's own, in their own chat with BotOps rather than a thread another human
 spoke in, and it must be the same human whose message started the run. Someone who has left lends nothing.
 
@@ -663,8 +663,8 @@ If a friendly tool refuses for permissions, BotOps retries the same action with 
 
 **Following through later.** A request often finishes in a later run that something else started: the daily-update
 request, a retry once a busy bot is idle, a notice. Nobody's request is attached to that run, so by default BotOps has
-only its own rights. To act for the person, BotOps cites the open task they asked it for: `hub api ... --on-behalf-of
-<task id>` or `hub bot model ... --on-behalf-of <task id>` (MCP: `on_behalf_of`). The server accepts a task BotOps owns
+only its own rights. To act for the person, BotOps cites the open task they asked it for: `tico api ... --on-behalf-of
+<task id>` or `tico bot model ... --on-behalf-of <task id>` (MCP: `on_behalf_of`). The server accepts a task BotOps owns
 that the person filed themselves (not through the Assistant; one BotOps filed as them counts only as a continuation of
 their message, `--request-id`), while it is open, and only in a run the person
 started or Tico started on its schedule (the daily update, a task's due or routine notice). A run a bot or
@@ -692,8 +692,8 @@ person (`for`), the request that lent the rights (`cited`: their message, or the
 `run`: `live` when they asked in this run, `comment` when their own comment on the task started it, `follow_through` when
 BotOps cited their open task in a later one.
 
-**Support and the Librarian.** BotOps with a person's rights files a support report as them (`hub support file`) and, for the
-owner, turns on the Librarian (`hub api POST librarian/turn-on`). With its own rights both are refused.
+**Support and the Librarian.** BotOps with a person's rights files a support report as them (`tico support file`) and, for the
+owner, turns on the Librarian (`tico api POST librarian/turn-on`). With its own rights both are refused.
 
 The same goes for routines and quarantine: human-requested BotOps work uses that human’s management rights,
 including work requested through a task. Only the requester's own comment on their task lends their authority. The run
@@ -704,37 +704,37 @@ The commands (with MCP tools of the same names):
 
 | Command | Does |
 | --- | --- |
-| `hub bot create --record-only --name N [<slug>] [--description] [--reports-to] [--template]` | creates the planned server record as the requester, who becomes its owner; the slug is picked from the name (else the template's) unless given, and printed; safe to repeat with the slug. `hub bot create` registers automatically in such a run |
-| `hub bot access <slug> [--see V] [--read V] [--write V]` | show or set who sees, reads, writes (`everyone`, or `ben,group:legal,bot:analyst`) |
-| `hub bot owners <slug> [--add P ...] [--remove P ...]` | the bot's owners |
-| `hub bot update <slug> ...` | name, description, reports-to, status, repository; a manager bot changes only its direct report's name and description ([Managers and their reports](#managers-and-their-reports)) |
-| `hub bot setup-done [slug]` | a starter bot's own call, once its setup is done: it stops being `needs_setup` (its manager may call it for it) |
-| `hub human add <email> [--name] [--title] [--reports-to]`, `hub human list` | the roster |
-| `hub group list`, `hub group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human] [--remove-bot]`, `hub group delete <group>` | the groups; create (no group given), rename, move, lead, fill or delete one, owners and admins only (a lead within its groups) |
-| `hub org reports-to <bot:slug\|human:id> <manager>` | change who a teammate reports to, with the asker's rights |
+| `tico bot create --record-only --name N [<slug>] [--description] [--reports-to] [--template]` | creates the planned server record as the requester, who becomes its owner; the slug is picked from the name (else the template's) unless given, and printed; safe to repeat with the slug. `tico bot create` registers automatically in such a run |
+| `tico bot access <slug> [--see V] [--read V] [--write V]` | show or set who sees, reads, writes (`everyone`, or `ben,group:legal,bot:analyst`) |
+| `tico bot owners <slug> [--add P ...] [--remove P ...]` | the bot's owners |
+| `tico bot update <slug> ...` | name, description, reports-to, status, repository; a manager bot changes only its direct report's name and description ([Managers and their reports](#managers-and-their-reports)) |
+| `tico bot setup-done [slug]` | a starter bot's own call, once its setup is done: it stops being `needs_setup` (its manager may call it for it) |
+| `tico human add <email> [--name] [--title] [--reports-to]`, `tico human list` | the roster |
+| `tico group list`, `tico group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human] [--remove-bot]`, `tico group delete <group>` | the groups; create (no group given), rename, move, lead, fill or delete one, owners and admins only (a lead within its groups) |
+| `tico org reports-to <bot:slug\|human:id> <manager>` | change who a teammate reports to, with the asker's rights |
 
-| `hub bot place <bot> [--computer C]` | puts a bot on a computer: the one named, or the only one, or the least busy that takes it |
-| `hub bot go-live <bot> [--computer C]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. |
-| `hub bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `hub bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart; a manager bot may set its direct report's model ([Managers and their reports](#managers-and-their-reports)) |
-| `hub bot profile <bot> [name] [--batch-seconds N] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, manager, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or BotOps; an Admin or the owner. A profile grants no right |
-| `hub bot budget <bot> [--hour N\|default] [--day N\|default]`, `hub bot budget <bot> release`, `hub bot release <bot>` | a bot's runs per hour and per day (the team default when unset; its owner, operator or BotOps), and release a bot Tico stopped for failed runs or too many runs. `hub team budget [--hour N] [--day N]` sets the team default (owner and admins) |
-| `hub bot scope <bot> <task>`, `hub bot scope <bot> --release` | limits the bot's claims to that task and its direct subtasks, or lifts the limit; the rest of its queue, new work included, stays queued as it is, and nothing is paused, resumed or started |
-| `hub automation update <id> --enable\|--disable` | an automation (a routine) on or off |
-| `hub computer list [--computer C [--section S --offset N]]`, `hub health check` | the computers a bot may go on, one short row each (one computer in full with `--computer`, large sections paged); what is wrong with the bots, most urgent first, each with its fix |
-| `hub computer performance <computer> [--hours 24]` | the computer's CPU and memory over the window, its overloads and what ran in them, and its busiest processes |
-| `hub computer turns-at-once <computer> <N\|automatic>` | turns at once, 1 to 256 or `automatic`; owners and admins |
-| `hub credential request\|set\|list` | a card for a credential in the chat, storing one a human pasted, the credentials with their bots (never a value); see [credential-vault.md](credential-vault.md) |
-| `hub credential grant <name> --to <bot>`, `hub credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator, the person who stored it (for a bot they own or manage), or a holder delegating to a bot they own or run; revoke the delegation to take it away |
-| `hub credential import <VAR> --from-bot <bot>` | move one variable from that bot's own secrets file into Credentials, granted to that bot; the computer sends the value itself and nobody sees it |
-| `hub support file "<message>"` | sends a requested support message to the Tico team with the requester's rights |
-| `hub api <METHOD> <path> ['{json}'] [--on-behalf-of <task>]` | any other v2 route, as the requester |
+| `tico bot place <bot> [--computer C]` | puts a bot on a computer: the one named, or the only one, or the least busy that takes it |
+| `tico bot go-live <bot> [--computer C]` | places it if it has no computer, turns it on, and for a starter bot starts its setup chat as the requester. When the computer does not have the bot's repository yet but GitHub does (or GitHub cannot be asked), the placement is kept and the answer is HTTP 202 `waiting_for_repository` (the CLI says so and exits 0): the computer clones it, and the readiness report that says it has the repository finishes the go-live, once, with the requester's rights. When GitHub could not be asked the answer says so, since a repository that doesn't exist never arrives. Health lists each waiting go-live for the owner, admins and whoever manages the bot. One that can't finish, or hasn't finished within 7 days, stops, and the requester gets one notice to run go-live again. A repository GitHub does not have is refused (`repository_missing`) with how to create it; when it is waiting for the GitHub App's permission to create repositories, the refusal is `repository_waiting_for_permission` and names the owner's Needs you task with the two fixes. |
+| `tico bot model <bot> [<model>] [--effort E] [--on-behalf-of <task>]`, `tico bot pause\|resume <bot>` | the model (none: list the choices; a change answers with the computer's `readiness`), stop and restart; a manager bot may set its direct report's model ([Managers and their reports](#managers-and-their-reports)) |
+| `tico bot profile <bot> [name] [--batch-seconds N] [--digest-hour H]`, `POST /api/v2/bots/{bot}/profile` | a bot's profile (doer, reviewer, lead, manager, responder, monitor, custom): what wakes it and which tasks it takes; its owner, operator, a person it reports up to, or BotOps; an Admin or the owner. A profile grants no right |
+| `tico bot budget <bot> [--hour N\|default] [--day N\|default]`, `tico bot budget <bot> release`, `tico bot release <bot>` | a bot's runs per hour and per day (the team default when unset; its owner, operator or BotOps), and release a bot Tico stopped for failed runs or too many runs. `tico team budget [--hour N] [--day N]` sets the team default (owner and admins) |
+| `tico bot scope <bot> <task>`, `tico bot scope <bot> --release` | limits the bot's claims to that task and its direct subtasks, or lifts the limit; the rest of its queue, new work included, stays queued as it is, and nothing is paused, resumed or started |
+| `tico automation update <id> --enable\|--disable` | an automation (a routine) on or off |
+| `tico computer list [--computer C [--section S --offset N]]`, `tico health check` | the computers a bot may go on, one short row each (one computer in full with `--computer`, large sections paged); what is wrong with the bots, most urgent first, each with its fix |
+| `tico computer performance <computer> [--hours 24]` | the computer's CPU and memory over the window, its overloads and what ran in them, and its busiest processes |
+| `tico computer turns-at-once <computer> <N\|automatic>` | turns at once, 1 to 256 or `automatic`; owners and admins |
+| `tico credential request\|set\|list` | a card for a credential in the chat, storing one a human pasted, the credentials with their bots (never a value); see [credential-vault.md](credential-vault.md) |
+| `tico credential grant <name> --to <bot>`, `tico credential revoke <name> --from <bot>` | give a bot a stored credential, or take it away; at once for a credential administrator, the person who stored it (for a bot they own or manage), or a holder delegating to a bot they own or run; revoke the delegation to take it away |
+| `tico credential import <VAR> --from-bot <bot>` | move one variable from that bot's own secrets file into Credentials, granted to that bot; the computer sends the value itself and nobody sees it |
+| `tico support file "<message>"` | sends a requested support message to the Tico team with the requester's rights |
+| `tico api <METHOD> <path> ['{json}'] [--on-behalf-of <task>]` | any other v2 route, as the requester |
 
-The server applies the requester's rights to every BotOps v2 call, including friendly tools and `hub api`.
+The server applies the requester's rights to every BotOps v2 call, including friendly tools and `tico api`.
 Older Computers receive the same behavior without adding a delegation header. `X-Tico-On-Behalf-Of: turn` and
 `on_behalf_of` remain supported; citing another human cannot widen the current requester's access. `/me` identifies
 the calling credential so clients can discover which tools are offered; it does not change the rights used by tools.
 The route's normal permission checks apply, just as when the requester uses it directly. No per-tool opt-in is needed.
-A Credential never travels in a `hub api` body (a key named `secret`, `password`, `token`, `api_key` and the like is refused).
+A Credential never travels in a `tico api` body (a key named `secret`, `password`, `token`, `api_key` and the like is refused).
 
 Everyday edits, requested bot deletion, outside-domain invites by an Owner or Admin, Tico updates, and the Owner's
 Team rule changes run directly with the requester's rights. Sending to outsiders stays off until enabled for that bot.
@@ -761,9 +761,9 @@ who may change it, its class, the route and body it writes, and a link that open
 (`#/settings/<tab>/<card>`). A person, or BotOps or their own Assistant for them, finds and changes a setting
 without knowing the route:
 
-    hub settings find "sql"                                  key, name, where, class and who may change it
-    hub settings show bot.limit.usd --bot support            the current value, who may change it, whether you may
-    hub settings set release.times 09:30,17:00               change it with your rights (BotOps, the Assistant: the
+    tico settings find "sql"                                  key, name, where, class and who may change it
+    tico settings show bot.limit.usd --bot support            the current value, who may change it, whether you may
+    tico settings set release.times 09:30,17:00               change it with your rights (BotOps, the Assistant: the
                                                              person's)
 
 `show` and `set` take `--bot`, `--computer`, `--person` or `--id` for a setting set per one of them. The class decides
@@ -774,7 +774,7 @@ what `set` does when BotOps or the Assistant asks for a person (the same answer 
 - **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
   ownership, the Strategy Bot): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
   confirms it for them. A wake rule is direct unless it sends a webhook or forwards the call. The person's own
-  `hub settings set` runs at once. The person's tap is their own click, also on the routes that take only that (the
+  `tico settings set` runs at once. The person's tap is their own click, also on the routes that take only that (the
   Strategy Bot's level and checks, company storage, turning the Assistant on). A confirm entry whose route BotOps can't yet
   put on a card is person-only until it can (`NO_CARD_YET`, empty now; the catalogue test fails once one can, so it
   goes back to confirm).
@@ -793,7 +793,7 @@ Someone without the rights is refused with who can change it ("Only the owner or
 trigger manages it too, as its route allows), a computer's operator, and the people who manage a wake rule's scope (the
 owner or an admin for a team rule); a person's role is the owner's alone.
 The route still makes its own check after the catalogue's, and when the route refuses a write BotOps or the Assistant
-made for a person (`hub api`), the refusal carries the same who-may line (`fix`, `who_may`).
+made for a person (`tico api`), the refusal carries the same who-may line (`fix`, `who_may`).
 
 `backend/tests/test_settings_catalog.py` reads every write
 the Settings pages make and fails when no entry covers one; a one-off action (check, replay, undo, run now) is listed

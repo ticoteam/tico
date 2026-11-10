@@ -8,7 +8,7 @@ A row says `from_task` stands in `kind` to `to_task`:
 - `duplicate_of`: from duplicates to.
 - `follow_up`: from was split off or followed up from to.
 
-`relate` is the only writer of the other three (the task page, `hub task relate` and the MCP tool all come here),
+`relate` is the only writer of the other three (the task page, `tico task relate` and the MCP tool all come here),
 so the rules live in one place: who may change which end, and a history row on both tasks. A task does not wait on a
 relation: what a task waits on is its requirements and the tasks it filed (backend/waiting_on.py). Reads filter the other end through the reader's task visibility, so a task someone
 cannot open is never named to them. Goals keep their own `parent_id`; this is tasks only.

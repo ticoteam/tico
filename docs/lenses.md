@@ -33,7 +33,7 @@ older guide files kept for reference; they are not listed.
 2. Choose what it reads: the **published** strategy (the default) or your **draft** (owner only; the run is private
    to you). A strategy lens needs a published version unless you run it on the draft. A market lens reads the market
    pages and the strategy, and ignores the choice. Startup idea check also reads the market's sizes.
-3. The run answers at once with `running`, then finishes in under a minute. The page and `hub lens show` poll it.
+3. The run answers at once with `running`, then finishes in under a minute. The page and `tico lens show` poll it.
 
 If no model provider is set up, the run is `no_model` and your answers are saved; nothing else happens.
 A run that is cut off (a restart, or no answer in ten minutes) reads **failed** with "The run was cut off; run it
@@ -71,11 +71,11 @@ the code `empty`.
 ## `hub` and the API
 
 ```
-hub lens list [--market]                           the lenses, with their questions
-hub lens run <lens> [--answers-file f.json] [--draft] [--no-wait]
+tico lens list [--market]                           the lenses, with their questions
+tico lens run <lens> [--answers-file f.json] [--draft] [--no-wait]
                                                    waits up to a minute; --draft is the owner's; --market lenses ignore it
-hub lens show <run id>                             one run, in full
-hub lens runs [--lens ID] [--limit N]              runs you may see, newest first, without answers
+tico lens show <run id>                             one run, in full
+tico lens runs [--lens ID] [--limit N]              runs you may see, newest first, without answers
 ```
 
 The answers file is `{"<step key>": answer}`: a list step is a list of short strings, a score step is

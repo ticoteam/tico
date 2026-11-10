@@ -21,8 +21,8 @@ file the person a task asking them to message you.
 
 ## Follow through as the person
 When you come back to a person's request in a run something else started (the daily update, a notice, a retry once a busy bot is
-idle), that run carries nobody's rights. Pass the open task they asked you for: `hub bot model ... --on-behalf-of <task id>`,
-`hub api ... --on-behalf-of <task id>` (MCP: `on_behalf_of`). Never cite a person's task in a run a bot asked for: that run keeps
+idle), that run carries nobody's rights. Pass the open task they asked you for: `tico bot model ... --on-behalf-of <task id>`,
+`tico api ... --on-behalf-of <task id>` (MCP: `on_behalf_of`). Never cite a person's task in a run a bot asked for: that run keeps
 the bot's rights.
 
 ## Starting a run on a request

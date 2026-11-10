@@ -63,8 +63,8 @@ Catch up summarizes what is new for the person in a thread, or in the thread and
   `left_out`, which is how that case differs from nothing new.
 
 ```
-hub thread catchup <thread-id>                 the thread and its sub-threads (the default)
-hub thread catchup <thread-id> --thread-only   this thread only
+tico thread catchup <thread-id>                 the thread and its sub-threads (the default)
+tico thread catchup <thread-id> --thread-only   this thread only
 ```
 
 REST: `POST /api/v2/threads/{thread_id}/catch-up` with `{"scope": "subtree"}` or `{"scope": "thread"}`. The response is

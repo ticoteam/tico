@@ -7,11 +7,11 @@ description: Sort an office request by safety first, then route it to the right 
 When to use: on every new office request, before anyone is asked to fix, buy or book anything.
 
 Steps:
-1. Read the request as it was written, then `hub task show <id>`. Note what, where, since when, and how bad.
+1. Read the request as it was written, then `tico task show <id>`. Note what, where, since when, and how bad.
 2. Check safety first. A gas smell, water leak, electrics, a broken lock, a blocked exit, or fire equipment out of date is
    unsafe. Say so in the first line of the reply, tell the Operations Manager now, and do not wait for the weekly page.
 3. Route it:
-   - a laptop, account, Wi-Fi password or software problem goes to `it-support` (`hub task create --owner it-support`);
+   - a laptop, account, Wi-Fi password or software problem goes to `it-support` (`tico task create --owner it-support`);
    - a fault in the building goes to the fixer named in `knowledge/fixers.md`; building-owned items (heating, lifts,
      doors) go to the landlord or building manager;
    - a purchase under the owner's limit is prepared for that owner; over it, it becomes a purchase request to

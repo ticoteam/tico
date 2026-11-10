@@ -7,9 +7,9 @@ Inputs: the invoice's id, stage and due date from the task.
 Done when: the payment is recorded, or this stage's reminder is recorded and its email is sent or waits for a
 person's OK, and the task is marked done with one line.
 
-1. Read the invoice: `hub api GET finance/invoices/<invoice id>`. Its `emails` field lists any invoice email still waiting
+1. Read the invoice: `tico api GET finance/invoices/<invoice id>`. Its `emails` field lists any invoice email still waiting
    to send; step 6 covers each one.
-2. Look for the payment: `hub finance search --kind feed --q <customer name>`. Find a row from this customer that paid this
+2. Look for the payment: `tico finance search --kind feed --q <customer name>`. Find a row from this customer that paid this
    invoice: the invoice's `remaining`, or part of it when the row names the invoice.
    When the invoice already shows some `paid`, a matching row may be that same payment waiting for its bank row (it stays
    unbooked, `entry_id` null, until someone links it): never record it, ask.
@@ -22,7 +22,7 @@ person's OK, and the task is marked done with one line.
 | no row matches | step 5 |
 | the invoice is already paid or void | step 6 for any `emails` entry, then 7 |
 
-4. Record it: `hub finance act invoice_record_payment` with the `invoice_id`, the amount in minor units, and the row's
+4. Record it: `tico finance act invoice_record_payment` with the `invoice_id`, the amount in minor units, and the row's
    `feed_id` (see playbooks/commands.md). Paid in full: step 6 for any `emails` entry, then 7. Paid in part: step 5, for
    the new `remaining`. Finance refuses a row that may be a payment already marked paid (it says `feed_match`): never
    retry it; ask the invoice's owner instead, as in the table.
@@ -34,9 +34,9 @@ person's OK, and the task is marked done with one line.
 6. The email (a reminder from step 5, or an `emails` entry from step 1) is already in Tico's send queue with Finance's
    exact text. A person OKs it from its preview in Needs you, and the queue sends it itself. Do not draft it, send it,
    or change a word of it. When you know how a send went, report it once. Delivered:
-   `hub finance act invoice_delivery --payload '{"invoice_id":"<id>","stage":<stage>,"delivered":true}'`.
+   `tico finance act invoice_delivery --payload '{"invoice_id":"<id>","stage":<stage>,"delivered":true}'`.
    Not sent: the same with `"delivered":false,"reason":"<what failed, in a few words>"`. Leave `stage` out for the
    invoice's own email. Use `--operation-id invoice-delivery:<invoice id>:<stage>:<attempt>`, with the attempt counted
    from 1. Never remake a stage, and never change the text to get it through.
-7. Finish with one line: `hub task done <task id> -m "<one line: what you recorded, and whether the email was
+7. Finish with one line: `tico task done <task id> -m "<one line: what you recorded, and whether the email was
    delivered, failed or still waits>" --version N`.

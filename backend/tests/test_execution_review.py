@@ -2685,7 +2685,7 @@ def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api
         c.execute(
             "UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "
             "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='started'",
-            ('hub task create --title report', attempt['id']),
+            ('tico task create --title report', attempt['id']),
         )
         c.execute(
             "UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "

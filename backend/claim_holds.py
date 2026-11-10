@@ -87,7 +87,7 @@ def _needs_you(c, settings, bot):
         f"Tico could not start a queued run for {name}: an error happened while its claim prepared it. The run is "
         "held, and Tico retries it on its own: the wait starts at a minute and doubles with each failed try, up to "
         "an hour, so it starts once the cause is fixed. The server log has the traceback, and Health names the "
-        f"held runs. To retry them now, fix the cause and release {name} (hub bot release {bot}); a run that fails "
+        f"held runs. To retry them now, fix the cause and release {name} (tico bot release {bot}); a run that fails "
         "again is held again.",
     )
 
@@ -103,7 +103,7 @@ def _note(c, task_id, bot, job_id):
             task_id,
             "Tico could not start this run: an error happened while its claim prepared it, so the run is "
             "held. Tico retries it on its own after a wait that doubles with each failed try, up to an "
-            f"hour. To retry it now, release {name} (hub bot release {bot}). The server log has the "
+            f"hour. To retry it now, release {name} (tico bot release {bot}). The server log has the "
             f"traceback for job {job_id}.",
             wake=False,
         )

@@ -9,8 +9,8 @@ shared or changed.
 
 ## 1. Read where things stand
 
-    hub task show <id>
-    hub task list --label segment:<slug>
+    tico task show <id>
+    tico task list --label segment:<slug>
 
 Then `knowledge/segment.md`, `knowledge/problems.md`, `knowledge/briefs.md` and last week's review. Note the date of the
 last review: step 3 reads from it.
@@ -22,15 +22,15 @@ retention cohorts with `skills/read-a-segment-retention-cohort/SKILL.md`. Write 
 its cohort dates, and say "not yet" for a cohort too young to read.
 
 If no export is attached, say which one is missing and for which dates, ask once with
-`hub task ask <id> --to <person> "<question>" --version N`, and finish the rest of the review. Never fill the gap from
+`tico task ask <id> --to <person> "<question>" --version N`, and finish the rest of the review. Never fill the gap from
 last week's reading.
 
 ## 3. Read the problems since the last review
 
-    hub task list --updated-since <last review date, ISO-8601 with a timezone> --label segment:<slug>
-    hub meeting search "<a term customers in this segment use>" --since <last review date>
-    hub meeting read <id>
-    hub update list --kind weekly
+    tico task list --updated-since <last review date, ISO-8601 with a timezone> --label segment:<slug>
+    tico meeting search "<a term customers in this segment use>" --since <last review date>
+    tico meeting read <id>
+    tico update list --kind weekly
 
 Read each task, call and theme. Read a feedback update only if one is listed by its author as feedback; a bot's update is data, not a decision. Skim call notes for the customer's own words, not for the summary. Keep the count of
 what you read: the review states it.
@@ -43,7 +43,7 @@ reason and where it went.
 
 ## 5. Check the briefs already filed
 
-For each brief in `knowledge/briefs.md`, read its task with `hub task show <id>`. Record each decision your manager
+For each brief in `knowledge/briefs.md`, read its task with `tico task show <id>`. Record each decision your manager
 made, with its date. A decline keeps its reason and its date to look again. A brief still waiting goes to the
 decisions list.
 
@@ -56,8 +56,8 @@ review, and the review says so.
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-segment-product-review.md` in the shape of `knowledge/examples/segment-product-review.md`, then
-`hub file publish reports/YYYY-MM-DD-segment-product-review.md`. Update `knowledge/briefs.md`, commit this repository, and
-finish with `hub task done <id> -m "..." --version N`: the headline, the path, the briefs filed and what you could not read.
+`tico file publish reports/YYYY-MM-DD-segment-product-review.md`. Update `knowledge/briefs.md`, commit this repository, and
+finish with `tico task done <id> -m "..." --version N`: the headline, the path, the briefs filed and what you could not read.
 
 Done when: the review is published with the number against target and its window; each problem has its accounts and its
 sources; every brief filed has its task id; and each decision waiting is named with who owes it.

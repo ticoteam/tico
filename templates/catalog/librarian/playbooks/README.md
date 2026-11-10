@@ -1,6 +1,6 @@
 One file per recurring kind of work. A playbook is the checklist you would hand a new hire.
 
-- `commands.md`: the hub commands, grouped by job. Use these; for any other, run `hub <group> --help` first.
+- `commands.md`: the tico commands, grouped by job. Use these; for any other, run `tico <group> --help` first.
 - `answer-a-question.md`: every question, from a human or a bot. The strategy: search, read, follow, cite.
 - `the-map.md`: what the `_librarian/` docs are, and the exact shape of each.
 - `refresh-the-map.md`: the daily routine, and what to do when someone asks for it now.

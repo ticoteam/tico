@@ -7,15 +7,15 @@ Inputs: the first message or task, the team docs, past job posts if any, and the
 Outcome: five recorded answers, a role file with the criteria written down, a first real artefact (a job post draft or the
 summaries of the applications you were given) on the task, and the first routine checked.
 
-Done when `state.md` says `Setup: finished`, the first artefact is attached, and `hub bot setup-done` has run.
+Done when `state.md` says `Setup: finished`, the first artefact is attached, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc search "values"
-    hub doc search "job"
+    tico task show <id>
+    tico doc search "values"
+    tico doc search "job"
 
 Check what you can already reach: team values and level guides in the docs, past job posts, and the hiring mailbox if it is
 in your access. Do not ask what these already say. If you cannot read applications, that is an answer to question 3, and a
@@ -57,17 +57,17 @@ If the task gave a role brief, follow `playbooks/draft-a-job-post.md`. If it gav
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will run the hiring pipeline every
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will run the hiring pipeline every
 Friday at 10:00 and put each owed reply up for review." They can change it or turn it off any time. There is nothing to
 approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
-leave it off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+leave it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run. Until then nothing
 you have runs on its own. Run it once the answers and the first result are recorded, not before.

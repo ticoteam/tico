@@ -31,7 +31,7 @@ prerequisites:
     why: "Merged pull requests and the docs repository are read through gh with the team's GitHub App token. The owner lists each repository under this bot's extra GitHub repositories in Settings."
     required: true
   - tool: docs
-    why: "Optional. When a README links to an internal process, the bot asks the Librarian with `hub doc ask` rather than reading or rewriting internal docs."
+    why: "Optional. When a README links to an internal process, the bot asks the Librarian with `tico doc ask` rather than reading or rewriting internal docs."
     required: false
 onboarding:
   - ask: "Which repositories hold the docs developers and users read, and which ones ship changes users see? Can I read them?"

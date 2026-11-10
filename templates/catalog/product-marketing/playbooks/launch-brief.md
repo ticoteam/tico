@@ -7,10 +7,10 @@ Triggered by a task naming a launch. Budget 40 minutes. The outcome is one brief
 
 ## 1. Read the request and the record
 
-    hub task show <id>
+    tico task show <id>
 
 Read `knowledge/positioning.md`, `knowledge/tiers.md` and `knowledge/launches.md`. Ask the requester
-once (`hub task ask <id> --to <person> "<question>" --version N`) if the launch, its date or its owner is unclear, and stop.
+once (`tico task ask <id> --to <person> "<question>" --version N`) if the launch, its date or its owner is unclear, and stop.
 
 ## 2. Size it
 
@@ -32,7 +32,7 @@ price or feature is promised to customers: the brief says "to confirm".
 
 ## 5. Hand over
 
-Update `knowledge/launches.md`, commit, then `hub task done <id> -m "..." --version N`: the
+Update `knowledge/launches.md`, commit, then `tico task done <id> -m "..." --version N`: the
 launch in one line, the tier, the path and the gaps. Assets go to the owning bot or human when
 the brief is ready; create requested tasks with your Tools.
 

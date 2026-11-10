@@ -50,7 +50,7 @@ def refused_as_card(api, token, method, path, body=None):
 
 
 def set_setting(api, token, key, value):
-    """`hub settings set`: the plan, then the run it names, both with the turn's token."""
+    """`tico settings set`: the plan, then the run it names, both with the turn's token."""
     planned = call(api, token, "POST", f"settings/catalog/{key}/plan", {"value": value})
     assert "run" in planned, planned
     run = planned["run"]

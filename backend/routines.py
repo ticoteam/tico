@@ -26,16 +26,16 @@ SWEEP_KEY = "task-sweep"
 SWEEP_TEXT = (
     "Look over the fleet once a day (follow playbooks/task-sweep.md if you have it). "
     "Tico wakes a bot that stops early, then its manager bot, then a person, so you do not restart tasks. "
-    "Find what stops bots from running (`hub bot status list`) and fix the cause in the bot or Tico when you can. "
+    "Find what stops bots from running (`tico bot status list`) and fix the cause in the bot or Tico when you can. "
     "Then review the open tasks you filed for people "
-    "(`hub task list --requester me --status open`): close each whose condition is already true or superseded "
-    "(`hub task close <id> -m \"why\" --version N`), and ask once, on the task, about one you cannot tell. "
+    "(`tico task list --requester me --status open`): close each whose condition is already true or superseded "
+    "(`tico task close <id> -m \"why\" --version N`), and ask once, on the task, about one you cannot tell. "
     "Nothing to do: finish this task with one line."
 )
 OPEN_TASKS_TEXT = (
-    "Daily open-tasks check. List the tasks you own that are still open (`hub task list`). "
+    "Daily open-tasks check. List the tasks you own that are still open (`tico task list`). "
     "Move the top one forward: finish it, take its next step, or say in one line with "
-    "`hub task update <id> --note` what it is waiting on. If a person asked for something that "
+    "`tico task update <id> --note` what it is waiting on. If a person asked for something that "
     "is not a task yet, file it now. Nothing open: finish this task with one line."
 )
 FIELDS = ("title", "cron", "on", "timezone", "text")

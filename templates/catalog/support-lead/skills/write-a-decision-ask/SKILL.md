@@ -16,7 +16,7 @@ Steps:
 5. State the proposed answer, and what happens on yes and on no.
 6. State the cost of no answer: which target is missed, which ticket waits, and from which date.
 7. Ask it once, on the task the decision belongs to:
-   `hub task ask <id> --to <person> "<question>" --choices Yes,No --version N`. With no task yet, file one you own
+   `tico task ask <id> --to <person> "<question>" --choices Yes,No --version N`. With no task yet, file one you own
    and ask on it. Put the evidence and the proposed answer on the task. Record the ask in
    `knowledge/decisions-needed.md` with the date.
 8. With no answer, do not ask again: the ask stays in the owner's Needs you until they answer. Add new evidence to

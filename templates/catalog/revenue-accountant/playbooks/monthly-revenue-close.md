@@ -15,7 +15,7 @@ proposed entries, the pack is published, and the task is closed with the differe
 
 ## 1. Gather
 
-    hub task show <id>
+    tico task show <id>
 
 Note each file's date range. A billing export that ends early is a finding.
 
@@ -46,6 +46,6 @@ Follow `skills/bridge-recurring-revenue/SKILL.md`, using the definition in `stat
 
 ## 7. Write and hand over
 
-Write `reports/YYYY-MM-revenue-close.md` in the shape of `knowledge/examples/revenue-close.md`, `hub file publish` it, commit, and
-`hub task done <id> -m "..." --version N`: reconciled or the difference, the entries count, the path. Questions for the
+Write `reports/YYYY-MM-revenue-close.md` in the shape of `knowledge/examples/revenue-close.md`, `tico file publish` it, commit, and
+`tico task done <id> -m "..." --version N`: reconciled or the difference, the entries count, the path. Questions for the
 accountant are drafts on the task, under the Sending rules in AGENT.md.

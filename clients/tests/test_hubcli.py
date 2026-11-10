@@ -1,4 +1,4 @@
-"""The `hub` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
+"""The `tico` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
 depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round

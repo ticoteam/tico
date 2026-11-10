@@ -7,7 +7,7 @@ description: Write a delivery progress report on a parent task with a link to ea
 When to use: before you write any progress report, daily check or update on a parent task.
 
 Steps:
-1. Read the parent's tree with `hub task tree <id>`. List each child and the pull requests linked to it.
+1. Read the parent's tree with `tico task tree <id>`. List each child and the pull requests linked to it.
 2. Read each pull request's state on GitHub with `gh pr view <number> -R <repo>`, and its checks with `gh pr checks <number> -R <repo>`.
 3. Sort each item into one fact, and keep the facts apart: **merged** (in the default branch), **released** (only when a
    release record shows it), or **still waiting** (what it waits on, who owns that, and since when).
@@ -15,7 +15,7 @@ Steps:
    make it a question for the requester.
 5. Write one line per child: its task link, its state, its pull request links, the blocker if any, and the next action.
 6. Write the dates you were given, or "no date set". Never estimate a date and present it as set.
-7. Post the report as a comment on the parent task with `hub task comment`. Ask a question only with `hub task ask <id> --to <person> "<question>" --version N`,
+7. Post the report as a comment on the parent task with `tico task comment`. Ask a question only with `tico task ask <id> --to <person> "<question>" --version N`,
    one open question per task.
 
 Checks before you finish:

@@ -1,6 +1,6 @@
 # Where facts about a market come from, and how far to trust each (backend/market_spend.py).
-# The Librarian reads this before it sizes a market (`hub market sources`) and cites a catalog id or a URL for every
-# figure. No source is trusted alone: size each segment by two methods. A team adds its own with `hub market sources
+# The Librarian reads this before it sizes a market (`tico market sources`) and cites a catalog id or a URL for every
+# figure. No source is trusted alone: size each segment by two methods. A team adds its own with `tico market sources
 # --add-file`; a team entry with the same id replaces the one here.
 #
 # covers:      sizing, players, buyers, pricing, signals, value_chain

@@ -39,8 +39,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Run the first report now on the real CRM, as a draft on the task labelled "First draft, not yet
    reviewed". Change nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -61,7 +61,7 @@ Always:
 - `skills/check-a-contact-list-at-list-time/SKILL.md`: read before a record goes on an outreach list or gets a list date.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/hygiene-rules.md`, `knowledge/stages.md`,
    `knowledge/exceptions.md` and last week's report.
 3. Read the CRM only through the read path the access note names, with the date and time of the read.
@@ -70,13 +70,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/exceptions.md` (new, still open, fixed), rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
+3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path
    after it, then what you could not read.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read with `hub task show <id>` and `hub task list`. A question for the requester
-is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A fix for a human is `hub task create --owner <human>` with the
-record ids, within the requested work. Keep `hub bot status set` to one factual line.
+Work arrives as tasks. Read with `tico task show <id>` and `tico task list`. A question for the requester
+is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. A fix for a human is `tico task create --owner <human>` with the
+record ids, within the requested work. Keep `tico bot status set` to one factual line.
 
 ## Quality standards
 - **Answer first.** Line one: open pipeline in dollars and deals, how it moved, and how many
@@ -101,5 +101,5 @@ when the pipeline moved more than 25% in a week. One question per task, the ask 
 under 120 words.
 
 ## Publishing your work
-The report goes to `reports/` and is listed with `hub file publish reports/<name>.md`; publishing it
+The report goes to `reports/` and is listed with `tico file publish reports/<name>.md`; publishing it
 again adds a version. Files humans send you are inputs, not yours to list.

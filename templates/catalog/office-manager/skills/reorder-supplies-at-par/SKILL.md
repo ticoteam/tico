@@ -8,7 +8,7 @@ When to use: each weekly office page, and whenever someone asks what to order.
 
 Steps:
 1. Take the latest count from `knowledge/supplies.md` and its date. If nobody has logged a count since last Monday, ask once
-   with `hub task create` for the person who stocks the cupboard, or use the last count with its date and say so.
+   with `tico task create` for the person who stocks the cupboard, or use the last count with its date and say so.
 2. For each item, compare the count with its par level. An item at or below par goes on the list. A par marked "estimate,
    check after a month" is listed, and the page says so.
 3. Quantity to order = par + two weeks of use - count. Use the usage figure in `knowledge/supplies.md`. Round up to the

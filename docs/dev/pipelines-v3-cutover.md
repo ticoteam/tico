@@ -220,26 +220,26 @@ with one `H.task_waits(ids)`, never one read per row.
 
 ## Bot commands
 
-As spec S16. MCP tools mirror them one for one (`hub task move` is `hub_task_move`).
+As spec S16. MCP tools mirror them one for one (`tico task move` is `hub_task_move`).
 
 ```
-hub task show <id>
-hub task done <id> -m "what was done" --version N
-hub task move <id> next|<stage> -m "why" --version N
-hub task close <id> -m "why" --version N
-hub task reassign <id> <owner> -m "why" --version N
-hub task ask <id> --to <person> "line" [--choices a,b] [--show page:12] --version N
-hub task ask <id> --withdraw
-hub task answer <id> <requirement> ok|no|<answer> [-m "note"] --version N      (a bot named on an OK or a question)
-hub task give <id> <requirement> --to <person> --version N
-hub task file --parent <id> [--pipeline general] "title"
-hub task snooze <id> [--until date] -m "why" --version N
-hub task create, list, comment, label, link, follow        (kept; no --status, --step, --type)
+tico task show <id>
+tico task done <id> -m "what was done" --version N
+tico task move <id> next|<stage> -m "why" --version N
+tico task close <id> -m "why" --version N
+tico task reassign <id> <owner> -m "why" --version N
+tico task ask <id> --to <person> "line" [--choices a,b] [--show page:12] --version N
+tico task ask <id> --withdraw
+tico task answer <id> <requirement> ok|no|<answer> [-m "note"] --version N      (a bot named on an OK or a question)
+tico task give <id> <requirement> --to <person> --version N
+tico task file --parent <id> [--pipeline general] "title"
+tico task snooze <id> [--until date] -m "why" --version N
+tico task create, list, comment, label, link, follow        (kept; no --status, --step, --type)
 ```
 
 - `--version` is the version the bot was last shown: `show`, a list row and every wake print it ("version 12"). The
   tools and MCP are stateless: the bot passes it. A tool never fetches a version just before it posts. Without one:
-  "Add --version N: the version you were last shown (`hub task show <id>` prints it, as do a list row and your wake)."
+  "Add --version N: the version you were last shown (`tico task show <id>` prints it, as do a list row and your wake)."
   The one exception is `label`: it only adds or takes off the labels named, so it reads the labels and, given no
   version, writes at the version it read (a change in between is refused, never lost).
 - `show` prints: version; pipeline · stage · owner; Turn; To leave (each requirement, met or not); Next; Filed by.

@@ -660,7 +660,7 @@ def _task_text(verb, bot, name, entry, computer, repo=None):
                 if entry.get("mcp")
                 else []
             ),
-            "Commit the bot repository locally and run `hub bot check "
+            "Commit the bot repository locally and run `tico bot check "
             + bot
             + "`. The bot publishes its own repository "
             "with its own access on its next run. Say on this task what the check reported. "
@@ -1022,5 +1022,5 @@ def install(app, store, auth, mutate, settings_admin, requester=None):
 
     @app.post("/api/v2/bots/{bot}/tools/{tool_id}/delete")
     def delete_tool_post(request: Request, bot: str, tool_id: str, body: M.Empty):
-        """The same as DELETE, for clients (the hub CLI, MCP) that only send GET and POST."""
+        """The same as DELETE, for clients (the tico CLI, MCP) that only send GET and POST."""
         return remove(request, bot, tool_id)

@@ -3,7 +3,7 @@
 The Task Manager is a built-in helper that keeps tasks moving without anyone having to look. It sits outside the
 org chart like the [Librarian](librarian.md), and runs on Haiku 5.5 at low
 effort. Every team has it: it is added when a team is set up, and an existing team gets it on upgrade. It is **on by
-default**. The owner can pause it (`POST /api/v2/task-manager/turn-off`, `hub task-manager bot off`); pausing keeps its
+default**. The owner can pause it (`POST /api/v2/task-manager/turn-off`, `tico task-manager bot off`); pausing keeps its
 history and `turn-on` wakes it again.
 
 It tidies tasks, never the work. It does not touch bots, credentials, computers, sends or spending.
@@ -69,11 +69,11 @@ or an admin can switch it, pick its schedule and run it now.
 
 | Do | API | `hub` |
 |---|---|---|
-| See the bot, the report's switch, schedule, last run and each department's last check | `GET /api/v2/task-manager` | `hub task-manager status` |
-| Report on or off | `PUT /api/v2/system-routines/task_manager_report` `{"on": false}` | `hub task-manager on` / `off` |
-| Schedule: `business` (default), `hourly`, `4h`, `daily` with `at` | same, `{"preset": "daily", "at": "09:00"}` | `hub task-manager schedule daily --at 09:00` |
-| Run the check now | `POST /api/v2/system-routines/task_manager_report/run` | `hub task-manager run` |
-| Pause or wake the bot (owner) | `POST /api/v2/task-manager/turn-off` / `turn-on` | `hub task-manager bot off` / `on` |
+| See the bot, the report's switch, schedule, last run and each department's last check | `GET /api/v2/task-manager` | `tico task-manager status` |
+| Report on or off | `PUT /api/v2/system-routines/task_manager_report` `{"on": false}` | `tico task-manager on` / `off` |
+| Schedule: `business` (default), `hourly`, `4h`, `daily` with `at` | same, `{"preset": "daily", "at": "09:00"}` | `tico task-manager schedule daily --at 09:00` |
+| Run the check now | `POST /api/v2/system-routines/task_manager_report/run` | `tico task-manager run` |
+| Pause or wake the bot (owner) | `POST /api/v2/task-manager/turn-off` / `turn-on` | `tico task-manager bot off` / `on` |
 
 The same four actions are the MCP tools `hub_task_manager`, `hub_task_manager_set` and `hub_task_manager_run`.
 While the bot is paused the report finds nothing to wake and says so on its row.

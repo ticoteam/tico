@@ -8,7 +8,7 @@ When to use: before you answer a security, privacy or compliance question in a c
 
 Steps:
 1. Write the buyer's question in their words, with the deal and the date.
-2. Find the documented answer with `hub doc search` and `hub doc ask`. Note the document, its date or version and the section.
+2. Find the documented answer with `tico doc search` and `tico doc ask`. Note the document, its date or version and the section.
 3. Check the document is current against the changelog. A document older than a release that changed the answer is a question for its owner, not an answer.
 4. Sort the answer into one class: documented yes (quote the line); yes with a workaround (write the workaround and its source); not supported today (say so, with the source's date); no documented answer (name the security owner from the team docs and the date the buyer needs).
 5. Do not turn a narrow control into a broad claim. "Encrypted in transit" is not "encrypted at rest" unless the document says both.

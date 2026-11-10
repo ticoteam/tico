@@ -10,7 +10,7 @@ Outcome: one note on the task that says what is wrong with the page for a buyer 
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
 Note the buyer question the page is meant to answer, from `knowledge/pages.md`. If no question is written for the page,
 ask the requester one question in the task rather than guessing.
@@ -43,6 +43,6 @@ date, the expected effect, and the check that will show whether it worked, with 
 
 Update the page's line in `knowledge/pages.md`, commit, then:
 
-    hub task done <id> -m "..." --version N
+    tico task done <id> -m "..." --version N
 
 The note holds the finding in one line, the draft path, and what you could not check.

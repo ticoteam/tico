@@ -10,17 +10,17 @@ Done when: one draft is on the calendar as drafted, or a one-line note says none
 
 ## 1. Decide what is due
 
-    hub task show <id>
+    tico task show <id>
 
 Read `knowledge/calendar.md`, `knowledge/results.md` and the tasks that ask for email
-(`hub task list`). Pick the next email due within
+(`tico task list`). Pick the next email due within
 ten days. If none is due, propose one from what the team published or launched recently, and say
 why. If nothing is worth an email, say so in one line and finish. Never draft to fill a slot.
 
 ## 2. Confirm the brief
 
 One audience, one job, one call to action, the date it should reach people. If any is missing, ask
-the requester once with `hub task ask <id> --to <person> "<question>" --version N` and stop.
+the requester once with `tico task ask <id> --to <person> "<question>" --version N` and stop.
 
 ## 3. Draft
 
@@ -34,7 +34,7 @@ audience within three days.
 
 ## 5. Hand over
 
-Commit, then `hub task done <id> -m "..." --version N`: what the email says in one line, the path,
+Commit, then `tico task done <id> -m "..." --version N`: what the email says in one line, the path,
 and which checklist items remain unchecked. Always finish it: an open scheduled task absorbs the next.
 
 ## When a source fails

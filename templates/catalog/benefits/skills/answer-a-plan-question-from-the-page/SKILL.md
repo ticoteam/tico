@@ -11,7 +11,7 @@ Steps:
 1. Sort the question. A general question ("what does the plan pay for physical therapy?") can be answered from the page. A
    question about whether a named person, treatment or claim is covered goes to the broker or HR owner in `state.md`, with
    the question untouched. Stop there.
-2. Find the page: `hub doc ask "<the question, with no personal details>"`, then `hub doc read <path>` for the page it cites.
+2. Find the page: `tico doc ask "<the question, with no personal details>"`, then `tico doc read <path>` for the page it cites.
    Read the whole page, not only the line it quotes.
 3. Quote the sentence that answers the question, exactly. Give the page title, the plan year and the date you read it.
 4. Say what the page does not cover, in one line, and who to ask for the rest.

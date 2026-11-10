@@ -9,9 +9,9 @@ failed, was inconclusive or was stopped.
 
 ## 1. Read the task
 
-    hub task show <id>                the task, its version and its comments
-    hub growth numbers                the channel's numbers over the test
-    hub kpi show <kpi id>             a KPI the test was meant to move
+    tico task show <id>                the task, its version and its comments
+    tico growth numbers                the channel's numbers over the test
+    tico kpi show <kpi id>             a KPI the test was meant to move
 
 A reading is a fact. Use the reading that covers the test's period; a partial period is not a value to judge. Every number
 you write must be one you read, with its source.
@@ -32,19 +32,19 @@ you write must be one you read, with its source.
 The learning is a claim about customers, not about the test. "Price shoppers churn in two weeks" is a learning;
 "the price test lost" is not. Every finished task gets this one line, a Failed one too. Put the learning in `memory/learnings.md` as well, dated.
 
-    hub task comment <id> "<the numbers, their source, the window, and the learning>"
+    tico task comment <id> "<the numbers, their source, the window, and the learning>"
 
 ## 4. End the task
 
-    hub task done <id> -m "Kept: <the learning in one line>" --version N
-    hub task close <id> -m "Dropped, <failed|inconclusive|stopped>: <the learning in one line>" --version N
+    tico task done <id> -m "Kept: <the learning in one line>" --version N
+    tico task close <id> -m "Dropped, <failed|inconclusive|stopped>: <the learning in one line>" --version N
 
 Use the one the evidence gives.
 
 ## 5. Follow up
 
 If the learning suggests a next test, file it as a new idea (`playbooks/propose-ideas.md`) and link it to this
-one: `hub task relate <new id> <this id> --kind follow_up`. Do not start it here; the weekly meeting picks it.
+one: `tico task relate <new id> <this id> --kind follow_up`. Do not start it here; the weekly meeting picks it.
 
 ## Quality
 

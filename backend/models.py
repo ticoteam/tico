@@ -457,7 +457,7 @@ class FactoryNew(Contract):
 
 
 class FileReview(Contract):
-    """A verdict given directly on one file version (`hub file review`, backend/file_reviews.py): by file id, or by a
+    """A verdict given directly on one file version (`tico file review`, backend/file_reviews.py): by file id, or by a
     path and the SHA-256 of its bytes."""
 
     file: ID | None = None

@@ -1998,7 +1998,7 @@ impl Runner {
     }
 
     /// The pushes this turn made from its task's worktrees on this computer: those the claim named, and any the
-    /// turn added (`hub task worktree add`), which this computer's worktree list names by now.
+    /// turn added (`tico task worktree add`), which this computer's worktree list names by now.
     async fn task_pushes(&self, attempt: &Value, bot: &str, since: i64) -> Vec<Value> {
         let task = text_of(&attempt["task"]["id"]);
         if task.is_empty() {
@@ -6917,10 +6917,10 @@ for line in sys.stdin:
     #[tokio::test]
     async fn a_resumed_claude_turn_is_given_its_standing_lines_again_only_after_they_may_be_gone() {
         let held =
-            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the hub CLI");
+            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI");
         let full = |p: &str| {
             !p.contains(crate::prompt::STANDING_SEEN)
-                && p.contains("Use the hub CLI")
+                && p.contains("Use the tico CLI")
                 && p.contains("Read AGENT.md and state.md")
         };
         // 0 new, 1 resumed and unchanged, 2 resumed but Claude compacts during it, 3 after that compaction, 4 unchanged,
@@ -6941,7 +6941,7 @@ for line in sys.stdin:
         // Turn 2's short prompt is followed, as soon as Claude compacts, by the standing lines it left out.
         assert!(
             injected[2].contains(crate::prompt::RESTORED)
-                && injected[2].contains("Use the hub CLI")
+                && injected[2].contains("Use the tico CLI")
                 && injected[2].contains("Read AGENT.md and state.md"),
             "{}",
             injected[2]
@@ -7005,7 +7005,7 @@ for line in sys.stdin:
         .await;
         for p in &prompts {
             assert!(
-                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the hub CLI"),
+                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the tico CLI"),
                 "{p}"
             );
         }
@@ -7037,7 +7037,7 @@ for line in sys.stdin:
         assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
         let rule = "Repo rules for acme/app";
         assert!(
-            prompts[0].contains(rule) && prompts[0].contains("Use the hub CLI"),
+            prompts[0].contains(rule) && prompts[0].contains("Use the tico CLI"),
             "{}",
             prompts[0]
         );
@@ -7046,7 +7046,7 @@ for line in sys.stdin:
         let restored = &prompts[2];
         assert!(
             restored.contains(rule)
-                && restored.contains("Use the hub CLI")
+                && restored.contains("Use the tico CLI")
                 && restored.contains("Question 1"),
             "{restored}"
         );
@@ -7134,20 +7134,20 @@ for line in sys.stdin:
             injected[1]
         );
         assert_eq!(injected[1].matches(rule).count(), 2, "{}", injected[1]);
-        assert!(injected[1].contains("Use the hub CLI"), "{}", injected[1]);
+        assert!(injected[1].contains("Use the tico CLI"), "{}", injected[1]);
         // With no room the prompt is whole but for the unchanged rules: a compaction gives back those alone.
         let tight = json!({"compact_at": 2_000});
         let (_, prompts, _, injected) =
             claude_rig(&[tight.clone(), tight], &[1], &[], &[], extra, rules).await;
         assert!(
-            prompts[1].contains("Use the hub CLI") && !prompts[1].contains(rule),
+            prompts[1].contains("Use the tico CLI") && !prompts[1].contains(rule),
             "{}",
             prompts[1]
         );
         assert!(
             injected[1].contains(crate::prompt::RESTORED)
                 && injected[1].contains(rule)
-                && !injected[1].contains("Use the hub CLI"),
+                && !injected[1].contains("Use the tico CLI"),
             "{}",
             injected[1]
         );
@@ -7232,13 +7232,13 @@ for line in sys.stdin:
         );
         assert!(
             !ran.prompts[0].contains(crate::prompt::STANDING_SEEN)
-                && ran.prompts[0].contains("Use the hub CLI"),
+                && ran.prompts[0].contains("Use the tico CLI"),
             "{}",
             ran.prompts[0]
         );
         for p in &ran.prompts[1..] {
             assert!(
-                p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the hub CLI"),
+                p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI"),
                 "{p}"
             );
         }

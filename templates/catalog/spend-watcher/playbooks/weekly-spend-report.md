@@ -11,7 +11,7 @@ Done when: the report is published with a source on every number, every source t
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/thresholds.md`, `knowledge/vendors.md`, `knowledge/renewals.md` and last week's report.
 Find the newest exports for each source and note each one's date range and row count. If a source is
@@ -48,12 +48,12 @@ days with its decide-by date (renewal minus notice). Anything inside 14 days goe
 Write `reports/YYYY-MM-DD-spend-report.md` in the shape of `knowledge/examples/spend-report.md`:
 headline, anomalies, movers, new, overlaps, renewals, could not read, sources. Then:
 
-    hub file publish reports/YYYY-MM-DD-spend-report.md
+    tico file publish reports/YYYY-MM-DD-spend-report.md
 
 Sharing the report with finance is within the requested work. Any message to a person outside finance stays a draft until a person turns mail sending on in Tico.
 
 ## 7. Finish
 
-Update `knowledge/vendors.md` and `knowledge/renewals.md`. Commit, then `hub task done <id> -m "..." --version N`: the total and its change, the count of anomalies and renewals, and which sources you could not
+Update `knowledge/vendors.md` and `knowledge/renewals.md`. Commit, then `tico task done <id> -m "..." --version N`: the total and its change, the count of anomalies and renewals, and which sources you could not
 read. A source that failed is named, and its spend is "unknown", not zero. Always finish the task: an open
 routine task absorbs the next.

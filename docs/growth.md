@@ -70,7 +70,7 @@ Tico computes the channel numbers from these inputs, so nobody types a computed 
 
 **Who enters them.** The Head of Marketing (the `marketing-lead` template) enters each month's rows and the KPI readings
 it owns, or that a goal it owns uses, in its weekly numbers routine. The routine ships off like every template routine: the bot's onboarding turns it on. It
-runs on Mondays at 07:00, before the growth meeting. Turn it off or on with `hub automation update <id> --disable` or
+runs on Mondays at 07:00, before the growth meeting. Turn it off or on with `tico automation update <id> --disable` or
 `--enable`.
 
 **Unknown.** A customer with no source, or from a source that is not one of the team's channels, goes to Unknown. Nobody
@@ -123,20 +123,20 @@ pins only the cards it made there (a bot pins no pages to it). Its audience is e
 ## Commands
 
 ```
-hub growth numbers                       the page: each month's rows, Unknown and the totals
-hub growth channel list | show SLUG | add | update SLUG | retire SLUG
-hub growth source list | add | update ID | retire ID
-hub growth cohort list [--channel SLUG] [--month YYYY-MM]
-hub growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot-cost N] [--new N]
+tico growth numbers                       the page: each month's rows, Unknown and the totals
+tico growth channel list | show SLUG | add | update SLUG | retire SLUG
+tico growth source list | add | update ID | retire ID
+tico growth cohort list [--channel SLUG] [--month YYYY-MM]
+tico growth cohort set --channel SLUG|unknown --month YYYY-MM [--spend N] [--bot-cost N] [--new N]
                  [--d30 N] [--d90 N] [--d180 N] [--revenue N] [--margin N]
                  [--quality actual|estimate] [--source FIELD=TEXT]
-hub growth settings [--set KEY=VALUE]
-hub kpi log <kpi id> <value> [note] --period-start YYYY-MM-DD --period-end YYYY-MM-DD
-hub task create --owner <who> --label idea:on-deck --label channel:<slug> --title "..." --body "..."
-hub task list --label channel:<slug>
-hub card add growth_number --place growth --metric cac [--channel SLUG]
-hub card add growth_channels --place growth --count 10
-hub card list --place growth
+tico growth settings [--set KEY=VALUE]
+tico kpi log <kpi id> <value> [note] --period-start YYYY-MM-DD --period-end YYYY-MM-DD
+tico task create --owner <who> --label idea:on-deck --label channel:<slug> --title "..." --body "..."
+tico task list --label channel:<slug>
+tico card add growth_number --place growth --metric cac [--channel SLUG]
+tico card add growth_channels --place growth --count 10
+tico card list --place growth
 ```
 
 ## Related

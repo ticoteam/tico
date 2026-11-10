@@ -2,7 +2,7 @@
 """Build the setup page's role list from the templates, and the copies Tico HQ serves suggestions from.
 
     backend/company_file/roles.json
-                          every role template the tico.team/setup page offers (`hub template list` less the helpers),
+                          every role template the tico.team/setup page offers (`tico template list` less the helpers),
                           with its summary and when to suggest it, for the setup page's draft engine
 
 With `--out DIR`, into DIR and nothing else (Tico HQ, in ticoteam/tico-services, has no templates; its sync job runs this
@@ -72,7 +72,7 @@ def _strings(value):
 
 
 def roles(documents):
-    """The setup page's role list, and the built-in helpers a chart seat can hold. `roles`: every card `hub template list`
+    """The setup page's role list, and the built-in helpers a chart seat can hold. `roles`: every card `tico template list`
     serves except the helpers, which sit outside the setup page's list. `helpers`: the required helper cards (the
     built-ins every install has, such as the Bookkeeper, which the chart's Finance Owner seat is). Built-in (`required`)
     cards are the `core` department and the assistant reads as "Assistant", as the page shows them. `tools` are the

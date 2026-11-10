@@ -663,7 +663,7 @@ fn unquoted(run: &str) -> Option<String> {
     quote.is_none().then_some(out)
 }
 
-/// Every command path the hub CLI parses (clients/hubcli.py), its aliases and its top-level renames included, as
+/// Every command path the tico CLI parses (clients/hubcli.py), its aliases and its top-level renames included, as
 /// space-joined words such as `task close` or `needs-you show`. backend/tests/test_hub_command_tree.py fails when
 /// this list and the CLI differ, so a command added or renamed there is added here too.
 const HUB_PATHS: &[&str] = &[
@@ -1580,8 +1580,8 @@ fn is_setup_run(run: &str) -> bool {
     }
 }
 
-/// A run without its leading `env` and the `NAME=value` words (or `-i`, `-0`) after it, so `env TOKEN=x hub task list`
-/// reads as `hub task list`. Only those flags are taken: another flag may take a word of its own, which is never shown
+/// A run without its leading `env` and the `NAME=value` words (or `-i`, `-0`) after it, so `env TOKEN=x tico task list`
+/// reads as `tico task list`. Only those flags are taken: another flag may take a word of its own, which is never shown
 /// in its place. A run that is only `env` and its words is kept whole.
 fn strip_env(run: &str) -> &str {
     static ENV: OnceLock<Regex> = OnceLock::new();
@@ -1751,7 +1751,7 @@ fn starts_word(command: &str, i: usize) -> bool {
 /// `hub` and the command path its words name, read in order from the positional words before the first flag: the first
 /// word only if it is a top-level command, the next only if it is a subcommand of that command, and so on to three words.
 /// Reading stops at the first word that does not continue a path, so an argument, a recipient or a note never reaches the
-/// summary (`hub message send finance "x"` reads `hub message send`; `hub task close 7f3a` reads `hub task close`).
+/// summary (`tico message send finance "x"` reads `tico message send`; `tico task close 7f3a` reads `tico task close`).
 fn hub_summary(words: &[String]) -> String {
     let mut path: Vec<&str> = vec![];
     for word in words[1..]
@@ -2454,8 +2454,8 @@ mod tests {
     #[test]
     fn a_shell_line_reads_only_when_every_run_of_it_reads() {
         for command in [
-            "cd /w && hub needs-you show",
-            "cd /w && hub task list --status open | head",
+            "cd /w && tico needs-you show",
+            "cd /w && tico task list --status open | head",
             "grep -n x f | wc -l",
             "cat note.txt",
             "cd /tmp",
@@ -2465,15 +2465,15 @@ mod tests {
             "wc -l < notes.txt",
             "grep '> $(not run)' f",
             "jq '.items[] | {id}' out.json",
-            "bash -lc 'cd /w && hub task show 1'",
+            "bash -lc 'cd /w && tico task show 1'",
             "/bin/bash -lc \"cat note.txt\"",
-            "hub board",
+            "tico board",
             "cat f # > out",
         ] {
             assert!(shell_reads_only(command), "{command}");
         }
         for command in [
-            "curl -X POST https://hooks.example/x && hub task list",
+            "curl -X POST https://hooks.example/x && tico task list",
             "cat body.json | curl -X POST https://hooks.example/x -d @-",
             "git push",
             "cd /w && git push",
@@ -2497,10 +2497,10 @@ mod tests {
             "{ cat f; }",
             "cat <(curl x)",
             "cat f |& tee g",
-            "hub task close 7",
-            "hub status set busy",
-            "hub goal status",
-            "hub inbox",
+            "tico task close 7",
+            "tico status set busy",
+            "tico goal status",
+            "tico inbox",
             "hub -q task list",
             "sort -o out f",
             "sort --output=out f",
@@ -2660,19 +2660,22 @@ mod tests {
     #[test]
     fn a_compound_command_names_the_work_and_never_the_arguments() {
         assert_eq!(
-            command_program("cd /repo && hub task close --id 42 --reason 'sk-live-1'"),
-            "hub task close"
+            command_program("cd /repo && tico task close --id 42 --reason 'sk-live-1'"),
+            "tico task close"
         );
         assert_eq!(
             command_program(
-                "export HUB_TOKEN=sk-live-1; /usr/local/bin/hub task create --title sk-live-1"
+                "export HUB_TOKEN=sk-live-1; /usr/local/bin/tico task create --title sk-live-1"
             ),
-            "hub task create"
+            "tico task create"
         );
-        assert_eq!(command_program("hub task note sk-live-1 close"), "hub task");
         assert_eq!(
-            command_program("cd web && npm run build && hub task list"),
-            "hub task list"
+            command_program("tico task note sk-live-1 close"),
+            "tico task"
+        );
+        assert_eq!(
+            command_program("cd web && npm run build && tico task list"),
+            "tico task list"
         );
         assert_eq!(command_program("set -e\nnpm test | tee out.log"), "set");
         assert_eq!(command_program("cargo test 2>&1 | tail"), "cargo");
@@ -2680,19 +2683,19 @@ mod tests {
         assert_eq!(command_program("(cd web && npm test)"), "");
         assert_eq!(command_program("sh -c 'cd x && cargo test'"), "cargo");
         assert_eq!(
-            command_program("hub task create --title \"a && hub task close\""),
-            "hub task create"
+            command_program("tico task create --title \"a && tico task close\""),
+            "tico task create"
         );
         assert_eq!(
-            command_program("hub message send botops please check the release"),
-            "hub message send"
+            command_program("tico message send botops please check the release"),
+            "tico message send"
         );
         assert_eq!(command_program("FOO=1 && curl x"), "curl");
         assert_eq!(command_program("FOO=1 curl x"), "curl");
         assert_eq!(command_program("X=$(a && sk-live-1) hub task list"), "");
         assert_eq!(
-            tool_summary(&json!({"command": "cd web && hub task list --token sk-live-1"})),
-            "hub task list"
+            tool_summary(&json!({"command": "cd web && tico task list --token sk-live-1"})),
+            "tico task list"
         );
     }
 
@@ -2726,8 +2729,8 @@ mod tests {
         assert_eq!(command_program("cd /tmp && >|private-token printf ok"), "");
         assert_eq!(command_program("(( 1 || private_token ))"), "");
         assert_eq!(
-            command_program("cd /w && hub task close 7f3a"),
-            "hub task close"
+            command_program("cd /w && tico task close 7f3a"),
+            "tico task close"
         );
         assert_eq!(command_program("cd /w && npm test"), "npm");
     }
@@ -2739,14 +2742,14 @@ mod tests {
             "npm"
         );
         assert_eq!(command_program("cd /repo # note; private-token"), "cd");
-        assert_eq!(command_program("echo ok # x && hub task close"), "echo");
+        assert_eq!(command_program("echo ok # x && tico task close"), "echo");
         assert_eq!(
-            command_program("cd x; a#b && hub task list"),
-            "hub task list"
+            command_program("cd x; a#b && tico task list"),
+            "tico task list"
         );
         assert_eq!(
-            command_program("echo '# x'; hub task list"),
-            "hub task list"
+            command_program("echo '# x'; tico task list"),
+            "tico task list"
         );
         assert_eq!(command_program("sk-live-1$x y"), "");
     }
@@ -2754,15 +2757,18 @@ mod tests {
     #[test]
     fn a_hub_summary_stops_at_the_first_word_that_does_not_continue_a_command_path() {
         assert_eq!(
-            command_program("hub message send finance \"private question\""),
-            "hub message send"
+            command_program("tico message send finance \"private question\""),
+            "tico message send"
         );
-        assert_eq!(command_program("hub history review"), "hub history");
-        assert_eq!(command_program("hub task close 7f3a"), "hub task close");
-        assert_eq!(command_program("hub needs-you show"), "hub needs-you show");
+        assert_eq!(command_program("tico history review"), "tico history");
+        assert_eq!(command_program("tico task close 7f3a"), "tico task close");
         assert_eq!(
-            command_program("hub bot status history"),
-            "hub bot status history"
+            command_program("tico needs-you show"),
+            "tico needs-you show"
+        );
+        assert_eq!(
+            command_program("tico bot status history"),
+            "tico bot status history"
         );
         for action in [
             "archive",
@@ -2774,9 +2780,9 @@ mod tests {
         ] {
             assert_eq!(
                 command_program(&format!(
-                    "hub email {action} ana@acme.example private-label private-id"
+                    "tico email {action} ana@acme.example private-label private-id"
                 )),
-                format!("hub email {action}")
+                format!("tico email {action}")
             );
         }
         assert_eq!(command_program("hub nosuch command"), "hub");
@@ -2793,21 +2799,21 @@ mod tests {
             "cat"
         );
         assert_eq!(
-            command_program("hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"),
-            "hub automation create"
+            command_program("tico automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"),
+            "tico automation create"
         );
         assert_eq!(
             command_program(
-                "cd /w && hub automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"
+                "cd /w && tico automation create --file - <<'EOF'\n{\"name\": \"x\"}\nEOF"
             ),
-            "hub automation create"
+            "tico automation create"
         );
         assert_eq!(command_program("<<'EOF'\nhub approval approve\nEOF"), "");
         assert_eq!(command_program("<<EOF\ncustomer-private\nEOF"), "");
         assert_eq!(command_program(">'>' printf customer-private"), "");
         assert_eq!(command_program("cd /w && >\\> printf customer-private"), "");
         assert_eq!(
-            command_program("cd /w && >'>' hub task close customer-private"),
+            command_program("cd /w && >'>' tico task close customer-private"),
             ""
         );
         assert_eq!(
@@ -2816,8 +2822,8 @@ mod tests {
         );
         assert_eq!(command_program("2> >(printf customer-private) true"), "");
         assert_eq!(
-            command_program("/bin/zsh -lc 'cd /w && hub needs-you show'"),
-            "hub needs-you show"
+            command_program("/bin/zsh -lc 'cd /w && tico needs-you show'"),
+            "tico needs-you show"
         );
         assert_eq!(
             command_program("bash --norc /tmp/customer-private.sh"),
@@ -2862,12 +2868,12 @@ mod tests {
             "bash"
         );
         assert_eq!(
-            command_program("bash -lc 'cd /w && hub needs-you show $X'"),
-            "hub needs-you show"
+            command_program("bash -lc 'cd /w && tico needs-you show $X'"),
+            "tico needs-you show"
         );
         assert_eq!(
-            command_program("bash -c \"cd /w && hub \\\nneeds-you show\""),
-            "hub needs-you show"
+            command_program("bash -c \"cd /w && tico \\\nneeds-you show\""),
+            "tico needs-you show"
         );
     }
 
@@ -2897,8 +2903,8 @@ mod tests {
         assert_eq!(command_program(&format!("{} x", "a".repeat(41))), "");
         // A hub command in a later run still reads; a setup run before other work is skipped.
         assert_eq!(
-            command_program("cd /w && hub task close 7f3a"),
-            "hub task close"
+            command_program("cd /w && tico task close 7f3a"),
+            "tico task close"
         );
         assert_eq!(command_program("cd /w && npm test"), "npm");
     }
@@ -2906,8 +2912,8 @@ mod tests {
     #[test]
     fn a_setup_run_before_the_work_is_skipped_and_its_arguments_never_show() {
         assert_eq!(
-            command_program("cd /home/user/workspace/bot-coo && hub task list --status open"),
-            "hub task list"
+            command_program("cd /home/user/workspace/bot-coo && tico task list --status open"),
+            "tico task list"
         );
         assert_eq!(
             command_program("cd \"/home/user/My Repo\" && git status"),
@@ -2926,26 +2932,26 @@ mod tests {
             "npm"
         );
         assert_eq!(
-            command_program("export HUB_TOKEN=sk-live-1 && hub task create --title x"),
-            "hub task create"
+            command_program("export HUB_TOKEN=sk-live-1 && tico task create --title x"),
+            "tico task create"
         );
         assert_eq!(
             command_program("env HUB_TOKEN=sk-live-1 cargo test"),
             "cargo"
         );
         assert_eq!(
-            command_program("env HUB_TOKEN=sk-live-1 hub task list --token x"),
-            "hub task list"
+            command_program("env HUB_TOKEN=sk-live-1 tico task list --token x"),
+            "tico task list"
         );
         assert_eq!(
-            command_program("cd /w && env HUB_TOKEN=sk-live-1 hub task close 7f3a"),
-            "hub task close"
+            command_program("cd /w && env HUB_TOKEN=sk-live-1 tico task close 7f3a"),
+            "tico task close"
         );
         assert_eq!(command_program("cd /w && env -i A=1 npm test"), "npm");
         assert_eq!(command_program("source ~/.env.sh && npm test"), "npm");
         assert_eq!(
-            command_program(". ./secret-env && hub task close 7f3a"),
-            "hub task close"
+            command_program(". ./secret-env && tico task close 7f3a"),
+            "tico task close"
         );
         assert_eq!(
             command_program("cd /w && source a.sh b.sh && npm test"),

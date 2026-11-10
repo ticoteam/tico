@@ -7,7 +7,7 @@ description: Check that a quote used in a decision, action item, open question o
 When to use: before any decision, action item, open question or summary line is written with a quote and a timestamp.
 
 Steps:
-1. Find the passage with `hub meeting read <id>` and copy the words exactly. Do not tidy the grammar or join two turns.
+1. Find the passage with `tico meeting read <id>` and copy the words exactly. Do not tidy the grammar or join two turns.
 2. Read the speaker label on that turn. Use a name only when the transcript labels that speaker. If the turn has no
    label, write "unlabelled speaker". Never infer a name from the context, from who usually talks, or from who was
    addressed.

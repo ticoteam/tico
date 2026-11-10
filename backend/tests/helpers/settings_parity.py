@@ -276,7 +276,7 @@ LAST = {}
 
 
 def ask(api, attempt, e, objects, person, token):
-    """`hub settings set` as BotOps does it for the person: the plan, then the request the plan says to make. A card,
+    """`tico settings set` as BotOps does it for the person: the plan, then the request the plan says to make. A card,
     from the plan or from the route, is tapped as the person (`tapped`): a catalogue card never reaches the route
     until then, so this is where the route says whether that person may."""
     if e.route.startswith("model-subscriptions/") or e.route == "computer-subscriptions":

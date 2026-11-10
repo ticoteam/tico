@@ -982,7 +982,7 @@ class Onboarding:
                     "changed": False,
                     "routine": self._arm_built_in_starter(c, who, slug),
                 }
-            # Its own setup-done says no summary: the one it gave with `hub bot ready --summary` stays, as it was
+            # Its own setup-done says no summary: the one it gave with `tico bot ready --summary` stays, as it was
             # (no new ready event, `at` unchanged).
             given = str(summary or "").strip()
             earlier = lifecycle.ready_of(self._declared(c, slug))
@@ -1344,7 +1344,7 @@ class Onboarding:
         changed or deleted is never put back: only a key the bot has never had is created. The bot's config names every
         key it has had (`routines_seeded`), so a key stays seeded even if its schedule row is gone; a key whose row
         exists (deleted, moved to an automation or changed) counts as seeded too. (A bot BotOps builds gets these from
-        `hub bot create`; a built-in one is made here.) Returns the keys it created."""
+        `tico bot create`; a built-in one is made here.) Returns the keys it created."""
         row = c.execute("SELECT 1 FROM bot_config WHERE bot=?", (slug,)).fetchone()
         declared = BS.read(c, slug)
         had = list(declared.get("routines_seeded") or [])

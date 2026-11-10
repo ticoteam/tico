@@ -11,7 +11,7 @@ Steps:
    team's FAQ, the price list in the task. An answer you cannot find is a gap, not a guess.
 2. Open with the answer, in the first sentence. Do not open with thanks, a compliment or "I hope you are well".
 3. Use their words for their problem, once. Repeat nothing they already know.
-4. If a call is wanted, offer two times from the calendar: read the bookings in `hub calendar list`, set them against the
+4. If a call is wanted, offer two times from the calendar: read the bookings in `tico calendar list`, set them against the
    seller's working hours, and write the time zone out. Never offer a time the calendar shows as taken.
 5. Where the lead asks for a price, term, date, or a security or legal answer that is not on record, write
    `[for the seller: ...]` in that place. Do not fill it.

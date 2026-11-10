@@ -27,7 +27,7 @@ never:
   - "Call an experiment early or report a result that has not reached the sample size it planned"
 prerequisites:
   - tool: hub
-    why: "Team databases Tico can read (`hub db`), tasks with event exports, goals and launch dates are the inputs."
+    why: "Team databases Tico can read (`tico db`), tasks with event exports, goals and launch dates are the inputs."
     required: true
   - tool: docs
     why: "Optional. Tracking plans and existing metric definitions, if they are in the team docs."
