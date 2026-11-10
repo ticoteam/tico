@@ -90,6 +90,15 @@ const CALL_LAST_WORDS: Duration = Duration::from_secs(120);
 const PENDING_CALL_FOR: Duration = Duration::from_secs(300);
 /// A release Tico did not take is tried this many times in all, a little later each time.
 const RELEASE_TRIES: u32 = 5;
+/// A call held for the person to choose Record (`Recorder::call_prompt`).
+#[derive(Clone, Debug)]
+struct CallPrompt {
+    destination: String,
+    call: String,
+    meeting_id: String,
+    title: String,
+    at: Instant,
+}
 /// A call's source to give back (`Recorder::release_call`).
 #[derive(Clone, Debug)]
 struct Release {
@@ -478,8 +487,11 @@ pub struct Recorder {
     /// A call link waiting for sign-in to its org: (org address, call id, when it came). It goes after
     /// `PENDING_CALL_FOR`, and when its sign-in card is dismissed or replaced or another org signs in.
     pending_call: Option<(String, String, Instant)>,
-    /// The call being claimed now: (connection id, call id).
-    claiming: Option<(String, String)>,
+    /// The call being claimed now: (connection id, call id, whether to ask before recording).
+    claiming: Option<(String, String, bool)>,
+    /// A call this Recorder is the source for, from a link to an org it was not signed in to: it records only once
+    /// the person chooses Record.
+    call_prompt: Option<CallPrompt>,
     /// When the call recording's live meeting was last read here, and its Meet names last sent.
     call_read_at: Instant,
     call_presence_at: Instant,
@@ -615,6 +627,7 @@ impl Recorder {
             releases: Default::default(),
             releasing: None,
             claiming: None,
+            call_prompt: None,
             call_read_at: Instant::now(),
             call_presence_at: Instant::now(),
             call_presence_off: String::new(),
@@ -897,13 +910,19 @@ impl Recorder {
     pub fn record_call(&mut self, address: &str, call: &str) {
         if self.claiming.is_some()
             || self
+                .call_prompt
+                .as_ref()
+                .is_some_and(|prompt| prompt.call == call)
+            || self
                 .call_recording()
                 .is_some_and(|(_, context)| context.call_id == call)
         {
             return;
         }
+        // Another call's link replaces a question still open.
+        self.dismiss_call();
         match self.connection_for(address) {
-            Some(destination) => self.claim_call(&destination, call),
+            Some(destination) => self.claim_call(&destination, call, false),
             None => {
                 self.pending_call = Some((address.to_owned(), call.to_owned(), Instant::now()));
                 if !self.signing_in {
@@ -912,16 +931,36 @@ impl Recorder {
             }
         }
     }
-    /// After a sign-in: a call link that waited for it goes on when that org is signed in now.
+    /// After a sign-in: a call link that waited for it goes on when that org is signed in now. Its link came for an
+    /// org this Recorder had no sign-in for, so it records only once the person chooses Record.
     pub fn continue_call(&mut self) {
         if let Some((address, call, at)) = self.pending_call.take()
             && at.elapsed() < PENDING_CALL_FOR
             && let Some(destination) = self.connection_for(&address)
         {
-            self.claim_call(&destination, &call);
+            self.claim_call(&destination, &call, true);
         }
     }
-    fn claim_call(&mut self, destination: &str, call: &str) {
+    /// Record, on the question a call from a newly signed-in org asks.
+    pub fn confirm_call(&mut self) {
+        if let Some(prompt) = self.call_prompt.take() {
+            self.accept_claim(
+                &prompt.destination,
+                &prompt.call,
+                Claim::Source {
+                    meeting_id: prompt.meeting_id,
+                    title: prompt.title,
+                },
+            );
+        }
+    }
+    /// Cancel on that question (or it went unanswered): the source goes back.
+    pub fn dismiss_call(&mut self) {
+        if let Some(prompt) = self.call_prompt.take() {
+            self.release_call(&prompt.destination, &prompt.call, None);
+        }
+    }
+    fn claim_call(&mut self, destination: &str, call: &str, ask: bool) {
         if self.updating {
             self.error = UPDATING.into();
             return;
@@ -932,7 +971,7 @@ impl Recorder {
         }
         let (config, connect) = (self.config.clone(), self.tico_for);
         let (destination, call) = (destination.to_owned(), call.to_owned());
-        self.claiming = Some((destination.clone(), call.clone()));
+        self.claiming = Some((destination.clone(), call.clone(), ask));
         self.job_for("call", None, move || {
             connect(&config, &destination)?.claim_fresh_call(&call)
         });
@@ -1519,7 +1558,7 @@ impl Recorder {
             let here = reply.meeting == self.meeting;
             match reply.kind.as_str() {
                 "call" => {
-                    if let Some((destination, call)) = self.claiming.take() {
+                    if let Some((destination, call, ask)) = self.claiming.take() {
                         // Tico did not take back a source this Recorder gave up: the release queue keeps trying.
                         if reply
                             .result
@@ -1528,7 +1567,18 @@ impl Recorder {
                         {
                             self.release_call(&destination, &call, None);
                         }
-                        self.accept_claim(&destination, &call, calls::claim_outcome(reply.result));
+                        match calls::claim_outcome(reply.result) {
+                            Claim::Source { meeting_id, title } if ask => {
+                                self.call_prompt = Some(CallPrompt {
+                                    destination,
+                                    call,
+                                    meeting_id,
+                                    title,
+                                    at: Instant::now(),
+                                })
+                            }
+                            claim => self.accept_claim(&destination, &call, claim),
+                        }
                     }
                     continue;
                 }
@@ -1892,6 +1942,14 @@ impl Recorder {
             .is_some_and(|(_, _, at)| at.elapsed() >= PENDING_CALL_FOR)
         {
             self.pending_call = None;
+        }
+        if self
+            .call_prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.at.elapsed() >= PENDING_CALL_FOR)
+        {
+            self.dismiss_call();
+            self.bump();
         }
         self.watch_inputs();
         let outside = self.outside_state();
@@ -3374,6 +3432,7 @@ impl Recorder {
             "message": message,
             "signing_in": self.signing_in,
             "connect": self.connect,
+            "call_prompt": self.call_prompt.as_ref().map(|prompt| json!({"title": prompt.title})),
             "first_run": self.config.destinations.is_empty() && !self.demo,
             "suggested": self.tico_url,
             "recording": recording,

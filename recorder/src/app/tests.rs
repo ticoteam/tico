@@ -2173,3 +2173,41 @@ fn a_call_waiting_for_sign_in_goes_when_its_card_is_replaced_another_org_signs_i
     wait(&mut app, &|app| app.expire_pending_call());
     assert_eq!(claims(), 0, "{:?}", tico.seen());
 }
+
+#[test]
+fn a_call_from_an_org_just_signed_in_to_records_only_on_record() {
+    let tico = FakeTico::start(|method, path| source_answer(method, path, "live"));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    let signed_in = app.config.destinations.clone();
+    let after_sign_in = |app: &mut Recorder| {
+        app.config.destinations.clear();
+        app.link(&call_link(&tico));
+        app.config.destinations = signed_in.clone();
+        app.connect = None;
+        app.continue_call();
+        settle(app, |app| !app.status_view()["call_prompt"].is_null());
+    };
+    after_sign_in(&mut app);
+    // The link came for an org this Recorder was not signed in to: it asks, and records nothing yet.
+    assert_eq!(app.status_view()["call_prompt"]["title"], "Pricing call");
+    assert!(app.status_view()["recording"].is_null());
+    assert!(app.store.list().unwrap().is_empty());
+    // Cancel gives the source back.
+    app.dismiss_call();
+    settle(&mut app, |_| {
+        tico.asked(&format!("DELETE {}", claim_path())) == 1
+    });
+    assert_eq!(tico.asked(&format!("DELETE {}", claim_path())), 1);
+    assert!(app.status_view()["call_prompt"].is_null());
+    assert!(app.store.list().unwrap().is_empty());
+    // Record records into the call's meeting.
+    after_sign_in(&mut app);
+    app.confirm_call();
+    assert!(app.status_view()["call_prompt"].is_null());
+    let id = app.status_view()["recording"]["id"]
+        .as_str()
+        .expect("recording after Record")
+        .to_owned();
+    assert_eq!(app.store.context(&id).unwrap().call_id, CALL);
+}

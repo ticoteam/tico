@@ -1376,6 +1376,12 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     const host = address.split('://')[1] || address;
     return `<div class="connect"><div class="card"><div class="host">Connect to ${esc(host)}?</div><p>Continue only if you chose Connect recorder in your browser.</p><div class="buttons"><button class="btn" data-act="connect-cancel">Cancel</button><button class="btn primary" data-act="connect-ok" ${S.status.busy ? 'disabled' : ''}>Sign in</button></div></div></div>`;
   }
+  /** A call from an org just signed in to records only on Record. */
+  function callCard() {
+    const prompt = S.status.call_prompt;
+    if (!prompt) return '';
+    return `<div class="connect"><div class="card"><div class="host">Record ${esc(prompt.title || 'call')}?</div><div class="buttons"><button class="btn" data-act="call-cancel">Cancel</button><button class="btn primary" data-act="call-ok" ${S.status.busy ? 'disabled' : ''}>Record</button></div></div></div>`;
+  }
   // Screen sharing: a private live share in the chosen org first, then the system picker.
   function screenCard() {
     const d = S.ui.screen;
@@ -1418,7 +1424,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     const first = S.status.first_run && !S.library?.rows?.length;
     if (first && S.page === 'library') S.page = 'signin';
     else if (!first && S.page === 'signin') S.page = 'library';
-    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet() + taskPickerSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + screenCard() };
+    const html = { top: topbar(), page: page(), dock: dock(), sheet: shareSheet() + finishSheet() + taskPickerSheet(), pop: popover(), mention: mentionPop(), connect: connectCard() + callCard() + screenCard() };
     // Read as an input: a key or model is only on the fields, and the selection is read only where there is one.
     const active = document.activeElement as HTMLInputElement | null;
     const key = active?.dataset?.key || active?.dataset?.model;
@@ -1955,6 +1961,8 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     'dismiss-speaker-names': () => act('dismiss_speaker_names'),
     'connect-ok': () => act('confirm_connect'),
     'connect-cancel': () => act('dismiss_connect'),
+    'call-ok': () => act('confirm_call'),
+    'call-cancel': () => act('dismiss_call'),
     signin: () => { const address = model('signin').trim(); if (address) { S.ui.signingDesktop = ''; act('sign_in', { address }); } },
     'sign-out': (el) => act('sign_out', { id: el.dataset.id! }),
     'make-default': (el) => { S.ui.pop = null; act('make_default', { id: el.dataset.id! }); },

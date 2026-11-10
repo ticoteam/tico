@@ -96,6 +96,8 @@ export interface Status {
   message: string;
   signing_in: boolean;
   connect: string | null;
+  /** A call from an org just signed in to, waiting for Record. */
+  call_prompt?: { title: string } | null;
   first_run: boolean;
   suggested: string;
   recording: RecordingStatus | null;
@@ -514,6 +516,8 @@ export interface Commands {
   import_legacy: { args: { directory: string }; reply: unknown };
   confirm_connect: { args: None; reply: unknown };
   dismiss_connect: { args: None; reply: unknown };
+  confirm_call: { args: None; reply: unknown };
+  dismiss_call: { args: None; reply: unknown };
   dismiss_error: { args: None; reply: unknown };
   open_url: { args: { url: string }; reply: unknown };
   dismiss_notice: { args: None; reply: unknown };
