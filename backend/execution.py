@@ -2843,8 +2843,9 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
 
 def obsolete_notices_sql(c):
     """FROM and WHERE of the Tico notices a claim cancels, for one runner (?), Tico's actor (?) and now (?): any queued
-    on a task already finished, unless a person's own act caused it (H._write_message: it still owes that person its
-    answer), a pull request's checks result for a head no open pull request on the task is at any more (a newer push
+    on a task already finished (on a task off the engine, unless a person's own act caused it: H._write_message, it
+    still owes that person its answer; on the engine nothing wakes a bot about a Done or Closed task, and
+    task_wakes.may_start holds it, so Health and the claim say the same), a pull request's checks result for a head no open pull request on the task is at any more (a newer push
     supersedes it), and a self-filed task's "New task" notice while the task is snoozed and its filing turn has ended.
     A turn that started and yielded (a drain's time limit, a shared login's hold cap) is never one of them: it is the
     rest of a turn already under way, often the one that finished the task, and canceling it left the bot's status on
@@ -2860,7 +2861,7 @@ def obsolete_notices_sql(c):
         f"WHERE x.runner_id=? AND j.bot_id=x.bot AND j.state='queued' AND {H.unheld_sql()} AND m.id=j.message_id "
         "AND m.sender_id=? AND m.kind='notice' "
         "AND ((t.status IN ('done','closed') "
-        "AND coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%') "
+        "AND (t.pipeline_id IS NOT NULL OR coalesce(json_extract(m.refs,'$.caused_by'),'') NOT LIKE 'human:%')) "
         "OR (m.body LIKE 'New task from %' AND m.recipient_id=t.owner_id "
         "AND json_extract(m.refs,'$.filed_in') IS NOT NULL "
         "AND EXISTS (SELECT 1 FROM snoozes sz WHERE sz.task_id=t.id AND sz.ended_at IS NULL "
