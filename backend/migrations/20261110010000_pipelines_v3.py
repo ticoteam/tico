@@ -6,7 +6,8 @@
   ladder (tries, level, next_try_at) and the Late marks.
 - answers: what met a requirement for a visit, or pushed past it.
 - snoozes, links, effects: a task set aside, a task filed by a task, a GitHub call still owed.
-- task_move_guards: the one row the trigger reads. `task_engine` sets it to 1 and back to 0 inside its write.
+- task_move_guards: the one row the trigger reads. `task_engine` opens it for one task and closes it again inside its
+  write.
 - tasks.pipeline_id, stage_id, assignee_id; messages.wake_key (a wake written twice is one wake).
 - Trigger tasks_move_only: a task on the engine (pipeline_id set) changes status, stage, owner or pipeline only while
   the guard is open.
@@ -91,7 +92,7 @@ TABLES = (
     "tries INTEGER NOT NULL DEFAULT 0, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS effects_owed ON effects(state, updated_at) WHERE state = 'owed'",
     "CREATE TABLE IF NOT EXISTS task_move_guards ("
-    "id INTEGER PRIMARY KEY CHECK (id = 1), open INTEGER NOT NULL DEFAULT 0 CHECK (open IN (0, 1)))",
+    "id INTEGER PRIMARY KEY CHECK (id = 1), open INTEGER NOT NULL DEFAULT 0 CHECK (open IN (0, 1)), task_id TEXT)",
     "INSERT OR IGNORE INTO task_move_guards (id, open) VALUES (1, 0)",
 )
 
@@ -99,7 +100,7 @@ TRIGGER = (
     "CREATE TRIGGER IF NOT EXISTS tasks_move_only "
     "BEFORE UPDATE OF status, stage_id, owner_id, pipeline_id ON tasks "
     "WHEN (OLD.pipeline_id IS NOT NULL OR NEW.pipeline_id IS NOT NULL) "
-    "AND (SELECT open FROM task_move_guards WHERE id = 1) IS NOT 1 "
+    "AND (SELECT task_id FROM task_move_guards WHERE id = 1 AND open = 1) IS NOT NEW.id "
     "BEGIN SELECT RAISE(ABORT, 'tasks: stage, owner and status change only through move()'); END"
 )
 

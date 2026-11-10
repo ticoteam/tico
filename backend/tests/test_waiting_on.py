@@ -78,7 +78,7 @@ def test_the_ladder_hands_the_turn_to_the_manager_bot_and_then_to_a_person(c, ge
 
 def test_snoozed_is_the_headline_and_the_rest_is_still_listed(c, general):
     row = X.new_task(c, ANA, "Chase the vendor", assignee="bot:builder")
-    E.snooze(c, row["id"], "bot:builder", "Vendor replies by Nov 14", "2026-11-14T00:00:00.000000Z")
+    E.snooze(c, row["id"], "bot:builder", "Vendor replies by Nov 14", "2026-11-14T00:00:00.000000Z", row["version"])
     waits = W.waiting_on(c, row["id"])
     assert [w.state for w in waits] == ["snoozed", "bot"]
     assert (waits[0].who, waits[0].line, waits[0].until) == (
@@ -116,7 +116,14 @@ def test_a_task_waits_on_the_tasks_it_filed_and_on_a_question_a_bot_asked(c, gen
     child = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
     assert _states(c, parent["id"]) == [("tasks", child["id"])]
     asked = E.add_requirement(
-        c, child["id"], "bot:builder", "answer", ANA, "Card or invoice?", choices=["Card", "Invoice"]
+        c,
+        child["id"],
+        "bot:builder",
+        "answer",
+        ANA,
+        "Card or invoice?",
+        choices=["Card", "Invoice"],
+        seen_version=child["version"],
     )
     waits = W.waiting_on(c, child["id"])
     assert [(w.state, w.who) for w in waits] == [("person", ANA), ("bot", "bot:builder")]
@@ -138,13 +145,31 @@ def test_an_ended_task_waits_on_nothing_and_an_open_one_never_does(c, build):
 def test_needs_you_lists_what_is_a_persons_to_act_on_oldest_first_and_leaves_out_snoozed(c, build):
     mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)
     bots = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    asked = E.add_requirement(c, bots["id"], "bot:builder", "ok", ANA, "OK the headline")
+    asked = E.add_requirement(c, bots["id"], "bot:builder", "ok", ANA, "OK the headline", seen_version=bots["version"])
     set_aside = X.new_task(c, ANA, "Renew the lease", assignee=ANA)
     E.snooze(c, set_aside["id"], ANA)
     listed = W.needs(c, ANA)
-    assert [(n["task_id"], n["line"]) for n in listed] == [
-        (mine["id"], "Say when the work is done"),
-        (bots["id"], "OK the headline"),
+    assert [(n["kind"], n["task_id"], n["line"]) for n in listed] == [
+        ("task", mine["id"], "Say when the work is done"),
+        ("ask", bots["id"], "OK the headline"),
     ]
     assert listed[1]["requirement_id"] == asked["requirement_id"]
     assert W.needs(c, "human:nobody") == []
+
+
+def test_a_persons_own_task_is_listed_once_however_much_is_missing(c, general):
+    stages = ({"name": "Plan", "owner": "assignee", "requirements": [{"kind": "owner_done"}, {"kind": "linked_done"}]},)
+    X.pipeline(c, "plans", "Plans", stages)
+    row = X.new_task(c, ANA, "Plan the launch", "plans", assignee=ANA)
+    assert [w.state for w in W.waiting_on(c, row["id"])] == ["person", "person"]
+    listed = W.needs(c, ANA)
+    assert [(n["kind"], n["task_id"]) for n in listed] == [("task", row["id"])]
+    assert listed[0]["missing"] == ["Say when the work is done", "No task filed yet"]
+
+
+def test_an_ok_that_names_a_bot_is_that_bots_turn(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee=ANA)
+    E.add_requirement(c, row["id"], ANA, "ok", "bot:reviewer", "OK the wording")
+    waits = W.waiting_on(c, row["id"])
+    assert [(w.state, w.who, w.ask) for w in waits] == [("person", ANA, False), ("bot", "bot:reviewer", True)]
+    assert [n["kind"] for n in W.needs(c, ANA)] == ["task"]  # the reviewer's OK is not in Ana's list

@@ -199,6 +199,21 @@ def test_a_task_waits_on_the_tasks_it_filed_and_moves_when_they_are_all_done(c, 
     assert E.task(c, parent["id"])["status"] == "done"  # the last one ended Done: the parent left in the same step
 
 
+def test_a_filed_task_that_was_deleted_counts_as_closed_not_done(c, general):
+    stages = ({"name": "In development", "owner": "bot:manager", "requirements": [{"kind": "linked_done"}]},)
+    X.pipeline(c, "product", "Product", stages)
+    parent = X.new_task(c, ANA, "Checkout flow", "product")
+    one = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=parent["id"])
+    two = X.new_task(c, ANA, "Build the payment form", assignee="bot:builder", parent=parent["id"])
+    X.say_done(c, one)
+    E.advance(c, one["id"])
+    c.execute("PRAGMA foreign_keys=OFF")
+    c.execute("DELETE FROM tasks WHERE id=?", (two["id"],))
+    standing = R.standings(c, E.task(c, parent["id"]))[0]
+    assert (standing.state, standing.line) == (R.NOT_MET, "A deleted task was closed: It was deleted")
+    assert E.advance(c, parent["id"]) is None
+
+
 def test_a_filed_task_that_closes_keeps_the_parent_and_wakes_its_owner_once(c, general):
     stages = ({"name": "In development", "owner": "bot:manager", "requirements": [{"kind": "linked_done"}]},)
     X.pipeline(c, "product", "Product", stages)
@@ -249,13 +264,16 @@ def test_reassign_is_a_move_it_resets_the_tries_and_drops_the_old_owners_wakes(c
 
 def test_snooze_a_bot_says_why_and_its_fourth_in_one_stage_goes_to_the_manager(c, general):
     row = X.new_task(c, ANA, "Chase the vendor", assignee="bot:builder")
+    seen = row["version"]  # a snooze is not a move: the version stays
+    with _refused("task_changed"):
+        E.snooze(c, row["id"], "bot:builder", "Vendor replies later", "2026-11-14T00:00:00.000000Z")
     with _refused("task_why"):
-        E.snooze(c, row["id"], "bot:builder", until="2026-11-14T00:00:00.000000Z")
+        E.snooze(c, row["id"], "bot:builder", until="2026-11-14T00:00:00.000000Z", seen_version=seen)
     for n in range(E.BOT_SNOOZES):
-        out = E.snooze(c, row["id"], "bot:builder", f"Vendor replies later ({n})", "2026-11-14T00:00:00.000000Z")
+        out = E.snooze(c, row["id"], "bot:builder", f"Vendor replies later ({n})", "2026-11-14T00:00:00.000000Z", seen)
         assert out["snooze"]["why"].startswith("Vendor replies later")
         E.unsnooze(c, row["id"], ANA)
-    out = E.snooze(c, row["id"], "bot:builder", "Still waiting", "2026-11-20T00:00:00.000000Z")
+    out = E.snooze(c, row["id"], "bot:builder", "Still waiting", "2026-11-20T00:00:00.000000Z", seen)
     assert out["snooze"] is None and "manager" in out["note"]
     assert out["visit"]["level"] == "manager"
     assert E.snooze(c, row["id"], ANA)["snooze"]["until_at"] is None  # a person needs no reason and no date
@@ -275,14 +293,57 @@ def test_a_snoozed_task_holds_no_slot_and_ending_the_task_ends_the_snooze(c, bui
     assert H._one(c, "SELECT COUNT(*) AS n FROM snoozes WHERE ended_at IS NULL")["n"] == 0
 
 
+def test_a_snooze_ends_when_the_task_leaves_the_stage_it_was_set_aside_in(c, build):
+    row = X.new_task(c, ANA, "Build the importer", "eng")
+    E.move(c, row["id"], E.NEXT, ANA)
+    E.fill_open_slots(c)
+    E.snooze(c, row["id"], ANA)
+    moved = E.move(c, row["id"], "Review", ANA, "Reviewed by hand")
+    assert moved["snooze"] is None  # it would have kept Review's wake and slot away from the task
+    back = E.move(c, row["id"], "Build", ANA)
+    assert back["snooze"] is None and X.wakes(c, row["id"], "bot:builder")[-1][0].startswith(row["id"])
+
+
+def test_a_snooze_cancels_every_wake_queued_for_the_task_whoever_it_was_for(c, general):
+    row = X.new_task(c, ANA, "Write the launch note")  # no owner: the manager bot is woken to pick one
+    E.reassign(c, row["id"], "bot:builder", ANA)
+    mine = "message_id IN (SELECT id FROM messages WHERE wake_key LIKE ?)"
+    c.execute(f"UPDATE jobs SET state='queued' WHERE {mine}", (row["id"] + ":%",))
+    E.snooze(c, row["id"], ANA)
+    states = c.execute(f"SELECT bot_id, state FROM jobs WHERE {mine} ORDER BY bot_id", (row["id"] + ":%",)).fetchall()
+    assert [tuple(s) for s in states] == [("builder", "canceled"), ("manager", "canceled")]
+
+
+def test_the_guard_is_open_for_one_task_only(c, general):
+    first = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    second = X.new_task(c, ANA, "Write the changelog", assignee="bot:builder")
+    c.execute(
+        "CREATE TEMP TRIGGER rides_along AFTER UPDATE OF updated_at ON tasks WHEN NEW.id = '%s' "
+        "BEGIN UPDATE tasks SET status='done' WHERE id = '%s'; END" % (first["id"], second["id"])
+    )
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="only through move"):
+            E.reassign(c, first["id"], "bot:reviewer", ANA)
+    finally:
+        c.execute("DROP TRIGGER rides_along")
+    assert E.task(c, second["id"])["status"] == "open" and X.guard_closed(c)
+
+
 def test_a_requirement_added_to_one_task_holds_it_until_answered_withdrawn_or_the_visit_ends(c, build):
     row = X.new_task(c, ANA, "Build the importer", "eng")
     E.fill_open_slots(c)
     row = E.task(c, row["id"])
+    seen = row["version"]
+    with _refused("task_changed"):
+        E.add_requirement(c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?")
     with _refused("task_requirement"):
-        E.add_requirement(c, row["id"], "bot:builder", "owner_done", ANA, "Is it done?")
-    first = E.add_requirement(c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?", choices=["3", "5"])
-    second = E.add_requirement(c, row["id"], "bot:builder", "answer", ANA, "Retry 3 or 5 times?", choices=["3", "5"])
+        E.add_requirement(c, row["id"], "bot:builder", "owner_done", ANA, "Is it done?", seen_version=seen)
+    first = E.add_requirement(
+        c, row["id"], "bot:builder", "answer", ANA, "Retry how many times?", choices=["3", "5"], seen_version=seen
+    )
+    second = E.add_requirement(
+        c, row["id"], "bot:builder", "answer", ANA, "Retry 3 or 5 times?", choices=["3", "5"], seen_version=seen
+    )
     open_ones = R.on_visit(c, row["visit"]["id"])
     assert [r["id"] for r in open_ones] == [second["requirement_id"]]  # a bot's second replaces its first
     assert first["version"] == row["version"]  # asking is not a move

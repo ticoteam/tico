@@ -1828,7 +1828,8 @@ class EffectRow(TypedDict):
 
 
 class TaskMoveGuardRow(TypedDict):
-    """The one row the tasks_move_only trigger reads: open is 1 only inside task_engine's write."""
+    """The one row the tasks_move_only trigger reads: open is 1, for one task, only inside task_engine's write."""
 
     id: int
     open: int
+    task_id: str | None

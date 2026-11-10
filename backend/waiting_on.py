@@ -60,7 +60,8 @@ _ORDER = {state: at for at, state in enumerate(STATES)}
 class Wait:
     """One thing a task waits on. `who` is an actor for `person`, `paused` and `bot`, a task id for `tasks`, the stage
     id for `room` and `by_hand`, whoever snoozed it for `snoozed`, and None for `jev` and `github`. `line` is one
-    sentence. `until` is a snooze's end, where it has one."""
+    sentence. `until` is a snooze's end, where it has one. `ask` is set when a requirement names who it waits on (an
+    OK or an answer); without it the wait is the task's own work, which whoever has the task has."""
 
     state: str
     who: str | None = None
@@ -68,6 +69,7 @@ class Wait:
     requirement_id: str | None = None
     since: str | None = None
     until: str | None = None
+    ask: bool = False
 
 
 def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
@@ -113,14 +115,15 @@ def _turn(
     line: str,
     requirement_id: str | None = None,
     since: str | None = None,
+    ask: bool = False,
 ) -> Wait:
-    """The wait for work `who` has: a person's turn, a bot's turn, or Paused when that bot cannot run."""
+    """The wait for something `who` has to do: a person's turn, a bot's turn, or Paused when that bot cannot run."""
     if not who or is_human(who):
-        return Wait(PERSON, who, line, requirement_id, since)
+        return Wait(PERSON, who, line, requirement_id, since, ask=ask)
     cause = task_wakes.cannot_run(conn, who)
     if cause:
-        return Wait(PAUSED, who, cause, requirement_id, since)
-    return Wait(BOT, who, line, requirement_id, since)
+        return Wait(PAUSED, who, cause, requirement_id, since, ask=ask)
+    return Wait(BOT, who, line, requirement_id, since, ask=ask)
 
 
 def _of(conn: "sqlite3.Connection", row: Row) -> list[Wait]:
@@ -147,7 +150,9 @@ def _of(conn: "sqlite3.Connection", row: Row) -> list[Wait]:
         elif standing.state == R.WAITING and standing.on in (R.JEV, R.GITHUB):
             out.append(Wait(JEV if standing.on == R.JEV else GITHUB, None, line, requirement["id"], since))
         elif standing.state == R.WAITING:
-            out.append(Wait(PERSON, standing.on or person_for(conn, row), line, requirement["id"], since))
+            # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve.
+            named = standing.on or person_for(conn, row)
+            out.append(_turn(conn, row, named, line, requirement["id"], since, ask=True))
         elif not by_hand:
             # Not met: whoever has the task's work has this too. In a by-hand stage nobody is chased for it.
             has = has or holder(conn, row)
@@ -195,7 +200,8 @@ def all_met(waits: list[Wait]) -> bool:
 
 
 def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
-    """Needs you, for one person: every wait on an open task that is theirs to act on, oldest first. A read: nothing is
+    """Needs you, for one person, oldest first. A task whose work is theirs is listed once (`kind` "task"), however many
+    requirements are missing. Each OK or answer that names them is its own entry (`kind` "ask"). A read: nothing is
     stored, so nothing can fall out of step with the tasks. A snoozed task is set aside and is not listed."""
     out: list[Row] = []
     rows = conn.execute(
@@ -206,18 +212,21 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
         row = E.task(conn, task_id)
         if row is None:  # the query lists only tasks on the engine
             raise LookupError(f"task {task_id} is not on the engine")
-        for wait in _of(conn, row):
-            if wait.state == PERSON and wait.who == person:
-                out.append(
-                    {
-                        "task_id": task_id,
-                        "number": row.get("number"),
-                        "title": row.get("title"),
-                        "pipeline_id": row["pipeline_id"],
-                        "stage_id": row["stage_id"],
-                        "requirement_id": wait.requirement_id,
-                        "line": wait.line,
-                        "since": wait.since,
-                    }
-                )
+        mine = [wait for wait in _of(conn, row) if wait.state == PERSON and wait.who == person]
+        work = [wait for wait in mine if not wait.ask]
+        for wait in [wait for wait in mine if wait.ask] + work[:1]:
+            out.append(
+                {
+                    "kind": "ask" if wait.ask else "task",
+                    "task_id": task_id,
+                    "number": row.get("number"),
+                    "title": row.get("title"),
+                    "pipeline_id": row["pipeline_id"],
+                    "stage_id": row["stage_id"],
+                    "requirement_id": wait.requirement_id if wait.ask else None,
+                    "line": wait.line,
+                    "missing": [each.line for each in (work if not wait.ask else [wait])],
+                    "since": min((each.since or "" for each in work), default="") if not wait.ask else wait.since,
+                }
+            )
     return sorted(out, key=lambda item: (item["since"] or "", item["task_id"]))

@@ -135,12 +135,16 @@ def newest_answers(conn: "sqlite3.Connection", visit_id: str) -> dict[str, Row]:
 
 
 def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
-    """The tasks filed during a visit, with how each stands."""
+    """The tasks filed during a visit, with how each stands. One that was deleted since counts as closed: it is not
+    work that got done."""
     return _rows(
         conn.execute(
-            "SELECT t.id, t.title, t.status, t.number, "
+            "SELECT l.to_task_id AS id, COALESCE(t.title, 'A deleted task') AS title, "
+            "COALESCE(t.status, 'closed') AS status, t.number, "
+            "CASE WHEN t.id IS NULL THEN 'It was deleted' ELSE "
             "(SELECT v.why FROM visits v WHERE v.task_id = t.id AND v.how = 'closed' ORDER BY v.left_at DESC LIMIT 1) "
-            "AS why FROM links l JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? ORDER BY l.created_at, l.id",
+            "END AS why FROM links l LEFT JOIN tasks t ON t.id = l.to_task_id WHERE l.visit_id=? "
+            "ORDER BY l.created_at, l.id",
             (visit_id,),
         )
     )

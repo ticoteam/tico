@@ -63,7 +63,7 @@ links         id, from_task_id, to_task_id, visit_id, kind (sub_task|handoff), c
               a task has at most one row as to_task_id
 effects       id, visit_id, kind (queue_pr|dequeue_pr), key (unique), state (owed|done|failed|moot),
               tries, last_error, created_at, updated_at
-task_move_guards   id = 1, open (0|1)        the guard the trigger reads
+task_move_guards   id = 1, open (0|1), task_id      the guard the trigger reads: open for one task
 tasks         + pipeline_id, stage_id, assignee_id      (status, owner_id, version exist)
 messages      + wake_key, unique where not null
 ```
@@ -85,12 +85,13 @@ requirement is met for a visit by its newest answer that is not undone.
 ```sql
 CREATE TRIGGER tasks_move_only BEFORE UPDATE OF status, stage_id, owner_id, pipeline_id ON tasks
 WHEN (OLD.pipeline_id IS NOT NULL OR NEW.pipeline_id IS NOT NULL)
- AND (SELECT open FROM task_move_guards WHERE id = 1) IS NOT 1
+ AND (SELECT task_id FROM task_move_guards WHERE id = 1 AND open = 1) IS NOT NEW.id
 BEGIN SELECT RAISE(ABORT, 'tasks: stage, owner and status change only through move()'); END;
 ```
 
-The guard row is set to 1 and back to 0 inside the write transaction, in one place (`task_engine._write`), around one
-statement, with the close in a `finally`. No other connection ever sees it open. At the cut-over the `WHEN` loses its
+The guard row is opened for one task and closed again inside the write transaction, in one place
+(`task_engine._write`), around one statement, with the close in a `finally`. No other connection ever sees it open, and
+a trigger that fires during that statement cannot change another task. At the cut-over the `WHEN` loses its
 first line and a `BEFORE INSERT` twin is added.
 
 `_write` takes only the columns in `task_engine.WRITES` (`status`, `stage_id`, `owner_id`, `pipeline_id`, `assignee_id`,
@@ -162,8 +163,16 @@ Who must say why:
 - Reopen: everyone gives a note.
 - Snooze: a bot.
 
-A bot's fourth snooze in one stage is not applied. The visit goes to level `manager`, the manager bot is woken, and the
-result carries `note`.
+A bot sends `seen_version` with every command that takes one: move, reassign, snooze and add a requirement. A person
+may leave it out.
+
+A bot's fourth snooze in one stage is not applied. The visit goes to level `manager` with its next try due at once, so
+the never-stuck check wakes the manager bot on its next pass. The result carries `note`.
+
+A snooze sets a task aside in one stage: any move ends it. A move, a reassign and a snooze cancel every wake still
+queued for the task, whoever it was for.
+
+A filed task that was deleted counts as closed, not done, for Linked work done.
 
 What `move()` does, in order, in one transaction: check the version; work out the kind; for forward, check requirements
 through `task_requirements.unmet`, then room; for back and close, `stage_effects.undo`; close the visit (its task
@@ -219,9 +228,10 @@ def person_for(conn, row) -> str | None                          # the person a 
 def holder(conn, row) -> str | None                              # who has the task's own work now
 ```
 
-`Wait` has `state`, `who`, `line`, `requirement_id`, `since`, `until`. `who` is an actor for `person`, `paused` and `bot`,
+`Wait` has `state`, `who`, `line`, `requirement_id`, `since`, `until`, `ask`. `who` is an actor for `person`, `paused` and `bot`,
 a task id for `tasks`, the stage id for `room` and `by_hand`, whoever snoozed it for `snoozed`, and None for `jev` and
-`github`. `until` is a snooze's end. The list is never empty for an open task. A Done or Closed task returns `[]`.
+`github`. `until` is a snooze's end. `ask` is set when a requirement names who it waits on (an OK or an answer): a
+person, or a bot named to approve. Without it the wait is the task's own work. The list is never empty for an open task. A Done or Closed task returns `[]`.
 
 - `room`: everything is met. The line is "No room in <stage>" when the next stage is full, and "Moving to <stage>" when
   it has room and the engine has not passed yet.
@@ -231,8 +241,10 @@ a task id for `tasks`, the stage id for `room` and `by_hand`, whoever snoozed it
 - `person_for`, first that exists: the person the ladder already chose, the pipeline's owner or manager where that is a
   person, the owner of its manager bot, the owner of the bot that has the task, whoever asked for the task, the company
   owner.
-- `needs` leaves out snoozed tasks and returns `task_id`, `number`, `title`, `pipeline_id`, `stage_id`,
-  `requirement_id`, `line`, `since`, oldest first.
+- `needs` leaves out snoozed tasks and returns `kind`, `task_id`, `number`, `title`, `pipeline_id`, `stage_id`,
+  `requirement_id`, `line`, `missing`, `since`, oldest first. A task whose work is the person's is one entry (`kind`
+  `task`, `missing` lists every line), however many requirements are missing. Each OK or answer that names them is its
+  own entry (`kind` `ask`).
 
 ## task_wakes.py
 
@@ -244,7 +256,7 @@ def add(conn, task, target, visit, text, *, level="owner", try_n=0, wake_key=Non
 def cannot_run(conn, actor) -> str | None       # why this bot cannot run now, in a few words; None when it can
 def queued(conn, task_id, actor) -> bool        # a wake for this task is waiting for this bot, held ones included
 def live_run(conn, task_id, actor) -> bool      # a run on this task whose computer checked in within 90 s
-def drop(conn, task_id, actor) -> int           # reassign: the old owner's queued wakes for the task
+def drop(conn, task_id) -> int                  # cancel every wake still queued for the task, whoever it is for
 ```
 
 The wake is a message from the engine in the task's conversation, with `refs.wake = "task_turn"` and the task, visit,

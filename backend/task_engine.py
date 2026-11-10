@@ -114,7 +114,7 @@ def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0) -> bool
     if stage_row["kind"] != "work" or not limit:
         return True
     held = conn.execute(
-        "SELECT COUNT(*) FROM tasks t WHERE t.stage_id=? AND t.status='open' "
+        "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
         "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL)",
         (stage_row["id"],),
     ).fetchone()[0]
@@ -162,16 +162,16 @@ WRITES = frozenset(
 
 def _write(conn: "sqlite3.Connection", task_id: str, **fields: Any) -> None:
     """The only statement that changes a task's status, stage, owner or pipeline. The guard is open for this one
-    statement and closed again before anything else runs, inside the caller's transaction."""
+    statement on this one task, and closed again before anything else runs, inside the caller's transaction."""
     names = list(fields)
     if set(names) - WRITES:
         raise ValueError(f"not a column the engine writes: {sorted(set(names) - WRITES)}")
     sets = ", ".join(f"{name}=?" for name in names)
-    conn.execute("INSERT OR REPLACE INTO task_move_guards (id, open) VALUES (1, 1)")
+    conn.execute("INSERT OR REPLACE INTO task_move_guards (id, open, task_id) VALUES (1, 1, ?)", (task_id,))
     try:
         conn.execute(f"UPDATE tasks SET {sets} WHERE id=?", (*[fields[n] for n in names], task_id))
     finally:
-        conn.execute("UPDATE task_move_guards SET open=0 WHERE id=1")
+        conn.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
 
 
 def _open_visit(conn: "sqlite3.Connection", task_id: str, stage_id: str, how: str, ts: str) -> str:
@@ -432,11 +432,10 @@ def move(
     if pushed:
         how = "pushed_past"
     _close_visit(conn, visit, how, by, why, ts)
-    if target["kind"] != "work" and row.get("snooze"):
-        _end_snooze(conn, row["snooze"], by, ts)
+    if row.get("snooze"):
+        _end_snooze(conn, row["snooze"], by, ts)  # a snooze sets a task aside in one stage: it ends with the visit
     owner = owner_for(target, row.get("assignee_id"), row.get("owner_id"))
-    if owner != row.get("owner_id"):
-        task_wakes.drop(conn, task_id, row.get("owner_id"))
+    task_wakes.drop(conn, task_id)  # what was queued was about the visit that just closed
     status = {"work": "open", "done": "done", "closed": "closed"}[target["kind"]]
     extra: Row = {}
     if "done_at" in row:
@@ -604,7 +603,7 @@ def reassign(
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
     if row["stage"].get("owner") == "assignee":
         fields["assignee_id"] = owner
-    task_wakes.drop(conn, task_id, row.get("owner_id"))
+    task_wakes.drop(conn, task_id)
     _write(conn, task_id, **fields)
     conn.execute(
         "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=NULL, last_change_at=? WHERE id=?",
@@ -646,8 +645,7 @@ def snooze(
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
-    if seen_version is not None:
-        _check_version(conn, by, row, seen_version)
+    _check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
     _need_why(conn, by, why, "snooze it", task_id)
@@ -670,7 +668,7 @@ def snooze(
     )
     if is_bot(by):
         conn.execute("UPDATE visits SET bot_snoozes = bot_snoozes + 1 WHERE id=?", (visit["id"],))
-    task_wakes.drop(conn, task_id, row.get("owner_id"))
+    task_wakes.drop(conn, task_id)
     _event(conn, task_id, by, "snooze", None, until, why)
     out = _task(conn, task_id)
     if not until and is_bot(by):
@@ -723,8 +721,7 @@ def add_requirement(
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
-    if seen_version is not None:
-        _check_version(conn, by, row, seen_version)
+    _check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
     if kind not in ("ok", "answer"):
