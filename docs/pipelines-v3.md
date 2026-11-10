@@ -419,7 +419,7 @@ cases.
 #### A task waits a day on you
 
 - It sits in your list. Nothing runs and nothing reminds you.
-- Everyone else sees an amber "!" with your picture on the row, and "Waiting on Chris" on the task.
+- Everyone else sees an amber "!" with your picture on the row, and "Waiting on Ana" on the task.
 - Past the stage's expected time it is Late. The manager bot looks once. It can push past with a reason if the
   requirement allows that.
 
@@ -476,7 +476,7 @@ Three ways, by weight. A task waits on the last two and never on the first.
 - The task doesn't wait. A bot that @s someone and stops still has the turn, and the check wakes it again (C28).
 - No push.
 
-**A requirement with your name.** Examples: "OK from Chris." "Answer from Chris: which plan?"
+**A requirement with your name.** Examples: "OK from Ana." "Answer from Ana: which plan?"
 
 - The task stays in its stage until you answer, or someone pushes past with a reason.
 - It is in your list as one sentence, with buttons.
@@ -1111,13 +1111,13 @@ Today: the pipeline editor.
   - "▾ Spec", open, with buttons "↑", "↓" and "Remove" at the right. Its fields: Purpose "A spec a builder can build
     from"; Owner "Product Manager ▾"; Tasks leave "When requirements are met ▾"; Limit "2"; Expected time "2 days"; On
     enter "Nothing ▾". Then the label "To leave", with one requirement row: "▸ Spec page", and at the right, dimmed,
-    "Jev, then Chris". Then a button "+ Requirement".
+    "Jev, then Ana". Then a button "+ Requirement".
   - "▸ In development"
   - "▸ Validate"
 - **Bottom row:** "+ Stage" at the left, "Save" (main) at the right.
 
 **A requirement, open:** fields, name then value: Needs "A page ▾"; Jev checks "Covers goal, scope, what done looks
-like"; Then a person "Chris ▾"; Who OKs "People, with exceptions ▾"; Can be pushed past "On".
+like"; Then a person "Ana ▾"; Who OKs "People, with exceptions ▾"; Can be pushed past "On".
 
 Rules:
 
