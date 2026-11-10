@@ -242,7 +242,9 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     saved, _ = state.load(domain)
     mine = state.load_backup(domain)  # an earlier backup-storage for this domain
     names = awsmod.Names(awsmod.asset_prefix(args.asset_prefix, saved or mine))
-    name = (args.name or mine.get("name") or saved.get("aws_name") or awsmod.slug(args.domain)).strip().lower()
+    # An install saved before --asset-prefix (no asset_prefix key) had its backup user named after the domain.
+    server_name = saved.get("aws_name") if "asset_prefix" in saved else ""
+    name = (args.name or mine.get("name") or server_name or awsmod.slug(args.domain)).strip().lower()
     if not awsmod.NAME_RE.fullmatch(name):
         raise MissingInput(
             "--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit"

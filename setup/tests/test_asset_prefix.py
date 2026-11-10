@@ -271,6 +271,18 @@ def test_backup_storage_takes_name_and_otherwise_the_saved_one():
     assert code == 2 and "--name is 1 to 40" in out
 
 
+def test_backup_storage_for_an_install_saved_before_the_flag_keeps_its_old_backup_user():
+    # Before --asset-prefix, backup-storage always named its user after the domain, whatever --name the server had.
+    s3, iam = S3(), IAM()
+    d = fakes.deps()
+    d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
+    d.aws_s3 = lambda region, profile: s3
+    state.save("old.example.com", {"domain": "old.example.com", "aws_name": "custom", "aws_instance_id": "i-1"})
+    assert go(["backup-storage", "--domain", "old.example.com", "--aws-region", "us-west-2"], deps=d)[0] == 0
+    assert [c["UserName"] for c in iam.called("create_user")] == ["tico-backup-old-example-com"]
+    assert state.load_backup("old.example.com")["name"] == "old-example-com"
+
+
 # --- --asset-prefix hub -------------------------------------------------------------------------------------------
 
 HUB = aws.Names("hub")
