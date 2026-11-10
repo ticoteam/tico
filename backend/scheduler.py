@@ -336,6 +336,24 @@ def step_task_loops(ctx):
     return SR.words_of(told, "looping task told", "No looping tasks", "looping tasks told"), SR.nothing(told)
 
 
+def step_never_stuck(ctx: "Context") -> tuple[str, bool]:
+    # Pipelines v3: one pass over every open task on the engine (backend/never_stuck.py). A task it cannot work out is
+    # left as it was and reported; the rest of the pass still happens.
+    from . import never_stuck
+    from .batch_work import report
+    from .heartbeat import Failed
+
+    failed: list[tuple[str, Exception]] = []
+    with ctx.locked("never_stuck") as c:
+        done = never_stuck.check(c, stamp(ctx.at), failed)
+    for task_id, error in failed:
+        ctx.failures.append({"never_stuck": task_id, "error": type(error).__name__})
+        report("never_stuck", task_id, error)
+    if failed:
+        raise Failed(f"Failed: {SR.count_words(len(failed), 'task')} could not be checked")
+    return SR.words_of(done, none="Nothing to do"), SR.nothing(done)
+
+
 def step_snooze_ends(ctx):
     # Snoozes whose date came: back on every list, and one notice to the owner bot (backend/task_snooze.py).
     # With the deferred runs below, one job: Snooze ends.

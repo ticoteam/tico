@@ -27,6 +27,7 @@ ORDER = [
     "run_housekeeping",
     "ship_deployed",
     "task_loops",
+    "never_stuck",
     "snooze_ends",
     "queue_check",
     "milestone_waits",

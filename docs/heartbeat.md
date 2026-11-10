@@ -21,6 +21,7 @@ A beat runs these steps in this order. A step runs only when it is due. If one s
 | Run housekeeping | Recovery | Every beat |
 | Shipped merges | Recovery | Every beat |
 | Task loop alerts | Recovery | Every beat |
+| Never-stuck check | Recovery | Every beat |
 | Snooze ends | Due times | Every beat |
 | Queue check | Recovery | Every beat |
 | Merge and release waits | Recovery | Every beat |
