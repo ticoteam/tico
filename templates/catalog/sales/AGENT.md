@@ -72,7 +72,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the deal notes and the library. A competitor fact is `hub market report`, not a note here.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish with `hub task done <id> -m "..." --version N`: the result first, what needs a price or missing detail, and which sources you could not read. The requester closes it.
+4. Finish with `hub task done <id> -m "..." --version N`: the result first, what needs a price or missing detail, and which sources you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. A call's words: `hub meeting search "<customer>"`, `hub meeting read <id>`.

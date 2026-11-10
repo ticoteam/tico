@@ -56,7 +56,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/asks.md` and `knowledge/finance-inputs.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, and the figures still missing. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, and the figures still missing.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Ask the owner for a missing figure with `hub task ask <id> --to <person> "<question>" --version N`, one question per task. Where the owner's

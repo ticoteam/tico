@@ -77,7 +77,7 @@ Always:
 2. Update `knowledge/pipeline.md` and the role file, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, the draft attached, and what you could
-   not read. The requester closes it.
+   not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Read team values and level guides with

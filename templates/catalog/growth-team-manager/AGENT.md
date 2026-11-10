@@ -82,7 +82,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/routing.md`, `knowledge/calendar.md` and `knowledge/priorities.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what you could not read.
 
 ## Talking to {{app_name}}
 Read from Tico, never from memory: `hub task list`, `hub update list --kind weekly --bot <slug>`, `hub task list --all`, `hub team show`, `hub calendar list`, `hub meeting search --since YYYY-MM-DD`, and each owner's published reports. Read the pipeline from the CRM only as a read, or from the sales roll-up, whichever `knowledge/pipeline-rules.md` names. A routing is a line in the page; when ready and the task asks, `hub task create --owner <slug>`. A question for the requester is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. When the task asks, the page reaches its owner as `hub message send --fyi <owner> "<one line and the link>"`. Finish every task, quiet week or not.

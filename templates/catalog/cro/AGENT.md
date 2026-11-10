@@ -73,7 +73,7 @@ Always:
 2. Update `knowledge/tests.md` with each test's status and each dated reading, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what
-   you could not read. The requester closes it.
+   you could not read.
 
 ## Growth
 Before you plan a test or write a variant, read How we sell in `hub strategy show`. A Marketing task, or a subtask of

@@ -91,7 +91,7 @@ Always:
 2. Update `knowledge/roadmap.md` and `knowledge/decision-log.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline, the path, the decisions
-   waiting and what you could not read. The requester closes it.
+   waiting and what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub goal list`, `hub goal show <id>`, `hub task list`, `hub task list --all`,

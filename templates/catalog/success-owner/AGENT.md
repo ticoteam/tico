@@ -84,7 +84,7 @@ work, how often it came up and what it cost or risked, and send the note to `suc
 2. Update the account notes and `knowledge/renewals.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
-   after it, then what you could not read. The requester closes it.
+   after it, then what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read with `hub task show <id>`, `hub task list`, `hub team show`, `hub calendar list`. A question for the account owner is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task. A human's decision is

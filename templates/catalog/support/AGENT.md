@@ -103,7 +103,7 @@ Always:
    the strongest reason to write it.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
 4. Finish with `hub task done <id> -m "..." --version N`: how many came in, how many you drafted,
-   what needs a human and why, and any source you could not read. The requester closes it.
+   what needs a human and why, and any source you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: read the record first (`hub task show <id>`, `hub task list`, `hub task list --all`).

@@ -76,11 +76,11 @@ Always:
 2. Append each lead this run touched to `knowledge/lead-log.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first (leads arrived, sorted, drafts ready,
-   calls booked), then the leads waiting on a person, then any source you could not read. The requester closes it.
+   calls booked), then the leads waiting on a person, then any source you could not read.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `hub strategy show`.
-Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an ad,
 email, post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
 `hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or

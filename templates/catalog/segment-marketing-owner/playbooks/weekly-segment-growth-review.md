@@ -30,10 +30,11 @@ Log nothing for a KPI you do not own. If the goal names no KPI, say so in the re
 
 ## 3. Read the tests
 
-    hub task list --type idea --label segment:<slug>
+    hub task list --label growth:running --label segment:<slug>
+    hub task list --label growth:measuring --label segment:<slug>
 
-For each test in Live or Working, note its channel, its update since the last review and its numbers. Read the close-out
-comment of each test that finished since the last review. A Live test with no update for two weeks is named in the
+For each running or measuring test, note its channel, its update since the last review and its numbers. Read the close-out
+comment of each test that finished since the last review. A running test with no update for two weeks is named in the
 review; the growth meeting nudges its owner.
 
 ## 4. Read the asks
@@ -49,8 +50,8 @@ If the copy changed since the last review, or a claim is in use that is not in `
 
 ## 6. Plan the next moves
 
-Run `playbooks/plan-a-growth-test.md`: up to three ideas for the Monday growth meeting. An idea already On deck, In
-development or Live for this segment is not filed again.
+Run `playbooks/plan-a-growth-test.md`: up to three ideas for the Monday growth meeting. An idea already filed or running for this
+segment is not filed again.
 
 ## 7. Write and hand over
 
@@ -59,5 +60,5 @@ Write `reports/YYYY-MM-DD-segment-growth-review.md` in the shape of `knowledge/e
 commit this repository, and finish with `hub task done <id> -m "..." --version N`: the number against goal and
 ceiling, the tests, the asks, the ideas filed and what you could not read.
 
-Done when: the number is written with its split methods and month; every Live test has a line; every open ask has its
+Done when: the number is written with its split methods and month; every running test has a line; every open ask has its
 task id and age; the reconciliation is written, or its gap is named; and the review is published.

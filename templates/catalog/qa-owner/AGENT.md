@@ -53,7 +53,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/flaky-tests.md` and `knowledge/suites.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then any suite or repository you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then any suite or repository you could not read.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real person or role on the roster, never "Root" or an operator who is not there. Only the Release Owner publishes a release. A test that blocks a release goes to the Release Owner on a task with your decision; never tag or publish a release yourself.

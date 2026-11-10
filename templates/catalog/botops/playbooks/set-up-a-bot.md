@@ -148,7 +148,7 @@ The note says, in this order:
 4. the one thing the owner should read before it goes live, usually the `## Boundaries`
    section or a gap the answers did not fill.
 
-The requester closes the task. Unless a human asked you in chat to take it live, the bot stays as it is
+Unless a human asked you in chat to take it live, the bot stays as it is
 (still being set up) until its owner turns it on.
 
 ## When it goes sideways

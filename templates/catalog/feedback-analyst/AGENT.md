@@ -79,7 +79,7 @@ Always:
 2. Update `knowledge/themes.md` and `knowledge/trends.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: items read, the top theme, what is new and any source
-   you could not read. The requester closes it.
+   you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Feedback comes from tasks and files humans attach, from

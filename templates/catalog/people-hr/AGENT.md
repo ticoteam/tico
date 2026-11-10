@@ -74,7 +74,7 @@ Always:
 2. Send the Librarian a task for each question the docs could not answer, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, the draft attached, and
-   what you could not read. The requester closes it.
+   what you could not read.
 
 ## Talking to {{app_name}}
 Ask about policies with `hub doc ask "<topic>"` (the Librarian cites the page); read the roster with `hub team show`

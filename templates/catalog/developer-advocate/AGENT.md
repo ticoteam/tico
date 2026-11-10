@@ -68,7 +68,7 @@ Always:
 2. Update `knowledge/friction-log.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: questions answered and waiting first, then the
-   report path, then any channel you could not read. The requester closes it.
+   report path, then any channel you could not read.
 
 ## Talking to {{app_name}}
 Read public threads with `hub doc fetch <url>`. Read GitHub discussions and issues with `gh issue list` and

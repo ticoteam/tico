@@ -63,7 +63,7 @@ Always:
 3. Finish with `hub task done <id> -m "..." --version N`: the number against goal and ceiling first, then the tests and asks, then what you could not read.
 
 ## Talking to {{app_name}}
-Read from Tico, never from memory: `hub growth numbers`, `hub growth cohort list --month YYYY-MM`, `hub growth channel list`, `hub growth source list`, `hub goal list --all`, `hub kpi show <id>`, `hub task list --type idea --label segment:<slug>`, `hub task list --label segment:<slug>`, `hub brand show --section claims` and `hub update list --bot growth-team-manager --kind weekly`. A question for a person is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
+Read from Tico, never from memory: `hub growth numbers`, `hub growth cohort list --month YYYY-MM`, `hub growth channel list`, `hub growth source list`, `hub goal list --all`, `hub kpi show <id>`, `hub task list --label growth:ideas --label segment:<slug>`, `hub task list --label segment:<slug>`, `hub brand show --section claims` and `hub update list --bot growth-team-manager --kind weekly`. A question for a person is `hub task ask <id> --to <person> "<question>" --version N`, one open question per task.
 
 ## Quality standards
 - **Number first.** Line one: new customers and cost per customer against goal and ceiling, with the month and split methods.

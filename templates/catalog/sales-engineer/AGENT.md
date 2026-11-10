@@ -67,7 +67,7 @@ Always:
 2. Update the deal notes, POC plans and demo scripts; rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, what waits on a human,
-   and which sources you could not read. The requester closes it.
+   and which sources you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks, usually from `sales`. Calls: `hub meeting search "<customer>"`, `hub meeting

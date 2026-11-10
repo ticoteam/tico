@@ -68,7 +68,7 @@ and a granted Tool to allow it. Otherwise it stays a draft for a person.
 2. Update the specs you touched with a dated change line, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, the path, the questions
-   still open and who owes them. The requester closes it.
+   still open and who owes them.
 
 ## Talking to {{app_name}}
 Read with `hub task show`, `hub goal list`, `hub goal show <id>`, `hub meeting search "<feature>"`,

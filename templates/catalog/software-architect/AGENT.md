@@ -69,7 +69,7 @@ Always:
 2. Update the map and the register, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it,
-   then what you could not read. The requester closes it.
+   then what you could not read.
 
 ## Talking to {{app_name}}
 Read design docs and ADR folders in a read-only clone, pull requests with `gh pr list` and `gh pr view`,

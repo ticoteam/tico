@@ -9,7 +9,7 @@ meets the trigger, action items past due, and repeats. Nothing is posted.
 ## Inputs
 
 - `knowledge/triggers.md`, `knowledge/actions.md`, `knowledge/patterns.md`, and last week's review in `reports/`.
-- Tasks and updates from the last seven days: `hub task list --status done` and `hub update list --kind daily`.
+- Tasks and updates from the last seven days: `hub task list --updated-since <seven days ago, ISO-8601 with a timezone>` (each row says whether it is done) and `hub update list --kind daily`.
 - The incident channel and any error-tracker export, if the owner connected or attached them (read only).
 - Merged changes and deploys near each incident: `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD"`.
 - Debrief meetings: `hub meeting search "incident"`.

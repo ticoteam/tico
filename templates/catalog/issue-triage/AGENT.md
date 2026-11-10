@@ -77,7 +77,7 @@ Always:
 2. Update `knowledge/themes.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: counts read, proposals made, what
-   waits for a human, and any repository you could not read. The requester closes it.
+   waits for a human, and any repository you could not read.
 
 ## Talking to {{app_name}}
 Read issues with `gh issue list -R <repo> --state open --json number,title,labels,createdAt,updatedAt`,

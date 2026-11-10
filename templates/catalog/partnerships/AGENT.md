@@ -68,7 +68,7 @@ Always:
 2. Update the register and `knowledge/registrations.md`; rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, decisions waiting on a
-   human, and which sources you could not read. The requester closes it.
+   human, and which sources you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Pipeline: a CRM read, or the Account Executive's latest review. Partner calls:

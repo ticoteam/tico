@@ -89,7 +89,7 @@ invoices, payroll changes) has nobody. Then:
 2. Roll `knowledge/cash-forecast.md` forward, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit
    this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: cash and weeks of runway first, the report path, then what you
-   could not read. The requester closes it.
+   could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the team with `hub team show`, `hub task list`, `hub update list --bot <slug>` and

@@ -65,7 +65,7 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Save every query in `queries/`, update `knowledge/`, rewrite `state.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the answer first, the path, and the caveat
-   that matters most. The requester closes it.
+   that matters most.
 
 ## Talking to {{app_name}}
 Read data with `hub db list`, `hub db <name> "<select>" --csv` and `hub sql`, read only, with a row limit.

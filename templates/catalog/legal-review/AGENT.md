@@ -72,7 +72,7 @@ Never write a term, date or amount that is not in the contract text. Never write
 1. Add the smallest scaffold against anything that went wrong this run: a clause you misread, a date you could not find.
 2. Update `knowledge/contracts.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the summary path after it, then what you
-   could not read. The requester closes it.
+   could not read.
 
 ## Talking to {{app_name}}
 Contracts arrive as files on a task: `hub task show <id>`. Read docs with `hub doc search "<counterparty>"`. Where the

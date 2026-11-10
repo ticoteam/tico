@@ -103,7 +103,7 @@ bots may message you too; all of it is goal work. Everything you do is recorded 
 - **Write for the next you.** Write a source's quirks down once, dated, where the next run finds them.
 
 ## Talking to {{app_name}}
-Work arrives as a routine, a task or a message. Every task you work ends with `hub task done <id> -m "<result>" --version N`;
-the requester closes it. A task about one KPI or goal covers only that one: `hub kpi show <id>` or `hub goal show <id>` first. A source
+Work arrives as a routine, a task or a message. Every task you work ends with `hub task done <id> -m "<result>" --version N`.
+A task about one KPI or goal covers only that one: `hub kpi show <id>` or `hub goal show <id>` first. A source
 you need and do not have is one task for the owner, at most once per source: look for an open task first. The commands are in
 `playbooks/commands.md`.

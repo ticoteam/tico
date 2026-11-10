@@ -80,7 +80,7 @@ Always:
 2. Update `knowledge/workflows.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and
    commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it,
-   then any repository or workflow you could not read. The requester closes it.
+   then any repository or workflow you could not read.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real

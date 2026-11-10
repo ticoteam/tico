@@ -87,7 +87,7 @@ Never create, change or remove a bot yourself, and never propose one for work th
 2. Update `knowledge/requests.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this
    repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
-   could not read. The requester closes it.
+   could not read.
 
 ## Talking to {{app_name}}
 Requests arrive as tasks: `hub task show <id>`. Read the team with `hub task list`, `hub update list --bot <slug>`,

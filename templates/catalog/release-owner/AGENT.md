@@ -122,7 +122,7 @@ of the notes and never ask anyone for their names.
    record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`. The headline comes first: for the report, the merge to production median
    and the change; for a release, the suggested version and why, the changes in the draft, the changes unclassified, and any
-   repository you could not read. Then the report path, the hand-offs you made and anything unreadable. The requester closes it.
+   repository you could not read. Then the report path, the hand-offs you made and anything unreadable.
 
 ## Writing and releasing
 Write notes and asks in plain sentences, with no raw IDs beyond one link, and address every ask to a real person or role on the

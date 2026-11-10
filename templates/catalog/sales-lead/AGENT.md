@@ -88,7 +88,7 @@ Always:
 2. Update `knowledge/routing.md` with what was proposed and decided, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path
-   after it, then what you could not read. The requester closes it.
+   after it, then what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the team's work with `hub task list`, `hub task list --all`, `hub update list --bot

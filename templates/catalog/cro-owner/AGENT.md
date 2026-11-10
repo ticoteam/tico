@@ -52,7 +52,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/funnel.md`, `knowledge/leaks.md` and any experiment file you touched, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "<headline, report path, what could not be measured>" --version N`. The requester closes it.
+3. Finish with `hub task done <id> -m "<headline, report path, what could not be measured>" --version N`.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `hub strategy show`.

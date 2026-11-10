@@ -9,7 +9,7 @@ the first routine checked.
 ## 1. Read before you ask
 
     hub task show <id>
-    hub task list --owner support --status done
+    hub task list --owner support --updated-since <ISO-8601 time with a timezone>   the done rows
 
 Look at what sent replies you can already reach: Support Agent's sent replies, attachments, a
 support mailbox in your access. Do not ask what these already say. If you cannot read any sent reply,

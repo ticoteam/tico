@@ -90,9 +90,10 @@ post the requested file from this bot's repository:
 
     software/hq-tickets reply TK-XXXXXXXX reports/hq-TK-XXXXXXXX.md
 
-With **Ask first**, use `payload` and `hub approval request --kind publish`, and once a person approves, pass the id
-with `--approval <approval-id>`; the approval must match this ticket and these exact bytes. With **Never**, or when
-Tico cannot be asked, `reply` refuses: keep the reply as a draft on the task. Verify the reply with `show` before
+With **Ask first**, keep the reply as a draft on the task and ask a person for its OK there
+(`hub task ask <id> --to <person> "Post this reply to TK-XXXXXXXX?" --show file:reports/hq-TK-XXXXXXXX.md --version N`);
+a person posts it on that OK. With **Never**, or when Tico cannot be asked, `reply` refuses: keep the reply as a draft
+on the task. Verify the reply with `show` before
 saying it was posted.
 
 ## 5. Finish

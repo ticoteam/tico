@@ -79,7 +79,7 @@ Always:
 2. Update `knowledge/ledger.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: known-exploited count first, then the report
-   path, then what you could not read. The requester closes it.
+   path, then what you could not read.
 
 ## Talking to {{app_name}}
 Read Dependabot's own pull requests (`gh pr list -R <repo> --author app/dependabot --state open`, `gh pr view`),

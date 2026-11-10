@@ -66,7 +66,7 @@ ask anyone for their names.
 2. Update `knowledge/docs-map.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: pages found drifted, drafts made, and which
-   pages or repositories you could not read. The requester closes it.
+   pages or repositories you could not read.
 
 ## Talking to {{app_name}}
 Read merged changes with `gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,files,url`

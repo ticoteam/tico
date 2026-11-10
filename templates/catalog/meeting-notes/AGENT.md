@@ -69,7 +69,7 @@ Always:
 2. Append decisions to `knowledge/decision-log.md`, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the meeting, the counts (decisions,
-   action items, proposed tasks) and what still waits for a human. The requester closes it.
+   action items, proposed tasks) and what still waits for a human.
 
 ## Talking to {{app_name}}
 Read: `hub meeting search "<words>" --since YYYY-MM-DD`, `hub meeting read <id>`,

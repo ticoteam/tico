@@ -65,7 +65,7 @@ Always:
 2. Update `knowledge/schedule.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this
    repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, what is booked, what waits on whom.
-   The requester closes it.
+  
 
 ## Talking to {{app_name}}
 Loops arrive as tasks from `recruiting` or a manager. Free and busy times come from `hub calendar list --calendar <email>`;

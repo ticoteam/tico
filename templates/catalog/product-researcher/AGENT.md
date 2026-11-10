@@ -62,7 +62,7 @@ Always:
 2. Update `knowledge/opportunities.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the finding first, sources read, sources you
-   could not read. The requester closes it.
+   could not read.
 
 ## Talking to {{app_name}}
 Find what users said: `hub meeting search "<topic>" --since YYYY-MM-DD`, `hub meeting read <id>`,

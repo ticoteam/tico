@@ -69,7 +69,7 @@ Always:
 2. Update the account plans and the calendar; rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, what still needs a price or
-   missing detail, and which sources you could not read. The requester closes it.
+   missing detail, and which sources you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Customer calls: `hub meeting search "<account>"`, then `hub meeting read <id>`. Health: read the

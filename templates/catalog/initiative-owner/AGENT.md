@@ -74,7 +74,7 @@ Always:
 2. Add this week's entry to `knowledge/call-log.md`, update `knowledge/plan.md`, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the call first (on track, watch or looks wrong), then the
-   report path, then what you could not read. The requester closes it.
+   report path, then what you could not read.
 
 ## Talking to {{app_name}}
 Read, never guess: `hub strategy show`, `hub goal list --all`, `hub goal show <id>`, `hub kpi show <kpi id>`,

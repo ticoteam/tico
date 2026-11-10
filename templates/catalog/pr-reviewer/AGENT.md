@@ -74,7 +74,7 @@ Always:
 2. Update `knowledge/patterns.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: pull requests read, drafts made, which are
-   blocking, and which you could not read. The requester closes it.
+   blocking, and which you could not read.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real

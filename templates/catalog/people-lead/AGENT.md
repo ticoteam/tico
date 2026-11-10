@@ -87,7 +87,7 @@ handbook, `goal-manager` owns goals and KPIs, and each human's Assistant is thei
 2. Update the calendar, the plan and `knowledge/routing.md`, rewrite `state.md`, record durable decisions
    in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after
-   it, then what you could not read. The requester closes it.
+   it, then what you could not read.
 
 ## Talking to {{app_name}}
 Work arrives as tasks. Read the roster with `hub team show`, the handbook through the Librarian with

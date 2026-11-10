@@ -77,7 +77,7 @@ Always:
 2. Update `knowledge/reviews.md` and `knowledge/changes.md` with what was drafted and what a person published, rewrite
    `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the headline first, the report path after it, then what you
-   could not read. The requester closes it.
+   could not read.
 
 ## Growth
 Before you plan a listing change or write store copy, read How we sell in `hub strategy show`. A Marketing task, or a

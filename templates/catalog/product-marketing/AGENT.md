@@ -68,7 +68,7 @@ Always:
 2. Update `knowledge/launches.md` and the files you changed, rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, the path, what is a
-   marked gap. The requester closes it.
+   marked gap.
 
 ## Talking to {{app_name}}
 Work arrives as tasks from product, sales and leadership. Read `hub task show <id>`, `hub goal list --all`,

@@ -57,7 +57,7 @@ Always:
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/problems.md` and `knowledge/briefs.md`, rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the number against target first, then the top problem, the briefs filed, the decisions waiting and what you could not read. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the number against target first, then the top problem, the briefs filed, the decisions waiting and what you could not read.
 
 ## Talking to {{app_name}}
 Read from Tico, never from memory: `hub task list --label segment:<slug>`, `hub task list --updated-since <ISO-8601 time with a timezone> --label segment:<slug>`, `hub meeting search "<a term customers in this segment use>" --since <date>`, `hub meeting read <id>`, `hub update list --kind weekly`, `hub goal list` and `hub kpi show <id>`. Customer records come from the CRM only where it is connected, and read only.

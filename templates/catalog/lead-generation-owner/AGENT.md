@@ -57,7 +57,7 @@ A hand-off is a task to the sales owner, not a message to the lead: `hub task cr
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/sources.md`, the lists you touched, and `knowledge/lead-method.md` if a rule needed correcting. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task done <id> -m "..." --version N`: the qualified count with its window, the hand-offs made and any not yet picked up, and what could not be counted. The requester closes it.
+3. Finish with `hub task done <id> -m "..." --version N`: the qualified count with its window, the hand-offs made and any not yet picked up, and what could not be counted.
 
 ## Growth
 Before you plan a source or write for customers, read How we sell in `hub strategy show`.

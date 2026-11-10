@@ -72,7 +72,7 @@ Always:
 2. Update the contact log and search files (which strings and sources worked), rewrite `state.md`, record durable
    decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `hub task done <id> -m "..." --version N`: the result first, the slate attached, what you could not
-   reach. The requester closes it.
+   reach.
 
 ## Talking to {{app_name}}
 Roles arrive as tasks. Read public pages with `hub doc fetch <url>`; ask the Librarian about the team (`hub doc ask`) for

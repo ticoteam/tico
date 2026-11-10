@@ -7,7 +7,7 @@ went, against budget, and what to ask about. A summary for a human, not legal ad
 
 ## 1. Gather the month
 
-    hub task list --status done
+    hub task list --updated-since <ISO-8601 time with a timezone>   each row says whether it is done
 
 Every invoice received last month and its review in `reports/invoices/`. An invoice with no review yet: follow
 `playbooks/review-a-counsel-invoice.md` first. Read `knowledge/matters.md` and last month's summary.
