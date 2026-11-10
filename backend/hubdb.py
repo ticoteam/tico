@@ -1496,10 +1496,14 @@ def migrate(conn, adopt_legacy=False):
     Each migration is one transaction with its version bump, so a failure leaves the file at
     the version it had; every statement is also safe to run twice (IF NOT EXISTS, guarded
     ADD COLUMN), so a file that has the change but an older version simply catches up.
-    `adopt_legacy` is for `manage.migrate_legacy`, whose source has no version record."""
+    `adopt_legacy` is for `manage.migrate_legacy`, whose source has no version record.
+    A database made by Tico 0.5 (it has tasks and has not had the cut-over) is refused before anything is written."""
+    from . import migrations
+
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version == 0 and not adopt_legacy:
         _refuse_foreign(conn)
+    migrations.refuse_old_tasks(conn)
     if version < len(MIGRATIONS):
         # A file from before the bridge (the legacy import; preflight refuses one otherwise) runs the numbered steps
         # below on its old shape, and they name today's columns, so it takes the cleanup's column renames first. A file
@@ -1535,8 +1539,6 @@ def migrate(conn, adopt_legacy=False):
     # The migration files (backend/migrations) run next, before every CREATE, ALTER and add_column below and in the
     # module schema code: those name the current columns, so a rename must land first or they would add an empty
     # column beside the old one.
-    from . import migrations
-
     migrations.apply(conn)
     # conversations.scope, owner_id and room_key (cloud room scopes) and their two room indexes are migration 0047's.
     # Deleted tasks wait here until restored or purged (backend/task_delete.py).
