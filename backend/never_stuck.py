@@ -2,7 +2,8 @@
 """The never-stuck check (docs/pipelines-v3.md, "The never-stuck check").
 
     check(conn, now=None) -> dict[str, int]      one pass over every open task, on the Heartbeat every 10 seconds
-    rules_hold(conn) -> list[str]                the seven rules that hold at all times; empty when they do
+    rules_hold(conn) -> list[str]                the seven rules that hold at all times; empty when they do (each
+                                                 sentence a `Break`, carrying the ids of the tasks it is about)
 
 `check` reads tables only: no GitHub, no Jev, no computer, no model. It looks at state, not events, so a lost wake or a
 crash only delays things until the next pass. For every open task it asks what is missing, who has it, and whether they
@@ -24,7 +25,7 @@ harmless: every wake has a key made from the task's visit, the level, the try an
 Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any
 
 from . import batch_work, hubdb_core, task_wakes
@@ -436,6 +437,18 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
 
 
 # ----------------------------------------------------------------------------- the rules that hold at all times
+class Break(str):
+    """One rule break: its sentence, and the tasks it is about (`tasks`), tied to it when it is found. A reader shown
+    only the breaks of tasks they may read is shown them by these ids, never by reading the words."""
+
+    tasks: tuple[str, ...]
+
+    def __new__(cls, text: str, tasks: Iterable[object] = ()) -> "Break":
+        made = super().__new__(cls, text)
+        made.tasks = tuple(str(task) for task in tasks if task)
+        return made
+
+
 def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     """The seven rules (docs/pipelines-v3.md, "Rules that hold at all times"), checked against the database as it is.
     Returns one sentence per break; empty when they all hold. The fault rig runs it after every step."""
@@ -455,11 +468,11 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     for task_id in open_ids:
         row = E.task(conn, task_id)
         if not row or not row.get("visit") or not row.get("stage"):
-            broken.append(f"4: task {task_id} is open with no open visit or no stage")
+            broken.append(Break(f"4: task {task_id} is open with no open visit or no stage", [task_id]))
             continue
         waits = W.of(conn, row, seen)
         if not waits:
-            broken.append(f"1: task {task_id} waits on nothing")
+            broken.append(Break(f"1: task {task_id} waits on nothing", [task_id]))
         if row.get("snooze"):
             continue
         visit = row["visit"]
@@ -470,12 +483,14 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
                 or task_wakes.live_run(conn, row, wait.who, now, live)
                 or task_wakes.queued(conn, task_id, wait.who)
             ):
-                broken.append(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try")
+                broken.append(
+                    Break(f"2: task {task_id} is {wait.who}'s turn with no run, no wake and no next try", [task_id])
+                )
         if any(wait.state == W.PERSON and not wait.who for wait in waits):
             if someone is None:
                 someone = W.company_person(conn) is not None
             if someone:
-                broken.append(f"3: task {task_id} is a person's turn that names nobody")
+                broken.append(Break(f"3: task {task_id} is a person's turn that names nobody", [task_id]))
         people = {wait.who for wait in waits if wait.state == W.PERSON and wait.who}
         for person in sorted(people):
             if person not in needs:
@@ -486,7 +501,8 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
             want = len(asks) + (1 if any(not wait.ask for wait in mine) else 0)
             got_asks = sorted(str(item["requirement_id"]) for item in listed if item["kind"] == "ask")
             if len(listed) != want or got_asks != sorted(str(a) for a in asks):
-                broken.append(f"3: task {task_id} shows {len(listed)} times in {person}'s Needs you, not {want}")
+                said = f"3: task {task_id} shows {len(listed)} times in {person}'s Needs you, not {want}"
+                broken.append(Break(said, [task_id]))
     broken += _rule_4(conn)
     broken += _rule_5(conn)
     broken += _rule_6(conn)
@@ -494,8 +510,9 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     return broken
 
 
-def _lines(conn: "sqlite3.Connection", sql: str, text: str) -> list[str]:
-    return [text.format(*found) for found in conn.execute(sql).fetchall()]
+def _lines(conn: "sqlite3.Connection", sql: str, text: str, tasks: tuple[int, ...] = ()) -> list[str]:
+    """One `Break` per row: `text` filled from the row, about the task ids in the columns `tasks` names."""
+    return [Break(text.format(*found), [found[i] for i in tasks]) for found in conn.execute(sql).fetchall()]
 
 
 def _rule_4(conn: "sqlite3.Connection") -> list[str]:
@@ -513,12 +530,14 @@ def _rule_4(conn: "sqlite3.Connection") -> list[str]:
         "WHERE t.pipeline_id IS NOT NULL AND (s.id IS NULL OR s.pipeline_id <> t.pipeline_id OR "
         "t.status <> CASE s.kind WHEN 'work' THEN 'open' ELSE s.kind END)",
         "4: task {0} is {1} in a stage that is {2}",
+        (0,),
     )
     out += _lines(
         conn,
         "SELECT t.id, COUNT(v.id) FROM tasks t LEFT JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
         "WHERE t.pipeline_id IS NOT NULL GROUP BY t.id HAVING COUNT(v.id) <> 1 OR MAX(v.stage_id) <> t.stage_id",
         "4: task {0} has {1} open visits, or its open visit is in another stage",
+        (0,),
     )
     return out
 
@@ -528,9 +547,10 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
     no task a visit handed off is still open after the visit was left by Back or Close."""
     out = _lines(
         conn,
-        "SELECT visit_id, COUNT(*) FROM links WHERE kind='handoff' AND visit_id IS NOT NULL "
-        "GROUP BY visit_id HAVING COUNT(*) > 1",
+        "SELECT l.visit_id, COUNT(*), MAX(v.task_id) FROM links l JOIN visits v ON v.id = l.visit_id "
+        "WHERE l.kind='handoff' GROUP BY l.visit_id HAVING COUNT(*) > 1",
         "5: visit {0} handed off {1} tasks",
+        (2,),
     )
     out += _lines(
         conn,
@@ -538,6 +558,7 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
         "JOIN tasks c ON c.id = l.to_task_id WHERE l.kind='handoff' AND v.how IN ('back', 'closed') "
         "AND c.status='open'",
         "5: task {0} is still open after {1} moved back or closed",
+        (0, 1),
     )
     out += _lines(
         conn,
@@ -545,6 +566,7 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
         "WHERE e.kind='queue_pr' AND e.state IN ('owed', 'done') AND v.how IN ('back', 'closed') AND NOT EXISTS "
         "(SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id AND u.kind='dequeue_pr')",
         "5: effect {0} of task {1} was not undone when it moved back or closed",
+        (1,),
     )
     return out
 
@@ -569,9 +591,10 @@ def _rule_7(conn: "sqlite3.Connection") -> list[str]:
     """Nothing wakes a bot about a snoozed, Done or Closed task: no wake for one is still queued."""
     return _lines(
         conn,
-        "SELECT m.wake_key, t.status FROM jobs j JOIN messages m ON m.id = j.message_id "
+        "SELECT m.wake_key, t.status, t.id FROM jobs j JOIN messages m ON m.id = j.message_id "
         "JOIN tasks t ON t.id = substr(m.wake_key, 1, instr(m.wake_key, ':') - 1) "
         "WHERE j.state='queued' AND m.wake_key IS NOT NULL AND (t.status <> 'open' OR EXISTS "
         "(SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL))",
         "7: wake {0} is queued for a task that is {1} or snoozed",
+        (2,),
     )

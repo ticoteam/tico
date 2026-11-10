@@ -305,18 +305,18 @@ def test_health_counts_tasks_without_naming_them_and_a_member_counts_only_what_t
         c.execute(
             "UPDATE visits SET level='person' WHERE left_at IS NULL AND task_id IN (?,?)", (seen["id"], hidden["id"])
         )
-    reading = health.record_never_stuck(api.app.state.store)
-    assert reading["person"] == 2
     # A broken rule names its task and a bot: an Admin sees how many, never which.
-    reading["breaks"], reading["broken"] = [f"2: task {hidden['id']} is bot:ops's turn with no run"], 1
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(reading), health.NEVER_STUCK_KEY))
+    broke = post(api, "tasks", {"title": "Quiet payroll", "body": "x", "owner": "ops", "private": True})
+    _wake_left_queued(api, broke["id"])
+    reading = health.record_never_stuck(api.app.state.store)
+    assert reading["person"] == 2 and reading["broken"] == 1
     admin = _never_stuck(api, "ben-test")
     assert admin["counts"]["person"] == 2 and admin["counts"]["broken"] == 1 and admin["status"] == "bad"
-    assert hidden["id"] not in json.dumps(admin) and "bot:ops" not in json.dumps(admin)
+    for task in (hidden, broke):
+        assert task["id"] not in json.dumps(admin) and "bot:ops" not in json.dumps(admin)
     member = _never_stuck(api, "cara-test")
     assert member["counts"]["person"] == 1 and member["counts"]["broken"] == 0
-    assert hidden["id"] not in json.dumps(member)
+    assert hidden["id"] not in json.dumps(member) and broke["id"] not in json.dumps(member)
 
 
 def test_an_admins_needs_you_plates_count_only_what_the_admin_may_read(api):
@@ -349,3 +349,28 @@ def test_the_screens_reads_are_in_the_served_document_and_answer_as_it_says(api)
     call("listFactories", "get", "/api/v2/factories")
     call("createFactory", "post", "/api/v2/factories", json={"name": "Growth"})
     call("getPipelineLog", "get", "/api/v2/pipelines/product/log")
+
+
+def _wake_left_queued(api, tid):
+    """Rule 7 broken for real (never_stuck._rule_7): the task is done, and a wake for it is queued again."""
+    post(api, f"tasks/{tid}/done", {})
+    with api.app.state.store.transaction() as c:
+        found = c.execute(
+            "UPDATE jobs SET state='queued' WHERE message_id IN (SELECT id FROM messages WHERE wake_key LIKE ?)",
+            (tid + ":%",),
+        ).rowcount
+    assert found
+
+
+def test_a_real_rule_break_counts_for_whoever_reads_its_task(api):
+    """Codex review 2, 10: a rule-7 break the checker makes ("wake ... is queued for a task that is done") is tied to
+    its task when the reading is made, so a member who reads that task sees it counted."""
+    from backend import health, never_stuck
+
+    seen = post(api, "tasks", {"title": "Book the barn", "body": "x", "owner": "ops"})
+    _wake_left_queued(api, seen["id"])
+    health.record_never_stuck(api.app.state.store)
+    with api.app.state.store.read() as c:
+        assert [line[:2] for line in never_stuck.rules_hold(c)] == ["7:"]
+    member = _never_stuck(api, "cara-test")
+    assert member["counts"]["broken"] == 1 and member["status"] == "bad"
