@@ -368,7 +368,7 @@ def install(app, store, auth):
         if cutoff:
             merged = [item for item in merged if item["at"] < cutoff]
 
-        # The board as it stood at `from`: tasks open then, each in the status it had.
+        # The tasks as they stood at `from`: those open then, each in the status it had.
         candidates = {}
         for row in c.execute(
             f"SELECT id,title,owner_id,requester_id,status,created_at FROM tasks WHERE created_at<? "
@@ -389,12 +389,13 @@ def install(app, store, auth):
         for task in candidates.values():
             if not within(task["owner_id"], task["requester_id"]):
                 continue
+            # Its first move since `from` says where it stood then: the kind of the stage it left.
             later = c.execute(
-                "SELECT old FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
-                "AND created_at>=? ORDER BY created_at LIMIT 1",
+                "SELECT s.kind FROM history_events h JOIN stages s ON s.id=h.old WHERE h.subject_type='task' "
+                "AND h.subject_id=? AND h.kind='move' AND h.created_at>=? ORDER BY h.created_at LIMIT 1",
                 (task["id"], first),
             ).fetchone()
-            status = (later["old"] if later and later["old"] else task["status"]) or "open"
+            status = {"work": "open"}.get(later["kind"], later["kind"]) if later else task["status"] or "open"
             if status in H.ACTIVE_STATUSES:
                 board.append({"id": task["id"], "title": task["title"], "owner_id": task["owner_id"], "status": status})
         board = sorted(board, key=lambda t: t["id"])[:SNAPSHOT_MAX]

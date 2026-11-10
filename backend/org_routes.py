@@ -159,7 +159,6 @@ def register(app, auth, settings, settings_admin, store):
             and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60)
         )
         row["queued"] = rows.queued[slug]
-        row["next_run"] = sum(privacy.task_readable(c, who, t) for t in rows.next_run[slug])
         row["notes"] = rows.notes[slug]
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None

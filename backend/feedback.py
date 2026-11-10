@@ -1,14 +1,13 @@
 """Feedback on bot work: a person's thumbs up or down, with an optional reason, on something a bot made.
 
-- Subjects: a message a bot wrote (Assistant chat, threads, DMs, task comments), a task a bot filed (its requester is a
-  bot) and an approval a bot asked for. Anything else is refused (422). An ask (a bot's requirement on a task) is a
-  fourth subject, rated through backend/answers.py and read back here; it is as readable as its task.
+- Subjects: a message a bot wrote (Assistant chat, threads, DMs, task comments) and a task a bot filed (its requester
+  is a bot). Anything else is refused (422). An ask (a bot's requirement on a task, an OK among them) is a third
+  subject, rated through backend/answers.py and read back here; it is as readable as its task.
 - One row per person and subject (`feedbacks`, migration 0041): rating again replaces it. The row names the bot and,
   where the work links to a runner attempt, the attempt, its model and harness, for training. It keeps no copy of the
   rated words: deleting a message erases them, and the reason is the person's own.
 - Privacy: every read, write, count and list asks whether the viewer reads the subject, with the checks the subject's
-  own pages use (`threads._reactable` for a message, `Auth.task` for a task, the approval route's checks for an
-  approval). An unreadable subject answers 404, and its feedback is left out of every answer, so a private Assistant
+  own pages use (`threads._reactable` for a message, `Auth.task` for a task and an ask). An unreadable subject answers 404, and its feedback is left out of every answer, so a private Assistant
   chat's feedback is its person's alone. Only people rate; a bot or a computer never does.
 - 👎 can tell the bot (a quiet note for its next run, tied to the rated message so a private conversation's feedback
   stays in that conversation's session, threads.note_fits_run) or make a rule (an internal org rule drafted from the
@@ -26,12 +25,11 @@ from pydantic import BaseModel, Field
 from . import hubdb as H
 from . import org_rules as O
 from . import threads
-from . import task_privacy as privacy
 from .models import Contract
 from .store import Problem
 
-SUBJECTS = ("message", "task", "approval", "ask")
-SUBJECTS_SAID = "subject_type is message, task, approval or ask"
+SUBJECTS = ("message", "task", "ask")
+SUBJECTS_SAID = "subject_type is message, task or ask"
 RATINGS = ("up", "down")
 REASON_MAX = 1000
 IDS_MAX = 200  # the subjects one markers read names
@@ -57,7 +55,7 @@ class Nothing(BaseModel):
 
 
 class FeedbackGive(Contract):
-    subject_type: Literal["message", "task", "approval"]
+    subject_type: Literal["message", "task"]
     subject_id: str = Field(min_length=1, max_length=128)
     rating: Literal["up", "down"]
     reason: str = Field(default="", max_length=REASON_MAX)
@@ -93,7 +91,7 @@ def _attempt(c, attempt_id):
 
 
 def _made_in(c, action, target):
-    """The run a task or approval was made in, as hubdb.event stamped it."""
+    """The run a task was made in, as hubdb.event stamped it."""
     row = c.execute(
         "SELECT detail FROM events WHERE action=? AND target=? ORDER BY created_at, id LIMIT 1", (action, target)
     ).fetchone()
@@ -110,17 +108,6 @@ def _readable_task(c, auth, who, task_id):
         return auth.task(c, who, task_id)
     except Problem:
         raise _missing("task") from None
-
-
-def _readable_approval(c, auth, who, approval_id):
-    """The approval, when the viewer reads it as GET /api/v2/approvals/{id} lets them."""
-    try:
-        row = auth.approval(c, who, approval_id)
-        privacy.require_payload(c, who, row)
-        privacy.require_message(c, who, H.message(c, row["message_id"]))
-    except Problem:
-        raise _missing("approval") from None
-    return row
 
 
 def _readable_ask(c, auth, who, subject_id):
@@ -200,27 +187,6 @@ def subject(c, auth, who, subject_type, subject_id):
             "text": f"{task.get('title') or ''}\n\n{name_of(ask['requirement'])}".strip(),
             "target": task["id"],
         }
-    if subject_type == "approval":
-        row = _readable_approval(c, auth, who, subject_id)
-        bot = row.get("requested_by_id")
-        if not H.is_bot(bot):
-            raise Problem("not_bot", "Only an approval a bot asked for takes feedback", 422)
-        message = H.message(c, row["message_id"]) or {}
-        link = (
-            ("/#/task/" + quote(row["task_id"], safe=""))
-            if row.get("task_id")
-            else "/#/thread/%s?m=%s"
-            % (quote(message.get("conversation_id") or "", safe=""), quote(row["message_id"], safe=""))
-        )
-        return {
-            "bot_id": bot,
-            "conversation_id": message.get("conversation_id"),
-            "attempt": _attempt(c, _made_in(c, "approval.request", row["id"])),
-            "revision": None,
-            "note_message_id": row["message_id"],
-            "link": link,
-            "text": f"{row.get('kind')}: " + json.dumps(row.get("payload") or {}, sort_keys=True, default=str),
-        }
     raise Problem("validation", SUBJECTS_SAID, 422)
 
 
@@ -232,7 +198,6 @@ def readable(c, auth, who, subject_type, subject_id, memo=None):
     check = {
         "message": _readable_message,
         "task": _readable_task,
-        "approval": _readable_approval,
         "ask": _readable_ask,
     }.get(subject_type)
     try:
@@ -403,10 +368,6 @@ def _private(c, subject_type, subject_id, subj):
     participants thread), a message tied to a private task or meeting, or a private task."""
     if subject_type in ("task", "ask") and H.task_private(c, H.task(c, subj.get("target") or subject_id) or {}):
         return True
-    if subject_type == "approval":
-        approval = c.execute("SELECT task_id FROM approvals WHERE id=?", (subject_id,)).fetchone()
-        if approval and approval["task_id"] and H.task_private(c, H.task(c, approval["task_id"]) or {}):
-            return True
     source, thread, root = threads._note_source(c, {"message_id": subj["note_message_id"]})
     return source is not None and threads._source_private(c, source, thread, root)
 
@@ -601,7 +562,7 @@ def draft(write, given):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/feedback")
     def feedback_give(request: Request, body: FeedbackGive):
-        """Rate a message, task or approval a bot made: 👍 or 👎 with an optional reason. Rating again replaces it.
+        """Rate a message or task a bot made: 👍 or 👎 with an optional reason. Rating again replaces it.
         `tell_bot` (a 👎 only) leaves the bot a note for its next run in that conversation."""
         who = request.state.identity
         return mutate(request, body, lambda c: give(c, auth, who, body.model_dump()))
