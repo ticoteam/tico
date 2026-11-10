@@ -10,7 +10,7 @@ import pytest
 
 from backend import support
 from backend.auth import Identity
-from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers.onboarding import TOKEN, as_person, environment, signed_in  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.support import ContractHQ, TICKET_ID, documented, file, hq
 
@@ -366,24 +366,40 @@ def as_bot(api, slug="coo"):
 
 
 def draft(api, headers, message=REPORT, **extra):
+    """A report drafted through POST /api/v2/support/reports: with the team rule off, an OK asked of a person
+    (backend/task_asks.py); the answer's `id` is the OK's requirement id."""
     import hashlib
 
     payload = {"message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest(), **extra}
-    import uuid
-
-    return api.post(
-        "/api/v2/approvals",
-        json={"kind": "support", "payload": payload},
-        headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
-    )
+    return api.post("/api/v2/support/reports", json={"payload": payload}, headers=signed_in(_token(headers)))
 
 
-def decide(api, approval_id, decision="approved"):
+def _token(headers):
+    return headers["Authorization"].split(" ", 1)[1]
+
+
+def decide(api, approval_id, decision="approved", token=TOKEN):
+    """The person asked answers through the real OK routes: OK from the preview (GET /api/v2/oks/{rid}, POST
+    /api/v2/tasks/{id}/asks/{rid}/ok), or a send back. Returns (whom it was asked of, the answer)."""
+    from backend import task_asks
+
     with api.app.state.store.read() as c:
-        to = c.execute(
-            "SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?", (approval_id,)
-        ).fetchone()[0]
-    return to, api.post(f"/api/v2/approvals/{approval_id}", json={"decision": decision}, headers=signed_in())
+        to = task_asks.grant(c, approval_id)["asked_of_id"]
+        tid = task_asks.task_of(c, approval_id)
+    if decision != "approved":
+        return to, api.post(
+            f"/api/v2/tasks/{tid}/asks/{approval_id}/answer",
+            json={"value": "no", "note": "Not this one."},
+            headers=signed_in(token),
+        )
+    shown = api.get(f"/api/v2/oks/{approval_id}", headers=signed_in(token))
+    if shown.status_code != 200:
+        return to, shown
+    return to, api.post(
+        f"/api/v2/tasks/{tid}/asks/{approval_id}/ok",
+        json={"shown_hash": shown.json()["shown_hash"]},
+        headers=signed_in(token),
+    )
 
 
 def send(api, headers, approval_id):
@@ -391,8 +407,10 @@ def send(api, headers, approval_id):
 
 
 def consumed(api, approval_id):
+    from backend import task_asks
+
     with api.app.state.store.read() as c:
-        return c.execute("SELECT consumed_at FROM approvals WHERE id=?", (approval_id,)).fetchone()[0]
+        return (task_asks.grant(c, approval_id) or {}).get("used_at")
 
 
 def drafts_only(api):
@@ -408,12 +426,12 @@ def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_th
     r = draft(api, bot)
     assert r.status_code == 200, r.text
     approval = r.json()
-    assert approval["kind"] == "support" and hq.seen == []  # drafting sends nothing
-    assert send(api, bot, approval["id"]).json()["error"]["code"] == "approval"  # not approved yet
+    assert approval["status"] == "pending" and hq.seen == []  # drafting sends nothing
+    assert send(api, bot, approval["id"]).json()["error"]["code"] == "approval"  # not OK'd yet
     assert hq.seen == [] and not consumed(api, approval["id"])
-    needs = api.get("/api/v2/needs-you", headers=signed_in()).json()["items"]
-    card = next(i for i in needs if i.get("id") == approval["id"])
-    assert card["title"] == "Send this to Tico support?" and card["support"] == {"to": "updates.tico.team"}
+    with api.app.state.store.read() as c:
+        filed = c.execute("SELECT title, private FROM tasks WHERE id=?", (approval["task_id"],)).fetchone()
+    assert tuple(filed) == ("Send a report to Tico support", 1)
     approver, decided = decide(api, approval["id"])
     assert decided.status_code == 200, decided.text
     r = send(api, bot, approval["id"])
@@ -511,20 +529,34 @@ def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):
     assert hq.seen == [] and not consumed(api, approval["id"])
 
 
-def test_hq_down_or_refusing_spends_nothing_and_a_retry_sends_it(environment, hq):  # noqa: F811  (the fixture)
+def test_an_okd_report_is_claimed_before_it_leaves_and_a_retry_sends_the_same_report_once(environment, hq):  # noqa: F811  (the fixture)
+    """Claim, then send (rule D): the OK is used and committed before HQ hears anything, every send of it carries
+    Idempotency-Key tico-support:<rid>, HQ down or refusing leaves it claimed with no ticket, and a retry sends the
+    same report, even once the person who OK'd it has left: nothing is refused after it may have gone."""
     api = environment()
     drafts_only(api)
     bot = as_bot(api)
     approval = draft(api, bot).json()
-    decide(api, approval["id"])
+    rid = approval["id"]
+    approver, given = decide(api, rid)
+    assert given.status_code == 200, given.text
     hq.down = True
-    r = send(api, bot, approval["id"])
-    assert r.status_code == 502 and r.json()["error"]["retryable"] is True and not consumed(api, approval["id"])
+    r = send(api, bot, rid)
+    assert r.status_code == 502 and r.json()["error"]["retryable"] is True and consumed(api, rid)
     hq.down, hq.status_override = False, 429
-    assert send(api, bot, approval["id"]).status_code == 429 and not consumed(api, approval["id"])
+    assert send(api, bot, rid).status_code == 429
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 0
     hq.status_override = None
-    r = send(api, bot, approval["id"])
-    assert r.status_code == 200 and consumed(api, approval["id"]) and len(hq.tickets) == 1
+    from backend.tests.helpers import engine as X
+
+    with api.app.state.store.transaction() as c:  # the person who OK'd it can no longer sign in after the claim
+        X.no_sign_in(c, approver)
+    r = send(api, bot, rid)
+    assert r.status_code == 200 and not r.json()["again"] and len(hq.tickets) == 1, r.text
+    assert {q.headers.get("idempotency-key") for q in hq.seen} == {"tico-support:" + rid}
+    again = send(api, bot, rid)
+    assert again.status_code == 200 and again.json()["again"] and len(hq.seen) == 3
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
 

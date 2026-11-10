@@ -161,8 +161,30 @@ def registry(api, check_id):
 
 
 def open_approvals(api, kind):
+    """The OKs asked for reports of `kind` (support: subject support:<key>) still waiting for their person."""
+    from backend import task_asks
+
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id FROM approvals WHERE kind=? AND decision IS NULL", (kind,))]
+        rows = c.execute("SELECT requirement_id FROM ok_grants WHERE subject LIKE ?", (kind + ":%",)).fetchall()
+        return [{"id": r[0]} for r in rows if task_asks.standing(c, r[0]) == task_asks.WAITING]
+
+
+def answer_report(api, rid, ok=True):
+    """The owner answers a report's OK through the real routes: OK from its preview, or a send back."""
+    from backend import task_asks
+
+    with api.app.state.store.read() as c:
+        tid = task_asks.task_of(c, rid)
+    if not ok:
+        r = api.post(f"/api/v2/tasks/{tid}/asks/{rid}/answer", json={"value": "no", "note": "No."}, headers=signed_in())
+        assert r.status_code == 200, r.text
+        return
+    shown = api.get(f"/api/v2/oks/{rid}", headers=signed_in())
+    assert shown.status_code == 200, shown.text
+    r = api.post(
+        f"/api/v2/tasks/{tid}/asks/{rid}/ok", json={"shown_hash": shown.json()["shown_hash"]}, headers=signed_in()
+    )
+    assert r.status_code == 200, r.text
 
 
 def set_rule(api, reports):
@@ -277,7 +299,7 @@ def test_a_setup_finding_is_never_reported_to_the_tico_team(environment, readers
     assert hq.seen == []
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM approvals WHERE kind='support'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM ok_grants WHERE subject LIKE 'support:%'").fetchone()[0] == 0
 
 
 def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environment, readers, hq):
@@ -317,7 +339,7 @@ def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environ
     assert hq.seen == []
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM approvals WHERE kind='support'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM ok_grants WHERE subject LIKE 'support:%'").fetchone()[0] == 0
 
 
 def test_the_idle_load_is_taken_from_a_computer_only(environment):
@@ -1192,8 +1214,7 @@ def _part_declined(api, runner, monkeypatch, hq=None, comments=None, clock=None)
     set_rule(api, False)
     code_findings[:] = [item("push_stuck", key="push_stuck:A", kind=MH.BUG, title="Pushes are stuck")]
     first = file_due(api, run(api))[MH.signature("push_stuck")]["approval"]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE approvals SET decision='declined' WHERE id=?", (first,))
+    answer_report(api, first, ok=False)
     second = api.post("/api/v2/health/findings/push_stuck:A/report", json={}, headers=signed_in()).json()
     assert second["approval"] and second["approval"] != first and "again" not in second
     assert hq.seen == []
@@ -1207,9 +1228,9 @@ def _part_owner_approved(api, runner, monkeypatch, hq=None, comments=None, clock
     run(api)
     url = f"/api/v2/health/findings/event_stream:{runner['runner_id']}/report"
     approval = api.post(url, json={}, headers=signed_in()).json()["approval"]
-    with store.transaction() as c:
+    with store.read() as c:
         owner = api.app.state.auth.owner_identity(c)
-        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval))
+    answer_report(api, approval)
     api.app.state.support.file_approved(owner, approval)
     assert json.loads(hq.seen[-1].content)["source"] == "health_monitor"
     with store.read() as c:
@@ -1243,15 +1264,11 @@ def _part_sent_as_requester(api, runner, monkeypatch, *, requester, hq=None, com
     (approval,) = open_approvals(api, "support")
     assert first["approval"] == approval["id"] and hq.seen == []
     with store.read() as c:
-        asked_by = c.execute("SELECT requested_by_id FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
-    assert asked_by == "bot:botops"
-    with store.transaction() as c:
-        owner = auth.owner_identity(c)
-        # Older health reports used the keeper as their requester.
-        c.execute(
-            "UPDATE approvals SET requested_by_id=?, decision='approved', decided_by_id=? WHERE id=?",
-            (requester, owner.actor, approval["id"]),
-        )
+        asked_by = c.execute("SELECT asked_by_id FROM ok_grants WHERE requirement_id=?", (approval["id"],)).fetchone()[
+            0
+        ]
+    assert asked_by == "bot:botops" and requester  # v3 starts over: every report is asked by BotOps
+    answer_report(api, approval["id"])
 
     def unreachable(who, approval_id):
         raise Problem("support_unreachable", "Tico support is out of reach", 503)
@@ -1284,13 +1301,9 @@ def _part_approved_cap(api, runner, monkeypatch, hq=None, comments=None, clock=N
     ]
     approvals = file_due(api, run(api))
     clock.at += timedelta(hours=25)  # requests from yesterday still count when sent today
+    for answer in approvals.values():
+        answer_report(api, answer["approval"])
     with store.transaction() as c:
-        owner = auth.owner_identity(c)
-        for answer in approvals.values():
-            c.execute(
-                "UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?",
-                (owner.actor, answer["approval"]),
-            )
         for i in range(MH.REPORTS_PER_DAY - 1):
             c.execute(
                 "INSERT INTO health_reports(signature,ticket_id,created_at,reported_occurrences) VALUES(?,?,?,1)",
@@ -1308,11 +1321,11 @@ def _part_approved_cap(api, runner, monkeypatch, hq=None, comments=None, clock=N
     (waiting,) = [sig for sig, answer in answers.items() if answer.get("deferred") == "support_busy"]
     with store.read() as c:
         row = c.execute(
-            "SELECT h.ticket_id,a.consumed_at FROM health_reports h JOIN approvals a ON a.id=h.approval_id "
+            "SELECT h.ticket_id,a.used_at FROM health_reports h JOIN ok_grants a ON a.requirement_id=h.approval_id "
             "WHERE h.signature=?",
             (waiting,),
         ).fetchone()
-        assert row["ticket_id"] is None and row["consumed_at"] is None
+        assert row["ticket_id"] is None and row["used_at"] is None
     assert MH.file_reports(store, auth, store.settings, support, []) == {
         waiting: {"signature": waiting, "deferred": "support_busy"}
     }
@@ -1331,9 +1344,7 @@ def _part_send_resets(api, runner, monkeypatch, hq=None, comments=None, clock=No
     clock.at += timedelta(hours=25)
     result = run(api)  # seen again while the approval waited
     assert result["details"]["reports_due"] == [sig]
-    with store.transaction() as c:
-        owner = api.app.state.auth.owner_identity(c)
-        c.execute("UPDATE approvals SET decision='approved', decided_by_id=? WHERE id=?", (owner.actor, approval))
+    answer_report(api, approval)
     assert file_due(api, result)[sig]["ticket"]
     (ticket,) = hq.tickets.values()
     assert ticket["messages"] == []
@@ -1750,11 +1761,13 @@ def _fresh(api, hq=None, comments=None):
     """What a section of a story leaves behind, wiped: findings, reports, approvals, wakes and Health tasks (kept, renamed
     and closed), so the next section starts as on a new install. BotOps is active again, the team rule back to its default."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET title='old: '||title, status='done' WHERE title LIKE 'Health:%'")
+        for (tid,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Health:%' AND status='open'").fetchall():
+            H.task_close(c, H.KEEPER, tid, "A new section of the story.")
+        c.execute("UPDATE tasks SET title='old: '||title WHERE title LIKE 'Health:%'")
         c.execute("UPDATE messages SET body='old '||body WHERE body LIKE 'Health wake: %'")
         for table in ("health_findings", "health_reports", "invariant_state", "support_tickets"):
             c.execute(f"DELETE FROM {table}")
-        c.execute("DELETE FROM approvals WHERE kind='support'")
+        c.execute("DELETE FROM ok_grants WHERE subject LIKE 'support:%'")
         c.execute("DELETE FROM registry_metadata WHERE key LIKE 'health-%'")
         c.execute("DELETE FROM events WHERE action IN (?,?)", (L.BOT_ACTION, L.TASK_ACTION))
         c.execute("UPDATE bots SET state='active' WHERE id='botops'")
