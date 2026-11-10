@@ -367,7 +367,7 @@ def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False,
     With `starting`, a lease still live that has not started yet counts too: it is about to. "Since" is by order, not
     by the clock: a run whose attempt row came after the change. A run belongs to the change it was claimed after.
     `besides` leaves one run out: the one asking whether it may start."""
-    started, args = "a.started_at IS NOT NULL", [_marks(task)[0]]
+    started, args = "a.started_at IS NOT NULL", list[object]([_marks(task)[0]])
     if starting:
         started = "(a.started_at IS NOT NULL OR (a.state = 'leased' AND a.lease_until > ?))"
         args.append(_h().now())
@@ -418,7 +418,8 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
         task = E.task(conn, str(named)) if named else None
     if task is None:
         return True  # about no task on the engine: not the engine's to hold
-    if refs.get("wake") == "task_turn" and refs.get("visit") != (task.get("visit") or {}).get("id"):
+    visit: Row = task.get("visit") or {}
+    if refs.get("wake") == "task_turn" and refs.get("visit") != visit.get("id"):
         allowed = False
     else:
         kind = parts[2] if found[0] and task["id"] == parts[0] and len(parts) > 2 else ""
