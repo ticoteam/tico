@@ -163,9 +163,6 @@ class ReadIndex:
             for aid, mid in self.c.execute("SELECT attempt_id,message_id FROM attempt_inputs"):
                 if aid in rows:
                     rows[aid]["messages"].append(mid)
-            for tid, aid in self.c.execute("SELECT id,carried_by FROM tasks WHERE carried_by IS NOT NULL"):
-                if aid in rows and tid in self.private:
-                    rows[aid]["tasks"].add(tid)
             for aid, detail in self.c.execute(
                 "SELECT target,detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ")"
             ):
@@ -182,7 +179,7 @@ class ReadIndex:
         ).fetchone()
         if not row:
             return set()
-        ids = {r[0] for r in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)) if r[0] in self.private}
+        ids = set()
         for (detail,) in self.c.execute(
             "SELECT detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)
         ):
@@ -260,8 +257,6 @@ class ReadIndex:
                 return False
         if not found:
             return None
-        if any(tid in self.denied for (tid,) in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,))):
-            return False
         for action, detail in self.c.execute(
             "SELECT action,detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ") AND target=?",
             (aid,),

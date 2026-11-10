@@ -293,7 +293,7 @@ def test_a_task_handed_to_another_bot_loses_the_model_its_old_bot_was_given(api)
     finance_on_the_computer(api, machine)
     mine = filed(api, "Tidy the changelog")
     own_model(api, mine["id"], HAIKU)
-    post(api, "tasks/" + mine["id"], {"version": mine["version"], "owner": "finance"})
+    post(api, "tasks/" + mine["id"] + "/owner", {"version": mine["version"], "owner": "finance"})
     assert get(api, "tasks/" + mine["id"])["run_model"] is None
     with api.app.state.store.read() as c:
         events = c.execute(
@@ -329,13 +329,11 @@ def test_a_temporary_assignment_retired_with_its_task_takes_the_model_off_it(api
         )
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('ops-a1','ana')")
         BS.write(c, 'ops-a1', {'assignment_branch': True, 'shared_from': 'ops'})
-        c.execute("UPDATE tasks SET owner_id='bot:ops-a1',status='doing' WHERE id=?", (mine["id"],))
+        H.task_reassign(c, H.KEEPER, mine["id"], "bot:ops-a1", "A temporary assignment takes it")
         haiku = task_run_models.stamped("claude-haiku-5-5", "low", "claude")
         task_run_models.set_choice(c, "human:ana", mine["id"], haiku)
         assert task_run_models.of(c, mine["id"]) is not None
-        # Ops is not active, so the task goes back to it directly rather than through a handoff.
-        c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
-        retire_assignments(c)
+        retire_assignments(c)  # the task goes back to Ops through the engine's reassign
         assert H.task(c, mine["id"])["owner_id"] == "bot:ops"
         assert task_run_models.of(c, mine["id"]) is None
 

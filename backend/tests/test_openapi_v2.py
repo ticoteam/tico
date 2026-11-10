@@ -118,8 +118,15 @@ def test_the_declared_answers_match_the_live_ones(api):
         "updateTask",
         "post",
         "/api/v2/tasks/" + task["id"],
-        json={"version": detail["task"]["version"], "status": "doing"},
+        json={"version": detail["task"]["version"], "title": "Draft the launch plan today"},
     )
+    asked = call("askOnTask", "post", "/api/v2/tasks/%s/asks" % task["id"], json={"to": "ben", "line": "Which date?"})
+    call("getNeedsYou", "get", "/api/v2/needs-you")
+    call("withdrawAsk", "delete", "/api/v2/tasks/%s/asks/%s" % (task["id"], asked["requirement_id"]))
+    call("snoozeTask", "post", "/api/v2/tasks/%s/snooze" % task["id"], json={"until": "2099-01-05", "why": "Later"})
+    call("unsnoozeTask", "post", "/api/v2/tasks/%s/unsnooze" % task["id"], json={})
+    call("listPipelines", "get", "/api/v2/pipelines")
+    call("getPipeline", "get", "/api/v2/pipelines/general")
     said = call("commentOnTask", "post", "/api/v2/tasks/" + task["id"] + "/comments", json={"text": "looks good"})
     comment = "/api/v2/tasks/" + task["id"] + "/comments/" + said["comment"]["id"]
     call("editTaskComment", "post", comment, json={"text": "looks good to me"})
@@ -130,6 +137,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("sendAssistantMessage", "post", "/api/v2/assistant/messages", json={"text": "what's waiting on me"})
     call("getNeedsYou", "get", "/api/v2/needs-you")
     call("getNeedsYou", "get", "/api/v2/needs-you", params={"count": "true"})
+    call("doneTask", "post", "/api/v2/tasks/%s/done" % task["id"], json={"note": "Drafted."})
     call("getPlace", "get", "/api/v2/places/dashboard")
     call("savePlace", "put", "/api/v2/places/dashboard", json={})
     call("listCards", "get", "/api/v2/cards")
@@ -335,29 +343,6 @@ def test_the_finance_record_and_order_answers_match_the_live_ones(api):
     call("getPurchaseOrder", "/api/v2/purchase-orders/" + po)
     call("listEstimates", "/api/v2/estimates")
     call("getEstimate", "/api/v2/estimates/" + estimate)
-
-
-def test_closed_status_uses_close_permissions_and_rejects_combined_edits(api):
-    from backend.tests.helpers.api import post
-    from backend.store import H
-    from backend.tests.helpers.task_lanes import task_bot
-    from backend.tests.helpers.subtask_results import start
-
-    machine = task_bot(api, lanes=True)
-    task = post(api, "tasks", {"title": "Check closure alias", "body": "Check it.", "owner": "bot:ops"})
-    checking = start(api, machine, task["id"], "closure-task")
-    task = checking["task"]
-    path = f"tasks/{task['id']}"
-    refused = post(api, path, {"version": task["version"], "status": "closed"}, checking["token"], expected=403)
-    assert refused["error"]["code"] == "close"
-    post(api, path, {"version": task["version"], "status": "closed", "title": "Changed"}, expected=422)
-    with api.app.state.store.read() as c:
-        row = H.task(c, task["id"])
-        assert (row["status"], row["title"], row["version"]) == ("doing", task["title"], task["version"])
-    closed = post(api, path, {"version": task["version"], "status": "closed", "note": "Accepted."})
-    assert closed["status"] == "closed" and closed["closed_by_id"] == "human:ana"
-    assert closed["version"] == task["version"] + 1
-    post(api, path, {"version": task["version"], "status": "closed"}, expected=409)
 
 
 def test_the_thread_answers_match_the_live_ones(api):

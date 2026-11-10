@@ -173,9 +173,8 @@ def register(app, auth, delegated_identity, mutate, settings_admin, store, reset
             kept, more = _first_visible(newest(), lambda m: privacy.message_readable(c, privacy.actor(who), m))
             result = {"actor": who.actor, "messages": H.mark_answered(c, kept[::-1]), "more_messages": more}
             result["tasks"], result["more_tasks"] = _first_visible(
-                H.tasks(c, owner=who.actor, status=H.ACTIVE_STATUSES), lambda t: privacy.task_readable(c, who, t)
+                H.tasks(c, owner=who.actor, status=("open",)), lambda t: privacy.task_readable(c, who, t)
             )
-            result["approvals"] = []
             result["notices"] = [m for m in result["messages"] if m["kind"] == "notice"]
             from .files import readable_page_refs
 

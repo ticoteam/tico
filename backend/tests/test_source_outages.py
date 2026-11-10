@@ -9,7 +9,14 @@ from backend.store import H
 from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401
 from backend.tests.helpers.login_holds import at, events, limit, done, signed_in
 from backend import bot_settings as BS
-from backend.tests.helpers.source_outages import managers, notices
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.source_outages import notices
+
+
+def managers(c):
+    """An Engineering pipeline managed by the COO: who an outage notice goes to."""
+    X.pipeline(c, "engineering", "Engineering", manager="bot:coo")
+    c.execute("UPDATE pipelines SET preset='engineering' WHERE id='engineering'")
 
 
 def fallback_off(c, bot):
@@ -62,7 +69,7 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
     task = post(api, 'tasks', {'owner': 'ops', 'title': 'Prepare the deployment plan', 'body': 'Review existing code.'})
     first = claim(api, machine)
     limit(api, machine, first, errors=('Usage limit; usage window resets at 2026-10-27T07:00:00Z',))
-    other = post(api, 'tasks', {'owner': 'finance', 'title': 'Review the invoice', 'body': 'Read it.'})
+    post(api, 'tasks', {'owner': 'finance', 'title': 'Review the invoice', 'body': 'Read it.'})
     with api.app.state.store.transaction() as c:
         managers(c)
     for hour in range(2, 7):
@@ -284,7 +291,6 @@ def test_a_hundred_queued_notices_restore_as_one_carrier_with_their_history(api,
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, 'human:ana', 'Review the change', 'Review it.', 'bot:ops', lint=False)
         c.execute("UPDATE jobs SET state='completed'")
-        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task['id'],))
         for n in range(100):
             from backend.rules import Decision, WAKE
 
@@ -791,26 +797,6 @@ def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_leas
         assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result,'$.lease_continue')=1").fetchone()
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
-
-
-def test_github_retry_disappearing_never_claims_access_recovered(api, monkeypatch):
-    at(monkeypatch, '2026-10-27T01:00:00.000000Z')
-    with api.app.state.store.transaction() as c:
-        managers(c)
-        source_outages.observe(c, 'github:acme/project', 'GitHub checks access', waiting=1)
-    at(monkeypatch, '2026-10-31T01:00:00.000000Z')
-    with api.app.state.store.transaction() as c:
-        # The remembered move is gone: whether expired, canceled or closed, that proves no successful read.
-        source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 1  # the start notice only: one to the engineering managers
-        prs = [{'id': 'pr', 'repo': 'acme/project'}]
-        source_outages.github_read(c, prs, {'pr': {'error': True, 'why': 'GitHub answered 403'}})
-        assert len(notices(c)) == 1
-        source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
-        source_outages.github_read(c, prs, {'pr': {'head_sha': 'a' * 40, 'checks': {}}})
-        source_outages.sync(c, api.app.state.store.settings)
-        assert len(notices(c)) == 2
-        assert all('available again' in row['body'] for row in notices(c)[1:])
 
 
 def test_a_pending_completion_batch_counts_past_its_bounded_identity_window(api):

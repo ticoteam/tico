@@ -200,23 +200,6 @@ def awake_since(api, r):
         ]
 
 
-def test_approval_decision_and_consumption_have_separate_authority(api):
-    r, _, a = setup_attempt(api)
-    payload = {"url": "https://acme.example/draft", "content_sha256": "a" * 64}
-    approval = post(api, "approvals", {"kind": "publish", "payload": payload}, token=a["token"])
-    path = "approvals/" + approval["id"]
-    post(api, path, {"decision": "approved"}, token="ben-test", expected=403)
-    post(api, path, {"decision": "approved"})
-    post(api, path + "/consume", {"payload_hash": "b" * 64}, token=a["token"], expected=403)
-    result = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=a["token"], key="send-op")
-    assert result["consumed_at"]
-    assert (
-        post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=a["token"], key="send-op")
-        == result
-    )
-    post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=a["token"], expected=422)
-
-
 def test_a_files_metadata_follows_the_same_access_as_the_file(api):
     """Name, size and type without the bytes, for the viewer's thumbnails."""
     store = api.app.state.store
