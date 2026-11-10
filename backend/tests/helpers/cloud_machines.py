@@ -64,6 +64,8 @@ class FakeHQ:
         self.calls.append(("start", machine_id, size))
         self._check("start")
         machine = self.machines[machine_id]
+        if machine["state"] in ("starting", "running"):
+            return dict(machine)  # as HQ: a live machine is left as it is, never restarted
         changes = {"state": "starting", "size": size or machine["size"], "starts_month": machine["starts_month"] + 1}
         if self.clock:
             changes["started_at"] = self.clock()

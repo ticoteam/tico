@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from backend import cloud_access, cloud_machines as CM, placement, readiness
+from backend.cloud_machine_health import file_card as file_health_card
 from backend.store import H, Problem
 from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.cloud_access import signals
@@ -53,6 +54,46 @@ def test_decide_wakes_for_work_and_creates_on_first_use():
     assert CM.decide(machine_row(always_on=1), facts(), 1000, 300) == ("start", None)
     # Not active, or moved to another computer: a machine that is on stops, one that is off stays off.
     assert CM.decide(machine_row(state="running"), facts(active=False, want="job:a"), 1000, 300) == ("stop", None)
+
+
+def test_an_offline_own_machine_restarts_only_after_fifteen_minutes_of_runnable_work():
+    # HQ's start leaves a live machine as it is, so the restart is a stop; the work's wake then starts it.
+    current = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    HOUR = 3600  # a pause longer than the wait, so its idle stop is not the stop seen here
+    waiting = facts(want="job:a", want_at=1000, last_seen=1000)
+    assert CM.decide(current, waiting, 1899, HOUR)[0] != "stop"
+    assert CM.decide(current, waiting, 1900, HOUR) == ("stop", None)
+    assert CM.decide(current, facts(want="job:a", want_at=1000, last_seen=1000, turns=True), 1900, HOUR)[0] != "stop"
+    assert CM.decide(current, facts(want="job:a", want_at=1000, last_seen=1000, updating=True), 1900, HOUR)[0] != "stop"
+    assert (
+        CM.decide(current, facts(want="watcher:ops:daily:done", want_at=1000, last_seen=1000), 1900, HOUR)[0] != "stop"
+    )
+    assert (
+        CM.decide(
+            machine_row(bot=CM.SHARED, placement="shared", state="running", active_at=1000, heartbeat_at=1000),
+            waiting,
+            1900,
+            HOUR,
+        )[0]
+        != "stop"
+    )
+    assert not CM.offline_restart_ready({**current, "state": "stopping"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "state": "stopped"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "placement": "shared"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "size": "large", "machine_size": "small"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "stop_until": 1901}, waiting, 1900)
+
+
+def test_an_offline_restart_never_loops():
+    current = machine_row(state="running", active_at=0, heartbeat_at=0)
+    gap = CM.OFFLINE_RESTART_GAP
+    # Restarted at 1000 and never heard from since: no second restart, however long the work waits.
+    never_back = facts(want="job:a", want_at=0, last_seen=900, restarted_at=1000)
+    assert not CM.offline_restart_ready(current, never_back, 1000 + 10 * gap)
+    # Back at 1100, silent again: not again within the gap, once after it.
+    flapping = facts(want="job:a", want_at=0, last_seen=1100, restarted_at=1000)
+    assert not CM.offline_restart_ready(current, flapping, 1000 + gap - 1)
+    assert CM.offline_restart_ready(current, flapping, 1000 + gap)
     assert CM.decide(machine_row(), facts(active=False, want="job:a"), 1000, 300) == (None, None)
     # A drain lets the turn out finish on it first.
     assert CM.decide(machine_row(state="running"), facts(active=False, turns=True), 1000, 300) == ("heartbeat", None)
@@ -755,6 +796,103 @@ def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(clo
     assert cloud.tick(10) == ["start"]
     assert cloud.row()["failures"] == 0 and cloud.row()["problem"] == ""
     assert cloud.tick(5) == ["start", "start"] and cloud.row()["state"] == "starting"
+
+
+def silent_with_waiting_work(cloud):
+    """An enrolled own machine still running at HQ, silent for 30 minutes, with a fresh runnable job."""
+    computer = enrolled(cloud)
+    idle(cloud)
+    work(cloud, text="Please run after the machine restarts.")
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", state="running")
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=-30), computer["runner_id"]),
+        )
+    cloud.hq.machines["m1"]["state"] = "running"
+    cloud.hq.calls.clear()
+    return computer
+
+
+def test_an_offline_own_machine_is_restarted_and_recorded_without_a_person_card(cloud):
+    computer = silent_with_waiting_work(cloud)
+    # HQ's start leaves a running machine as it is: the restart stops it, and the waiting work starts it again.
+    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
+    assert cloud.row()["state"] == "stopped" and cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+    stopped = events(cloud, "cloud_machine.stopped")[-1]
+    assert json.loads(stopped["detail"])["reason"] == CM.OFFLINE_REASON
+    assert cloud.tick(1) == ["stop", "start"]
+    assert cloud.hq.machines["m1"]["state"] == "starting"
+    assert CM.machine_view(cloud.row())["restarting"] is True
+    reported(cloud, computer)
+    assert cloud.row()["problem"] == ""
+    # Silent again at once: not restarted again within the hour.
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), computer["runner_id"]))
+    cloud.hq.machines["m1"]["state"] = "running"
+    cloud.hq.calls.clear()
+    cloud.tick(CM.OFFLINE_RESTART_DELAY + 1)
+    restarts = [e for e in events(cloud, "cloud_machine.stopped") if CM.OFFLINE_REASON in (e["detail"] or "")]
+    assert len(restarts) == 1
+    with cloud.store.read() as c:
+        active, want, _, _ = CM.bot_want(c, cloud.store.settings, "ops", computer["runner_id"], cloud.at[0])
+        assert active and want.startswith("job:")
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE title LIKE 'Health: Check %cloud machine' LIMIT 1").fetchone()
+
+
+def with_botops(cloud):
+    with cloud.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+
+
+def machine_cards(cloud):
+    with cloud.store.read() as c:
+        return [
+            dict(r)
+            for r in c.execute("SELECT title,body,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
+        ]
+
+
+@pytest.mark.parametrize(("code", "status"), [("starts_full", 429), ("cpu_cap", 409)])
+def test_a_refused_offline_restart_files_one_botops_task_and_keeps_the_existing_retry(cloud, code, status):
+    with_botops(cloud)
+    silent_with_waiting_work(cloud)
+    cloud.hq.fail["start"] = [CM.Refused(code, status), CM.Refused(code, status)]
+    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
+    assert cloud.tick(1) == ["stop", "start"]
+    current = cloud.row()
+    assert current["machine_id"] == "m1" and current["problem"] == "hq:" + code
+    assert current["next_try_at"] == cloud.at[0] + CM.BACKOFF
+    cards = machine_cards(cloud)
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["owner_id"] == H.bot_actor(H.FLEET_MAINTAINER)
+    assert "ops" in card["body"] and code in card["body"] and "will not replace the machine" in card["body"]
+    assert "Replace the machine, or check it." in card["body"]
+    assert "keeper" not in (card["title"] + card["body"]).lower()
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id LIKE 'human:%' LIMIT 1").fetchone()
+    cloud.hq.calls.clear()
+    assert cloud.tick(14) == []
+    # The retry is refused again: still one open task.
+    assert cloud.tick(CM.BACKOFF) == ["start"]
+    assert len(machine_cards(cloud)) == 1
+
+
+def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_botops(cloud):
+    adopt(cloud)
+    with cloud.store.transaction() as c:
+        assert file_health_card(c, "ops", "starts_full", cloud.at[0]) is None  # no BotOps: nothing filed
+    assert machine_cards(cloud) == []
+    with_botops(cloud)
+    with cloud.store.transaction() as c:
+        first = file_health_card(c, "ops", "starts_full", cloud.at[0])
+        assert first and file_health_card(c, "ops", "cpu_cap", cloud.at[0]) is None
+    assert len(machine_cards(cloud)) == 1
+    with cloud.store.transaction() as c:
+        H.task_done(c, H.KEEPER, first, "Machine replaced.")
+        assert file_health_card(c, "ops", "cpu_cap", cloud.at[0])  # closed: the next refusal files a new one
 
 
 def test_a_same_choice_reposted_keeps_the_start_refusal_and_its_wake_guard(cloud):
