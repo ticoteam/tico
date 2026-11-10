@@ -67,7 +67,10 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
 
 Hand-off caps, run budgets and loop guards are separate safety controls. The limits on this page do not replace them.
 
-**Clear automatic queue** (Usage, owner and administrators) cancels queued automatic wakes and waits for the whole team or one group and its subgroups. Tasks stay on their current step. Messages from people stay queued, including keeper notices carrying their messages or reporting their own acts. A run that has already started finishes. `POST /api/v2/usage/queues/purge` with `{"scope": "company"}` or `{"scope": "group:<id>"}`.
+**Clear automatic queue** (Usage, owner and administrators) cancels queued automatic wakes and waits for the whole team
+or one group and its subgroups. Tasks stay in their stage. Messages from people stay queued, including Tico's notices
+carrying their messages or reporting their own acts. A run that has already started finishes. `POST
+/api/v2/usage/queues/purge` with `{"scope": "company"}` or `{"scope": "group:<id>"}`.
 
 ### Strategy > Budget
 

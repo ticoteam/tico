@@ -116,7 +116,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                                        add a requester, or update one with --requester-id
     hub task requester-remove <id> <requester-id>      take a requester off a task
     hub task publication-preview <id> [--public-title T] [--public-summary S] [--visibility public|private]
-                                 [--label L] [--comment "..."]   the exact payload a publish approval needs
+                                 [--label L] [--comment "..."]   the exact content an OK to publish needs
     hub task comment-moderate <id> <comment-id> hide|show|delete   a public comment on a task you manage
     hub roadmap tasks [--sort requester_count|external_requesters|important|organization|size]   ranked roadmap
     hub roadmap settings [--label L] [--cors-origin O] [--action-limit N] [--suggestion-limit N]
@@ -440,11 +440,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            change it as yourself (BotOps, the Assistant: as the person who asked; a
                                            confirm one is their Confirm card, a person-only one says why and links the
                                            card; the Assistant cites their words for a direct one)
-    hub settings ask <key> <value> [--to P] [--note "..."] [--bot B|...] [--on-behalf-of turn]
-                                           one you may not change: on your yes, its Confirm card and a request go to
-                                           one person who may (an admin, or the owner for the owner's); you're told
-                                           when they confirm or say no
-    hub release now [--note "..."]         ask the Release Manager to release what is at Pending Release now
+    hub release now [--note "..."]         ask the Release Manager to release what waits for a release now
     hub release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
     hub bot status set "<focus>" [--state waiting_human|blocked|...] [--task ID] [--bot X]
@@ -2118,7 +2114,7 @@ def parser():
     s.set_defaults(fn="task update")
     s = task.add_parser("comment", help="leave a comment on a task, on the record with your name")
     s.add_argument("--public", action="store_true", default=None)
-    s.add_argument("--approval-id", dest="approval_id")
+    s.add_argument("--ok", metavar="OK_ID", help="the OK a person gave on exactly this public reply")
     s.add_argument("id")
     s.add_argument("text")
     s.add_argument("--attach", action="append", help="file to attach; repeat for more files")
@@ -2178,7 +2174,7 @@ def parser():
     s.set_defaults(fn="task requester-remove")
     s = task.add_parser(
         "publication-preview",
-        help="the exact payload a publish approval needs for public text, a label change or a public reply",
+        help="the exact content an OK to publish needs: public text, a label change or a public reply",
     )
     s.add_argument("id")
     s.add_argument("--visibility", choices=["public", "private"])
@@ -2190,7 +2186,7 @@ def parser():
     s.add_argument("--comment", help="the public reply's text")
     s.set_defaults(fn="task publication-preview")
     s = task.add_parser("comment-edit", help="change the text of a comment you wrote; it wakes nobody")
-    s.add_argument("--approval-id", dest="approval_id")
+    s.add_argument("--ok", metavar="OK_ID", help="the OK a person gave on exactly this public reply")
     s.add_argument("id")
     s.add_argument("comment_id", help="the comment's id (its id in the task's comments)")
     s.add_argument("text")
@@ -3668,16 +3664,12 @@ def parser():
     for leaf, text in (
         ("show", "one setting: its value, who may change it and its card"),
         ("set", "change one setting as yourself, or BotOps or the Assistant as the person who asked"),
-        ("ask", "a setting you may not change: ask one person who may, with its Confirm card"),
     ):
         s = catalogue.add_parser(leaf, help=text)
         s.add_argument("key", help="the key `hub settings find` gives, e.g. team.rules.admin_sql")
-        if leaf in ("set", "ask"):
+        if leaf == "set":
             s.add_argument("value", help="on/off, a number, text, a comma-separated list or JSON")
             s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-        if leaf == "ask":
-            s.add_argument("--to", help="the person's id to ask; default an admin who may (the owner for the owner's)")
-            s.add_argument("--note", help="a line for them from you, shown on the request")
         target = s.add_mutually_exclusive_group()
         target.add_argument("--bot", help="the bot, for a setting set per bot")
         target.add_argument("--computer", help="the computer, for a setting set per computer")
@@ -3689,12 +3681,10 @@ def parser():
     ).add_subparsers(dest="sub")
     s = release.add_parser(
         "now",
-        help="ask the Release Manager to release what is at Pending Release now (hotfix, "
-        "midday release); one task listing the tickets",
+        help="ask the Release Manager to release what waits for a release now (hotfix, "
+        "midday release); one task listing the tasks",
     )
-    s.add_argument(
-        "--note", help="why now; goes in the task; a person's note asks even with nothing at Pending Release"
-    )
+    s.add_argument("--note", help="why now; goes in the task; a person's note asks even with nothing waiting")
     s.set_defaults(fn="release now")
     s = release.add_parser("schedule", help="show the daily release, or change it")
     on = s.add_mutually_exclusive_group()
@@ -3719,7 +3709,7 @@ def parser():
     s.add_argument("--offset", type=int)
     s.set_defaults(fn="webhook list")
     s = webhook.add_parser(
-        "create", help="make an endpoint; the signing secret is printed once. A bot files an approval instead"
+        "create", help="make an endpoint; the signing secret is printed once. A bot asks a person to OK it first"
     )
     s.add_argument("--name", required=True)
     s.add_argument("--url", required=True, help="an https address")
@@ -3735,7 +3725,7 @@ def parser():
     s.add_argument("--departments", nargs="+", help="only events about work in these departments (default all)")
     s.add_argument("--bots", nargs="+", help="only events that involve these bots (default all)")
     s.add_argument(
-        "--task-types", dest="task_types", nargs="+", help="only events about tasks of these types (default all)"
+        "--pipelines", nargs="+", help="only events about tasks in these pipelines, by id or name (default all)"
     )
     s.add_argument(
         "--header", action="append", help='a header to send, "Name: value" (up to 10; every use replaces the list)'
@@ -3768,7 +3758,7 @@ def parser():
     s.add_argument("--departments", nargs="+", help="only events about work in these departments (default all)")
     s.add_argument("--bots", nargs="+", help="only events that involve these bots (default all)")
     s.add_argument(
-        "--task-types", dest="task_types", nargs="+", help="only events about tasks of these types (default all)"
+        "--pipelines", nargs="+", help="only events about tasks in these pipelines, by id or name (default all)"
     )
     s.add_argument(
         "--header", action="append", help='a header to send, "Name: value" (up to 10; every use replaces the list)'

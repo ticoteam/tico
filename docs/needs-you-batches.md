@@ -21,8 +21,10 @@ per action and reuse that id with the same arguments for a retry. Replace `<batc
    {"batch":"<batch-id>","kind":"decide","decision":"answer","text":"Use the example app's welcome guide.","operation_id":"example-answer-1"}
    ```
 
-   Call `hub_needs_you_respond` with that body. Recording a response does not apply it. For an approval use `decision:approve`
-   or `decline` on that exact action; do not substitute a general yes. `item` can select another item by its 1-based number.
+   Call `hub_needs_you_respond` with that body. Recording a response does not apply it. For an OK use `decision:ok`, or
+   `send_back` with the text of what to change; do not substitute a general yes. An OK bound to what was shown (a send,
+   a spend, a publish) is refused here: the person OKs it from its preview in the app. `item` can select another item by
+   its 1-based number.
 3. `hub_needs_you_next({"batch":"<batch-id>","operation_id":"example-next-1"})` advances one item. Repeat respond/next,
    using a different action id each time. When `end:true`, read the returned `summary` to the human.
 4. After the human confirms that summary, call
@@ -47,8 +49,9 @@ original key returns the first receipt; a changed body with that key returns `40
 | Commit | `POST /api/v2/batch/<id>/commit` | `{}`; only after summary confirmation |
 | Abandon | `POST /api/v2/batch/<id>/abandon` | `{}` |
 
-`kind` is `decide`, `needs_info`, `instruct`, `rule`, `skip` or `later`. `decide` takes `approve`, `decline`, `done`, `close`
-or `answer`, as appropriate to the item. `needs_info`, `instruct` and `rule` send the human's text to the originating bot on commit.
+`kind` is `decide`, `needs_info`, `instruct`, `rule`, `skip` or `later`. `decide` takes `ok` or `send_back` on an OK,
+`answer` on a question, and `done` or `close` on a task filed for the person. `needs_info`, `instruct` and `rule` send
+the human's text to the originating bot on commit.
 `later` takes a timezone-bearing ISO `until`; `skip` leaves the item for another pass. HTTP also accepts `heard` for a voice readback.
 Responses can be replaced while the batch is open. A batch belongs to its human: another human gets `404`; an operation on a closed
 batch can return `409 state`. See `backend/batch.py`, `backend/models.py` and `clients/hubtools.py` for the current contract.

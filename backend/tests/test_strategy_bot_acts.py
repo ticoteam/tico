@@ -370,7 +370,7 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
         ),
         ("vision", "company", {"vision": "Rule the world"}),
         ("instructions", "bots/ops/definition", {"description": "Only ever work on growth", "expected_revision": 1}),
-        ("person_task", f"tasks/{mine}", {"owner": OWNER, "version": task(api, mine)["version"]}),
+        ("person_task", f"tasks/{mine}/owner", {"owner": OWNER, "version": task(api, mine)["version"]}),
     ]
     for kind, path, body in tries:
         r = api.post("/api/v2/" + path, json=body, headers=headers(strategy_token))
@@ -466,7 +466,8 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
                 "SELECT recipient_id FROM messages WHERE sender_id=? AND body LIKE '%undid a decision%'", (H.KEEPER,)
             )
         }
-    assert {"bot:ops", "bot:finance"} <= told
+    # Ops gets back what Undo restored; every task Finance still holds stayed as it was, so Finance hears nothing.
+    assert "bot:ops" in told and "bot:finance" not in told
 
 
 def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposal(api):
@@ -500,7 +501,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
                 "changes": [{"do": "reorder", "task_id": name}, {"do": "create", "owner": "ops", "title": "Fix setup"}],
             },
         )
-        assert r.status_code == 422 and r.json()["error"]["code"] == "not-found", r.text
+        assert r.status_code == 404 and r.json()["error"]["code"] == "not-found", r.text
         assert "Fire the vendor" not in r.text and "Acquire Initech" not in r.text
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM strategy_actions").fetchone()
@@ -726,7 +727,7 @@ def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by
             headers=headers(strategy_token),
             json={"reason": "Activation is red", "changes": [change]},
         )
-        assert r.status_code == 422 and r.json()["error"]["code"] == "not-found", (change, r.text)
+        assert r.status_code == 404 and r.json()["error"]["code"] == "not-found", (change, r.text)
         assert "Restructure the payroll" not in r.text and "Secret salaries" not in r.text
     after = task(api, hidden)
     assert (after["owner_id"], after["status"], after["rank"]) == (before["owner_id"], before["status"], before["rank"])

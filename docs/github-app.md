@@ -16,7 +16,6 @@ changes; bots keep using whatever git access their computer already has.
 | Actions | read (read and write to run workflows) | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. With read alone it cannot start, rerun or cancel them; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
 | Workflows | none (read and write to edit workflow files) | not in the manifest. Add it only for a bot that must create or change `.github/workflows` files; see [Letting a bot edit workflow files](#letting-a-bot-edit-workflow-files) |
 | Checks, Commit statuses | read | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. It cannot create, rerun or change them |
-| Checks | read and write for pipeline approvals | not in the manifest. Tico posts a check run named `Tico: <requirement>` on a pull request's commit when a pipeline requirement is met, failed or waiting, with its own token. Until an Owner sets **Checks** to **Read and write** on the App's GitHub settings page and accepts the updated permissions on the installation, the check is withheld and nothing is posted. Requiring the check on a branch is a repository setting |
 | Deployments | read | a bot reads deployments, such as a pull request's preview link, in any repository it can read. It cannot create or change them |
 | Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
 
@@ -275,7 +274,6 @@ bot repository and read product repositories, even when an existing product gran
 use the server-side command with an existing read or write grant; ordinary primary-App callers still need
 a write grant. This credential boundary prevents reviewer-App product authorship; the ruleset alone does not
 choose the team's reviewers. Verify during human setup that the App approval counts before enabling the rule.
-The factory's second independent review remains a task gate.
 See GitHub's [review API](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) and
 [ruleset API](https://docs.github.com/en/rest/repos/rules#create-a-repository-ruleset).
 
@@ -534,8 +532,7 @@ new conflict, request for changes, comment from a person or PR closed without
 merging, with events per task grouped into one wake within three minutes. A single check
 finishing sends nothing. Once every check suite, run and status on a head has finished the
 owner gets one `pr_checks_done` for it, naming the failures, and one more only if the head's
-result changes. It wakes the owner when the ticket is at a working step (status open or doing);
-at any other step it is a note carried by the owner's next run. A review or comment that is
+result changes. It wakes the owner of an open task; a done, closed or snoozed task is not woken. A review or comment that is
 not from a person (a GitHub App's `[bot]` login, a bot's own configured login or anything
 posted through an App) is a note too, and a person's keeps the grouped wake. The bot's own
 comments never wake it. A
@@ -547,15 +544,14 @@ Checks left pending are read afresh from GitHub: by the background pass once a l
 GitHub's current check runs, statuses and suites. A suite that has had no check run for 10 minutes never started (an
 installed App's suite, such as a deploy or monitoring service with nothing to run on that push). That suite is not
 pending, so it never holds a green head. Checks that leave pending this way finish the head as a webhook's last
-check would: the ticket moves on, or the merge is next (Tico merges a bot's ticket itself, docs/releasing.md#tico-merges;
-otherwise the Builder is woken to merge), at most once per head.
+check would: the owner gets the head's one `pr_checks_done`, at most once per head.
 The grouping survives server restarts and keeps at most 50 distinct notice items per burst.
 Wake rules for `pr_checks_done` and `pr_review` (in the **What wakes** automations on the Automations page) change what these do.
 
 A bot waiting on one result can arm a one-shot wake on a PR link: `hub task link <task> <pr url> --wake-once`
 (`wake_once: true` on `POST /api/v2/tasks/{id}/links` or `hub_task_link`; `--no-wake-once` disarms it). The
 owner then hears once, in the task's conversation (the head's `pr_checks_done`, so a link armed for it
-is never woken twice for one head, at any step), at the first of: every check suite, check run and status
+is never woken twice for one head), at the first of: every check suite, check run and status
 GitHub has reported on the PR's current head has completed (passed, or failed naming every failing suite, run
 and status, with the checks link and commit; judged when a suite completes, or when a run or status that was
 pending finishes after one has; a run whose own suite is still running holds it), a review is submitted approving or requesting changes (with the reviewer and
@@ -563,10 +559,8 @@ review link), or a release ships the merged PR. A PR merged in a repository othe
 never ships, so its merge is the wake. The link disarms in the same write, so redelivered events never repeat
 it; the link's `detail.wake_once_fired` records what fired. Arming needs the connected App and is refused
 on a closed or shipped PR, or one already merged outside the release repository; it is off unless armed,
-creates no task and never changes the task's status or step. While armed on an open or merged PR that the App
-has sent an event for, or in a repository it reaches, the task counts as waiting on GitHub, so a waiting task
-is not sent back to open. A snoozed task gets the notice quietly, like any other news. A CI run or deploy with
-no PR is not covered.
+creates no task and never moves the task. A snoozed task is not woken. A CI run or deploy with no PR is not
+covered.
 
 A review request can also put the reviewer on the task. Set `TICO_GITHUB_REVIEW_ROLE` to a task role
 (for example `reviewer`) and restart the API, then give each person their GitHub login under **GitHub**
@@ -576,17 +570,13 @@ the review arrived leaves them on. Logins are unique on the team: setting one so
 `409 github_taken`, and a login two people already share changes nobody. Unknown logins, people who
 cannot read a private task, and finished tasks are skipped. Unset, review requests change no roles.
 
-A PR that names one active Dev ticket as "Dev 665", "Dev #665" or "Dev ticket 665" in its branch, title or body links
-itself to that ticket when it is opened, reopened or edited, as `hub task link` would, so a forgotten link does not leave
-the ticket without a PR. A bare "#665" is never read. A PR that names two tickets, a finished or non-Dev ticket, or a
-ticket that already has an open PR links nothing.
-
-GitHub sends no event when the base branch moves under an open PR. Every few minutes Tico reads open PRs on active
-Dev tickets whose mergeability is unknown (after five minutes) or last read over thirty minutes ago, at most 30 per
+GitHub sends no event when the base branch moves under an open PR. Every few minutes Tico reads open PRs on open
+tasks whose mergeability is unknown (after five minutes) or last read over thirty minutes ago, at most 30 per
 pass, and wakes the owner once per head when one now conflicts.
 
 Several PRs can belong to one task. A PR on a task is information only: GitHub events, release
-tags and deploys never change the task's status or step; a person moves the task. A merged PR
+tags and deploys never move the task. When a linked PR merges, the bot that owns the open task is woken once to
+carry it on: say it is done, or close it. A merged PR
 becomes Shipped once the running release includes its merge commit; merged PRs in another
 repository stay Merged.
 When push deliveries were missed, the enabled background scheduler also checks up to 20 merge/deployed
