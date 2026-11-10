@@ -115,7 +115,7 @@ public API references, not live captures. Each names its source. A renamed field
 ## Not in this package
 
 Browser UI journeys (`scripts/ui-tests.cts`), the Docker install journey (`scripts/journey-test.sh`), bot, MCP and CLI
-checks, and the factory evals (`evals/factory/`) run from their own scripts and kinds, not from `python -m e2e.run`.
+checks, and the never-stuck rig (`evals/never_stuck/`) run from their own scripts and kinds, not from `python -m e2e.run`.
 
 ## On RunsOn
 
