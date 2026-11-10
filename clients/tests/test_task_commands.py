@@ -174,6 +174,35 @@ def test_each_command_and_its_tool_send_the_plans_request_with_the_version_given
     assert "tasks/T1" not in reads or tool[0] == "hub_task_label", "no tool reads the task for a version"
 
 
+@pytest.mark.parametrize(
+    "name, args",
+    [
+        ("hub_task_reassign", {"id": "T1", "owner": "ana", "version": 3}),
+        ("hub_task_done", {"id": "T1", "version": 3}),
+        ("hub_task_move", {"id": "T1", "to": "next", "why": "x", "version": 3}),
+        ("hub_task_close", {"id": "T1", "why": "x", "version": 3}),
+        ("hub_task_answer", {"id": "T1", "requirement": "r9", "value": "ok", "version": 3}),
+    ],
+)
+def test_the_assistant_cites_the_persons_message_on_a_change_they_asked_for(name, args):
+    seen = []
+
+    class Assistant(Recorder):
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            seen.append((method, path, delegate))
+            return {"task": {"id": "T1"}}
+
+    hubtools.BY_NAME[name]["fn"](Assistant(), {**args, "on_behalf_of": "turn"})
+    assert [delegate for method, _, delegate in seen if method != "GET"] == ["turn"]
+    assert "on_behalf_of" in hubtools.BY_NAME[name]["inputSchema"]["properties"]
+    words = ["task", name.removeprefix("hub_task_"), *{"hub_task_reassign": ["T1", "ana"]}.get(name, ["T1"])]
+    if name == "hub_task_move":
+        words.append("next")
+    if name == "hub_task_answer":
+        words += ["r9", "ok"]
+    assert hubcli.parser().parse_args([*words, "--on-behalf-of", "turn"]).on_behalf_of == "turn"
+
+
 def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
     api = Recorder(task={"id": "T1", "version": 7, "labels": ["bug"]})
     hubtools.task_label(api, {"id": "T1", "add": ["docs"], "version": 3})

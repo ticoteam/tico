@@ -2056,6 +2056,7 @@ def parser():
     s.add_argument("owner", help="a bot slug, a person id, or me")
     s.add_argument("-m", "--why", help="why, in one plain sentence")
     s.add_argument("--version", type=int, help=version_help)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task reassign")
     s = task.add_parser(
         "ask", help="ask a person on this task, in one line; it waits for their answer, which wakes you once"

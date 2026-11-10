@@ -1294,14 +1294,20 @@ def task_close(api, args):
     "hub_task_reassign",
     "Give the task to another bot or person for this stage. It raises the version and starts the tries again; the "
     "old owner's queued wakes for it are dropped.",
-    {"id": TASK_ID, "owner": _s("The new owner: a bot slug, a person id, or `me`"), "why": WHY, "version": VERSION},
+    {
+        "id": TASK_ID,
+        "owner": _s("The new owner: a bot slug, a person id, or `me`"),
+        "why": WHY,
+        "version": VERSION,
+        "on_behalf_of": ASKED,
+    },
     required=("id", "owner"),
     writes=True,
 )
 def task_reassign(api, args):
     version = _seen(args)
     body = {"owner": _target(api, args["owner"]), "version": version, **_why(args)}
-    return api.post(f"tasks/{args['id']}/owner", body, key=_key(args))
+    return _asked(api, args).post(f"tasks/{args['id']}/owner", body, key=_key(args))
 
 
 @tool(
