@@ -274,3 +274,26 @@ def test_an_admins_needs_you_plates_count_only_what_the_admin_may_read(api):
     assert own and own["items"][0]["count"] >= 12
     admin = next((c for c in get(api, "health", token="ben-test")["checks"] if c["id"] == "needs_plate"), None)
     assert admin is None or all(item["person"] != "human:cara" for item in admin.get("items", []))
+
+
+def test_the_screens_reads_are_in_the_served_document_and_answer_as_it_says(api):
+    from backend.tests.helpers.openapi_v2 import conforms
+
+    product(api)
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    by_id = {op["operationId"]: op for ops in document["paths"].values() for op in ops.values()}
+
+    def call(operation, method, path, **kw):
+        response = getattr(api, method)(path, headers=headers(), **kw)
+        assert response.status_code == 200, (path, response.text)
+        schema = by_id[operation]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert conforms(response.json(), schema, document) is None, (operation, response.text[:300])
+
+    call("getPreference", "get", "/api/v2/preferences/ui.rails")
+    call("setPreference", "post", "/api/v2/preferences/ui.rails", json={"value": {"at": 1}})
+    call("getReleaseSchedule", "get", "/api/v2/release-schedule")
+    call("updateReleaseSchedule", "patch", "/api/v2/release-schedule", json={"on": True})
+    call("releaseNow", "post", "/api/v2/release/now", json={})
+    call("listFactories", "get", "/api/v2/factories")
+    call("createFactory", "post", "/api/v2/factories", json={"name": "Growth"})
+    call("getPipelineLog", "get", "/api/v2/pipelines/product/log")
