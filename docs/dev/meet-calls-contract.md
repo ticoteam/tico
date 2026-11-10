@@ -33,6 +33,8 @@ push. Each track builds against this file; a change to it goes through the integ
 | `meet_code TEXT` | the meeting code |
 | `meet_conference TEXT` | the last active `conferenceRecords/<id>` seen |
 | `meet_seen_at TEXT` | first time a status source saw anyone in the Meet; the call's length counts from here |
+| `meet_active_at TEXT` | last time a status source saw anyone in the Meet; the call's length counts to here |
+| `meet_empty_at TEXT` | first successful read that showed nobody since someone was last seen (migration `20261110071554_meet_call_empty.py`); NULL while anyone is seen |
 | `meet_polled_at TEXT` | last successful status read |
 | `live_count INTEGER NOT NULL DEFAULT 0` | people in the Meet now, as the status source last said (unmatched guests included) |
 | `status_source TEXT` | `google`, `recorder` or NULL (no live status) |
@@ -56,20 +58,28 @@ All existing routes keep working for `tico` calls. Changes:
 - `GET /api/v2/threads/{thread_id}/calls`: `available` stays; adds `providers` (what the viewer could start, in order).
 - Call view (`GET /api/v2/calls/{id}`, the start/join answers, list items) adds:
   `provider`, `meet_uri`, `join_url` (meet_uri + `?authuser=<viewer's Google address>` when known, else meet_uri; null for
-  `tico`), `live_count`, `status_source`, `seen_at` (= meet_seen_at), `duration_s` (ended calls: ended_at minus seen_at
-  or started_at), `ring` (bool: the viewer was rung, has not joined, and the call is live), `card_message_id`,
+  `tico`), `live_count`, `status_source`, `seen_at` (= meet_seen_at), `duration_s` (ended calls only. Google Meet: meet_active_at
+  minus meet_seen_at, null when nobody was ever seen; Tico Meet: ended_at minus started_at), `ring` (bool: the viewer was rung, has not joined, and the call is live), `card_message_id`,
   `transcript_message_id`, `recorder: {"source": <actor or null>, "installed": <viewer has a Recorder seen in the last
   30 days, recorder_installs.mine(...)["recent"]>}`, and on each participant `in_call`.
 - `POST /api/v2/calls/{id}/join` on a `google_meet` call records the open and answers `{"call": view, "url": join_url}`
   (no token). `POST /api/v2/calls/{id}/token` on one answers `409 not_tico_meet`.
 - `POST /api/v2/calls/{id}/end` (connector) on a `google_meet` call asks Google to end the active conference
-  (`spaces/<id>:endActiveConference`, best effort) and ends the call.
+  (`spaces/<id>:endActiveConference`, best effort), then locks the space (`PATCH spaces/<id>?updateMask=config.accessType`
+  with `{"config":{"accessType":"RESTRICTED"}}`, best effort, a failure is logged) so the link can't be reused, and ends
+  the call. A call the sweep ends (`meet_ended`, `no_answer`, `stale`) has its space locked the same way, on the poll
+  pool.
 - `GET /api/v2/calls/ringing`: live calls ringing the viewer now (page load and reconnect): `{"calls": [view, ...]}`.
-- `POST /api/v2/calls/{id}/recorder` (body `{}`): a person who can read the thread claims the recording source for a
-  live call. First claim wins and is kept by its holder; answers `{"source": bool, "meeting_id", "title",
+- `POST /api/v2/calls/{id}/recorder` (body `{}`): a person who can read the thread and is in the call claims the
+  recording source for a live call. In the call means: the connector, a person with a `call_participants` row that was
+  not removed (they opened it from Tico, or a status source saw them in it), or one of the thread's own people
+  (`thread_members`, a DM's or group chat's people). Anyone else who can read the thread (a company thread's readers)
+  gets `403 not_in_call`. First claim wins and is kept by its holder; answers `{"source": bool, "meeting_id", "title",
   "source_actor"}`. `DELETE /api/v2/calls/{id}/recorder` releases it (holder only). While held, the holder may write
   chunks and corrections to the call's live meeting (`backend/live_meetings.py` `_connector` allows the call's
-  `recorder_actor` for those two routes only).
+  `recorder_actor` for those two routes only), and for 90 s after the call ended (`RECORDER_TAIL_SECONDS`, the
+  Recorder's upload tail); after that they are refused as before. A call with a recording source posts its transcript
+  only once the tail is over.
 - `POST /api/v2/calls/{id}/presence` body `{"names": [str, ...]}` (max 100): the recording source's Recorder reports
   who it sees in the Meet window. Used only while Google gives no status (`status_source` is not `google`); names are
   matched to company people by display name; `live_count` = len(names).
@@ -79,12 +89,24 @@ All existing routes keep working for `tico` calls. Changes:
 
 ### Status polling (the calls sweep, every heartbeat, 10 s by default)
 
-For each live `google_meet` call: mint a Meet token for the connector's mailbox, `GET spaces/<id>`. With an
-`activeConference`, list its participants that are still in it, match `signedinUser.displayName` (then email when
-present) to company people, set `in_call`, `live_count`, `meet_seen_at`, `meet_polled_at`, `status_source='google'`.
-Without one: a call whose `meet_seen_at` is set ends `meet_ended`; a call nobody joined within 120 s ends `no_answer`.
-Google refusing (scope not authorized, mailbox not covered) leaves `status_source` to the Recorder or NULL; a call
-with no status ends `stale` 8 hours after it started. The connector can always End.
+Live `google_meet` calls are read in parallel on a pool of 4, and the sweep waits 5 s for the pass at most; a read
+still out then is read again on a later pass (never two at once for one call). A call whose read failed skips 1, 2,
+4... passes (at most 16) before its next. All Google requests happen outside DB write transactions; the roster is read
+once per pass, each call's participants once per pass.
+
+For each read: mint a Meet token for the connector's mailbox, `GET spaces/<id>`. With an `activeConference`, list its
+participants that are still in it, match `signedinUser.displayName` (then email when present) to company people, set
+`in_call`, `live_count`, `meet_seen_at`, `meet_active_at`, `meet_polled_at`, `status_source='google'` (also when the
+read found nobody). A call someone was seen in ends `meet_ended` once successful reads have shown nobody for 60 s
+(from `meet_empty_at`); a call nobody joined within 120 s ends `no_answer`. Only a successful read changes the status:
+a read Google did not answer (timeout, 5xx, 429, status 0) keeps the count, `in_call` and source as they were and never
+counts toward the empty minute. Google refusing (401/403/404: scope not authorized, mailbox not covered) leaves
+`status_source` to the Recorder or NULL. A call ends `stale` 8 hours after it started when it has no status from Google
+(refused, or no successful read for 10 minutes). The connector can always End.
+
+An ended call keeps `status_source` (the end and a later Recorder release do not clear it), so the UI can tell a
+missed call (`duration_s` null, `status_source` set: something watched and saw nobody) from one nothing watched
+(`duration_s` null, `status_source` null).
 
 When a `google_meet` call ends: no LiveKit work; final windows run; the transcript is posted only when the call's live
 meeting has chunks (from the Recorder); action items as today. No "(no speech was transcribed)" post for a Meet call.

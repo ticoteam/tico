@@ -1,9 +1,9 @@
 # pyright: strict
 """Google Meet's REST API (v2), for Google Meet calls in threads (backend/calls.py, docs/meet.md).
 
-Four requests, each with an access token the Workspace key minted for one mailbox and the Meet scope
+Five requests, each with an access token the Workspace key minted for one mailbox and the Meet scope
 (`google_workspace.mint(c, mailbox, "meet")`): make a space, read a space (its active conference, when someone is in
-it), list the people still in a conference, and end a space's active conference. Every request goes through
+it), list the people still in a conference, end a space's active conference, and lock a space once its call is over. Every request goes through
 `meet_call`, which tests replace; nothing here logs a token, and Google's refusals reach a caller as a kind, never as
 Google's text.
 
@@ -24,6 +24,8 @@ API = "https://meet.googleapis.com/v2/"
 SECONDS = 10  # the sweep polls every live call each beat, so one slow answer must not hold the others long
 # TRUSTED: the host's organization, invited guests and dial-ins join without knocking; anyone else knocks.
 ACCESS_TYPE = "TRUSTED"
+# RESTRICTED: only people the host invited join without knocking. An ended call's space is locked so its link is spent.
+LOCKED_ACCESS_TYPE = "RESTRICTED"
 ACTIVE = "latest_end_time IS NULL"
 PAGE_SIZE = 250  # Google's largest page
 PARTICIPANT_PAGES = 4  # at most 1,000 people read per poll; a call that large is counted, not listed further
@@ -36,7 +38,7 @@ Json = dict[str, Any]
 
 class MeetUnavailable(Exception):
     """Google did not do what was asked. `kind`: `refused` (401/403: the scope, the API or the mailbox), `not_found`,
-    `unreachable` (no answer, or Google's own error) or `other`."""
+    `unreachable` (no answer, Google's own error, or 429: Google asking Tico to slow down; each passes) or `other`."""
 
     def __init__(self, kind: str, status: int = 0) -> None:
         super().__init__(kind)
@@ -44,11 +46,11 @@ class MeetUnavailable(Exception):
 
 
 def meet_call(method: str, url: str, *, token: str, body: Json | None = None) -> tuple[int, Json]:
-    """(HTTP status, JSON object) from Google: a GET, or a POST with a JSON `body` (an empty one when None). A refusal
-    comes back as its status; an unreachable Google as status 0. Tests replace this function."""
+    """(HTTP status, JSON object) from Google: a GET, or a POST or PATCH with a JSON `body` (an empty one when None). A
+    refusal comes back as its status; an unreachable Google as status 0. Tests replace this function."""
     headers = {"Accept": "application/json", "Authorization": "Bearer " + token}
     data = None
-    if method == "POST":
+    if method in ("POST", "PATCH"):
         data = json.dumps(body or {}).encode()
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -75,7 +77,7 @@ def _kind(status: int) -> str:
         return "refused"
     if status == 404:
         return "not_found"
-    if status == 0 or status >= 500:
+    if status in (0, 429) or status >= 500:
         return "unreachable"
     return "other"
 
@@ -164,6 +166,24 @@ def end_active_conference(token: str, name: str) -> bool:
         return False
     try:
         _ask("POST", name + ":endActiveConference", token, body={})
+    except MeetUnavailable:
+        return False
+    return True
+
+
+def lock_space(token: str, name: str) -> bool:
+    """Make the space RESTRICTED, so its link no longer lets anyone straight in once its call is over. True when Google
+    did, False when it would not; best effort, so it never raises."""
+    if not SPACE_NAME.fullmatch(str(name or "")):
+        return False
+    try:
+        _ask(
+            "PATCH",
+            name,
+            token,
+            body={"config": {"accessType": LOCKED_ACCESS_TYPE}},
+            query={"updateMask": "config.accessType"},
+        )
     except MeetUnavailable:
         return False
     return True

@@ -19,18 +19,27 @@ nobody; its readers see the call on the thread's row (`live_call`) and its card.
 being rung once they open the call from Tico or Google sees them in it.
 
 **Status.** The calls sweep (every heartbeat, 10 s) reads each live Meet as its connector: the space, then the people
-still in its active conference (`latest_end_time IS NULL`). Google is the source of truth for `live_count`, each
+still in its active conference (`latest_end_time IS NULL`). The reads run in parallel on a small pool, and the sweep
+waits 5 s for them at most, so a slow Google never holds up the heartbeat; a read still out is made again on a later
+pass. A call whose read failed skips 1, 2, 4... passes (at most 16) before its next. Google is the source of truth for `live_count`, each
 participant's `in_call`, and `seen_at`. Rules, from live tests:
 
 - Opening the Meet's pre-join page opens a conference with nobody in it. A conference alone is nobody in the call: only
   a listed participant is.
 - `seen_at` is the first poll that lists anyone. A call can span several conferences: when the last person leaves Google
   ends the conference at once, and a rejoin makes a new one on the same space (`meet_conference` is the latest).
-- `meet_ended`: someone was seen, and nobody has been seen for 60 s (a grace for dropping and rejoining).
+- Only a successful read changes the status. A read Google does not answer (a timeout, its own error, 429) keeps the
+  count and who is in the call as the last good read left them.
+- `meet_ended`: someone was seen, and successful reads have shown nobody for 60 s (a grace for dropping and
+  rejoining). Failed reads never count toward that minute.
 - `no_answer`: nobody was seen within 120 s of the start.
-- `stale`: Google gave no status (scope not authorized, mailbox not covered, Google refusing) and the call is 8 hours
-  old. The connector can always End, which also asks Google to end the active conference (best effort).
-- `duration_s`: an ended call's `ended_at` minus `seen_at` (else its start).
+- `stale`: Google gave no status (scope not authorized, mailbox not covered, Google refusing, or no answer for 10
+  minutes) and the call is 8 hours old. The connector can always End, which also asks Google to end the active
+  conference and then locks the space (`RESTRICTED`) so its link is spent (both best effort). A call the sweep ends has
+  its space locked too.
+- `duration_s`: from the first time anyone was seen (`seen_at`) to the last (`meet_active_at`); null when nobody was
+  ever seen. An ended call keeps its `status_source`: null duration with a source is a missed call, with none a call
+  nothing watched.
 
 People are matched to Google's participants by display name (one person with that name; email when Google gives one),
 and only people who can read the thread; anyone else is counted and never named. A change to the count, who is in it,
@@ -38,8 +47,10 @@ the status source, the recording source or `seen_at` writes one `call.updated` c
 
 **Recording.** Google records nothing for Tico. A person's Tico Recorder can be the call's recording source:
 `POST /api/v2/calls/{call_id}/recorder` claims it (the first claim wins and its holder keeps it; the answer says
-`has_transcript` when the meeting already has one), `DELETE` releases it. The holder may write chunks and corrections to
-the call's live meeting, nothing else of it. While Google gives no status, the source's Recorder may report the names
+`has_transcript` when the meeting already has one), `DELETE` releases it. Only someone in the call may claim: its
+connector, a person who opened it from Tico or was seen in it, or one of the thread's own people; any other reader gets
+`403 not_in_call`. The holder may write chunks and corrections to the call's live meeting, nothing else of it, while the
+call is live and for 90 s after it ends (the Recorder's upload tail); the transcript is posted after that tail. While Google gives no status, the source's Recorder may report the names
 in the Meet window (`POST /api/v2/calls/{call_id}/presence`, up to 100); `status_source` is then `recorder`. Google's
 answer always wins. When the call ends, the transcript is posted only if a Recorder wrote one, and the action items as
 for Tico Meet.
@@ -129,7 +140,8 @@ sets it (`--speak` in the CLI, `speak_replies` in REST and MCP) is refused with 
 
 Errors: `meet_unavailable` (503) when no call provider is available to the caller, Google will not make the space,
 Tico Meet is not set up, the LiveKit package is missing, or the recorder cannot join. `not_tico_meet` (409) for a token
-on a Google Meet call, `not_google_meet` (409) for the Recorder routes on a Tico Meet call. `call_in_progress` (409) for a second live call in a thread, `call_ended` (409), `not_joined` (409) when a token is
+on a Google Meet call, `not_google_meet` (409) for the Recorder routes on a Tico Meet call, `not_in_call` (403) for a
+recording claim from a reader who is not in the call. `call_in_progress` (409) for a second live call in a thread, `call_ended` (409), `not_joined` (409) when a token is
 asked for without joining, and `call_access_removed` (403) after removal. A call the caller cannot read is 404, the
 same as a call that does not exist. `call_meeting` (409) when the live meeting's own controls
 (`/api/v2/live-meetings/{id}/control`) are used on a call's meeting: a call is paused, resumed or ended through the call.
