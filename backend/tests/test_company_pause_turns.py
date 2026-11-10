@@ -87,7 +87,12 @@ def test_a_held_turn_is_not_a_failed_run_and_the_never_stuck_check_wakes_no_one_
     tid = new_task(api, "Draft the notes")["id"]
     run = claim(api, machine)  # its first wake has had its run, which stopped without saying done
     post(api, f"attempts/{run['id']}/started", {"thread_id": "first"}, machine["token"])
-    post(api, f"attempts/{run['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Started."}, machine["token"])
+    post(
+        api,
+        f"attempts/{run['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "Started."},
+        machine["token"],
+    )
     post(api, "company/pause", {})
     store = api.app.state.store
     with store.read() as c:
