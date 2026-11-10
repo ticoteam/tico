@@ -5426,9 +5426,6 @@ def create_app(settings=None):
     from . import heartbeat as heartbeat_screen
 
     heartbeat_screen.install(app, store, auth, mutate)
-    from . import task_rules
-
-    task_rules.install(app, store, auth, mutate)
     from . import rules as wake_rules_api
 
     wake_rules_api.install(app, store, auth)  # the event catalog; wake rules are automations now

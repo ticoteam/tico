@@ -3280,7 +3280,7 @@ class InboundTask(Contract):
 class RuleCreate(Contract):
     """A wake rule (backend/rules.py): in this scope, when this event happens (and `when` holds), do `then`."""
 
-    scope_kind: Literal["team", "type", "department", "bot", "task"]
+    scope_kind: Literal["team", "pipeline", "department", "bot", "task"]
     scope_id: str = Field(default="", max_length=120)
     event: str = Field(min_length=1, max_length=60)
     then: Literal["ignore", "note", "batch", "wake", "ask", "action"]
@@ -3308,16 +3308,6 @@ class RuleDelete(Contract):
 
 class RuleSuggestionAct(Contract):
     pass
-
-
-class TaskRuleUpdate(Contract):
-    name: str | None = Field(default=None, min_length=1, max_length=120)
-    department: str | None = Field(default=None, min_length=1, max_length=80)
-    triggers: list[dict] | None = Field(default=None, min_length=1, max_length=8)
-    actions: list[str] | None = Field(default=None, min_length=1, max_length=8)
-    on: bool | None = None
-    preset: Literal["15m", "hourly", "4h", "daily"] | None = None
-    at: str | None = Field(default=None, max_length=5)
 
 
 # ----------------------------------------------------------------------------- brand, growth
