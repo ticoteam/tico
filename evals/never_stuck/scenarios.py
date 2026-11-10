@@ -337,7 +337,6 @@ LATER: dict[int, tuple[str, str]] = {
     29: ("3", "GitHub: PRs and Merge"),
     30: ("3", "GitHub: the merge queue"),
     31: ("3", "GitHub: the merge queue"),
-    32: ("3", "GitHub: PR reads"),
     33: ("3", "GitHub: releases"),
     34: ("3", "GitHub: Checks pass"),
     35: ("3", "GitHub: commits during a run"),
@@ -374,8 +373,14 @@ def extra(name: str, what: str) -> Callable[[Callable[[Rig], None]], Callable[[R
     return add
 
 
+# Scenarios a Product and Engineering case passes for (software_scenarios.CASES), by the case's name.
+ELSEWHERE: dict[int, str] = {
+    32: "webhooks-out-of-order",
+}
+
+
 def numbers_covered() -> list[int]:
-    return sorted([*SCENARIOS, *LATER])
+    return sorted([*SCENARIOS, *LATER, *ELSEWHERE])
 
 
 @contextmanager
@@ -1209,8 +1214,11 @@ def c_file_into(r: Rig) -> None:
             },
         ],
     }
-    out = r.refused(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, record), "task_settings", "saving 'file into'")
-    expect("comes with the Product pipeline" in out.detail, out.detail)
+    out = r.act(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, record))
+    # Refused until the Product pipeline lands (track A); after that it saves, and filing is the software cases' to check
+    # (software_scenarios). Either way the move below must not raise.
+    if isinstance(out, Refusal):
+        expect(out.rule == "task_settings" and "comes with the Product pipeline" in out.detail, out.detail)
     record["stages"][1]["on_enter"] = {}
     r.pipeline(record)
     # Saved before the refusal: the stage has it in the table.

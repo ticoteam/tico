@@ -3,6 +3,7 @@
     python -m evals.never_stuck.run --seed N [--explain]           one seed; --explain prints every step
     python -m evals.never_stuck.run --seeds 1-10000 [--shard i/n] [--json] [-j N] [--allow-known]
     python -m evals.never_stuck.run --scenarios [--json]           the 52 scenarios, the bugs and the extra checks
+    python -m evals.never_stuck.run --software --seeds 1-200 [-j N]  one idea to Done through Product and Engineering
 
 A sweep prints one line per failed seed (its seed, step and what broke, and the known bug it matches) and a summary:
 how many seeds passed, every bot behaviour, person action and fault the runs used, and the most bot runs any task used
@@ -37,6 +38,46 @@ def one(seed: int, explain: bool = False) -> dict[str, Any]:
         }
     report["seconds"] = round(time.perf_counter() - started, 2)
     return report
+
+
+def software_one(seed: int) -> dict[str, Any]:
+    """One seed of the Product and Engineering run (software_sim): ok, failed, or not built yet on the shared base."""
+    from . import software as S
+    from . import software_sim as SS
+
+    started = time.perf_counter()
+    try:
+        report = SS.run_software_seed(seed)
+        report["ok"], report["not_built"] = True, None
+    except S.NotBuiltYet as gap:
+        report = {"seed": seed, "ok": False, "not_built": str(gap), "step": 0, "what": str(gap)}
+    except SS.SoftwareFailure as failure:
+        report = {"seed": seed, "ok": False, "not_built": None, "step": failure.step, "what": failure.what}
+    report["seconds"] = round(time.perf_counter() - started, 2)
+    return report
+
+
+def software_sweep(seeds: list[int], jobs: int) -> dict[str, Any]:
+    started = time.perf_counter()
+    if jobs > 1:
+        with ProcessPoolExecutor(jobs) as pool:
+            reports = list(pool.map(software_one, seeds, chunksize=4))
+    else:
+        reports = [software_one(seed) for seed in seeds]
+    used: dict[str, Counter[str]] = {"behaviours": Counter(), "faults": Counter()}
+    for report in reports:
+        for key, counts in used.items():
+            counts.update(report.get(key) or {})
+    return {
+        "seeds": len(seeds),
+        "passed": sum(1 for r in reports if r["ok"]),
+        "not_built": dict(Counter(r["not_built"] for r in reports if r["not_built"])),
+        "failed": [{k: r[k] for k in ("seed", "step", "what")} for r in reports if not r["ok"] and not r["not_built"]],
+        "most_unchanged_runs": max((r.get("most_unchanged_runs", 0) for r in reports), default=0),
+        "runs": sum(r.get("runs", 0) for r in reports),
+        "seconds": round(time.perf_counter() - started, 1),
+        **{key: dict(sorted(counts.items())) for key, counts in used.items()},
+    }
 
 
 def seeds_of(text: str, shard: str | None) -> list[int]:
@@ -124,7 +165,23 @@ def main() -> int:
     parser.add_argument("--scenarios", action="store_true", help="run the scenarios, the bugs and the extra checks")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.add_argument("--allow-known", action="store_true", help="with --seeds: fail only on a new failure")
+    parser.add_argument("--software", action="store_true", help="with --seed/--seeds: the Product and Engineering run")
     args = parser.parse_args()
+    if args.software:
+        seeds = [args.seed] if args.seed is not None else seeds_of(args.seeds or "1", args.shard)
+        out = software_sweep(seeds, max(1, args.jobs))
+        if args.json:
+            print(json.dumps(out, indent=2))
+        else:
+            for failure in out["failed"]:
+                print(f"seed {failure['seed']} step {failure['step']}: {failure['what']}"[:600])
+            print(
+                f"{out['passed']} of {out['seeds']} seeds passed in {out['seconds']} s; not built yet: "
+                f"{out['not_built']}; most bot runs without a change: {out['most_unchanged_runs']}"
+            )
+            for key in ("behaviours", "faults"):
+                print(f"{key}: {out[key]}")
+        return 0 if out["passed"] == out["seeds"] else 1
     if args.seed is not None:
         report = one(args.seed, args.explain)
         if args.json:
