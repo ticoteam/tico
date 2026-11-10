@@ -427,6 +427,34 @@ def _runs_since_change(c, task_id):
     return task_wakes.runs_since(c, E.task(c, task_id))
 
 
+def _job(c, task_id, actor):
+    found = c.execute(
+        "SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id WHERE j.state='queued' AND j.bot_id=? "
+        "AND m.wake_key LIKE ?",
+        (H.actor_id(actor), task_id + ":%"),
+    ).fetchone()
+    return found[0] if found else None
+
+
+def test_no_eighth_run_starts_even_from_a_wake_queued_before_the_seventh(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    E.add_requirement(c, task_id, ANA, "ok", REVIEWER, "OK the wording")  # the builder still has work
+    waiting = _job(c, task_id, REVIEWER)
+    assert task_wakes.may_start(c, waiting) and _job(c, task_id, REVIEWER) == waiting  # it may start now
+    # Its wake stays queued while the builder runs four times and the manager bot three.
+    for _ in range(60):
+        for bot in (BUILDER, MANAGER):
+            X.ran(c, task_id, bot)
+            if _runs_since_change(c, task_id) == NS.RUNS:
+                break
+        if _runs_since_change(c, task_id) == NS.RUNS:
+            break
+        later(minutes=10)
+    assert _runs_since_change(c, task_id) == NS.RUNS and _job(c, task_id, REVIEWER) == waiting
+    assert not task_wakes.may_start(c, waiting)  # seven runs since the change: it may not start an eighth
+    assert _job(c, task_id, REVIEWER) is None  # and it is canceled with that answer
+
+
 def test_only_whoever_has_the_turn_is_woken_when_a_task_enters_a_stage(c, general, later):
     stages = (
         {"name": "Write", "owner": BUILDER, "requirements": [{"kind": "owner_done"}]},

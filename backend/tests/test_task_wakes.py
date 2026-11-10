@@ -66,6 +66,29 @@ def test_a_fold_never_leaves_a_bot_that_runs_jobs_without_a_queued_run(c, genera
     assert _queued(c, row["id"]) == [BUILDER]  # the wake it would have folded is still queued
 
 
+def _state(c, message_id):
+    return c.execute("SELECT state FROM jobs WHERE id=?", (message_id,)).fetchone()[0]
+
+
+def test_a_wake_may_start_only_for_a_bot_whose_turn_it_is(c, general):
+    from backend import task_engine as E
+
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    start = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (row["id"] + ":%",)).fetchone()[0]
+    assert task_wakes.may_start(c, start) and _state(c, start) == "queued"
+    stray = task_wakes.add(c, row, REVIEWER, row["visit"], "Look at this.", wake_key=f"{row['id']}:stray")
+    assert not task_wakes.may_start(c, {"message_id": stray}) and _state(c, stray) == "canceled"  # no turn of its own
+    look = task_wakes.add(
+        c, row, MANAGER, row["visit"], "Late: look once.", wake_key=f"{row['id']}:{row['visit']['id']}:late"
+    )
+    assert task_wakes.may_start(c, look)  # Late's one look for the manager bot needs no turn
+    chat = H.say(c, ANA, REVIEWER, "Any news?")
+    assert task_wakes.may_start(c, chat["id"])  # not a wake about a task: not the engine's to hold
+    E.snooze(c, row["id"], ANA)
+    c.execute("UPDATE jobs SET state='queued' WHERE id=?", (start,))
+    assert not task_wakes.may_start(c, start) and _state(c, start) == "canceled"  # a snoozed task wakes nobody
+
+
 def _chat_run(c, conversation_id, bot):
     """A run of `bot` on a message in a conversation that names no task: a person wrote to it there."""
     message, run = H.new_id(), H.new_id()

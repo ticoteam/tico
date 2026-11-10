@@ -49,9 +49,11 @@ SYSTEM: str = E.SYSTEM
 GAPS = (E.FIRST_TRY_S, 900, 3600)
 TRIES = len(GAPS)
 # Bot runs one visit may start between two changes: the owner's start and 3 tries, then the manager bot's 3 tries.
-# Every run on the task counts, whoever it was for and whatever woke it (R1).
+# Every run on the task counts, whoever it was for and whatever woke it (R1). The ladder holds to them, and the claim
+# of a job asks `task_wakes.may_start`, which holds the 7 at the moment a run starts.
 OWNER_RUNS = 1 + TRIES
-RUNS = 1 + 2 * TRIES
+RUNS = task_wakes.RUNS
+assert RUNS == 1 + 2 * TRIES
 HOPS = 20  # stages one task is taken through in one pass, at most
 LATE_PERSON = 3  # times a stage's expected time before a late task lands in a person's list (C5)
 CUT_OFF = ("expired", "failed", "interrupted")
