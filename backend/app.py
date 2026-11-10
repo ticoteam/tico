@@ -2560,7 +2560,7 @@ def create_app(settings=None):
             row,
             who.actor,
             "",
-            *([rule_target(c, who, body.owner)] if body.owner else []),
+            *([rule_target(c, who, body.owner)] if getattr(body, "owner", None) else []),
             *(org_rule_check.company(c) if rule_publishes(body, row) else []),
         )
 
@@ -2601,7 +2601,7 @@ def create_app(settings=None):
         text = rule_update_text(body, row)
         if not text:
             return None
-        only_owner = body.owner and not any(
+        only_owner = getattr(body, "owner", None) and not any(
             getattr(body, k, None) for k in ("title", "body", "note", "public_title", "public_summary")
         )
         return rule_check(
@@ -4542,7 +4542,11 @@ def create_app(settings=None):
             person = body.get("owner")
             ref = body.get("parent")
             # Only a plain ask: no roles, goals, links or relations reached with BotOps' rights for whoever asked.
-            if not ref or not person or set(body) - {"title", "body", "owner", "parent", "due", "private", "on_behalf_of"}:
+            if (
+                not ref
+                or not person
+                or set(body) - {"title", "body", "owner", "parent", "due", "private", "on_behalf_of"}
+            ):
                 return False
         else:
             found = re.fullmatch(r"/api/v2/tasks/([^/]+)(?:/(?:comments|asks|links|worktrees(?:/attach)?))?", path)
