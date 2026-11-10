@@ -2183,7 +2183,9 @@ def create_app(settings=None):
     @app.post("/api/v2/system/update/check")
     def system_update_check(request: Request):
         updater_only(request.state.identity, "checks for updates")
-        return releases.check_now()
+        found = releases.check_now()
+        with store.read() as c:
+            return releases.offered(c, found)
 
     # The updater restarts this process, so the outcome is written by whichever process first
     # sees a final state after a start; a marker row keeps it to one event per update.
