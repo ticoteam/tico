@@ -4,12 +4,15 @@ as the recording source, and the privacy of all of it. Google is never asked: `g
 Workspace token mint are replaced. Every name is synthetic (Acme, acme.example)."""
 
 import json
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from backend import call_ring, google_meet, threads
+from backend import calls as calls_module
 from backend import google_workspace as W
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post
@@ -25,12 +28,24 @@ class FakeMeet:
 
     def __init__(self):
         self.spaces, self.calls, self.refuse = {}, [], False
+        self.fail = None  # a status for every status read: 0 (no answer), 429, 503...
+        self.hang = {}  # space name -> an Event its status read waits on, as a Google that does not answer
+        self.lock_fail = False
 
     def __call__(self, method, url, *, token, body=None):
         self.calls.append((method, url, body))
         if self.refuse:
             return 403, {"error": {"status": "PERMISSION_DENIED"}}
         path = url[len(MEET) :].split("?")[0]
+        if method == "GET" and path in self.hang:
+            self.hang[path].wait(10)
+        if method == "GET" and self.fail is not None:
+            return self.fail, {}
+        if method == "PATCH" and path.startswith("spaces/"):
+            if self.lock_fail:
+                return 500, {}
+            self.spaces[path]["access"] = body["config"]["accessType"]
+            return 200, {"name": path, "meetingUri": URI, "config": body["config"]}
         if method == "POST" and path == "spaces":
             name = f"spaces/space{len(self.spaces) + 1}"
             self.spaces[name] = {"conference": None, "people": []}
@@ -105,6 +120,21 @@ def updates(api, call_id):
         return c.execute(
             "SELECT COUNT(*) FROM changes WHERE kind='call.updated' AND subject_id=?", (call_id,)
         ).fetchone()[0]
+
+
+def reads(fake, space):
+    """How many times the space's status was read."""
+    return len([c for c in fake.calls if c[0] == "GET" and c[1] == MEET + space])
+
+
+def locked(fake, space, wait=2.0):
+    """Whether the space was locked, waiting a little for a lock the sweep left to the poll pool."""
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if fake.spaces[space].get("access") == "RESTRICTED":
+            return True
+        time.sleep(0.02)
+    return False
 
 
 def backdate(api, call_id, seconds, *columns):
@@ -278,13 +308,16 @@ def test_a_drop_and_rejoin_within_a_minute_keeps_the_call_and_a_minute_empty_end
     assert row(meet, call["id"])["meet_conference"] == "conferenceRecords/c2"
     google.now(space, None)
     calls.poll(call["id"])
+    assert row(meet, call["id"])["meet_empty_at"]  # the first read that showed nobody
     backdate(meet, call["id"], 600, "meet_seen_at")
-    backdate(meet, call["id"], 61, "meet_active_at")
+    backdate(meet, call["id"], 90, "meet_active_at")
+    backdate(meet, call["id"], 61, "meet_empty_at")
     calls.poll(call["id"])
     ended = row(meet, call["id"])
     assert ended["state"] == "ended" and ended["end_reason"] == "meet_ended" and ended["live_count"] == 0
     view = get(meet, f"calls/{call['id']}")
-    assert 590 <= view["duration_s"] <= 610  # from the first time anyone was seen, across conferences
+    assert 505 <= view["duration_s"] <= 515  # first seen to last seen, across conferences: not the empty minute
+    assert locked(google, space)  # the sweep's end locks the space too
     texts = thread_texts(meet, cid)
     assert not any(text.startswith("Call transcript") for text in texts)  # no Recorder wrote one
 
@@ -322,8 +355,19 @@ def test_the_connector_s_end_ends_google_s_conference(google, meet):
     assert r.status_code == 403
     ended = post(meet, f"calls/{call['id']}/end", {})
     assert ended["state"] == "ended" and ended["end_reason"] == "ended_by_connector"
-    assert ("POST", MEET + space + ":endActiveConference", {}) in google.calls
+    ended_at = google.calls.index(("POST", MEET + space + ":endActiveConference", {}))
+    lock = ("PATCH", MEET + space + "?updateMask=config.accessType", {"config": {"accessType": "RESTRICTED"}})
+    assert google.calls.index(lock) > ended_at  # then the space is locked, so its link is spent
     assert meet.app.state.call_media.ended == []  # no LiveKit room to close
+
+
+def test_a_space_google_will_not_lock_still_ends_the_call(google, meet, caplog):
+    call = start(meet, thread(meet))
+    google.lock_fail = True
+    ended = post(meet, f"calls/{call['id']}/end", {})
+    assert ended["state"] == "ended" and ended["end_reason"] == "ended_by_connector"
+    assert any(c[0] == "PATCH" for c in google.calls)
+    assert "was not locked" in caplog.text
 
 
 # ----------------------------------------------------------------------------- the Recorder
@@ -443,3 +487,166 @@ def test_the_declared_meet_call_answers_match_the_live_ones(google, meet):
     send("POST", f"/api/v2/calls/{call_id}/presence", "reportCallPresence", {"names": ["Ana Alvarez"]})
     send("DELETE", f"/api/v2/calls/{call_id}/recorder", "releaseCallRecorder", {})
     send("POST", f"/api/v2/calls/{call_id}/end", "endCall", {})
+
+
+# ----------------------------------------------------------------------------- polling that Google cannot stall
+
+
+def test_a_hanging_google_does_not_hold_up_the_sweep_or_the_other_calls(google, meet, monkeypatch):
+    monkeypatch.setattr(calls_module, "POLL_BUDGET_SECONDS", 0.3)
+    calls = meet.app.state.calls
+    slow, quick = start(meet, thread(meet, subject="Acme ops")), start(meet, thread(meet, subject="Acme sales"))
+    slow_space, quick_space = row(meet, slow["id"])["meet_space"], row(meet, quick["id"])["meet_space"]
+    google.now(slow_space, "conferenceRecords/c1", "Ana Alvarez")
+    google.now(quick_space, "conferenceRecords/c2", "Ana Alvarez", "Ben Brown")
+    answer = threading.Event()
+    google.hang[slow_space] = answer
+    try:
+        began = time.monotonic()
+        calls.sweep()
+        assert time.monotonic() - began < 3  # the pass waits its budget, not Google
+        assert row(meet, quick["id"])["live_count"] == 2 and row(meet, slow["id"])["status_source"] is None
+        participants = [c for c in google.calls if c[1].startswith(MEET + "conferenceRecords/c2/participants")]
+        assert len(participants) == 1  # each call's people read once per pass
+        calls.sweep()  # the slow read is still out: it is not asked again on top of itself
+        assert reads(google, slow_space) == 1 and reads(google, quick_space) == 2
+    finally:
+        answer.set()
+    calls.polling[slow["id"]].result(timeout=5)
+    calls.sweep()
+    assert row(meet, slow["id"])["live_count"] == 1 and row(meet, slow["id"])["status_source"] == "google"
+
+
+def test_short_google_failures_keep_the_status_and_never_count_as_nobody(google, meet):
+    calls = meet.app.state.calls
+    call = start(meet, thread(meet))
+    space = row(meet, call["id"])["meet_space"]
+    google.now(space, "conferenceRecords/c1", "Ana Alvarez", "Ben Brown")
+    calls.poll(call["id"])
+    seen = updates(meet, call["id"])
+    for status in (503, 429, 0):  # Google's own error, slow down, no answer
+        google.fail = status
+        calls.poll(call["id"])
+        stored = row(meet, call["id"])
+        assert (stored["state"], stored["status_source"], stored["live_count"]) == ("live", "google", 2)
+    assert updates(meet, call["id"]) == seen
+    view = get(meet, f"calls/{call['id']}")
+    assert {p["actor"]: p["in_call"] for p in view["participants"]} == {"human:ana": True, "human:ben": True}
+    # Google was out for five minutes, then answers that everyone has gone: the empty minute starts at that answer.
+    backdate(meet, call["id"], 400, "meet_seen_at")
+    backdate(meet, call["id"], 300, "meet_active_at", "meet_polled_at")
+    google.fail = None
+    google.now(space, None)
+    calls.poll(call["id"])
+    assert row(meet, call["id"])["state"] == "live"
+    backdate(meet, call["id"], 61, "meet_empty_at")
+    calls.poll(call["id"])
+    ended = row(meet, call["id"])
+    assert ended["end_reason"] == "meet_ended"
+    assert 95 <= get(meet, f"calls/{call['id']}")["duration_s"] <= 105  # first seen to last seen
+
+
+def test_a_failing_read_eight_hours_on_ends_stale_only_once_google_has_been_quiet(google, meet):
+    calls = meet.app.state.calls
+    call = start(meet, thread(meet))
+    space = row(meet, call["id"])["meet_space"]
+    google.now(space, "conferenceRecords/c1", "Ana Alvarez")
+    calls.poll(call["id"])
+    backdate(meet, call["id"], 8 * 3600 + 5, "started_at")
+    google.fail = 503
+    calls.poll(call["id"])
+    assert row(meet, call["id"])["state"] == "live"  # a good read moments ago: one failure is not 8 hours of none
+    backdate(meet, call["id"], calls_module.QUIET_SECONDS + 5, "meet_polled_at")
+    calls.poll(call["id"])
+    assert row(meet, call["id"])["end_reason"] == "stale"
+
+
+def test_a_failing_read_backs_off_1_2_4_passes_and_a_good_one_resets_it(google, meet):
+    calls = meet.app.state.calls
+    call = start(meet, thread(meet))
+    space = row(meet, call["id"])["meet_space"]
+    google.fail = 503
+    pattern = []
+    for _ in range(8):
+        before = reads(google, space)
+        calls.poll_live([call["id"]])
+        pattern.append(reads(google, space) - before)
+    assert pattern == [1, 0, 1, 0, 0, 1, 0, 0]
+    google.fail = None
+    for _ in range(3):
+        calls.poll_live([call["id"]])  # the last skip passes, then a good read
+    assert call["id"] not in calls.backoff
+    before = reads(google, space)
+    calls.poll_live([call["id"]])
+    assert reads(google, space) == before + 1
+
+
+def test_a_call_nobody_was_seen_in_has_no_duration_and_keeps_who_watched_it(google, meet):
+    call = start(meet, thread(meet))
+    backdate(meet, call["id"], 121, "started_at")
+    meet.app.state.calls.poll(call["id"])  # Google answers: nobody in it
+    view = get(meet, f"calls/{call['id']}")
+    assert view["end_reason"] == "no_answer" and view["duration_s"] is None
+    assert view["status_source"] == "google"  # watched and nobody came: a missed call
+    # Nothing watched this one (Google refused every read): it ends with no source, a plain ended call.
+    unwatched = start(meet, thread(meet, subject="Acme ops"))
+    google.refuse = True
+    meet.app.state.calls.poll(unwatched["id"])
+    google.refuse = False
+    post(meet, f"calls/{unwatched['id']}/end", {})
+    view = get(meet, f"calls/{unwatched['id']}")
+    assert view["state"] == "ended" and view["duration_s"] is None and view["status_source"] is None
+    # A Recorder that watched a call and lets go after its end leaves the source in place.
+    watched = start(meet, thread(meet, subject="Acme sales"))
+    post(meet, f"calls/{watched['id']}/recorder", {})
+    google.refuse = True
+    meet.app.state.calls.poll(watched["id"])
+    post(meet, f"calls/{watched['id']}/presence", {"names": ["Ana Alvarez"]})
+    post(meet, f"calls/{watched['id']}/end", {})
+    meet.request("DELETE", f"/api/v2/calls/{watched['id']}/recorder", json={}, headers=headers("ana-test"))
+    view = get(meet, f"calls/{watched['id']}")
+    assert view["status_source"] == "recorder" and view["duration_s"] == 0
+
+
+# ----------------------------------------------------------------------------- the Recorder's tail and who may claim
+
+
+def test_the_recorder_s_last_chunks_are_taken_for_90_seconds_after_the_call_ends(google, meet):
+    cid = thread(meet)
+    call = start(meet, cid)
+    meeting = call["meeting_id"]
+    post(meet, f"calls/{call['id']}/recorder", {}, token="ben-test")
+
+    def chunk(seq, text):
+        return {
+            "chunks": [{"seq": seq, "speaker": "Ben", "start_ms": seq * 1000, "end_ms": seq * 1000 + 900, "text": text}]
+        }
+
+    post(meet, f"live-meetings/{meeting}/chunks", chunk(1, "We ship Friday"), token="ben-test")
+    post(meet, f"calls/{call['id']}/end", {})
+    assert not [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]  # it waits for the tail
+    post(meet, f"live-meetings/{meeting}/chunks", chunk(2, "Ben owns the rollout"), token="ben-test")
+    fix = {"revision": 2, "speaker": "Ben", "start_ms": 1000, "end_ms": 1900, "text": "We ship on Friday"}
+    post(meet, f"live-meetings/{meeting}/chunks/1/corrections", fix, token="ben-test")
+    backdate(meet, call["id"], 91, "ended_at")
+    late = meet.post(f"/api/v2/live-meetings/{meeting}/chunks", json=chunk(3, "Late"), headers=headers("ben-test"))
+    assert late.status_code == 403
+    fix = {**fix, "revision": 3, "text": "Too late"}
+    late = meet.post(f"/api/v2/live-meetings/{meeting}/chunks/1/corrections", json=fix, headers=headers("ben-test"))
+    assert late.status_code in (403, 409)
+    meet.app.state.calls.sweep()
+    transcripts = [t for t in thread_texts(meet, cid) if t.startswith("Call transcript")]
+    assert len(transcripts) == 1 and "We ship on Friday" in transcripts[0] and "Ben owns the rollout" in transcripts[0]
+    assert "Late" not in transcripts[0]
+
+
+def test_only_someone_in_the_call_may_claim_its_recording(google, meet):
+    with meet.app.state.store.transaction() as c:
+        cid = threads.create(c, "human:ana", title="Acme all hands", audience="company")["id"]
+    call = start(meet, cid)
+    assert get(meet, f"calls/{call['id']}", token="cara-test")["id"] == call["id"]  # Cara reads the thread
+    r = meet.post(f"/api/v2/calls/{call['id']}/recorder", json={}, headers=headers("cara-test"))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "not_in_call"
+    assert row(meet, call["id"])["recorder_actor"] is None
+    join(meet, call["id"], "cara-test")  # she opens the call from Tico: now she is in it
+    assert post(meet, f"calls/{call['id']}/recorder", {}, token="cara-test")["source"] is True

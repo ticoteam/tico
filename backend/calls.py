@@ -83,6 +83,15 @@ NO_ANSWER_SECONDS = 120  # a Meet nobody was seen in this long after it started 
 # makes a new one on the same space, so a Meet someone was seen in ends only after nobody has been seen in it this long.
 EMPTY_SECONDS = 60
 STALE_SECONDS = 8 * 3600  # a Meet with no status from Google this long after it started ends stale
+# A Meet whose reads have failed (no answer, Google's own error, 429) keeps the status its last good read gave. One Google
+# has not answered for this long counts as having no status from Google, for the stale rule.
+QUIET_SECONDS = 600
+# The sweep reads live Meets from Google on its own small pool, so a slow or hanging Google never holds up the heartbeat:
+# it waits POLL_BUDGET_SECONDS for the pass, and a read still out then is made again on a later pass. A Meet whose read
+# failed skips 1, 2, 4... passes before its next one, never more than POLL_SKIP_MAX.
+POLL_WORKERS = 4
+POLL_BUDGET_SECONDS = 5
+POLL_SKIP_MAX = 16
 PRESENCE_MAX = 100  # the names one presence report may carry
 RINGING_LIMIT = 20  # the calls `GET /api/v2/calls/ringing` answers with at most
 CHANGE_FIELDS = ("live_count", "status_source", "recorder_actor", "meet_seen_at")  # with in_call: call.updated
@@ -232,10 +241,15 @@ def _between(start, end):
 
 
 def _duration(row):
-    """An ended call's length in seconds: from the first time anyone was seen in it (else its start) to its end."""
+    """An ended call's length in seconds. A Google Meet's runs from the first time anyone was seen in it to the last
+    (`meet_active_at`), and is None when nobody ever was: a missed call. A Tico Meet's runs from its start to its end."""
     if row["state"] != "ended" or not row["ended_at"]:
         return None
-    return max(0, int(_between(row["meet_seen_at"] or row["started_at"], row["ended_at"])))
+    if _google(row):
+        if not row["meet_seen_at"]:
+            return None
+        return max(0, int(_between(row["meet_seen_at"], row["meet_active_at"] or row["meet_seen_at"])))
+    return max(0, int(_between(row["started_at"], row["ended_at"])))
 
 
 def _ring_list(row):
@@ -282,6 +296,10 @@ class Calls:
         self.pending = {}  # call_id -> the clips it is still transcribing
         self.workers = ThreadPoolExecutor(max_workers=WORKERS, thread_name_prefix="tico-meet-stt")
         self.starting = {}  # (actor, idempotency key) -> the lock a Google Meet start holds while it makes its space
+        self.pollers = ThreadPoolExecutor(max_workers=POLL_WORKERS, thread_name_prefix="tico-meet-poll")
+        self.polling = {}  # call_id -> a status read a past pass left still out
+        self.backoff = {}  # call_id -> [failures in a row, passes still to skip]
+        self.poll_pass = threading.Lock()  # one polling pass at a time
 
     @property
     def media(self):
@@ -949,6 +967,13 @@ class Calls:
         if row["finalized_at"]:
             return True
         if row["wrapped_up_at"] is None:
+            if (
+                _google(row)
+                and row["recorder_actor"]
+                and row["ended_at"]
+                and _seconds_since(row["ended_at"]) < live_meetings.RECORDER_TAIL_SECONDS
+            ):
+                return False  # the Recorder's last chunks may still be on their way (live_meetings.recorder_tail)
             if self.media is not None and not _google(row):
                 try:
                     self.media.stop_recorder(call_id)
@@ -1136,7 +1161,7 @@ class Calls:
     def sweep(self):
         """Keep calls true to their threads (the scheduler's tick). Nothing here is a request, so a call that cannot reach
         LiveKit waits for the next tick. An ended call comes back until its room is closed, its transcript is posted and
-        LiveKit has dropped everyone who left."""
+        LiveKit has dropped everyone who left. Live Google Meets are read from Google last, all together (poll_live)."""
         self.flush(idle=True)
         with self.store.read() as c:
             ids = [
@@ -1147,17 +1172,21 @@ class Calls:
                     "(left_at IS NOT NULL OR removed_at IS NOT NULL)))"
                 )
             ]
+        polls = []
         for call_id in ids:
             try:
-                self._sweep_call(call_id)
+                if self._sweep_call(call_id):
+                    polls.append(call_id)
             except call_media.MediaUnavailable:
                 continue
             except Exception as exc:  # noqa: BLE001 - one call's sweep failing must not stop the others
                 from .batch_work import report
 
                 report("calls_sweep", call_id, exc, logger="tico.calls")
+        self.poll_live(polls)
 
     def _sweep_call(self, call_id):
+        """One call's pass. Returns True for a live Google Meet, whose status the sweep then reads from Google."""
         with self.store.read() as c:
             row = _call(c, call_id)
         if row["state"] == "ended":
@@ -1185,8 +1214,7 @@ class Calls:
         if _google(row):
             with self.store.transaction() as c:
                 self._keep_to_thread(c, row, revoked, stale_bots)
-            self.poll(call_id)
-            return
+            return True
         room = row["room_name"]
         exists = self.media.room_exists(room)
         if not exists and (row["media_seen_at"] or _started_long_ago(row["started_at"])):
@@ -1230,67 +1258,152 @@ class Calls:
 
     # --- Google Meet: status from Google (or the Recorder), the recording source, and ending the conference
 
-    def _meet_token(self, c, actor):
-        """A Meet access token for `actor`'s Workspace mailbox, or None: Meet not authorized, the mailbox not covered, or
-        Google refusing the token. Reads only."""
+    def _mint_meet(self, c, actor):
+        """A Meet access token for `actor`'s Workspace mailbox. Raises google_meet.MeetUnavailable: `refused` when Meet is
+        not authorized, the mailbox is not covered or Google names its refusal; `unreachable` when Google's token answer
+        names nothing (no answer, or its own error), which passes. Reads only."""
         if not google_workspace.meet_ready(c):
-            return None
+            raise google_meet.MeetUnavailable("refused")
         box = google_workspace.workspace_mailbox(c, actor)
         if not box:
-            return None
+            raise google_meet.MeetUnavailable("refused")
         try:
             return google_workspace.mint(c, box, "meet")["access_token"]
-        except Problem:
+        except Problem as exc:
+            passes = exc.extra.get("kind") == "other"  # Google's token answer named no refusal
+            raise google_meet.MeetUnavailable("unreachable" if passes else "refused") from None
+
+    def _meet_token(self, c, actor):
+        """A Meet access token for `actor`'s Workspace mailbox, or None when there is none to have. Reads only."""
+        try:
+            return self._mint_meet(c, actor)
+        except google_meet.MeetUnavailable:
             return None
 
+    def read_status(self, call_id):
+        """Google's answer for one live Google Meet, read as its connector with no transaction open: the space, then who
+        is still in its active conference, each read once. {"ok": True, "conference", "people"}; {"ok": False, "refused":
+        True} when Google will not give a status (no token for the mailbox, the scope or the API refused, no such space);
+        {"ok": False, "refused": False} when Google did not answer (a timeout, its own error, 429), which passes and
+        changes nothing. None when the call is no longer a live Meet."""
+        try:
+            with self.store.read() as c:
+                row = _call(c, call_id)
+                if not _google(row) or row["state"] != "live":
+                    return None
+                token = self._mint_meet(c, row["connector_actor"])
+            space = google_meet.get_space(token, row["meet_space"])
+            people = google_meet.active_participants(token, space["conference"]) if space["conference"] else []
+        except google_meet.MeetUnavailable as exc:
+            log.info("A Meet call's status read failed: %s", exc.kind)
+            return {"ok": False, "refused": exc.kind != "unreachable"}
+        return {"ok": True, "conference": space["conference"], "people": people}
+
     def poll(self, call_id):
-        """One status read of a live Google Meet call, as its connector: the space, then who is still in its active
-        conference. Google asked outside any transaction. A conference with nobody listed in it is nobody in the call
-        (Google opens one for the pre-join page), and a call may span several conferences (each rejoin after everyone
-        left makes a new one). A call someone was seen in ends `meet_ended` once nobody has been seen in it for
-        EMPTY_SECONDS; one nobody was seen in within NO_ANSWER_SECONDS of its start ends `no_answer`. Google refusing
-        leaves the status
-        to the Recorder, or to nothing, and a call with no status from Google ends `stale` STALE_SECONDS after it
-        started."""
-        with self.store.read() as c:
-            row = _call(c, call_id)
-            if not _google(row) or row["state"] != "live":
+        """One status read of a live Google Meet call, written, and the call wrapped up when the read ended it."""
+        seen = self.read_status(call_id)
+        if seen is None:
+            return
+        if self.apply_status(call_id, seen):
+            self.lock_later(call_id)
+            self.after_end(call_id)
+
+    def poll_live(self, ids):
+        """Read every live Google Meet in `ids` from Google at once, on the poll pool, and write what each read said.
+        The pass waits POLL_BUDGET_SECONDS at most: a read still out then is left to finish and the call is read again
+        on a later pass, never twice at once. A call whose read failed waits (`backoff`) before its next. Calls a read
+        ended are wrapped up by the next pass of the sweep, so this pass stays inside its budget."""
+        if not self.poll_pass.acquire(blocking=False):
+            return
+        try:
+            live = set(ids)
+            for gone in [call_id for call_id in self.backoff if call_id not in live]:
+                self.backoff.pop(gone, None)
+            due = []
+            for call_id in ids:
+                out = self.polling.get(call_id)
+                if out is not None and not out.done():
+                    continue
+                self.polling.pop(call_id, None)
+                waiting = self.backoff.get(call_id)
+                if waiting and waiting[1] > 0:
+                    waiting[1] -= 1
+                    continue
+                due.append(call_id)
+            if not due:
                 return
-            token = self._meet_token(c, row["connector_actor"])
-        seen = None
-        if token:
-            try:
-                space = google_meet.get_space(token, row["meet_space"])
-                people = google_meet.active_participants(token, space["conference"]) if space["conference"] else []
-                seen = (space["conference"], people)
-            except google_meet.MeetUnavailable as exc:
-                log.info("A Meet call's status read was refused: %s", exc.kind)
+            futures = {self.pollers.submit(self.read_status, call_id): call_id for call_id in due}
+            done, late = wait(futures, timeout=POLL_BUDGET_SECONDS)
+            for future in late:
+                if not future.cancel():
+                    self.polling[futures[future]] = future
+            index = None
+            for future, call_id in futures.items():
+                if future not in done:
+                    continue
+                try:
+                    seen = future.result()
+                    if seen is None:
+                        continue
+                    if seen["ok"]:
+                        self.backoff.pop(call_id, None)
+                    else:
+                        failures = (self.backoff.get(call_id) or [0, 0])[0] + 1
+                        self.backoff[call_id] = [failures, min(2 ** (failures - 1), POLL_SKIP_MAX)]
+                    if index is None and seen["ok"] and seen["people"]:
+                        with self.store.read() as c:
+                            index = self._people_index(c)  # the roster, read once for the whole pass
+                    if self.apply_status(call_id, seen, index):
+                        self.lock_later(call_id)
+                except Exception as exc:  # noqa: BLE001 - one call's status failing must not stop the others
+                    from .batch_work import report
+
+                    report("calls_poll", call_id, exc, logger="tico.calls")
+        finally:
+            self.poll_pass.release()
+
+    def apply_status(self, call_id, seen, index=None):
+        """Write what one read said (read_status), in one transaction with no request to Google in it, and end the call
+        when that is what it says. Only a good read changes the status: a read Google did not answer keeps the count,
+        who is in the call and the source as the last good read left them, and never ends the call but as stale.
+        A conference with nobody listed in it is nobody in the call (Google opens one for the pre-join page), and a call
+        may span several conferences (each rejoin after everyone left makes a new one). A call someone was seen in ends
+        `meet_ended` once good reads have shown nobody for EMPTY_SECONDS (`meet_empty_at`, the first of them); one
+        nobody was seen in within NO_ANSWER_SECONDS of its start ends `no_answer`. Google refusing leaves the status to
+        the Recorder, or to nothing, and a call with no status from Google ends `stale` STALE_SECONDS after it
+        started. Returns the end reason, or None."""
         ended = None
         with self.store.transaction() as c:
             row = _call(c, call_id)
-            if row["state"] != "live":
-                return
+            if not _google(row) or row["state"] != "live":
+                return None
             self._drop_lost_source(c, row)
             row = _call(c, call_id)
-            if seen is None:
-                if row["status_source"] == "google":
-                    self._set_status(c, row, None, [], None)
-                if _seconds_since(row["started_at"]) > STALE_SECONDS:
-                    ended = "stale"
-            else:
-                conference, people = seen
-                self._set_status(c, row, "google", people, conference)
+            if seen["ok"]:
+                people = seen["people"]
+                self._set_status(c, row, "google", people, seen["conference"], index)
+                row = _call(c, call_id)
                 if people:
                     ended = None  # someone is in it: the call goes on, whichever conference they are in
                 elif row["meet_seen_at"]:
-                    if _seconds_since(row["meet_active_at"] or row["meet_seen_at"]) >= EMPTY_SECONDS:
+                    if row["meet_empty_at"] and _seconds_since(row["meet_empty_at"]) >= EMPTY_SECONDS:
                         ended = "meet_ended"
                 elif _seconds_since(row["started_at"]) > NO_ANSWER_SECONDS:
                     ended = "no_answer"
+            else:
+                if seen["refused"] and row["status_source"] == "google":
+                    self._set_status(c, row, None, [], None)
+                    row = _call(c, call_id)
+                quiet = (
+                    row["status_source"] != "google"
+                    or not row["meet_polled_at"]
+                    or _seconds_since(row["meet_polled_at"]) > QUIET_SECONDS
+                )
+                if quiet and _seconds_since(row["started_at"]) > STALE_SECONDS:
+                    ended = "stale"
             if ended:
                 self.finish(c, call_id, ended)
-        if ended:
-            self.after_end(call_id)
+        return ended
 
     def _drop_lost_source(self, c, row):
         """A recording source who can no longer read the thread is no longer the source."""
@@ -1304,10 +1417,9 @@ class Calls:
             )
             self._changed(c, row, before, in_call)
 
-    def _match(self, c, row, people):
-        """The company people among a status source's `people`, by display name (one person with that name), then by
-        email when the source gives one. Only people who can read the call's thread are matched: anyone else is
-        counted in the call and never named in it."""
+    @staticmethod
+    def _people_index(c):
+        """The company's people by spoken display name (a set: names can repeat) and by email, for matching."""
         from .views import roster
 
         names, emails = {}, {}
@@ -1319,6 +1431,15 @@ class Calls:
                 names.setdefault(_spoken(person.get("name")), set()).add(actor)
             if person.get("email"):
                 emails[str(person["email"]).strip().lower()] = actor
+        return names, emails
+
+    def _match(self, c, row, people, index=None):
+        """The company people among a status source's `people`, by display name (one person with that name), then by
+        email when the source gives one. Only people who can read the call's thread are matched: anyone else is
+        counted in the call and never named in it. `index` is a pass's _people_index, read once for all its calls."""
+        if not people:
+            return set()
+        names, emails = index or self._people_index(c)
         found = set()
         for one in people:
             named = names.get(_spoken(one.get("name"))) or set() if _spoken(one.get("name")) else set()
@@ -1327,13 +1448,13 @@ class Calls:
                 found.add(actor)
         return found
 
-    def _set_status(self, c, row, source, people, conference):
+    def _set_status(self, c, row, source, people, conference, index=None):
         """Record what a status source says is in the call: who (in_call, and a participant row for anyone first seen),
-        how many, and when someone was first seen. `source` None clears the status. Writes `call.updated` only when
-        something changed."""
+        how many, when someone was first and last seen, and when a read first showed nobody after that. `source` None
+        clears the status. Writes `call.updated` only when something changed."""
         before, in_call_before = dict(row), self._in_call_set(c, row["id"])
         stamp = H.now()
-        actors = self._match(c, row, people) if source else set()
+        actors = self._match(c, row, people, index) if source else set()
         for actor in actors:
             c.execute(
                 "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,1) "
@@ -1347,9 +1468,12 @@ class Calls:
             (row["id"], *sorted(actors)),
         )
         count = len(people) if source else 0
+        # SET reads the row as it was, so meet_seen_at below is the one from before this read.
         c.execute(
             "UPDATE calls SET live_count=?,status_source=?,meet_seen_at=COALESCE(meet_seen_at,?),"
             "meet_active_at=COALESCE(?,meet_active_at),meet_polled_at=COALESCE(?,meet_polled_at),"
+            "meet_empty_at=CASE WHEN ? OR ? IS NULL OR meet_seen_at IS NULL THEN NULL "
+            "ELSE COALESCE(meet_empty_at,?) END,"
             "meet_conference=COALESCE(?,meet_conference),updated_at=? WHERE id=?",
             (
                 count,
@@ -1357,6 +1481,9 @@ class Calls:
                 stamp if count else None,
                 stamp if count else None,
                 stamp if source else None,
+                count,
+                source,
+                stamp,
                 conference,
                 stamp,
                 row["id"],
@@ -1402,8 +1529,11 @@ class Calls:
 
     def claim_recorder(self, c, who, call_id):
         """A person who can read the thread asks for their Recorder to be the call's recording source. The first claim
-        wins and its holder keeps it; anyone else is told who has it."""
+        wins and its holder keeps it; anyone else is told who has it. Only someone in the call may (_in_call_or_thread).
+        """
         row = self._readable_live(c, who, call_id)
+        if not self._in_call_or_thread(c, row, who.actor):
+            raise Problem("not_in_call", "Only someone in this call can record it", 403)
         if row["recorder_actor"] is None:
             before, in_call = dict(row), self._in_call_set(c, call_id)
             stamp = H.now()
@@ -1418,6 +1548,21 @@ class Calls:
             audit_log.write(c, who.actor, f"call:{call_id}", None, {"kind": "call.recorder_claimed"})
             self._changed(c, row, before, in_call)
         return self._source_answer(c, who, call_id)
+
+    @staticmethod
+    def _in_call_or_thread(c, row, actor):
+        """Whether `actor` is in the call, for claiming its recording source: its connector, someone with a place in it
+        that was not taken away (they opened it from Tico, or a status source saw them in it), or one of the thread's
+        own people (its members; a DM's or a group chat's people). Reading the thread alone, as anyone can a company
+        thread, is not being in the call."""
+        if actor == row["connector_actor"]:
+            return True
+        if c.execute(
+            "SELECT 1 FROM call_participants WHERE call_id=? AND actor=? AND removed_at IS NULL", (row["id"], actor)
+        ).fetchone():
+            return True
+        root = threads.root_of(c, threads.thread_row(c, row["thread_id"]))
+        return actor in threads._dm_members(c, root)
 
     def release_recorder(self, c, who, call_id):
         """The holder stops being the recording source; the Recorder's status goes with it."""
@@ -1436,7 +1581,8 @@ class Calls:
                 "UPDATE calls SET recorder_actor=NULL,recorder_claimed_at=NULL,updated_at=? WHERE id=?",
                 (H.now(), call_id),
             )
-            if row["status_source"] == "recorder":
+            if row["status_source"] == "recorder" and row["state"] == "live":
+                # An ended call keeps its source: it says something watched the call (a missed call, not an unknown one).
                 c.execute("UPDATE calls SET status_source=NULL,live_count=0 WHERE id=?", (call_id,))
                 c.execute("UPDATE call_participants SET in_call=0 WHERE call_id=?", (call_id,))
             audit_log.write(c, who.actor, f"call:{call_id}", None, {"kind": "call.recorder_released"})
@@ -1464,12 +1610,46 @@ class Calls:
         return {"calls": found}
 
     def end_conference(self, call_id):
-        """Ask Google to end a Meet call's active conference, as its connector. Best effort: the call ends either way."""
+        """Ask Google to end a Meet call's active conference, as its connector, then lock its space so the link is spent.
+        Best effort: the call ends either way."""
         with self.store.read() as c:
             row = _call(c, call_id)
             token = self._meet_token(c, row["connector_actor"]) if _google(row) else None
         if token and row["meet_space"]:
             google_meet.end_active_conference(token, row["meet_space"])
+            self._lock(row, token)
+
+    def lock_space(self, call_id):
+        """Lock an ended Meet call's space (google_meet.lock_space), as its connector. Best effort: a failure is logged."""
+        with self.store.read() as c:
+            row = _call(c, call_id)
+            token = self._meet_token(c, row["connector_actor"]) if _google(row) else None
+        if token and row["meet_space"]:
+            self._lock(row, token)
+        elif _google(row):
+            log.warning("A Meet call's space was not locked: no token for its connector")
+
+    @staticmethod
+    def _lock(row, token):
+        try:
+            locked = google_meet.lock_space(token, row["meet_space"])
+        except Exception:  # noqa: BLE001 - locking is best effort: the call has ended either way
+            locked = False
+        if not locked:
+            log.warning("A Meet call's space was not locked; its link still opens it (call %s)", row["id"])
+
+    def lock_later(self, call_id):
+        """Lock the space of a Meet the sweep ended, on the poll pool, so the heartbeat never waits on Google for it."""
+
+        def lock():
+            try:
+                self.lock_space(call_id)
+            except Exception as exc:  # noqa: BLE001 - reported; the call has ended either way
+                from .batch_work import report
+
+                report("calls_lock", call_id, exc, logger="tico.calls")
+
+        self.pollers.submit(lock)
 
     def drop_pending(self, call_id):
         """Remove from the call's LiveKit room everyone who left or lost access. Each removal is kept until LiveKit confirms

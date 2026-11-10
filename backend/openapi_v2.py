@@ -9808,7 +9808,7 @@ STABLE.extend(
             "post",
             "Calls",
             "claimCallRecorder",
-            "Make your Tico Recorder a live Google Meet call's recording source: the first claim wins",
+            "Make your Tico Recorder a live Google Meet call's recording source: the first claim wins, if you are in the call",
             "CallRecorderSource",
         ),
         (

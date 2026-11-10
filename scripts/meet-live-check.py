@@ -5,7 +5,7 @@ Meet. Run it once by hand with a Workspace service-account key whose client is a
     meet-live-check.py --key key.json --mailbox ana@acme.example [--minutes 5] [--every 10]
 
 It makes a space as the mailbox (the key impersonating it, as Tico's server does), prints the join link, then every
-`--every` seconds prints the active conference and the people still in it, for `--minutes`, and ends the conference.
+`--every` seconds prints the active conference and the people still in it, for `--minutes`, ends the conference and locks the space.
 Join and leave the Meet while it runs to see when each poll notices. Ctrl-C ends it early. It talks to Google only,
 through Tico's own Meet client (backend/google_meet.py): no Tico server, database or vault is used, and nothing is
 written but the space. Needs PyJWT and cryptography (backend/requirements.txt).
@@ -90,7 +90,9 @@ def main():
     except KeyboardInterrupt:
         print()
     ended = google_meet.end_active_conference(access, space["name"])
-    print(f"{stamp()} {'ended the conference' if ended else 'no conference to end'}; the space stays, unused")
+    print(f"{stamp()} {'ended the conference' if ended else 'no conference to end'}")
+    locked = google_meet.lock_space(access, space["name"])
+    print(f"{stamp()} {'locked the space (RESTRICTED)' if locked else 'Google did not lock the space'}")
 
 
 if __name__ == "__main__":
