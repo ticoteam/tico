@@ -154,19 +154,33 @@ def _started(row):
     return not old & set(MT.STARTED) and bool(new & set(MT.STARTED))
 
 
+# The idea's labels when a move was made: the last label change before it, else what the first one after it changed
+# from, else the labels it has now (it never changed them).
+LABELS_THEN = (
+    "coalesce((SELECT l.new FROM history_events l WHERE l.subject_type='task' AND l.subject_id=e.subject_id "
+    "AND l.kind='labels' AND l.rowid<e.rowid ORDER BY l.rowid DESC LIMIT 1), "
+    "(SELECT l.old FROM history_events l WHERE l.subject_type='task' AND l.subject_id=e.subject_id "
+    "AND l.kind='labels' AND l.rowid>e.rowid ORDER BY l.rowid LIMIT 1), "
+    "(SELECT json_group_array(tg.key) FROM task_tags tt JOIN tags tg ON tg.id=tt.tag_id WHERE tt.task_id=e.subject_id))"
+)
+
+
 def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
     started = " OR ".join("e.new LIKE ?" for _ in MT.STARTED)
     labelled = ",".join("?" * len(MT.LABELS))
+    # A finish is a move that ended the task (into Done or Closed, by a person, a bot or a close of the task above it)
+    # while it was an idea. A task put back from the trash as it ended did not end again.
     rows = H._rows(
         c.execute(
             "SELECT e.kind AS event, e.subject_id AS task_id, e.created_at, e.old, e.new, s.kind AS stage, t.title, "
             "t.goal_id FROM history_events e JOIN tasks t ON t.id=e.subject_id "
             "LEFT JOIN stages s ON e.kind='move' AND s.id=e.new "
             f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND ({started})) "
-            "OR (e.kind='move' AND s.kind IN ('done','closed') AND t.id IN (SELECT tt.task_id FROM task_tags tt "
-            f"JOIN tags tg ON tg.id=tt.tag_id WHERE tg.key IN ({labelled})))) "
-            f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.created_at DESC, e.id DESC",
+            "OR (e.kind='move' AND s.kind IN ('done','closed') "
+            "AND coalesce(json_extract(e.data, '$.move'), '')!='restored' "
+            f"AND EXISTS (SELECT 1 FROM json_each({LABELS_THEN}) WHERE value IN ({labelled})))) "
+            f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.created_at DESC, e.rowid DESC",
             [since, *(f'%"{label}"%' for label in MT.STARTED), *MT.LABELS],
         )
     )

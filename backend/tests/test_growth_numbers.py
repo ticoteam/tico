@@ -389,3 +389,27 @@ def test_an_idea_already_running_starts_no_new_test_when_it_takes_the_other_runn
         H.task_update(c, ANA, tid, labels=["idea:live", "channel:seo"])
         found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
     assert [m["kind"] for m in found] == ["started"]
+
+
+def test_only_a_real_ending_marks_a_finish_and_it_stays_when_the_ideas_labels_go(company):
+    """A done or closed move is a finish. A task restored from the trash as it ended did not finish again; an idea that
+    finished keeps its finish when its labels are cleared later; one reopened and done again finished twice."""
+    from backend import task_delete
+
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        restored = _idea(c, "Weekend discount", ["growth:ideas"])
+        H.task_done(c, ANA, restored, "Bookings rose 8%")
+        assert task_delete.delete_tasks(c, [restored], apply=True, actor=ANA, keep_work=True)["applied"]
+        assert task_delete.restore_tasks(c, [restored], actor=ANA)["restored"] == [restored]
+        cleared = _idea(c, "Door hangers in Elm Park", ["idea:on-deck"])
+        H.task_close(c, ANA, cleared, "Too few replies")
+        H.task_update(c, ANA, cleared, labels=[])
+        twice = _idea(c, "Referral cards", ["growth:ideas"])
+        H.task_done(c, ANA, twice, "Worked")
+        H.task_move(c, ANA, twice, "reopen", "Try a second round")
+        H.task_done(c, ANA, twice, "Worked again")
+        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    assert sorted((m["task_id"], m["outcome"]) for m in found) == sorted(
+        [(restored, "kept"), (cleared, "dropped"), (twice, "kept"), (twice, "kept")]
+    )
