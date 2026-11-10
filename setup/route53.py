@@ -43,12 +43,36 @@ def _norm(v: str) -> str:
     return v.rstrip(".").lower()
 
 
+# What, besides name, type, TTL and values, makes a record set what it is: its routing policy and health check.
+ROUTING = (
+    "SetIdentifier",
+    "Weight",
+    "Region",
+    "Failover",
+    "GeoLocation",
+    "GeoProximityLocation",
+    "CidrRoutingConfig",
+    "MultiValueAnswer",
+    "HealthCheckId",
+    "TrafficPolicyInstanceId",
+)
+
+
+def _canon(v):
+    return tuple(sorted((k, _canon(x)) for k, x in v.items())) if isinstance(v, dict) else v
+
+
+def simple(rs: dict) -> bool:
+    """A plain record set, as setup writes them: no alias, no routing policy, no health check."""
+    return "AliasTarget" not in rs and not any(k in rs for k in ROUTING)
+
+
 def key(rs: dict) -> tuple | None:
-    """A record set exactly: name, type, TTL and values. An alias is never one setup made."""
+    """A record set exactly: name, type, TTL, values and every routing field. An alias is never one setup made."""
     if "AliasTarget" in rs:
         return None
     values = tuple(sorted(_norm(v["Value"]) for v in rs.get("ResourceRecords", [])))
-    return (_norm(rs["Name"]), rs["Type"], rs.get("TTL"), values)
+    return (_norm(rs["Name"]), rs["Type"], rs.get("TTL"), values, tuple((k, _canon(rs.get(k))) for k in ROUTING))
 
 
 def plan(
@@ -87,9 +111,9 @@ def plan(
         for rs in got["ResourceRecordSets"]:
             if _norm(rs["Name"]) != want or rs["Type"] not in ("A", "AAAA", "CNAME"):
                 continue
-            alias, w = "AliasTarget" in rs, wanted.get(rs["Type"])
+            w = wanted.get(rs["Type"])
             vals = {_norm(v["Value"]) for v in rs.get("ResourceRecords", [])}
-            if not alias and w is not None and vals == w:
+            if simple(rs) and w is not None and vals == w:
                 keep.add(rs["Type"])
                 if key(rs) in mine_keys:
                     kept.append(rs)
@@ -97,7 +121,7 @@ def plan(
             if key(rs) in mine_keys or want in replace:
                 changes.append({"Action": "DELETE", "ResourceRecordSet": rs})
                 continue
-            fits = not alias and rs["Type"] != "CNAME" and not cname and vals
+            fits = simple(rs) and rs["Type"] != "CNAME" and not cname and vals
             mine_only = {_norm(a) for a in allowed}
             if fits and (vals <= mine_only if w is None else preflight and vals <= mine_only | w):
                 continue

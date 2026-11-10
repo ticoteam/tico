@@ -1829,3 +1829,26 @@ def test_backup_storage_holds_to_the_server_installs_record_of_its_user(tmp_path
     assert (
         state.load_backup(DOMAIN)["aws_ids"]["backup_user"] == made == state.load(DOMAIN)[0]["aws_ids"]["backup_user"]
     )
+
+
+def test_a_record_set_matches_this_installs_only_when_every_routing_field_is_equal():
+    # Codex review 4: name, type, TTL and values alone are not the record set. One someone has since made weighted,
+    # latency, failover, geo, multivalue or health-checked (with the same values) is theirs: never kept, never deleted.
+    made = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 300, "ResourceRecords": [{"Value": "203.0.113.9"}]}
+    want = [dns.Record("A", DOMAIN, "203.0.113.9", 300)]
+    for extra in (
+        {"SetIdentifier": "blue", "Weight": 10},
+        {"SetIdentifier": "east", "Region": "us-east-1"},
+        {"SetIdentifier": "p", "Failover": "PRIMARY"},
+        {"SetIdentifier": "g", "GeoLocation": {"CountryCode": "US"}},
+        {"SetIdentifier": "m", "MultiValueAnswer": True},
+        {"HealthCheckId": "hc-1"},
+    ):
+        theirs = {**made, **extra}
+        assert route53.key(theirs) != route53.key(made), extra
+        r53 = FakeRoute53(ZONE, [dict(theirs)])
+        changes, created, found, kept = route53.plan(r53, "Z1", want, [made])
+        assert found == [theirs] and kept == [] and not [c for c in changes if c["Action"] == "DELETE"], extra
+        assert route53.recorded(r53, "Z1", DOMAIN, [made]) == ([], [theirs]), extra
+    r53 = FakeRoute53(ZONE, [dict(made)])
+    assert route53.recorded(r53, "Z1", DOMAIN, [made]) == ([made], [])
