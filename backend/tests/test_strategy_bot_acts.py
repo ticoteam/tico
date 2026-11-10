@@ -823,3 +823,26 @@ def test_the_strategy_bot_never_changes_who_reads_files_under_or_holds_up_a_pers
         x["kind"] == "person_task" and x["state"] == "proposed"
         for x in get(api, "strategy-bot/log")["items"][: len(tries)]
     )
+
+
+def test_the_strategy_bot_never_sets_a_check_back_on_a_persons_task(api):
+    """A check-back on a person's task is the owner's to set. The Strategy Bot's attempt becomes a proposal and leaves
+    the check-back unchanged, and the owner still sets one."""
+    strategy_token = with_strategy_bot(api)
+    with api.app.state.store.transaction() as c:
+        theirs = H.task_create(
+            c, STRATEGY_BOT, "Call the bank about the loan", "Ask for the new rate.", OWNER, lint=False
+        )["id"]
+    before = task(api, theirs)
+    logged = len(get(api, "strategy-bot/log")["items"])
+    r = api.post(
+        f"/api/v2/tasks/{theirs}/check-back",
+        json={"at": "2h", "note": "Check the rate"},
+        headers=headers(strategy_token),
+    )
+    assert r.status_code == 409 and "proposal" in r.text, r.text
+    after = task(api, theirs)
+    assert (after["check_back_at"], after["version"]) == (before["check_back_at"], before["version"])
+    assert len(get(api, "strategy-bot/log")["items"]) == logged + 1
+    post(api, f"tasks/{theirs}/check-back", {"at": "2h", "note": "Check the rate"})
+    assert task(api, theirs)["check_back_at"] is not None
