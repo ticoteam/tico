@@ -682,7 +682,8 @@ def ensure_dns(
 
 def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> bool:
     try:
-        client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile)
+        one = owned.strict(s.asset_prefix)
+        client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile, one)
     except Exception:
         io.say("  Route 53 serves this domain but no AWS credentials are available here; add the records by hand.")
         return False
@@ -716,7 +717,7 @@ def _r53_zone(s: Settings, deps: Deps, zone: dnsmod.Zone):
     """(client, zone id, status, problem): the domain's Route 53 zone, or why it could not be read."""
     client = None
     try:
-        client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile)
+        client = deps.route53_client(s.aws_profile) if deps.route53_client else _r53_client(s.aws_profile, True)
         zid, status = route53.find_zone(client, zone)
     except Exception as e:  # noqa: BLE001  any failure here is reported as "add the record by hand", as _route53 does
         if client is None:
@@ -725,8 +726,38 @@ def _r53_zone(s: Settings, deps: Deps, zone: dnsmod.Zone):
     return client, zid, status, ""
 
 
+def settle_pending(s: Settings, client, zid: str) -> None:
+    """Record sets journalled before a CREATE whose outcome setup never learned. One still absent was not made: dropped.
+    One found in the zone, exactly equal, may be setup's or someone else's (equality cannot tell who made it): adopted
+    only with --confirm-dns naming it, else setup stops and says what to check."""
+    if not s.dns_pending or s.dns_zone_id != zid:
+        return
+    keep, adopt, ask = [], [], []
+    for rs in s.dns_pending:
+        live, _ = route53.recorded(client, zid, rs["Name"], [rs])
+        if not live:
+            continue
+        if s.confirm_dns and s.confirm_dns.rstrip(".").lower() == rs["Name"].rstrip(".").lower():
+            adopt.append(live[0])
+        else:
+            keep.append(rs)
+            ask.append(live[0])
+    s.dns_records, s.dns_pending = s.dns_records + adopt, keep
+    save_dns(s)
+    if ask:
+        raise MissingInput(
+            "Setup's last run sent Route 53 "
+            + "; ".join(route53.describe(rs) for rs in ask)
+            + " but never heard back, and that record set is in the zone now: setup cannot tell whether its request "
+            "made it or someone else did. Check it in the Route 53 console, then either run again with "
+            + " ".join(f"--confirm-dns {rs['Name'].rstrip('.')}" for rs in ask)
+            + " if it is this install's, or delete it by hand if it is not."
+        )
+
+
 def _route53_strict(io: IO, s: Settings, client, zid: str, records) -> bool:
     ours = {r.value for r in records} | {s.server_ip} - {""}
+    settle_pending(s, client, zid)
     changes, created, found, kept = route53.plan(client, zid, records, owned_dns(s, zid), replace(s), ours)
     refuse_dns(s, found)
     # Journalled before the call: if its answer is lost, the retry finds exactly these and knows them for its own.
@@ -755,9 +786,9 @@ def save_dns(s: Settings) -> None:
 
 
 def owned_dns(s: Settings, zone_id: str) -> list[dict]:
-    """The exact record sets this install created in this zone, and any it journalled before a CREATE whose answer was
-    lost. Another zone of the same name (deleted and made again) holds none of them."""
-    return s.dns_records + s.dns_pending if s.dns_zone_id == zone_id else []
+    """The exact record sets this install created in this zone (a pending one counts only once settle_pending adopted
+    it). Another zone of the same name (deleted and made again) holds none of them."""
+    return s.dns_records if s.dns_zone_id == zone_id else []
 
 
 def replace(s: Settings) -> set[str]:
@@ -788,13 +819,22 @@ def dns_preflight(s: Settings, deps: Deps, zone: dnsmod.Zone | None, records, ou
     client, zid, status, problem = _r53_zone(s, deps, zone)
     if problem or status != "authoritative":
         return  # setup writes nothing there (ensure_dns says to add the record by hand)
+    settle_pending(s, client, zid)  # before the first AWS write: an unresolved CREATE stops the run here
     refuse_dns(s, route53.plan(client, zid, records, owned_dns(s, zid), replace(s), ours, preflight=True)[2])
 
 
-def _r53_client(profile: str):
+def _r53_client(profile: str, single_attempt: bool = False):
+    """single_attempt (strict mode): botocore's automatic retries off, so setup sees the first attempt's outcome itself; a
+    retried CREATE answered 400 "already exists" may be its own first attempt, landed."""
     import boto3
 
-    c = boto3.Session(profile_name=profile or None).client("route53")
+    if single_attempt:
+        from botocore.config import Config
+
+        cfg = Config(retries={"max_attempts": 1, "mode": "standard"})
+        c = boto3.Session(profile_name=profile or None).client("route53", config=cfg)
+    else:
+        c = boto3.Session(profile_name=profile or None).client("route53")
     c.list_hosted_zones(MaxItems="1")
     return c
 
@@ -1044,6 +1084,7 @@ def _strict_preflight(io: IO, args, s: Settings, deps: Deps, zone, records, kept
     """Strict mode, reads only (and the install's own state file) before the first AWS write: every name the install
     takes is free or already provably its own, and its account is recorded."""
     s.replace_dns = bool(getattr(args, "replace_dns", False))
+    s.confirm_dns = getattr(args, "confirm_dns", "") or ""
     if not kept:  # before the first AWS write: a retry after a failure from here keeps the prefix and install id
         state.save(s.domain, s.public())
     owned.mark(s.domain, s.aws_name, s.asset_prefix, s.install_id)
@@ -1662,8 +1703,15 @@ def _dns_to_delete(io: IO, args, saved: dict, deps: Deps, ours: set[str]):
             return None
         if saved.get("install_id"):
             # Strict mode: only the exact record sets this install recorded creating, in the zone it created them in.
-            owned_sets = saved.get("dns_records", []) + saved.get("dns_pending", [])
-            sets, other = route53.recorded(client, zid, domain, owned_sets if saved.get("dns_zone_id") == zid else [])
+            owned_sets = saved.get("dns_records", []) if saved.get("dns_zone_id") == zid else []
+            sets, other = route53.recorded(client, zid, domain, owned_sets)
+            pending = {route53.key(rs) for rs in saved.get("dns_pending", [])}
+            for rs in [rs for rs in other if route53.key(rs) in pending]:
+                other.remove(rs)
+                io.say(
+                    f"  Left alone: {route53.describe(rs)}, which setup sent but never heard back about (not confirmed "
+                    "as this install's); delete it by hand if it is."
+                )
         else:
             sets, other = route53.pointing_at(client, zid, domain, ours)
     except Exception as e:

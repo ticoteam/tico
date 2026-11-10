@@ -151,7 +151,10 @@ def refused(e: Exception) -> bool:
     meta = getattr(e, "response", None)
     if not isinstance(meta, dict) or not meta.get("Error", {}).get("Code"):
         return False
-    return int(meta.get("ResponseMetadata", {}).get("HTTPStatusCode") or 400) < 500
+    info = meta.get("ResponseMetadata", {})
+    if info.get("RetryAttempts"):  # an earlier attempt may have landed: its answer is what was lost
+        return False
+    return int(info.get("HTTPStatusCode") or 400) < 500
 
 
 def describe(rs: dict) -> str:

@@ -130,6 +130,13 @@ def parser() -> argparse.ArgumentParser:
         "setup did not make is refused before anything is created",
     )
     p.add_argument(
+        "--confirm-dns",
+        metavar="NAME",
+        default="",
+        help="run, --asset-prefix: the record set at NAME that setup's last run sent to Route 53 without hearing back "
+        "is this install's (check it in the Route 53 console first); setup asks for this when it cannot tell",
+    )
+    p.add_argument(
         "--dns",
         action="store_true",
         help="destroy: also delete the domain's A and AAAA records in Route 53, only "

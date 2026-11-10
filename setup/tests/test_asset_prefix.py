@@ -1462,7 +1462,9 @@ def test_a_create_whose_answer_was_lost_is_known_for_its_own_on_the_retry_and_de
     (made,) = r53.records
     saved = state.load(DOMAIN)[0]
     assert saved["dns_pending"] == [made] and saved.get("dns_records", []) == []
-    code, out = go(argv, deps=d)
+    code, out = go(argv, deps=d)  # review 5, case 7: found in the zone, but who made it? Asked, never assumed.
+    assert code == 2 and f"--confirm-dns {DOMAIN}" in out, out
+    code, out = go([*argv, "--confirm-dns", DOMAIN], deps=d)
     assert code == 0, out
     saved = state.load(DOMAIN)[0]
     assert saved["dns_records"] == [made] and saved.get("dns_pending", []) == []
@@ -1709,6 +1711,9 @@ def test_a_hub_install_in_us_east_1_stopped_anywhere_finishes_on_a_plain_retry_a
         out
     )
     code, out = go(argv, deps=d)
+    if stop == "change_resource_record_sets":  # review 5, case 7: the one stop a person settles, by --confirm-dns
+        assert code == 2 and f"--confirm-dns {DOMAIN}" in out, out
+        code, out = go([*argv, "--confirm-dns", DOMAIN], deps=d)
     assert code == 0, out
     saved = state.load(DOMAIN)[0]
     assert saved["aws_region"] == "us-east-1" and saved["aws_account_id"] == HOTMIC_ACCOUNT and saved["dns_records"]
@@ -1938,6 +1943,8 @@ def test_a_refused_route53_batch_leaves_no_pending_record_and_a_lost_answer_is_a
         assert route53.key(pending) == route53.key(r53.records[0]), err
         r53.change_resource_record_sets = real
         code, out = go(argv, deps=d)
+        assert code == 2 and f"--confirm-dns {DOMAIN}" in out, out  # review 5, case 7
+        code, out = go([*argv, "--confirm-dns", DOMAIN], deps=d)
         assert code == 0, out
         saved = state.load(DOMAIN)[0]
         assert [route53.key(rs) for rs in saved["dns_records"]] == [route53.key(pending)]
@@ -2229,3 +2236,64 @@ def test_state_is_bound_to_its_install_and_a_remote_shell_proves_its_server_firs
             assert code != 0 and not ssm.called("send_command")[len(ssm.called("send_command")) :], out
             assert "refusing" in out, (edit, argv, out)
         assert len(writes()) == before, writes()[before:]
+
+
+def test_a_route53_create_that_may_have_landed_stays_pending_and_is_never_adopted_by_equality(tmp_path, monkeypatch):
+    # Codex review 5, cases 3 and 7: the CREATE landed, its answer timed out, botocore retried and got 400 "already
+    # exists", and setup took that as a refusal and dropped the pending proof; and a pending entry was resolved by an
+    # identical record existing, which cannot tell who made it. Strict mode's Route 53 client makes one attempt per call,
+    # a 4xx after any retry is ambiguous, and a pending record set found in the zone is adopted only with --confirm-dns.
+    import sys
+    import types
+
+    built = []
+
+    class Session:
+        def __init__(self, profile_name=None):
+            pass
+
+        def client(self, name, config=None):
+            built.append(config)
+            return types.SimpleNamespace(list_hosted_zones=lambda **kw: {})
+
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(Session=Session))
+    wizard._r53_client("", single_attempt=True)
+    assert built[-1].retries["max_attempts"] == 1
+    wizard._r53_client("")
+    assert built[-1] is None  # the default path's client is main's
+
+    d, ec2, iam, ssm, s3, log = hub_world()
+    r53 = d.route53_client("")._inner
+    real = r53.change_resource_record_sets
+    retried = Refused("InvalidChangeBatch")
+    retried.response["ResponseMetadata"]["RetryAttempts"] = 1
+
+    def landed_then_retried(**kw):
+        real(**kw)
+        raise retried
+
+    r53.change_resource_record_sets = landed_then_retried
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    try:
+        code = go(argv, deps=d)[0]
+    except Refused:
+        code = None
+    assert code != 0 and len(r53.records) == 1
+    (pending,) = state.load(DOMAIN)[0]["dns_pending"]
+    r53.change_resource_record_sets = real
+    code, out = go(argv, deps=d)
+    assert code == 2 and f"A {DOMAIN} -> 203.0.113.9" in out and f"--confirm-dns {DOMAIN}" in out, out
+    assert not r53.called("change_resource_record_sets")[1:] and state.load(DOMAIN)[0]["dns_pending"] == [pending]
+    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes", "--dry-run"], deps=d)
+    assert "not confirmed" in out, out  # destroy never deletes a pending record set either
+    code, out = go([*argv, "--confirm-dns", DOMAIN], deps=d)
+    assert code == 0, out
+    saved = state.load(DOMAIN)[0]
+    assert [route53.key(r) for r in saved["dns_records"]] == [route53.key(pending)]
+    assert saved.get("dns_pending", []) == []
+    # Pending and gone (deleted by hand): the entry is dropped and the record made again.
+    state.save(DOMAIN, {**saved, "dns_records": [], "dns_pending": [pending]})
+    r53.records = []
+    code, out = go(argv, deps=d)
+    assert code == 0 and len(r53.records) == 1, out
+    assert state.load(DOMAIN)[0].get("dns_pending", []) == []
