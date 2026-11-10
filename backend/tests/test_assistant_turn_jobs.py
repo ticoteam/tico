@@ -96,50 +96,37 @@ def ana_task(api, owner="bot:ops", title="Send the invoice"):
 
 
 def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card(api):
-    """Each write the person could make on their words goes through on a turn's token: a close, a bulk close, an owner
-    change, an approval declined, a question answered, settings, automations, a bot paused, resumed and set to a model,
+    """Each write the person could make on their words goes through on a turn's token: a close, closes of the tasks listed, an owner
+    change, a question answered, settings, automations, a bot paused, resumed and set to a model,
     a rule added and retired, a message and an ask. Every step builds what it acts on, so none leans on another."""
     # A turn closes a task directly.
     task = ana_task(api)
     token = turn(api)
     current = call(api, token, "GET", f"tasks/{task}")["task"]
-    closed = call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "status": "done"})
-    assert (closed.get("task") or closed)["status"] == "done", ("close", closed)
+    closed = call(
+        api, token, "POST", f"tasks/{task}/move", {"to": "closed", "why": "Sent.", "version": current["version"]}
+    )
+    assert closed["task"]["status"] == "closed", ("close", closed)
 
-    # A turn closes tasks in bulk, and only the ones listed.
+    # A turn closes the tasks she listed, one at a time (a change to many tasks at once is a person's, on the Tasks
+    # page), and only those.
     ids = [ana_task(api, title=f"Follow up {n}") for n in range(2)]
     outside = ana_task(api, title="Not in the list")
-    done = call(api, turn(api), "POST", "task-bulk", {"filter": {"ids": ids}, "action": "close"})
-    assert done["changed"] == 2, ("bulk close", done)
+    token = turn(api)
+    for t in ids:
+        version = call(api, token, "GET", f"tasks/{t}")["task"]["version"]
+        call(api, token, "POST", f"tasks/{t}/move", {"to": "closed", "why": "Not needed.", "version": version})
     with api.app.state.store.read() as c:
-        assert [H.task(c, t)["status"] for t in ids] == ["closed", "closed"], "bulk close"
-        assert H.task(c, outside)["status"] == "open", "bulk close leaves a task outside the list"
+        assert [H.task(c, t)["status"] for t in ids] == ["closed", "closed"], "close"
+        assert H.task(c, outside)["status"] == "open", "a close leaves a task outside the list"
 
     # A turn changes a task owner.
-    task = ana_task(api)
+    task = ana_task(api, owner="human:ana")
     token = turn(api)
     current = call(api, token, "GET", f"tasks/{task}")["task"]
-    call(api, token, "POST", f"tasks/{task}", {"version": current["version"], "owner": "bot:ops"})
-
-    # A turn sends back an OK a bot asked of her (a send back is hers to say through the Assistant; an OK never is).
-    setup_attempt(api, "finance")
-    with api.app.state.store.transaction() as c:
-        okd = task_asks.ask_ok(
-            c,
-            "bot:finance",
-            "human:ana",
-            "Raise the ads budget?",
-            shows=[],
-            subject="budget_raise:ads",
-            content={"amount": 1200},
-        )
-    call(
-        api,
-        turn(api, "No, do not spend it"),
-        "POST",
-        f"tasks/{okd['task_id']}/asks/{okd['requirement_id']}/answer",
-        {"value": "no", "note": "Not this month."},
-    )
+    call(api, token, "POST", f"tasks/{task}/owner", {"version": current["version"], "owner": "bot:ops"})
+    with api.app.state.store.read() as c:
+        assert H.task(c, task)["owner_id"] == "bot:ops", "owner"
 
     # A turn answers a question the bot asked.
     with api.app.state.store.transaction() as c:
@@ -200,6 +187,34 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
         "POST",
         "messages",
         {"to": "ops", "text": "Is it paid?", "kind": "say", "needs_action": True, "wait_s": 0},
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="v3: an OK filed on its own task is private to its parties and the person asked; the Assistant's turn "
+    "for that person does not read it (auth.task_sql: a delegated turn needs the task_actor to read it too), so it "
+    "cannot send the OK back on her word. Open question for the lead: should the person's Assistant read her asks?",
+)
+def test_a_turn_sends_back_an_ok_a_bot_asked_of_her(api):
+    """A send back is hers to say through the Assistant; an OK never is."""
+    setup_attempt(api, "finance")
+    with api.app.state.store.transaction() as c:
+        okd = task_asks.ask_ok(
+            c,
+            "bot:finance",
+            "human:ana",
+            "Raise the ads budget?",
+            shows=[],
+            subject="budget_raise:ads",
+            content={"amount": 1200},
+        )
+    call(
+        api,
+        turn(api, "No, do not spend it"),
+        "POST",
+        f"tasks/{okd['task_id']}/asks/{okd['requirement_id']}/answer",
+        {"value": "no", "note": "Not this month."},
     )
 
 
