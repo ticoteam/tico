@@ -49,7 +49,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Changelog | Product announcements and the signed-in person's read state ([guide](updates.md)). |
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
 | Meetings | Recorded meetings. |
-| Calls | Tico Meet calls ([guide](meet.md)): audio and screen share in a thread, a live transcript posted to it when it ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera. |
+| Calls | Calls in a thread ([guide](meet.md)): a Google Meet, or a Tico Meet call with audio and screen share, a live transcript posted to the thread when it ends, and bots that listen. Joining a Tico Meet call hands back a token for audio and screen share only, never a camera; joining a Google Meet hands back its link. |
 | Files | What a bot creates, revises or delivers, listed on its page ([guide](files.md)). |
 | Pages | HTML pages bots publish and keep current ([guide](pages.md)): a file with a cadence, a data date and a status line. |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |

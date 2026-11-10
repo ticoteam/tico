@@ -9188,7 +9188,9 @@ SCHEMAS.update(
                 },
                 "live_call": {
                     "type": ["object", "null"],
-                    "description": "The thread's live call, {id, live_count}, or null",
+                    "description": "The thread's live call, or null",
+                    "properties": {"id": {"type": "string"}, "live_count": {"type": "integer"}},
+                    "required": ["id", "live_count"],
                 },
             },
             required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq", "pinned_for_everyone"],

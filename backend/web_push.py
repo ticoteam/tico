@@ -155,6 +155,8 @@ def _private_key(store, vault):
     public_key(store, vault)
     with store.read() as c:
         found = _stored(c)
+        if found is None:
+            raise RuntimeError("the push key is missing")
         sealed = found["private"]
         if sealed not in _PRIVATE:
             scalar = unb64u(_vault_cipher(vault).unseal(c, CONTEXT, sealed))
@@ -279,12 +281,12 @@ def _subject(settings):
 def _message(payload):
     """The JSON the service worker shows (title, body, url, tag, ring), cut to fit one record."""
     fields = {k: str(payload.get(k) or "") for k in ("title", "body", "url", "tag")}
-    fields["ring"] = bool(payload.get("ring"))
-    data = json.dumps(fields, ensure_ascii=False).encode()
+    ring = bool(payload.get("ring"))
+    data = json.dumps({**fields, "ring": ring}, ensure_ascii=False).encode()
     while len(data) > PAYLOAD_MAX and (fields["body"] or fields["title"]):
         key = "body" if fields["body"] else "title"
         fields[key] = fields[key][: len(fields[key]) // 2]
-        data = json.dumps(fields, ensure_ascii=False).encode()
+        data = json.dumps({**fields, "ring": ring}, ensure_ascii=False).encode()
     return data
 
 
@@ -373,7 +375,7 @@ def _record(store, row_id, status):
 
 def ring_hook(app, call_id, actors, payload):
     """call_ring's hook: the ring to each rung person's browsers, shown until answered where the browser allows."""
-    return send(app.state.store, app.state.vault, actors, {**payload, "ring": True}, ttl=RING_TTL, urgency="high")
+    send(app.state.store, app.state.vault, actors, {**payload, "ring": True}, ttl=RING_TTL, urgency="high")
 
 
 # ----------------------------------------------------------------------------- the routes
