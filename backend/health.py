@@ -1516,7 +1516,8 @@ def holding_turns(c, attempts):
     names = {r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id,slug,display_name FROM bots")}
     out = []
     for a in attempts:
-        ids = sorted(attempt_tasks(c, a["id"]))
+        own = c.execute("SELECT task_id FROM attempts WHERE id=? AND task_id IS NOT NULL", (a["id"],)).fetchone()
+        ids = sorted(attempt_tasks(c, a["id"]) | ({own[0]} if own else set()))  # the run's own task, then what it read
         task = (
             c.execute(
                 f"SELECT id,title FROM tasks WHERE id IN ({','.join('?' * len(ids))}) AND NOT private "

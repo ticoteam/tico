@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from backend import models_preset, releases, replication
+from backend import health, models_preset, releases, replication
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.getting_started import SIGNED_IN, add_bot, enrolled, heartbeat  # noqa: F401
@@ -33,6 +33,7 @@ def test_all_good(environment, monkeypatch):
     runner = enrolled(api)
     heartbeat(api, runner, seconds_ago=5, runtimes=SIGNED_IN)
     with_backup(monkeypatch, {"mode": "remote", "last_replicated_at": H.now(), "target_kind": "s3"})
+    health.record_never_stuck(api.app.state.store)  # the hourly reading
     body, checks = health_of(api)
     assert {k: v["status"] for k, v in checks.items() if k != "signin"} == {
         "version": "ok",
@@ -44,6 +45,7 @@ def test_all_good(environment, monkeypatch):
         "backups": "ok",
         "failed": "ok",
         "stalled_runs": "ok",
+        "never_stuck": "ok",
         "turns:" + body["computers"][0]["id"]: "ok",
     }
     assert body["computers"][0]["online"] and body["computers"][0]["runtimes"][0]["ready"]
@@ -221,7 +223,7 @@ def test_others_see_counts_not_details(environment):
     heartbeat(api, runner, seconds_ago=600)
     body, checks = health_of(api, as_person(api, "quinn"))
     assert body["audience"] == "human" and body["computers"] == [] and body["waiting"] == []
-    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs"}
+    assert set(checks) == {"computers", "waiting", "queue", "failed", "stalled_runs", "never_stuck"}
     assert all(not row["fixes"] for row in checks.values())
     assert "helper" not in checks["waiting"]["summary"]
 
@@ -257,6 +259,7 @@ def test_a_bot_reads_computers_and_failed_runs_without_admin_detail(environment)
         "queue",
         "failed",
         "stalled_runs",
+        "never_stuck",
         "turns:" + body["computers"][0]["id"],
     }
     assert api.get("/api/v2/health/issues", headers=signed_in("qa-bot")).status_code == 200

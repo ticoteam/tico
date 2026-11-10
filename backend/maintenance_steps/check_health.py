@@ -553,7 +553,8 @@ def _comment(c, task_id, text, wake):
     marker as it was and the next run tries again."""
     try:
         c.execute("SAVEPOINT check_health_comment")
-        refs = RT.stamp({"wake": "health", "no_mentions": True}, "other", "check_health") if wake else None
+        # A problem Health found is a blocker the bot is there to clear: it wakes (rules.WAKE_EVENTS), never a note.
+        refs = RT.stamp({"wake": "blocker", "no_mentions": True}, "other", "check_health") if wake else None
         message = H.task_comment(c, H.KEEPER, task_id, text, wake=wake, extra_refs=refs)
         queued = (
             not wake
