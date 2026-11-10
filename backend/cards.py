@@ -363,13 +363,10 @@ def owner_sql(actors):
 def tasks_by_status(ctx, s):
     where, args = owner_sql(ctx.team_actors(s["team"]))
     visible = ctx.visible()
-    counts = {"open": 0, "doing": 0, "waiting": 0, "done": 0}
-    for status, n in ctx.c.execute(
-        f"SELECT status, count(*) FROM tasks WHERE ({visible}) AND {where} AND status IN "
-        "('open','ready','doing','review','waiting') GROUP BY status",
-        args,
-    ):
-        counts["doing" if status in ("ready", "review") else status] += n
+    counts = {"open": 0, "done": 0}
+    counts["open"] = ctx.c.execute(
+        f"SELECT count(*) FROM tasks WHERE ({visible}) AND {where} AND status='open'", args
+    ).fetchone()[0]
     counts["done"] = ctx.c.execute(
         f"SELECT count(*) FROM tasks WHERE ({visible}) AND {where} AND status='done' AND coalesce(done_at,'')>=?",
         (*args, monday()),
@@ -405,8 +402,7 @@ def needs_brief(items, n):
             "id": it.get("id"),
             "kind": it.get("kind"),
             "title": it.get("title") or "",
-            "task_id": it.get("task_id")
-            or (it.get("id") if it.get("kind") in ("task", "question", "waiting") else None),
+            "task_id": it.get("task_id") or (it.get("id") if it.get("kind") in ("task", "ask") else None),
         }
         for it in items[:n]
     ]
@@ -470,16 +466,12 @@ def unread_threads(ctx, s):
     return {"count": sum(1 for r in rows if r["unread"]), "threads": rows[: s["count"]]}
 
 
-OPEN_STATUSES = H.ACTIVE_STATUSES
-
-
 def my_tasks(ctx, s):
     """The open tasks the reader owns and may read, the soonest due first."""
     if ctx.who.role not in ("owner", "human", "bot"):
         return None
-    marks = ",".join("?" * len(OPEN_STATUSES))
-    where = f"({ctx.visible()}) AND owner_id=? AND status IN ({marks})"
-    args = (ctx.who.actor, *OPEN_STATUSES)
+    where = f"({ctx.visible()}) AND owner_id=? AND status='open'"
+    args = (ctx.who.actor,)
     count = ctx.c.execute(f"SELECT count(*) FROM tasks WHERE {where}", args).fetchone()[0]
     rows = ctx.c.execute(
         f"SELECT id, title, status, due_at, updated_at FROM tasks WHERE {where} "
@@ -818,33 +810,39 @@ def channel_names(ctx):
 
 
 def marketing_tasks(ctx):
-    """The open marketing tasks the reader may read, each with its stage (idea, building, testing or scaling), owner
-    and channel slugs, most recently updated first (backend/marketing_tasks.py: the On deck, In development, Live and
-    Working steps)."""
+    """The open marketing tasks the reader may read, each with its stage (the furthest of its idea labels: idea,
+    building, testing, scaling, measuring or paused), owner and channel slugs, most recently updated first
+    (backend/marketing_tasks.py: an idea is a General task with a label that says where it is)."""
     from . import marketing_tasks as MT
 
     def make():
-        steps = {MT.step_id(key): key for key in ("idea", "building", "testing", "scaling")}
-        marks = ",".join("?" * len(steps))
+        order = [stage for stage, _labels in MT.STAGES]
+        marks = ",".join("?" * len(MT.LABELS))
         found = {}
         for r in ctx.c.execute(
-            "SELECT t.id, t.title, t.owner_id, t.step_id, t.updated_at, tg.key FROM tasks t "
-            "LEFT JOIN task_tags tt ON tt.task_id=t.id LEFT JOIN tags tg ON tg.id=tt.tag_id AND tg.key LIKE 'channel:%' "
-            f"WHERE t.type_id=? AND t.step_id IN ({marks}) AND t.id IN (SELECT id FROM tasks WHERE {ctx.visible()}) "
-            "ORDER BY t.id, tg.key",
-            (MT.TYPE_ID, *steps),
+            "SELECT t.id, t.title, t.owner_id, t.updated_at, tg.key FROM tasks t "
+            "JOIN task_tags tt ON tt.task_id=t.id JOIN tags tg ON tg.id=tt.tag_id "
+            f"WHERE t.status='open' AND (tg.key IN ({marks}) OR tg.key LIKE 'channel:%') "
+            "AND t.id IN (SELECT x.task_id FROM task_tags x JOIN tags g ON g.id=x.tag_id "
+            f"WHERE g.key IN ({marks})) AND t.id IN (SELECT id FROM tasks WHERE {ctx.visible()}) ORDER BY t.id, tg.key",
+            (*MT.LABELS, *MT.LABELS),
         ):
-            task = found.get(r["id"])
-            if task is None:
-                task = found[r["id"]] = {
+            task = found.setdefault(
+                r["id"],
+                {
                     "id": r["id"],
                     "title": r["title"] or "",
                     "owner_id": r["owner_id"],
-                    "stage": steps[r["step_id"]],
+                    "stage": None,
                     "updated_at": r["updated_at"] or "",
                     "channels": [],
-                }
-            if r["key"]:
+                },
+            )
+            if r["key"] in MT.LABELS:
+                stage = MT.LABELS[r["key"]]
+                if task["stage"] is None or order.index(stage) > order.index(task["stage"]):
+                    task["stage"] = stage
+            else:
                 task["channels"].append(r["key"][len("channel:") :])
         return sorted(found.values(), key=lambda t: (t["updated_at"], t["id"]), reverse=True)
 
@@ -864,7 +862,7 @@ def growth_channels(ctx, s):
     month = ctx.month
     cal = months_between(nums["months"][0], month) if nums["months"] else [month]
     tasks = {}
-    rank = {"scaling": 0, "testing": 1, "building": 2, "idea": 3}
+    rank = {"scaling": 0, "testing": 1, "measuring": 2, "building": 3, "idea": 4, "paused": 5}
     for task in sorted(marketing_tasks(ctx), key=lambda t: rank[t["stage"]]):
         for slug in task["channels"]:
             tasks.setdefault(slug, []).append({"id": task["id"], "title": task["title"], "stage": task["stage"]})
@@ -907,12 +905,14 @@ def growth_retention(ctx, s):
 
 
 def growth_board(ctx, s):
-    """Open marketing tasks by stage: Live, Working, In development, then On deck; each lane's count and newest few."""
+    """Open marketing tasks by stage: Live, Working, Measuring, In development, then On deck; each lane's count and
+    newest few."""
     tasks, names = marketing_tasks(ctx), channel_names(ctx)
     lanes = []
     for stage, label in (
         ("testing", "Live"),
         ("scaling", "Working"),
+        ("measuring", "Measuring"),
         ("building", "In development"),
         ("idea", "On deck"),
     ):
