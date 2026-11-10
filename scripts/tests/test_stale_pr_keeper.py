@@ -159,13 +159,13 @@ def written_to(gh, number):
 
 
 def test_a_pytest_leg_names_its_failed_test_from_the_short_summary():
-    tests, scripts, scenarios = keeper.read_log(log_lines("pytest-failed.log"))
+    tests, scripts = keeper.read_log(log_lines("pytest-failed.log"))
     assert tests == [(RECRUITING, False)]
-    assert scripts == [] and scenarios == []
+    assert scripts == []
 
 
 def test_a_crashed_xdist_worker_is_marked_crashed():
-    tests, _, _ = keeper.read_log(log_lines("worker-crashed.log"))
+    tests, _ = keeper.read_log(log_lines("worker-crashed.log"))
     assert tests == [(CRASHED, True)]
 
 
@@ -180,15 +180,11 @@ def test_a_crash_pytest_never_summarised_still_names_its_test():
 
 def test_a_failed_line_outside_the_summary_is_test_output_not_a_failure():
     lines = ["2026-11-08T20:00:00.0Z FAILED made_up/test_x.py::test_printed - from a test's own output\n"]
-    assert keeper.read_log(lines) == ([], [], [])
+    assert keeper.read_log(lines) == ([], [])
 
 
 def test_the_browser_suite_names_its_failed_ui_scripts():
-    assert keeper.read_log(log_lines("browser-failed.log")) == ([], [UI_SCRIPT], [])
-
-
-def test_the_factory_sim_names_each_scenario_with_a_fail_line():
-    assert keeper.read_log(log_lines("factory-sim-failed.log")) == ([], [], ["stranded_doing seed 1"])
+    assert keeper.read_log(log_lines("browser-failed.log")) == ([], [UI_SCRIPT])
 
 
 def summary(*lines, results="1 failed, 3 passed in 1.0s"):
@@ -198,7 +194,7 @@ def summary(*lines, results="1 failed, 3 passed in 1.0s"):
 
 def test_a_test_that_only_quotes_a_worker_crash_is_not_a_crash():
     quote = f"worker 'gw3' crashed while running '{CRASHED}'"
-    tests, _, _ = keeper.read_log(summary(f"FAILED {CRASHED} - AssertionError: {quote}"))
+    tests, _ = keeper.read_log(summary(f"FAILED {CRASHED} - AssertionError: {quote}"))
     assert tests == [(CRASHED, False)]
     other = f"{OTHER}::test_y"
     assert keeper.read_log(summary(f"FAILED {other} - {quote}"))[0] == [(other, False)]  # another test's crash
@@ -214,7 +210,7 @@ def test_a_worker_crash_names_its_test_as_repr_writes_it(test):
 
 def test_a_log_that_ends_inside_the_summary_is_never_a_flake():
     lines = summary(f"FAILED {RECRUITING} - x")[:-1]  # no result line: the log was cut off
-    tests, _, _ = keeper.read_log(lines)
+    tests, _ = keeper.read_log(lines)
     assert tests == [(RECRUITING, False), ("pytest's summary, cut off", False)]
     assert not keeper.flaky([finding(*tests)], QUARANTINE)
 
@@ -235,7 +231,7 @@ def test_a_coloured_summary_still_reads():
 
 
 def test_a_collection_error_in_the_summary_is_named_and_is_never_a_crash():
-    tests, _, _ = keeper.read_log(
+    tests, _ = keeper.read_log(
         summary(f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'", f"ERROR {OTHER}")
     )
     assert tests == [(CRASHED, True), (OTHER, False)]
@@ -245,12 +241,12 @@ def test_a_collection_error_in_the_summary_is_named_and_is_never_a_crash():
 def test_an_internalerror_is_named_and_is_never_a_crash():
     crash = f"FAILED {CRASHED} - worker 'gw3' crashed while running '{CRASHED}'"
     lines = [*summary(crash), "INTERNALERROR> Traceback\n", "INTERNALERROR> x\n"]
-    tests, _, _ = keeper.read_log(lines)
+    tests, _ = keeper.read_log(lines)
     assert tests == [(CRASHED, True), ("pytest INTERNALERROR", False)]
 
 
 def test_failures_the_summary_does_not_list_are_named():
-    tests, _, _ = keeper.read_log(summary(f"FAILED {RECRUITING} - x", results="2 failed, 1 error, 3 passed in 1.0s"))
+    tests, _ = keeper.read_log(summary(f"FAILED {RECRUITING} - x", results="2 failed, 1 error, 3 passed in 1.0s"))
     assert tests == [(RECRUITING, False), ("2 failure(s) the summary does not list", False)]
     assert not keeper.flaky([finding(*tests)], QUARANTINE)
 
@@ -899,7 +895,7 @@ def test_an_expired_log_reads_as_gone_and_any_other_error_raises(monkeypatch, tm
     with pytest.raises(keeper.RateLimited):
         gh.read_job_log(1)
     fake_gh("", 0)
-    assert gh.read_job_log(1) == ([], [], [])
+    assert gh.read_job_log(1) == ([], [])
 
 
 def test_comment_bodies_go_through_stdin(monkeypatch):

@@ -38,7 +38,7 @@ MAX_AGE_DAYS = 14
 # a set of flaky tests: its failures are reported, never proposed.
 MAX_FAILURES_PER_JOB = 5
 WORKFLOW = "pr-checks.yml"
-# The PR-check legs that run pytest (scripts/pr_checks.py run). Browser legs and the factory sim name no pytest ids.
+# The PR-check legs that run pytest (scripts/pr_checks.py run). Browser legs name no pytest ids.
 TEST_JOB = re.compile(r"python-\d+|contracts|conformance|caddy-linux-(?:amd64|arm64)")
 FIELDS = ("test", "first_seen", "commit", "runs", "ticket", "reason")
 REQUIRED = ("test", "first_seen", "runs", "ticket")

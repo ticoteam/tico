@@ -189,12 +189,11 @@ def test_failures_are_named_from_the_logs_and_by_their_job():
         "ui/tests/threads.cjs",
         "ui/tests/task-code.cjs",
     }
-    named = ri.failed_tokens([("python-3", PYTEST_FAILURES), ("factory-sim-2", ""), ("release-check", "")])
+    named = ri.failed_tokens([("python-3", PYTEST_FAILURES), ("release-check", "")])
     assert named == {
         "backend/tests/test_company_file.py",
         "ui/tests/threads.cjs",
         "ui/tests/task-code.cjs",
-        ri.FACTORY,
     }
     assert ri.failed_tokens([("product", ""), ("desktop", "")]) == {"product", "desktop"}
 
@@ -291,22 +290,6 @@ def test_the_product_and_desktop_vms_of_a_plan_place_the_release_binaries():
     include = ri.matrix_of(json.dumps(plan))["include"]
     assert [entry["name"] for entry in include] == ["product", "desktop"]
     assert all("binaries" not in entry for entry in include)
-
-
-def test_a_carried_factory_failure_runs_the_factory_sim():
-    assert plan_of(selected(), carried={ri.FACTORY}, smoke=(), gone=())["factory"] is True
-
-
-def test_a_docs_only_incremental_plans_no_factory_jobs_when_the_control_checkout_is_sparse(tmp_path):
-    # The planner runs from validation-control's sparse checkout, which has no evals/factory/call_path.json. The sim's
-    # recorded paths come from the candidate's checkout, so a docs-only change plans no factory jobs.
-    candidate = tmp_path / "candidate"
-    (candidate / "evals" / "factory").mkdir(parents=True)
-    (candidate / pr_checks.FACTORY_CALL_PATH).write_text((pr_checks.ROOT / pr_checks.FACTORY_CALL_PATH).read_text())
-    plan = plan_of(selected(), changed=("docs/releasing.md",), smoke=(), gone=(), factory_root=candidate)
-    assert plan["factory"] is False
-    # Where the recorded paths cannot be read, the sim runs: a missing measurement never skips the check.
-    assert plan_of(selected(), changed=("docs/releasing.md",), smoke=(), gone=(), factory_root=tmp_path)["factory"]
 
 
 def test_a_plan_of_any_size_is_made_because_release_validation_makes_it_itself():

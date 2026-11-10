@@ -27,7 +27,7 @@
     - '^group update engineering\b.*--add-bots?\b.*\bupgrade-manager\b'
     - '^group update engineering\b.*--add-bots?\b.*\bperformance-monitor\b'
   must_not:
-    - '^group (delete|create)\b'
+    - '^group (delete\b|update\s+--)'
     - '^group update operations\b'
     - '^bot (archive|pause)\b'
   reply: |
@@ -57,7 +57,7 @@
   must:
     - '^group update growth\b.*--name\s+Marketing\b'
   must_not:
-    - '^group (delete|create)\b'
+    - '^group (delete\b|update\s+--)'
     - '^group update growth\b.*--(parent|add-bots?|remove-bots?)'
   reply: |
     Renames the Growth group to Marketing with one `hub group update growth --name Marketing`. The group keeps its people and
