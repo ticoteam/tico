@@ -57,7 +57,9 @@ def _recruit_offers_templates_for_each_open_seat(built):
 
 def _applicants_are_open_recruiter_tasks_one_asking_ana_and_one_snoozed(built):
     with owner_api(built) as api:
-        tasks = api.get("/api/v2/tasks", params={"owner": "bot:recruiter", "snoozed": "all", "limit": 100}).json()["tasks"]
+        tasks = api.get("/api/v2/tasks", params={"owner": "bot:recruiter", "snoozed": "all", "limit": 100}).json()[
+            "tasks"
+        ]
         applicants = {
             task["title"].rsplit(": ", 1)[1]: task
             for task in tasks
