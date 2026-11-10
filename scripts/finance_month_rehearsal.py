@@ -3,7 +3,7 @@
 computer. It is NOT the proof of Finance: real Mercury credentials are not available yet, so this finds what would
 break on the real run and nothing more.
 
-It drives the running system only through its HTTP API (the routes behind the hub_finance_* tools in clients/hubtools.py)
+It drives the running system only through its HTTP API (the routes behind the tico_finance_* tools in clients/hubtools.py)
 and the fake's control endpoints. It writes nothing to any database and calls no internal function. Nothing here
 reaches api.mercury.com, QuickBooks, Xero, Stripe or HQ: the demo refuses outbound connections, and the fake answers
 on 127.0.0.1 only.

@@ -223,15 +223,15 @@ def test_the_mcp_tools_give_list_and_remove_feedback_as_the_caller(api):
     mid = bot_message(api, thread)
     failed, rated = call(
         api,
-        "hub_feedback_give",
+        "tico_feedback_give",
         {"subject_type": "message", "subject_id": mid, "rating": "down", "reason": "Wrong date"},
     )
     assert not failed and rated["reason"] == "Wrong date"
     assert (
-        call(api, "hub_feedback_markers", {"subject_type": "message", "subject_ids": [mid]})[1]["items"][0]["id"]
+        call(api, "tico_feedback_markers", {"subject_type": "message", "subject_ids": [mid]})[1]["items"][0]["id"]
         == rated["id"]
     )
-    assert [i["id"] for i in call(api, "hub_feedback_list", {"limit": 10})[1]["items"]] == [rated["id"]]
-    assert call(api, "hub_feedback_reasons")[1]["reasons"] == [{"text": "Wrong date", "count": 1}]
-    assert call(api, "hub_feedback_remove", {"id": rated["id"]})[1]["ok"] is True
+    assert [i["id"] for i in call(api, "tico_feedback_list", {"limit": 10})[1]["items"]] == [rated["id"]]
+    assert call(api, "tico_feedback_reasons")[1]["reasons"] == [{"text": "Wrong date", "count": 1}]
+    assert call(api, "tico_feedback_remove", {"id": rated["id"]})[1]["ok"] is True
     assert markers(api, [mid]) == []

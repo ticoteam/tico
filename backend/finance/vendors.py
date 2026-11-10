@@ -4,7 +4,7 @@ text.
 A bank or card row's vendor key is core/merchant.merchant_key of its counterparty (stored on the row as vendor_key when
 the row is taken in). Its vendor is the contact that key resolves to (fin_vendor_aliases), else the key itself: a read
 resolves it each time, so an alias added later applies to rows already in. Watch groups charges by that vendor, and the
-Transactions read (and so hub_finance_search) carries it as `vendor: {id, name}`.
+Transactions read (and so tico_finance_search) carries it as `vendor: {id, name}`.
 
 Actions (both need finance.book; in a mirrored book only the aliases are written, never a contact or the outbox):
 - vendor_merge {into, merge}: `into` is a vendor contact; `merge` is a list of name keys or vendor contact ids. Every

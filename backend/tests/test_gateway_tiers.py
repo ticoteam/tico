@@ -347,7 +347,7 @@ def test_the_fetch_tool_asks_the_route_with_the_url_and_a_default_size(api, monk
     from backend.tests.helpers.mcp import call
     from clients import hubtools
 
-    tool = hubtools.BY_NAME["hub_gateway_fetch"]
+    tool = hubtools.BY_NAME["tico_gateway_fetch"]
     assert (
         tool["inputSchema"]["required"] == ["url"]
         and tool["inputSchema"]["properties"]["max_tokens"]["maximum"] == 50000
@@ -364,16 +364,16 @@ def test_the_fetch_tool_asks_the_route_with_the_url_and_a_default_size(api, monk
             or (200, {"url": url, "title": "T", "content": "C", "usage": {"cost_usd": 0.00125}}, "")
         ),
     )
-    error, out = call(api, "hub_gateway_fetch", {"url": "https://example.test/a"})
+    error, out = call(api, "tico_gateway_fetch", {"url": "https://example.test/a"})
     assert not error and out == {
         "url": "https://example.test/a",
         "title": "T",
         "content": "C",
         "usage": {"cost_usd": 0.00125},
     }
-    error, out = call(api, "hub_gateway_fetch", {"url": "https://example.test/b", "max_tokens": 3000})
+    error, out = call(api, "tico_gateway_fetch", {"url": "https://example.test/b", "max_tokens": 3000})
     assert not error and asked == [("https://example.test/a", 10000), ("https://example.test/b", 3000)]
-    error, out = call(api, "hub_gateway_fetch", {"url": "file:///etc/passwd"})
+    error, out = call(api, "tico_gateway_fetch", {"url": "file:///etc/passwd"})
     assert error and len(asked) == 2
 
 
@@ -529,10 +529,10 @@ def test_every_tool_a_service_names_is_a_hub_tool():
     known = {entry["name"] for entry in hubtools.TOOLS}
     named = {name for service in T.SNAPSHOT["services"] for name in service["tools"]}
     assert {
-        "hub_inbound_wait",
-        "hub_gateway_search",
-        "hub_gateway_fetch",
-        "hub_decision_ask",
+        "tico_inbound_wait",
+        "tico_gateway_search",
+        "tico_gateway_fetch",
+        "tico_decision_ask",
     } <= named and named <= known, named - known
 
 
@@ -730,8 +730,8 @@ def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
     # The release's copy has the same shape, with this app's own tool names.
     assert all(isinstance(row["details"], list) and row["for"] for row in T.SNAPSHOT["services"])
     assert next(row for row in T.SNAPSHOT["services"] if row["id"] == "mail.physical")["tools"] == [
-        "hub_mail_list",
-        "hub_mail_read",
+        "tico_mail_list",
+        "tico_mail_read",
     ]
 
 

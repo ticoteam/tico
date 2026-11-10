@@ -331,9 +331,12 @@ def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attem
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"])
     tools = rpc(api, "tools/list", token=attempt["token"])["result"]["tools"]
-    assert "hub_page_publish" in {tool["name"] for tool in tools}
+    assert "tico_page_publish" in {tool["name"] for tool in tools}
     error, result = call(
-        api, "hub_page_publish", {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]}, token=attempt["token"]
+        api,
+        "tico_page_publish",
+        {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]},
+        token=attempt["token"],
     )
     assert not error, result
     assert result["page"]["updated_by"] == "human:ben"
@@ -433,7 +436,7 @@ def test_make_page_keeps_normal_assistant_learning_and_tools(api):
     assert "Use a calm page layout" in json.dumps(attempt["learned"])
     tools = rpc(api, "tools/list", token=attempt["token"])["result"]["tools"]
     names = {tool["name"] for tool in tools}
-    assert {"hub_page_publish", "hub_conversation_show", "hub_task_context"} <= names
+    assert {"tico_page_publish", "tico_conversation_show", "tico_task_context"} <= names
 
 
 def test_make_page_on_a_private_task_keeps_its_normal_task_audience(api):

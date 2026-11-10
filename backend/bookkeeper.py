@@ -1,4 +1,4 @@
-"""The Bookkeeper (docs/bookkeeper.md): a built-in helper bot that keeps the books, through the hub_finance tools only.
+"""The Bookkeeper (docs/bookkeeper.md): a built-in helper bot that keeps the books, through the tico_finance tools only.
 
 It appears when Finance is set up: a new install builds it with the other required helpers, and an install from
 before it gets it at the next start (`ensure`, after Finance's own setup). It is a helper outside the org chart.

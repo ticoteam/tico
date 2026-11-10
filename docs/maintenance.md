@@ -86,4 +86,4 @@ The Learn step's settings include the last seven days of runs, items read, items
   step's line. Anyone signed in can read it; only an owner or an admin can change it.
 - API: `GET /api/v2/maintenance`, `PATCH /api/v2/maintenance`, `GET /api/v2/maintenance/runs`, `POST /api/v2/maintenance/run`.
 - CLI: `tico maintenance status`, `tico maintenance set`, `tico maintenance run`, `tico maintenance runs`.
-- MCP: the `hub_maintenance*` tools.
+- MCP: the `tico_maintenance*` tools.

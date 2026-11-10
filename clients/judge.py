@@ -17,7 +17,7 @@ Four ways to reach it, one signature (`engine(state, questions, label=None) -> r
     direct(api_key)        POST https://api.typesafe.ai/v1/systemone with a customer's own TypeSafe
                            key; the server's second choice, never set by default.
     through_hub(client)    POST /api/v2/decisions on the hub with the turn's own credential; the
-                           `tico decision ask` command, the `hub_decision_ask` MCP tool and the mail CLI use
+                           `tico decision ask` command, the `tico_decision_ask` MCP tool and the mail CLI use
                            this, so no bot ever holds the key and every call is audited.
     from_env()             whichever of the two the environment allows, or None.
 
@@ -53,7 +53,7 @@ URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-latest"
 KEY_ENV = "TYPESAFE_API_KEY"
 # The Tico AI Gateway (Tico HQ): the same contract, answered as a Tico model. Low is `tico-decide-low`, the tier's current
-# version (Jev); a choice question (`hub_classify`'s spam check) is a Decide question like any other.
+# version (Jev); a choice question (`tico_classify`'s spam check) is a Decide question like any other.
 GATEWAY_PROVIDER = "Tico AI Gateway"
 GATEWAY_MODEL = "tico-decide-low"
 # How hard the Gateway thinks on a decision: Low is Jev, as it was before levels; Medium and High are language models and

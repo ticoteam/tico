@@ -797,7 +797,7 @@ STEP_WORDS = {
     "(the default: go on to the next step). `to` names a destination, whose actions run after the rule's own "
     "and end the thread",
     "decide": "a judge answers each question; its answers read as `<out>.<question id>`. Give `set` (a saved question "
-    "set, from hub_automation_question_sets) or `questions`, never both",
+    "set, from tico_automation_question_sets) or `questions`, never both",
     "llm": "a turn on a bot or an Assistant with the prompt; its text is `out`. With `choose` (`{to: [destination ids], "
     "default, mode: draft or reply}`, last in its list) the turn answers `{to, body}`: the body is saved as a draft "
     "or sent as the reply to the message (never templated), then the chosen destination's actions run. A malformed "

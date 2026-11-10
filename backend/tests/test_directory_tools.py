@@ -84,7 +84,7 @@ def test_a_person_written_by_the_cli_is_read_back_by_the_cli_and_the_mcp_door(ap
     assert [note["body"] for note in cli("get", jane)["notes"]] == ["Prefers phone"]
 
     assert [row["id"] for row in cli("find", "person", "--name", "jane")["rows"]] == [jane]
-    isError, over_mcp = call(api, "hub_directory_get", {"ref": "jane@example.test"})
+    isError, over_mcp = call(api, "tico_directory_get", {"ref": "jane@example.test"})
     assert isError is False and over_mcp["values"]["title"]["value"] == "Chief Financial Officer"
 
 
@@ -160,7 +160,7 @@ def test_self_and_rules_answer_the_same_through_the_cli_and_the_mcp_door(api, cl
 
     me = cli("self")
     assert me["name"] == "Acme Lights" and [place["name"] for place in me["operates_in"]] == ["Ontario"]
-    assert call(api, "hub_directory_self") == (False, me)
+    assert call(api, "tico_directory_self") == (False, me)
     assert cli("rules", "acme.example") == {"entity": self_id, "action": None, "as_bot": None, "rules": []}
 
 
@@ -194,7 +194,7 @@ def test_a_reader_without_access_gets_nothing_from_card_find_history_or_rules(ap
     listed = answer(api, "get", "entities/find/person", "cara-test", params={"name": "jane"})
     assert listed.status_code == 200 and listed.json()["rows"] == [] and listed.json()["count"] == 0
 
-    isError, payload = call(api, "hub_directory_get", {"ref": "jane@quiet.example"}, token="cara-test")
+    isError, payload = call(api, "tico_directory_get", {"ref": "jane@quiet.example"}, token="cara-test")
     assert isError is True and payload["error"] == "not_found"
     assert jane not in str(payload) and "Jane Quiet" not in str(payload)
 

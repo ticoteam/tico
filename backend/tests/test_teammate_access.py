@@ -211,13 +211,13 @@ def test_the_tools_and_the_cli_set_access_as_whoever_asked(acme):
     from clients import hubcli, remotecli
 
     api, tokens = acme
-    err, view = mcp(api, "hub_human_access", {"human": "cara", "see": "dee,group:legal,bot:counsel"}, "cara-test")
+    err, view = mcp(api, "tico_human_access", {"human": "cara", "see": "dee,group:legal,bot:counsel"}, "cara-test")
     assert not err, view
     assert view["see"]["people"] == ["dee"] and view["see"]["teams"] == ["legal"] and view["see"]["bots"] == ["counsel"]
     assert view["read"]["everyone"] and view["write"]["everyone"]  # left out: unchanged
-    err, _ = mcp(api, "hub_human_access", {"human": "cara", "see": "everyone"}, "eve-test")
+    err, _ = mcp(api, "tico_human_access", {"human": "cara", "see": "everyone"}, "eve-test")
     assert err  # a peer may not
-    err, view = mcp(api, "hub_group_access", {"group": "legal", "read": "group:legal"}, "ana-test")
+    err, view = mcp(api, "tico_group_access", {"group": "legal", "read": "group:legal"}, "ana-test")
     assert not err and view["read"]["teams"] == ["legal"] and view["see"]["everyone"]
     shown = remotecli.via_tool(Client(api, "dee-test"), hubcli.parser().parse_args(["human", "access", "cara"]))
     assert shown["see"]["people"] == ["dee"] and shown["you"]["manage"]

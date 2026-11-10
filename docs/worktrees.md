@@ -10,7 +10,7 @@ tico task worktree attach tasks/12345678/org__product
 tico task worktree setup org/product
 ```
 
-The commands use the run's current task. Add `--task <id>` to choose another task owned by the same bot; an abbreviated task ID is resolved to its canonical ID before any worktree operation. The local MCP tools are `hub_task_worktree_add` and `hub_task_worktree_attach`.
+The commands use the run's current task. Add `--task <id>` to choose another task owned by the same bot; an abbreviated task ID is resolved to its canonical ID before any worktree operation. The local MCP tools are `tico_task_worktree_add` and `tico_task_worktree_attach`.
 
 With a GitHub App connected, the bot needs write access to the repository. A human who can move tasks can request a worktree through `POST /api/v2/tasks/{id}/worktrees`; the computer creates it on its next heartbeat while that bot is idle. Creation returns the link, branch and path. Folders are under `<workspace>/tasks/<task-short>/<repository-owner>__<repository-name>`, with branches named `tico/<task-short>-<task-title>`.
 

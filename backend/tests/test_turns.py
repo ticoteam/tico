@@ -95,8 +95,8 @@ def test_a_run_that_failed_before_starting_does_not_claim_later_messages(api):
 
 
 def test_a_tool_call_reads_as_its_work_in_plain_words():
-    assert turns.tool_label({"tool": "mcp__hub__hub_task_create"}) == "Filing a task"
-    assert turns.tool_label({"tool": "mcp__hub__task_create"}) == "Filing a task"
+    assert turns.tool_label({"tool": "mcp__tico__tico_task_create"}) == "Filing a task"
+    assert turns.tool_label({"tool": "mcp__tico__task_create"}) == "Filing a task"
     assert turns.tool_label({"tool": "Bash", "summary": "tico task close"}) == "Closing a task"
     assert turns.tool_label({"tool": "Bash", "summary": "npm"}) == "Ran npm"
     assert turns.tool_label({"tool": "shell", "summary": "tico release now"}) == "Ran tico"
@@ -169,7 +169,7 @@ def test_a_folded_step_carries_its_label_and_keeps_its_tool_name():
 
 def test_a_hub_phrase_is_the_longest_command_it_starts_with():
     assert turns.tool_label({"tool": "Bash", "summary": "tico task done 12 -m sent"}) == "Finishing a task"
-    assert turns.tool_label({"tool": "mcp__hub__hub_task_move"}) == "Moving a task"
+    assert turns.tool_label({"tool": "mcp__tico__tico_task_move"}) == "Moving a task"
     assert turns.tool_label({"tool": "Bash", "summary": "tico task answer 12 r1 ok"}) == "Answering an ask"
     assert turns.tool_label({"tool": "Bash", "summary": "tico finance report"}) == "Working in Finance"
     assert turns.tool_label({"tool": "Bash", "summary": "tico meeting search"}) == "Searching"

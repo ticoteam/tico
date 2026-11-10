@@ -28,7 +28,7 @@ def test_botops_files_the_task_it_waits_on_without_borrowing_human_authority(api
     attempt = claim(api, botops, "botops")
     err, filed = mcp(
         api,
-        "hub_task_file",
+        "tico_task_file",
         {"parent": task["id"], "title": "Find the approved registry source", "owner": "finance"},
         attempt["token"],
     )
@@ -498,7 +498,7 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     api.app.state.store.settings.catalog_dir = template.parent
     err, made = mcp(
         api,
-        "hub_bot_create",
+        "tico_bot_create",
         {
             "slug": "qa-custom",
             "template": "qa-custom",
@@ -521,7 +521,7 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     qa = bot_id(api, "qa-custom")
     with api.app.state.store.transaction() as c:
         restrict(c, qa, people=["ana" if person == "ana-test" else "cara"])
-    err, status = mcp(api, "hub_tool_list", {"bot": "qa-custom"}, attempt["token"])
+    err, status = mcp(api, "tico_tool_list", {"bot": "qa-custom"}, attempt["token"])
     assert not err and status["bot"] == qa, status
     assign(api, botops, "qa-custom")
     ready(api, botops, ["botops", qa])

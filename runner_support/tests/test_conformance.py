@@ -1333,7 +1333,7 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
 
 
 @pytest.mark.parametrize("harness", ["claude"])
-def test_a_claude_turn_gets_only_hub_declared_and_project_mcp_servers(api, computer):
+def test_a_claude_turn_gets_only_tico_declared_and_project_mcp_servers(api, computer):
     # --strict-mcp-config on every turn keeps out the operator's own servers; the repo's .mcp.json still counts.
     repo = Path(computer.config).parent.parent / "projects" / "bot-ops"
     (repo / ".mcp.json").write_text(json.dumps({"mcpServers": {"acme-docs": {"command": "acme-docs"}}}))
@@ -1343,7 +1343,8 @@ def test_a_claude_turn_gets_only_hub_declared_and_project_mcp_servers(api, compu
     argv = computer.prompts()[-1]["argv"]
     assert "--strict-mcp-config" in argv
     servers = json.loads(argv[argv.index("--mcp-config") + 1])["mcpServers"]
-    assert {"acme-docs", "hub"} <= set(servers)
+    assert {"acme-docs", "tico"} <= set(servers)
+    assert "hub" not in servers
 
 
 @pytest.mark.parametrize("harness", ["claude"])  # a watcher runs without a model: one harness is the whole path

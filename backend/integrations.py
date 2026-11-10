@@ -211,7 +211,7 @@ class Catalog:
 
     def listing(self):
         pages, _ = self.loaded
-        # credentials and access belong on the index: MCP `hub_tool_list` is what a bot
+        # credentials and access belong on the index: MCP `tico_tool_list` is what a bot
         # reads to learn every outside system and what it needs before opening a page.
         keys = (
             "service",

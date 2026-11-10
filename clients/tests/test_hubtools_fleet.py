@@ -2,7 +2,7 @@ from clients import hubtools
 
 
 class _Api:
-    """One route answers `hub_health_check` for everyone: the server picks what the caller gets."""
+    """One route answers `tico_health_check` for everyone: the server picks what the caller gets."""
 
     def __init__(self):
         self.calls = []
@@ -46,9 +46,9 @@ class _Groups:
 def test_group_tools_list_create_and_update_and_botops_acts_as_the_requester():
     fn = hubtools.BY_NAME
     api = _Groups()
-    assert fn["hub_group_list"]["fn"](api, {}) == [{"id": "seo"}]
-    fn["hub_group_update"]["fn"](api, {"name": "SEO", "parent": "marketing", "add_bots": ["seo"]})
-    fn["hub_group_update"]["fn"](api, {"group": "seo", "parent": "", "remove_humans": ["cara"]})
+    assert fn["tico_group_list"]["fn"](api, {}) == [{"id": "seo"}]
+    fn["tico_group_update"]["fn"](api, {"name": "SEO", "parent": "marketing", "add_bots": ["seo"]})
+    fn["tico_group_update"]["fn"](api, {"group": "seo", "parent": "", "remove_humans": ["cara"]})
     assert [call for call in api.calls if call[1] != "me"][1:] == [
         ("POST", "groups", {"name": "SEO", "add": {"people": [], "bots": ["seo"]}, "parent": "marketing"}),
         (
@@ -58,23 +58,23 @@ def test_group_tools_list_create_and_update_and_botops_acts_as_the_requester():
         ),
     ]
     botops = _Groups("bot:botops")
-    fn["hub_group_update"]["fn"](botops, {"group": "seo", "name": "Search"})
+    fn["tico_group_update"]["fn"](botops, {"group": "seo", "name": "Search"})
     assert botops.calls[-1][:2] == ("PATCH", "groups/seo") and botops.calls[-1][3] is True
     try:
-        fn["hub_group_update"]["fn"](api, {})
+        fn["tico_group_update"]["fn"](api, {})
     except ValueError as exc:
         assert "Name the new group" in str(exc)
-    assert "hub_group_update" in hubtools.AUDIENCE
+    assert "tico_group_update" in hubtools.AUDIENCE
 
 
 def test_the_strategy_bot_makes_an_asked_for_org_change_citing_the_persons_words():
     fn = hubtools.BY_NAME
-    for name in ("hub_group_update", "hub_group_delete", "hub_org_reports_to"):
+    for name in ("tico_group_update", "tico_group_delete", "tico_org_reports_to"):
         assert "assistant" in hubtools.offered_to(fn[name]) and "bot" not in hubtools.offered_to(fn[name])
     api = _Groups("human:ana")
-    fn["hub_group_update"]["fn"](api, {"group": "seo", "lead": "bot:writer", "on_behalf_of": "turn"})
-    fn["hub_group_delete"]["fn"](api, {"group": "seo", "on_behalf_of": "turn"})
-    fn["hub_org_reports_to"]["fn"](api, {"teammate": "human:cara", "reports_to": "human:ana", "on_behalf_of": "turn"})
+    fn["tico_group_update"]["fn"](api, {"group": "seo", "lead": "bot:writer", "on_behalf_of": "turn"})
+    fn["tico_group_delete"]["fn"](api, {"group": "seo", "on_behalf_of": "turn"})
+    fn["tico_org_reports_to"]["fn"](api, {"teammate": "human:cara", "reports_to": "human:ana", "on_behalf_of": "turn"})
     assert api.calls[-3:] == [
         (
             "PATCH",
@@ -93,10 +93,10 @@ def test_reports_to_for_a_bot_sends_its_revision():
             return [{"slug": "writer", "revision": 7}] if path == "bots" else super().get(path, **query)
 
     api = _Bots()
-    hubtools.BY_NAME["hub_org_reports_to"]["fn"](api, {"teammate": "bot:writer", "reports_to": "cmo"})
+    hubtools.BY_NAME["tico_org_reports_to"]["fn"](api, {"teammate": "bot:writer", "reports_to": "cmo"})
     assert api.calls[-1] == ("POST", "bots/writer/definition", {"reports_to": "cmo", "expected_revision": 7})
     try:
-        hubtools.BY_NAME["hub_org_reports_to"]["fn"](api, {"teammate": "writer", "reports_to": "cmo"})
+        hubtools.BY_NAME["tico_org_reports_to"]["fn"](api, {"teammate": "writer", "reports_to": "cmo"})
     except ValueError as exc:
         assert "bot:<slug> or human:<id>" in str(exc)
     else:
@@ -104,7 +104,7 @@ def test_reports_to_for_a_bot_sends_its_revision():
 
 
 def test_org_order_reads_and_sets_and_botops_sets_as_the_requester():
-    fn = hubtools.BY_NAME["hub_org_order"]["fn"]
+    fn = hubtools.BY_NAME["tico_org_order"]["fn"]
     api = _Groups()
     fn(api, {"manager": "engineering-lead"})
     fn(api, {"manager": "human:ana", "set": ["bot:cmo", "ben"]})
@@ -121,19 +121,21 @@ def test_tool_add_and_remove_are_the_requesters_when_botops_calls_them():
     fn = hubtools.BY_NAME
     entry = {"bot": "inbox-manager", "service": "gmail", "can": "read,draft,send", "identity": "a@acme.example"}
     person, botops = _Groups(), _Groups("bot:botops")
-    fn["hub_tool_add"]["fn"](person, entry)
-    fn["hub_tool_remove"]["fn"](person, {"bot": "inbox-manager", "id": "gmail"})
+    fn["tico_tool_add"]["fn"](person, entry)
+    fn["tico_tool_remove"]["fn"](person, {"bot": "inbox-manager", "id": "gmail"})
     assert [c[:2] for c in person.calls if c[1] != "me"] == [
         ("POST", "bots/inbox-manager/tools"),
         ("POST", "bots/inbox-manager/tools/gmail/delete"),
     ]
-    fn["hub_tool_add"]["fn"](botops, entry)
-    fn["hub_tool_remove"]["fn"](botops, {"bot": "inbox-manager", "id": "gmail"})
+    fn["tico_tool_add"]["fn"](botops, entry)
+    fn["tico_tool_remove"]["fn"](botops, {"bot": "inbox-manager", "id": "gmail"})
     assert [c[:2] + (c[3],) for c in botops.calls if c[1] != "me"] == [
         ("POST", "bots/inbox-manager/tools", True),
         ("POST", "bots/inbox-manager/tools/gmail/delete", True),
     ]
-    assert "botops" in hubtools.offered_to(fn["hub_tool_add"]) and "bot" not in hubtools.offered_to(fn["hub_tool_add"])
+    assert "botops" in hubtools.offered_to(fn["tico_tool_add"]) and "bot" not in hubtools.offered_to(
+        fn["tico_tool_add"]
+    )
 
 
 def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops_calls_it():
@@ -146,7 +148,7 @@ def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops
         "scope": ["mailbox=a@acme.example", "sites="],
         "note": "",
     }
-    fn["hub_tool_update"]["fn"](person, args)
+    fn["tico_tool_update"]["fn"](person, args)
     assert [c for c in person.calls if c[1] != "me"] == [
         (
             "POST",
@@ -154,17 +156,17 @@ def test_tool_update_changes_only_what_is_sent_and_is_the_requesters_when_botops
             {"can": ["read", "draft", "send"], "scope": {"mailbox": "a@acme.example", "sites": ""}, "note": ""},
         )
     ]
-    fn["hub_tool_update"]["fn"](botops, {"bot": "inbox-manager", "id": "gmail", "note": "sends on Fridays"})
+    fn["tico_tool_update"]["fn"](botops, {"bot": "inbox-manager", "id": "gmail", "note": "sends on Fridays"})
     assert [c for c in botops.calls if c[1] != "me"] == [
         ("POST", "bots/inbox-manager/tools/gmail/update", {"note": "sends on Fridays"}, True)
     ]
     try:
-        fn["hub_tool_update"]["fn"](person, {"bot": "inbox-manager", "id": "gmail"})
+        fn["tico_tool_update"]["fn"](person, {"bot": "inbox-manager", "id": "gmail"})
         raise AssertionError("an update that changes nothing is refused")
     except ValueError as exc:
         assert "Say what changes" in str(exc)
-    assert "botops" in hubtools.offered_to(fn["hub_tool_update"]) and "bot" not in hubtools.offered_to(
-        fn["hub_tool_update"]
+    assert "botops" in hubtools.offered_to(fn["tico_tool_update"]) and "bot" not in hubtools.offered_to(
+        fn["tico_tool_update"]
     )
 
 
@@ -176,7 +178,7 @@ def test_task_list_asks_for_the_callers_own_requests_with_requester_me():
             asked.append((path, query))
             return {"actor": "bot:botops"} if path == "me" else {"tasks": [{"id": "t1"}]}
 
-    assert hubtools.BY_NAME["hub_task_list"]["fn"](Api(), {"requester": "me", "status": ["open", "done"]}) == [
+    assert hubtools.BY_NAME["tico_task_list"]["fn"](Api(), {"requester": "me", "status": ["open", "done"]}) == [
         {"id": "t1"}
     ]
     assert asked[-1] == ("tasks", {"owner": None, "requester": "bot:botops", "status": "open,done", "label": None})
@@ -200,8 +202,8 @@ def test_only_the_new_sync_tool_takes_the_inbox_and_an_older_server_still_syncs(
     bots = [{"id": "g1", "name": "Designer"}]
     for knows in (True, False):
         api = _Sync(knows)
-        assert hubtools.BY_NAME["hub_external_sync"]["fn"](api, {"provider": "grokbot", "bots": bots}) == {"bots": []}
+        assert hubtools.BY_NAME["tico_external_sync"]["fn"](api, {"provider": "grokbot", "bots": bots}) == {"bots": []}
         assert [b.get("inbox") for b in api.bodies] == ([True] if knows else [True, None])
     api = _Sync(True)
-    hubtools.BY_NAME["hub_grokbot_sync"]["fn"](api, {"bots": bots})  # routines from before the inbox ignore it
+    hubtools.BY_NAME["tico_grokbot_sync"]["fn"](api, {"bots": bots})  # routines from before the inbox ignore it
     assert api.bodies == [{"provider": "grokbot", "bots": bots}]

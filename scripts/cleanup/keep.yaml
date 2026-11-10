@@ -34,7 +34,7 @@ files:
   - backend/tests/test_runner_wire_names.py
   - backend/migrations/0*         # applied migration files are history: they ran on the shape of their day
 names:
-  clients/*.py: [body_json]       # hub_goal_save's exact method/path/body_json step, not a column
+  clients/*.py: [body_json]       # tico_goal_save's exact method/path/body_json step, not a column
   clients/tests/*.py: [body_json]
   backend/tests/test_hubdb.py: [payload_json]   # the documents table as it was before 0008 dropped it
   ui/app/router.js: [finished]          # a view transition's own `finished` promise

@@ -207,15 +207,17 @@ CLI_NAMES = ("tico", "hub")  # the teamwork CLI, and its old name
 
 def hub_words(text):
     """A Tico CLI call's words, lowercased and split on anything but letters and digits, from a shell summary
-    (`tico task show`, or `tico task show` under the CLI's old name) or an MCP tool name (`mcp__hub__hub_task_show`, or
-    `mcp__tico__hub_task_show` as people's own agents name the server). None for any other tool."""
+    (`tico task show`, or the same under the CLI's old name `hub`) or a Tico MCP tool name (`tico_task_show`, or
+    `mcp__tico__tico_task_show` with the harness's server prefix). None for any other tool."""
     words = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
-    if words[:1] == ["mcp"]:
+    if words[:2] == ["mcp", "tico"]:
         words = words[1:]
+    elif words[:1] == ["mcp"]:
+        return None
     if words[:1] not in (["hub"], ["tico"]):
         return None
     words = words[1:]
-    if words[:1] == ["hub"]:  # an MCP tool named hub_<command>
+    if words[:1] == ["tico"]:  # mcp__tico__tico_<command>
         words = words[1:]
     return words
 

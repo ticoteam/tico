@@ -173,8 +173,8 @@ Build) are signed in on the Mac and never leave it. Bot Credentials are stored i
 `_shared.env` and declared profiles migrate into grants on upgrade; new runs do not load those files.
 Model API keys stored in Tico are separate from local subscription logins.
 Each run gets a scoped credential in `HUB_API_URL`/`HUB_TOKEN`; the bot talks to hub.acme.example
-through the `tico` CLI (`scripts/hub`) or Tico's MCP tools (`hub_*`, the same names with
-underscores: `tico task create` is `hub_task_create`), and downloads attachments with
+through the `tico` CLI (`scripts/hub`) or Tico's MCP tools (`tico_*`, the same names with
+underscores: `tico task create` is `tico_task_create`), and downloads attachments with
 `clients/files.py`. The tool schema is `clients/hubtools.py` and is the contract; the two are
 one implementation behind two transports. Codex and Claude runs get the MCP server for free
 (the runner spawns `clients/hubmcp.py` with the run's credential); anything that speaks MCP
@@ -182,13 +182,13 @@ over HTTP can also `POST /api/v2/mcp` with a bearer token. Either way every call
 the same routes and `backend/hubdb.py` rules; there is no privileged path.
 
 Calendar appointments are three shared Tico tools available to every bot:
-`hub_calendar_list`, `hub_calendar_schedule`, and `hub_calendar_status`. Reads come from the
+`tico_calendar_list`, `tico_calendar_schedule`, and `tico_calendar_status`. Reads come from the
 bounded calendar snapshot, limited to the team owner's or the bot operator's calendar
 ([calendar paths](mail.md#calendar)). A schedule call writes an idempotent Tico action; the private calendar tool
 claims it once, creates the Google event and invitations locally, and reports the result. Bots must
 see `succeeded` before saying the appointment exists. This path grants no generic Gmail authority.
 
-One of those tools is a second model, the decision model. `hub_decision_ask` (`tico decision ask`) sends a JSON state and typed
+One of those tools is a second model, the decision model. `tico_decision_ask` (`tico decision ask`) sends a JSON state and typed
 questions to the decision model, and gets a calibrated answer per question back:
 a choice with a confidence, a score on ordered levels, or the probability a statement is true (yes/no, choice and score: the question format of OpenRouter's Decisions API).
 It writes no prose, so a bot uses it to decide (sort a listing, dedupe, route, gate a draft) and
@@ -506,7 +506,7 @@ message ahead of the rest; only one is handed out per window, however many lanes
 normally releases the bot (its Needs-you item closes, event `bot.run_recovered`), so a provider outage or a network drop that has
 ended lets every bot it held go again without anyone, while a bot that is really broken makes only a few runs a day. A try that
 fails after more than a minute changes nothing. **Release** (Settings → Bots, `tico bot release <bot>`,
-`POST /api/v2/bots/{bot}/release`, MCP `hub_bot_release`) lifts the hold and its Needs-you item at once; `GET /api/v2/bots/{bot}/budget`
+`POST /api/v2/bots/{bot}/release`, MCP `tico_bot_release`) lifts the hold and its Needs-you item at once; `GET /api/v2/bots/{bot}/budget`
 shows the hold's `next_try_at`.
 
 **A queued run Tico cannot start is held by itself.** Each claim checks the queued jobs it considers and prepares the
@@ -529,7 +529,7 @@ ended.
 **Run budgets.** Each bot has `turns_per_hour` (default 300) and `turns_per_day` (default 2500); the owner and administrators set the
 team defaults (`GET/POST /api/v2/settings/turn-budgets`, `tico team budget [--hour N] [--day N]`), and a bot's owner, operator or BotOps
 sets its own (`GET/POST /api/v2/bots/{bot}/budget` with `expected_revision`, `tico bot budget <bot> [--hour N|default] [--day N|default]`,
-MCP `hub_bot_budget`). 0 is no limit. Runs are counted when Tico hands them out. A run that would pass the budget is not started and
+MCP `tico_bot_budget`). 0 is no limit. Runs are counted when Tico hands them out. A run that would pass the budget is not started and
 the bot is held with: "Tico stopped <bot>: <n> runs in the last hour. This looks like a runaway loop, not normal work. Check its last
 runs, then release it or raise its budget." (a day budget says "in the last day"). A person's own message is never refused by a budget,
 and queued work is kept. `tico bot budget <bot> release` (or Release) lifts the hold and the count starts from then; raising the budget
@@ -644,7 +644,7 @@ Custom bot that keeps them on); a Reviewer, Lead, Responder or Monitor is listed
 times. Doers pull open tasks themselves; the others start a task only when it is handed to them.
 **Custom** copies the profile's rows into the Rules table, marked as the profile's, to edit there; choosing a named profile
 again deletes them after a confirm. Set a profile in **Settings → Bots → Edit**, with `tico bot profile <bot> [name]`, MCP
-`hub_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices
+`tico_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices
 with a line each); the bot's owner, operator, a person it reports up to, or BotOps may. The profile also shows on every bot read.
 
 Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `listening` and
@@ -690,7 +690,7 @@ made or revoked is an `events` row (`token.create`, `token.revoke`).
 | `clients/` | what bots and the runner call: the `tico` CLI, the HTTP client, attachment download, routine validation, preflight, the docs read and write commands |
 | `connectors/` | shared Slack, mail/calendar and browser adapters bots use instead of vendor APIs |
 | `integrations/` | one page per outside system (what it is, how a bot uses it, rules, recipes) and the query lists; served as **Tools** and `tico tool show <service>`, with the learnings bots add |
-| `questions/` | the question sets the decision model answers (`hub_decision_ask`, `tico decision ask`, `mail inbox --decisions`, the meeting brain): one versioned JSON file per decision, with its thresholds |
+| `questions/` | the question sets the decision model answers (`tico_decision_ask`, `tico decision ask`, `mail inbox --decisions`, the meeting brain): one versioned JSON file per decision, with its thresholds |
 | `ui/` | the web interface (`index.html`, `app/` scripts, `styles/`, feature scripts, browser tests; see `ui/README.md`) |
 | `app/` | the native macOS shell around hub.acme.example |
 | `infra/` | the EC2 stack, release packaging, deploy and restore scripts |

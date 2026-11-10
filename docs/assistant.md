@@ -259,7 +259,7 @@ the path must be plain (`/api/v2/...` without `//`, `..`, `%` or `\`), and exact
 error's detail are kept of the result, never the answer's body.
 
 **What is never done from chat is proposed, and only your click runs it:** anything
-the "Never on your words" list above names, and everything while the owner's switch is off. The assistant calls `tico assistant propose` (`hub_assistant_propose`, `POST /api/v2/assistant/actions`)
+the "Never on your words" list above names, and everything while the owner's switch is off. The assistant calls `tico assistant propose` (`tico_assistant_propose`, `POST /api/v2/assistant/actions`)
 with the exact API operation. That leaves a **pending action** and a Confirm / Cancel card in your DM. The server
 refuses these operations when the assistant tries them itself without your cited words (`403 confirm_required`). **Confirm** runs the recorded
 operation through the same routes with *your* credential, once (a claim makes a second click a `409`), and
@@ -279,14 +279,14 @@ per person. The card is yours: it runs only on your tap, as you, and says the As
 proposed it. Any other bot, or a person naming someone else, gets `403`.
 
 The same run may send you **one morning message a day**: `tico assistant morning --for human:<id> --body "<text>"` (`POST
-/api/v2/assistant/morning`, `hub_assistant_morning`). It is a plain message in your own Assistant DM, from the
+/api/v2/assistant/morning`, `tico_assistant_morning`). It is a plain message in your own Assistant DM, from the
 Assistant, with no card and nothing to confirm: what you can do today to move your goals. The server allows one per
 person per company day (the company's clock, not UTC); a second that day is `409 already_sent_today` and says when the
 next can go. Only the Assistant bot may send it, for an active person; other callers get `403`, and a person who is
 gone or signed out gets `404`.
 
 Any teammate, person or bot, can withdraw a Confirm card that still waits (`tico assistant withdraw <id>`, `POST
-/api/v2/assistant/actions/{aid}/withdraw`, or `hub_assistant_withdraw`; `tico assistant proposals` lists the waiting cards
+/api/v2/assistant/actions/{aid}/withdraw`, or `tico_assistant_withdraw`; `tico assistant proposals` lists the waiting cards
 with their ids). The card is marked withdrawn and never runs, and the owner's DM says who withdrew it, with the reason if
 one was given. Only the card's owner can confirm it, and the owner can still Cancel it.
 
@@ -302,8 +302,8 @@ does not stop the rest, and the result lists every step's status (`result.items`
 (`403`; a confirm run carries a credential made at click time, bound to the stored method and path, valid for two minutes and then failed), a personal API token cannot either, another human sees `404`, and an unconfirmed proposal expires after
 24 hours.
 
-Use `hub_assistant_read` and `hub_assistant_send` (CLI: `tico assistant read|send`) with your personal token.
-`hub_message_send` also accepts `assistant`; it uses your own DM. Other humans' DMs remain private,
+Use `tico_assistant_read` and `tico_assistant_send` (CLI: `tico assistant read|send`) with your personal token.
+`tico_message_send` also accepts `assistant`; it uses your own DM. Other humans' DMs remain private,
 and Confirm and Cancel still require your own click in Tico.
 
 ## What it has learned

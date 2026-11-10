@@ -23,11 +23,11 @@ other file.
   **Replaced by** and links here. An Assistant turn must be able to read and manage the older page as its person,
   and both pages must be filed on the request's task.
 
-A bot writes only its own pages. Over MCP the same tools are `hub_page_publish`, `hub_page_list`, `hub_page_show` and
-`hub_page_archive`.
+A bot writes only its own pages. Over MCP the same tools are `tico_page_publish`, `tico_page_list`, `tico_page_show` and
+`tico_page_archive`.
 
 Task turns receive up to ten pages filed on or pinned to the task and ten linked meetings, newest first, as ids,
-titles, versions and dates. `tico task context ID` (`hub_task_context`, `GET /api/v2/tasks/{id}/context`) reads that
+titles, versions and dates. `tico task context ID` (`tico_task_context`, `GET /api/v2/tasks/{id}/context`) reads that
 metadata list. It includes only sources the caller may read. A bot uses its own normal read rights in every turn,
 whether or not it is working on a task. The task supplies references; the bot pulls content with `tico file read ID`
 and `tico meeting read ID` (`--notes` for saved meeting notes).
@@ -49,7 +49,7 @@ The maintainer and page managers always pass the audience check. Only managers s
 
 `tico page publish report.html --audience ben,group:legal,bot:analyst` sets it when publishing.
 `tico page access ID` shows it to managers; `tico page access ID --audience everyone` clears it.
-MCP uses `hub_page_publish`'s `audience` and `hub_page_access`. A new version keeps the setting unless publishing sets
+MCP uses `tico_page_publish`'s `audience` and `tico_page_access`. A new version keeps the setting unless publishing sets
 one. `PATCH /api/v2/pages/{id}` accepts the access audience object, or `null` to clear it. Everyone still needs access
 to where the page is filed. Restricted pages use a per-reader visual address, never the shared hosted copy.
 
@@ -178,7 +178,7 @@ totals, so a count never says what a reader cannot see.
 Managers get `audience` on single-page reads and writes, and a small `restricted` flag on summaries and cards.
 Other readers get neither field.
 
-`tico page list --task ID` and MCP's `hub_page_list` include both filed and linked pages with the same paging.
+`tico page list --task ID` and MCP's `tico_page_list` include both filed and linked pages with the same paging.
 
 **Who acts.** A bot publishes during its turn. Your Assistant makes task pages as you, recording its authenticated
 attempt alongside your authorship. People archive and restore. BotOps archives for a person with that

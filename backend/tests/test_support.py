@@ -671,19 +671,19 @@ def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the 
     drafts_only(api)
     as_bot(api)
     tools = {t["name"] for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
-    assert {"hub_support_report", "hub_support_send"} <= tools
+    assert {"tico_support_report", "tico_support_send"} <= tools
     err, drafted = call(
-        api, "hub_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo"
+        api, "tico_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo"
     )
     assert not err, drafted
     assert "must OK it" in drafted["next"] and hq.seen == []
-    err, early = call(api, "hub_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, early = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
     assert err and hq.seen == []
     decide(api, drafted["ok"])
-    err, sent = call(api, "hub_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, sent = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
     assert not err, sent
     assert json.loads(hq.seen[-1].content)["message"] == REPORT.replace(". ", ".\n")  # what the person read
-    err, again = call(api, "hub_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, again = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
     assert not err and again["ticket"]["id"] == sent["ticket"]["id"] and len(hq.tickets) == 1
 
 

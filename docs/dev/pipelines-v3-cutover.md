@@ -221,7 +221,7 @@ with one `H.task_waits(ids)`, never one read per row.
 
 ## Bot commands
 
-As spec S16. MCP tools mirror them one for one (`tico task move` is `hub_task_move`).
+As spec S16. MCP tools mirror them one for one (`tico task move` is `tico_task_move`).
 
 ```
 tico task show <id>

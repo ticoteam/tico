@@ -30,7 +30,7 @@ def test_product_updates_api_and_mcp(api, monkeypatch, tmp_path):
     assert first["unread_count"] == 2
     second = api.get("/api/v2/changelog?kind=product&limit=1&offset=1", headers=headers("ben-test")).json()
     assert second["entries"][0]["title"] == "Browse the team" and second["next_offset"] is None
-    err, result = call(api, "hub_changelog_list", {"q": "restore", "unread": True}, token="ben-test")
+    err, result = call(api, "tico_changelog_list", {"q": "restore", "unread": True}, token="ben-test")
     assert not err and [r["title"] for r in result["entries"]] == ["Search tasks"]
     assert result["unread_count"] == 2
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
@@ -67,7 +67,7 @@ def test_read_state_is_personal_and_only_acknowledges_shown_updates(api, monkeyp
     assert private["id"] not in str(listing) and "Private outcome" not in str(listing)
     ids = {r["title"]: r["id"] for r in changelog.packaged_products(api.app.state.store.settings)}
     # Two tabs acknowledge different entries. The second write must merge, not replace the first.
-    err, result = call(api, "hub_changelog_mark_read", {"ids": [ids["Browse the team"]]}, token="ben-test")
+    err, result = call(api, "tico_changelog_mark_read", {"ids": [ids["Browse the team"]]}, token="ben-test")
     assert not err and result["unread_count"] == 1
     assert (
         api.post("/api/v2/changelog/read", json={"ids": [ids["Search tasks"]]}, headers=headers("ben-test")).json()[
@@ -95,4 +95,4 @@ def test_read_state_is_personal_and_only_acknowledges_shown_updates(api, monkeyp
     unread = api.get("/api/v2/changelog?unread=true", headers=headers("ben-test")).json()
     assert unread["unread_count"] == 1 and unread["entries"][0]["title"] == "Team news"
     tools = {r["name"] for r in rpc(api, "tools/list")["result"]["tools"]}
-    assert {"hub_changelog_list", "hub_changelog_mark_read"} <= tools
+    assert {"tico_changelog_list", "tico_changelog_mark_read"} <= tools

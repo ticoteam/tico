@@ -36,7 +36,7 @@ Do each fix as the human, with their rights. Do not ask first.
 
 A Tool with too few verbs (a mail bot that cannot send) is changed in place with
 `tico tool update <tool-id> --bot <bot> --can ...`, never removed and added again.
-For missing GitHub repository access, use `hub_bot_repos_set` / `tico bot repos` and verify
+For missing GitHub repository access, use `tico_bot_repos_set` / `tico bot repos` and verify
 `effective` before reporting success. Tool declarations and repository grants are separate.
 
 A fix the server refuses for their rights is not a failure: name it in the list with who can do it.

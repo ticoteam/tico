@@ -57,7 +57,7 @@ def chart(api, code):
 
 def ask(api, token, kind, payload, op, **extra):
     """The bot asks for one Finance action, its operation id as the action's key: (tool error flag, result)."""
-    return call(api, "hub_finance_act", {"kind": kind, "payload": payload, "operation_id": op, **extra}, token=token)
+    return call(api, "tico_finance_act", {"kind": kind, "payload": payload, "operation_id": op, **extra}, token=token)
 
 
 def _library_file(api, fid, bot):

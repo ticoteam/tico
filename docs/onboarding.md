@@ -273,7 +273,7 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   nothing on Slack, and sends messages, answers and notes only to its manager, the people above it and a person it answers in
   a thread. A run that cannot confirm its stage with Tico sends no email or Slack post either. Each attempt is refused with a
   plain reason. Any number of bots may be onboarding at once.
-- When it has learned enough, the bot says so with `tico bot ready --summary "..."` (MCP `hub_bot_ready`); its page shows the
+- When it has learned enough, the bot says so with `tico bot ready --summary "..."` (MCP `tico_bot_ready`); its page shows the
   summary. Only a person above it on the org chart (its manager, their managers, the owner) sees **Mark onboarding complete**
   (`tico bot setup-done <bot>`, `POST /api/v2/bots/{bot}/onboarded`, checked on the server; the bot's own call is its "I'm
   ready"). That makes it **Active**: its routines run, its queued work starts and it counts toward a member's limit.

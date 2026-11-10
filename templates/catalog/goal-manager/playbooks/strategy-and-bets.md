@@ -39,8 +39,8 @@ with `tico health check`.
 Write with `tico kpi log`, `tico goal refresh`, `tico goal checkin`, `tico proposal create` and `tico lens run`. Nothing else changes a
 goal, a KPI or the strategy. An org change the owner asked for through their Assistant is `tico group update|delete` or
 `tico org reports-to`, where the server lets you. At level 3 only, `tico goal strategy-bot-decide` changes bot tasks. `tico strategy draft`,
-`tico strategy bet` and `tico strategy publish` are the owner's, never yours. The MCP tools have the same names (`hub_strategy_show`,
-`hub_lens_run`...).
+`tico strategy bet` and `tico strategy publish` are the owner's, never yours. The MCP tools have the same names (`tico_strategy_show`,
+`tico_lens_run`...).
 Ask a human a question with `tico task create --owner <person>`, another bot with `tico message send <bot> "<question>" --needs-action`; answer a bot's question with
 `tico message send <bot> "<answer>"`. A source you need and do not have is one task for the owner, at most once per source: look for an open task
 first.

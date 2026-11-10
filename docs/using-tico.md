@@ -143,7 +143,7 @@ Choose **Undo** in the toast, or open the finished task under **Done** (the arch
 The earlier completion stays in its history, while Goals and KPIs count it as active again.
 
 A bot's final answer to a reply appears under that update automatically. An acknowledgement such as
-"Thanks" needs only a short answer; it does not need a new task. `hub_update_reply` is for humans.
+"Thanks" needs only a short answer; it does not need a new task. `tico_update_reply` is for humans.
 
 **My Mac is asleep. What happens?**
 Your team's Tico server keeps running: everything is saved and other humans' bots keep answering. Bots on your
@@ -283,8 +283,8 @@ tico task comment <task-id> "Billing first." --defer 4h
 
 `POST /api/v2/chat/<bot>` and `POST /api/v2/tasks/<id>/comments` take `delivery` (`steer`,
 `queue` or `defer`) and `defer_for` (`<n>m`, `<n>h`, `<n>d` up to two years, or `never`;
-defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `hub_chat_send`,
-`hub_message_send` and `hub_task_comment` take the same fields.
+defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `tico_chat_send`,
+`tico_message_send` and `tico_task_comment` take the same fields.
 
 A person's post in a bot's Home or a DM with a bot takes them too, as optional fields: `POST /api/v2/threads/<id>/messages`,
 `POST /api/v2/threads/dm` (with its first `body`) and `POST /api/v2/uploads/threads/<id>/messages` (form fields). A
@@ -397,8 +397,8 @@ tico tag update release-2026-10-02 --version 1 --markdown-file release-checklist
 
 The release bot can own an instance, gather the tasks going out, record checklist results and
 tell the teammate coordinating the release when it ships. Its tag-owner rights allow checklist
-edits; attaching tags still needs a task mover. Use `hub_tag_list`, `hub_tag_show`,
-`hub_tag_create` and `hub_tag_update` through MCP. Update calls include the current `version`;
+edits; attaching tags still needs a task mover. Use `tico_tag_list`, `tico_tag_show`,
+`tico_tag_create` and `tico_tag_update` through MCP. Update calls include the current `version`;
 a stale version returns `409 version_conflict` without overwriting the checklist.
 
 ## Pipelines and stages

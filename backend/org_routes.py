@@ -271,7 +271,7 @@ def register(app, auth, settings, settings_admin, store):
 
     @app.get("/api/v2/org")
     def org(request: Request, person: str | None = None, team: str | None = None, can: str | None = None):
-        """The mixed people-and-bots org chart. Bots use this (and `tico team show` / `hub_team_show`) to
+        """The mixed people-and-bots org chart. Bots use this (and `tico team show` / `tico_team_show`) to
         find who handles a kind of work and how to reach them. Only the bots the caller may see,
         each with `access`, its `reports_to`, its `team` (its group's id), its `department` (its group's name)
         and its `template`; the groups come with their `parent`; `?can=read` or `?can=write` keeps those they hold that level on."""

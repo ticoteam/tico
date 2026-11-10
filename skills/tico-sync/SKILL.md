@@ -11,13 +11,13 @@ waiting, and ends. It is one pass, not a conversation.
 
 ## How you reach Tico
 
-- If you have the `hub_*` tools (an MCP server named `tico`), call them directly.
+- If you have the `tico_*` tools (an MCP server named `tico`), call them directly.
 - If you do not (an OpenClaw profile has no `tico` MCP server), call the same tools through the connector. It signs in
   with this bot's saved credential, which you never see and never need to type:
 
       {{connector}} call {{profile}} <tool name> '<arguments as JSON>'
 
-  For example `{{connector}} call {{profile}} hub_message_send '{"to":"human:ana","text":"On it.","conversation_id":"..."}'`.
+  For example `{{connector}} call {{profile}} tico_message_send '{"to":"human:ana","text":"On it.","conversation_id":"..."}'`.
   The answer is the tool's JSON.
 
 Below, to "call" a tool means either way.
@@ -29,32 +29,32 @@ Below, to "call" a tool means either way.
    updated. If it says nothing is waiting and no update is due, reply `idle` and stop. Do not call
    any other tool. (On Hermes the same check already ran before you woke; you only see this run when
    something needs you.)
-2. **Who you are.** Call `hub_whoami` once. Note your bot name. Then call `hub_note_list` with
+2. **Who you are.** Call `tico_whoami` once. Note your bot name. Then call `tico_note_list` with
    `{"to":"me","waiting":true}`: quiet notes people left you. They are context for this run, not
    questions. Read them; do not reply to them.
-3. **What is waiting.** Call `hub_message_list` (your unread messages) and
-   `hub_task_list` with `{"owner":"me"}` (your open tasks).
+3. **What is waiting.** Call `tico_message_list` (your unread messages) and
+   `tico_task_list` with `{"owner":"me"}` (your open tasks).
 4. **Each message, one at a time, oldest first.**
    - From a person: read it, and the conversation if it refers to something earlier
-     (`hub_conversation_show` with `{"conversation":"<its conversation_id>"}`). Answer in that same
-     conversation with `hub_message_send` (`{"to":"<from_actor>","conversation_id":"<its conversation_id>","in_reply_to":"<its id>","text":"..."}`),
-     then call `hub_message_mark_read` with `{"message_id":"<its id>"}`. If you cannot do what they ask, say
+     (`tico_conversation_show` with `{"conversation":"<its conversation_id>"}`). Answer in that same
+     conversation with `tico_message_send` (`{"to":"<from_actor>","conversation_id":"<its conversation_id>","in_reply_to":"<its id>","text":"..."}`),
+     then call `tico_message_mark_read` with `{"message_id":"<its id>"}`. If you cannot do what they ask, say
      so in one line and say what you would need, then mark it read. Never leave a person without an answer.
    - A notice (`kind: notice`, an fyi): read it, mark it read, do not reply.
-   - A question from another bot: answer it in that bot's conversation with `hub_message_send` (as above, `in_reply_to` its id), or say in one line what you would need, then mark it read.
+   - A question from another bot: answer it in that bot's conversation with `tico_message_send` (as above, `in_reply_to` its id), or say in one line what you would need, then mark it read.
    - From another bot and not an ask: handle it like a person's message if it asks for something,
      otherwise mark it read.
-5. **Your tasks.** Read each task that is yours with `hub_task_show` (`{"id":"<task id>"}`). It gives the
+5. **Your tasks.** Read each task that is yours with `tico_task_show` (`{"id":"<task id>"}`). It gives the
    task's version, what it waits on and what is missing to leave its stage. Pass that version with every call on
    the task. Skip a task that waits on someone else. Do the work, then leave the task in one of five ways:
-   - Done: `hub_task_done` (`{"id":"<task id>","note":"<the result>","version":12}`).
-   - Asking a person: `hub_task_ask` (`{"id":"<task id>","to":"<person id>","line":"<the ask>","version":12}`).
+   - Done: `tico_task_done` (`{"id":"<task id>","note":"<the result>","version":12}`).
+   - Asking a person: `tico_task_ask` (`{"id":"<task id>","to":"<person id>","line":"<the ask>","version":12}`).
      One or two plain sentences saying what you need and what happens after, with no ids, hashes, file paths or
      tool names, for example "Run the vendor trial on Thursday? If yes, I'll send the invite." One open ask per
      task; asking again replaces it.
    - Waiting on a task you filed: nothing more to do.
-   - Snoozed: `hub_task_snooze` (`{"id":"<task id>","until":"2026-11-14","why":"<why>","version":12}`).
-   - Closed: `hub_task_close` (`{"id":"<task id>","why":"<why>","version":12}`). Never close a task a person
+   - Snoozed: `tico_task_snooze` (`{"id":"<task id>","until":"2026-11-14","why":"<why>","version":12}`).
+   - Closed: `tico_task_close` (`{"id":"<task id>","why":"<why>","version":12}`). Never close a task a person
      asked for: ask them.
    A task left any other way counts as stopped early, and you are woken for it again. A refusal says what is
    missing and which calls are allowed next: make one of those, never the same call again.

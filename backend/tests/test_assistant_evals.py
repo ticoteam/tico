@@ -183,7 +183,7 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "hub_task_close", "arguments": {"id": "x", "why": "y", "version": 3}},
+            "params": {"name": "tico_task_close", "arguments": {"id": "x", "why": "y", "version": 3}},
         },
     ]
     proc = subprocess.run(
@@ -201,7 +201,7 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
     assert [t["name"] for t in replies[2]["result"]["tools"]] == real
     assert not replies[3]["result"]["isError"], replies[3]
     logged = [json.loads(l) for l in log.read_text().splitlines()]
-    assert logged[-1]["via"] == "mcp" and logged[-1]["tool"] == "hub_task_close", logged
+    assert logged[-1]["via"] == "mcp" and logged[-1]["tool"] == "tico_task_close", logged
     assert re.search(r"^task close\b", logged[-1]["argv"]), logged[-1]
 
 
@@ -273,7 +273,7 @@ def test_a_sample_runs_its_claude_command_on_every_surface(tmp_path, monkeypatch
     if surface == "cli":
         assert servers == {}
     else:
-        assert servers["hub"]["command"] and servers["hub"]["args"][0].endswith("fake_mcp.py"), servers
+        assert servers["tico"]["command"] and servers["tico"]["args"][0].endswith("fake_mcp.py"), servers
 
 
 def _hub_answer(tmp_path, monkeypatch, canned):

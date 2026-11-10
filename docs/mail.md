@@ -268,10 +268,10 @@ calendars are refused on this path. Humans can use calendars whose mail they may
 owner can use all of them. This example uses the default team-owner calendar:
 
 ```text
-hub_calendar_list()
-hub_calendar_schedule(title="Murphy hold", start="2026-09-22T09:00:00-07:00",
+tico_calendar_list()
+tico_calendar_schedule(title="Murphy hold", start="2026-09-22T09:00:00-07:00",
                       end="2026-09-22T09:30:00-07:00", attendees=["person@example.com"])
-hub_calendar_status(id="<action id>")
+tico_calendar_status(id="<action id>")
 ```
 
 The schedule call queues one idempotent action for the private Mac calendar tool. Only a status of

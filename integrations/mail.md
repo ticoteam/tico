@@ -53,8 +53,8 @@ copies of another system's notifications, so bots do not see them twice.
 Inside a turn `HUB_BOT` and `HUB_DIR` are set, so the tool knows who you are; `--as <slug>`
 is for running it by hand. Add `--mailbox <address>` when you hold more than one.
 
-For appointments, prefer the Hub tools. `hub_calendar_schedule` returns a durable action, not
-instant success. Poll `hub_calendar_status`; only `succeeded` confirms the event. `unknown` means
+For appointments, prefer the Hub tools. `tico_calendar_schedule` returns a durable action, not
+instant success. Poll `tico_calendar_status`; only `succeeded` confirms the event. `unknown` means
 the provider result could not be reconciled and must be inspected before any retry. This grant
 does not allow the bot to draft or send unrelated email.
 
@@ -143,10 +143,10 @@ policy refused you. Add `--json` for structured output.
 - Scheduling on the owner's behalf: 30-minute meetings, at least 20 hours' notice, weekdays
   excluding holidays, business hours in the owner's timezone, 30-minute buffers both sides,
   every calendar on the mailbox counts as busy. Those are the scoped inbox workflow's automatic
-  slot-selection rules; an explicit `hub_calendar_schedule` call uses the exact future interval
+  slot-selection rules; an explicit `tico_calendar_schedule` call uses the exact future interval
   the calling bot supplies.
 - A calendar action in `pending` or `running` is not a created appointment. Report success only
-  after `hub_calendar_status` returns `succeeded`; inspect `unknown` before retrying.
+  after `tico_calendar_status` returns `succeeded`; inspect `unknown` before retrying.
 - A refused `send` is a downgrade, not an error: `{"ok": true, "sent": false, "downgraded":
   "draft", "gate": ..., "reason": ...}` and exit 0. Check `sent`, not the exit code.
 - Running the same `draft` command twice updates the same Gmail draft; changing a word makes a

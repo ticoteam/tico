@@ -4,7 +4,7 @@ One file per decision the company makes with the decision model (the Tico AI Gat
 (`skills/decisions/SKILL.md`). The decision model takes a JSON state and typed
 questions (`noul` for yes/no, `choice`, `score`, the same format as OpenRouter's Decisions API) and
 answers each with a calibrated probability; it writes no prose. The primitive is
-one call (`hub_decision_ask`, `tico decision ask`, `clients/judge.py`) and it never changes. What changes,
+one call (`tico_decision_ask`, `tico decision ask`, `clients/judge.py`) and it never changes. What changes,
 and what makes a decision reusable across bots, is the question set: a named, versioned file
 here that every caller loads and sends inline. The hub server knows nothing about these files;
 the `label` on each call (`id@version`) is what groups them in the audit.

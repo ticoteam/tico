@@ -203,11 +203,11 @@ def _sections(body):
 TICO_REASONS = (
     "it removes or deprecates something; check what your Instructions rely on",
     "it changes MCP tools, tico commands or the API; check the tools your Instructions use",
-    "no MCP, hub command, API or removal entries",
+    "no MCP, tico command, API or removal entries",
 )
 TEMPLATE_OTHER = "it changes only the template's other files"
-# Words in a release that touch what a bot calls: its MCP tools, `hub` commands and the API.
-_TOOLING = re.compile(r"\bMCP\b|\bhub_[a-z_]+|`(?:hub|tico)\s|\b(?:hub|tico) CLI\b|\bAPI\b", re.I)
+# Words in a release that touch what a bot calls: its MCP tools, `tico` commands and the API.
+_TOOLING = re.compile(r"\bMCP\b|\btico_[a-z_]+|`(?:hub|tico)\s|\b(?:hub|tico) CLI\b|\bAPI\b", re.I)
 
 
 def tico_item(release):

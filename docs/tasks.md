@@ -318,7 +318,7 @@ python -m backend.manage purge-deleted-tasks /data/hub.sqlite --older-than-days 
 
 ## CLI and MCP
 
-MCP tools mirror the commands one for one (`tico task move` is `hub_task_move`). `--version` is the version you were
+MCP tools mirror the commands one for one (`tico task move` is `tico_task_move`). `--version` is the version you were
 last shown: `tico task show`, a list row and every wake print it. Without one a bot's command is refused: "Run `tico task
 show <id>` first."
 

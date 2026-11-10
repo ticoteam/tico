@@ -1,7 +1,7 @@
 ---
 name: decisions
 version: 3
-description: Read when a step in your work is a decision rather than a piece of writing - classify, route, dedupe, gate, rank, flag, pick a value from candidates, choose which tool or branch comes next - and you want a calibrated answer in one call instead of reasoning it out in your own context. Tico's `hub_decision_ask` tool or `tico decision ask` command; the question format matches OpenRouter's Decisions API. Formerly the `judge` skill.
+description: Read when a step in your work is a decision rather than a piece of writing - classify, route, dedupe, gate, rank, flag, pick a value from candidates, choose which tool or branch comes next - and you want a calibrated answer in one call instead of reasoning it out in your own context. Tico's `tico_decision_ask` tool or `tico decision ask` command; the question format matches OpenRouter's Decisions API. Formerly the `judge` skill.
 ---
 
 # Decisions
@@ -49,7 +49,7 @@ for anything code can compute exactly (see "What the decision model is bad at").
 
 ## How to call it
 
-Inside any run, the MCP tool `hub_decision_ask` or the command:
+Inside any run, the MCP tool `tico_decision_ask` or the command:
 
 ```bash
 tico decision ask --list                                                  # the shared question sets
@@ -171,7 +171,7 @@ version for a bot:
 - **Say what the decision said.** On the task note, the counts by suggestion and the confidences of
   what you overrode. That is what a human reads to tune the thresholds.
 - **Record what you did.** Each answer (and `tico classify`'s) carries a `ref`; once you have acted, write it
-  down once: `tico decision outcome --ref <ref> --verdict archive --action archived` (`hub_decision_outcome`), and
+  down once: `tico decision outcome --ref <ref> --verdict archive --action archived` (`tico_decision_outcome`), and
   `--action "overrode: read it myself"` when you went against it. That is how a set's answers are checked against
   what happened.
 - **Check freshness.** An answer describes the state you sent; if the item changed before you
@@ -212,7 +212,7 @@ the cookbook nearest your shape (`cookbooks/rerank_typesafe.md`, `hierarchical_c
   (`Tico AI Gateway` / `tico-decide-low`, `TypeSafe`, or the team's provider) and `fallback` with the first
   failure's code when a later provider answered, never the state. Read a set's history back with `tico sql "SELECT created_at,
   actor, target, detail FROM events WHERE action='judge.call' AND target='mail-triage@1'
-  ORDER BY created_at DESC LIMIT 200"`. For the week at a glance, `tico decision readout` (`hub_decision_readout`): per
+  ORDER BY created_at DESC LIMIT 200"`. For the week at a glance, `tico decision readout` (`tico_decision_readout`): per
   question set, calls, cost, how many Jev answered (a Tico Decide answer counts as Jev), fell back or failed, the spread of answers, and the month's spend
   against the cap (`--days N` for another window, up to 31).
 - A 422 is the request's shape, not its content: an unknown key on a question, a criteria map with

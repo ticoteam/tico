@@ -80,7 +80,7 @@ tico automation recent-runs [--range 1h] [--status failed] [--trigger system] [-
 tico automation stats [--range 24h]
 ```
 
-These are `hub_automation_recent_runs` and `hub_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
+These are `tico_automation_recent_runs` and `tico_automation_stats` over MCP, and `GET /api/v2/automations/runs` and
 `GET /api/v2/automations/stats` in the API. A system job counts once per recorded run; quiet repeats with the same result,
 and failures with the same reason, fold into one row (`count`). The System job rows follow what this server runs: a job
 Tico adds gets its row on the next automations tick, a retired job's row goes, a task rule's row takes its name and
@@ -105,8 +105,8 @@ connected, say) is left out of the list, runs and counts until its feature is se
   tico automation delete <id>
   ```
 
-  The MCP tools have the same names (`hub_automation_list`, `hub_automation_create`, `hub_automation_update`,
-  `hub_automation_run`, `hub_automation_guide`, ...). The API is under `/api/v2/automations`.
+  The MCP tools have the same names (`tico_automation_list`, `tico_automation_create`, `tico_automation_update`,
+  `tico_automation_run`, `tico_automation_guide`, ...). The API is under `/api/v2/automations`.
 
 A prompt can read the trigger's values with `{{...}}`, for example `{{webhook.data}}` for a webhook call's body. Each
 one is passed as quoted data after the prompt, never as instructions.
@@ -125,12 +125,12 @@ queue, oldest first) or **Drop** (they are skipped). Turning it off or deleting 
 tico automation held <id> release|drop
 ```
 
-Over MCP this is `hub_automation_held`; in the API, `POST /api/v2/automations/{aid}/held` with `{"action": "release"}`
+Over MCP this is `tico_automation_held`; in the API, `POST /api/v2/automations/{aid}/held` with `{"action": "release"}`
 or `{"action": "drop"}`. Whoever may change the automation may do either.
 
 ## Events
 
-`tico event-types` (`hub_event_types`, `GET /api/v2/event-types`) lists every event name with its description and an
+`tico event-types` (`tico_event_types`, `GET /api/v2/event-types`) lists every event name with its description and an
 example payload; `--group` narrows it. Some that bots use: `meeting.ready` (a team meeting with a transcript is imported;
 see [Meetings](meetings.md)), `release.published`, `market.insight.urgent`, `strategy.published` and `market.briefing`
 (see [Market briefing](market-briefing.md)). An event fires an automation only once something emits it.

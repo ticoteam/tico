@@ -693,7 +693,7 @@ def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=No
             "configure the profile's tool or skill. Keep credential values in the profile's credential store, never on this task.\n\n"
             + access_entry.to_yaml(entry)
             + "\nAfter checking the tool, report the full current list with "
-            "hub_tool_report (or python3 hermes_agent.py call --profile <name> hub_tool_report '{\"tools\": [...]}'). "
+            "tico_tool_report (or python3 hermes_agent.py call --profile <name> tico_tool_report '{\"tools\": [...]}'). "
             "Use an empty list when the last tool was removed. Then finish this task."
         )
         return G._task(c, auth, who, bot, title, text)

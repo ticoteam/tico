@@ -142,16 +142,16 @@ def ENTRY(key):  # noqa: N802
 
 def test_a_member_changes_a_direct_setting_through_botops_and_the_reply_names_the_value(api, botops):
     ana = turn(api, botops, person="ana-test", text="Set the release to 09:30")
-    err, done = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, ana["token"])
+    err, done = mcp(api, "tico_settings_set", {"key": "release.times", "value": "09:30"}, ana["token"])
     assert not err and done["value"] == ["09:30"], done
-    err, shown = mcp(api, "hub_settings_show", {"key": "release.times"}, ana["token"])
+    err, shown = mcp(api, "tico_settings_show", {"key": "release.times"}, ana["token"])
     assert not err and shown["value"] == ["09:30"] and shown["you_may"] is True, shown
     finish(api, botops, ana)
 
 
 def test_a_confirm_setting_from_botops_is_a_card_and_nothing_changes(api, botops):
     ana = turn(api, botops, person="ana-test", text="Stop admins seeing SQL")
-    err, card = mcp(api, "hub_settings_set", {"key": "team.rules.admin_sql", "value": "off"}, ana["token"])
+    err, card = mcp(api, "tico_settings_set", {"key": "team.rules.admin_sql", "value": "off"}, ana["token"])
     assert not err and card["needs_confirm"] is True, card
     assert get(api, "access")["rules"]["admin_sql"] is True
     finish(api, botops, ana)
@@ -159,10 +159,12 @@ def test_a_confirm_setting_from_botops_is_a_card_and_nothing_changes(api, botops
 
 def test_mail_access_through_botops_waits_for_the_persons_confirmation(api, botops):
     ana = turn(api, botops, person="ana-test", text="Let Ops read our physical mail")
-    err, missing = mcp(api, "hub_settings_set", {"key": "mail.access.bot", "bot": "ops", "value": "read"}, ana["token"])
+    err, missing = mcp(
+        api, "tico_settings_set", {"key": "mail.access.bot", "bot": "ops", "value": "read"}, ana["token"]
+    )
     assert err and "--id" in str(missing), missing
     err, card = mcp(
-        api, "hub_settings_set", {"key": "mail.access.bot", "id": "all", "bot": "ops", "value": "read"}, ana["token"]
+        api, "tico_settings_set", {"key": "mail.access.bot", "id": "all", "bot": "ops", "value": "read"}, ana["token"]
     )
     assert not err and card["needs_confirm"] is True, card
     assert card["action"]["path"] == "/api/v2/postal/addresses/all/grants/bot/ops"
@@ -176,28 +178,28 @@ def test_mail_access_through_botops_waits_for_the_persons_confirmation(api, boto
 def test_a_person_only_setting_gets_the_reason_and_the_cards_link(api, botops):
     person_only = next(e for e in ENTRIES if e.kind == "person" and not e.target)
     ana = turn(api, botops, person="ana-test", text="Change it for me")
-    err, refused = mcp(api, "hub_settings_set", {"key": person_only.key, "value": "x"}, ana["token"])
+    err, refused = mcp(api, "tico_settings_set", {"key": person_only.key, "value": "x"}, ana["token"])
     assert err and person_only.card in str(refused), refused
     finish(api, botops, ana)
 
 
 def test_someone_without_the_rights_is_told_who_can(api, botops):
     cara = turn(api, botops, person="cara-test", text="Set the release to 09:30")
-    err, refused = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, cara["token"])
+    err, refused = mcp(api, "tico_settings_set", {"key": "release.times", "value": "09:30"}, cara["token"])
     assert err and "owner or an admin" in str(refused), refused
-    err, shown = mcp(api, "hub_settings_show", {"key": "release.times"}, cara["token"])
+    err, shown = mcp(api, "tico_settings_show", {"key": "release.times"}, cara["token"])
     assert not err and shown["you_may"] is False and "admin" in shown["setting"]["who_may"], shown
 
 
 def test_show_a_bots_spend_limit_and_who_may_change_it_and_a_member_changes_a_direct_setting(api, botops):
     ana = turn(api, botops, person="ana-test", text="What are BotOps' spend limits?")
-    err, shown = mcp(api, "hub_settings_show", {"key": "bot.limit.usd", "bot": "botops"}, ana["token"])
+    err, shown = mcp(api, "tico_settings_show", {"key": "bot.limit.usd", "bot": "botops"}, ana["token"])
     assert not err and "value_error" not in shown and isinstance(shown["value"], dict), shown
     assert shown["setting"]["who_may"].startswith("The bot's owners") and shown["you_may"] is True, shown
     finish(api, botops, ana)
     cara = turn(api, botops, person="cara-test", text="Make me an incoming trigger called Orders")
     err, done = mcp(
-        api, "hub_settings_set", {"key": "webhooks.incoming.create", "value": {"name": "Orders"}}, cara["token"]
+        api, "tico_settings_set", {"key": "webhooks.incoming.create", "value": {"name": "Orders"}}, cara["token"]
     )
     assert not err and done["value"] == {"name": "Orders"}, done
     with api.app.state.store.read() as c:
@@ -222,14 +224,14 @@ def test_catalogue_resolves_the_bot_for_id_addressed_transitions(api, botops):
             "VALUES('tr-owner',?,'model','{}','human:cara',1,'prepared',?,?)",
             (owner_id, now, now),
         )
-    err, shown = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "cara-test")
+    err, shown = mcp(api, "tico_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "cara-test")
     assert not err and shown["you_may"] is True, shown
 
     # An admin retains access; an unrelated ordinary member does not inherit the bot owner's rights.
-    err, admin = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
+    err, admin = mcp(api, "tico_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
     assert not err and admin["you_may"] is True, admin
     as_member(api, "ben@acme.example")
-    err, unrelated = mcp(api, "hub_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
+    err, unrelated = mcp(api, "tico_settings_show", {"key": "bot.change.cancel", "id": "tr-owner"}, "ben-test")
     assert not err and unrelated["you_may"] is False, unrelated
 
 
@@ -242,7 +244,10 @@ def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_
     groups(api, "product")
     ben = turn(api, botops, person="ben-test", text="Raise the Engineering pool to $50 a day")
     err, card = mcp(
-        api, "hub_settings_set", {"key": "pool.limit.usd", "id": "groups/eng", "value": {"daily_usd": 50}}, ben["token"]
+        api,
+        "tico_settings_set",
+        {"key": "pool.limit.usd", "id": "groups/eng", "value": {"daily_usd": 50}},
+        ben["token"],
     )
     assert not err and card["needs_confirm"] is True, card
     assert card["action"]["path"] == "/api/v2/usage/pools/groups/eng", card["action"]
@@ -253,6 +258,6 @@ def test_an_admin_asking_botops_to_raise_a_group_pool_limit_gets_a_card_the_tap_
     assert get(api, "usage/limits")["pools"]["groups"]["eng"]["daily_usd"] == 50
     for bad in ("groups", "groups/eng/x", "eng"):
         err, refused = mcp(
-            api, "hub_settings_set", {"key": "pool.limit.usd", "id": bad, "value": {"daily_usd": 5}}, "ben-test"
+            api, "tico_settings_set", {"key": "pool.limit.usd", "id": bad, "value": {"daily_usd": 5}}, "ben-test"
         )
         assert err and refused["error"] == "validation", (bad, refused)

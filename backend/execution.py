@@ -885,7 +885,7 @@ OUTSIDE_ACTIONS = tuple(
     )
 )
 # Runner tool names that name the same operations, including the hub MCP tools with their runner prefix
-# (`mcp__hub__hub_webhook_send` arrives here as `hub_webhook_send`). Internal hub writes (tasks, messages,
+# (`mcp__tico__tico_webhook_send` arrives here as `tico_webhook_send`). Internal hub writes (tasks, messages,
 # comments) stay out on purpose: they are reversible teamwork, not outside effects.
 OUTSIDE_TOOLS = {
     'send_email': 'send email',
@@ -893,11 +893,11 @@ OUTSIDE_TOOLS = {
     'merge_pull_request': 'merge pull request',
     'publish_release': 'publish release',
     'make_payment': 'make payment',
-    'hub_release_now': 'publish release',
-    'hub_webhook_send': 'send webhook',
-    'hub_webhook_retry': 'send webhook',
-    'hub_webhook_recover': 'send webhook',
-    'hub_support_send': 'send support report',
+    'tico_release_now': 'publish release',
+    'tico_webhook_send': 'send webhook',
+    'tico_webhook_retry': 'send webhook',
+    'tico_webhook_recover': 'send webhook',
+    'tico_support_send': 'send support report',
 }
 
 

@@ -204,7 +204,7 @@ def test_an_on_demand_brief_does_not_use_up_the_turn_start_hand_off(books):
         parent, soft = _software(c)
         _coder_budget(c, parent, soft)
         spend(c, "6100", 25_000, day="2026-10-10", teammate="bot:coder")
-        asked = BR.brief(c, "bot:coder", at=AT)  # hub_finance_brief answers on demand
+        asked = BR.brief(c, "bot:coder", at=AT)  # tico_finance_brief answers on demand
         assert asked["lines"]
         handed = BR.for_turn(c, "bot:coder", at=LATER)  # the turn start still gets them: nothing was handed yet
         assert handed is not None and handed["lines"] == asked["lines"]

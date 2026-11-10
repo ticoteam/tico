@@ -85,13 +85,13 @@ def test_exact_save_cli_mcp_and_new_goal_substitution(api):
 @pytest.mark.parametrize(
     'words,name',
     [
-        (['goal', 'create', '--owner', 'company', '--title', 'Goal'], 'hub_goal_create'),
-        (['goal', 'update', 'g', '--title', 'New title'], 'hub_goal_update'),
-        (['kpi', 'create', 'Measure', '--goal', 'g'], 'hub_kpi_create'),
-        (['kpi', 'link', 'g', 'k'], 'hub_kpi_link'),
-        (['kpi', 'unlink', 'g', 'k'], 'hub_kpi_unlink'),
-        (['kpi', 'target', 'g', 'k', '--target', '100', '--deadline', '2026-11-28'], 'hub_kpi_target'),
-        (['proposal', 'decide', 'p', 'reject'], 'hub_proposal_decide'),
+        (['goal', 'create', '--owner', 'company', '--title', 'Goal'], 'tico_goal_create'),
+        (['goal', 'update', 'g', '--title', 'New title'], 'tico_goal_update'),
+        (['kpi', 'create', 'Measure', '--goal', 'g'], 'tico_kpi_create'),
+        (['kpi', 'link', 'g', 'k'], 'tico_kpi_link'),
+        (['kpi', 'unlink', 'g', 'k'], 'tico_kpi_unlink'),
+        (['kpi', 'target', 'g', 'k', '--target', '100', '--deadline', '2026-11-28'], 'tico_kpi_target'),
+        (['proposal', 'decide', 'p', 'reject'], 'tico_proposal_decide'),
     ],
 )
 def test_named_writes_forward_cited_yes(api, words, name):
@@ -141,11 +141,11 @@ def test_mcp_discovery_call_refusal_and_missing_command(api):
         return protocol.handle({'jsonrpc': '2.0', 'id': 1, 'method': method, 'params': params})
 
     names = {t['name'] for t in request('tools/list')['result']['tools']}
-    assert {'hub_goal_read_back', 'hub_goal_save', 'hub_kpi_target'} <= names
+    assert {'tico_goal_read_back', 'tico_goal_save', 'tico_kpi_target'} <= names
     changes = [{'kind': 'goal_create', 'owner': 'company', 'title': 'Goal'}]
-    result = request('tools/call', name='hub_goal_read_back', arguments={'changes': changes})['result']
+    result = request('tools/call', name='tico_goal_read_back', arguments={'changes': changes})['result']
     assert not result['isError'] and result['structuredContent']['message_id'] == 'draft'
-    assert request('tools/call', name='hub_goal_nonexistent', arguments={})['error']['message'].startswith(
+    assert request('tools/call', name='tico_goal_nonexistent', arguments={})['error']['message'].startswith(
         'Unknown tool:'
     )
 
@@ -155,7 +155,7 @@ def test_mcp_discovery_call_refusal_and_missing_command(api):
     api.call = refuse
     result = request(
         'tools/call',
-        name='hub_goal_save',
+        name='tico_goal_save',
         arguments={'method': 'POST', 'path': '/api/v2/goals', 'body': '{}', 'on_behalf_of': 'turn'},
     )['result']
     assert result['isError'] and result['structuredContent']['error'] == 'not_agreed'

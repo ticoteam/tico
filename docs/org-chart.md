@@ -34,7 +34,7 @@ human who linked them. Move each one under a human or bot, or into a group, with
 later syncs preserve that placement. Grok's own sections and pins remain source metadata and do not create nested
 groups or control chart ordering. Each row keeps its runtime mark. Your own row shows **Connect** until an external
 agent of yours has reached Tico ([Connect an external agent](connect-an-agent.md)).
-Bots read the same chart through `tico team show` / the `hub_team_show` MCP tool (`GET /api/v2/org`): the humans, and every bot the caller
+Bots read the same chart through `tico team show` / the `tico_team_show` MCP tool (`GET /api/v2/org`): the humans, and every bot the caller
 may see (see [permissions.md](permissions.md)) with its `reports_to`, its `team` (its group's id), its `department` (its group's name)
 and its `template`. `tico team show --team <group>` is that group and the groups in it. `tico human list` is the humans alone.
 
@@ -65,7 +65,7 @@ manager's reports shown in a group keep that order there, and are dragged into p
   (`manager` is a bot's slug or a human's id; put `bot:` or `human:` in front when one could be either);
   `PUT /api/v2/org/order/{manager}` with `{"reports": [...]}` puts them in that order. Reports left out keep their
   places, so naming two swaps those two; a name that is not a direct report is refused. `tico org order <manager>` and
-  `tico org order <manager> --set a,b,c` (`hub_org_order`) do the same. Ordering never changes who reports to whom.
+  `tico org order <manager> --set a,b,c` (`tico_org_order`) do the same. Ordering never changes who reports to whom.
 
 Groups and reporting are two things. `reports_to` says who a human or bot works for; a group says who is on which sub-team. Changing
 one never changes the other.
@@ -114,8 +114,8 @@ Owners and admins change groups; everyone else reads them.
   adds or removes teammates (`"add"`, `"remove"`); `DELETE /api/v2/groups/{id}` removes it, and the groups and teammates in it move up to
   its parent. A group cannot go under itself or a group inside it, and a built-in bot cannot join one. The Built-in group is kept by Tico: it cannot be renamed, moved or deleted (422), and no bot can be added to it by hand.
 - **With the tools**: `tico group list`, `tico group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human]
-  [--remove-bot]` and `tico group delete <group>` (`hub_group_list`, `hub_group_update`, `hub_group_delete`); with no group given, `update`
-  creates one from `--name`. `tico org reports-to <bot:slug|human:id> <manager>` (`hub_org_reports_to`) changes who a teammate reports to.
+  [--remove-bot]` and `tico group delete <group>` (`tico_group_list`, `tico_group_update`, `tico_group_delete`); with no group given, `update`
+  creates one from `--name`. `tico org reports-to <bot:slug|human:id> <manager>` (`tico_org_reports_to`) changes who a teammate reports to.
   BotOps does the same as the person who asked it, with their own rights: a member is refused, an owner or an admin is not.
 - **With the Strategy Bot**: it suggests org changes in plain words in its chat and changes nothing on its own. When the person tells it
   to make one, it runs the tools above citing their message (`--on-behalf-of turn`), with exactly that person's rights.

@@ -547,11 +547,11 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
     }
     rule_id = tools(
         token,
-        ("hub_rules_list", {}),
-        ("hub_rules_list", {"mine": True}),
-        ("hub_file_read", {"id": file_id, "version": version}),
+        ("tico_rules_list", {}),
+        ("tico_rules_list", {"mine": True}),
+        ("tico_file_read", {"id": file_id, "version": version}),
         (
-            "hub_rules_add",
+            "tico_rules_add",
             {
                 "kind": "external",
                 "text": "Keep a consent record for five years.",
@@ -562,15 +562,15 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
     )["id"]
     tools(
         token,
-        ("hub_rules_get", {"id": rule_id}),
-        ("hub_task_comment", {"id": read["task_id"], "text": "Wrote 1 suggestion."}),
+        ("tico_rules_get", {"id": rule_id}),
+        ("tico_task_comment", {"id": read["task_id"], "text": "Wrote 1 suggestion."}),
     )
     # The same tools over the hub's own MCP: the version it was asked to read comes back whole, a newer one is refused.
-    assert not mcp(api, "hub_rules_list", {}, token=token)[0]
-    failed, got = mcp(api, "hub_file_read", {"id": file_id, "version": version}, token=token)
+    assert not mcp(api, "tico_rules_list", {}, token=token)[0]
+    failed, got = mcp(api, "tico_file_read", {"id": file_id, "version": version}, token=token)
     assert not failed and got["text"] == CONTRACT, got
     newer = new_version(api, file_id, CONTRACT + "\nClause 12: the Globex merger is secret.")
-    failed, got = mcp(api, "hub_file_read", {"id": file_id, "version": newer}, token=token)
+    failed, got = mcp(api, "tico_file_read", {"id": file_id, "version": newer}, token=token)
     assert failed and "Globex" not in json.dumps(got), got
     assert ("GET", f"/api/v2/files/{file_id}/versions/{newer}", counsel.READ_SCOPE) in seen
     seen[:] = [s for s in seen if s[2] is None]
@@ -581,10 +581,10 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
     token = next_counsel_run(api, r)["token"]
     tools(
         token,
-        ("hub_rules_list", {}),
-        ("hub_rules_list", {"bot": "ops"}),
-        ("hub_rules_get", {"id": rule_id}),
-        ("hub_task_comment", {"id": ask["task_id"], "text": "No rule covers it."}),
+        ("tico_rules_list", {}),
+        ("tico_rules_list", {"bot": "ops"}),
+        ("tico_rules_get", {"id": rule_id}),
+        ("tico_task_comment", {"id": ask["task_id"], "text": "No rule covers it."}),
     )
     shown = api.get(f"/api/v2/tasks/{ask['task_id']}", headers=headers(token)).json()["task"]["version"]
     with pytest.raises(Exception, match="Counsel reads only"):
@@ -1067,21 +1067,21 @@ def test_rules_read_by_id_is_the_single_rule_and_with_from_a_document_read():
     from clients import hubcli, remotecli
 
     single = remotecli._rules_args(hubcli.parser().parse_args(["rules", "read", "rule-1"]))
-    assert remotecli.tool_name(single.fn) == "hub_rules_get"
+    assert remotecli.tool_name(single.fn) == "tico_rules_get"
     document = remotecli._rules_args(hubcli.parser().parse_args(["rules", "read", "file-1", "--from", "Acme"]))
-    assert remotecli.tool_name(document.fn) == "hub_rules_read"
+    assert remotecli.tool_name(document.fn) == "tico_rules_read"
 
 
 def test_the_assistant_is_offered_the_document_read_the_question_and_the_single_rule_read():
     from clients import hubtools
 
     names = {t["name"] for t in hubtools.listing(kind="assistant")}
-    assert {"hub_rules_get", "hub_rules_read", "hub_rules_ask", "hub_rules_add"} <= names
+    assert {"tico_rules_get", "tico_rules_read", "tico_rules_ask", "tico_rules_add"} <= names
     tools = {t["name"]: t for t in hubtools.TOOLS}
-    assert tools["hub_rules_get"]["writes"] is False
+    assert tools["tico_rules_get"]["writes"] is False
     assert (
-        tools["hub_rules_read"]["writes"] is True
-        and "on_behalf_of" in tools["hub_rules_read"]["inputSchema"]["properties"]
+        tools["tico_rules_read"]["writes"] is True
+        and "on_behalf_of" in tools["tico_rules_read"]["inputSchema"]["properties"]
     )
     # The rule reads are writes the Assistant's turn may make on the person's cited words (`admits_on_turn`); a read
     # (GET) is never a write, so it is not held.
@@ -1176,14 +1176,14 @@ def test_counsel_is_offered_only_its_own_tools_and_refuses_the_rest():
     names = {t["name"] for t in hubtools.listing(kind="counsel")}
     assert names == {n for n in hubtools.COUNSEL_TOOLS if n in hubtools.BY_NAME}
     assert {
-        "hub_rules_list",
-        "hub_rules_get",
-        "hub_rules_add",
-        "hub_file_read",
-        "hub_task_comment",
-        "hub_task_close",
+        "tico_rules_list",
+        "tico_rules_get",
+        "tico_rules_add",
+        "tico_file_read",
+        "tico_task_comment",
+        "tico_task_close",
     } <= names
-    outward = {"hub_gateway_search", "hub_gateway_fetch", "hub_message_send"}
+    outward = {"tico_gateway_search", "tico_gateway_fetch", "tico_message_send"}
     assert not outward & names
     # Other bots and people keep theirs.
     assert outward <= {t["name"] for t in hubtools.listing(kind="bot")}

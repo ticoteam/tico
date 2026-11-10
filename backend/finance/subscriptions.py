@@ -402,7 +402,7 @@ def report(ctx: Ctx, viewer: str, top: int) -> Row:
 
 
 def search(ctx: Ctx, viewer: str, text: str, most: int) -> list[Row]:
-    """The subscriptions the viewer sees whose vendor name matches (hub_finance_search kind subscription)."""
+    """The subscriptions the viewer sees whose vendor name matches (tico_finance_search kind subscription)."""
     needle = text.lower()
     out: list[Row] = []
     for x in rows(ctx, viewer):

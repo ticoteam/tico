@@ -75,5 +75,5 @@ or an admin can switch it, pick its schedule and run it now.
 | Run the check now | `POST /api/v2/system-routines/task_manager_report/run` | `tico task-manager run` |
 | Pause or wake the bot (owner) | `POST /api/v2/task-manager/turn-off` / `turn-on` | `tico task-manager bot off` / `on` |
 
-The same four actions are the MCP tools `hub_task_manager`, `hub_task_manager_set` and `hub_task_manager_run`.
+The same four actions are the MCP tools `tico_task_manager`, `tico_task_manager_set` and `tico_task_manager_run`.
 While the bot is paused the report finds nothing to wake and says so on its row.

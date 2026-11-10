@@ -119,7 +119,7 @@ and then tries the connection as the bot:
    bot's name or slug; the credential is named by its name or its variable.) The second bot has it, as that variable, from its next run.
 3. To take it away: `tico credential revoke "JIRA_BASIC_AUTH" --from engineering-monitor`.
 
-The same three steps are the tools `hub_credential_import`, `hub_credential_grant` and `hub_credential_revoke`, and Tools → Credentials
+The same three steps are the tools `tico_credential_import`, `tico_credential_grant` and `tico_credential_revoke`, and Tools → Credentials
 does the grant and revoke by hand. A grant to a person, or to every computer, still asks for the person's own click when it comes through BotOps.
 
 ## The local credential key and backups
@@ -257,4 +257,4 @@ variable names only. Revocation removes access while keeping the stored value; d
 **Every computer (signs models in)** is available only for stored model API keys and tokens whose explicit or inferred variable is
 `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`. Those names infer a blank variable;
 older name-only keys fill the field when granted. This signs the model software in; tool Credentials still need a grant per bot.
-`hub_credential_grant` targets one bot; use Credentials to grant a model key to Every computer.
+`tico_credential_grant` targets one bot; use Credentials to grant a model key to Every computer.

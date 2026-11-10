@@ -89,7 +89,7 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - Generated access tasks take a title prefix: `tico tool add --title-prefix <prefix>`. Keep requested title prefixes on child tasks
   and notes too.
 - Keep Tool declarations separate: they describe actions and do not grant repository access.
-- Repository access requests use `hub_bot_repos_set` / `tico bot repos` (`tico bot repos <slug>` reads it; `--chosen owner/repo:read`
+- Repository access requests use `tico_bot_repos_set` / `tico bot repos` (`tico bot repos <slug>` reads it; `--chosen owner/repo:read`
   sets it). Then read `effective` to verify the requested repositories and read/write grants. Preserve existing grants unless
   the requester asked to change them.
 - Putting a bot's local repository on GitHub, when the team has connected it: `tico bot repo-create <slug> --empty`.

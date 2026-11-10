@@ -836,7 +836,7 @@ pages, at most 99 (the sidebar badge). Reading an item is `POST .../read-all`; m
 Naming. Only a DM with one teammate and a task's thread may be unnamed (`require_name`). `threads.create`, `threads.dm` and a post that starts a thread
 (`_create_plan`) refuse a group DM (two or more others) or a members, team or company thread with an empty title:
 422 `name_required`, "Group chats need a name.", and for a bot the same text plus how to pass a title (`title` in
-`hub_thread_create` and `hub_thread_dm_group`, `--title` on the commands). Opening a group DM that already exists needs
+`tico_thread_create` and `tico_thread_dm_group`, `--title` on the commands). Opening a group DM that already exists needs
 no title, and existing unnamed group DMs stay readable: clients name them from `dm_with`.
 
 A thread with no title that is not a Home is named by `name` (`threads._thread_name`, the same for every reader): the
@@ -852,9 +852,9 @@ Events. `threads` topic, kind `pinned`, `{"thread_id", "root_id", "kind": "pinne
 "pinned_for_everyone"}` (`pinned` is the receiver's own state). A reader's own pin (`thread_pins`, `ref` = actor) goes
 only to that reader; a pin for everyone (`conversations.pinned_for_everyone_at`, no `ref`) to everyone who reads it.
 
-CLI and MCP: `tico thread pin|unpin <thread>` (`hub_thread_pin`, `hub_thread_unpin`), `tico thread catch-up`
-(`hub_thread_catch_up`), `tico thread update --pin-for-everyone|--unpin-for-everyone` (`pinned_for_everyone` on
-`hub_thread_update`), `tico thread create --pin-for-members`, `tico thread dm-group --title`. BotOps runs the pin routes
+CLI and MCP: `tico thread pin|unpin <thread>` (`tico_thread_pin`, `tico_thread_unpin`), `tico thread catch-up`
+(`tico_thread_catch_up`), `tico thread update --pin-for-everyone|--unpin-for-everyone` (`pinned_for_everyone` on
+`tico_thread_update`), `tico thread create --pin-for-members`, `tico thread dm-group --title`. BotOps runs the pin routes
 as the person who asked.
 
 ## 11. Outside tracks' hooks

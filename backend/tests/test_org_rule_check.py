@@ -1034,7 +1034,7 @@ def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
     args = hubcli.parser().parse_args(["rules", "appeal", held["id"], "Gold is on our public site."])
     appealed = remotecli.via_tool(Client(api, "ops-test"), remotecli._rules_args(args))
     assert appealed["task_id"]
-    error, _ = mcp(api, "hub_rules_check", {"text": "Hello", "to": "ana"}, token="ops-test")
+    error, _ = mcp(api, "tico_rules_check", {"text": "Hello", "to": "ana"}, token="ops-test")
     assert not error
 
 
@@ -1875,12 +1875,12 @@ def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled, monkeypatch
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")  # a Tuesday: a daily, whatever today is
     made = color_rule(api)
     error, held = mcp(
-        api, "hub_update_create", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test"
+        api, "tico_update_create", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test"
     )
     assert not error and held["held"]["outcome"] == "blocked"
     edit(api, made["id"], {"if_broken": "warn", "version": made["version"]})
     error, posted = mcp(
-        api, "hub_update_create", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test"
+        api, "tico_update_create", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test"
     )
     assert not error and posted["rule_warning"] and posted["body"].startswith("Warning:")
 

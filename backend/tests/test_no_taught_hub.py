@@ -102,7 +102,7 @@ def test_every_help_page_says_tico():
         # Prose, the server and names that only contain the word stay.
         ("Tico keeps a hub task list for each bot.", False, "Tico keeps a hub task list for each bot."),
         ("hub status page is green", False, "hub status page is green"),
-        ("the hub_task_show tool and HUB_TOKEN", False, "the hub_task_show tool and HUB_TOKEN"),
+        ("the tico_task_show tool and HUB_TOKEN", False, "the tico_task_show tool and HUB_TOKEN"),
         ("https://hub.acme.example/task", False, "https://hub.acme.example/task"),
         ("~/.tico/hub.db task", False, "~/.tico/hub.db task"),
     ],

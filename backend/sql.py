@@ -300,7 +300,7 @@ GRANTED = {
               FROM {all_assistant_actions} GROUP BY 1, 2, 3)""",
     ),
     # Bot tool calls through MCP per week, by tool and by bot when the reader may read that bot; hidden bots count
-    # with no `bot`. People's calls are excluded. A name that is not a hub tool's counts as `other`.
+    # with no `bot`. People's calls are excluded. A name that is not a Tico tool's counts as `other`.
     "mcp_call_weekly": (
         ("events", "bots"),
         """

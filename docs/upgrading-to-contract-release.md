@@ -73,7 +73,7 @@ Each needs-you item has `id`, `kind`, `title`, `body`, `subject`, `created_at` a
   bot made in this release gets a UUID as its `id`.
 - Use the `id` for actor strings (`bot:<id>`), references and lookups. Use the `slug` to display a bot. A route, field
   or command that takes a bot accepts either.
-- Rename a bot with `tico bot update acme-ops --new-slug acme-support` (CLI), the `new_slug` argument of `hub_bot_update`
+- Rename a bot with `tico bot update acme-ops --new-slug acme-support` (CLI), the `new_slug` argument of `tico_bot_update`
   (MCP), or the `slug` field of `POST /api/v2/bots/{bot}/definition`. The `id`, the history and the folder stay.
 - A bot's checkout folder is named when the bot is made: `bot-<slug>`, or `bot-<slug>-<part of its id>` when that name
   is taken. A rename does not change it. Clients find a bot's files by `folder` from `GET /api/v2/bots`, not by slug.

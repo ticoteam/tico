@@ -3432,7 +3432,7 @@ def install_views(app, store, auth, mutate, task_view):
     def my_recent(request: Request, days: int = 7, limit: int = 10):
         """The bots I have been working with lately, most recent first, each with
         its live status, the last thing I said and the last thing it said, the conversation to read
-        on (`hub_conversation_show`), our open tasks and what it needs from me. `hub_bot_recent` over MCP, so an
+        on (`tico_conversation_show`), our open tasks and what it needs from me. `tico_bot_recent` over MCP, so an
         agent of mine (a Grok bot) can carry on where I left off."""
         who = request.state.identity
         human_only(who)

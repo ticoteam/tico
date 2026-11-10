@@ -104,33 +104,33 @@ class Api:
 
 def test_the_tools_rewrite_text_before_sending_and_say_so():
     api = Api()
-    made = hubtools.BY_NAME["hub_task_create"]["fn"](
+    made = hubtools.BY_NAME["tico_task_create"]["fn"](
         api, {"owner": "human:ana", "title": "Review the drafts", "body": "Draft: s3://acme-files/d/launch.md"}
     )
     assert made["sent"]["body"] == "Draft: " + VIEW + "/d/launch.md"
     assert made["s3_links"]["rewritten"] == [{"from": "s3://acme-files/d/launch.md", "to": VIEW + "/d/launch.md"}]
     assert "rewritten" in made["s3_links"]["note"]
-    said = hubtools.BY_NAME["hub_message_send"]["fn"](api, {"to": "human:ana", "text": "See s3://other-bucket/k.md"})
+    said = hubtools.BY_NAME["tico_message_send"]["fn"](api, {"to": "human:ana", "text": "See s3://other-bucket/k.md"})
     assert said["sent"]["text"] == "See s3://other-bucket/k.md"
     assert said["s3_links"]["unmapped"] == ["s3://other-bucket/k.md"]
     assert "tico file import s3://" in said["s3_links"]["hint"]
-    commented = hubtools.BY_NAME["hub_task_comment"]["fn"](
+    commented = hubtools.BY_NAME["tico_task_comment"]["fn"](
         api, {"id": "t1", "text": "`s3://acme-files/a.md` s3://acme-files/b.md"}
     )
     assert commented["sent"]["text"] == "`s3://acme-files/a.md` " + VIEW + "/b.md"
-    done = hubtools.BY_NAME["hub_task_done"]["fn"](api, {"id": "t1", "note": "s3://acme-files/r.pdf", "version": 3})
+    done = hubtools.BY_NAME["tico_task_done"]["fn"](api, {"id": "t1", "note": "s3://acme-files/r.pdf", "version": 3})
     assert done["sent"]["note"] == VIEW + "/r.pdf"
-    chat = hubtools.BY_NAME["hub_chat_send"]["fn"](api, {"to": "finance", "text": "s3://acme-files/c.png"})
+    chat = hubtools.BY_NAME["tico_chat_send"]["fn"](api, {"to": "finance", "text": "s3://acme-files/c.png"})
     assert chat["sent"]["text"] == VIEW + "/c.png"
     # Text without a bucket URI costs no config read and comes back as it always did.
     before = len(api.calls)
-    plain = hubtools.BY_NAME["hub_task_comment"]["fn"](api, {"id": "t1", "text": "Done."})
+    plain = hubtools.BY_NAME["tico_task_comment"]["fn"](api, {"id": "t1", "text": "Done."})
     assert "s3_links" not in plain and ("GET", "config") not in api.calls[before:]
 
 
 def test_a_server_without_the_mapping_leaves_text_alone_with_the_hint():
     api = Api(mapping=None)
-    made = hubtools.BY_NAME["hub_task_create"]["fn"](
+    made = hubtools.BY_NAME["tico_task_create"]["fn"](
         api, {"owner": "human:ana", "title": "T", "body": "s3://acme-files/d.md"}
     )
     assert made["sent"]["body"] == "s3://acme-files/d.md" and made["s3_links"]["unmapped"] == ["s3://acme-files/d.md"]

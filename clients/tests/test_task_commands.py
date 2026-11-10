@@ -42,27 +42,27 @@ class Recorder:
 COMMANDS = [
     (
         ["task", "done", "T1", "-m", "Shipped the notes", "--version", "3"],
-        ("hub_task_done", {"id": "T1", "note": "Shipped the notes", "version": 3}),
+        ("tico_task_done", {"id": "T1", "note": "Shipped the notes", "version": 3}),
         ("POST", "tasks/T1/done", {"version": 3, "note": "Shipped the notes"}),
     ),
     (
         ["task", "move", "T1", "next", "-m", "The reviewer is away", "--version", "3"],
-        ("hub_task_move", {"id": "T1", "to": "next", "why": "The reviewer is away", "version": 3}),
+        ("tico_task_move", {"id": "T1", "to": "next", "why": "The reviewer is away", "version": 3}),
         ("POST", "tasks/T1/move", {"to": "next", "version": 3, "why": "The reviewer is away"}),
     ),
     (
         ["task", "move", "T1", "Build", "--version", "3"],
-        ("hub_task_move", {"id": "T1", "to": "Build", "version": 3}),
+        ("tico_task_move", {"id": "T1", "to": "Build", "version": 3}),
         ("POST", "tasks/T1/move", {"to": "Build", "version": 3}),
     ),
     (
         ["task", "close", "T1", "-m", "Not needed", "--version", "3"],
-        ("hub_task_close", {"id": "T1", "why": "Not needed", "version": 3}),
+        ("tico_task_close", {"id": "T1", "why": "Not needed", "version": 3}),
         ("POST", "tasks/T1/move", {"to": "closed", "version": 3, "why": "Not needed"}),
     ),
     (
         ["task", "reassign", "T1", "ana", "-m", "Hers to sign", "--version", "3"],
-        ("hub_task_reassign", {"id": "T1", "owner": "ana", "why": "Hers to sign", "version": 3}),
+        ("tico_task_reassign", {"id": "T1", "owner": "ana", "why": "Hers to sign", "version": 3}),
         ("POST", "tasks/T1/owner", {"owner": "ana", "version": 3, "why": "Hers to sign"}),
     ),
     (
@@ -81,7 +81,7 @@ COMMANDS = [
             "3",
         ],
         (
-            "hub_task_ask",
+            "tico_task_ask",
             {
                 "id": "T1",
                 "to": "chris",
@@ -99,47 +99,47 @@ COMMANDS = [
     ),
     (
         ["task", "ask", "T1", "--to", "chris", "Send the edition?", "--kind", "ok", "--version", "3"],
-        ("hub_task_ask", {"id": "T1", "to": "chris", "line": "Send the edition?", "kind": "ok", "version": 3}),
+        ("tico_task_ask", {"id": "T1", "to": "chris", "line": "Send the edition?", "kind": "ok", "version": 3}),
         ("POST", "tasks/T1/asks", {"to": "chris", "line": "Send the edition?", "version": 3, "kind": "ok"}),
     ),
     (
         ["task", "ask", "T1", "--withdraw", "--requirement", "r9", "-m", "Found it myself"],
-        ("hub_task_ask", {"id": "T1", "withdraw": True, "requirement": "r9", "why": "Found it myself"}),
+        ("tico_task_ask", {"id": "T1", "withdraw": True, "requirement": "r9", "why": "Found it myself"}),
         ("DELETE", "tasks/T1/asks/r9", {"why": "Found it myself"}),
     ),
     (
         ["task", "answer", "T1", "r9", "no", "-m", "Wrong totals", "--version", "3"],
-        ("hub_task_answer", {"id": "T1", "requirement": "r9", "value": "no", "note": "Wrong totals", "version": 3}),
+        ("tico_task_answer", {"id": "T1", "requirement": "r9", "value": "no", "note": "Wrong totals", "version": 3}),
         ("POST", "tasks/T1/asks/r9/answer", {"value": "no", "version": 3, "note": "Wrong totals"}),
     ),
     (
         ["task", "give", "T1", "r9", "--to", "ben", "--version", "3"],
-        ("hub_task_give", {"id": "T1", "requirement": "r9", "to": "ben", "version": 3}),
+        ("tico_task_give", {"id": "T1", "requirement": "r9", "to": "ben", "version": 3}),
         ("POST", "tasks/T1/asks/r9/give", {"to": "ben", "version": 3}),
     ),
     (
         ["task", "snooze", "T1", "--until", "2026-11-14", "-m", "Vendor replies by Nov 14", "--version", "3"],
-        ("hub_task_snooze", {"id": "T1", "until": "2026-11-14", "why": "Vendor replies by Nov 14", "version": 3}),
+        ("tico_task_snooze", {"id": "T1", "until": "2026-11-14", "why": "Vendor replies by Nov 14", "version": 3}),
         ("POST", "tasks/T1/snooze", {"version": 3, "until": "2026-11-14", "why": "Vendor replies by Nov 14"}),
     ),
     (
         ["task", "unsnooze", "T1", "-m", "Back now"],
-        ("hub_task_unsnooze", {"id": "T1", "why": "Back now"}),
+        ("tico_task_unsnooze", {"id": "T1", "why": "Back now"}),
         ("POST", "tasks/T1/unsnooze", {"why": "Back now"}),
     ),
     (
         ["task", "update", "T1", "--title", "Ship the notes", "--due", "2026-11-14T17:00:00Z", "--version", "3"],
-        ("hub_task_update", {"id": "T1", "title": "Ship the notes", "due": "2026-11-14T17:00:00Z", "version": 3}),
+        ("tico_task_update", {"id": "T1", "title": "Ship the notes", "due": "2026-11-14T17:00:00Z", "version": 3}),
         ("POST", "tasks/T1", {"version": 3, "title": "Ship the notes", "due": "2026-11-14T17:00:00Z"}),
     ),
     (
         ["task", "label", "T1", "--add", "docs,launch", "--remove", "bug", "--version", "3"],
-        ("hub_task_label", {"id": "T1", "add": ["docs", "launch"], "remove": ["bug"], "version": 3}),
+        ("tico_task_label", {"id": "T1", "add": ["docs", "launch"], "remove": ["bug"], "version": 3}),
         ("POST", "tasks/T1", {"version": 3, "labels": ["docs", "launch"]}),
     ),
     (
         ["task", "file", "Sign the FCC filing", "--parent", "T1", "--pipeline", "general", "--owner", "ana"],
-        ("hub_task_file", {"parent": "T1", "title": "Sign the FCC filing", "pipeline": "general", "owner": "ana"}),
+        ("tico_task_file", {"parent": "T1", "title": "Sign the FCC filing", "pipeline": "general", "owner": "ana"}),
         (
             "POST",
             "tasks",
@@ -171,17 +171,17 @@ def test_each_command_and_its_tool_send_the_plans_request_with_the_version_given
     assert hubtools.argument_error(tool[1], hubtools.BY_NAME[tool[0]]["inputSchema"]) is None
     assert cli.writes() == mcp.writes() == [request_]
     reads = [path for method, path, _ in mcp.calls if method == "GET"]
-    assert "tasks/T1" not in reads or tool[0] == "hub_task_label", "no tool reads the task for a version"
+    assert "tasks/T1" not in reads or tool[0] == "tico_task_label", "no tool reads the task for a version"
 
 
 @pytest.mark.parametrize(
     "name, args",
     [
-        ("hub_task_reassign", {"id": "T1", "owner": "ana", "version": 3}),
-        ("hub_task_done", {"id": "T1", "version": 3}),
-        ("hub_task_move", {"id": "T1", "to": "next", "why": "x", "version": 3}),
-        ("hub_task_close", {"id": "T1", "why": "x", "version": 3}),
-        ("hub_task_answer", {"id": "T1", "requirement": "r9", "value": "ok", "version": 3}),
+        ("tico_task_reassign", {"id": "T1", "owner": "ana", "version": 3}),
+        ("tico_task_done", {"id": "T1", "version": 3}),
+        ("tico_task_move", {"id": "T1", "to": "next", "why": "x", "version": 3}),
+        ("tico_task_close", {"id": "T1", "why": "x", "version": 3}),
+        ("tico_task_answer", {"id": "T1", "requirement": "r9", "value": "ok", "version": 3}),
     ],
 )
 def test_the_assistant_cites_the_persons_message_on_a_change_they_asked_for(name, args):
@@ -195,10 +195,10 @@ def test_the_assistant_cites_the_persons_message_on_a_change_they_asked_for(name
     hubtools.BY_NAME[name]["fn"](Assistant(), {**args, "on_behalf_of": "turn"})
     assert [delegate for method, _, delegate in seen if method != "GET"] == ["turn"]
     assert "on_behalf_of" in hubtools.BY_NAME[name]["inputSchema"]["properties"]
-    words = ["task", name.removeprefix("hub_task_"), *{"hub_task_reassign": ["T1", "ana"]}.get(name, ["T1"])]
-    if name == "hub_task_move":
+    words = ["task", name.removeprefix("tico_task_"), *{"tico_task_reassign": ["T1", "ana"]}.get(name, ["T1"])]
+    if name == "tico_task_move":
         words.append("next")
-    if name == "hub_task_answer":
+    if name == "tico_task_answer":
         words += ["r9", "ok"]
     assert hubcli.parser().parse_args([*words, "--on-behalf-of", "turn"]).on_behalf_of == "turn"
 
@@ -207,7 +207,7 @@ def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeyp
     api = Recorder()
     hubtools.task_relate(api, {"id": "T1", "task": "T2", "kind": "duplicate_of"})
     assert api.writes() == [("POST", "tasks/T1/relations", {"task": "T2", "kind": "duplicate_of", "remove": False})]
-    assert "enum" not in hubtools.BY_NAME["hub_task_relate"]["inputSchema"]["properties"]["kind"]
+    assert "enum" not in hubtools.BY_NAME["tico_task_relate"]["inputSchema"]["properties"]["kind"]
     for kind in ("blocks", "blocked_by"):
         with pytest.raises(ValueError) as refused:
             hubtools.task_relate(Recorder(), {"id": "T1", "task": "T2", "kind": kind})
@@ -256,15 +256,15 @@ def test_label_as_taught_needs_no_version_and_guards_the_labels_with_the_version
 @pytest.mark.parametrize(
     "name, args",
     [
-        ("hub_task_done", {"id": "T1", "note": "x"}),
-        ("hub_task_move", {"id": "T1", "to": "next", "why": "x"}),
-        ("hub_task_close", {"id": "T1", "why": "x"}),
-        ("hub_task_reassign", {"id": "T1", "owner": "ana"}),
-        ("hub_task_ask", {"id": "T1", "to": "chris", "line": "Which plan?"}),
-        ("hub_task_answer", {"id": "T1", "requirement": "r9", "value": "ok"}),
-        ("hub_task_give", {"id": "T1", "requirement": "r9", "to": "ben"}),
-        ("hub_task_snooze", {"id": "T1", "why": "x"}),
-        ("hub_task_update", {"id": "T1", "title": "x"}),
+        ("tico_task_done", {"id": "T1", "note": "x"}),
+        ("tico_task_move", {"id": "T1", "to": "next", "why": "x"}),
+        ("tico_task_close", {"id": "T1", "why": "x"}),
+        ("tico_task_reassign", {"id": "T1", "owner": "ana"}),
+        ("tico_task_ask", {"id": "T1", "to": "chris", "line": "Which plan?"}),
+        ("tico_task_answer", {"id": "T1", "requirement": "r9", "value": "ok"}),
+        ("tico_task_give", {"id": "T1", "requirement": "r9", "to": "ben"}),
+        ("tico_task_snooze", {"id": "T1", "why": "x"}),
+        ("tico_task_update", {"id": "T1", "title": "x"}),
     ],
 )
 def test_without_a_version_a_change_says_to_add_the_version_and_sends_nothing(name, args):
@@ -392,7 +392,7 @@ def test_a_refusal_carries_what_is_missing_and_the_commands_allowed_next_over_mc
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "hub_task_move", "arguments": {"id": "E-214", "to": "next", "version": 12}},
+            "params": {"name": "tico_task_move", "arguments": {"id": "E-214", "to": "next", "version": 12}},
         }
     )
     assert reply["result"]["isError"] is True
@@ -438,26 +438,26 @@ def test_needs_you_counts_each_kind_and_lists_the_items_oldest_first():
     assert hubtools.needs_you_show(Recorder(), {"kind": "ask"})["items"] == [{"kind": "ask"}, {"kind": "ask"}]
 
 
-def test_the_old_engines_tools_are_gone_and_a_call_by_one_says_what_to_use():
+def test_the_old_engines_tools_are_gone_and_a_call_by_one_is_an_unknown_tool():
     for name in (
-        "hub_task_question",
-        "hub_task_bulk",
-        "hub_task_check_back",
-        "hub_task_later",
-        "hub_task_waive_qa",
-        "hub_task_wait",
-        "hub_task_types",
-        "hub_approval_approve",
-        "hub_pipeline_manager",
-        "hub_requirements",
-        "hub_task_answers",
+        "tico_task_question",
+        "tico_task_bulk",
+        "tico_task_check_back",
+        "tico_task_later",
+        "tico_task_waive_qa",
+        "tico_task_wait",
+        "tico_task_types",
+        "tico_approval_approve",
+        "tico_pipeline_manager",
+        "tico_requirements",
+        "tico_task_answers",
     ):
         assert name not in hubtools.BY_NAME
         reply = hubtools.Protocol(Recorder(), kind="bot").handle(
             {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": {}}}
         )
-        assert reply["result"]["structuredContent"]["error"] == "removed", name
-    assert "bot" not in hubtools.offered_to(hubtools.BY_NAME["hub_task_unsnooze"])
+        assert reply["error"]["message"] == f"Unknown tool: {name}", name
+    assert "bot" not in hubtools.offered_to(hubtools.BY_NAME["tico_task_unsnooze"])
 
 
 def test_task_show_text_names_people_and_bots_and_a_filed_task_by_its_title():

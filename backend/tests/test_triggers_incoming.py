@@ -433,12 +433,12 @@ def test_a_sender_id_that_looks_like_a_replay_still_counts_toward_the_hourly_cap
 def test_the_hub_tools_cover_the_whole_life_of_a_trigger(api):
     from backend.tests.helpers.mcp import call
 
-    bad, made = call(api, "hub_trigger_create", {"name": "Shop"})
+    bad, made = call(api, "tico_trigger_create", {"name": "Shop"})
     assert not bad and made["id"] == "shop"
     routine(api)
-    assert not call(api, "hub_trigger_update", {"id": "shop", "hourly": 5, "type_from": "/kind", "unheard": "note"})[0]
-    assert call(api, "hub_trigger_show", {"id": "shop"})[1]["hourly"] == 5
-    signed = call(api, "hub_trigger_sign", {"id": "shop", "preset": "github"})[1]
+    assert not call(api, "tico_trigger_update", {"id": "shop", "hourly": 5, "type_from": "/kind", "unheard": "note"})[0]
+    assert call(api, "tico_trigger_show", {"id": "shop"})[1]["hourly"] == 5
+    signed = call(api, "tico_trigger_sign", {"id": "shop", "preset": "github"})[1]
     assert signed["preset"] == "github" and len(signed["signing_secret"]) == 64
     body = b'{"kind": "k1"}'
     assert (
@@ -450,14 +450,14 @@ def test_the_hub_tools_cover_the_whole_life_of_a_trigger(api):
         ).status_code
         == 202
     )
-    rows = call(api, "hub_trigger_deliveries", {"id": "shop"})[1]["result"]
+    rows = call(api, "tico_trigger_deliveries", {"id": "shop"})[1]["result"]
     assert rows[0]["delivery"] == "a/b c" and rows[0]["type"] == "k1" and rows[0]["stored"] is True
-    shown = call(api, "hub_trigger_delivery", {"id": "shop", "delivery": "a/b c"})[1]
+    shown = call(api, "tico_trigger_delivery", {"id": "shop", "delivery": "a/b c"})[1]
     assert json.loads(shown["body"]) == {"kind": "k1"}
-    assert call(api, "hub_trigger_replay", {"id": "shop", "delivery": "a/b c"})[1]["delivery"] == "a/b c:replay:1"
-    assert call(api, "hub_trigger_list")[1]["result"][0]["preset"] == "github"
-    assert call(api, "hub_trigger_rotate", {"id": "shop"})[1]["url"] != made["url"]
-    assert call(api, "hub_trigger_delete", {"id": "shop"})[1]["deleted"] is True
+    assert call(api, "tico_trigger_replay", {"id": "shop", "delivery": "a/b c"})[1]["delivery"] == "a/b c:replay:1"
+    assert call(api, "tico_trigger_list")[1]["result"][0]["preset"] == "github"
+    assert call(api, "tico_trigger_rotate", {"id": "shop"})[1]["url"] != made["url"]
+    assert call(api, "tico_trigger_delete", {"id": "shop"})[1]["deleted"] is True
 
 
 def test_a_cap_above_the_log_size_still_holds(api):

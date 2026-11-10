@@ -242,7 +242,7 @@ TRACEBACK = (
 )
 
 
-def hub_file_approved(monkeypatch, answers):
+def tico_file_approved(monkeypatch, answers):
     """The real approval() against a fake `tico file approved`: answers maps a file's repo path to (exit, stdout, stderr)."""
     calls = []
 
@@ -259,7 +259,7 @@ def hub_file_approved(monkeypatch, answers):
 def test_exit_0_is_approved_and_the_pipeline_moves_on(repo, monkeypatch):
     brief = put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(
+    tico_file_approved(
         monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": APPROVED}
     )
     assert REAL_APPROVAL(brief) == (True, {"approved": True, "by": "Ana"})
@@ -270,7 +270,7 @@ def test_exit_0_is_approved_and_the_pipeline_moves_on(repo, monkeypatch):
 def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monkeypatch):
     put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(
+    tico_file_approved(
         monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": NOT_APPROVED}
     )
     assert REAL_APPROVAL(script) == (False, {})
@@ -305,7 +305,7 @@ def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monke
 def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, code, stdout, stderr):
     put(repo, "brief", "brief.md")
     script = put(repo, "script", "intro.md")
-    hub_file_approved(
+    tico_file_approved(
         monkeypatch,
         {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (code, stdout, stderr)},
     )
@@ -320,7 +320,7 @@ def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, cod
 def test_a_crash_shows_the_stderr_tail_in_the_error_and_stops_the_command(repo, monkeypatch, capsys):
     put(repo, "brief", "brief.md")
     put(repo, "script", "intro.md")
-    hub_file_approved(
+    tico_file_approved(
         monkeypatch, {"projects/launch/brief/brief.md": APPROVED, "projects/launch/script/intro.md": (1, "", TRACEBACK)}
     )
     assert pipeline.main(["next", str(repo.project), "--task", "T-1", "--owner", "Ana Lee"]) == 2

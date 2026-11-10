@@ -78,13 +78,13 @@ call fails, or in rehearsal, the answer is the rows that were pulled. Each model
 latency, how many excerpts and how long the question was; never its text) and counts per person per day under the decision
 caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted apart from decisions); over the cap the ask is a 429.
 
-**Bots and the Assistant.** `tico doc ask "question" [--wait 120]`, or the MCP tool `hub_doc_ask`, returns
+**Bots and the Assistant.** `tico doc ask "question" [--wait 120]`, or the MCP tool `tico_doc_ask`, returns
 `{answer, citations: [{type, title, url_or_id}], covered}`. A bot's question is a direct message to the Librarian flagged
 `--needs-action`, the ordinary message path: the Librarian's final message is the answer. `covered` is false when the answer starts "Not in the docs".
 Citations have `type: internal|linked|manual`. Manual citations link to the release's page, such as
 `https://github.com/ticoteam/tico/blob/v0.3.3/docs/people.md`.
 The server MCP returns after at most 20 seconds: if pending, it returns
-`{timeout: true, conversation_id, message_id}`. Use `hub_doc_ask_status` with those ids (or
+`{timeout: true, conversation_id, message_id}`. Use `tico_doc_ask_status` with those ids (or
 `tico doc ask-status <conversation_id> <message_id> [--wait 20]`) to collect the same answer. Polling
 uses short requests and sends no new question. Local CLI asks can wait for the full requested duration.
 The Assistant asking for a human puts the question in that human's own docs DM.
@@ -139,7 +139,7 @@ reading itself, in smaller rounds.
 
 ## Reading a link: `tico doc fetch`
 
-`tico doc fetch <url> [--max-chars N]` (MCP: `hub_doc_fetch`) runs on the computer that runs the bot, never on the Tico server,
+`tico doc fetch <url> [--max-chars N]` (MCP: `tico_doc_fetch`) runs on the computer that runs the bot, never on the Tico server,
 which does not offer it. It returns `{url, final_url, title, text, links, truncated}`. What it will and will not do:
 
 - http and https only, on the ordinary web ports, with no user name or password in the address.
@@ -278,8 +278,8 @@ setup ends by pointing at the same playbook.
 | `GET /api/v2/market/value-chain` | anyone who reads the market | the five layers |
 
 CLI: `tico market define`, `segment add|tree`, `size add|accept|reject|params|list`, `figure add`, `sources`, `spend`,
-`research`. MCP: `hub_market_spend`, `hub_market_define`, `hub_market_segment_add`, `hub_market_size_add`,
-`hub_market_size_decide`, `hub_market_figure_add`, `hub_market_sources`, `hub_market_research`.
+`research`. MCP: `tico_market_spend`, `tico_market_define`, `tico_market_segment_add`, `tico_market_size_add`,
+`tico_market_size_decide`, `tico_market_figure_add`, `tico_market_sources`, `tico_market_research`.
 
 ## Built-in
 

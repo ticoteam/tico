@@ -193,7 +193,7 @@ def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
     token = post(api, 'me/tokens', {'label': 'QA cleanup'}, 'ben-test')['token']
     from backend.tests.helpers.mcp import call
 
-    err, out = call(api, 'hub_credential_delete', {'credential': row['name']}, token=token)
+    err, out = call(api, 'tico_credential_delete', {'credential': row['name']}, token=token)
     assert not err and out['deleted']
     with api.app.state.store.read() as c:
         assert not c.execute('SELECT 1 FROM credentials WHERE id=?', (row['id'],)).fetchone()

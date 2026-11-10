@@ -245,36 +245,36 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 
 | Command | Tool | What it does |
 |---|---|---|
-| `tico thread list [--with ACTOR]` | `hub_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; a task's thread only while it is unread; `--with` only the threads shared with that person, bot or group |
-| `tico thread show <thread> [--flat]` | `hub_thread_show` | the messages in tree order, each sub-thread under its message; `--flat` one list in time order |
-| `tico thread home <actor>` | `hub_thread_home` | a teammate's Home, made on first use; needs Read on them |
-| `tico thread dm <actor>` | `hub_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
-| `tico thread dm-group <actor> <actor> ... --title "..." [--body "..."]` | `hub_thread_dm_group` | a group DM with these people or bots; a new one needs `--title`; `--body` is the first message |
-| `tico thread create "title"` | `hub_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body`, `--pin-for-members` |
-| `tico thread post <thread> "..."` | `hub_thread_post` | a message: `--kind say\|ask`, `--to`, `--reply-to MESSAGE`, `--ref KIND:ID` (repeat) |
-| `tico thread bot-status <thread>` | `hub_thread_bot_status` | the bots the thread waits on: working, up next or can't reply, and why |
-| `tico thread reply <thread> <message> "..."` | `hub_thread_reply` | a side topic in that message's sub-thread (to answer a message, `post --reply-to`) |
-| `tico thread edit <message> "..."` | `hub_thread_edit` | a new revision of your own message |
-| `tico thread sub <message>` | `hub_thread_sub` | open a message's sub-thread without posting |
-| `tico thread react <message-id> <emoji>` | `hub_thread_react` | your reaction to a message, such as `:+1:` |
-| `tico thread unreact <message-id> <emoji>` | `hub_thread_unreact` | remove your reaction |
-| `tico thread open-earlier <thread>` | `hub_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
-| `tico thread task <message-id> --title T --owner O` | `hub_thread_task` | a task from a message, private unless the thread is company-wide |
-| `tico thread delete <message-id>` | `hub_thread_delete` | delete your message: a marker stays and the asks it answered reopen |
-| `tico thread upload <thread> <file> [--text ..] [--kind say\|ask] [--to ACTOR] [--under MESSAGE]` | `hub_thread_upload` | a message with a local file streamed to the thread (or to a message's sub-thread) |
-| `tico thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
-| `tico thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
-| `tico thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
-| `tico thread pin <thread>` | `hub_thread_pin` | pin a thread for you |
-| `tico thread unpin <thread>` | `hub_thread_unpin` | unpin it for you, even one pinned for everyone |
-| `tico thread catch-up [--cursor C]` | `hub_thread_catch_up` | the threads with new messages for you, mentions first, each with its new messages |
-| `tico thread search "..."` | `hub_thread_search` | messages in threads you can read |
-| `tico thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
-| `tico thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever`, `--pin-for-everyone` or `--unpin-for-everyone` (managers) |
-| `tico thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
-| `tico thread slack-resume <link-id>` | `hub_thread_slack_resume` | check a suspended or refused Slack link again (admins) |
+| `tico thread list [--with ACTOR]` | `tico_thread_list` | your threads: needs attention, then unread, then recent; DMs apart; a task's thread only while it is unread; `--with` only the threads shared with that person, bot or group |
+| `tico thread show <thread> [--flat]` | `tico_thread_show` | the messages in tree order, each sub-thread under its message; `--flat` one list in time order |
+| `tico thread home <actor>` | `tico_thread_home` | a teammate's Home, made on first use; needs Read on them |
+| `tico thread dm <actor>` | `tico_thread_dm` | your DM with one person or bot, the open one or a new one; needs Write |
+| `tico thread dm-group <actor> <actor> ... --title "..." [--body "..."]` | `tico_thread_dm_group` | a group DM with these people or bots; a new one needs `--title`; `--body` is the first message |
+| `tico thread create "title"` | `tico_thread_create` | start a thread: `--audience`, `--group`, `--member` (repeat), `--body`, `--pin-for-members` |
+| `tico thread post <thread> "..."` | `tico_thread_post` | a message: `--kind say\|ask`, `--to`, `--reply-to MESSAGE`, `--ref KIND:ID` (repeat) |
+| `tico thread bot-status <thread>` | `tico_thread_bot_status` | the bots the thread waits on: working, up next or can't reply, and why |
+| `tico thread reply <thread> <message> "..."` | `tico_thread_reply` | a side topic in that message's sub-thread (to answer a message, `post --reply-to`) |
+| `tico thread edit <message> "..."` | `tico_thread_edit` | a new revision of your own message |
+| `tico thread sub <message>` | `tico_thread_sub` | open a message's sub-thread without posting |
+| `tico thread react <message-id> <emoji>` | `tico_thread_react` | your reaction to a message, such as `:+1:` |
+| `tico thread unreact <message-id> <emoji>` | `tico_thread_unreact` | remove your reaction |
+| `tico thread open-earlier <thread>` | `tico_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
+| `tico thread task <message-id> --title T --owner O` | `tico_thread_task` | a task from a message, private unless the thread is company-wide |
+| `tico thread delete <message-id>` | `tico_thread_delete` | delete your message: a marker stays and the asks it answered reopen |
+| `tico thread upload <thread> <file> [--text ..] [--kind say\|ask] [--to ACTOR] [--under MESSAGE]` | `tico_thread_upload` | a message with a local file streamed to the thread (or to a message's sub-thread) |
+| `tico thread follow <thread> [--notify ...]` | `tico_thread_follow` | follow at a level |
+| `tico thread unfollow <thread>` | `tico_thread_unfollow` | stop following |
+| `tico thread read <thread> [--seq N \| --all]` | `tico_thread_read` | mark read |
+| `tico thread pin <thread>` | `tico_thread_pin` | pin a thread for you |
+| `tico thread unpin <thread>` | `tico_thread_unpin` | unpin it for you, even one pinned for everyone |
+| `tico thread catch-up [--cursor C]` | `tico_thread_catch_up` | the threads with new messages for you, mentions first, each with its new messages |
+| `tico thread search "..."` | `tico_thread_search` | messages in threads you can read |
+| `tico thread members list\|add\|remove` | `tico_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
+| `tico thread update <thread>` | `tico_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group`, `--keep-days N` or `--keep-forever`, `--pin-for-everyone` or `--unpin-for-everyone` (managers) |
+| `tico thread link-slack <thread> [<channel>] [--history] [--off]` | `tico_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
+| `tico thread slack-resume <link-id>` | `tico_thread_slack_resume` | check a suspended or refused Slack link again (admins) |
 
-The commands are `tico thread` in the CLI and `hub_thread_*` over MCP. The REST routes live under `/api/v2/threads`
+The commands are `tico thread` in the CLI and `tico_thread_*` over MCP. The REST routes live under `/api/v2/threads`
 and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The thread routes a client calls are:
 
 - `GET /api/v2/threads/home/{actor}`: a teammate's Home, with the actor in the path (`bot:ops` keeps its colon).

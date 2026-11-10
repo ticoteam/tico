@@ -84,7 +84,7 @@ def test_plain_bot_lists_closed_computer_with_latest_numbers_without_change_righ
         c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (rid,))
     post(api, "runners/performance", {"samples": [point(time.time(), cpu=75)]}, token=r["token"])
     bot_token = tokens["stranger"]
-    failed, seen = call(api, "hub_computer_list", {}, token=bot_token)
+    failed, seen = call(api, "tico_computer_list", {}, token=bot_token)
     assert not failed, seen
     computer = next(x for x in seen["computers"] if x["id"] == rid)
     assert computer["latest_sample"]["cpu_pct"] == 75
@@ -159,7 +159,7 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
             "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES(?,?,1,?,'human:ana')",
             (counsel_id, rid, P._iso(time.time())),
         )
-    failed, detail = call(api, "hub_computer_list", {"computer": rid}, token=tokens["stranger"])
+    failed, detail = call(api, "tico_computer_list", {"computer": rid}, token=tokens["stranger"])
     assert not failed, detail
     assert "counsel" not in str(detail) and counsel_id not in str(detail)
     assert detail["id"] == rid
@@ -178,7 +178,7 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
         "turn_summary",
     }
     for section in ("repositories", "recent_errors"):
-        failed, page = call(api, "hub_computer_list", {"computer": rid, "section": section}, token=tokens["stranger"])
+        failed, page = call(api, "tico_computer_list", {"computer": rid, "section": section}, token=tokens["stranger"])
         assert not failed and page["items"] == []
     owner = next(x for x in get(api, "computers")["computers"] if x["id"] == rid)
     assert owner["repositories"][0]["full_name"] == "acme/private-repo"
@@ -186,7 +186,7 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     # Full details stay available for computers already readable before load discovery.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (rid,))
-    failed, opened = call(api, "hub_computer_list", {"computer": rid}, token=tokens["stranger"])
+    failed, opened = call(api, "tico_computer_list", {"computer": rid}, token=tokens["stranger"])
     assert not failed and opened["repositories"] == owner["repositories"]
 
 

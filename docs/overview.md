@@ -76,7 +76,7 @@ A bot's sidebar pins are its sidebar widgets: `page:<file id>` and `card:<id>` b
 number, and the built-ins may be hidden so the sidebar is only pages. The Assistant's sidebar keeps its own widgets.
 
 People change cards from the ⋯ menu; bots and BotOps (with the rights of the person who asked) use `tico card
-list|add|update|remove` and `tico pin add|update|remove`, the `hub_card_*` and `hub_pin_*` tools, or the API:
+list|add|update|remove` and `tico pin add|update|remove`, the `tico_card_*` and `tico_pin_*` tools, or the API:
 `GET|PUT /api/v2/places/{place}`, `POST /api/v2/places/{place}/order`, `POST /api/v2/pins`,
 `PATCH|DELETE /api/v2/pins/{id}`, `GET|POST /api/v2/cards`, `PATCH|DELETE /api/v2/cards/{id}` and
 `GET /api/v2/cards/choices`. `GET /api/v2/places/growth?month=YYYY-MM` reads the Growth page for one month and answers

@@ -709,13 +709,13 @@ def request_text(
     if week:
         tracked = kpi_snapshot(c, bot)
         ask = [
-            f"Time for your week in review ({day}). Post it with hub_update_create{post_day} "
+            f"Time for your week in review ({day}). Post it with tico_update_create{post_day} "
             "(or `tico update create --slides-file`), then carry on.",
             "",
             SLIDES_SHAPE,
             "Say it plainly: these are skimmed by swiping, so a slide is a few short lines, never a wall of text. "
             "If nothing real has happened this week (nothing finished, started, decided, or newly waiting or blocked; "
-            "rechecking that nothing changed does not count), don't post: call hub_update_create with skip instead. "
+            "rechecking that nothing changed does not count), don't post: call tico_update_create with skip instead. "
             "If you have open tasks, still pick the most useful one and start it in this turn. "
             "A review that breaks these rules is refused.",
         ]
@@ -741,7 +741,7 @@ def request_text(
         ]
     else:
         ask = [
-            f"Time for your daily update ({day}). Post it with hub_update_create{post_day} "
+            f"Time for your daily update ({day}). Post it with tico_update_create{post_day} "
             "(or `tico update create`), in plain words, then carry on.",
             "",
             "Write three bullets in plain English and nothing else: no title, no headings or sections, "
@@ -750,7 +750,7 @@ def request_text(
             f"suggestion you acted on, if any. At most {LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} "
             "in all, not counting those two.",
             "If nothing real has happened since your last update (nothing finished, started, decided, or newly waiting "
-            "or blocked; rechecking that nothing changed does not count), don't post: call hub_update_create with skip "
+            "or blocked; rechecking that nothing changed does not count), don't post: call tico_update_create with skip "
             "instead. If you have open tasks, still pick the most useful one and start it in this turn. An update that "
             "breaks these rules is refused.",
         ]
@@ -1375,7 +1375,7 @@ def _words(text):
 def lint_slides(slides):
     """What is wrong with a week's slides, or None."""
     if not isinstance(slides, dict):
-        return "Not a week in review yet: it has no slides. " + SLIDES_SHAPE + " Post again with hub_update_create."
+        return "Not a week in review yet: it has no slides. " + SLIDES_SHAPE + " Post again with tico_update_create."
     missing, style = slide_problems(slides)
     return _slides_message(missing + style)
 
@@ -1384,7 +1384,11 @@ def _slides_message(problems):
     if not problems:
         return None
     return (
-        "Not a week in review yet: " + "; ".join(problems) + ". " + SLIDES_SHAPE + " Post again with hub_update_create."
+        "Not a week in review yet: "
+        + "; ".join(problems)
+        + ". "
+        + SLIDES_SHAPE
+        + " Post again with tico_update_create."
     )
 
 
@@ -1543,7 +1547,7 @@ def lint(body, kind, version=FORMAT_VERSION):
         + "; ".join(problems)
         + ". "
         + SHAPE
-        + " Rewrite it and post again with hub_update_create."
+        + " Rewrite it and post again with tico_update_create."
     )
 
 
@@ -1735,7 +1739,7 @@ def _style(problem):
     if H.STYLE_LINT == "refuse":
         raise H.Refused("lint", problem, "normal")
     problem = re.sub(r"^Not (?:an update|a week in review) yet: ", "Posted. Next time fix this: ", problem)
-    return re.sub(r" (?:Rewrite it and post|Post) again with hub_update_create\.$", "", problem)
+    return re.sub(r" (?:Rewrite it and post|Post) again with tico_update_create\.$", "", problem)
 
 
 def purge_rejected(c):

@@ -640,7 +640,7 @@ signed in, the runner (the software on the computer) asks the server for that ke
 and signs in the way it would with a key you had typed there. Nobody copies a key between computers, and the key is in no log.
 For those model-key names, a blank **Bot variable name** is inferred automatically; an explicit variable takes precedence.
 Older name-only model keys also offer **Every computer (signs models in)**, and granting one fills the missing variable.
-Tool Credentials need a grant per bot; `hub_credential_grant` targets a bot.
+Tool Credentials need a grant per bot; `tico_credential_grant` targets a bot.
 
 Only that model credential comes this way: a bot's own credentials stay with that bot, and a computer never receives them.
 

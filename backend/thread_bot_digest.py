@@ -69,7 +69,7 @@ def wake_bot(c, bot):
         H.KEEPER,
         bot,
         f"New messages in threads you follow on digest (thread: messages):\n{lines}\n"
-        "Catch up with hub_thread_catchup if they need you.",
+        "Catch up with tico_thread_catchup if they need you.",
         kind="notice",
         refs={"wake": WAKE, "wake_digest": len(covered), "trigger": "other", "threads": sorted(counts)},
     )

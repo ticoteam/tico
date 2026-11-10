@@ -69,7 +69,7 @@ automation on the event `market.briefing` with a Strategy Bot turn that follows 
 
 `--items-file` is a JSON list of `{"text", "kind", "entity_ids"}`; `--answers-file` a JSON object of the answers, by
 key. Both commands are also hub tools
-(`hub_market_briefing_post`, `hub_market_briefing_latest`).
+(`tico_market_briefing_post`, `tico_market_briefing_latest`).
 
 ## API
 

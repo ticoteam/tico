@@ -504,9 +504,9 @@ import hubcli
 
 LISTING = hubtools.listing(local=True, kind=os.environ.get("EVAL_MCP_KIND", "assistant"))
 OFFERED = {t["name"]: t for t in LISTING}
-# Production runs `task show` with several ids as hub_task_show_many (remotecli: `show` with len(ids) > 1).
-TOOL_COMMAND = {"hub_task_show_many": "hub_task_show"}
-TOOL_ARGS = {"hub_task_show_many": {"ids": "id"}}
+# Production runs `task show` with several ids as tico_task_show_many (remotecli: `show` with len(ids) > 1).
+TOOL_COMMAND = {"tico_task_show_many": "tico_task_show"}
+TOOL_ARGS = {"tico_task_show_many": {"ids": "id"}}
 
 
 def command_map():
@@ -545,9 +545,9 @@ def argv_for(name, args):
     """The canonical CLI words of a tool call: the command words, the positional arguments (ids) first, then `--key value`
     for each other argument in the order sent. A list positional goes in as separate words; underscores become hyphens;
     a list flag repeats its flag; true is a bare flag; false becomes the flag's --no- form when the CLI has one and is
-    left out otherwise; null is left out. A tool with no command gets its name with hub_ dropped and _ as spaces."""
+    left out otherwise; null is left out. A tool with no command gets its name with tico_ dropped and _ as spaces."""
     command = TOOL_COMMAND.get(name, name)
-    words, positional, options = COMMANDS.get(command) or (command[len("hub_"):].replace("_", " ").split(), [], set())
+    words, positional, options = COMMANDS.get(command) or (command[len("tico_"):].replace("_", " ").split(), [], set())
     rename = TOOL_ARGS.get(name, {})
     args = {rename.get(k, k): v for k, v in args.items()}
     argv, used = list(words), set()
@@ -604,7 +604,7 @@ def handle(message):
     if method == "initialize":
         asked = params.get("protocolVersion")
         version = asked if asked in hubtools.PROTOCOL_VERSIONS else hubtools.PROTOCOL_VERSIONS[0]
-        result = {"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": {"name": "hub", "version": "eval"}}
+        result = {"protocolVersion": version, "capabilities": {"tools": {}}, "serverInfo": {"name": "tico", "version": "eval"}}
     elif method == "ping":
         result = {}
     elif method == "tools/list":
@@ -789,12 +789,12 @@ def run_sample(case, sample, args, outdir):
         "HUB_DIR": str(work / "hubdir"),
         "TICO_BOT": "coo",
     }
-    # The hub MCP server, as runner-rs/src/hosts/claude.rs gives it: the same state and canned files as the CLI.
+    # The Tico MCP server (`tico`), as runner-rs/src/hosts/claude.rs gives it: the same state and canned files as the CLI.
     servers = (
         {}
         if args.surface == "cli"
         else {
-            "hub": {
+            "tico": {
                 "command": sys.executable,
                 "args": [str(tools / "fake_mcp.py")],
                 "env": {

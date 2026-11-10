@@ -352,7 +352,7 @@ class SettingsAdmin:
         if template not in names:
             closest = difflib.get_close_matches(template, names, n=3)
             hint = " Closest: " + ", ".join(closest) + "." if closest else ""
-            raise Problem("template", f"Unknown template {template}. Use hub_template_list.{hint}", 422)
+            raise Problem("template", f"Unknown template {template}. Use tico_template_list.{hint}", 422)
 
     def template_repo_defaults(self, template):
         from pathlib import Path

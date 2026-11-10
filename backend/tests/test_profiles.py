@@ -316,7 +316,7 @@ def test_the_cli_and_mcp_tool_read_the_choices_and_send_the_revision():
             return {"ok": True}
 
     api = Stub()
-    tool = hubtools.BY_NAME["hub_bot_profile"]["fn"]
+    tool = hubtools.BY_NAME["tico_bot_profile"]["fn"]
     assert tool(api, {"bot": "ops"})["choices"] == [{"name": "doer"}]
     tool(api, {"bot": "ops", "profile": "lead", "digest_hour": 7})
     assert api.posts == [("bots/ops/profile", {"digest_hour": 7, "profile": "lead", "expected_revision": 4})]

@@ -275,7 +275,7 @@ Repeated requests return the same `<bot>-<person>` bot. Independent copies keep 
 `shared_from`, `operator` and `status`. Only branches the caller can read are returned.
 Bot definitions expose `shared` and `shared_from`; updates accept `shared` and `session: "bot" | "task"`
 with the existing `expected_revision`. A branch accepts only status changes to its definition.
-MCP uses `hub_bot_branch(bot, runner_id?)` and `hub_bot_update(slug, shared=)`; CLI uses
+MCP uses `tico_bot_branch(bot, runner_id?)` and `tico_bot_update(slug, shared=)`; CLI uses
 `tico bot branch <bot> [--computer C]` and `tico bot update <bot> --shared|--no-shared`.
 New tasks and canonical chats to an original route to the caller's active branch when branches are allowed.
 Stored keys, room-mode `shared`, independent copy routes and older runner payloads keep their meanings.
@@ -304,7 +304,7 @@ story, with the CLI, is on [Webhooks](webhooks.md).
 Tico posts an event to an address you choose when something happens: a task is made, moves to a new stage, is done
 or closed; a bot is held or fails; a message is held by a rule; and more. Add them in Tools → Add tool → Outgoing
 webhook, or use
-the API, `tico webhook` or the `hub_webhook_*` tools ([Webhooks](webhooks.md#outgoing)).
+the API, `tico webhook` or the `tico_webhook_*` tools ([Webhooks](webhooks.md#outgoing)).
 
 ```
 tico webhook create --name "Acme orders" --url https://hooks.acme.example/tico --events 'task.*' 'custom.*'
@@ -356,7 +356,7 @@ Each inbox has an audience. `company`, the default, is everyone above. An owner 
 under it read it, with the owner and admins. Outside its audience an inbox is not there on any read: the inbox list,
 `messages` (search included), `cursor`, `wait`, a message and its code (`404`). Each change leaves an `audit_log` row
 (`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `tico inbound audience <id> company|team --group G`;
-MCP: `hub_inbound_audience`. An inbox's page in Tools shows who reads it, and an admin changes it there.
+MCP: `tico_inbound_audience`. An inbox's page in Tools shows who reads it, and an admin changes it there.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
 
 Phone provisioning requires TICO approval until billing is available. Owners and admins can
@@ -386,7 +386,7 @@ Expiry does not depend on HQ: reads past the cutoff return `410 retention` and t
 with no inbound key or during an outage.
 
 CLI and MCP share the same tools: `tico inbound inboxes`, `create-email`, `list`, `search`,
-`cursor`, `wait`, `read` and `code` (`hub_inbound_*` in MCP). Repeat `--inbox-id` to select several.
+`cursor`, `wait`, `read` and `code` (`tico_inbound_*` in MCP). Repeat `--inbox-id` to select several.
 Both MCP transports honor the same wait timeout as the CLI, up to 120 seconds (25 by default).
 `list` and `search` page to older messages with `--before <next>` (`before` in MCP).
 For example, `tico inbound wait --after 12 --inbox-id ibx_example --has-code --timeout 60`.

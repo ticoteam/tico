@@ -209,7 +209,7 @@ declare function renderSettingsBots(): void;
     assert.equal(await services.locator('[data-gateway-service=classify]').count(), 0, 'Classify is gone');
     assert.deepEqual(statuses, [...statuses].sort((a, b) => ['Live', 'On request', 'Coming soon'].indexOf(a) - ['Live', 'On request', 'Coming soon'].indexOf(b)));
     assert.equal(await services.locator('[data-gateway-service=search] .gw-for').innerText(), 'Search the web and read what it finds');
-    assert.equal(await services.locator('[data-gateway-service=search] .gw-tools').innerText(), 'hub_gateway_search');
+    assert.equal(await services.locator('[data-gateway-service=search] .gw-tools').innerText(), 'tico_gateway_search');
     await card.locator('[data-gateway-advanced] > summary').click();
     assert.doesNotMatch(await card.innerText(), /Claude|Haiku|Sonnet|Opus|DeepSeek|Mercury|Jev|Gemini|GPT/, 'no model name in the card');
     await card.locator('[data-gateway-advanced] > summary').click();

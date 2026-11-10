@@ -232,7 +232,7 @@ def bare(tmp_path):
 def test_the_agent_finishes_setup_through_the_token_with_the_hub_setup_tools(bare):
     token = bare.token
     names = {t["name"] for t in rpc(bare, "tools/list", token=token)["result"]["tools"]}
-    assert {"hub_setup_show", "hub_setup_complete", "hub_setup_invite", "hub_api"} <= names
+    assert {"tico_setup_show", "tico_setup_complete", "tico_setup_invite", "tico_api"} <= names
     # The company file from setup names Dee (Settings > People > From your setup).
     with bare.app.state.store.transaction() as c:
         record = O.load(c)
@@ -241,32 +241,32 @@ def test_the_agent_finishes_setup_through_the_token_with_the_hub_setup_tools(bar
         }
         bare.app.state.onboarding._store(c, record, "human:ana")
 
-    err, show = call(bare, "hub_setup_show", {}, token=token)
+    err, show = call(bare, "tico_setup_show", {}, token=token)
     assert not err and show["completed"] is None and show["needed"] is True
     assert [(p["id"], p["person"]) for p in show["company_import"]["people"]] == [("dee", None)]
     assert show["getting_started"]["items"]
 
     # An unknown key is a plain not found. The person from the file goes on the roster with the email the agent gives.
-    err, refused = call(bare, "hub_setup_invite", {"person_key": "nobody", "email": "x@acme.example"}, token=token)
+    err, refused = call(bare, "tico_setup_invite", {"person_key": "nobody", "email": "x@acme.example"}, token=token)
     assert err and "not_found" in str(refused)
-    err, invited = call(bare, "hub_setup_invite", {"person_key": "dee", "email": "dee@acme.example"}, token=token)
+    err, invited = call(bare, "tico_setup_invite", {"person_key": "dee", "email": "dee@acme.example"}, token=token)
     # This test install signs in another way, so no invitation email can go: the agent is told so, plainly.
     assert err and "invite_unavailable" in str(invited)
     with bare.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM humans WHERE lower(email)='dee@acme.example'").fetchone()
 
     # The wizard's picks are saved through the generic door, then finished by the tool; finishing twice keeps the first.
-    err, done = call(bare, "hub_setup_complete", {}, token=token)
+    err, done = call(bare, "tico_setup_complete", {}, token=token)
     assert not err and done["completed"] and done["needed"] is False, done
     first = done["completed"]
-    err, again = call(bare, "hub_setup_complete", {}, token=token)
+    err, again = call(bare, "tico_setup_complete", {}, token=token)
     assert not err and again["completed"] == first
-    err, show = call(bare, "hub_setup_show", {}, token=token)
+    err, show = call(bare, "tico_setup_show", {}, token=token)
     assert not err and show["completed"] == first and show["needed"] is False
 
 
 def test_an_admin_reads_setup_through_the_tools_but_only_the_owner_changes_it(handoff):
     admin = [t["name"] for t in rpc(handoff, "tools/list", token=ADMIN)["result"]["tools"]]
-    assert "hub_setup_show" in admin and "hub_setup_complete" not in admin and "hub_setup_invite" not in admin
-    err, show = call(handoff, "hub_setup_show", {}, token=ADMIN)
+    assert "tico_setup_show" in admin and "tico_setup_complete" not in admin and "tico_setup_invite" not in admin
+    err, show = call(handoff, "tico_setup_show", {}, token=ADMIN)
     assert not err and "completed" in show

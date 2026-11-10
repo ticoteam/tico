@@ -25,7 +25,7 @@ def test_a_person_or_a_bot_judges_and_the_audit_keeps_the_answers_not_the_state(
     assert "secret" not in json.dumps(detail)
 
     r, msg, attempt = setup_attempt(api)
-    err, out = call(api, "hub_decision_ask", {"state": state, "questions": QUESTIONS}, token=attempt["token"])
+    err, out = call(api, "tico_decision_ask", {"state": state, "questions": QUESTIONS}, token=attempt["token"])
     assert not err and out["answers"]["is_ask"]["noul"] == 0.9
     assert events(api, "bot:ops")[0][0] == ""
 
@@ -193,15 +193,15 @@ def test_a_caller_records_one_outcome_for_its_own_decision_call(api):
     r, msg, attempt = setup_attempt(api)
     err, asked = call(
         api,
-        "hub_decision_ask",
+        "tico_decision_ask",
         {"state": {"subject": "Invoice 4471"}, "questions": QUESTIONS, "label": "mail-triage@1"},
         token=attempt["token"],
     )
     assert not err and asked["ref"]
     said = {"ref": asked["ref"], "verdict": "reply 0.8", "action": "replied"}
-    err, first = call(api, "hub_decision_outcome", said, token=attempt["token"])
+    err, first = call(api, "tico_decision_outcome", said, token=attempt["token"])
     assert not err and first["recorded"] and first["label"] == "mail-triage@1"
-    err, again = call(api, "hub_decision_outcome", {**said, "action": "archived"}, token=attempt["token"])
+    err, again = call(api, "tico_decision_outcome", {**said, "action": "archived"}, token=attempt["token"])
     assert not err and not again["recorded"] and again["id"] == first["id"] and again["action"] == "replied"
     # Another caller cannot write an outcome onto the bot's call.
     assert api.post("/api/v2/decisions/outcome", json=said, headers=headers()).status_code == 404
