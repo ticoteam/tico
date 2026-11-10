@@ -1,5 +1,5 @@
 """What Finance reads from and calls in the rest of Tico, typed at the border: the roster and org chart, the install
-owner, the audit log and approvals. Every function takes the caller's connection."""
+owner, the audit log and OKs. Every function takes the caller's connection."""
 
 import json
 import sqlite3
@@ -7,11 +7,13 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
 from ... import hubdb as _hubdb
+from ... import task_asks as _task_asks
 from ..core.org import Org, Team
 from ... import bot_settings as BS
 
 # Tico's own modules are untyped: Finance reaches them only through this file, typed at each call.
 _H: Any = _hubdb
+_A: Any = _task_asks
 
 Row = Mapping[str, Any]
 Refused: type[Exception] = _H.Refused
@@ -148,24 +150,46 @@ def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: M
     _H.event(c, actor, action, target, dict(detail))
 
 
-def approval_request(c: sqlite3.Connection, requester: str, kind: str, payload: Mapping[str, object], to: str) -> str:
-    """A Tico approval with no task, decided by `to` (one person). The id."""
-    row = cast(Row, _H.approval_request(c, requester, kind, dict(payload), to=to))
-    return str(row["id"])
+OK_LINE = "OK this in Finance? It is done once you OK it."
 
 
-def approval(c: sqlite3.Connection, approval_id: str) -> Row | None:
-    return cast(Row | None, _H.approval(c, approval_id))
+def ok_ask(c: sqlite3.Connection, requester: str, person: str, title: str, subject: str, content: object) -> str:
+    """Ask `person` (one person by name) for an OK bound to exactly `content`, on a task of its own titled `title`
+    (backend/task_asks.py). The OK's requirement id."""
+    asked = _A.ask_ok(
+        c, requester, person, OK_LINE, shows=[subject], subject=subject, content=content, title=title[:200]
+    )
+    return str(asked["requirement_id"])
 
 
-def approval_consume(c: sqlite3.Connection, actor: str, approval_id: str) -> None:
-    _H.approval_consume(c, actor, approval_id)
+def ok_grant(c: sqlite3.Connection, requirement_id: str) -> Row | None:
+    """The grant of an OK: who asked, the subject, the content's hash, who gave it (`ok_by_id`) and when it was used."""
+    return cast(Row | None, _A.grant(c, requirement_id))
 
 
-def approval_decide(c: sqlite3.Connection, actor: str, approval_id: str, decision: str) -> None:
-    """A person's decision, recorded as theirs. Only a person can make it (hubdb refuses any other actor); Finance calls
-    this only for an invoice email's send approval, decided by the person whose yes the action waited on."""
-    _H.approval_decide(c, actor, approval_id, decision)
+def ok_standing(c: sqlite3.Connection, requirement_id: str) -> str:
+    """waiting, ok, sent_back, withdrawn or used (task_asks.standing)."""
+    return str(_A.standing(c, requirement_id))
+
+
+def ok_use(c: sqlite3.Connection, requirement_id: str, subject: str, content: object, by: str) -> None:
+    """The gate before the act: passes once, for whoever asked, for exactly the content that was OK'd. Else Refused."""
+    _A.use(c, requirement_id, subject, content, by)
+
+
+def ok_withdraw(c: sqlite3.Connection, requirement_id: str, why: str) -> None:
+    """Take back an OK nobody needs any more (a used one stays); the task it was asked on is closed with `why`."""
+    _A.withdraw(c, requirement_id, why)
+
+
+def ok_settle(c: sqlite3.Connection, requirement_id: str, note: str) -> None:
+    """The task an OK was asked on ends with it: done with `note` once the OK was used."""
+    _A.settle(c, requirement_id, note)
+
+
+def content_hash(content: object) -> str:
+    """The hash an OK is bound to (task_asks.content_hash)."""
+    return str(_A.content_hash(content))
 
 
 def queue_email(
@@ -206,7 +230,6 @@ def queue_email(
                 sending.Enqueue(mailbox=metadata["mailbox"], raw=raw, operation_id=ref),
                 {"legal_or_money": None, "status": "finance_preview_required"},
                 via="finance",
-                approval_metadata=metadata,
             ),
         )
         if queued["state"] == "blocked":
@@ -217,16 +240,8 @@ def queue_email(
 
 
 def is_person(actor: str) -> bool:
-    """Whether the actor is a person: only a person decides an approval."""
+    """Whether the actor is a person: only a person gives an OK."""
     return bool(_H.is_human(actor))
-
-
-def approval_withdraw(c: sqlite3.Connection, approval_id: str, note: str) -> None:
-    _H.approval_withdraw(c, approval_id, note)
-
-
-def payload_hash(payload: Mapping[str, object]) -> str:
-    return str(_H.payload_hash(dict(payload)))
 
 
 def known_actor(c: sqlite3.Connection, actor: str) -> bool:

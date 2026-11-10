@@ -38,6 +38,7 @@ from backend.tests.helpers.finance_fixtures import (
 )
 from clients import hubtools
 from clients.tico import APIError
+from backend.tests.helpers.finance_oks import give
 
 LATER = "2026-10-15T13:30:00.000000Z"
 NEXT = "2026-11-03T09:00:00.000000Z"
@@ -1387,7 +1388,7 @@ def test_a_routed_raise_is_checked_at_the_raised_amount_with_the_parents_cards(b
         eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
         asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 52_000}, key="routed-cards")
         assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
-        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        give(c, "human:dan", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done and done.reason
         amounts = {
@@ -1422,7 +1423,7 @@ def test_a_routed_raise_must_fit_every_ancestor_with_its_cards_not_only_its_pare
         assert act(c, OWNER, "budget_update", {"budget_id": company, "amount": 120_000}).status == "committed"
         asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 50_000}, key="grand-fits")
         assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
-        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        give(c, "human:dan", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done and done.reason
         amounts = {
@@ -1482,7 +1483,7 @@ def test_a_routed_raise_covers_the_parents_own_holds_with_its_children(books):
         assert held.allowed, held
         asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 50_000}, key="held-raise")
         assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
-        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        give(c, "human:dan", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done and done.reason
         amounts = {
@@ -1521,7 +1522,7 @@ def test_a_routed_raise_covers_the_grandparents_teammate_and_gateway_allocations
             asked.code,
             asked.reason,
         )
-        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        give(c, "human:dan", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done and done.reason
         amounts = {
@@ -1620,7 +1621,7 @@ def test_a_manager_routed_card_limit_is_not_committed_by_the_old_manager_after_a
         asked = act(c, "human:cara", "card_update_limit", {"card_id": card_id, "amount": 6_000})
         assert (asked.status, asked.approver) == ("needs_approval", "human:ben"), (asked.code, asked.reason)
         set_manager(c, "cara", "dan")
-        H.approval_decide(c, "human:ben", asked.approval_id, "approved")
+        give(c, "human:ben", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert (done.status, done.approver) == ("needs_approval", "human:dan"), (done.status, done.code, done.reason)
         limits = {str(r["target_id"]): int(r["amount"]) for r in SB.allocations(c, [web])}

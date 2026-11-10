@@ -76,6 +76,7 @@ ALWAYS_REFUSED = re.compile(
     r"|bots/[^/]+/(?:agent-credential(?:/revoke)?|repository-read-token)"
     r"|access/owner(?:/email)?"
     r"|credentials/[^/]+/reveal|credential-runtime|runner-[a-z-]*credential[a-z-]*(?:/.*)?"
+    r"|tasks/[^/]+/asks/[^/]+/(?:ok|answer)|oks/[^/]+/use"  # an OK or an answer is the person's own (task_asks)
     r")"
 )
 # Pages that open a person's own room or calendar: Tico support has neither, so it gets a plain refusal.
@@ -88,7 +89,7 @@ PLAIN_PATH = re.compile(r"/api/v2(?:/[A-Za-z0-9_~@+=:-][A-Za-z0-9._~@+=:-]*)+")
 APP_READS_REFUSED = re.compile(r"/api/v2/(?:attempts/[^/]+/capture|runners/[^/]+/logins(?:/.*)?)")
 # The app tier's only writes: setup. A bot's model, fallback and context size; a computer's runner restart; and asking
 # a computer to read its subscriptions' allowance again. No model sign-in (its code would let support choose the
-# account a computer runs on), approvals, messages, tasks, runs, publishing, spending, people, access or credentials.
+# account a computer runs on), OKs, messages, tasks, runs, publishing, spending, people, access or credentials.
 APP_WRITES = tuple(
     (method, re.compile(pattern))
     for method, pattern in (
