@@ -44,6 +44,7 @@ TABLES = {
     rows.PageIdentityRow: "page_identities",
     rows.AlertPreferenceRow: "alert_preferences",
     rows.RecorderInstallRow: "recorder_installs",
+    rows.PushSubscriptionRow: "push_subscriptions",
     rows.AlertCompanySettingRow: "alert_company_settings",
     rows.PersonalAlertRow: "personal_alerts",
     rows.PostalMailGrantRow: "postal_mail_grants",

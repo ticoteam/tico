@@ -490,6 +490,7 @@ async function notifyThreadNeedsOnce(items: NeedItem[]) {
     // The person's own row in the people list carries the setting (there is no one-person read).
     try { S.notifyBrowser = ((await v2Get('/humans'))?.people || []).find((p: {id?: string; notify_browser?: boolean}) => p.id === id)?.notify_browser === true; }
     catch { S.notifyBrowser = false; }
+    pushKeep(S.notifyBrowser);         // this browser takes Web Push too (person-page.ts)
   }
   const key = 'tico.notified.' + id;
   const thread = items.filter(it => THREAD_NEED_KINDS[it.kind]);
