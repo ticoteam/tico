@@ -272,9 +272,17 @@ def test_the_wake_for_a_note_narrower_than_its_public_thread_runs_in_a_private_s
         new_thread(api, audience="company", title="Launch"),
         new_thread(api, audience="company", title="Handbook"),
     )
-    tid = task_about(api)
+    # The note is about a task cpo has the turn on: a bot's news about a task wakes only the bot whose turn it is
+    # (task_wakes.may_start). The task's own turn is set aside so the note's wake is the one left.
+    with api.app.state.store.transaction() as c:
+        tid = H.task_create(c, "bot:cpo", "Launch plan", "Plan it.", "bot:cpo", lint=False)["id"]
+        c.execute(
+            "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+            "(SELECT id FROM messages WHERE wake_key LIKE ? || ':%')",
+            (tid,),
+        )
     bot_says(api, company, "@cpo Zebrawire", refs={"task": tid})
-    turn_task_private(api, tid)  # cpo asked for the task, so it still reads the message
+    turn_task_private(api, tid)  # cpo owns the task, so it still reads the message
     say(api, other, "@cpo work here")
     public = claim(api, r, "cpo")
     assert public["conversation"]["audience_class"] == "public" and public["notes"] == []
@@ -345,7 +353,7 @@ def test_a_private_runs_reply_is_narrower_than_its_company_thread(api):
     reply = rows(api, "SELECT id FROM messages WHERE body='Our reply'")[0]["id"]
     tid = task_about(api)
     with api.app.state.store.transaction() as c:  # the run drew on a task that is private now
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (first["id"], tid))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (tid, first["id"]))
     turn_task_private(api, tid)
     assert session_class(api, company, reply) == "private"
 
