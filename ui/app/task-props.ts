@@ -7,8 +7,6 @@
 // The task as this file reads it: the server's Task, plus the fields a task's page adds on top of it.
 interface PropTask extends TaskV3 {
   links?: {kind: string; detail?: string | null}[];
-  verdict?: string | null;
-  qa_waivers?: {head: string; actor: string; reason?: string | null}[];
   followers?: PropFollower[] | null;
 }
 interface PropFollower { actor: string; notify: string; }
@@ -20,7 +18,7 @@ type TaskSave = (key: string, body: PropBody) => unknown;
 type PropChange = (body: PropBody) => unknown;
 // Which row's refused save says why (one reason per row, under the properties).
 interface PropsErrors { id: string; map: Map<string, string>; }
-// The task dialog (#task-modal or #task-peek) with the state the page keeps on it.
+// The task dialog (#task-modal) with the state the page keeps on it.
 interface TaskDialog extends HTMLDialogElement {
   focusProp?: string;
   propsErrs?: PropsErrors | null;
@@ -142,10 +140,6 @@ function taskPropsHTML(t: PropTask): string {
       + `<button type="button" class="prop-v prop-link" data-open-task="${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button>`
       + (r.links ? `<button type="button" class="prop-x" data-prop-clear="parent" aria-label="Clear Part of" title="Clear">${TL_ICON.x}</button>` : '') + '</span></div>');
   } else rows.push(row('parent', 'Part of', txt(r.links ? 'Add parent' : 'None'), {edit: r.links, empty: true, words: 'none'}));
-  if (t.verdict) rows.push(row('verdict', 'Verdict', taskVerdictHTML(t), {words: VERDICT_WORDS[t.verdict]?.[0] || t.verdict}));
-  const waiver = (t.qa_waivers || []).at(-1);
-  if (waiver) rows.push(row('qa-waiver', 'QA', taskQaWaiverHTML(waiver), {words: `waived on ${String(waiver.head).slice(0, 7)}, not a QA pass`,
-    extra: `<small>${esc(actorLabel(waiver.actor))}: ${esc(waiver.reason || '')}</small>`}));
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
@@ -183,7 +177,7 @@ async function taskReaders(d: TaskDialog, task: PropTask, body: PropPatch): Prom
     await post(`/v2/tasks/${encodeURIComponent(task.id)}/readers`, body);
     if (d.propsErrs?.id === String(task.id)) d.propsErrs.map.delete('readers');
     const data = await get<{task?: PropTask}>(`/v2/tasks/${encodeURIComponent(task.id)}`);
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
   } catch (e) {
     if (d.propsErrs?.id !== String(task.id)) d.propsErrs = {id: String(task.id), map: new Map()};
@@ -463,7 +457,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;
       try { await post(`/v2/tasks/${encodeURIComponent(task.id)}/delete`, {}); } catch (e) { toast(errorCode(e) === 'has_work' ? "This task has work on it, such as a bot's turn, an answer, a bot's file or a subtask, so it can't be deleted. Close it instead." : errorMessage(e, ''), true); return; }
       d.close(); toast('Deleted');
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     }});
     propMenu(d, more, {label: 'Task', items: items.map(it => ({...it, html: `<span>${esc(it.text)}</span>`})), onPick: it => it.run()});
   };

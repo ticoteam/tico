@@ -139,7 +139,7 @@ async function open(browser: Pick<Browser, 'newPage'>, {viewport = {width: 1440,
       note: 'The draft is checked; the rollout still needs a decision.', labels: ['checkout'], acceptance_criteria: ['Both flows send a receipt.']});
     data.tasks.push(task('t-outward', {title: 'Choose the rollout day', owner_id: 'human:ben', requester_id: 'bot:eng', status: 'open'}),
       task('t-finished', {title: 'Check the receipt wording', status: 'closed', requester_id: 'bot:eng', done_at: now, closed_at: now}),
-      ...data.tree.map(({children, ...t}) => task(t.id, {...t, relations: {parent: [{id: 't-checkout', title: 'Ship the checkout redesign', status: 'doing', owner_id: 'bot:eng', direction: 'out'}]}})));
+      ...data.tree.map(({children, ...t}) => task(t.id, {...t, status: t.status === 'done' || t.status === 'closed' ? t.status : 'open', relations: {parent: [{id: 't-checkout', title: 'Ship the checkout redesign', status: 'doing', owner_id: 'bot:eng', direction: 'out'}]}})));
     data.comments = [{id: 'm1', kind: 'say', sender_id: 'bot:eng', body: 'The draft is checked.', created_at: now, refs: {task: 't-checkout', note: true}},
       {id: 'm2', kind: 'ask', sender_id: 'bot:eng', body: 'Which rollout day?', created_at: now, answers: [], refs: {task: 't-checkout',
         questions: [{id: 'day', question: 'Which rollout day?', options: [{label: 'Tuesday'}, {label: 'Thursday'}], multi: true, other: true}]}}];

@@ -193,6 +193,7 @@ def routine_times(c, at):
     if table(c, "deferrals") and (due := epoch(delivery.next_due(c))) is not None:
         out.append(max(due, at))
     out.extend(edition_times(c, when))
+    out.extend(release_times(c, when))
     return sorted(out)
 
 
@@ -204,6 +205,14 @@ def edition_times(c, when):
         found = schedule.next_wake(c, when) if table(c, "audiences") else None
     except Exception:
         return []
+    return [found.timestamp()] if found else []
+
+
+def release_times(c, when):
+    """The release hour (backend/release_hour.py): now while a due one has not fired, else the next one."""
+    from . import release_hour
+
+    found = release_hour.next_wake(c, when)
     return [found.timestamp()] if found else []
 
 

@@ -8,7 +8,7 @@
 type TasksMenuBind = (pop: HTMLElement) => void;
 // The page whose state keeps the open menu: the Tasks page's, or another page's that borrows the menu (the roadmap's).
 type TasksMenuHost = {menuAnchor?: HTMLElement | null | undefined; menuField?: string | undefined};
-const isTasksRoute = (r: string | null | undefined) => [TASKS, BOARD, ISSUES].includes(String(r || '').split('?')[0]!);
+const isTasksRoute = (r: string | null | undefined) => String(r || '').split('?')[0] === TASKS;
 const PHONE = '(max-width:760px)';
 // Small inline icons (the icon font is a fixed subset; these never need it).
 const TL_ICON = {

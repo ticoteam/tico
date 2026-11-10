@@ -144,7 +144,9 @@ function liveTaskScope(): TaskScope {
   // A bot's route may name it by slug (a link made from a label); its actor is its id.
   const botRef = r.startsWith('#/bot/') ? decodeURIComponent(String(r.slice(6).split(/[/?]/)[0])) : '';
   const party = botRef ? 'bot:' + (botByRef(botRef)?.id || botRef)
-    : r.startsWith('#/person/') ? 'human:' + decodeURIComponent(String(r.slice(9).split(/[/?]/)[0])) : '';
+    : r.startsWith('#/person/') ? 'human:' + decodeURIComponent(String(r.slice(9).split(/[/?]/)[0]))
+    // My dashboard: the reader's own tasks, for its My tasks card (dashboard.ts dashTasksLive).
+    : r === HOME ? myActor() : '';
   return {task: open, party: party ? [party] : []};
 }
 const liveTaskKey = (scope: TaskScope) => scope.all ? 'all' : scope.task.join(',') + '|' + scope.party.join(',');

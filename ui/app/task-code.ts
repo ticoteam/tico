@@ -13,30 +13,6 @@ function prStateBadge(state: string | null | undefined): string {
   const b = PR_BADGE[String(state)]; if (!b) return '';
   return `<span class="pr-badge ${b[1]}" data-pr-state="${esc(state)}" title="${esc(b[2])}" aria-label="${esc(b[2])}">${esc(b[0])}</span>`;
 }
-// A review or QA subtask's verdict (`verdict`, `verdict_head`, docs/tasks.md): green for approve and pass, red for
-// changes and fail, and the head it judged as a short sha. Nothing until a verdict is recorded.
-const VERDICT_WORDS: Record<string, [string, string]> = {approve: ['Approved', 'ok'], pass: ['Passed', 'ok'], changes: ['Changes', 'fail'], fail: ['Failed', 'fail']};
-interface VerdictRow { verdict?: string | null; verdict_head?: string | null; }
-function taskVerdictHTML(t: VerdictRow | null | undefined): string {
-  const v = VERDICT_WORDS[String(t?.verdict)]; if (!t || !v) return '';
-  const head = String(t.verdict_head || '').slice(0, 7);
-  const tip = `Verdict: ${v[0]}${head ? ` on ${head}` : ''}`;
-  return `<span class="verdict-chip ${v[1]}" data-verdict="${esc(t.verdict)}" title="${esc(tip)}" aria-label="${esc(tip)}">${esc(v[0])}${head
-    ? ` <code class="tnum" data-verdict-head>${esc(head)}</code>` : ''}</span>`;
-}
-
-// A person's QA waiver on a Dev ticket (`qa_waivers`, backend/qa_waivers.py): amber, never green, and always the words
-// "QA waived", so it never reads as a QA pass. A waiver for a head the pull request has moved on from says so.
-interface QaWaiverRow { head?: string | null; actor?: string | null; reason?: string | null; current?: boolean; }
-function taskQaWaiverHTML(w: QaWaiverRow | null | undefined): string {
-  if (!w?.head) return '';
-  const head = String(w.head).slice(0, 7);
-  const tip = `QA waived on ${head} by ${actorLabel(w.actor)}: ${w.reason || 'no reason given'}. A waiver, not a QA pass.${
-    w.current ? '' : ' The pull request has a newer head, which this waiver does not cover.'}`;
-  return `<span class="verdict-chip waived" data-qa-waiver data-current="${w.current ? 'yes' : 'no'}" title="${esc(tip)}" aria-label="${esc(tip)}">QA waived <code class="tnum">${
-    esc(head)}</code>${w.current ? '' : ' · old head'}</span>`;
-}
-
 // A link on a task (the server's `links`): a worktree or a pull request. Its `detail` is an object, or its JSON text.
 interface CodeLink {
   id?: string | null; kind: string; state?: string | null; url?: string | null; repo?: string | null;
@@ -218,7 +194,7 @@ function taskSubRowHTML(k: SubRow, open: Set<string>): string {
     <div class="sub-line">${kids.length ? `<button type="button" class="sub-chev${open.has(key) ? ' open' : ''}" data-sub-toggle="${esc(key)}" aria-expanded="${open.has(key)}" aria-label="${open.has(key) ? 'Hide' : 'Show'} subtasks of ${esc(k.title || '')}">›</button>` : '<span class="sub-chev-pad"></span>'}
       ${taskStatusText(k)}<button type="button" class="sub-open" data-sub-open="${esc(key)}" title="${esc(`${k.title || ''} · ${taskStatusLabel(k)} · ${actorLabel(k.owner_id)}`)}"><span class="sub-title">${esc(k.title || 'Untitled')}</span>${
         k.label ? `<span class="pill sub-chip">${esc(k.label)}</span>` : ''}</button>
-      ${prStateBadge(k.pr_state)}${taskVerdictHTML(k)}<span class="sub-who" title="${esc(actorLabel(k.owner_id))}">${who}</span></div>
+      ${prStateBadge(k.pr_state)}<span class="sub-who" title="${esc(actorLabel(k.owner_id))}">${who}</span></div>
     ${kids.length && open.has(key) ? `<ul class="sub-list">${kids.map(c => taskSubRowHTML(c, open)).join('')}</ul>` : ''}</li>`;
 }
 const taskSubAdder = (t: CodeTask): boolean => canMove() && !['done', 'closed'].includes(String(t.status || ''));
@@ -248,7 +224,7 @@ function taskRailPaint(d: TaskRailDialog, t: CodeTask): void {
   const typed = old?.elements.title.value || '', focused = !!old && old.contains(document.activeElement) ? (document.activeElement as HTMLInputElement).name : '';
   // Code is drawn from the full task only: list rows carry no worktree details (ahead, behind, files, errors).
   const code = st.full && String(st.full.id) === String(t.id) ? taskCodeHTML(st.full) : '';
-  // An Engineering ticket under a Product card: a link to the card first, opened like a subtask row (taskRailBind).
+  // A subtask: a link to its parent task first, opened like a subtask row (taskRailBind).
   const parent = t.parent ? `<section class="rail-sec task-parent"><button type="button" class="linkish" data-sub-open="${esc(String(t.parent.id))}" title="${esc(t.parent.title || '')}">from ${esc(t.parent.label || t.parent.title || '')}</button></section>` : '';
   const html = parent + code + taskSubtasksHTML(t, kids, st.open, st.adding, st.owner, st.refused);
   rail.innerHTML = html;
@@ -326,7 +302,7 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
         catch (e) { if (![404, 405].includes(errorStatus(e) ?? 0)) throw e; await post(base, {remove: drop.dataset.codeDrop}); }   // an older server
         if ('codeRetry' in drop.dataset) toast('Cleanup asked again. The worktree goes once its computer saves and removes it.');
         const data = await get<{task: CodeTask}>(`/v2/tasks/${encodeURIComponent(t.id)}`);
-        if (TASKS_ST) void tasksLoad(TASKS_ST);
+        if (TASKS_ST) void tasksCatchUp(TASKS_ST);
         if (d.open && d.dataset.task === String(t.id)) { if (d.taskRail) d.taskRail.full = data.task; taskModalShow(data.task, d); }
       } catch (e) { toast(errorMessage(e, ''), true); drop.disabled = false; }
     }
@@ -346,13 +322,13 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
       await post('/v2/tasks', {title, body: title, owner: owner.includes(':') ? owner : 'bot:' + owner, relations: [{task: t.id, kind: 'parent'}]});
       input.value = '';
       const data = await get<{task: CodeTask}>(`/v2/tasks/${encodeURIComponent(t.id)}`);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       if (d.open && d.dataset.task === String(t.id)) {
         if (d.taskRail) d.taskRail.focus = true;
         taskModalShow(data.task, d);
       }
     } catch (e) {
-      // A refusal ("Review 1 is already open on this ticket") reads under the field it was typed in; the title stays.
+      // A refusal ("Review 1 is already open on this task") reads under the field it was typed in; the title stays.
       if (d.taskRail) d.taskRail.refused = errorMessage(e, 'Not added');
       delete form.dataset.busy; input.disabled = false;
       taskRailPaint(d, t);

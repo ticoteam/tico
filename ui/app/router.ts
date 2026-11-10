@@ -44,7 +44,6 @@ function route(hash: string = location.hash): void {
   const newPath = !from || routePage(from) !== routePage(S.route);
   if (from && newPath && !ROUTE_FADING && main.animate && !matchMedia('(prefers-reduced-motion: reduce)').matches)
     main.animate({opacity: [0, 1]}, {duration: 120, easing: 'cubic-bezier(.2,0,0,1)'});
-  document.body.classList.remove('task-peek-open');
   if (!isMarketRoute(S.route)) window.marketStop?.();
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
   if (!isLensesRoute(S.route)) window.lensesStop?.();
@@ -87,7 +86,7 @@ function route(hash: string = location.hash): void {
   else if (S.route === '#/roadmap') pageRoadmap();
   else if (S.route === '#/tags') pageTags();
   else if (S.route.startsWith('#/tag/')) pageTag(decodeURIComponent(S.route.slice(6)));
-  else if (S.route.startsWith('#/task/')) pageTasks('', decodeURIComponent(S.route.slice(7)));
+  else if (S.route.startsWith('#/task/')) pageTasks(decodeURIComponent(S.route.slice(7)));
   else if (S.route.startsWith(TASKS + '/')) { location.replace('#/task/' + (S.route.slice(TASKS.length + 1).split('?')[0] ?? '')); return; }   // #/tasks/<id> is the same task
   else if (S.route === CHAT) { location.hash = TASKS; return; }
   else if (S.route.startsWith(MEETINGS + '/live/')) pageLiveMeetings(decodeURIComponent(S.route.slice((MEETINGS + '/live/').length)));
@@ -112,11 +111,7 @@ function route(hash: string = location.hash): void {
     const parts = S.route.slice(9).split('/').map(decodeURIComponent);
     pagePerson(parts[0], parts[1]);
   }
-  else if (isTasksRoute(S.route)) {
-    // #/tasks?owner=bot:eng&tag=bug: the filters ride in the query (ui/app/task-list.ts)
-    const base = S.route.split('?')[0] ?? '';
-    pageTasks(base === BOARD ? 'board' : base === ISSUES ? 'list' : '');
-  }
+  else if (isTasksRoute(S.route)) pageTasks();   // #/tasks?owner=bot:eng&tag=bug: the filters ride in the query
   else if (S.route === UPDATES || S.route.startsWith(UPDATES + '?')) pageUpdates();
   else if (S.route === SETTINGS) pageSettings();
   else if (S.route === HELP) { location.replace(OVERVIEW); window.supportOpen?.(); return; }   // Help is the Support pop-up, over Company

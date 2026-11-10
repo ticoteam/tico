@@ -19,7 +19,8 @@ interface SettingsReleaseSchedule {
   can_change?: boolean;
   can_release?: boolean;
 }
-// What POST /v2/release/now answers: whether a task was filed or woken, and why not when neither.
+// What POST /v2/release/now answers: whether a task was filed, and why not when it was not. `tasks` counts only the
+// waiting tasks the caller may read; an open Release task's id (`already_open`) comes only to someone who may read it.
 interface SettingsReleaseNowAnswer { sent?: boolean; tasks?: number; reason?: string | null; task?: string | null; }
 
 // The daily release (docs/pipelines-v3.md D13): on or off, one or two company times, the Release Manager and
@@ -27,8 +28,8 @@ interface SettingsReleaseNowAnswer { sent?: boolean; tasks?: number; reason?: st
 // release. Owners and admins change it (`can_change`); `can_release` may ask for a release now.
 let RELEASE_VIEW: SettingsReleaseSchedule | null = null, RELEASE_AT = 0;
 // The last answer under the card (Saved, or what Release now did) survives the repaint the fresh schedule causes.
-let RELEASE_NOTE = {text: '', failed: false};
-const RELEASE_REASONS: Record<string, string> = {nothing_pending: 'No tasks wait for a release', already_open: 'A release task is open', no_release_manager: 'No Release Manager'};
+let RELEASE_NOTE: {text: string; failed: boolean; task?: string | null} = {text: '', failed: false};
+const RELEASE_REASONS: Record<string, string> = {already_open: 'A release task is open', no_release_manager: 'No Release Manager'};
 const releaseTasks = (n: number | undefined) => `${n ?? 0} task${n === 1 ? '' : 's'}`;
 async function releaseScheduleLoad(force?: boolean): Promise<SettingsReleaseSchedule> {
   if (!force && RELEASE_VIEW && Date.now() - RELEASE_AT < 60000) return RELEASE_VIEW;
@@ -49,12 +50,12 @@ function releaseBotPick(name: string, chosen: string | null | undefined, found: 
   return `<select class="settings-inline-select" name="${name}" aria-label="${esc(label)}"><option value="">${esc(auto)}</option>
     ${bots.map(b => `<option value="${esc(b)}"${b === chosen ? ' selected' : ''}>${esc(empName(b))}</option>`).join('')}</select>`;
 }
-function releaseNowButtonHTML(v: SettingsReleaseSchedule | null | undefined, cls = 'ghost'): string {
-  if (!v?.can_release) return '';
-  return `<button type="button" class="${cls}" data-release-now${v.pending ? '' : ' disabled title="No tasks wait for a release"'}>Release now</button>`;
+function releaseNowButtonHTML(v: SettingsReleaseSchedule): string {
+  if (!v.can_release) return '';
+  return '<button type="button" class="ghost" data-release-now>Release now</button>';
 }
-// With a note the server asks even when no task waits for a release, so the
-// card's field lights the button; the board's button has no field and stays off while nothing waits.
+// The request is filed whether or not anything waits (the count shows only what the caller may read, so it never
+// decides the button); the Release Manager closes it when nothing does. The note goes with it.
 function releaseNoteHTML(v: SettingsReleaseSchedule): string {
   return v.can_release ? '<input type="text" data-release-note maxlength="1000" placeholder="Note" aria-label="Release note">' : '';
 }
@@ -75,28 +76,34 @@ function releaseCardHTML(v: SettingsReleaseSchedule): string {
     <div class="sb-row"><span>Next</span><div class="rel-line">${v.on && v.next ? `<span class="tnum" title="${esc(fmt(v.next))}" data-release-next>${esc(until(v.next))}</span>` : '<span class="muted">Off</span>'}</div><span></span></div>
     <div class="sb-row"><span>Last</span><div class="rel-line">${releaseLastHTML(v.last)}</div><span></span></div>
     <div class="sb-row"><span>Pending</span><div class="rel-line"><span class="tnum" data-release-pending>${releaseTasks(v.pending)}</span>${releaseNoteHTML(v)}${releaseNowButtonHTML(v)}</div><span></span></div>
-  </div><p class="settings-cell-note${RELEASE_NOTE.failed ? ' err' : ''}" role="status" data-release-status>${esc(RELEASE_NOTE.text)}</p>`;
+  </div><p class="settings-cell-note${RELEASE_NOTE.failed ? ' err' : ''}" role="status" data-release-status>${releaseStatusHTML()}</p>`;
 }
-function releaseStatus(text: string, failed?: boolean): void {
-  RELEASE_NOTE = {text, failed: !!failed};
+// The answer, with the open Release task's link when the caller may read it.
+function releaseStatusHTML(): string {
+  const {text, task} = RELEASE_NOTE;
+  return task ? `<a href="#/task/${encodeURIComponent(task)}" data-release-task>${esc(text)}</a>` : esc(text);
+}
+function releaseStatus(text: string, failed?: boolean, task?: string | null): void {
+  RELEASE_NOTE = {text, failed: !!failed, task: task ?? null};
   const box = document.querySelector<HTMLElement>('#set-release [data-release-status]');
-  if (box) { box.textContent = text; box.classList.toggle('err', !!failed); }
+  if (box) { box.innerHTML = releaseStatusHTML(); box.classList.toggle('err', !!failed); }
 }
 async function releaseSave(body: Record<string, unknown>): Promise<void> {
   try { RELEASE_VIEW = await patch('/v2/release-schedule', body); RELEASE_AT = Date.now(); releaseCardPaint(); releaseStatus('Saved'); }
   catch (e) { releaseCardPaint(); releaseStatus(errorMessage(e, 'Try again'), true); }
 }
 // One press asks the Release Manager; the answer says whether a task was filed, an open one woken, or why not.
-async function releaseNow(button: HTMLButtonElement | null, note = ''): Promise<{text: string; failed: boolean}> {
+async function releaseNow(button: HTMLButtonElement | null, note = ''): Promise<{text: string; failed: boolean; task?: string | null}> {
   if (button) button.disabled = true;
-  let text = '', failed = false;
+  let text = '', failed = false, task: string | null = null;
   try {
     const out: SettingsReleaseNowAnswer = await post('/v2/release/now', note ? {note} : {});
     text = out.sent ? (out.tasks ? `Asked for a release of ${releaseTasks(out.tasks)}` : 'Asked for a release') : (RELEASE_REASONS[out.reason ?? ''] || 'Nothing sent');
-    void releaseScheduleLoad(true).then(() => { releaseCardPaint(); boardReleaseSlots(); }).catch(() => {});
+    task = out.sent ? null : out.task ?? null;
+    void releaseScheduleLoad(true).then(releaseCardPaint).catch(() => {});
   } catch (e) { text = errorMessage(e, 'Try again'); failed = true; }
   finally { if (button?.isConnected) button.disabled = false; }
-  return {text, failed};
+  return {text, failed, task};
 }
 function releaseCardPaint(): void {
   const el = document.querySelector<HTMLElement>('#set-release'), card = document.querySelector<HTMLElement>('#set-release-card');
@@ -104,11 +111,6 @@ function releaseCardPaint(): void {
   if (formBusy(el)) return;
   card.hidden = false;
   el.innerHTML = releaseCardHTML(RELEASE_VIEW);
-  el.oninput = ev => {
-    const now = el.querySelector<HTMLButtonElement>('[data-release-now]');
-    const note = ev.target;
-    if (note instanceof HTMLInputElement && note.matches('[data-release-note]') && now && RELEASE_VIEW) now.disabled = !RELEASE_VIEW.pending && !note.value.trim();
-  };
   el.onchange = ev => {
     const t = ev.target;
     if (!(t instanceof HTMLInputElement || t instanceof HTMLSelectElement)) return;
@@ -134,8 +136,8 @@ function releaseCardPaint(): void {
     if (now && !now.disabled) {
       const box = el.querySelector<HTMLInputElement>('[data-release-note]');
       const out = await releaseNow(now, box?.value.trim());
-      if (box?.isConnected && !out.failed) { box.value = ''; now.disabled = !RELEASE_VIEW?.pending; }
-      releaseStatus(out.text, out.failed);
+      if (box?.isConnected && !out.failed) box.value = '';
+      releaseStatus(out.text, out.failed, out.task);
     }
   };
 }
@@ -143,19 +145,6 @@ async function renderReleaseCard(): Promise<void> {
   if (!document.querySelector('#set-release')) return;
   try { await releaseScheduleLoad(); } catch { return; }   // a team with no schedule to read keeps the card hidden
   if (Array.isArray(RELEASE_VIEW?.times)) releaseCardPaint();
-}
-
-// A list's release slot carries Release now for those who may ask (a page draws [data-release-slot]).
-function boardReleaseSlots(): void {
-  const slots = document.querySelectorAll<HTMLElement>('[data-release-slot]');
-  if (!slots.length) return;
-  const fill = (v: SettingsReleaseSchedule): void => slots.forEach(slot => {
-    slot.innerHTML = releaseNowButtonHTML(v, 'ghost board-release');
-    const button = slot.querySelector<HTMLButtonElement>('[data-release-now]');
-    if (button) button.onclick = async ev => { ev.stopPropagation(); const out = await releaseNow(button); toast(out.text); };
-  });
-  if (RELEASE_VIEW && Date.now() - RELEASE_AT < 60000) { fill(RELEASE_VIEW); return; }
-  releaseScheduleLoad().then(v => { if (Array.isArray(v?.times)) fill(v); }).catch(() => {});
 }
 
 // The Task Manager (backend/task_manager.py): a built-in helper that checks each department's tasks on a schedule

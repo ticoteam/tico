@@ -80,6 +80,11 @@ def needs(api, token="ana-test"):
     return get(api, "needs-you", token)["items"]
 
 
+def paused(api, token="ana-test"):
+    """The Paused rows in a person's Needs you: one per cause they can fix, with the tasks it holds up."""
+    return [i for i in needs(api, token) if i["kind"] == "paused"]
+
+
 def open_card(api, t, key="google:ana@acme.example", person="human:ana"):
     with api.app.state.store.transaction() as c:
         return R.open(
@@ -288,7 +293,6 @@ def test_a_card_retires_when_its_task_changes_hands_or_its_bot_is_archived_and_a
         assert R.google_connected(c, "ana@acme.example") == []
     assert [c["status"] for c in cards(api, moved) + cards(api, kept)] == ["retired", "retired"]
     assert wakes(api, moved) == wakes(api, kept) == []
-    assert not [i for i in needs(api) if i.get("reconnect")]
 
 
 def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_the_fix(api, monkeypatch):
@@ -315,8 +319,9 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     assert shown(api, t)["task"]["status"] == "open"
     with api.app.state.store.read() as c:
         assert R.hold(c, t["id"])["why"] == "Codex on Test Mac to be reconnected"
-    [item] = [i for i in needs(api) if i["id"] == t["id"]]
-    assert item["need"] == "connect" and item["reconnect"]["key"] == card["key"]
+    # The bot is Paused on it: one row for the person who can fix it, naming the task (docs/pipelines-v3.md, Paused).
+    [row] = paused(api)
+    assert row["line"] == "ops has a login to reconnect" and row["task_ids"] == [t["id"]]
     # The same refusal again (the queued job's retry) changes nothing: one card, one item.
     with api.app.state.store.transaction() as c:
         R.login_refused(c, api.app.state.store.settings, "ops", machine["runner_id"], "codex", t["id"])
@@ -341,7 +346,7 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
         machine["token"],
     )
     assert len(wakes(api, t)) == 1
-    assert not [i for i in needs(api) if i["id"] == t["id"]]
+    assert paused(api) == []
     # a refused profile waits for that profile not the computers own login
     drain(api)
     t = task(api)
@@ -387,9 +392,6 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     first, second = task(api, "Reply to Acme"), task(api, "Book the Acme call")
     open_card(api, first)
     open_card(api, second)
-    items = [i for i in needs(api) if i.get("reconnect")]
-    assert len(items) == 1 and items[0]["id"] == first["id"]
-    assert [f["id"] for f in items[0]["folded"]] == [second["id"]]
     with api.app.state.store.transaction() as c:
         assert R.google_connected(c, "ana@acme.example") == [first["id"], second["id"]]
         assert R.google_connected(c, "ana@acme.example") == []
@@ -407,9 +409,7 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     t = task(api)
     open_card(api, t, key="google:cara@acme.example", person="human:cara")
     # Cara's own mailbox: hers to connect, not the owner's or an admin's.
-    assert [i["id"] for i in needs(api, "cara-test") if i.get("reconnect")] == [t["id"]]
-    assert not [i for i in needs(api, "ana-test") if i.get("reconnect")]
-    assert not [i for i in needs(api, "ben-test") if i.get("reconnect")]
+    assert [c["person"] for c in cards(api, t)] == ["human:cara"]
     with api.app.state.store.transaction() as c:
         R.google_connected(c, "cara@acme.example")  # settled, so it is not left for the next step
     # the connector cards the mailbox bots recent task and only every refusing service fixes it
@@ -556,11 +556,10 @@ def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_l
     # a task made private retires a card nobody else can fix and stops waiting on it
     t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
     open_card(api, t, "google:cara@acme.example", "human:cara")  # only Cara connects her mailbox
-    assert [i["id"] for i in needs(api, "cara-test") if i.get("reconnect")] == [t["id"]]
+    assert [(c["person"], c["status"]) for c in cards(api, t)] == [("human:cara", "open")]
     make_private(api, t)  # Cara cannot read it now
     assert [c["status"] for c in cards(api, t)] == ["retired"]
     assert shown(api, t, "ben-test")["task"]["status"] == "open"
-    assert not [i for i in needs(api, "cara-test") if i.get("reconnect")]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     # a former reader cannot load or save the credential card by id
@@ -584,7 +583,6 @@ def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_l
         ("human:cara", "retired"),
     ]
     assert shown(api, t, "ben-test")["task"]["status"] == "open"
-    assert [i["reconnect"]["person"] for i in needs(api) if i["id"] == t["id"]] == ["human:ana"]
     heartbeat(api, machine, True)  # the fix still reaches the task
     assert len(wakes(api, t)) == 1
     # a private task cards a fixer who can read it and never one who cannot

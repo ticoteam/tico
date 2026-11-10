@@ -156,7 +156,7 @@ function taskLiveSuspend() {
   for (const d of document.querySelectorAll<TaskDialog>('dialog')) if (d.taskLive) { d.taskLive.revoked = true; sharedPlaceStop(d.taskLive); }
   for (const draft of TASK_EDIT_DRAFTS.values()) { clearTimeout(draft.timer); draft.owner = null; }
   TASK_EDIT_DRAFTS.clear();
-  TASK_DRAFTS.clear(); QC_DRAFTS.clear();
+  TASK_DRAFTS.clear();
 }
 function taskLiveClear(identity: string = sessionIdentity()) {
   taskLiveSuspend();
@@ -187,19 +187,17 @@ document.addEventListener('click', event => {
 }, true);
 // Capture immediately before replacing HTML: async reads must not snapshot text before the person finishes typing.
 function taskFormKey(el: Element, root: Element): string {
-  const path: string[] = [], question = el.closest<HTMLElement>('[data-qc-key]');
-  const scope = question && root.contains(question) ? question : root;
-  const scoped = (key: string) => scope !== root ? `[data-qc-key="${CSS.escape(String(question?.dataset.qcKey))}"] ${key}` : key;
-  for (let node: Element | null = el; node && node !== scope; node = node.parentElement) {
+  const path: string[] = [];
+  for (let node: Element | null = el; node && node !== root; node = node.parentElement) {
     const here: Element = node;
     const attr = ['id', 'data-task-field', 'name', 'aria-label', ...here.getAttributeNames().filter(k => k.startsWith('data-') && !['data-busy', 'data-loaded'].includes(k))]
       .find(key => here.hasAttribute(key));
     path.unshift(here.tagName.toLowerCase() + (attr ? `[${attr}="${CSS.escape(String(here.getAttribute(attr)))}"]`
       : `:nth-of-type(${[...(here.parentElement?.children ?? [])].filter(n => n.tagName === here.tagName).indexOf(here) + 1})`));
-    // A unique semantic key survives inserted sections. Only repeated fields need their containing form's scope.
-    if (attr && scope.querySelectorAll(path.join(' > ')).length === 1) return scoped(path.join(' > '));
+    // A unique semantic key survives inserted sections.
+    if (attr && root.querySelectorAll(path.join(' > ')).length === 1) return path.join(' > ');
   }
-  return scoped(path.join(' > '));
+  return path.join(' > ');
 }
 function taskFormCapture(root: Element): TaskFormCapture {
   const fields = [...root.querySelectorAll<TaskField>('input, textarea, select, [contenteditable]')].map((el): TaskFormSaved => {
@@ -489,7 +487,7 @@ async function taskLiveSave(d: TaskDialog, live: TaskLive) {
           taskPropsMsgPaint(d);
         }
         if (d.taskLive === live && Number(reply.task.version) >= Number(d.liveTask?.version || 0)) d.liveTask = reply.task;
-        tasksLive();     // the Tasks page behind reads its view again
+        if (TASKS_ST) tasksTaskPut(TASKS_ST, reply.task);     // the Tasks page behind takes the saved task
         return reply.task;
       };
       return d.saveQueue = (d.saveQueue || Promise.resolve()).then(run, run);

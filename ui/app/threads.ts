@@ -442,7 +442,7 @@ async function threadsPinned(d: ThreadsEvent) {
   const view = await get<ThreadRow>(thvPath(d.thread_id), {fresh: true}).catch(() => null);
   if (view?.id) threadsPut({...view, me: {...view.me, pinned: true}});
 }
-// The whole rail is read only on the first load, a `reset`, a `needs` change and the safety poll; every other change is
+// The whole rail is read only on the first load, a `reset`, a reconnect and the safety poll; every other change is
 // patched from its event (above). Once per burst.
 const threadsRecount = () => liveThrottle('threads-rail', threadsLoad, 3000);
 // Every route: the first load, the current row marked, and the stream wired once.
@@ -482,14 +482,15 @@ function threadsSync() {
     if (d.kind === 'capped') liveSoon('threads-needs', () => liveEmit('needs', {version: 'read'}), 400);
     threadViewsLive('threads', d);
   });
-  // An ask or a held message moved on the viewer's Needs you list: Catch up holds those too. A reconnect that carried
-  // `threads` over (it replays the thread changes it missed) naming the Needs you version the rail was last read at,
-  // within 5 minutes of that read, moved nothing, so the rail is not read again for it. Any other connect reads it: a
-  // change no event names (a thread the viewer can no longer see) is caught by one at least that often.
+  // A Needs you change while connected reads nothing here (Nov 3): an unread mention already came as its thread's
+  // `activity` (above), and what no event names (an ask answered, a held message let go) waits for the safety read. A
+  // reconnect that carried `threads` over (it replays the thread changes it missed) naming the Needs you version the
+  // rail was last read at, within 5 minutes of that read, moved nothing, so the rail is not read again for it. Any other
+  // connect reads it: a change no event names (a thread the viewer can no longer see) is caught by one at least that often.
   liveOn('needs', (d: NeedsEvent) => {
+    if (!THREADS.on || !d?.connect) return;
     const fresh = Date.now() - THREADS.readAt < THREADS_CONNECT_FRESH_MS;
-    if (!THREADS.on || fresh && d?.carried?.includes('threads') && d.version === THREADS.needsSeen) return;
-    if (!d?.connect) THREADS.gen++;
+    if (fresh && d.carried?.includes('threads') && d.version === THREADS.needsSeen) return;
     threadsRecount();
   });
   liveOn('reset', () => { liveSoon('threads-rail', threadsLoad, 400); threadViewsLive('reset', {}); });

@@ -34,7 +34,7 @@ type TfCommentFile = {f: TfFile; v: TfVersion; title?: string; loose?: undefined
 interface TfMessage { id: string; ask?: TfAsk | null; refs?: {attachments?: TfAttachment[] | null; questions?: TfQuestion[] | null; who?: string | null; target?: {file?: string | null; version?: number | string | null} | null} | null; sender_id?: string | null; answers?: TfAnswer[] | null; body?: string | null; }
 
 // ---- thumbnails: lazy, sized, a skeleton until they arrive. A versioned address never changes, so the browser's cache
-// serves a revisit; this keeps the decoded picture too, so the peek, the modal and the board redraw it at once.
+// serves a revisit; this keeps the decoded picture too, so the modal and the pipeline redraw it at once.
 const TF_THUMBS = new Map<string, HTMLImageElement>();          // url -> decoded Image, newest use last
 function tfThumbLoad(url: string): Promise<HTMLImageElement> {
   const hit = TF_THUMBS.get(url);
@@ -148,7 +148,6 @@ async function tfLoad(d: TfDialog, id: string | number): Promise<void> {
   if (TASK_CHAT?.dialog === d && TASK_CHAT.data) { TASK_CHAT.rendered = ''; taskCommentsRender(TASK_CHAT, TASK_CHAT.data); }
 }
 function tfPaint(d: TfDialog): void {
-  qcardPaintPictures(d, tfFiles(d));       // the Needs you card's option pictures (question-card.js)
   const el = d.tfEl;
   if (!el) return;
   const files = tfFiles(d);
@@ -205,7 +204,7 @@ async function tfAdd(d: TfDialog, files: File[]): Promise<void> {
   if (!added) return;
   if (added === files.length) toast(`Added ${plural(added, 'file')}`);
   if (d.open && d.taskOpening === opening && String(d.dataset.task) === id) await tfLoad(d, id);
-  if (TASKS_ST) void tasksLoad(TASKS_ST);
+  if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
 // Taking a file off a task: its owner, its requester, or someone who may move tasks (the server's rule).
 function tfCanRemove(d: TfDialog): boolean {
@@ -230,7 +229,7 @@ async function tfRemove(d: TfDialog, fid: string, button: HTMLButtonElement): Pr
   tfClose(d);
   await tfLoad(d, id);
   if (TASK_CHAT?.dialog === d) { TASK_CHAT.rendered = ''; void taskChatRead(TASK_CHAT); }
-  if (TASKS_ST) void tasksLoad(TASKS_ST);
+  if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
 // Files dragged onto a task or the new-task form land there; the zone lights up while they hover.
 function fileDropTarget(zone: HTMLElement, take: (files: File[]) => void): void {
@@ -484,7 +483,7 @@ function tfWire(d: TfDialog): void {
 // a redraw can leave the focus on the page, and the task must not see the key.
 document.addEventListener('keydown', ev => {
   if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || ev.isComposing) return;
-  const d = eventElement(ev)?.closest?.('dialog:not(.tf-view)') || $('dialog:modal:not(.tf-view)') || $('#task-peek[open]');
+  const d = eventElement(ev)?.closest?.('dialog:not(.tf-view)') || $('dialog:modal:not(.tf-view)');
   if (!d?.tfOpen || !d.tfEl || eventElement(ev)?.closest?.('.prop-pop')) return;
   const typing = eventElement(ev)?.closest?.('input, textarea, [contenteditable]');
   if (ev.key === 'Escape' && !typing) {

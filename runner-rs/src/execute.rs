@@ -32,6 +32,11 @@ pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
 const CONTINUE_LOST: &str = "This turn continues one the model's capacity stopped after it acted, but its thread could not be resumed on this computer; a fresh thread could repeat what it did, so the run is held for review";
 const HELD_AT_LOGIN_CAP: &str = "Interrupted at the end of the shared login's grace; this turn cannot be resumed (its harness cannot resume an interrupted turn, or it ran on a fallback whose thread is not kept), so the run is held for review instead of queued to continue";
+/// `started` answered `start_wait` this many times in a row: the server will not start this lease (a refused start
+/// stays refused, backend/execution.py refuse_start), so the turn gives up and reports itself interrupted, which the
+/// server settles as skipped. A fresh wake comes on a new lease.
+const START_WAIT_TRIES: u32 = 5;
+const START_REFUSED: &str = "Execution interrupted after stop: the server kept refusing this turn's start";
 const OWN_INTERRUPT: &[&str] = &[
     "Lease expired",
     "Execution interrupted after stop",
@@ -1185,6 +1190,22 @@ impl Runner {
         }
     }
 
+    /// After the `tries`-th `start_wait` in a row: a pause that doubles (1, 2, 4, 8 seconds) before the turn asks for
+    /// its place and its start again, and at START_WAIT_TRIES the turn gives up as interrupted. A runner with no
+    /// managed start place asked `started` again at once, for ever, while renew kept its lease alive.
+    async fn after_start_wait(&self, tries: u32) -> Result<(), Fail> {
+        if tries >= START_WAIT_TRIES {
+            return Err(Fail::runtime(START_REFUSED));
+        }
+        let pause = if cfg!(test) {
+            Duration::from_millis(1)
+        } else {
+            Duration::from_secs(1 << tries.saturating_sub(1).min(4))
+        };
+        tokio::time::sleep(pause).await;
+        Ok(())
+    }
+
     async fn wait_before_start(&self, attempt: &Value, reason: &str) -> Result<(), Fail> {
         if attempt.get("start_reservation_seconds").is_some() {
             let aid = text_of(&attempt["id"]);
@@ -1244,6 +1265,7 @@ impl Runner {
                 Err(e) if e.code == "start_wait" => {
                     self.places.lock().unwrap().remove(&aid);
                     tries += 1;
+                    self.after_start_wait(tries).await?;
                 }
                 Err(e) => return Err(e.into()),
             }
@@ -2478,6 +2500,7 @@ impl Runner {
                         Err(e) if e.code == "start_wait" => {
                             drop(cold_guard.take());
                             self.places.lock().unwrap().remove(&aid);
+                            self.after_start_wait(start_try + 1).await?;
                             if cold { cold_guard = Some(self.wait_cold_start(&attempt, &flags).await?); }
                             else { self.wait_start_place(&attempt, &flags).await?; }
                             start_try += 1;

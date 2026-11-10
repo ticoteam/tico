@@ -368,13 +368,15 @@ def test_undo_before_the_move_takes_the_answer_back(c, general):
     row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
     _bot_ask(c, row["id"], "bot:builder", "answer", ANA, "Which plan?", choices=["Free"])
     said = A.answer(c, row["id"], _owner_done(c, row), "bot:builder", "done", seen_version=row["version"])
-    with _refused("task_requirement"):
-        A.undo(c, said["answer_id"], "bot:reviewer")  # not who answered, and not a person
+    with _refused("identity"):
+        A.undo(c, said["answer_id"], "bot:reviewer")  # not who answered
+    with _refused("identity"):
+        A.undo(c, said["answer_id"], ANA)  # a person, but not who answered
     out = A.undo(c, said["answer_id"], "bot:builder")
     assert out["version"] == row["version"] and out["stage_id"] == row["stage_id"]
     assert H._one(c, "SELECT undone_at FROM answers WHERE id=?", (said["answer_id"],))["undone_at"]
     assert [s.state for s in R.standings(c, out)][0] == R.NOT_MET
-    assert A.undo(c, said["answer_id"], ANA)["version"] == row["version"]  # twice is once
+    assert A.undo(c, said["answer_id"], "bot:builder")["version"] == row["version"]  # twice is once
 
 
 def test_undo_after_the_move_is_an_ordinary_move_back(c, build):

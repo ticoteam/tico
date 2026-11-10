@@ -707,33 +707,13 @@ TAGS_SCHEMA = TAGS_TABLES_SCHEMA + TAGS_BACKFILL
 
 GENERAL_TYPE = "general"
 GENERAL_PIPELINE = "general"  # the pipeline a task goes into when none is named
-PIPELINES_SCHEMA = (
-    """
-CREATE TABLE IF NOT EXISTS task_types (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, created_at TEXT, updated_at TEXT);
-CREATE TABLE IF NOT EXISTS task_steps (
-  id TEXT PRIMARY KEY, type_id TEXT NOT NULL REFERENCES task_types(id), name TEXT NOT NULL,
-  position INTEGER NOT NULL, status TEXT NOT NULL
-    CHECK(status IN ('open','doing','waiting','review','ready','done','closed','declined')),
-  UNIQUE(type_id, name));
-CREATE INDEX IF NOT EXISTS task_steps_type ON task_steps(type_id, position, id);
-ALTER TABLE tasks ADD COLUMN type_id TEXT REFERENCES task_types(id);
-ALTER TABLE tasks ADD COLUMN step_id TEXT REFERENCES task_steps(id);
-CREATE INDEX IF NOT EXISTS tasks_type_step ON tasks(type_id, step_id);
-INSERT OR IGNORE INTO task_types(id,name,created_at,updated_at)
-  VALUES('general','General',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+# Numbered step 14 made the old engine's task types and steps. A database that ran it has them until the Pipelines v3
+# cut-over drops them; a new database never makes them (only a database with no tasks runs these steps). The two
+# columns stay: a shipped migration file reads them, and the cut-over drops them with the old tasks table.
+PIPELINES_SCHEMA = """
+ALTER TABLE tasks ADD COLUMN type_id TEXT;
+ALTER TABLE tasks ADD COLUMN step_id TEXT;
 """
-    + "\n".join(
-        f"INSERT OR IGNORE INTO task_steps(id,type_id,name,position,status) "
-        f"VALUES('general-{status}','general','{status.title()}',{position},'{status}');"
-        for position, status in enumerate(STEP_STATUSES)
-    )
-    + """
-UPDATE tasks SET type_id='general', step_id=(SELECT id FROM task_steps
-  WHERE type_id='general' AND status=tasks.status ORDER BY position,id LIMIT 1)
-  WHERE type_id IS NULL;
-"""
-)
 
 TASK_LINKS_V2_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -767,16 +747,11 @@ CREATE TABLE IF NOT EXISTS task_file_reviews(
  PRIMARY KEY(file_id,version));
 """
 
-# A numbered type gives each of its tasks the team's next number, kept for good; `step_rank` is a
-# task's place within its step, apart from `rank`, its place in the owner's queue. Every task
-# already in a step keeps the order it was filed in (rowid order), so a new one joins the end.
+# Each task's team-wide number, kept for good. (This step also numbered the old engine's types and ranked tasks in
+# their steps; a new database never makes those.)
 NUMBERS_SCHEMA = """
-ALTER TABLE task_types ADD COLUMN numbered INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN number INTEGER;
-ALTER TABLE tasks ADD COLUMN step_rank REAL;
 CREATE UNIQUE INDEX IF NOT EXISTS tasks_number ON tasks(number);
-CREATE INDEX IF NOT EXISTS tasks_step_rank ON tasks(step_id, step_rank);
-UPDATE tasks SET step_rank=rowid WHERE step_id IS NOT NULL AND step_rank IS NULL;
 """
 
 # Existing records have no reliable sensitivity marker. Preserve them privately on upgrade;
@@ -1711,7 +1686,7 @@ def migrate(conn, adopt_legacy=False):
         "lane,COALESCE(closed_at,done_at,updated_at,created_at) DESC,id DESC) "
         "WHERE status IN ('done','closed')"
     )
-    conn.execute(TASKS_DUE_INDEX)  # the scheduler's due-date reminder pass
+    conn.execute("DROP INDEX IF EXISTS tasks_due_active")  # the due-date reminder pass it served is gone
     # A task's history and the Tasks page's stats read history_events through the indexes its migration made
     # (backend/migrations/0064_history_events.py).
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
@@ -7771,31 +7746,6 @@ def tasks(
         )
     hydrate_task_tags(conn, rows)
     return rows
-
-
-# The due-date reminder pass (backend/scheduler.py) reads only the columns it uses, through tasks_due_active: its
-# predicate is this query's status list and due test, word for word, or SQLite will not use it and scans every task.
-TASKS_DUE_SQL = (
-    f"SELECT id,title,owner_id,due_at,conversation_id FROM tasks WHERE status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) "
-    "AND due_at IS NOT NULL AND due_at!='' AND substr(due_at,1,10)<=? AND owner_id LIKE 'bot:%' "
-    "AND NOT " + SNOOZED % "tasks" + " "
-    "AND NOT EXISTS (SELECT 1 FROM task_reminders r WHERE r.task_id=tasks.id AND r.due_at=tasks.due_at) "
-    "ORDER BY created_at,id"
-)
-TASKS_DUE_INDEX = (
-    "CREATE INDEX IF NOT EXISTS tasks_due_active ON tasks(substr(due_at,1,10)) "
-    f"WHERE status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) AND due_at IS NOT NULL AND due_at!=''"
-)
-
-
-def tasks_due_for_bots(conn, through):
-    """Live tasks a bot owns whose due date may have arrived by `through` (a "YYYY-MM-DD").
-
-    Due dates are text in more than one shape (an offset, a bare date, an old local time), so this
-    is a day-level bound with a day of slack; the caller compares the exact instant. No row cap:
-    the reminder pass needs every one of them, however many tasks the hub holds.
-    """
-    return _rows(conn.execute(TASKS_DUE_SQL, (through,)))
 
 
 def task_flow(

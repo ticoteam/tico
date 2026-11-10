@@ -91,12 +91,13 @@ interface NeedsChange extends NeedsRead {
 // Every bot is hosted by the keeper (`host: keeper`, the only host there is), so the record is hub.db, not GitHub:
 // chat is `messages`, work is `tasks`, approvals are one tap, and every bot has one status row with
 // its history. Every fetch is guarded, so a hub with no hub.db yet looks exactly as it does today.
-const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiting_human: 'Waiting on a human',
-                 waiting_bot: 'Waiting on a bot', blocked: 'Blocked', limited: 'Rate limited',
-                 crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
+// A bot that waits on someone or on another task is not running: it reads Idle (docs/pipelines-v3.md S14, S18). Who has
+// a task's turn is the task's own line, never the bot's.
+const V2_WORD: Record<string, string> = {idle: 'Idle', running: 'Running', waiting_human: 'Idle', waiting_bot: 'Idle', blocked: 'Idle',
+                 limited: 'Rate limited', crashed: 'Crashed', paused: 'Paused', quarantined: 'Paused for review'};
 // A bot the server has registered but not switched on yet. People read "Setting up"; the API value stays `planned`.
 const statusWord = (status: unknown) => status === 'planned' ? 'Setting up' : String(status || '');
-const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: 'needs', waiting_bot: 'waiting', blocked: 'blocked',
+const V2_PILL: Record<string, string> = {running: 'in-progress', waiting_human: '', waiting_bot: '', blocked: '',
                  limited: 'waiting', crashed: 'fail', quarantined: 'fail', idle: ''};
 const V2_KIND: Record<string, string> = {decision: 'Decision', approval: 'Approval', review: 'Review', declined: 'Declined',
                  question: 'Question', task: 'Task', notice: 'Message', setup: 'Set up'};
@@ -110,14 +111,14 @@ const personDisplay = (id: unknown) => {
   return (p && p.name) || titleCase(id);
 };
 // What a sender, "added by" or "by" slot says for the keeper: it happened automatically.
-const KEEPER_LABEL = 'Automatic';
+const AUTOMATIC_LABEL = 'Automatic';
 const actorLabel = (a: unknown): string => {
   const slug = actorSlug(a);
   if (slug) return botDisplayName(slug);
   const pid = actorPerson(a);
   if (pid) return pid === S.me?.id ? 'You' : personDisplay(pid);
   // The keeper is the server itself, never the Assistant or the app: a row it wrote is labelled by its source (rowSource).
-  return a === 'keeper' ? KEEPER_LABEL : String(a || '');
+  return a === 'keeper' ? AUTOMATIC_LABEL : String(a || '');
 };
 // Notices the hub writes for bots to read carry raw ids ("New task from human:sam"); people see names.
 const plainActors = (text: unknown) => String(text ?? '').replace(/\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])/g,

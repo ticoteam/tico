@@ -82,15 +82,28 @@ def headers(token="ana-test", key=None):
     return {"Authorization": "Bearer " + token, "Idempotency-Key": key or str(uuid.uuid4())}
 
 
-def legacy_send_approval(api, payload, *, actor="bot:ops", task_id=None):
-    """An existing pre-cutover card for compatibility reads; new email asks use the frozen queue."""
-    with api.app.state.store.transaction() as c:
-        row = H.approval_request(c, actor, "send", payload, task_id=task_id)
-        cutover = c.execute(
-            "SELECT applied_at FROM schema_migrations WHERE version='20261105040656_email_sending_queue'"
-        ).fetchone()[0]
-        c.execute("UPDATE approvals SET created_at=? WHERE id=?", (H.shift(cutover, seconds=-1), row["id"]))
-        return H.approval(c, row["id"])
+def give_ok(api, rid, token="ana-test", expected=200):
+    """A person OKs the OK `rid` by their own click: they open it (GET /api/v2/oks/{rid}) and OK exactly what it showed."""
+    shown = get(api, f"oks/{rid}", token=token)
+    return post(
+        api,
+        f"tasks/{shown['task_id']}/asks/{rid}/ok",
+        {"shown_hash": shown["shown_hash"]},
+        token=token,
+        expected=expected,
+    )
+
+
+def send_back(api, rid, token="ana-test", note="Not this one.", expected=200):
+    """A person says no to the OK `rid`: the task goes back with a note."""
+    shown = get(api, f"oks/{rid}", token=token)
+    return post(
+        api,
+        f"tasks/{shown['task_id']}/asks/{rid}/answer",
+        {"value": "no", "note": note},
+        token=token,
+        expected=expected,
+    )
 
 
 def post(api, path, body, token="ana-test", key=None, expected=200):

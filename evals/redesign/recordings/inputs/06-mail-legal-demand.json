@@ -18,7 +18,10 @@
     "is_calendar_invite": false,
     "labels": [
       "INBOX"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "",
+    "known_sender": false
   },
   "note": "A legal demand with a deadline: needs the owner, and legal risk."
 }

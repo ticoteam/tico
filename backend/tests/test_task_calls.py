@@ -476,6 +476,21 @@ def test_an_ask_names_only_someone_who_can_read_the_task(c):
     H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
 
 
+def test_a_bot_asks_only_a_person_in_its_reach_or_who_handed_it_the_task(c, monkeypatch):
+    """By default a bot reaches its manager, its reports, its peers and its team (reach.py, mode nearby). An ask is a
+    write to a person like a message is, so one outside that reach is refused and nothing is asked; the person who
+    handed the bot the task may always be asked about it."""
+    from backend import reach
+
+    monkeypatch.setenv("TICO_REACH_DEFAULT", "nearby")  # conftest starts tests open
+    row = _new(c, by=BEN, owner=BUILDER)
+    with pytest.raises(reach.Refused) as refused:
+        H.task_ask(c, BUILDER, row["id"], "human:cara", "Which vendor do we keep?", seen_version=_version(c, row["id"]))
+    assert refused.value.code == "reach_closed"
+    assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1  # only the owner's own done
+    H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
+
+
 def test_a_refused_write_on_a_private_task_is_recorded_without_its_words(c):
     row = _new(c, by=BEN, owner=BUILDER, private=True)
     H.task_ask(c, BUILDER, row["id"], BEN, "Do we drop the Acme contract?", seen_version=_version(c, row["id"]))
@@ -563,18 +578,27 @@ def test_a_task_that_goes_private_with_its_new_owner_is_private_before_anyone_he
         assert key in before or H.task_private_readable(c, who, task), (key, who)
 
 
-def test_a_stage_that_asks_a_bot_who_cannot_read_the_private_task_refuses_the_move(c):
+def test_a_stage_that_asks_a_bot_brings_it_in_to_read_the_private_task(c):
     _private_owner(c, "bot:reviewer")
     X.bot(c, "reviewer")
+    X.bot(c, "outsider")
     row = _new(c, by=HELPER, pipeline="terms")
-    woken = X.wakes(c, row["id"])
-    assert H.attempt(c, H.task_move, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"])) is None
+    H.task_move(c, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"]))
     after = H.task(c, row["id"])
-    assert (after["stage_id"], after["owner_id"], H.task_private(c, after)) == (row["stage_id"], BUILDER, False)
-    assert X.wakes(c, row["id"]) == woken
-    with _refused("task_requirement") as refusal:
-        H.task_move(c, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"]))
-    assert "cannot read this task" in refusal.value.detail
+    assert (after["owner_id"], H.task_private(c, after)) == (COUNSEL, True)
+    # The stage's bot reads it, and nobody else was added.
+    assert H.task_private_readable(c, "bot:reviewer", after)
+    assert H.task_readers(after) == ["bot:reviewer"]
+    assert not H.task_private_readable(c, "bot:outsider", after)
+    assert not H.task_private_readable(c, BEN, after)
+    # Its history says who brought the bot in.
+    readers = c.execute(
+        "SELECT actor_id, new FROM history_events WHERE subject_id=? AND kind='reader'", (row["id"],)
+    ).fetchall()
+    assert [tuple(r) for r in readers] == [(COUNSEL, "bot:reviewer")]
+    # The spec does not end a reader's access when the task leaves the stage: the bot keeps reading it.
+    H.task_move(c, COUNSEL, row["id"], "Draft", "Back to drafting.", _version(c, row["id"]))
+    assert H.task_private_readable(c, "bot:reviewer", H.task(c, row["id"]))
 
 
 def test_a_child_restored_before_its_parent_is_under_it_again_once_both_are_back(c):

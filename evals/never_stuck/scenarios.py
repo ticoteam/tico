@@ -327,7 +327,6 @@ FAILING: dict[int, str] = {
 
 # Scenarios this branch cannot express yet: (phase, why).
 LATER: dict[int, tuple[str, str]] = {
-    13: ("1 (cut-over step 4)", "held actions (approvals) are not on the engine yet; they move at cut-over step 4"),
     14: ("2", "pages and their OK (send back, version 2) arrive with Product"),
     19: ("2 and 3", "only the General preset exists; Product and Engineering presets arrive with their phases"),
     20: ("2", "waking the Product Manager when Spec empties (C10) arrives with Product"),
@@ -684,6 +683,42 @@ def s12(r: Rig) -> None:
     out = r.act(BUILDER, lambda c: E.move(c, task, E.CLOSED, BUILDER, "Not possible", version))
     expect(isinstance(out, Refusal), "a bot closed a person's request (C8)")
     expect("ask" in out.detail.lower(), f"the refusal does not say to ask: {out.detail}")
+
+
+@scenario(13, "A held action with no task: a General task is filed for the person")
+def s13(r: Rig) -> None:
+    from backend import task_asks as K
+
+    raise_ = {"usd": 40, "what": "Launch ads budget"}
+    asked = r.ok(
+        WRITER,
+        lambda c: K.ask_ok(
+            c, WRITER, ANA, "Raise the launch ads budget by $40?", shows=raise_, subject="budget_raise:launch-ads", content=raise_
+        ),
+        "the writer asks Ana, an owner, for a budget raise",
+    )
+    task, rid = str(asked["task_id"]), str(asked["requirement_id"])
+    row = r.row(task)
+    expect(row["pipeline_id"] == GENERAL, f"the filed task is in {row['pipeline_id']}, not General (C11)")
+    expect(row["owner_id"] == WRITER, f"the filed task is owned by {row['owner_id']}, not the bot that asked")
+    expect((ANA in {who for _, who in r.waits(task)}), f"the task does not wait on Ana: {r.waits(task)}")
+    expect(any(t == task for _, t in r.needs_tasks(ANA)), "the ask is not in Ana's Needs you")
+    # The bot never OKs its own ask, and asking again with the same content is the same ask.
+    r.refused(
+        WRITER,
+        lambda c: K.give_ok(c, WRITER, rid, K.content_hash(raise_), own_click=True),
+        "identity",
+        "the writer OKs its own budget raise",
+    )
+    again = r.ok(
+        WRITER,
+        lambda c: K.ask_ok(
+            c, WRITER, ANA, "Raise the launch ads budget by $40?", shows=raise_, subject="budget_raise:launch-ads", content=raise_
+        ),
+        "the writer asks again",
+    )
+    expect(again["task_id"] == task and again["requirement_id"] == rid, f"asking again filed another: {again}")
+    r.check()
 
 
 REVIEW_RECORD: dict[str, Any] = {

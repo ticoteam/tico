@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend import hubdb as H
+from backend.migrations import MigrationError
 from backend.tests.helpers.hubdb import with_legacy_run_tables
 from backend.tests.helpers.upgrade import FIXTURES, boot
 
@@ -21,11 +22,15 @@ def state(path):
         )
 
 
-def old_release(tmp_path):
-    """hub.sqlite as v0.2.1 wrote it (scripts/make_upgrade_fixture.py): 3 bots, 3 tasks, 2 messages."""
+def old_release(tmp_path, tasks=False):
+    """hub.sqlite as v0.2.1 wrote it (scripts/make_upgrade_fixture.py): 3 bots, 3 tasks, 2 messages. Tico 0.6 does not
+    carry tasks over (it refuses a file that has some), so the tasks go unless `tasks`."""
     path = tmp_path / "hub.sqlite"
     with gzip.open(FIXTURES / "hub-v0.2.1.sqlite.gz") as source, open(path, "wb") as target:
         shutil.copyfileobj(source, target)
+    if not tasks:
+        with sqlite3.connect(path) as c:
+            c.execute("DELETE FROM tasks")
     return path
 
 
@@ -40,8 +45,15 @@ def test_previous_release_database_boots_twice_and_keeps_rows(tmp_path):
     with sqlite3.connect(path) as c:
         assert [r[0] for r in c.execute("SELECT slug FROM bots ORDER BY slug")] == ["cmo", "coo", "seo"]
         assert c.execute("SELECT count(*) FROM bots").fetchone()[0] == 3
-        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == 3
         assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == 2
+
+
+def test_an_old_release_database_with_tasks_is_refused_and_left_as_it_was(tmp_path):
+    path = old_release(tmp_path, tasks=True)
+    before = path.read_bytes()
+    with pytest.raises(MigrationError, match="does not carry tasks over"):
+        boot(path, adopt_legacy=True)
+    assert path.read_bytes() == before
 
 
 def test_goal_id_already_present_with_version_behind_still_boots(tmp_path):

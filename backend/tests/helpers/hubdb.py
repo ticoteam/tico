@@ -5,6 +5,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 from backend import hubdb as H
+from backend.tests.helpers.migrations import forget_from
 
 
 EMPLOYEES = {
@@ -58,9 +59,9 @@ LEGACY_TURNS = (
 
 
 def with_legacy_run_tables(conn):
-    """Put back `turns` (empty) on a file `H.connect` made, and forget migration 0072, so
-    the numbered steps and the migrations run on them again as on an install from before it."""
-    conn.execute("DELETE FROM schema_migrations WHERE version>='0072' AND version NOT LIKE 'legacy%'")
+    """Put back `turns` and what the cut-over took away (empty) on a file `H.connect` made, and forget migration 0072,
+    so the numbered steps and the migrations run on them again as on an install from before it."""
+    forget_from(conn, "0072")
     conn.execute(LEGACY_TURNS)
     conn.commit()
 
@@ -69,6 +70,12 @@ class HubCase(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        # The tables the task engine writes (assignments, pipelines, jobs) are made when the store starts, not by
+        # hubdb's migrations: start one on the file first.
+        from backend.store import Store
+        from backend.tests.helpers.api import api_settings
+
+        Store(api_settings(Path(self.dir.name))).initialize()
         self.conn = H.connect(Path(self.dir.name) / "hub.db")
         self.addCleanup(self.conn.close)
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
@@ -76,7 +83,7 @@ class HubCase(unittest.TestCase):
     def before(self, version):
         """The database as an install from before migration `version` left it: H.connect has applied every migration
         file (hubdb.migrate), so the records from that one on are forgotten and migrations.apply runs them again."""
-        self.conn.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (version,))
+        forget_from(self.conn, version)
         self.conn.commit()
 
     def refused(self, rule, fn, *a, **kw):

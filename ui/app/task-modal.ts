@@ -298,7 +298,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
     try {
       await post(`/v2/tasks/${encodeURIComponent(task.id)}/links`, {url});
       const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       if (linkCurrent() && data.task) taskModalShow(data.task, d);
     } catch (e) { toast(errorMessage(e, ''), true); }
   };
@@ -454,7 +454,7 @@ function taskRunModelBind(d: ModalDialog, task: ModalTask) {
       const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
       if (saved.warning) toast(saved.warning);
       const data = await get(`/v2/tasks/${encodeURIComponent(id)}`);
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       if (d.open && String(d.dataset.task) === id && data.task) void taskModalShow(data.task, d);
     } catch (e) { toast(errorMessage(e, ''), true); apply.disabled = same(); }
   };
@@ -468,7 +468,7 @@ async function taskRelate(d: ModalDialog, task: ModalTask, body: PropPatch, on =
   try {
     await post(`/v2/tasks/${encodeURIComponent(on)}/relations`, body);
     const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
   } catch (e) { toast(errorMessage(e, ''), true); }
 }
@@ -533,9 +533,9 @@ async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then:
     if (here() && then !== false) void taskModalShow(task, d);       // the server's answer, at once
     // Closing says so with Undo for a while (S5): Undo reopens it.
     if (body.close) toast('Closed', false, {label: 'Undo', run: () => taskMove(id, 'reopen', task.version).then(r => { if (here()) void taskModalShow(r.task, d); }, e => toast(errorMessage(e, ''), true))});
-    if (BOT) void loadBotTasksV2(BOT.slug);
+    if (BOT) void botTasksCatchUp(BOT.slug);
     void personTasksReload();
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     roadmapRankingRefresh();
     return true;
   } catch (e) {
@@ -606,9 +606,6 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   duplicated_by: v => v ? 'marked a duplicate of it' : 'unmarked a duplicate of it', follow_up_of: v => v ? 'marked it a follow-up' : 'unmarked it as a follow-up',
   follow_ups: v => v ? 'added a follow-up' : 'removed a follow-up',
   link: v => v ? `linked ${v}` : 'removed a link', file: (v, x) => v ? `added ${v}` : `removed ${x.old || 'a file'}`, due: v => v ? `set the due date to ${fmt(v)}` : 'cleared the due date',
-  qa_waiver: v => { let w: {head?: string} = {}; try { w = JSON.parse(v || '{}'); } catch { /* an unreadable record still says what it is */ }
-    return `waived QA${w.head ? ` on ${String(w.head).slice(0, 7)}` : ''}: a waiver, not a QA pass`; },
-  verdict: v => `recorded the verdict ${v || 'none'}`,
   lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment'};
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
 function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '') {
@@ -633,12 +630,10 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
     // A result mirrored into a comment keeps its full text there; the event still records the status move.
     const mirrored = x.note && all?.some(y => y.kind === 'comment' && y.message?.sender_id === x.actor
       && String(y.message.body || '').trim() === String(x.note).trim() && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 5000);
-    // A QA waiver is a person's decision, never a verdict: it keeps its own mark and its full reason.
-    const waived = x.field === 'qa_waiver' ? ' <span class="verdict-chip waived" data-qa-waiver>QA waived</span>' : '';
     const src = rowSource(x, x.actor), who = commentAuthor(x.actor, x.via, src);
     // A change the server made with no name to give it (a system line) reads as a sentence of its own.
     const said = who ? say : say.charAt(0).toUpperCase() + say.slice(1);
-    return `<div class="tcomment sys tmark${waived ? ' qa-waiver' : ''}">${who ? `<span class="tcomment-who">${who}</span>` : ''}${waived} <span class="muted">${esc(said)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(waived ? x.note : clipLine(x.note, 200))}` : ''}</span>
+    return `<div class="tcomment sys tmark">${who ? `<span class="tcomment-who">${who}</span>` : ''} <span class="muted">${esc(said)}${x.note && x.field !== 'note' && !mirrored ? ` — ${esc(clipLine(x.note, 200))}` : ''}</span>
       <time class="muted tnum" title="${esc(fmt(x.ts))}">${esc(ago(x.ts))}</time></div>`;
   }
   const m = x.message, ask = askOf(m);
@@ -960,7 +955,7 @@ async function taskChatRead(state: TaskChatState) {
       state.stopped = true; clearInterval(state.poll); state.liveOff?.();
       TASK_DRAFTS.delete(String(state.id)); PROP_TASKS = null;
       if (state.dialog.taskLive) taskLiveGone(state.dialog, state.dialog.taskLive);
-      else if (TASKS_ST) void tasksLoad(TASKS_ST);
+      else if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       state.dialog.close(); state.dialog.innerHTML = '';
       return;
     }

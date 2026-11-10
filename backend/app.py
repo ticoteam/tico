@@ -32,6 +32,7 @@ from . import sources as SRC
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link, setup_handoff
 from . import org_rule_check
+from . import task_rule_gate
 from . import bot_home_merge
 from .roadmaps import exact_approval
 from . import cloud_access
@@ -1589,7 +1590,9 @@ def create_app(settings=None):
         if c is None:
             return value
         viewer = (who.task_actor or who.actor) if who is not None else None
-        value.update(H.task_view(c, row["id"], viewer) or {})
+        # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
+        rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
+        value.update(H.task_view(c, row["id"], viewer, rule) or {})
         value["parent_id"] = TR.parent_of(c, row["id"])
         value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
         value["roles"] = TRo.roles_of(c, row["id"])
@@ -4791,8 +4794,7 @@ def create_app(settings=None):
         handoff_preflight,
         mover,
         mutate,
-        rule_update_check,
-        rule_update_text,
+        task_rule_gate.TaskRules(auth, rule_check, rule_task_audience, rule_target, store),
         store,
         task_view,
     )
@@ -5147,7 +5149,7 @@ def create_app(settings=None):
             "note": note,
             "task_create": task_create,
             "task_update": task_update,
-            "task_owner": task_update,
+            # A hand-off (task_owner) and the other v3 task writes count their own: backend/task_moves_routes.py.
             "bulk": task_update,
             "comment": comment,
             "comment_edit": comment_edit,

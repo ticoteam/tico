@@ -649,3 +649,23 @@ def test_maintenance_has_one_monthly_cap_and_ignores_a_saved_rules_cap(api, monk
     body = patch(api, "maintenance", {"monthly_cap_usd": 80})
     assert body["settings"]["monthly_cap_usd"] == body["settings"]["monthly_cap_usd_in_effect"] == 80
     assert not any(key.startswith("rules_") for key in body["settings"])
+
+
+def test_the_real_clean_up_step_runs_and_prunes_old_maintenance_history(api):
+    """Clean up, as Maintenance runs it (no stand-in): it finishes without raising and drops runs past 30 days."""
+    from backend.maintenance_steps import clean_up
+
+    store, _ = stores(api)
+    now = H.now()
+    old = H.shift(now, days=-(clean_up.RUN_HISTORY_DAYS + 1))
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,finished_at,result) "
+            "VALUES('old','schedule:old','schedule',NULL,?,?,?,'ran')",
+            (old, old, old),
+        )
+    with store.read() as c:
+        out = M.LIVE["clean_up"](c, {"store": store, "now": now})
+    assert out["status"] == "ran", out
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM maintenance_runs WHERE id='old'").fetchone()

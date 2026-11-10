@@ -1914,6 +1914,45 @@ def finished_before_start(c, row):
     return bool(ended and ended >= msg["created_at"])
 
 
+START_REFUSED = "attempt.start_refused"
+
+
+def start_refused(c, aid):
+    """Whether this lease's `started` was refused once (refuse_start): it never starts after that, whatever the task
+    does next. Read on the events index by actor, action and target."""
+    return bool(
+        c.execute(
+            "SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1", (H.KEEPER, START_REFUSED, aid)
+        ).fetchone()
+    )
+
+
+def refuse_start(c, row, detail):
+    """Refuse a lease's start for good, in the transaction that answers `started`: the refusal is on record and its
+    place is let go. From then on `started` is refused, renew and start-place say stop, and the run its computer reports
+    interrupted settles as skipped (held_before_start), even once the task wants a run again: a fresh wake, on a new
+    lease, is what runs. Returns the answer the route turns into a 409 `start_wait` after the write commits."""
+    if not start_refused(c, row["id"]):
+        H.event(c, H.KEEPER, START_REFUSED, row["id"], {"bot": row["bot_id"], "job_id": row["job_id"], "why": detail})
+    c.execute("UPDATE start_places SET start_until=NULL WHERE attempt_id=?", (row["id"],))
+    return {"started": False, "refused": {"code": "start_wait", "detail": detail}}
+
+
+def held_before_start(c, row):
+    """Whether a turn its computer has not started is no longer wanted: its task ended after the message that started
+    it (finished_before_start), or the engine holds it now (task_wakes.may_start, the turn's own lease not counted).
+    The claim asked the engine, but the task may have been snoozed, closed, handed to a person or given another owner
+    since: the turn is stopped before it starts and its job canceled, not run nor queued again."""
+    if row["state"] != "leased":
+        return False
+    if start_refused(c, row["id"]) or finished_before_start(c, row):
+        return True
+    from . import task_wakes
+
+    message = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+    return bool(message) and not task_wakes.may_start(c, message[0], attempt=row["id"])
+
+
 def login_class(c, task, msg, routine):
     """The class a turn waits in for a shared login that serves one turn at a time: "release" for a task labelled
     release-blocker, "review" for one labelled critical-path and for a turn a person's own message started, "other"
@@ -2764,8 +2803,10 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
             return why  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
     task_id = work_task_id(message, conversation)
-    if task_id and message.get("sender_id") == H.KEEPER and task_snoozed(c, task_id):
-        return "task_wait"  # Tico wakes no bot about a snoozed task (docs/pipelines-v3.md, rule 7); a person still can
+    if task_id and message.get("sender_id") == H.KEEPER and not H.person_sent(message) and task_snoozed(c, task_id):
+        # Tico wakes no bot about a snoozed task (docs/pipelines-v3.md, rule 7); a person still can, through the
+        # keeper's carrier of their own message too (task_wakes.may_start).
+        return "task_wait"
     refs = message.get("refs") or {}
     if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
         return "make_page_upgrade"
@@ -4777,7 +4818,7 @@ class Execution:
             return {"attempt": None}
         from . import task_wakes
 
-        if not task_wakes.may_start(c, msg):
+        if not task_wakes.may_start(c, row["message_id"]):
             # The engine canceled its wake: the bot has no turn on the task now, or the visit started its 7 runs since
             # it last changed. Under this write lock, so two claims never both take the seventh. The never-stuck check
             # writes a lost wake again for a bot that still has a turn, and hands a task at 7 runs to a person.
@@ -4859,7 +4900,8 @@ class Execution:
             row["bot_id"],
             trigger="task" if task else msg["kind"],
             message_id=msg["id"],
-            task_id=task["id"] if task else None,
+            # A carrier's run is about the task of the message it carries (task_wakes.message_task): counted for it.
+            task_id=task["id"] if task else task_wakes.message_task(c, msg["id"]),
             trigger_kind=woke,
             trigger_source=source,
             purpose=run_triggers.purpose_of(msg, row["bot_id"], woke),
@@ -5708,7 +5750,8 @@ class Execution:
             until = H.shift(now, seconds=seconds)
             c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (until, aid))
         # The runner renews every few seconds, so a person's Stop rides on the answer it already reads. A turn whose
-        # task ended meanwhile is stopped while it waits before starting; one preparing or under way runs on.
+        # task ended meanwhile, or that the engine holds now, is stopped while it waits before starting; one preparing
+        # or under way runs on.
         from .login_waits import wait
 
         benched = quarantine_stops.stopped_by(c, row)
@@ -5718,8 +5761,10 @@ class Execution:
             **(
                 {"stop": True}
                 if row["stop_requested_at"]
-                or finished_before_start(c, row)
-                and (wait(c, aid) or start_places.is_waiting(c, aid))
+                or row["state"] == "leased"
+                and start_refused(c, aid)
+                or (wait(c, aid) or start_places.is_waiting(c, aid))
+                and held_before_start(c, row)
                 else {}
             ),
             **({"stop_reason": benched} if benched else {}),
@@ -5809,7 +5854,7 @@ class Execution:
         if body.waiting:
             start_places.waiting(c, aid, body.waiting)
         # Check before reserve clears the wait, including when the last renewal preceded task completion.
-        if start_places.is_waiting(c, aid) and finished_before_start(c, row):
+        if start_places.is_waiting(c, aid) and finished_before_start(c, row) or held_before_start(c, row):
             return {"reserved": False, "stop": True}
         if body.waiting:
             return {"reserved": False, **({"stop": True} if row["stop_requested_at"] else {})}
@@ -5820,8 +5865,14 @@ class Execution:
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
+        if start_refused(c, aid):
+            return {"started": False, "refused": {"code": "start_wait", "detail": "This turn's start was refused"}}
         if start_places.is_waiting(c, aid) and finished_before_start(c, row):
-            raise Problem("start_wait", "Task finished while this turn was waiting", 409)
+            return refuse_start(c, row, "Task finished while this turn was waiting")
+        if held_before_start(c, row):
+            # Its computer asks for a place again, is told to stop, and reports the turn interrupted: it settles as
+            # skipped (complete), its job canceled. The refusal is kept, so the answer never changes for this lease.
+            return refuse_start(c, row, "The task no longer waits on this turn")
         reserved = (
             start_places.reserve(c, row, self.store.settings, harness_allocated=body.harness_allocated)
             if start_places.managed(c, aid)
@@ -5830,6 +5881,9 @@ class Execution:
         if not reserved["reserved"]:
             raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
+        from . import task_wakes
+
+        task_wakes.started(c, aid)  # charged to the task's change current now, not the one it was claimed in
         from .performance import stamp_attempt
 
         stamp_attempt(c, aid, row["runner_id"], "start", body.load_snapshot)
@@ -6498,7 +6552,7 @@ class Execution:
         # ran, and it goes back to wait out the hold (backend/login_holds.py after_turn).
         # And a turn stopped while it waited for its shared login: older runners report failed, newer ones interrupted.
         # Either settles the Stop. A task done or closed meanwhile (`skipped`) also ends its waiting turn.
-        skipped = body.outcome == "interrupted" and not row["stop_requested_at"] and finished_before_start(c, row)
+        skipped = body.outcome == "interrupted" and not row["stop_requested_at"] and held_before_start(c, row)
         # A private meeting's turn its computer could make no copy of the repository for (runner-rs
         # sessions::PRIVATE_COPY_FAILED) never started, and would fail alike on every retry: it ends here, and the
         # meeting says why (live_meetings `meeting.bot_turn_failed`), never handed back to run again.

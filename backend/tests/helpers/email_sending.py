@@ -6,7 +6,7 @@ from email.message import EmailMessage
 import pytest
 from backend import email_sending as S, mailbox_access as MA
 from backend.store import H
-from backend.tests.helpers.api import headers, post as api_post
+from backend.tests.helpers.api import give_ok, headers, post as api_post
 
 
 BOX = "ana@acme.example"
@@ -125,4 +125,4 @@ def claim(api, token):
 
 def approved(api, queued, token="ana-test"):
     assert api.get("/api/v2/email/sends/" + queued["id"], headers=headers(token)).status_code == 200
-    post(api, "approvals/" + queued["approval_id"], {"decision": "approved"}, token=token)
+    give_ok(api, queued["approval_id"], token=token)

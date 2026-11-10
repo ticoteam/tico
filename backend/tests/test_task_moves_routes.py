@@ -299,3 +299,92 @@ def test_an_unrelated_reader_cannot_finish_or_hand_over_through_the_owners_done(
     assert given["error"] == control["error"]
     shown = show(api, tid)
     assert shown["status"] == "open" and shown["owner_id"] == "human:ben"
+
+
+def ask(api, tid, to="ben", line="OK to book the barn?", kind="ok", token="ana-test"):
+    body = {"to": to, "line": line, "kind": kind, "version": show(api, tid)["version"]}
+    r = api.post(f"/api/v2/tasks/{tid}/asks", json=body, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()["requirement_id"]
+
+
+def leave(shown, rid):
+    return next(r for r in shown["to_leave"] if r["requirement_id"] == rid)
+
+
+def test_a_reader_who_cannot_work_the_task_cannot_give_someone_elses_ask_away(api):
+    """Codex review 2, 1: Cara reads the task but cannot work it. She cannot give Ben's ordinary OK to herself (and
+    then say OK and finish the task); Ben, whom it waits on, and Ana, who works the task, can."""
+    made = task(api, owner="ana")
+    tid = made["id"]
+    rid = ask(api, tid)
+    before = show(api, tid)
+    body = refused(api, f"tasks/{tid}/asks/{rid}/give", {"to": "cara"}, token="cara-test", status=403)
+    assert body["error"]["code"] == "identity"
+    assert show(api, tid) == before
+    refused(api, f"tasks/{tid}/asks/{rid}/answer", {"value": "ok"}, token="cara-test")
+    assert (
+        leave(post(api, f"tasks/{tid}/asks/{rid}/give", {"to": "cara"}, token="ben-test"), rid)["who"] == "human:cara"
+    )
+    assert leave(post(api, f"tasks/{tid}/asks/{rid}/give", {"to": "ben"}), rid)["who"] == "human:ben"
+
+
+def test_a_reader_who_was_not_asked_cannot_send_a_bots_ask_back(api):
+    """Codex review 2, 2: the bot said its own work is done and waits only on Ben's answer. Cara's thumbs down would
+    withdraw that ask and so finish the task: refused. Ben, who was asked, may decline it."""
+    bot = as_bot(api)
+    made = task(api, owner="ops")
+    tid = made["id"]
+    rid = ask(api, tid, line="Which month suits the team?", kind="answer", token=bot)
+    own = next(r for r in show(api, tid)["to_leave"] if r["kind"] == "owner_done")["requirement_id"]
+    version = show(api, tid)["version"]
+    done = api.post(
+        f"/api/v2/tasks/{tid}/asks/{own}/answer", json={"value": "done", "version": version}, headers=headers(bot)
+    )
+    assert done.status_code == 200, done.text
+    before = show(api, tid)
+    assert before["status"] == "open"
+    thumbs = f"tasks/{tid}/asks/{rid}/thumbs"
+    body = refused(api, thumbs, {"up": False, "note": "Nobody needs this"}, token="cara-test", status=403)
+    assert body["error"]["code"] == "identity"
+    assert show(api, tid) == before
+    post(api, thumbs, {"up": False, "note": "We already picked June"}, token="ben-test")
+    assert show(api, tid)["status"] == "done"
+
+
+def test_only_who_gave_an_answer_takes_it_back(api):
+    """Codex review 2, 3: Cara cannot take back Ben's "done" (and so reopen his finished task), nor can Ana, who works
+    the task but did not say it. Ben can."""
+    made = task(api, owner="ben")
+    tid = made["id"]
+    [own] = show(api, tid, token="ben-test")["to_leave"]
+    said = api.post(
+        f"/api/v2/tasks/{tid}/asks/{own['requirement_id']}/answer", json={"value": "done"}, headers=headers("ben-test")
+    )
+    assert said.status_code == 200, said.text
+    aid = said.json()["answer_id"]
+    before = show(api, tid)
+    assert before["status"] == "done"
+    for token in ("cara-test", "ana-test"):
+        assert refused(api, f"answers/{aid}/undo", {}, token=token, status=403)["error"]["code"] == "identity"
+        assert show(api, tid) == before
+    assert post(api, f"answers/{aid}/undo", {}, token="ben-test")["status"] == "open"
+
+
+def test_the_buttons_a_reader_is_offered_are_the_ones_the_calls_allow(api):
+    """Codex review 2, 12: done and give on the owner's own work, give on someone else's ask and undo on someone else's
+    answer are offered only to whom the calls allow them."""
+    made = task(api, owner="ana")
+    tid = made["id"]
+    rid = ask(api, tid)
+    cara = show(api, tid, token="cara-test")
+    assert [r["may"] for r in cara["to_leave"]] == [[], []]
+    ana = show(api, tid)
+    assert next(r for r in ana["to_leave"] if r["kind"] == "owner_done")["may"] == ["done", "give"]
+    assert "give" in leave(ana, rid)["may"]
+    ben = show(api, tid, token="ben-test")
+    assert next(r for r in ben["to_leave"] if r["kind"] == "owner_done")["may"] == []
+    assert leave(ben, rid)["may"] == ["ok", "no", "give"]
+    post(api, f"tasks/{tid}/asks/{rid}/answer", {"value": "ok"}, token="ben-test")
+    assert "undo" in leave(show(api, tid, token="ben-test"), rid)["may"]
+    assert "undo" not in leave(show(api, tid), rid)["may"]

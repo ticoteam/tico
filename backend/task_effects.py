@@ -141,10 +141,14 @@ def moved(
         # A routine's task for a due date: finishing it marks that day, reopening takes the mark back.
         rules: Any = rule_due
         rules.on_task_status(conn, actor, before, old, new)
+    runs: Any = run_triggers
     if old == "done" and new == "open":
         # Someone sent a bot's finished result back: that is what became of the run that made it.
-        runs: Any = run_triggers
         runs.turn_result(conn, actor, before, "overridden", H.event, new)
+    elif new == "done":
+        # Someone else's act took the bot's task to Done (an OK, the manager or a person saying it is done): its run
+        # was accepted. The bot's own move, or Tico's, writes nothing (turn_result).
+        runs.turn_result(conn, actor, after, "accepted", H.event)
     if new in ("done", "closed"):
         deliveries: Any = delivery
         deliveries.task_closed(conn, before)
