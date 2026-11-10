@@ -1,5 +1,0 @@
-{
-  "backend/goals.py": {
-    "F401": 2
-  }
-}

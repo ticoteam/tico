@@ -34,7 +34,7 @@ def parse_until(value):
             if at.tzinfo is None:
                 at = at.replace(tzinfo=ZONE)
     except ValueError:
-        raise Problem("date", "until is an ISO-8601 date or date-time", 422)
+        raise Problem("date", "until is an ISO-8601 date or date-time", 422) from None
     stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     if stamp <= H.now():
         raise Problem("date", "until is a date to come", 422)

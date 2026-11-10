@@ -1,6 +1,6 @@
 {
   "backend/sleep_idle.py": {
-    "BLE001": 4,
-    "S110": 3
+    "BLE001": 3,
+    "S110": 2
   }
 }

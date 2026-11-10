@@ -668,12 +668,12 @@ class Builder:
                 sent = self.call("POST", f"/api/meetings/{result['id']}/send", {"bot_id": entry["send_to"]})
                 if entry.get("send_note") and sent.get("task"):
                     self.write(
-                        lambda c: hubdb.task_update(
+                        lambda c, entry=entry, task=sent["task"]: hubdb.task_update(
                             c,
                             "bot:" + entry["send_to"],
-                            sent["task"],
+                            task,
                             note=entry["send_note"],
-                            seen_version=version(c, sent["task"]),
+                            seen_version=version(c, task),
                         )
                     )
         self.granola()

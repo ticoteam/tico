@@ -217,7 +217,7 @@ class World:
             response = getattr(self.client, method)(
                 "/api/v2/" + path, headers=headers, **({"json": body} if body is not None else {})
             )
-        except Exception:  # TestClient re-raises what the app raised; a live server would answer 500
+        except Exception:  # noqa: BLE001 - TestClient re-raises what the app raised; a live server would answer 500
             status, reply = 500, "raised:\n" + traceback.format_exc()[-3000:]
         else:
             status = response.status_code
