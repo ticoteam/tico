@@ -100,10 +100,11 @@ const taskBriefParams = (query: TaskBriefQuery): URLSearchParams => {
   }
   return p;
 };
-/** One page of list rows and the cursor a later `taskChanges` resumes from. */
-async function taskBriefsPage(query: TaskBriefQuery = {}): Promise<{tasks: TaskBriefV3[]; cursor: string}> {
-  const res = await get<{tasks?: TaskBriefV3[]; cursor?: string} | TaskBriefV3[]>(`/v2/tasks?${taskBriefParams(query)}`);
-  return Array.isArray(res) ? {tasks: res, cursor: ''} : {tasks: res.tasks || [], cursor: res.cursor || ''};
+/** One page of list rows, the cursor a later `taskChanges` resumes from, and whether the server holds more (`more`). */
+async function taskBriefsPage(query: TaskBriefQuery = {}): Promise<{tasks: TaskBriefV3[]; cursor: string; more: boolean}> {
+  const res = await get<{tasks?: TaskBriefV3[]; cursor?: string; next_offset?: number | null} | TaskBriefV3[]>(`/v2/tasks?${taskBriefParams(query)}`);
+  return Array.isArray(res) ? {tasks: res, cursor: '', more: false}
+    : {tasks: res.tasks || [], cursor: res.cursor || '', more: res.next_offset != null};
 }
 async function taskBriefs(query: TaskBriefQuery = {}): Promise<TaskBriefV3[]> {
   return (await taskBriefsPage(query)).tasks;
