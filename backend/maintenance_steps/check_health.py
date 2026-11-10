@@ -537,12 +537,10 @@ def _task_body(sig, rows, total, now):
 
 
 def _task_create(c, title, body):
-    """The BotOps task for a setup signature. Quiet: its owner's notice is written without a wake (`_wake` wakes BotOps once)."""
+    """The BotOps task for a setup signature. Filing it wakes BotOps once, as any task for a bot does."""
     try:
         c.execute("SAVEPOINT check_health_task")
-        made = H.task_create(
-            c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False, quiet_notice=True
-        )
+        made = H.task_create(c, H.KEEPER, f"Health: {title}"[:200], body, H.bot_actor(BOTOPS), lint=False)
         c.execute("RELEASE check_health_task")
         return made
     except Exception:  # noqa: BLE001 - a refusal to file one task must not undo the check's record
@@ -557,7 +555,7 @@ def _comment(c, task_id, text, wake):
     marker as it was and the next run tries again."""
     try:
         c.execute("SAVEPOINT check_health_comment")
-        refs = RT.stamp({"wake": "task_roundup", "no_mentions": True}, "task_roundup", "check_health") if wake else None
+        refs = RT.stamp({"wake": "health", "no_mentions": True}, "other", "check_health") if wake else None
         message = H.task_comment(c, H.KEEPER, task_id, text, wake=wake, extra_refs=refs)
         queued = (
             not wake
@@ -635,7 +633,7 @@ def _open(c, task_id):
     row = H.task(c, task_id) if task_id else None
     if row is None or row["owner_id"] != "bot:" + BOTOPS:
         return None
-    return row if row["status"] not in ("done", "closed", "declined") else None
+    return row if row["status"] == "open" else None
 
 
 def _botops_active(c):
