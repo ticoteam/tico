@@ -1318,11 +1318,9 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
             return {**result, "ok": True, "detail": waits}
     conn.execute("SAVEPOINT rule_task")
     try:
-        options = {}
-        if event in TTR.TRIGGERS and task:
-            options = {"private": True if H.task_private(conn, task) else None}
+        private = True if event in TTR.TRIGGERS and task and H.task_private(conn, task) else None
         row = H.task_create(
-            conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False, deduplicate=False, **options
+            conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False, deduplicate=False, private=private
         )
         if event in TTR.TRIGGERS and task:
             from . import task_relations as TR
