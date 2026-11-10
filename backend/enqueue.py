@@ -61,59 +61,6 @@ def wanted(sender, recipient, refs):
     return not (isinstance(kind, str) and kind in LIVE_HISTORY)
 
 
-def parked_sql():
-    """SQL true when the message `m` (with its conversation as `cv`) is about a card On ice (D69): such a message starts no
-    run, whichever writer made it. The card is the message's task (hubdb.MESSAGE_TASK_SQL)."""
-    from .hubdb import MESSAGE_TASK_SQL, ON_ICE
-
-    return f"EXISTS (SELECT 1 FROM tasks t WHERE t.id={MESSAGE_TASK_SQL} AND {ON_ICE % 't'})"
-
-
-def _parked_tables(conn):
-    from .hubdb import _has_table
-
-    return all(_has_table(conn, name) for name in ("tasks", "task_steps", "conversations"))
-
-
-def _parked_one_sql():
-    return (
-        "SELECT " + parked_sql() + " FROM messages m LEFT JOIN conversations cv ON cv.id=m.conversation_id WHERE m.id=?"
-    )
-
-
-def parked(conn, message_id):
-    """Whether the stored message `message_id` is about a card On ice (parked_sql). A bare hub database (no task tables) has
-    no such card, so nothing is parked there. Read through the snapshot's cache, which prime_parked seeds for a page."""
-    from .read_cache import one
-
-    if not _parked_tables(conn):
-        return False
-    row = one(conn, _parked_one_sql(), (message_id,))
-    return bool(row and row[0])
-
-
-def prime_parked(conn, message_ids):
-    """Seed `parked` for many messages with one read per 500 (read_cache.prime), so a page that asks it of every queued
-    job (Health's queue reasons) reads none of them on its own."""
-    from .hubdb import chunks
-    from .read_cache import cache, prime
-
-    ids = sorted({str(m) for m in message_ids if m})
-    if cache(conn) is None or not ids or not _parked_tables(conn):
-        return
-    found: dict[tuple[str], tuple[object] | None] = {(mid,): None for mid in ids}
-    for part in chunks(ids):
-        for row in conn.execute(
-            "SELECT m.id, "
-            + parked_sql()
-            + " FROM messages m LEFT JOIN conversations cv ON cv.id=m.conversation_id "
-            + f"WHERE m.id IN ({','.join('?' * len(part))})",
-            part,
-        ):
-            found[(row[0],)] = (row[1],)
-    prime(conn, _parked_one_sql(), found)
-
-
 def enqueue(conn, message):
     """Queue the job `message` (a just-inserted row as a dict: id, sender_id, recipient_id, refs, created_at) starts.
     Returns the job id, or None when it starts none."""
@@ -121,8 +68,6 @@ def enqueue(conn, message):
 
     recipient = message.get("recipient_id")
     if not wanted(message.get("sender_id"), recipient, message.get("refs")) or not _has_table(conn, "jobs"):
-        return None
-    if parked(conn, message["id"]):
         return None
     if conn.execute("SELECT " + external_bot_sql("?"), (recipient,)).fetchone()[0]:
         return None
