@@ -18,7 +18,6 @@ The tasks, KPIs and channels are read as their own routes read them: a marker sh
 (auth.task_sql, as task lists do). `may_edit` is who may record cohorts: an admin or a bot (growth.py's cohort rule).
 """
 
-import json
 from datetime import datetime, timezone
 
 from fastapi import Request
@@ -147,11 +146,16 @@ def _kpis(c, hidden):
     }
 
 
-def _started(row):
-    """Whether this label change started the idea's test: it had none of the running labels and now has one. Adding
-    or swapping to the other running label while it runs is the same test."""
-    old, new = set(json.loads(row["old"] or "[]")), set(json.loads(row["new"] or "[]"))
-    return not old & set(MT.STARTED) and bool(new & set(MT.STARTED))
+def _has_any(labels, values):
+    """SQL: the JSON list of labels `labels` holds one of `values` (bound in order)."""
+    return f"EXISTS (SELECT 1 FROM json_each({labels}) WHERE value IN ({','.join('?' * len(values))}))"
+
+
+# A test starts when a label change takes an idea from none of the running labels to one of them. Adding or swapping
+# to the other running label while it runs is the same test.
+STARTED_SQL = (
+    _has_any("coalesce(e.new, '[]')", MT.STARTED) + " AND NOT " + _has_any("coalesce(e.old, '[]')", MT.STARTED)
+)
 
 
 # The idea's labels when a move was made: the last label change before it, else what the first one after it changed
@@ -167,8 +171,6 @@ LABELS_THEN = (
 
 def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
-    started = " OR ".join("e.new LIKE ?" for _ in MT.STARTED)
-    labelled = ",".join("?" * len(MT.LABELS))
     # A finish is a move that ended the task (into Done or Closed, by a person, a bot or a close of the task above it)
     # while it was an idea. A task put back from the trash as it ended did not end again.
     rows = H._rows(
@@ -176,15 +178,14 @@ def _markers(c, auth, who, since):
             "SELECT e.kind AS event, e.subject_id AS task_id, e.created_at, e.old, e.new, s.kind AS stage, t.title, "
             "t.goal_id FROM history_events e JOIN tasks t ON t.id=e.subject_id "
             "LEFT JOIN stages s ON e.kind='move' AND s.id=e.new "
-            f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND ({started})) "
+            f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND {STARTED_SQL}) "
             "OR (e.kind='move' AND s.kind IN ('done','closed') "
             "AND coalesce(json_extract(e.data, '$.move'), '')!='restored' "
-            f"AND EXISTS (SELECT 1 FROM json_each({LABELS_THEN}) WHERE value IN ({labelled})))) "
-            f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.created_at DESC, e.rowid DESC",
-            [since, *(f'%"{label}"%' for label in MT.STARTED), *MT.LABELS],
+            f"AND {_has_any(LABELS_THEN, MT.LABELS)})) "
+            f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
+            [since, *MT.STARTED, *MT.STARTED, *MT.LABELS, MARKERS_MAX],
         )
     )
-    rows = [r for r in rows if r["event"] == "move" or _started(r)][:MARKERS_MAX]
     tags = {}
     ids = list(dict.fromkeys(r["task_id"] for r in rows))
     if ids:

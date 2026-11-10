@@ -413,3 +413,22 @@ def test_only_a_real_ending_marks_a_finish_and_it_stays_when_the_ideas_labels_go
     assert sorted((m["task_id"], m["outcome"]) for m in found) == sorted(
         [(restored, "kept"), (cleared, "dropped"), (twice, "kept"), (twice, "kept")]
     )
+
+
+def test_the_markers_read_no_more_rows_than_they_show(company, monkeypatch):
+    """The newest markers are picked in SQL: label changes that start nothing are never read into Python."""
+    monkeypatch.setattr(GN, "MARKERS_MAX", 2)
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        busy = _idea(c, "Weekend discount", ["growth:ideas"])
+        H.task_update(c, ANA, busy, labels=["growth:running"])
+        for n in range(5):  # still running: no new start
+            H.task_update(c, ANA, busy, labels=["growth:running", f"channel:c{n}"])
+        newest = [_idea(c, title, ["growth:ideas"]) for title in ("Flyers", "Radio spot")]
+        for tid in newest:
+            H.task_update(c, ANA, tid, labels=["idea:live"])
+        read, rows = [], H._rows
+        monkeypatch.setattr(H, "_rows", lambda found: read.append(r := rows(found)) or r)
+        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    assert [m["task_id"] for m in found] == newest[::-1]
+    assert max(len(r) for r in read) <= 2
