@@ -739,7 +739,7 @@ def llm_answers(raw, questions):
     try:
         parsed = json.loads(text)
     except ValueError:
-        raise JudgeError("shape", "the model did not answer with JSON")
+        raise JudgeError("shape", "the model did not answer with JSON") from None
     answers = {}
     for qid, q in questions.items():
         got = parsed.get(qid) if isinstance(parsed, dict) else None
@@ -749,14 +749,14 @@ def llm_answers(raw, questions):
             try:
                 answers[qid] = {"noul": min(1.0, max(0.0, float(got.get("noul", 0.5))))}
             except (TypeError, ValueError):
-                raise JudgeError("shape", f"{qid}: noul is not a number")
+                raise JudgeError("shape", f"{qid}: noul is not a number") from None
             continue
         raw_p = got.get("probabilities")
         names = list(q["criteria"]) if q["type"] == "choice" else list(range(len(q["criteria"])))
         try:
             values = [float(raw_p[name]) for name in names] if q["type"] == "choice" else [float(v) for v in raw_p]
         except (TypeError, KeyError, ValueError):
-            raise JudgeError("shape", f"{qid}: probabilities do not cover every option")
+            raise JudgeError("shape", f"{qid}: probabilities do not cover every option") from None
         if len(values) != len(names) or any(v < 0 for v in values) or not sum(values):
             raise JudgeError("shape", f"{qid}: probabilities are not usable")
         total = sum(values)
@@ -766,7 +766,7 @@ def llm_answers(raw, questions):
             answers[qid] = {
                 "choice": names[best],
                 "confidence": probabilities[best],
-                "probabilities": dict(zip(names, probabilities)),
+                "probabilities": dict(zip(names, probabilities, strict=True)),
             }
         else:
             answers[qid] = {
@@ -803,9 +803,9 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
                     f"{provider} answered {exc.code}",
                     exc.code,
                     retryable=exc.code in (429, 529) or exc.code >= 500,
-                )
+                ) from exc
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError, ValueError) as exc:
-            raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
+            raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True) from exc
         # An answer came back, so it was paid for, even when it cannot be used.
         usage = clean_usage(
             (payload.get("usage") or payload.get("usageMetadata")) if isinstance(payload, dict) else None
@@ -817,11 +817,11 @@ def llm(provider, api_key, model, timeout=TIMEOUT, opener=None):
                 JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True),
                 model,
                 usage,
-            )
+            ) from exc
         try:
             answers = llm_answers(text, questions)
         except JudgeError as exc:
-            raise _paid(exc, model, usage)
+            raise _paid(exc, model, usage) from exc
         return {
             "model": model,
             "answers": answers,
