@@ -2,109 +2,58 @@
    columns, one per work stage, or as a list grouped by stage in the same order; on a phone, one stage at a time under a
    row of stage tabs. Done and Closed are not columns: they sit behind the page's archive button with Snoozed.
    A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
-   for whoever may change the pipeline. Search and filter are the page's (task-row.ts taskFilterMatch); the page shell
-   (tasks-page.ts) draws the header and calls pipelineViewRender. Moving a task between columns is task-board.ts.
-   Reads: GET /api/v2/pipelines/{id} and GET /api/v2/tasks (open tasks of the pipeline), through task-api.ts.
+   for whoever may change the pipeline. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
+   search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
+   file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-type PvLayout = 'list' | 'columns';
-interface PvOpts { layout: PvLayout; q: string; filters: TaskFilters; phone: boolean }
+interface PvOpts { layout: 'list' | 'columns'; phone: boolean; q: string; filters: TaskFilters }
 /** A move the engine refused, shown above the stages: a push past to confirm with a why, or the engine's reason. */
-interface PvBar { taskId: string; to: string; toName: string; push: boolean; text: string }
+interface PvBar { taskId: string; to: string; push: boolean; text: string }
 interface PvState {
-  root: HTMLElement; pipelineId: string; opts: PvOpts;
-  rec: PipelineRec | null; tasks: TaskBriefV3[]; loadedAt: number; seq: number; failed: string;
+  rec: PipelineRec; tasks: TaskAny[]; opts: PvOpts;
+  /** Where the page put the view; drawn again here after a move or a tab. */
+  root: HTMLElement | null;
   /** The stage shown on a phone. */
   stage: string;
   /** Moves drawn before the engine answers: task id -> the stage it was moved to. */
   moving: Map<string, string>;
   bar: PvBar | null;
-  poll: number;
 }
 
 let PV: PvState | null = null;
-/** A pipeline's held data is drawn again without a read for this long (a search typed, a filter set). */
-const PV_FRESH_MS = 5000;
-/** A safety read while the view is open; live task events read sooner (pipelineViewLive). */
-const PV_POLL_MS = 180000;
+const PV_BOUND = new WeakSet<HTMLElement>();
 const PV_STAGE_KEY = 'tico.pipeline.stage';
 
+/** The stage each pipeline last showed on a phone. Throws where storage is blocked. */
+const pvStagesKept = (): Record<string, string> => JSON.parse(localStorage.getItem(PV_STAGE_KEY) || '{}') as Record<string, string>;
 function pvStageKept(pipelineId: string): string {
-  try { return (JSON.parse(localStorage.getItem(PV_STAGE_KEY) || '{}') as Record<string, string>)[pipelineId] ?? ''; } catch { return ''; }
+  try { return pvStagesKept()[pipelineId] ?? ''; } catch { return ''; }
 }
 function pvStageKeep(pipelineId: string, stage: string): void {
   try {
-    const all = JSON.parse(localStorage.getItem(PV_STAGE_KEY) || '{}') as Record<string, string>;
+    const all = pvStagesKept();
     all[pipelineId] = stage;
     localStorage.setItem(PV_STAGE_KEY, JSON.stringify(all));
   } catch { /* storage blocked: not kept */ }
 }
 
-/** Draws one pipeline into root. Called again by the page on every search, filter or layout change: the same pipeline is
-    drawn from what is held, and read again only when that is older than a few seconds. */
-async function pipelineViewRender(root: HTMLElement, pipelineId: string, opts: PvOpts): Promise<void> {
-  const same = PV && PV.root === root && PV.pipelineId === pipelineId && root.isConnected ? PV : null;
-  const state: PvState = same ?? {root, pipelineId, opts, rec: null, tasks: [], loadedAt: 0, seq: 0, failed: '',
-    stage: pvStageKept(pipelineId), moving: new Map(), bar: null, poll: 0};
-  if (!same) { pipelineViewLeave(); PV = state; pvBind(state); }
-  state.opts = opts;
-  if (state.rec) pvDraw(state);
-  else root.innerHTML = skelRows(4, {dot: false});
-  if (Date.now() - state.loadedAt > PV_FRESH_MS) await pvLoad(state);
+/** The view's state for a pipeline: the same one while the page draws the same pipeline again. */
+function pvStateFor(rec: PipelineRec): PvState {
+  if (PV && PV.rec.id === rec.id) return PV;
+  PV = {rec, tasks: [], opts: {layout: 'columns', phone: false, q: '', filters: {}}, root: null,
+    stage: pvStageKept(rec.id), moving: new Map(), bar: null};
+  return PV;
 }
 
-/** The view is gone (another pipeline, another view, another page): its poll and rail go with it. */
-function pipelineViewLeave(): void {
-  const state = PV;
-  if (!state) return;
-  window.clearInterval(state.poll);
-  pipelineRailLeave();
-  PV = null;
-}
-
-/** Live task events touched the tasks: read the pipeline's tasks again (at most once a second). */
-let PV_LIVE = 0;
-function pipelineViewLive(): void {
-  if (!PV || PV_LIVE) return;
-  PV_LIVE = window.setTimeout(() => { PV_LIVE = 0; if (PV) void pvLoad(PV); }, 1000);
-}
-
-async function pvLoad(state: PvState): Promise<void> {
-  const seq = ++state.seq;
-  try {
-    const [rec, tasks] = await Promise.all([
-      pipelineRec(state.pipelineId),
-      taskBriefs({pipeline: state.pipelineId, status: 'open', limit: 500}),
-    ]);
-    if (PV !== state || seq !== state.seq) return;
-    state.rec = rec;
-    state.tasks = tasks.filter(t => t.pipeline_id === state.pipelineId && t.status === 'open');
-    state.loadedAt = Date.now();
-    state.failed = '';
-    // A move the engine has answered shows as the read has it.
-    for (const [id, to] of state.moving) if (state.tasks.find(t => t.id === id)?.stage_id === to) state.moving.delete(id);
-  } catch (error) {
-    if (PV !== state || seq !== state.seq) return;
-    state.failed = errorMessage(error, 'Could not load this pipeline.');
-  }
-  pvDraw(state);
-}
-
-function pvBind(state: PvState): void {
-  state.poll = window.setInterval(() => {
-    if (!state.root.isConnected) { if (PV === state) pipelineViewLeave(); return; }
-    if (!document.hidden) void pvLoad(state);
-  }, PV_POLL_MS);
-  state.root.addEventListener('click', ev => pvClick(state, ev));
-  state.root.addEventListener('submit', ev => pvSubmit(state, ev));
-  taskBoardBind(state);
-}
+/** The open tasks the manager's rail reads, when the view shows that pipeline. */
+const pvTasksOf = (pipelineId: string): TaskAny[] => PV && PV.rec.id === pipelineId ? PV.tasks : [];
 
 // ---------------------------------------------------------------- drawing
 
 /** A task as the view draws it: in the stage a move put it in while the engine has not answered. */
-const pvShown = (state: PvState, t: TaskBriefV3): TaskBriefV3 => {
+const pvShown = (state: PvState, t: TaskAny): TaskAny => {
   const to = state.moving.get(t.id);
   return to ? {...t, stage_id: to} : t;
 };
@@ -118,32 +67,32 @@ function pvStageCount(state: PvState, stage: PipelineStageRec): string {
 /** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise. */
 function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
   const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum">${esc(pvStageCount(state, stage))}</span>`;
-  return state.rec?.may_change
+  return state.rec.may_change
     ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}">${inner}</button>`
     : `<span class="pv-stage-h">${inner}</span>`;
 }
 
-/** The tasks of one stage that the search and the filters let through, in the list's order. */
-function pvInStage(state: PvState, stageId: string): TaskBriefV3[] {
+/** The tasks of one stage that the search and the filters let through, in the order the page gave them. */
+function pvInStage(state: PvState, stageId: string): TaskAny[] {
   return state.tasks.map(t => pvShown(state, t))
     .filter(t => t.stage_id === stageId && taskFilterMatch(t, state.opts.q, state.opts.filters));
 }
 
-const pvSearching = (opts: PvOpts): boolean => !!opts.q.trim() || Object.values(opts.filters).some(v => Array.isArray(v) ? v.length > 0 : !!v);
+const pvSearching = (opts: PvOpts): boolean => !!opts.q.trim() || taskFiltersOn(opts.filters);
 
-function pvColumnsHTML(state: PvState, stages: PipelineStageRec[]): string {
-  const cols = stages.map(stage => {
+function pvColumnsHTML(state: PvState): string {
+  const cols = state.rec.stages.map(stage => {
     const id = stage.id ?? '';
-    const cards = pvInStage(state, id).map(t => `<div class="pv-card" data-pv-task="${esc(t.id)}">${taskCardHTML(t)}</div>`).join('');
+    const cards = pvInStage(state, id).map(t => taskCardHTML(t)).join('');
     return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}</header>
       <div class="pv-col-body">${cards}</div></section>`;
   }).join('');
   return `<div class="pv-cols" data-pv-drag>${cols}</div>`;
 }
 
-function pvListHTML(state: PvState, stages: PipelineStageRec[]): string {
+function pvListHTML(state: PvState): string {
   const searching = pvSearching(state.opts);
-  const groups = stages.map(stage => {
+  const groups = state.rec.stages.map(stage => {
     const rows = pvInStage(state, stage.id ?? '');
     if (!rows.length && searching) return '';
     return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}</h2>
@@ -153,8 +102,8 @@ function pvListHTML(state: PvState, stages: PipelineStageRec[]): string {
 }
 
 /** S17.3: a row of stage tabs, then the chosen stage's tasks. */
-function pvPhoneHTML(state: PvState, stages: PipelineStageRec[]): string {
-  const ids = stages.map(s => s.id ?? '');
+function pvPhoneHTML(state: PvState): string {
+  const stages = state.rec.stages, ids = stages.map(s => s.id ?? '');
   const shown = ids.includes(state.stage) ? state.stage : ids.find(id => pvInStage(state, id).length) ?? ids[0] ?? '';
   state.stage = shown;
   const tabs = stages.map(stage => {
@@ -178,41 +127,20 @@ function pvBarHTML(bar: PvBar | null): string {
     <button type="button" class="ghost" data-pv-bar-x aria-label="Close">✕</button></div>`;
 }
 
-function pvDraw(state: PvState): void {
-  if (PV !== state || !state.root.isConnected) return;
-  const rec = state.rec;
-  if (!rec) {
-    state.root.innerHTML = state.failed ? `<p class="pv-empty muted" role="alert">${esc(state.failed)}</p>` : skelRows(4, {dot: false});
-    return;
-  }
-  const body = state.opts.phone ? pvPhoneHTML(state, rec.stages)
-    : state.opts.layout === 'columns' ? pvColumnsHTML(state, rec.stages) : pvListHTML(state, rec.stages);
-  // The shell stays across draws, so the manager's rail beside the stages (and its chat) is not drawn again.
-  let shell = state.root.querySelector<HTMLElement>(':scope > .pv');
-  if (!shell) {
-    state.root.innerHTML = '<div class="pv"><div class="pv-main"></div></div>';
-    shell = state.root.querySelector<HTMLElement>(':scope > .pv');
-  }
-  const main = shell?.querySelector<HTMLElement>(':scope > .pv-main');
-  if (!shell || !main) return;
-  shell.classList.toggle('pv-is-phone', state.opts.phone);
-  const focus = pvFocusKeep(main);
-  main.innerHTML = pvBarHTML(state.bar) + body;
-  focus();
-  pipelineRailSync(shell, rec, state.tasks, state.opts.phone);
+function pvHTML(state: PvState): string {
+  const body = state.opts.phone ? pvPhoneHTML(state) : state.opts.layout === 'columns' ? pvColumnsHTML(state) : pvListHTML(state);
+  return `<div class="pv${state.opts.phone ? ' pv-is-phone' : ''}">${pvBarHTML(state.bar)}${body}</div>`;
 }
 
-/** The why being typed survives a redraw (a live read lands while it is typed). */
-function pvFocusKeep(root: HTMLElement): () => void {
+/** Draws the view again where the page put it, keeping a why being typed. */
+function pvDraw(state: PvState): void {
+  const root = state.root;
+  if (PV !== state || !root?.isConnected) return;
   const field = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
-  if (!field) return () => undefined;
-  const text = field.value, typing = document.activeElement === field;
-  return () => {
-    const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
-    if (!next) return;
-    next.value = text;
-    if (typing) next.focus();
-  };
+  const text = field?.value ?? '', typing = !!field && document.activeElement === field;
+  root.innerHTML = pvHTML(state);
+  const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
+  if (next) { next.value = text; if (typing) next.focus(); }
 }
 
 // ---------------------------------------------------------------- what a person does here
@@ -221,7 +149,7 @@ function pvClick(state: PvState, ev: MouseEvent): void {
   const target = eventElement(ev);
   if (!target) return;
   const settings = target.closest<HTMLElement>('[data-pv-settings]');
-  if (settings) { void openPipelineEditor(state.pipelineId, settings.dataset['pvSettings'] ?? ''); return; }
+  if (settings) { void openPipelineEditor(state.rec.id, settings.dataset['pvSettings'] ?? ''); return; }
   const tab = target.closest<HTMLElement>('[data-pv-tab]');
   if (tab) { pvStageShow(state, tab.dataset['pvTab'] ?? ''); return; }
   if (target.closest('[data-pv-bar-x]')) { state.bar = null; pvDraw(state); }
@@ -230,14 +158,14 @@ function pvClick(state: PvState, ev: MouseEvent): void {
 function pvStageShow(state: PvState, stage: string): void {
   if (!stage || stage === state.stage) return;
   state.stage = stage;
-  pvStageKeep(state.pipelineId, stage);
+  pvStageKeep(state.rec.id, stage);
   pvDraw(state);
-  state.root.querySelector('.pv-tab.on')?.scrollIntoView({inline: 'center', block: 'nearest'});
+  state.root?.querySelector('.pv-tab.on')?.scrollIntoView({inline: 'center', block: 'nearest'});
 }
 
 /** A phone swipe steps to the next (1) or the previous (-1) stage. */
 function pvStageStep(state: PvState, by: number): void {
-  const ids = (state.rec?.stages ?? []).map(s => s.id ?? '');
+  const ids = state.rec.stages.map(s => s.id ?? '');
   const to = ids[ids.indexOf(state.stage) + by];
   if (to) pvStageShow(state, to);
 }
@@ -268,10 +196,10 @@ function pvSubmit(state: PvState, ev: SubmitEvent): void {
 }
 
 /** Moves a task to a stage of this pipeline: `next` when it is the stage after its own, else the stage's id. The task is
-    drawn there at once; a refusal puts it back and says what the engine said: what is missing, with a why to push past it
-    when it can be pushed past. */
-function pvMove(state: PvState, t: TaskBriefV3, stageId: string, why = ''): void {
-  const stages = state.rec?.stages ?? [];
+    drawn there at once; the page's live read shows where the engine put it. A refusal puts it back and says what the
+    engine said: what is missing, with a why to push past it when it can be pushed past. */
+function pvMove(state: PvState, t: TaskAny, stageId: string, why = ''): void {
+  const stages = state.rec.stages;
   const from = stages.findIndex(s => s.id === t.stage_id), to = stages.findIndex(s => s.id === stageId);
   const target = stages[to];
   if (to < 0 || !target || from === to) return;
@@ -281,27 +209,56 @@ function pvMove(state: PvState, t: TaskBriefV3, stageId: string, why = ''): void
   pvDraw(state);
   void (async () => {
     try {
-      await taskMove(t.id, where, t.version, why || undefined);
-      if (PV === state) await pvLoad(state);
+      const moved = await taskMove(t.id, where, t.version, why || undefined);
+      if (PV !== state) return;
+      // The engine's answer is the task as it is now: draw it there until the page's next read.
+      state.moving.delete(t.id);
+      state.tasks = state.tasks.map(x => x.id === moved.task.id ? moved.task : x).filter(x => x.status === 'open');
+      pvDraw(state);
     } catch (error) {
       if (PV !== state) return;
       state.moving.delete(t.id);
       state.bar = pvRefusedBar(t, stageId, target.name, error, !why);
-      if (taskRefusedOf(error)?.error === 'task_changed') await pvLoad(state);
-      else pvDraw(state);
+      pvDraw(state);
     }
   })();
 }
 
-/** What the view says about a refused move: the engine's own words. A move forward that misses requirements a person may
-    push past asks for the why ("Move to Review 1 without Checks pass?"); anything else is the engine's reason. */
-function pvRefusedBar(t: TaskBriefV3, stageId: string, stageName: string, error: unknown, mayPush: boolean): PvBar {
+/** What the view says about a refused move: the engine's own words. A move that misses requirements a person may push
+    past asks for the why ("Move to Review without Checks pass?"); anything else is the engine's reason. */
+function pvRefusedBar(t: TaskAny, stageId: string, stageName: string, error: unknown, mayPush: boolean): PvBar {
   const refused = taskRefusedOf(error);
   const missing = refused?.missing ?? [];
   if (refused?.error === 'task_not_met' && mayPush && missing.length) {
-    return {taskId: t.id, to: stageId, toName: stageName, push: true, text: `Move to ${stageName} without ${missing.join(', ')}?`};
+    return {taskId: t.id, to: stageId, push: true, text: `Move to ${stageName} without ${missing.join(', ')}?`};
   }
   const words = refused ? [refused.detail, missing.length ? `Missing: ${missing.join(', ')}.` : ''].filter(Boolean).join(' ')
     : errorMessage(error, 'Not moved.');
-  return {taskId: t.id, to: stageId, toName: stageName, push: false, text: `${t.title}: ${words}`};
+  return {taskId: t.id, to: stageId, push: false, text: `${t.title}: ${words}`};
 }
+
+// ---------------------------------------------------------------- the page's hooks
+
+TASK_PAGE_HOOKS.pipeline = {
+  html(rec, tasks, opts) {
+    const state = pvStateFor(rec);
+    state.rec = rec;
+    state.opts = {layout: opts.layout, phone: opts.phone, q: opts.q, filters: opts.filters};
+    state.tasks = tasks.filter(t => t.pipeline_id === rec.id && t.status === 'open');
+    // A move the read already shows is no longer drawn by hand.
+    for (const [id, to] of state.moving) if (state.tasks.find(t => t.id === id)?.stage_id === to) state.moving.delete(id);
+    return pvHTML(state);
+  },
+  bind(root, rec) {
+    const state = pvStateFor(rec);
+    state.root = root;
+    if (PV_BOUND.has(root)) return;
+    PV_BOUND.add(root);
+    // Bound once per element; each event reads the view drawn there now.
+    root.addEventListener('click', ev => { if (PV?.root === root) pvClick(PV, ev); });
+    root.addEventListener('submit', ev => { if (PV?.root === root) pvSubmit(PV, ev); });
+    taskBoardBind(root);
+  },
+  rail(host, rec) { pipelineRailSync(host, rec); },
+  edit(rec) { void openPipelineEditor(rec.id); },
+};

@@ -2,9 +2,9 @@
    factory is a locked box, named on its tab. Its Factory Manager sits on top when it has two or more pipelines (D59), and
    under it one Pipeline Manager card per pipeline. A card's name opens its bot; its chip opens the pipeline, by the route
    the Factories map uses. Pipelines outside every factory share one box after them. The cards come from the pipeline and
-   factory setup, so none of them moves, folds or opens an edit menu. The read is the overview the map reads
-   (GET /api/v2/pipelines/overview, backend/pipeline_overview.py), which already leaves out a members-only pipeline for
-   anyone who is not on it.
+   factory setup, so none of them moves, folds or opens an edit menu. The read is the one Company › Factories reads
+   (overview-factories.ts ofRead: GET /api/v2/factories and GET /api/v2/pipelines), which leaves out a private pipeline
+   for anyone who may not see it.
    The bots this section draws are not on the people chart too: orgSetupLift takes them out of it, and their reports
    hang where they stood.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -23,20 +23,20 @@ const orgBotOf = (ref: string): string => botByRef(ref)?.id || orgBotId(ref);
 const orgShowsFm = (g: OfGroup): boolean => !!g.manager && g.pipelines.length >= 2;
 
 /** One locked card. With a manager, its name opens the bot; `chip` (a pipeline) opens that pipeline. */
-function orgCardHtml(kind: 'fm' | 'pm', manager: string | null, chip: OfPipeline | null): string {
+function orgCardHtml(kind: 'fm' | 'pm', manager: string | null, chip: OfBox | null): string {
   const id = manager ? orgBotOf(manager) : '';
   const head = manager
     ? `<a class="org-fac-open" href="#/bot/${encodeURIComponent(id)}"><b>${esc(botDisplayName(id))}</b></a><span class="rdo-r">${avatar(id, 16)}</span>`
     : '<b>No manager</b>';
   const link = chip
-    ? `<a class="org-fac-chip" href="${esc(ofPipelineHref(chip.id))}"${chip.goal ? ` title="${esc(chip.goal)}"` : ''}>${esc(chip.name)} <span aria-hidden="true">→</span></a>`
+    ? `<a class="org-fac-chip" href="${esc(pipelineHref(chip.id))}"${chip.goal ? ` title="${esc(chip.goal)}"` : ''}>${esc(chip.name)} <span aria-hidden="true">→</span></a>`
     : '';
   return `<div class="rdo-card org-fac-card ${kind}" data-org-card="${kind}">${head}${link}`
     + `<span class="org-fac-lock" role="img" aria-label="Set by Factories" title="Set by Factories">${ORG_FAC_LOCK}</span></div>`;
 }
 
 /** The Pipeline Manager cards of a box, one list item each. */
-const orgPipelineItems = (pipelines: OfPipeline[]): string =>
+const orgPipelineItems = (pipelines: OfBox[]): string =>
   pipelines.map(p => `<li>${orgCardHtml('pm', p.manager_id, p)}</li>`).join('');
 
 /** A factory's box: its Factory Manager on top when it has two or more pipelines, then a card per pipeline. */
@@ -55,10 +55,12 @@ const orgLooseBoxHtml = (g: OfGroup): string =>
   + `<span class="rdo-tab"><span class="rdo-tn">Not in a factory</span></span>`
   + `<div class="rdo-gb"><ul class="org-fac-row">${orgPipelineItems(g.pipelines)}</ul></div></section>`;
 
-/** The section for an overview, or '' when there are no factories: nothing to draw, so no empty box. */
-function orgFactoriesHtml(map: OfMap): string {
-  if (!map.factories.length) return '';
-  const boxes = ofGroups(map).map(g => g.id ? orgFactoryBoxHtml(g) : orgLooseBoxHtml(g)).join('');
+const orgHasFactory = (groups: OfGroup[]): boolean => groups.some(g => g.id);
+
+/** The section for the groups, or '' when there are no factories: nothing to draw, so no empty box. */
+function orgFactoriesHtml(groups: OfGroup[]): string {
+  if (!orgHasFactory(groups)) return '';
+  const boxes = groups.map(g => g.id ? orgFactoryBoxHtml(g) : orgLooseBoxHtml(g)).join('');
   return `<section class="org-fac" aria-labelledby="org-fac-title">`
     + `<div class="org-fac-head"><h2 id="org-fac-title">Factories</h2>`
     + `<span class="org-fac-key"><i class="org-fac-ring fm" aria-hidden="true"></i>Factory bot<i class="org-fac-ring pm" aria-hidden="true"></i>Pipeline bot</span></div>`
@@ -67,10 +69,10 @@ function orgFactoriesHtml(map: OfMap): string {
 
 /** The roster ids of the bots the section draws as cards: each Pipeline Manager, and each Factory Manager shown. Nothing
  *  when there are no factories, since the section then draws nothing and the people chart keeps every bot. */
-function orgDrawnBots(map: OfMap): Set<string> {
+function orgDrawnBots(groups: OfGroup[]): Set<string> {
   const bots = new Set<string>();
-  if (!map.factories.length) return bots;
-  for (const g of ofGroups(map)) {
+  if (!orgHasFactory(groups)) return bots;
+  for (const g of groups) {
     if (g.manager && orgShowsFm(g)) bots.add(orgBotOf(g.manager));
     for (const p of g.pipelines) if (p.manager_id) bots.add(orgBotOf(p.manager_id));
   }
@@ -94,12 +96,12 @@ function orgSetupLift(by: Record<string, OrgChartNode[]>, bots: Set<string>): vo
 }
 
 /** Draws the section into host, below the chart, and records its bots for the people chart. Resolves true when the chart
- *  must be drawn again (it now leaves bots out). A failed read, or one without the overview's lists, leaves the chart
+ *  must be drawn again (it now leaves bots out). A failed read leaves the chart
  *  alone; so does a host the page has left. */
 async function orgFactoriesMount(host: HTMLElement): Promise<boolean> {
-  const map: OfMap | null = await get('/v2/pipelines/overview?period=7d', {fresh: true}).catch(() => null);
-  if (!Array.isArray(map?.factories) || !Array.isArray(map?.pipelines) || !host.isConnected) return false;
-  ORG_FAC_BOTS = orgDrawnBots(map);
-  host.innerHTML = orgFactoriesHtml(map);
+  const groups = await ofRead('7d').catch(() => null);
+  if (!groups || !host.isConnected) return false;
+  ORG_FAC_BOTS = orgDrawnBots(groups);
+  host.innerHTML = orgFactoriesHtml(groups);
   return ORG_FAC_BOTS.size > 0;
 }

@@ -1,20 +1,88 @@
-.task-type-row { padding:16px; border-bottom:1px solid var(--line); display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
-.task-type-row strong { min-width:100px; }
-#set-types > button { margin:16px; }
-.task-type-editor label { display:block; margin-bottom:16px; }
-.task-type-editor [data-steps] { display:grid; gap:10px; margin-bottom:12px; }
-.task-step-edit { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
-.task-step-models { flex:0 0 100%; }
-.task-step-models span { display:block; }
-.task-step-edit input { width:100%; min-width:0; flex:1; }
-.task-step-edit select { max-width:120px; }
-.task-step-edit select[aria-label="Another model company"] { max-width:260px; }
-.task-step-edit input[aria-label="Check pool"] { flex:1.4; }
-.task-step-edit input[type=number] { flex:0 0 64px; width:64px; }
-.task-type-editor .row { margin-top:20px; }
-@media(max-width:600px) {
-  .task-step-edit { flex-wrap:wrap; }
-  .task-step-edit input { flex-basis:100%; }
-  .task-step-edit input[type=number] { flex:0 0 64px; }
-  .task-step-edit select { flex:1; max-width:none; }
+/* ui/styles/task-pipelines.css — One pipeline on the Tasks page (ui/app/task-pipelines.ts: columns, the list grouped
+   by stage, the phone's stage tabs, the refused-move bar), the manager's rail beside it (ui/app/pipeline-rail.ts) and the
+   pipeline editor (ui/app/pipeline-editor.ts). Rows and boxes themselves are task-row.css. */
+.pv{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0}
+
+/* A stage's header: its name and its count, a button for whoever may change the pipeline. */
+.pv-stage-h{display:inline-flex;align-items:baseline;gap:6px;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left}
+button.pv-stage-h{cursor:pointer}
+button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
+.pv-stage-name{font-weight:600}
+.pv-stage-n{color:var(--muted);font-size:var(--t-sm)}
+
+/* Columns: one per work stage, side by side, scrolling sideways. */
+.pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
+.pv-col{flex:0 0 260px;display:flex;flex-direction:column;gap:8px;min-width:0;padding:8px;border-radius:8px;background:var(--surface2)}
+.pv-col-head{padding:2px 4px}
+.pv-col-body{display:flex;flex-direction:column;gap:6px;min-height:24px}
+
+/* The list: a group per stage. */
+.pv-group{margin:0 0 10px}
+.pv-group-head{margin:12px 10px 4px;font-size:var(--t-sm)}
+.pv-empty{margin:24px 10px}
+
+/* A phone: a row of stage tabs, then one stage's tasks. */
+.pv-tabs{display:flex;gap:4px;overflow-x:auto;padding:0 0 4px;scrollbar-width:none}
+.pv-tab{flex:none;padding:6px 10px;border:0;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);white-space:nowrap;cursor:pointer}
+.pv-tab.on{background:var(--surface2);color:var(--ink)}
+
+/* A refused move: the engine's line, or "Move to X without Y?" with a why. */
+.pv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
+.pv-bar-text{flex:1 1 240px;min-width:0}
+.pv-bar input{flex:1 1 180px;min-width:0;height:30px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+
+/* The manager's rail. */
+.pm-rail{min-width:0;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:var(--t-sm)}
+.pm-shell{display:flex;flex-direction:column;flex:1;min-height:0}
+.pm-strip{display:none;justify-content:center;padding:14px 0;border:0;background:none;cursor:pointer}
+.pm-rail.collapsed .pm-strip{display:flex}
+.pm-rail.collapsed .pm-panel{display:none}
+.pm-panel{display:flex;flex-direction:column;flex:1;min-height:0}
+.pm-head{display:flex;align-items:center;gap:8px;padding:12px 14px}
+.pm-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pm-tabs{display:flex;gap:4px;padding:0 10px 6px}
+.pm-tab{padding:4px 10px;border:0;border-radius:5px;background:none;color:var(--muted);font:inherit;cursor:pointer}
+.pm-tab.on{background:var(--surface2);color:var(--ink)}
+.pm-body{flex:0 1 auto;max-height:45%;overflow:auto;padding:0 6px 8px}
+.pm-group{margin:0 0 8px}
+.pm-h{display:flex;gap:6px;margin:8px 8px 4px;color:var(--muted);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
+.pm-row{display:flex;gap:8px;align-items:center;padding:4px 8px;border-radius:6px;cursor:pointer}
+.pm-row:hover{background:var(--hover)}
+.pm-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pm-age{color:var(--muted)}
+.pm-line{display:flex;gap:8px;padding:3px 8px;color:var(--muted)}
+.pm-line[data-task]{cursor:pointer}
+.pm-line[data-task]:hover{color:var(--ink)}
+.pm-at{flex:none}
+.pm-empty{margin:8px}
+.pm-chat{flex:1 1 0;min-height:200px;display:flex;flex-direction:column;border-top:1px solid var(--line)}
+
+/* The editor. */
+.pe-body{display:flex;flex-direction:column;gap:14px}
+.pe-fields{display:grid;gap:10px}
+.pe-f{display:grid;grid-template-columns:120px minmax(0,1fr);gap:10px;align-items:center}
+.pe-f>span:first-child{color:var(--muted);font-size:var(--t-sm)}
+.pe-f input,.pe-f select,.pe-pair input,.pe-pair select{min-width:0;height:32px;box-sizing:border-box;padding:0 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+.pe-pair{display:flex;gap:6px}
+.pe-pair input{width:80px}
+.pe-check{display:flex;align-items:center;gap:8px}
+.pe-stages{display:flex;flex-direction:column;gap:6px}
+.pe-stage{border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.pe-stage>summary{display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer}
+.pe-stage-name{flex:1;min-width:0;font-weight:600}
+.pe-tools{display:none;gap:2px}
+.pe-stage[open]>summary .pe-tools{display:flex}
+.pe-stage-body{display:grid;gap:10px;padding:4px 12px 12px}
+.pe-h{margin:6px 0 0;color:var(--muted);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
+.pe-req{border-top:1px solid var(--line)}
+.pe-req>summary{display:flex;gap:8px;padding:6px 0;cursor:pointer}
+.pe-req-name{flex:1;min-width:0}
+.pe-req-body{display:grid;gap:8px;padding:0 0 10px 14px}
+.pe-req-x,.pe-add{justify-self:start}
+.pe-clash{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}
+.pe-clash p{flex:1 1 260px;margin:0}
+.pe-clash-do{display:flex;gap:8px}
+.pe-foot{display:flex;justify-content:space-between;gap:8px}
+@media (max-width:600px){
+  .pe-f{grid-template-columns:1fr;gap:4px}
 }

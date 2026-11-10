@@ -21,6 +21,17 @@ async function factoryCreate(name: string, goal: string): Promise<void> {
   await post('/v2/factories', {name, goal: goal || null});
 }
 
+/** A line of the manager's Log (a push past, a snooze with no end, what it did) or of what it Learned. */
+interface PipelineLogLine { at: string; text: string; task_id?: string | null }
+/** GET /api/v2/pipelines/{id}/log: the manager's Log, newest first, and what it Learned. */
+interface PipelineLog { log: PipelineLogLine[]; learned: PipelineLogLine[] }
+
+/** A pipeline manager's Log and Learned lines. */
+async function pipelineLogRead(id: string): Promise<PipelineLog> {
+  const res = await get<Partial<PipelineLog>>(`/v2/pipelines/${encodeURIComponent(id)}/log`, {fresh: true});
+  return {log: res.log ?? [], learned: res.learned ?? []};
+}
+
 /** The Tasks page showing one pipeline (tasks-page.ts reads `pipeline`). */
 const pipelineHref = (id: string): string => `${TASKS}?pipeline=${encodeURIComponent(id)}`;
 

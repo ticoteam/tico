@@ -1,7 +1,7 @@
 /* ui/app/task-board.ts — Dragging a task between a pipeline's columns (task-pipelines.ts draws them), on a desktop
    pointer. The page carries the task rather than the browser's drag and drop, so the wheel and the trackpad still
    scroll the columns while it is held. Letting go over another stage asks the engine to move it there (pvMove); a press
-   that never moved is a click, which opens the task as always. A phone moves a task from the task's own ⋯ menu.
+   that never moved is a click, which the page reads to open the task. A phone moves a task from the task's own ⋯ menu.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -15,17 +15,17 @@ interface TbDrag {
 const BOARD_SLOP = 5;
 let TB_DRAG: TbDrag | null = null;
 
-function taskBoardBind(state: PvState): void {
-  state.root.addEventListener('pointerdown', ev => taskBoardPress(state, ev));
+function taskBoardBind(root: HTMLElement): void {
+  root.addEventListener('pointerdown', ev => { if (PV?.root === root) taskBoardPress(PV, ev); });
 }
 
 function taskBoardPress(state: PvState, ev: PointerEvent): void {
   if (TB_DRAG || state.opts.phone || ev.button !== 0 || ev.pointerType === 'touch') return;
   if (ev.shiftKey || ev.metaKey || ev.ctrlKey || ev.altKey) return;
   const target = eventElement(ev);
-  const card = target?.closest<HTMLElement>('[data-pv-drag] .pv-card');
+  const card = target?.closest<HTMLElement>('[data-pv-drag] .tk-card');
   if (!target || !card || target.closest('a, input, select, textarea, button')) return;
-  const id = card.dataset['pvTask'] ?? '';
+  const id = card.dataset['task'] ?? '';
   if (!id || state.moving.has(id)) return;          // one move at a time per task
   const move = (e: PointerEvent): void => taskBoardMove(state, e);
   const up = (e: PointerEvent): void => taskBoardUp(state, e);
@@ -67,7 +67,7 @@ function taskBoardLift(d: TbDrag): void {
   const r = d.card.getBoundingClientRect();
   d.dx = d.x0 - r.left; d.dy = d.y0 - r.top;
   const ghost = d.card.cloneNode(true) as HTMLElement;
-  ghost.removeAttribute('data-pv-task');
+  ghost.removeAttribute('data-task');
   ghost.classList.add('pv-ghost');
   ghost.setAttribute('aria-hidden', 'true');
   ghost.style.width = r.width + 'px';
@@ -84,7 +84,7 @@ function taskBoardOver(state: PvState): void {
   const d = TB_DRAG;
   if (!d?.on) return;
   const col = document.elementFromPoint(d.x, d.y)?.closest<HTMLElement>('[data-pv-drag] [data-pv-col]') ?? null;
-  state.root.querySelectorAll('.pv-col.over').forEach(el => { if (el !== col) el.classList.remove('over'); });
+  for (const el of state.root?.querySelectorAll('.pv-col.over') ?? []) if (el !== col) el.classList.remove('over');
   col?.classList.add('over');
   d.target = col?.dataset['pvCol'] ?? '';
 }
@@ -96,7 +96,7 @@ function taskBoardAutoScroll(state: PvState): void {
   const step = (): void => {
     d.tick = 0;
     if (TB_DRAG !== d) return;
-    const cols = state.root.querySelector<HTMLElement>('.pv-cols');
+    const cols = state.root?.querySelector<HTMLElement>('.pv-cols');
     if (!cols) return;
     const r = cols.getBoundingClientRect(), edge = 60, left = cols.scrollLeft;
     if (d.y >= r.top && d.y <= r.bottom) {
@@ -125,7 +125,7 @@ function taskBoardEnd(state: PvState, drop: boolean): void {
   d.ghost?.remove();
   d.card.classList.remove('dragging');
   document.body.classList.remove('board-holding');
-  state.root.querySelectorAll('.pv-col.over').forEach(el => el.classList.remove('over'));
+  for (const el of state.root?.querySelectorAll('.pv-col.over') ?? []) el.classList.remove('over');
   // The click the carry ends in opens nothing.
   const swallow = (ev: Event): void => { ev.stopPropagation(); ev.preventDefault(); };
   window.addEventListener('click', swallow, {capture: true, once: true});
