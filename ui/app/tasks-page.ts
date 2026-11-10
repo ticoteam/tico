@@ -188,17 +188,20 @@ function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, '
 // (Chris, Nov 3: whole-list reads per event cost 1.5 GB/h). Full reads: the page's first, a change of view, pull to
 // refresh, and the stream's `reset`. Otherwise the 2-minute refresh, a tab back from sleep, a bulk change and this
 // tab's own writes catch up with a changed_after delta from the cursor the last read gave.
-/** The view's server filters: the archive's, or the pipeline's open tasks; You is Needs you's. */
+/** The view's server filters: the archive's (of the pipeline in view, if any), or the pipeline's open tasks; You is
+ * Needs you's. */
 function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
-  if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide'};
-  if (state.pipeline) return {status: 'open', snoozed: 'hide', pipeline: state.pipeline};
+  const of = state.pipeline ? {pipeline: state.pipeline} : {};
+  if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide', ...of};
+  if (state.pipeline) return {status: 'open', snoozed: 'hide', ...of};
   return null;
 }
 /** Whether a task, as the viewer reads it now, belongs in the view: tasksQuery's filters, client-side. */
 function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
+  if (state.pipeline && t.pipeline_id !== state.pipeline) return false;
   if (state.archive === 'snoozed') return t.status === 'open' && !!t.snoozed;
   if (state.archive) return t.status === state.archive;
-  return !!state.pipeline && t.status === 'open' && !t.snoozed && t.pipeline_id === state.pipeline;
+  return !!state.pipeline && t.status === 'open' && !t.snoozed;
 }
 /** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
  * the pipeline's open tasks. */
