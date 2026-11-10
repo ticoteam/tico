@@ -1,7 +1,8 @@
 """History replay: what happened between two moments, in time order, for a person to play back (`GET /api/v2/replay`).
 
 Nothing new is recorded. The items are read from the history Tico already keeps: task creation and the
-status and owner rows of a task's history (`history_events`), messages (chats and task comments), runs (`attempts`), each bot's
+engine's moves and reassignments in a task's history (`history_events`; a move between work stages is `task.stage`,
+one that changes the status `task.status`), messages (chats and task comments), runs (`attempts`), each bot's
 status rows (`bot_status_history`) and goal status changes (`history_events` of goals). Each source is read by its
 time-bounded index and capped, so a long history costs what the window holds, not what the tables hold.
 Each source also stops after SCAN_MAX rows read, shown or not (rows the viewer may not read, or outside the
@@ -29,7 +30,8 @@ SCAN_MAX = 20000  # rows read per source, shown or not; past it the replay is cu
 TEXT_MAX = 1200
 SNAPSHOT_MAX = 300
 MESSAGE_KINDS = ("say", "ask", "answer")
-TASK_FIELDS = ("status", "owner")
+# The engine's history kinds a replay shows: a move (`task.status` or `task.stage`) and a reassignment (`task.owner`).
+TASK_FIELDS = ("move", "reassign")
 
 
 def stamp(at):
@@ -121,7 +123,7 @@ def install(app, store, auth):
         # so the answer ends just before it and `next` starts there: continuing from `next` skips nothing.
         caps = []
 
-        # Tasks made in the window, then their status and owner changes.
+        # Tasks made in the window, then their moves and owner changes.
         created = []
         for scanned, row in enumerate(
             c.execute(
@@ -141,6 +143,25 @@ def install(app, store, auth):
                 caps.append(created[-1]["created_at"])
                 break
         changes, seen = [], 0
+        stages = {r[0]: (r[1], r[2]) for r in c.execute("SELECT id, kind, name FROM stages")}
+
+        def status_of(stage_id):
+            kind = (stages.get(stage_id) or ("work", ""))[0]
+            return "open" if kind == "work" else kind
+
+        def moved(event):
+            """A move as the replay shows it: a status change, or (between work stages) a stage change by name."""
+            if event["field"] == "reassign":
+                return {**event, "field": "owner"}
+            was, now = status_of(event["old"]), status_of(event["new"])
+            if was != now:
+                return {**event, "field": "status", "old": was, "new": now}
+
+            def name(stage_id):
+                return (stages.get(stage_id) or ("", stage_id))[1]
+
+            return {**event, "field": "stage", "old": name(event["old"]), "new": name(event["new"])}
+
         marks = ",".join("?" * len(TASK_FIELDS))
         cursor = c.execute(
             "SELECT subject_id AS task_id,created_at,actor_id AS actor,kind AS field,old,new,note FROM history_events "
@@ -160,10 +181,10 @@ def install(app, store, auth):
             rows = tasks_by_id([r["task_id"] for r in batch])
             for event in batch:
                 task = rows.get(event["task_id"])
-                if event["field"] == "status" and not event["old"]:
-                    continue  # the status a task is made with: its task.created says it
+                if event["field"] == "move" and not event["old"]:
+                    continue  # the stage a task is made in: its task.created says it
                 if task and within(task["owner_id"], task["requester_id"], event["actor"]):
-                    changes.append((dict(event), task))
+                    changes.append((moved(dict(event)), task))
         if len(changes) > LIMIT:
             caps.append(changes[-1][0]["created_at"])
         first_status = {}
