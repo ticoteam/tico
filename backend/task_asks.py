@@ -62,13 +62,26 @@ FROM_PREVIEW = "OK this from its preview in Tico."
 ON_OK: dict[str, str] = {
     "board": "backend.company_page.editions:board_ok",
     "email_send": "backend.email_sending:ok_given",
+    "finance": "backend.finance.actions:ok_given",
     "letter": "backend.letters:ok_given",
     "proposal": "backend.proposals:ok_given",
 }
 
 # Subject kinds whose module asks and uses its OKs itself: a bot's generic ask (POST /api/v2/tasks/{id}/oks) and use
 # (POST /api/v2/oks/{id}/use) never name one.
-OWNED = ("email_send", "letter", "edition", "board", "proposal", "support", "webhook", "publish")
+OWNED = ("email_send", "letter", "edition", "board", "proposal", "support", "webhook", "publish", "finance")
+
+# Who may OK a subject of this kind under the subject's own rule: "<module>:<function>", called as
+# fn(conn, person, grant) -> the refusal's words, or None when `person` may. Checked when the OK is given and again
+# when it is used. An OWNED kind that is not here is OK'd only by the person its module asked: giving the ask to
+# someone else never hands on the right to OK it. A module whose check needs the caller's sign-in (an inbox's
+# approvers, a letter's) checks it itself, in its ON_OK step and again before it acts: CHECKS_ITSELF.
+MAY_OK: dict[str, str] = {
+    "board": "backend.company_page.editions:may_ok",
+    "edition": "backend.company_page.editions:may_ok",
+    "proposal": "backend.proposals:may_ok",
+}
+CHECKS_ITSELF = ("email_send", "letter")
 
 
 def generic(subject: str) -> bool:
@@ -187,15 +200,31 @@ def _task_status(conn: "sqlite3.Connection", task_id: object) -> str | None:
     return str(found[0]) if found else None
 
 
+def _taken_back(conn: "sqlite3.Connection", visit: Row) -> bool:
+    """Whether the task was moved back, closed or reopened since this visit ended: what it moved on with is undone."""
+    found = conn.execute(
+        f"SELECT 1 FROM visits WHERE task_id=? AND left_at>=? AND how IN ({','.join('?' for _ in ENDS_ASKS)}) LIMIT 1",
+        (visit["task_id"], visit["left_at"], *ENDS_ASKS),
+    ).fetchone()
+    return found is not None
+
+
 def _state(conn: "sqlite3.Connection", row: Row) -> tuple[str, Row | None, Row | None]:
     """(standing, requirement, visit) of a grant. Writes nothing."""
     if row.get("used_at"):
         return USED, None, None
     requirement = _requirement(conn, row["requirement_id"])
     visit = _visit(conn, requirement.get("visit_id")) if requirement else None
-    if not requirement or not visit or requirement.get("withdrawn_at"):
+    if not requirement or not visit:
+        return WITHDRAWN, requirement, visit
+    # The engine ends a visit's asks with it (task_engine._close_visit). A visit that ended because what it needed was
+    # met, this OK among it, moved on with the OK: that is the OK doing its work, not taking it back.
+    met = visit.get("how") == "met" and requirement.get("withdrawn_at") == visit.get("left_at")
+    if requirement.get("withdrawn_at") and not met:
         return WITHDRAWN, requirement, visit
     if _task_status(conn, visit["task_id"]) in (None, "closed") or visit.get("how") in ENDS_ASKS:
+        return WITHDRAWN, requirement, visit
+    if visit.get("left_at") and _taken_back(conn, visit):
         return WITHDRAWN, requirement, visit
     answer = _newest_answer(conn, visit["id"], requirement["id"])
     if row.get("ok_at") and answer and answer["id"] == row.get("answer_id") and answer["answer"] == "ok":
@@ -299,9 +328,9 @@ def ask_ok(
     asked: Row = H.task_ask(conn, by, task_id, target, line, kind="ok", shows=shows, seen_version=row.get("version"))
     requirement_id = str(asked["requirement_id"])
     conn.execute(
-        "INSERT INTO ok_grants (requirement_id, asked_by_id, subject, content_hash, content, filed, created_at) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (requirement_id, by, subject, digest, _canonical(content), int(filed), H.now()),
+        "INSERT INTO ok_grants (requirement_id, asked_by_id, asked_of_id, subject, content_hash, content, filed, "
+        "created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (requirement_id, by, target, subject, digest, _canonical(content), int(filed), H.now()),
     )
     H.event(conn, by, "ok.asked", requirement_id, {"subject": subject, "to": target, "task": task_id})
     return {"task_id": task_id, "requirement_id": requirement_id}
@@ -360,6 +389,10 @@ def give_ok(
         _refuse(conn, person, "not-found", "No such OK")
     if not own_click or not is_human(person):
         _refuse(conn, person, "identity", "Only the person's own click in Tico gives this OK")
+    step = ON_OK.get(kind_of(row["subject"]))
+    if step and ctx is None:
+        # Its own step acts as the person who OK'd it (a page rebuilt, a letter sent): without them, nothing is given.
+        _refuse(conn, person, "identity", "Only the person's own click in Tico gives this OK")
     state, requirement, visit = _state(conn, row)
     task_id = str(visit["task_id"]) if visit else None
     if state == USED:
@@ -380,6 +413,9 @@ def give_ok(
     ).fetchone()
     if not seen:
         _refuse(conn, person, "task_requirement", "Open its preview in Tico first", task_id)
+    refused = _authority(conn, person, row)
+    if refused:
+        _refuse(conn, person, "task_requirement", refused, task_id)
     token = _GIVING.set(requirement_id)
     try:
         answered: Row = H.task_answer(conn, person, task_id, requirement_id, "ok")
@@ -390,7 +426,6 @@ def give_ok(
         (H.now(), person, answered.get("answer_id"), requirement_id),
     )
     H.event(conn, person, "ok.given", requirement_id, {"subject": row["subject"], "task": task_id})
-    step = ON_OK.get(kind_of(row["subject"]))
     if step:
         import importlib
 
@@ -406,7 +441,7 @@ def _problem(
     """(rule, words, task id) of why the act may not go ahead on this grant now, or None when it may."""
     if not row:
         return ("not-found", "No such OK", None)
-    state, _requirement, visit = _state(conn, row)
+    state, requirement, visit = _state(conn, row)
     task_id = str(visit["task_id"]) if visit else None
     if by != row["asked_by_id"]:
         return ("identity", "Only whoever asked for this OK may use it", task_id)
@@ -419,6 +454,31 @@ def _problem(
     if state != OK:
         words = {WAITING: "It waits for an OK", SENT_BACK: "It was sent back", WITHDRAWN: "It is not asked any more"}
         return ("task_ok_missing", f"{words[state]}: nothing is done without one", task_id)
+    refused = _authority(conn, str(row.get("ok_by_id") or ""), row)
+    if refused:
+        return ("task_ok_missing", f"{refused}: ask for a new OK", task_id)
+    return None
+
+
+def _authority(conn: "sqlite3.Connection", person: str, row: Row) -> str | None:
+    """Why `person` may not OK this grant now, or None when they may: a person who is still here and may sign in, and
+    whom the subject's own rule lets OK it (MAY_OK; for an OWNED kind with no rule, the person its module asked)."""
+    from . import task_requirements as R
+
+    H = _h()
+    if not R.active_person(conn, person):
+        return f"{H.actor_name(conn, person) if person else 'Whoever gave it'} can no longer OK this"
+    kind = kind_of(row["subject"])
+    check = MAY_OK.get(kind)
+    if check:
+        import importlib
+
+        module, _, name = check.partition(":")
+        rule: Callable[..., str | None] = getattr(importlib.import_module(module), name)
+        return rule(conn, person, row)
+    named = str(row.get("asked_of_id") or "")
+    if kind in OWNED and kind not in CHECKS_ITSELF and named and named != person:
+        return f"Only {H.actor_name(conn, named)}, who it was asked of, may OK this"
     return None
 
 

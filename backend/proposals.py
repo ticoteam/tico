@@ -54,7 +54,7 @@ def _parse(kind, payload):
         return found
     except ValidationError as exc:
         first = exc.errors()[0]
-        raise Problem("validation", f"{kind} payload: {'.'.join(map(str, first['loc']))}: {first['msg']}", 422)
+        raise Problem("validation", f"{kind} payload: {'.'.join(map(str, first['loc']))}: {first['msg']}", 422) from None
 
 
 def check(c, kind, payload):
@@ -67,6 +67,13 @@ def decider(c):
 
     pid = top_person(c)
     return "human:" + pid if pid else None
+
+
+def may_ok(c, person, grant):
+    """Whether `person` may OK a proposal now (task_asks.MAY_OK): only the top of the org, whoever holds the ask."""
+    if person != decider(c):
+        return "Only the top of the org OKs this change"
+    return None
 
 
 LINES = {

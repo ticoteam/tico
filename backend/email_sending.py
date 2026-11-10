@@ -649,7 +649,7 @@ def ok_given(c, grant, ctx):
     row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
     if not row or row["state"] not in ACTIVE:
         raise Problem("state", "This email is no longer waiting to send", 409)
-    if auth is not None and not can_ok(
+    if auth is None or not can_ok(
         c, auth, grant["ok_by_id"], row["mailbox"], row["bot"], effective(c, row["mailbox"], row["bot"])
     ):
         raise Problem("forbidden", "This send follows its inbox's approval rule", 403)

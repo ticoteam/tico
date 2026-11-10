@@ -1155,6 +1155,19 @@ def _approver(c, audience):
     return owner
 
 
+def may_ok(c, person, grant):
+    """Whether `person` may OK this edition or stats board now (task_asks.MAY_OK): the audience's approver as it is
+    today, whoever holds the ask."""
+    audience_id = str((grant.get("content") or {}).get("audience_id") or "")
+    try:
+        approver = _approver(c, _audience(c, audience_id)) if audience_id else None
+    except Problem:
+        approver = None
+    if not approver or approver != person:
+        return "Only this audience's approver OKs it"
+    return None
+
+
 def request_approval(c, who, edition_id):
     """Ask the approver. From `ready`, or again when the last ask lapsed, was declined or no longer matches."""
     require_person(who)
@@ -1402,6 +1415,11 @@ def board_ok(c, grant, ctx):
     audience_id = str(content.get("audience_id") or "")
     if not audience_id or not H.is_human(grant["asked_by_id"]):
         return
+    app = getattr(ctx, "app", None)
+    store = getattr(getattr(app, "state", None), "store", None)
+    if store is None:
+        # The Public page is rebuilt after the OK commits: with nothing to rebuild it, the OK is not taken.
+        raise Problem("approval", "A stats board is OK'd from its preview in Tico", 409)
     from . import stats
 
     url = str(content.get("url") or "")
@@ -1417,7 +1435,4 @@ def board_ok(c, grant, ctx):
         "approved_by, created_at) VALUES(?,?,?,?,?,?,?)",
         (row, audience_id, config, revision, grant["requirement_id"], grant["ok_by_id"], H.now()),
     )
-    app = getattr(ctx, "app", None)
-    store = getattr(getattr(app, "state", None), "store", None)
-    if store is not None:
-        ctx.after.append(lambda: release_board(store, row))
+    ctx.after.append(lambda: release_board(store, row))

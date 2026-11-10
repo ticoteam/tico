@@ -62,7 +62,7 @@ def test_an_okd_spend_limit_applies_as_the_person_with_its_audit_row(store):
 def test_an_ok_with_no_preview_route_behind_it_applies_nothing(store):
     with store.transaction() as c:
         asked = proposals.propose(c, OPS, "spend_limit", {"bot": "ops", "daily_usd": 9})
-    with pytest.raises(Problem, match="preview"):
+    with pytest.raises(H.Refused, match="own click"):
         with store.transaction() as c:
             _ok(store, c, asked, ctx=False)
     with store.read() as c:
