@@ -192,7 +192,7 @@ def test_status_task_reads_skip_finished_tasks_come_back_as_one_row_and_keep_pri
             wanted = {
                 tuple(t)
                 for t in c.execute(
-                    f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE (owner_id{marks} OR requester_id{marks}) "
+                    f"SELECT {privacy.STATUS_TASK_SELECT} FROM tasks WHERE (owner_id{marks} OR requester_id{marks}) "
                     f"AND {privacy.STATUS_TASKS_SQL}",
                     actors * 2,
                 )
@@ -362,3 +362,24 @@ def test_status_page_reads_a_fixed_number_of_statements_for_bots_whose_plan_sign
     assert big <= small + 5, (small, big)
     assert any(issue.get("bot") == "desk-39" for issue in big_body["health_issues"])
     assert len(big_body["health_issues"]) > len(small_body["health_issues"])
+
+
+def test_a_bots_open_asks_count_in_its_needs_human_only_on_tasks_the_reader_may_read(api):
+    # The e2e contract scenario: a bot's ask put to a person is something it waits on a person for, so it counts in
+    # needs_human (hubdb.status_counts). The status line counts it again per reader: an ask on a private task the
+    # reader cannot open is not counted for them, so the number never hints that the task is there.
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        H.status_set(c, H.KEEPER, "ops", state="idle", focus="")
+        shared = H.task_create(c, "human:ana", "Check the vendor list", "Compare them.", "bot:ops", private=False)
+        secret = H.task_create(c, "human:ana", "Acme acquisition", "Look into it.", "bot:ops", private=True)
+        for task in (shared, secret):
+            version = H.task(c, task["id"])["version"]
+            H.task_ask(c, "bot:ops", task["id"], "human:ana", "Spend $5 on the test?", kind="ok", seen_version=version)
+        assert H.status_counts(c, "bot:ops")[1] == 2
+    with store.read_transaction() as c:
+        seen = {
+            token: status_line(c, store.settings.test_identities[token], "ops", auth=auth)["needs_human"]
+            for token in ("ana-test", "ben-test")
+        }
+    assert seen == {"ana-test": 2, "ben-test": 1}
