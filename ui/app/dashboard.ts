@@ -369,11 +369,11 @@ function dashNeedsLive(): void {
 // A thread not listed waits for the safety read (an activity event carries no title or audience to draw it with).
 function dashThreadsLive(d: ThreadsEvent): void {
   const root = d.root_id || d.thread_id;
-  if (!root || (d.kind !== 'read' && d.kind !== 'activity')) return;
+  if (!root || (d.kind !== 'read' && d.kind !== 'activity' && !d.gone)) return;
   dashCardsPatch('unread_threads', data => {
     const rows = data.threads || [], at = rows.findIndex(t => t.id === root);
     if (at < 0) return null;
-    if (d.kind === 'read') return {...data, threads: rows.filter((_, i) => i !== at), count: Math.max(0, (Number(data.count) || 0) - 1)};
+    if (d.kind === 'read' || d.gone) return {...data, threads: rows.filter((_, i) => i !== at), count: Math.max(0, (Number(data.count) || 0) - 1)};
     if (d.unread !== true) return null;
     const held = rows[at]!;
     const row = {...held, unread: (Number(held.unread) || 0) + Math.max(1, Number(d.unread_count) || 1), updated_at: new Date().toISOString()};

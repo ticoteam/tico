@@ -202,6 +202,9 @@ const holdNext = (match: Held['match']): Held => {
     {kind: 'read', thread_id: 'th1', root_id: 'th1', read: {last_read_seq: 7}});
   await page.waitForFunction(() => !document.querySelector('.dash-grid')?.textContent?.includes('Launch'));
   assert.match(await pin('Unread threads').locator('li').first().textContent() || '', /Hiring[\s\S]*3 new/);
+  // Taken off Hiring's members: the event names the thread alone, and its row goes.
+  await emit('threads', {kind: 'members', thread_id: 'th2', gone: true});
+  await page.waitForFunction(() => !document.querySelector('.dash-grid')?.textContent?.includes('Hiring'));
   await settled();
   assert.equal(reads.places, placed, 'no read of the place follows an event');
 

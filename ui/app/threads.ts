@@ -97,6 +97,8 @@ interface ThreadsEvent {
   pinned_for_everyone?: boolean | undefined;
   counters?: { last_seq?: number | undefined; last_unread_seq?: number | undefined } | undefined;
   thread?: ThreadRow | undefined;
+  /** The viewer can no longer read the thread (taken off its members): its id alone, and its row leaves. */
+  gone?: boolean | undefined;
 }
 // The needs topic's event: the Needs you version, and what the stream carried over a reconnect.
 interface NeedsEvent {
@@ -354,6 +356,12 @@ function threadsAllRead(id: string) {
 // The server refuses anyone who does not manage the thread.
 // An archived thread, here or in another window, leaves Catch up and its count at once; a 1:1 DM's count on its teammate
 // goes too (a DM is not on the list, so only this clears it).
+// A thread the viewer can no longer read: off the rail, Catch up and its count, with nothing read for it.
+function threadsGone(id: string) {
+  THREADS.pinned = THREADS.pinned.filter(t => t.id !== id);
+  THREADS.threads = THREADS.threads.filter(t => t.id !== id);
+  threadsArchivedGone(id, THREADS.roots[id]?.dm);
+}
 function threadsArchivedGone(id: string, dm?: string | null) {
   THREADS.cu?.delete(id);
   if (typeof catchUpGone === 'function') catchUpGone(id, true);
@@ -463,6 +471,7 @@ function threadsSync() {
       if (typeof catchUpGone === 'function') catchUpGone(root);
     }
     else if (d.kind === 'pinned' && d.thread_id) void threadsPinned(d);
+    else if (d.gone && d.thread_id) threadsGone(d.thread_id);
     else if (d.thread && !d.thread.parent_id) {
       // A 1:1 DM is not on the rail: it is learned for its teammate's count; a new one starts that count.
       if (threadIsDm(d.thread) && !threadIsGroupDm(d.thread)) {
