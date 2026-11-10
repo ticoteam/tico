@@ -2053,7 +2053,9 @@ def create_app(settings=None):
     @app.post("/api/v2/system/update/check")
     def system_update_check(request: Request):
         updater_only(request.state.identity, "checks for updates")
-        return releases.check_now()
+        found = releases.check_now()
+        with store.read() as c:
+            return releases.offered(c, found)
 
     # The updater restarts this process, so the outcome is written by whichever process first
     # sees a final state after a start; a marker row keeps it to one event per update.
@@ -4793,6 +4795,10 @@ def create_app(settings=None):
         """A delegated identity that has not been confirmed: BotOps acting for a person, before their click."""
         return who.via == "botops" and not who.confirmed
 
+    # The task-write rule check, also for task writes outside the v3 routes (backend/goal_routes.py).
+    task_rules = app.state.task_rules = task_rule_gate.TaskRules(
+        auth, rule_check, rule_task_audience, rule_target, store
+    )
     # After delegated_identity: a change BotOps makes for a person is made as them.
     task_moves_routes.register(
         app,
@@ -4801,7 +4807,7 @@ def create_app(settings=None):
         handoff_preflight,
         mover,
         mutate,
-        task_rule_gate.TaskRules(auth, rule_check, rule_task_audience, rule_target, store),
+        task_rules,
         store,
         task_view,
     )

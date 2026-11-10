@@ -34,7 +34,7 @@ def parse_until(value):
             if at.tzinfo is None:
                 at = at.replace(tzinfo=ZONE)
     except ValueError:
-        raise Problem("date", "until is an ISO-8601 date or date-time", 422)
+        raise Problem("date", "until is an ISO-8601 date or date-time", 422) from None
     stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     if stamp <= H.now():
         raise Problem("date", "until is a date to come", 422)
@@ -96,12 +96,14 @@ def register(
     # on what the recipient reads: `carry`).
     writes = {}
 
-    def says(operation, model, said, call, *, to=None, hands_over=False, ask=False):
+    def says(operation, model, said, call, *, to=None, also=None, hands_over=False, ask=False):
+        """`also(c, params)`: actors the write reaches besides the task's people and `to` (an answer's asker)."""
         writes[operation] = {
             "model": model,
             "said": said,
             "call": call,
             "to": to or (lambda body: None),
+            "also": also,
             "hands_over": hands_over,
             "ask": ask,
         }
@@ -118,23 +120,43 @@ def register(
         spec = writes[operation]
         replay = {"task": task_id, "body": body.model_dump(mode="json", by_alias=True), "params": params or {}}
         gate = task_rules.apply(
-            c, who, task_id, verdict, spec["said"](body), replay, hands_over=spec["hands_over"], ask=spec["ask"]
+            c,
+            who,
+            task_id,
+            verdict,
+            spec["said"](body),
+            replay,
+            to=spec["to"](body),
+            also=reached(spec, params),
+            hands_over=spec["hands_over"],
+            ask=spec["ask"],
         )
         if task_rule_gate.held(gate):
             return org_rule_check.answer(gate)
         out = spec["call"](c, who, task_id, body, gate, params or {}, ingest) or {}
         return {**out, **org_rule_check.answer(gate)}
 
-    def check(caller, tid, body, operation):
+    def reached(spec, params):
+        """The write's `also`, bound to its params: a function of the connection, or None."""
+        also = spec["also"]
+        return (lambda c: also(c, params or {})) if also else None
+
+    def check(caller, tid, body, operation, params=None):
         """The verdict for this write, outside the store's write."""
         spec = writes[operation]
         return task_rules.check(
-            caller, tid, operation, spec["said"](body), to=spec["to"](body), hands_over=spec["hands_over"]
+            caller,
+            tid,
+            operation,
+            spec["said"](body),
+            to=spec["to"](body),
+            also=reached(spec, params),
+            hands_over=spec["hands_over"],
         )
 
     def checked(request, tid, body, operation, params=None):
         """A route's write: checked outside the store's write, then made through its verdict inside it."""
-        rc = check(request.state.identity, tid, body, operation)
+        rc = check(request.state.identity, tid, body, operation, params)
         return work(request, tid, body, lambda c, who, task_id: gated(c, who, task_id, body, rc, operation, params))
 
     def replays():
@@ -158,7 +180,8 @@ def register(
             def audience(c, bot, data):
                 body = spec["model"].model_validate(data["body"])
                 row = auth.task(c, bot, auth.resolve_task(c, bot, data["task"]))
-                return task_rules.audience(c, bot, row, spec["to"](body))
+                also = reached(spec, data.get("params"))
+                return task_rules.audience(c, bot, row, spec["to"](body), also)
 
             return replay, audience
 
@@ -351,13 +374,20 @@ def register(
         refused = task_asks.refuses_ok_by(c, who, asked, body.value)
         if refused:
             raise Problem("ok_not_yours", refused, 403)
-        note, version = carry(c, who, task_id, gate, body.note, body.version)
-        done = H.task_answer(c, who.actor, task_id, asked, body.value, note, version)
+        # A warned answer carries the line in its own notes, with or without a note of its own: answering never needs
+        # the right to edit the task.
+        note = task_rule_gate.warn_on(gate, body.note) if body.note else org_rule_check.warn_line(gate) or body.note
+        done = H.task_answer(c, who.actor, task_id, asked, body.value, note, body.version)
         # An answer on the Strategy Bot's merged item goes to each original it stands for.
         strategy_merge.on_answer(c, who.actor, task_id, body.value)
         return {"answer_id": done.get("answer_id")}
 
-    says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call)
+    def asker(c, params):
+        """Whoever asked what an answer answers: the answer reaches them too."""
+        found = c.execute("SELECT added_by_id FROM requirements WHERE id=?", (params.get("requirement_id"),)).fetchone()
+        return [found[0]] if found and found[0] else []
+
+    says("task_ask_answer", M.TaskAskAnswer, answer_said, answer_call, also=asker)
 
     @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/answer")
     def task_answer(request: Request, tid: str, requirement_id: str, body: M.TaskAskAnswer):

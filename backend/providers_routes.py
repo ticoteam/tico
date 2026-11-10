@@ -24,6 +24,8 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
     def system_update(request: Request, body: M.SystemUpdate):
         who = request.state.identity
         updater_only(who, "updates the installation")
+        with store.read() as c:
+            releases.refuse_held(c, body.version)
         result = releases.start(body.version)
         target = str(body.version).lstrip("v")
         with store.transaction() as c:

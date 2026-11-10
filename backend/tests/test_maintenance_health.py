@@ -723,6 +723,27 @@ def test_a_paused_bots_routines_are_not_a_finding(environment):
     assert keys(api) == []
 
 
+def test_private_tasks_no_one_can_move_stay_on_owner_health_and_file_nothing(readers, monkeypatch):
+    """Health's `no_one` count (private tasks nobody who reads them can move) is for the company's owner and Admins on
+    Health only: it never becomes a finding, so no BotOps task carries it and no bot is started for it. A rule break
+    still files, its words without that count."""
+
+    def tasks(status, **counts):
+        summary = "0 waiting on nothing. 2 private tasks have no one to move them."
+        if counts.get("broken"):
+            summary += " 1 rule break."
+        return {"id": "never_stuck", "label": "Tasks", "status": status, "summary": summary, "counts": counts}
+
+    page = {"checks": [tasks("warn", no_one=2, broken=0)]}
+    monkeypatch.setattr(health, "view", lambda c, *a, **k: page)
+    ctx = {"auth": SimpleNamespace(owner_identity=lambda c: None), "settings": None}
+    read, found = check_health._page_findings(None, ctx, {})
+    assert read == 1 and found == []
+    page["checks"] = [tasks("bad", no_one=2, broken=1)]
+    _, found = check_health._page_findings(None, ctx, {})
+    assert len(found) == 1 and "private" not in json.dumps(found, default=str)
+
+
 def test_the_monitor_files_for_botops_and_a_task_for_a_person_is_refused(api):
     # The Health Monitor gives its fixes to BotOps only (docs/health-monitor.md): a task for a person, and a hand-off to
     # one, are refused with where to file it and nothing is written; the same task for BotOps is accepted.

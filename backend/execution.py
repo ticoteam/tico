@@ -4900,8 +4900,9 @@ class Execution:
             row["bot_id"],
             trigger="task" if task else msg["kind"],
             message_id=msg["id"],
-            # A carrier's run is about the task of the message it carries (task_wakes.message_task): counted for it.
-            task_id=task["id"] if task else task_wakes.message_task(c, msg["id"]),
+            # The task may_start admitted the run for (task_wakes.message_task): a carrier's run is the carried
+            # message's task's, even in another task's conversation, so it is counted for that task.
+            task_id=task_wakes.message_task(c, msg["id"]) or (task["id"] if task else None),
             trigger_kind=woke,
             trigger_source=source,
             purpose=run_triggers.purpose_of(msg, row["bot_id"], woke),
@@ -5879,7 +5880,15 @@ class Execution:
             else {"reserved": not row["stop_requested_at"]}
         )
         if not reserved["reserved"]:
-            raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
+            # A wait, not a refusal for good: no start_refused record, so a later start-place may grant it. The route
+            # raises the 409 after this commits, so the wait reserve wrote and the grant it let go are kept.
+            return {
+                "started": False,
+                "refused": {
+                    "code": "start_wait",
+                    "detail": reserved.get("waiting", "Start reservation expired or stopped"),
+                },
+            }
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
         from . import task_wakes
 

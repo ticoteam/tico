@@ -158,7 +158,8 @@ async function pageNotes(): Promise<void> {
   state.landing = false;
   const open = linked.get('meeting') || linked.get('recording');
   if (open) { state.selected = open; meetShow(state, true); meetDetail(state, open); }
-  state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 30000);
+  // A safety read only: the list follows its live events, so the whole list is read every 3 minutes, not every 30 s.
+  state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 180000);
   state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
 }
 
