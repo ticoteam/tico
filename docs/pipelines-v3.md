@@ -1108,7 +1108,8 @@ Today: the pipeline editor.
 
 - **Heading:** "Product".
 - **Pipeline fields,** name then value: Goal "Discerning, high-quality specs that ship"; Manager "Product Manager ▾";
-  Factory "Product ▾"; Prefix "P"; Private "Off".
+  Factory "Product ▾"; Prefix "P". (No Private switch in 0.6.0-rc.1: saving a private pipeline is refused. Tasks can
+  still be private one by one.)
 - **Stages,** one panel each, closed (▸) until clicked:
   - "▸ Ideas"
   - "▾ Spec", open, with buttons "↑", "↓" and "Remove" at the right. Its fields: Purpose "A spec a builder can build

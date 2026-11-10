@@ -150,6 +150,15 @@ def _jobs(api, bot="ops"):
         ]
 
 
+def turn_wake(c, task_id):
+    """The message of the queued run a new task's turn woke its owner bot with."""
+    return c.execute(
+        "SELECT j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "WHERE j.state='queued' AND m.wake_key LIKE ? || ':%'",
+        (task_id,),
+    ).fetchone()[0]
+
+
 def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
     from backend.store import H
     from backend.tests.helpers.threads_runner import make_thread, say
@@ -160,14 +169,13 @@ def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
     post(api, "chat/ops", {"text": "Please keep this."})
     thread = make_thread(api, title="Review notes", members=["bot:ops"])
     carried = say(api, thread, "@ops please check this too")
-    made = post(api, "tasks", {"title": "Review the patch", "body": "Look at the patch.", "owner": "bot:ops"})
-    task = made["task"] if isinstance(made, dict) and made.get("task") else made
+    post(api, "tasks", {"title": "Review the patch", "body": "Look at the patch.", "owner": "bot:ops"})  # Ana's turn
     with api.app.state.store.transaction() as c:
+        # A task Tico made on its own: its turn is the automatic wake.
+        task = H.task_create(c, H.KEEPER, "Refresh the export", "Refresh it.", H.bot_actor("ops"), lint=False)
         row = H.task(c, task["id"])
-        before_status = row["status"]
-        before_step = row.get("step_id")
-        automatic = H._wake(c, row, row["owner_id"], "Review 1 gave approve at head abcdef1.", {"handoff": "verdict"})
-        H._wake(c, row, row["owner_id"], "Ana asked about this.", {"caused_by": "human:ana"})
+        before = (row["status"], row["stage_id"], row["owner_id"])
+        automatic = {"id": turn_wake(c, task["id"])}
     post(api, "usage/queues/purge", {"scope": "group:missing"}, expected=404)
     result = post(api, "usage/queues/purge", {"scope": "group:eng"})
     jobs = _jobs(api)
@@ -179,8 +187,8 @@ def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
     assert next(j for j in jobs if j["message_id"] == automatic["id"])["state"] == "canceled"
     assert all(j["state"] != "queued" or H.person_sent(j) or j["caused_by"] == "human:ana" for j in jobs)
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == before_status
-        assert H.task(c, task["id"]).get("step_id") == before_step
+        row = H.task(c, task["id"])
+        assert (row["status"], row["stage_id"], row["owner_id"]) == before
         assert c.execute("SELECT state FROM attempts WHERE id=?", (running["id"],)).fetchone()[0] in (
             "leased",
             "running",
@@ -202,11 +210,9 @@ def test_clearing_a_group_leaves_other_groups_and_clears_held_jobs(api):
     groups(api, "product")
     messages = {}
     for bot in ("ops", "finance"):
-        made = post(api, "tasks", {"title": "Review for " + bot, "body": "Check it.", "owner": "bot:" + bot})
-        task = made.get("task", made)
         with api.app.state.store.transaction() as c:
-            row = H.task(c, task["id"])
-            messages[bot] = H._wake(c, row, row["owner_id"], "Review 1 gave approve.", {"handoff": "verdict"})["id"]
+            task = H.task_create(c, H.KEEPER, "Review for " + bot, "Check it.", H.bot_actor(bot), lint=False)
+            messages[bot] = turn_wake(c, task["id"])
             c.execute("UPDATE jobs SET held=1 WHERE message_id=?", (messages[bot],))
     result = post(api, "usage/queues/purge", {"scope": "group:eng"})
     assert result["cancelled"] == 1

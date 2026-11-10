@@ -76,7 +76,9 @@ def test_closing_a_task_before_the_receiver_acts_frees_its_slot(api):
     closing = api.get(f"/api/v2/tasks/{first['id']}", headers=headers("ops-test")).json()
     version = (closing.get("task") or closing)["version"]
     r = api.post(
-        f"/api/v2/tasks/{first['id']}", json={"version": version, "status": "closed"}, headers=headers("ops-test")
+        f"/api/v2/tasks/{first['id']}/move",
+        json={"to": "closed", "why": "Not needed.", "version": version},
+        headers=headers("ops-test"),
     )
     assert r.status_code == 200, r.text
     assert rows(api)[("bot:ops", "person:ana")]["count"] == 0
@@ -132,8 +134,8 @@ def test_a_hand_over_adds_a_send_and_never_takes_the_first_one_out_of_the_count(
     first = task(api, "ops-test", "First", owner="ana")
     shown = api.get(f"/api/v2/tasks/{first['id']}", headers=headers()).json()
     r = api.post(
-        f"/api/v2/tasks/{first['id']}",
-        json={"version": (shown.get("task") or shown)["version"], "owner": "coo"},
+        f"/api/v2/tasks/{first['id']}/owner",
+        json={"version": (shown.get("task") or shown)["version"], "owner": "coo", "why": "Coo takes it."},
         headers=headers(),
     )  # Ana hands it to coo
     assert r.status_code == 200, r.text

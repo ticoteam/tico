@@ -2886,16 +2886,27 @@ def suppress_notice(c, job, task_id, reason):
     c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job['id'],))
     claim_holds.clear(c, job['id'], "Its run is no longer needed.")
     c.execute("UPDATE messages SET delivered_at=coalesce(delivered_at,?) WHERE id=?", (H.now(), job['message_id']))
+    clear_stop_status(c, job)
+    H.event(c, H.KEEPER, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id})
+
+
+def clear_stop_status(c, job):
+    """A canceled job's idle bot no longer shows the status its run's end left: a stop's, or a pause's "queued to
+    continue" for a turn that yielded and was the bot's last (Dev 684)."""
     from .repositories import metadata
 
-    if (
-        job["attempt_id"]
-        and metadata(c, LAST_STOP + job["bot_id"]).get("attempt_id") == job["attempt_id"]
-        and (H.status(c, job["bot_id"]) or {}).get("state") == "idle"
-    ):
+    aid, bot = job["attempt_id"], job["bot_id"]
+    if not aid or (H.status(c, bot) or {}).get("state") != "idle":
+        return
+    stopped = metadata(c, LAST_STOP + bot).get("attempt_id") == aid
+    yielded = c.execute(
+        "SELECT 1 FROM attempts a WHERE a.id=? AND a.state='interrupted' AND json_extract(a.result,'$.yielded') "
+        "AND NOT EXISTS (SELECT 1 FROM attempts b WHERE b.bot_id=a.bot_id AND b.created_at>a.created_at)",
+        (aid,),
+    ).fetchone()
+    if stopped or yielded:
         # Clearing the status also publishes the new header to already-open pages.
-        settle_status(c, job["bot_id"], "idle", "")
-    H.event(c, H.KEEPER, 'job.suppress', job['id'], {'reason': reason, 'task_id': task_id})
+        settle_status(c, bot, "idle", "")
 
 
 def request_stop(c, actor, aid, bot, detail):
@@ -4842,6 +4853,7 @@ class Execution:
             # The engine canceled its wake: the bot has no turn on the task now, or the visit started its 7 runs since
             # it last changed. Under this write lock, so two claims never both take the seventh. The never-stuck check
             # writes a lost wake again for a bot that still has a turn, and hands a task at 7 runs to a person.
+            clear_stop_status(c, row)
             H.event(c, H.KEEPER, "job.suppress", row["id"], {"reason": "no_turn_or_runs"})
             return {"attempt": None}
         # The bot's budget and back-off: an error in them passes the bot over, and holds no run.

@@ -46,7 +46,7 @@
  "file link": "not_found",
  "file list": "not_found",
  "file read": "not_found",
- "file review": "not_found",
+ "file review": "forbidden",
  "file touch": "not_found",
  "finance action": "not_found",
  "gateway digest": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",

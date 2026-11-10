@@ -74,21 +74,27 @@ def test_a_check_subtask_keeps_its_check_model_over_the_tasks_own_model(api):
     own_model(api, parent["id"], HAIKU)
     turn = claim(api, machine)
     assert turn["config"]["model"] == "claude-haiku-5-5"
-    sub = post(
-        api,
-        "tasks",
-        {
-            "owner": "ops",
-            "title": "Review PR 700 with another model",
-            "body": "Read it.",
-            "check_model": "grok",
-            "check_role": "review",
-            "parent": parent["id"],
-        },
-        turn["token"],
-    )
-    own_model(api, sub["id"], HAIKU)
-    finish(api, machine, turn, HAIKU_RAN)
+    made = {}
+
+    def file_the_check():
+        # The started turn files it: once filed, its parent waits on it, and a turn not yet started would not start.
+        made["sub"] = post(
+            api,
+            "tasks",
+            {
+                "owner": "ops",
+                "title": "Review PR 700 with another model",
+                "body": "Read it.",
+                "check_model": "grok",
+                "check_role": "review",
+                "parent": parent["id"],
+            },
+            turn["token"],
+        )
+        own_model(api, made["sub"]["id"], HAIKU)
+
+    finish(api, machine, turn, HAIKU_RAN, during=file_the_check)
+    sub = made["sub"]
     check = claim(api, machine)
     assert check["task"]["id"] == sub["id"]
     assert (check["config"]["runtime"], check["config"]["model"]) == ("grok", "grok-4.6")

@@ -604,6 +604,33 @@ def _readable(conn: "sqlite3.Connection", viewer: str | None, task_id: object, v
     return conn.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible_sql})", (other["id"],)).fetchone() is not None
 
 
+def _readable_rows(
+    conn: "sqlite3.Connection", viewer: str | None, task_ids: list[str], visible_sql: str | None = None
+) -> dict[str, Row]:
+    """`_readable` for many tasks at once, read together so a task that filed many costs what one that filed few
+    does: {id: its row} for each of `task_ids` that `viewer` may read."""
+    H = _h()
+    ids = list(dict.fromkeys(str(t) for t in task_ids if t))
+    if not ids:
+        return {}
+    marks = ",".join("?" * len(ids))
+    rows: dict[str, Row] = {
+        str(r["id"]): dict(r) for r in conn.execute(f"SELECT * FROM tasks WHERE id IN ({marks})", ids).fetchall()
+    }
+    if viewer is None:
+        return rows
+    if viewer == ON_RECORD:
+        return {i: r for i, r in rows.items() if not H.task_private(conn, r)}
+    rows = {i: r for i, r in rows.items() if H.task_private_readable(conn, viewer, r)}
+    if visible_sql is None or not rows:
+        return rows
+    marks = ",".join("?" * len(rows))
+    seen = {
+        str(r[0]) for r in conn.execute(f"SELECT id FROM tasks WHERE id IN ({marks}) AND ({visible_sql})", list(rows))
+    }
+    return {i: r for i, r in rows.items() if i in seen}
+
+
 def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None) -> list[str]:
     """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read (`_readable`).
     Their titles and ids are not theirs to see: not in what the task waits on, not in a requirement's standing, not
@@ -612,7 +639,10 @@ def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visib
     if row.get("status") != "open" or not visit:
         return []
     filed = [str(found[0]) for found in conn.execute("SELECT to_task_id FROM links WHERE visit_id=?", (visit["id"],))]
-    return [other for other in filed if not _readable(conn, viewer, other, visible_sql)]
+    if viewer is None or not filed:
+        return []
+    readable = _readable_rows(conn, viewer, filed, visible_sql)
+    return [other for other in filed if other not in readable]
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
@@ -689,7 +719,6 @@ def task_view(
     from . import task_requirements as R
     from . import waiting_on as W
 
-    H = _h()
     row = E.task(conn, task_id)
     if not row:
         return None
@@ -753,14 +782,15 @@ def task_view(
     # (`_readable`): one they may not read is left out whole, its id, status and that it exists at all.
     above = conn.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (task_id,)).fetchone()
     filed_by = above[0] if above and _readable(conn, viewer, above[0], visible_sql) else None
-    filed: list[Row] = []
-    for child_id, kind in conn.execute(
+    links = conn.execute(
         "SELECT to_task_id, kind FROM links WHERE from_task_id=? ORDER BY created_at, id", (task_id,)
-    ).fetchall():
-        child: Row | None = H.task(conn, child_id)
-        if not child or not _readable(conn, viewer, child_id, visible_sql):
-            continue
-        filed.append({"id": child_id, "kind": kind, "status": child["status"], "title": child["title"]})
+    ).fetchall()
+    children = _readable_rows(conn, viewer, [str(link[0]) for link in links], visible_sql)
+    filed: list[Row] = [
+        {"id": child_id, "kind": kind, "status": children[child_id]["status"], "title": children[child_id]["title"]}
+        for child_id, kind in ((str(link[0]), link[1]) for link in links)
+        if child_id in children
+    ]
     snooze: Row | None = row.get("snooze")
     late = None
     if live and visit.get("late_told_at"):

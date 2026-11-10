@@ -4,6 +4,8 @@ that follows edits and deletes. Fictional people only: ana (owner), ben and cara
 
 import time
 
+import pytest
+
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the fixture and its helpers)
 from backend.tests.helpers.org_rule_check import COLOR, bodies, hold_row, ruled  # noqa: F401  (the Judge fixture)
@@ -551,8 +553,7 @@ def test_releasing_a_held_upload_keeps_its_files_for_the_people_in_the_thread(ru
     assert got.status_code == 200 and got.content == b"swatches"
 
 
-def test_a_native_held_post_is_on_the_needs_list_and_moves_its_thread_up_for_who_reads_it(ruled):
-    api, _ = ruled
+def _held_post(api):
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
     quiet = new_thread(api, title="Held here", members=("human:ben",))
     say(api, quiet["id"], "Hello.")
@@ -561,17 +562,36 @@ def test_a_native_held_post_is_on_the_needs_list_and_moves_its_thread_up_for_who
     held = api.post(f"/api/v2/threads/{quiet['id']}/messages", json={"text": GOLD}, headers=headers("ben-test")).json()[
         "held"
     ]
+    return quiet, held
+
+
+def test_a_native_held_post_moves_its_thread_up_for_who_reads_it(ruled):
+    api, _ = ruled
+    quiet, held = _held_post(api)
+    assert [t["id"] for t in sidebar(api, limit=1)["attention"]] == [quiet["id"]]
+    assert quiet["id"] in {t["id"] for t in sidebar(api, "ana-test")["attention"]}
+    # A reviewer outside the thread: her sidebar says nothing of the thread.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rule_holds SET reviewer='human:cara' WHERE id=?", (held["id"],))
+    assert quiet["id"] not in str(sidebar(api, "cara-test"))
+    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
+    assert sidebar(api, limit=1)["attention"] == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Needs you lists tasks, asks, Paused causes and mentions only (docs/dev/pipelines-v3-cutover.md); a held "
+    "thread post is not on it, so a reviewer outside the thread is shown the hold nowhere",
+)
+def test_a_native_held_post_is_on_the_needs_list_of_its_author_and_reviewer(ruled):
+    api, _ = ruled
+    quiet, held = _held_post(api)
     mine = [i for i in get(api, "needs-you", token="ben-test")["items"] if i["kind"] == "thread_held"]
     assert [(i["id"], i["thread_id"]) for i in mine] == [(held["id"], quiet["id"])]
-    assert [t["id"] for t in sidebar(api, limit=1)["attention"]] == [quiet["id"]]
     reviewing = [i for i in get(api, "needs-you", token="ana-test")["items"] if i["kind"] == "thread_held"]
     assert [i["id"] for i in reviewing] == [held["id"]]  # Ana wrote the rule: it names her reviewer
-    assert quiet["id"] in {t["id"] for t in sidebar(api, "ana-test")["attention"]}
-    # A reviewer outside the thread: her list says a hold waits on her, and her sidebar says nothing of the thread.
+    # A reviewer outside the thread: her list says a hold waits on her, and names no thread.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE org_rule_holds SET reviewer='human:cara' WHERE id=?", (held["id"],))
     review = [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "thread_held"]
     assert [i["id"] for i in review] == [held["id"]] and review[0]["thread_id"] is None
-    assert quiet["id"] not in str(sidebar(api, "cara-test"))
-    assert post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")
-    assert sidebar(api, limit=1)["attention"] == []

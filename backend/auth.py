@@ -1035,9 +1035,17 @@ class Auth:
         if who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
+            from .task_asks import FILED_FOR_SQL, assistant_for
+
+            # The person's own Assistant also reads the tasks filed for the OKs asked of her (task_asks.assistant_reads_own_ok).
+            own_oks = (
+                (" OR id IN (" + FILED_FOR_SQL.replace("?", me) + ")")
+                if assistant_for(who.actor, who.task_actor)
+                else ""
+            )
             audience += (
                 f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
-                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}))"
+                f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}){own_oks})"
             )
         from . import counsel
 
@@ -1045,6 +1053,12 @@ class Auth:
         if denied:
             audience += " AND id NOT IN " + A.qlist(sorted(denied))
         return audience
+
+    @staticmethod
+    def _assistant_reads_own_ok(c, who, task_id):
+        from .task_asks import assistant_reads_own_ok
+
+        return assistant_reads_own_ok(c, who.actor, who.task_actor, task_id)
 
     def operator(self, c, who, bot):
         row = read_cache.one(c, OPERATOR_SQL, (bot,))
@@ -1303,7 +1317,11 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         if who.role not in ("owner", "human", "bot") or not H.task_private_readable(c, who.actor, row):
             raise Problem("not_found", "Task not found", 404)
-        if who.task_actor and not H.task_private_readable(c, who.task_actor, row):
+        if (
+            who.task_actor
+            and not H.task_private_readable(c, who.task_actor, row)
+            and not self._assistant_reads_own_ok(c, who, row["id"])
+        ):
             raise Problem("not_found", "Task not found", 404)
         participants = (row["owner_id"], row["requester_id"])
         if not H.task_participant(c, who.actor, row) and not (
