@@ -1292,3 +1292,18 @@ def test_runner_records_of_servers_that_slug_alike_never_share_a_file():
     for suffix in ("", "/a"):
         keys.add(runner_setup.runner_key(Settings(server_url=long + suffix, aws_region="us-west-2"), "runner-b1"))
     assert len(keys) == 8
+
+
+def test_an_old_install_re_saved_keeps_the_backup_user_backup_storage_made_for_it(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    state.save(DOMAIN, {"domain": DOMAIN, "aws_name": "hotmic", "target": "aws", "aws_region": "us-west-2"})
+    bs = ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"]
+    assert go(bs, deps=d)[0] == 0  # as an older release did: named after the domain, and no backup.json kept
+    assert [c["UserName"] for c in iam.called("create_user")] == ["tico-backup-hub-hotmicapp-com"]
+    (state.home() / DOMAIN / "backup.json").unlink()
+    code, out = go(hub_args(tmp_path, "--name", "hotmic", "--backup", "local"), deps=d)  # re-saves with asset_prefix
+    assert code == 0, out
+    assert state.load(DOMAIN)[0]["asset_prefix"] == "tico"
+    code, out = go(bs, deps=d)
+    assert code == 0, out
+    assert len(iam.called("create_user")) == 1 and state.load_backup(DOMAIN)["name"] == "hub-hotmicapp-com"

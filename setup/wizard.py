@@ -775,6 +775,12 @@ def run(args, io: IO, deps: Deps) -> int:
         and (kept.get("aws_account_id") or kept.get("aws_instance_id"))
     ):
         awsmod.check_region(kept.get("aws_region", ""), s.aws_region, s.domain)
+    if kept and "asset_prefix" not in kept and not dry and not state.load_backup(s.domain):
+        # Saved before --asset-prefix: `setup backup-storage` named its bucket's user after the domain. Re-saving adds
+        # asset_prefix, which would hide that, so the old identity is kept beside the state first.
+        state.save_backup(
+            s.domain, {"asset_prefix": awsmod.DEFAULT_PREFIX, "name": awsmod.slug(s.domain), "legacy": True}
+        )
     # Without a server install, the prefix `setup backup-storage` made the domain's bucket with.
     s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), kept or state.load_backup(s.domain))
     hosted.gather(args, s, dry)
