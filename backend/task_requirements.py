@@ -9,6 +9,7 @@ What met a requirement is its newest answer on the visit that is not undone (`an
 
 - `done`: the owner said the stage's work is finished (owner_done).
 - `ok`: the named person approved. `no`: they sent it back, with notes. `again`: the owner asks them to look again.
+- `give`: a stage's OK was given to another person, named in `notes`. It waits on them now.
 - anything else on an `answer` requirement: the choice the person picked, or what they typed.
 - `pushed_past`: someone moved the task on without it, with the reason in `notes`. Any kind.
 """
@@ -134,6 +135,19 @@ def newest_answers(conn: "sqlite3.Connection", visit_id: str) -> dict[str, Row]:
     return out
 
 
+def person_of(conn: "sqlite3.Connection", requirement: Row, visit_id: str) -> str | None:
+    """Who a requirement waits on in one visit: the person it was last given to (a `give` answer that is not undone),
+    else the person it names."""
+    given = conn.execute(
+        "SELECT notes FROM answers WHERE visit_id=? AND requirement_id=? AND answer='give' AND undone_at IS NULL "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (visit_id, requirement["id"]),
+    ).fetchone()
+    if given and given[0]:
+        return str(given[0])
+    return requirement.get("person_id")
+
+
 def _filed(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
     """The tasks filed during a visit, with how each stands. One that was deleted since counts as closed: it is not
     work that got done."""
@@ -157,7 +171,7 @@ def _owner_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer:
 
 
 def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    person = requirement.get("person_id")
+    person = person_of(conn, requirement, task["visit"]["id"])
     what = requirement.get("line") or "OK"
     if answer and answer["answer"] == "ok":
         return Standing(requirement, MET, line="OK'd")
@@ -168,9 +182,10 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
 
 
 def _answer(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    if answer and answer["answer"] not in ("again",):
+    if answer and answer["answer"] not in ("again", "give"):
         return Standing(requirement, MET, line=str(answer["answer"]))
-    return Standing(requirement, WAITING, requirement.get("person_id"), requirement.get("line") or "Answer")
+    person = person_of(conn, requirement, task["visit"]["id"])
+    return Standing(requirement, WAITING, person, requirement.get("line") or "Answer")
 
 
 def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:

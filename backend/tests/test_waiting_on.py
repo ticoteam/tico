@@ -63,7 +63,7 @@ def test_a_bot_that_cannot_run_shows_paused_with_the_cause(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     c.execute("UPDATE bots SET state='quarantined' WHERE id='builder'")
     wait = W.headline(c, row["id"])
-    assert (wait.state, wait.who, wait.line) == ("paused", "bot:builder", "quarantined")
+    assert (wait.state, wait.who, wait.line) == ("paused", "bot:builder", "builder is quarantined")
     c.execute("UPDATE bots SET state='active' WHERE id='builder'")
     assert W.headline(c, row["id"]).state == "bot"  # it carries on by itself
 
@@ -73,7 +73,12 @@ def test_the_ladder_hands_the_turn_to_the_manager_bot_and_then_to_a_person(c, ge
     c.execute("UPDATE visits SET level='manager' WHERE id=?", (row["visit"]["id"],))
     assert _states(c, row["id"]) == [("bot", "bot:manager")]
     c.execute("UPDATE visits SET level='person' WHERE id=?", (row["visit"]["id"],))
-    assert _states(c, row["id"]) == [("person", ANA)]  # the manager bot's owner
+    waits = W.waiting_on(c, row["id"])  # the manager bot's owner has it, and the first thing it says is why
+    assert [(w.state, w.who, w.line) for w in waits] == [
+        ("person", ANA, "Stuck in To do"),
+        ("person", ANA, "Say when the work is done"),
+    ]
+    assert [(n["kind"], n["line"]) for n in W.needs(c, ANA)] == [("task", "Stuck in To do")]
 
 
 def test_snoozed_is_the_headline_and_the_rest_is_still_listed(c, general):
@@ -126,7 +131,7 @@ def test_a_task_waits_on_the_tasks_it_filed_and_on_a_question_a_bot_asked(c, gen
         seen_version=child["version"],
     )
     waits = W.waiting_on(c, child["id"])
-    assert [(w.state, w.who) for w in waits] == [("person", ANA), ("bot", "bot:builder")]
+    assert [(w.state, w.who) for w in waits] == [("person", ANA)]  # the bot waits for the answer: it has no turn
     assert waits[0].requirement_id == asked["requirement_id"] and waits[0].line == "Card or invoice?"
 
 

@@ -9890,7 +9890,7 @@ SCHEMAS.update(
             {
                 "id": "s",
                 "person_id": "s",
-                "subject_type": {"enum": ["message", "task", "approval"]},
+                "subject_type": {"enum": ["message", "task", "approval", "ask"]},
                 "subject_id": "s",
                 "bot_id": "s",
                 "rating": {"enum": ["up", "down"]},

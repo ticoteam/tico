@@ -9,6 +9,7 @@ import json
 import re
 
 from backend import bot_settings as BS
+from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend.store import H
 
@@ -24,13 +25,46 @@ GENERAL = (
 )
 
 
-def bot(c, slug):
-    """An active bot, as the actor string."""
+def bot(c, slug, computer=True):
+    """An active bot on a computer, as the actor string. `computer=False` leaves it with nowhere to run."""
     if not H.bot(c, slug):
         H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"}}, {"people": []})
         c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, None, "ana"))
         BS.write(c, slug, {"name": slug, "runtime": "fake", "status": "active"})
+        if computer:
+            place(c, slug)
     return H.bot_actor(slug)
+
+
+def place(c, slug):
+    """Put a bot on the one test computer."""
+    c.execute(
+        "INSERT OR IGNORE INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','box','ana','h',?)",
+        (H.now(),),
+    )
+    c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
+
+
+def ran(c, task_id, actor, state="completed", at=None):
+    """The bot's queued wakes for a task have had their run: each job gets one run that ended in `state` at `at`."""
+    at = at or H.now()
+    rows = c.execute(
+        "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id = j.message_id "
+        "WHERE j.state='queued' AND j.bot_id=? AND m.wake_key LIKE ?",
+        (H.actor_id(actor), task_id + ":%"),
+    ).fetchall()
+    for job_id, message_id in rows:
+        run = H.new_id()
+        c.execute(
+            "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, "
+            "created_at, started_at, finished_at, message_id, task_id) VALUES (?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
+            (run, job_id, H.actor_id(actor), run, state, at, at, at, at, message_id, task_id),
+        )
+        c.execute(
+            "UPDATE jobs SET state=?, attempt_id=? WHERE id=?",
+            ("completed" if state == "completed" else "uncertain", run, job_id),
+        )
+    return len(rows)
 
 
 def _slug(name):
@@ -60,9 +94,25 @@ def requirement(c, stage_id, kind, **fields):
     return rid
 
 
+def _general(c, manager):
+    """General from its preset (backend/pipeline_settings.py), with its fixed ids, managed by `manager`."""
+    record = PS.preset(c, "general")
+    record["manager_id"] = manager
+    saved = PS.save(c, E.SYSTEM, record)
+    stages = [*saved["stages"], saved["done"], saved["closed"]]
+    return {
+        "id": saved["id"],
+        "stages": {s["name"]: s["id"] for s in stages},
+        "requirements": {s["name"]: [r["id"] for r in s.get("requirements") or ()] for s in stages},
+    }
+
+
 def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
     """A pipeline with its work stages, then Done and Closed. Returns {"id", "stages": {name: id}, "requirements":
-    {stage name: [ids]}}. Stage ids are `<pipeline id>-<stage name as a slug>`."""
+    {stage name: [ids]}}. Stage ids are `<pipeline id>-<stage name as a slug>`. The default is General, built from its
+    preset: its ids are fixed (`general-todo`, `general-done`, `general-closed`)."""
+    if (pid, name, stages) == ("general", "General", GENERAL):
+        return _general(c, manager)
     now = H.now()
     c.execute(
         "INSERT INTO pipelines (id, name, manager_id, created_at, updated_at) VALUES (?,?,?,?,?)",
@@ -138,6 +188,14 @@ def wakes(c, task_id, actor=None):
         "SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE ? ORDER BY created_at, id", (task_id + ":%",)
     ).fetchall()
     return [(r[0], r[1]) for r in rows if actor is None or r[1] == actor]
+
+
+def events(c, task_id):
+    """The kinds of a task's history events, oldest first."""
+    rows = c.execute(
+        "SELECT kind FROM history_events WHERE subject_type='task' AND subject_id=? ORDER BY rowid", (task_id,)
+    ).fetchall()
+    return [row[0] for row in rows]
 
 
 def guard_closed(c):

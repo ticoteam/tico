@@ -1,7 +1,8 @@
 """Feedback on bot work: a person's thumbs up or down, with an optional reason, on something a bot made.
 
 - Subjects: a message a bot wrote (Assistant chat, threads, DMs, task comments), a task a bot filed (its requester is a
-  bot) and an approval a bot asked for. Anything else is refused (422).
+  bot) and an approval a bot asked for. Anything else is refused (422). An ask (a bot's requirement on a task) is a
+  fourth subject, rated through backend/answers.py and read back here; it is as readable as its task.
 - One row per person and subject (`feedbacks`, migration 0041): rating again replaces it. The row names the bot and,
   where the work links to a runner attempt, the attempt, its model and harness, for training. It keeps no copy of the
   rated words: deleting a message erases them, and the reason is the person's own.
@@ -29,7 +30,8 @@ from . import task_privacy as privacy
 from .models import Contract
 from .store import Problem
 
-SUBJECTS = ("message", "task", "approval")
+SUBJECTS = ("message", "task", "approval", "ask")
+SUBJECTS_SAID = "subject_type is message, task, approval or ask"
 RATINGS = ("up", "down")
 REASON_MAX = 1000
 IDS_MAX = 200  # the subjects one markers read names
@@ -121,6 +123,30 @@ def _readable_approval(c, auth, who, approval_id):
     return row
 
 
+def _readable_ask(c, auth, who, subject_id):
+    """The ask (answers.ask_of) with its task, when the viewer reads the task."""
+    from .answers import ask_of
+
+    ask = ask_of(c, subject_id)
+    if not ask:
+        raise _missing("ask")
+    try:
+        task = auth.task(c, who, ask["task_id"])
+    except Problem:
+        raise _missing("ask") from None
+    return {**ask, "task": task}
+
+
+def _latest_message(c, conversation_id):
+    """The newest message of a conversation, which a note to the bot is tied to."""
+    latest = c.execute(
+        "SELECT id FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (conversation_id,),
+    ).fetchone()
+    return latest[0] if latest else None
+
+
 def subject(c, auth, who, subject_type, subject_id):
     """What feedback on one subject records, when the viewer reads it (404 otherwise) and a bot made it (422 otherwise):
     {bot_id, conversation_id, attempt_id, model, harness, revision, note_message_id, link, text}. `note_message_id` is
@@ -148,19 +174,31 @@ def subject(c, auth, who, subject_type, subject_id):
         bot = task.get("requester_id")
         if not H.is_bot(bot):
             raise Problem("not_bot", "Only a task a bot filed takes feedback", 422)
-        latest = c.execute(
-            "SELECT id FROM messages WHERE conversation_id=? AND deleted_at IS NULL "
-            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            (task.get("conversation_id"),),
-        ).fetchone()
         return {
             "bot_id": bot,
             "conversation_id": task.get("conversation_id"),
             "attempt": _attempt(c, _made_in(c, "task.create", task["id"])),
             "revision": task.get("version"),
-            "note_message_id": latest[0] if latest else None,
+            "note_message_id": _latest_message(c, task.get("conversation_id")),
             "link": "/#/task/" + quote(task["id"], safe=""),
             "text": f"{task.get('title') or ''}\n\n{task.get('body') or ''}".strip(),
+        }
+    if subject_type == "ask":
+        # Rated through backend/answers.py, never through give(); read back here for a removal, a rule draft and the
+        # audit event, which targets the task.
+        from .task_requirements import name_of
+
+        ask = _readable_ask(c, auth, who, subject_id)
+        task = ask["task"]
+        return {
+            "bot_id": ask["bot"],
+            "conversation_id": task.get("conversation_id"),
+            "attempt": (None, None, None),
+            "revision": task.get("version"),
+            "note_message_id": _latest_message(c, task.get("conversation_id")),
+            "link": "/#/task/" + quote(task["id"], safe=""),
+            "text": f"{task.get('title') or ''}\n\n{name_of(ask['requirement'])}".strip(),
+            "target": task["id"],
         }
     if subject_type == "approval":
         row = _readable_approval(c, auth, who, subject_id)
@@ -183,7 +221,7 @@ def subject(c, auth, who, subject_type, subject_id):
             "link": link,
             "text": f"{row.get('kind')}: " + json.dumps(row.get("payload") or {}, sort_keys=True, default=str),
         }
-    raise Problem("validation", "subject_type is message, task or approval", 422)
+    raise Problem("validation", SUBJECTS_SAID, 422)
 
 
 def readable(c, auth, who, subject_type, subject_id, memo=None):
@@ -191,7 +229,12 @@ def readable(c, auth, who, subject_type, subject_id, memo=None):
     key = (subject_type, subject_id)
     if memo is not None and key in memo:
         return memo[key]
-    check = {"message": _readable_message, "task": _readable_task, "approval": _readable_approval}.get(subject_type)
+    check = {
+        "message": _readable_message,
+        "task": _readable_task,
+        "approval": _readable_approval,
+        "ask": _readable_ask,
+    }.get(subject_type)
     try:
         found = bool(check) and check(c, auth, who, subject_id) is not None
     except Problem:
@@ -254,10 +297,10 @@ def own_row(c, auth, who, feedback_id):
 
 
 # ----------------------------------------------------------------------------- writes
-def _cancel_waiting(c, who, note_id):
+def _cancel_waiting(c, actor, note_id):
     """Take back a note no run has carried yet: the feedback it said is gone or replaced."""
     if note_status(c, note_id) == "waiting":
-        H.note_cancel(c, who.actor, note_id)
+        H.note_cancel(c, actor, note_id)
         return True
     return False
 
@@ -286,50 +329,11 @@ def give(c, auth, who, body):
     H._writer(c, who.actor)
     if body["tell_bot"] and body["rating"] != "down":
         raise Problem("validation", "tell_bot goes with a 👎", 422)
+    if body["subject_type"] == "ask":
+        raise Problem("validation", "Rate an ask on its task", 422)
     subj = subject(c, auth, who, body["subject_type"], body["subject_id"])
-    attempt_id, model, harness = subj["attempt"]
-    now = H.now()
-    reason = str(body.get("reason") or "").strip()[:REASON_MAX]
-    old = c.execute(
-        "SELECT * FROM feedbacks WHERE person_id=? AND subject_type=? AND subject_id=?",
-        (who.actor, body["subject_type"], body["subject_id"]),
-    ).fetchone()
-    old = dict(old) if old else None
-    row = {
-        "person_id": who.actor,
-        "subject_type": body["subject_type"],
-        "subject_id": body["subject_id"],
-        "bot_id": subj["bot_id"],
-        "conversation_id": subj["conversation_id"],
-        "attempt_id": attempt_id,
-        "model": model,
-        "harness": harness,
-        "subject_revision": subj["revision"],
-        "rating": body["rating"],
-        "reason": reason,
-        "updated_at": now,
-    }
-    if old is None:
-        row.update({"id": H.new_id(), "outcome": "none", "note_id": None, "org_rule_id": None, "created_at": now})
-    else:
-        row.update({k: old[k] for k in ("id", "outcome", "note_id", "org_rule_id", "created_at")})
-        if _cancel_waiting(c, who, old["note_id"]):
-            row["note_id"] = None
-            row["outcome"] = "rule" if old["org_rule_id"] else "none"
-    if body["tell_bot"]:
-        row["note_id"] = _tell(c, who, row, subj)
-        row["outcome"] = "told_bot"
-    c.execute(
-        "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,conversation_id,attempt_id,model,harness,"
-        "subject_revision,rating,reason,outcome,note_id,org_rule_id,created_at,updated_at) VALUES(:id,:person_id,"
-        ":subject_type,:subject_id,:bot_id,:conversation_id,:attempt_id,:model,:harness,:subject_revision,:rating,"
-        ":reason,:outcome,:note_id,:org_rule_id,:created_at,:updated_at) ON CONFLICT(person_id,subject_type,"
-        "subject_id) DO UPDATE SET bot_id=excluded.bot_id,conversation_id=excluded.conversation_id,"
-        "attempt_id=excluded.attempt_id,model=excluded.model,harness=excluded.harness,"
-        "subject_revision=excluded.subject_revision,rating=excluded.rating,reason=excluded.reason,"
-        "outcome=excluded.outcome,note_id=excluded.note_id,updated_at=excluded.updated_at",
-        row,
-    )
+    tell = (lambda row: _tell(c, who, row, subj)) if body["tell_bot"] else None
+    row = rate(c, who.actor, body["subject_type"], body["subject_id"], subj, body["rating"], body.get("reason"), tell)
     # Kinds only: the reason is the person's words and stays in its row.
     _event(
         c,
@@ -343,10 +347,61 @@ def give(c, auth, who, body):
     return view(c, _row(c, row["id"]))
 
 
+def rate(c, person, subject_type, subject_id, subj, rating, reason, tell=None):
+    """Write one person's 👍 or 👎 on one subject: their row for it is made or replaced. The one writer of `feedbacks`
+    rows; the caller has checked the person may rate it. `subj` is what `subject` gives (`bot_id`, `conversation_id`,
+    `attempt`, `revision`). A replaced row's note that no run carried yet is taken back; `tell(row)` leaves a new one and
+    returns its id. Returns the row as written. Asks on tasks are rated through here by backend/answers.py."""
+    attempt_id, model, harness = subj["attempt"]
+    now = H.now()
+    reason = str(reason or "").strip()[:REASON_MAX]
+    old = c.execute(
+        "SELECT * FROM feedbacks WHERE person_id=? AND subject_type=? AND subject_id=?",
+        (person, subject_type, subject_id),
+    ).fetchone()
+    old = dict(old) if old else None
+    row = {
+        "person_id": person,
+        "subject_type": subject_type,
+        "subject_id": subject_id,
+        "bot_id": subj["bot_id"],
+        "conversation_id": subj["conversation_id"],
+        "attempt_id": attempt_id,
+        "model": model,
+        "harness": harness,
+        "subject_revision": subj["revision"],
+        "rating": rating,
+        "reason": reason,
+        "updated_at": now,
+    }
+    if old is None:
+        row.update({"id": H.new_id(), "outcome": "none", "note_id": None, "org_rule_id": None, "created_at": now})
+    else:
+        row.update({k: old[k] for k in ("id", "outcome", "note_id", "org_rule_id", "created_at")})
+        if _cancel_waiting(c, person, old["note_id"]):
+            row["note_id"] = None
+            row["outcome"] = "rule" if old["org_rule_id"] else "none"
+    if tell is not None:
+        row["note_id"] = tell(row)
+        row["outcome"] = "told_bot"
+    c.execute(
+        "INSERT INTO feedbacks(id,person_id,subject_type,subject_id,bot_id,conversation_id,attempt_id,model,harness,"
+        "subject_revision,rating,reason,outcome,note_id,org_rule_id,created_at,updated_at) VALUES(:id,:person_id,"
+        ":subject_type,:subject_id,:bot_id,:conversation_id,:attempt_id,:model,:harness,:subject_revision,:rating,"
+        ":reason,:outcome,:note_id,:org_rule_id,:created_at,:updated_at) ON CONFLICT(person_id,subject_type,"
+        "subject_id) DO UPDATE SET bot_id=excluded.bot_id,conversation_id=excluded.conversation_id,"
+        "attempt_id=excluded.attempt_id,model=excluded.model,harness=excluded.harness,"
+        "subject_revision=excluded.subject_revision,rating=excluded.rating,reason=excluded.reason,"
+        "outcome=excluded.outcome,note_id=excluded.note_id,updated_at=excluded.updated_at",
+        row,
+    )
+    return row
+
+
 def _private(c, subject_type, subject_id, subj):
     """Whether the rated work is narrower than the company: a private thread (an Assistant chat, a members or
     participants thread), a message tied to a private task or meeting, or a private task."""
-    if subject_type == "task" and H.task_private(c, H.task(c, subject_id) or {}):
+    if subject_type in ("task", "ask") and H.task_private(c, H.task(c, subj.get("target") or subject_id) or {}):
         return True
     if subject_type == "approval":
         approval = c.execute("SELECT task_id FROM approvals WHERE id=?", (subject_id,)).fetchone()
@@ -364,14 +419,15 @@ def _event(c, auth, who, action, row, subj, detail):
         subj = subject(c, auth, who, row["subject_type"], row["subject_id"])
     if _private(c, row["subject_type"], row["subject_id"], subj):
         return
-    H.event(
-        c, who.actor, action, row["subject_id"], {"feedback": row["id"], "subject_type": row["subject_type"], **detail}
-    )
+    detail = {"feedback": row["id"], "subject_type": row["subject_type"], **detail}
+    if subj.get("target"):
+        detail["subject_id"] = row["subject_id"]
+    H.event(c, who.actor, action, subj.get("target") or row["subject_id"], detail)
 
 
 def remove(c, auth, who, feedback_id):
     row = own_row(c, auth, who, feedback_id)
-    _cancel_waiting(c, who, row["note_id"])
+    _cancel_waiting(c, who.actor, row["note_id"])
     c.execute("DELETE FROM feedbacks WHERE id=?", (row["id"],))
     _event(c, auth, who, "feedback.removed", row, None, {"bot": row["bot_id"]})
     return {"ok": True, "id": row["id"]}
@@ -401,7 +457,7 @@ def markers(c, auth, who, subject_type, subject_ids):
     one subject with hundreds of ratings costs one count row."""
     auth.domain(who)
     if subject_type not in SUBJECTS:
-        raise Problem("validation", "subject_type is message, task or approval", 422)
+        raise Problem("validation", SUBJECTS_SAID, 422)
     ids = [i.strip() for i in str(subject_ids or "").split(",") if i.strip()]
     ids = list(dict.fromkeys(ids))
     if len(ids) > IDS_MAX:
@@ -602,4 +658,15 @@ def install(app, store, auth, mutate):
         return mutate(request, body, lambda c: make_rule(c, auth, who, feedback_id, body.model_dump()))
 
 
-__all__ = ["install", "give", "remove", "make_rule", "markers", "listing", "recent_reasons", "subject", "readable"]
+__all__ = [
+    "install",
+    "give",
+    "rate",
+    "remove",
+    "make_rule",
+    "markers",
+    "listing",
+    "recent_reasons",
+    "subject",
+    "readable",
+]

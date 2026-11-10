@@ -61,7 +61,7 @@ def test_a_task_on_the_engine_changes_stage_owner_and_status_only_through_the_en
 
 def test_a_new_task_starts_in_the_first_stage_with_one_open_visit_and_one_wake(c, general):
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
-    assert (row["stage_id"], row["status"], row["owner_id"]) == ("general-to-do", "open", "bot:builder")
+    assert (row["stage_id"], row["status"], row["owner_id"]) == ("general-todo", "open", "bot:builder")
     assert row["visit"]["entered_how"] == "new" and row["visit"]["left_at"] is None
     assert X.wakes(c, row["id"]) == [(f"{row['id']}:{row['visit']['id']}:owner:0", "bot:builder")]
     with _refused("task_changed"):

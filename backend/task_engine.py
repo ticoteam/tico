@@ -13,6 +13,7 @@ quarantining a bot.
 Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
+import hashlib
 import json
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn
@@ -35,6 +36,7 @@ is_human: Callable[[object], bool] = _core.is_human
 NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"
 MAX_DEPTH = 5  # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3  # a bot's snoozes in one stage before the manager bot gets the task
+FIRST_TRY_S = 120  # seconds after a wake before the never-stuck check looks at a bot that stopped early
 GUARDED = ("status", "stage_id", "owner_id", "pipeline_id")
 
 
@@ -178,8 +180,9 @@ def _open_visit(conn: "sqlite3.Connection", task_id: str, stage_id: str, how: st
     H = _h()
     visit_id = H.new_id()
     conn.execute(
-        "INSERT INTO visits (id, task_id, stage_id, entered_at, entered_how, last_change_at) VALUES (?,?,?,?,?,?)",
-        (visit_id, task_id, stage_id, ts, how, ts),
+        "INSERT INTO visits (id, task_id, stage_id, entered_at, entered_how, last_change_at, next_try_at) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (visit_id, task_id, stage_id, ts, how, ts, H.shift(ts, seconds=FIRST_TRY_S)),
     )
     return visit_id
 
@@ -196,9 +199,11 @@ def _close_visit(conn: "sqlite3.Connection", visit: Row, how: str, by: str, why:
     )
 
 
-def _check_version(
+def check_version(
     conn: "sqlite3.Connection", by: str, row: Row, seen_version: int | str | None, cascade: bool = False
 ) -> None:
+    """Refuse a write made against an old version of the task. A bot always says which version it saw; a person may
+    leave it out. `cascade` is the engine closing a task with the one that filed it."""
     if cascade:
         return
     if seen_version is None:
@@ -407,7 +412,7 @@ def move(
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
-    _check_version(conn, by, row, seen_version, cascade)
+    check_version(conn, by, row, seen_version, cascade)
     target, kind = _target(conn, by, row, to)
     if not target or kind is None:
         return row
@@ -517,6 +522,7 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
     lead = "The tasks this one filed have ended: " + "; ".join(
         f"{title or 'A task'}: {'Done' if status == 'done' else 'Closed'}" for title, status in filed
     )
+    _reset_ladder(conn, above["visit"], _h().now(), by)
     owner = above.get("owner_id")
     if is_bot(owner) and not above.get("snooze"):
         task_wakes.add(
@@ -558,8 +564,9 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
 
 
 def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None = None) -> list[str]:
-    """Move every task that is ready and has room, oldest first. Run right after a move frees a slot, and by the
-    never-stuck check. Returns the ids of the tasks it moved."""
+    """Move every task that is ready and has room, oldest first. Run when a pipeline's settings change a limit. The
+    never-stuck check does the same for every task on each pass, so a freed slot is filled within 10 seconds. Returns
+    the ids of the tasks it moved."""
     sql = (
         "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
         "JOIN stages s ON s.id = t.stage_id "
@@ -593,7 +600,7 @@ def reassign(
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
-    _check_version(conn, by, row, seen_version)
+    check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
     owner = owner or None
@@ -605,10 +612,7 @@ def reassign(
         fields["assignee_id"] = owner
     task_wakes.drop(conn, task_id)
     _write(conn, task_id, **fields)
-    conn.execute(
-        "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=NULL, last_change_at=? WHERE id=?",
-        (ts, row["visit"]["id"]),
-    )
+    _reset_ladder(conn, row["visit"], ts, by)
     _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, why, {"stage": row["stage_id"]})
     moved = _task(conn, task_id)
     if is_bot(owner) and not moved.get("snooze") and not moved["stage"].get("by_hand"):
@@ -621,6 +625,89 @@ def reassign(
             wake_key=f"{task_id}:{moved['visit']['id']}:owner:v{moved['version']}",
         )
     return moved
+
+
+def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence[R.Standing] | None = None) -> str:
+    """What the never-stuck check compares to tell a task that changed from one that did not: the task's version, the
+    answers, added requirements, filed tasks and snoozes of this visit, and where each requirement stands (so a PR
+    that opened or a check that finished is a change). A comment is not a change. `standings` saves reading them
+    again when the caller has them."""
+    found = conn.execute(
+        "SELECT v.task_id, t.version, "
+        "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id), "
+        "(SELECT COUNT(*) FROM answers a WHERE a.visit_id = v.id AND a.undone_at IS NOT NULL), "
+        "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id), "
+        "(SELECT COUNT(*) FROM requirements r WHERE r.visit_id = v.id AND r.withdrawn_at IS NOT NULL), "
+        "(SELECT COUNT(*) FROM links l WHERE l.visit_id = v.id), "
+        "(SELECT COUNT(*) FROM links l LEFT JOIN tasks c ON c.id = l.to_task_id "
+        " WHERE l.visit_id = v.id AND COALESCE(c.status, 'closed') <> 'open'), "
+        "(SELECT COUNT(*) FROM snoozes z WHERE z.task_id = v.task_id AND z.visit_id = v.id), "
+        "(SELECT COUNT(*) FROM snoozes z WHERE z.task_id = v.task_id AND z.visit_id = v.id AND z.ended_at IS NOT NULL) "
+        "FROM visits v JOIN tasks t ON t.id = v.task_id WHERE v.id=?",
+        (visit_id,),
+    ).fetchone()
+    if not found:
+        return ""
+    if standings is None:
+        row = task(conn, found[0])
+        standings = R.standings(conn, row) if row and _part(row, "visit").get("id") == visit_id else ()
+    stand = ",".join(f"{s.requirement['id']}={s.state}:{s.on or ''}" for s in standings)
+    return ".".join(str(part or 0) for part in found[1:]) + "." + hashlib.sha256(stand.encode()).hexdigest()[:12]
+
+
+def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> None:
+    """The task changed: start the never-stuck ladder again. The owner has it, no tries are counted, and the check
+    looks again after the first gap. Call it after the change is written, so the mark it keeps includes the change. A
+    task that Late brought to a person stays with that person until a person acts."""
+    mark = progress_mark(conn, visit["id"])
+    look = _h().shift(ts, seconds=FIRST_TRY_S)
+    if visit.get("level") == "person" and visit.get("late_person_at") and not is_human(by):
+        conn.execute(
+            "UPDATE visits SET progress_mark=?, last_change_at=?, next_try_at=? WHERE id=?",
+            (mark, ts, look, visit["id"]),
+        )
+        return
+    conn.execute(
+        "UPDATE visits SET tries=0, level='owner', person_id=NULL, next_try_at=?, last_change_at=?, progress_mark=? "
+        "WHERE id=?",
+        (look, ts, mark, visit["id"]),
+    )
+
+
+def changed(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """Something a task waits on changed outside a move: an answer came, or was taken back. The ladder starts again.
+    Whoever calls this also wakes the bot it hands the turn to."""
+    row = task(conn, task_id)
+    if row and row["status"] == "open":
+        _reset_ladder(conn, row["visit"], _h().now(), by)
+
+
+def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
+    """Try again: hand a task the ladder or Late brought to a person back to its owner, with the count at zero. The
+    owner is woken once."""
+    H = _h()
+    row = task(conn, task_id)
+    if not row:
+        _refuse(conn, by, "not-found", "No such task")
+    if row["status"] != "open":
+        _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
+    ts = H.now()
+    visit = row["visit"]
+    _reset_ladder(conn, visit, ts, by)
+    _event(conn, task_id, by, "try_again", visit.get("level"), "owner", why)
+    out = _task(conn, task_id)
+    owner = out.get("owner_id") or _part(out, "pipeline").get("manager_id")
+    if is_bot(owner) and not out.get("snooze") and not out["stage"].get("by_hand"):
+        lead = "Try this task again." + (f" {why}" if why else "")
+        task_wakes.add(
+            conn,
+            out,
+            owner,
+            out["visit"],
+            task_wakes.body(conn, out, lead),
+            wake_key=f"{task_id}:{visit['id']}:again:{ts}",
+        )
+    return out
 
 
 # ----------------------------------------------------------------------------- snooze
@@ -645,7 +732,7 @@ def snooze(
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
-    _check_version(conn, by, row, seen_version)
+    check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
     _need_why(conn, by, why, "snooze it", task_id)
@@ -669,6 +756,7 @@ def snooze(
     if is_bot(by):
         conn.execute("UPDATE visits SET bot_snoozes = bot_snoozes + 1 WHERE id=?", (visit["id"],))
     task_wakes.drop(conn, task_id)
+    _reset_ladder(conn, visit, ts, by)
     _event(conn, task_id, by, "snooze", None, until, why)
     out = _task(conn, task_id)
     if not until and is_bot(by):
@@ -686,7 +774,7 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
         return row
     ts = H.now()
     _end_snooze(conn, row["snooze"], by, ts)
-    conn.execute("UPDATE visits SET last_change_at=? WHERE id=?", (ts, row["visit"]["id"]))
+    _reset_ladder(conn, row["visit"], ts, by)
     _event(conn, task_id, by, "unsnooze", row["snooze"].get("until_at"), None, why)
     out = _task(conn, task_id)
     owner = out.get("owner_id")
@@ -721,7 +809,7 @@ def add_requirement(
     row = task(conn, task_id)
     if not row:
         _refuse(conn, by, "not-found", "No such task")
-    _check_version(conn, by, row, seen_version)
+    check_version(conn, by, row, seen_version)
     if row["status"] != "open":
         _refuse(conn, by, "task_ended", f"The task is {row['stage']['name']}. Reopen it first.", task_id)
     if kind not in ("ok", "answer"):
@@ -756,10 +844,21 @@ def add_requirement(
             ts,
         ),
     )
-    conn.execute("UPDATE visits SET last_change_at=? WHERE id=?", (ts, visit["id"]))
+    _reset_ladder(conn, visit, ts, by)
     _event(conn, task_id, by, "requirement", None, requirement_id, line.strip(), {"kind": kind, "person": person})
     out = _task(conn, task_id)
     out["requirement_id"] = requirement_id
+    if is_bot(person) and not out.get("snooze"):
+        # A person finds it in Needs you. A bot that is named is woken, once.
+        lead = f"{H.actor_name(conn, by)} asks you: {line.strip()}"
+        task_wakes.add(
+            conn,
+            out,
+            person,
+            out["visit"],
+            task_wakes.body(conn, out, lead),
+            wake_key=f"{task_id}:{visit['id']}:ask:{requirement_id}",
+        )
     return out
 
 
@@ -776,6 +875,6 @@ def withdraw_requirement(
         return task(conn, visit["task_id"]) if visit else None
     ts = H.now()
     conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (ts, requirement_id))
-    conn.execute("UPDATE visits SET last_change_at=? WHERE id=?", (ts, visit["id"]))
+    _reset_ladder(conn, visit, ts, by)
     _event(conn, visit["task_id"], by, "requirement_withdrawn", requirement_id, None, why)
     return advance(conn, visit["task_id"]) or task(conn, visit["task_id"])

@@ -277,6 +277,15 @@ STEPS = [
     Step(
         "task_loops", "Task loop alerts", "recovery", None, S.step_task_loops, failure="task_loops", capture="scheduler"
     ),
+    Step(
+        "never_stuck",
+        "Never-stuck check",
+        "recovery",
+        None,
+        S.step_never_stuck,
+        failure="never_stuck",
+        capture="scheduler",
+    ),
     Step("snooze_ends", "Snooze ends", "due", None, S.step_snooze_ends, failure="snooze_ends", capture="scheduler"),
     Step(
         "queue_check", "Queue check", "recovery", None, S.step_queue_check, failure="queue_check", capture="scheduler"
