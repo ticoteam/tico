@@ -48,6 +48,11 @@
   ],
   "browser": [
     {
+      "script": "ask-screen",
+      "seconds": 5.4,
+      "reason": "Needs you one ask at a time: an OK sends the hash of exactly what it showed"
+    },
+    {
       "script": "account-status",
       "seconds": 9.429,
       "reason": "The account menu's status dot: Can't reach Tico (amber) and Bots aren't running (red)"
