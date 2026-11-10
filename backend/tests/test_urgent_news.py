@@ -11,21 +11,19 @@ from backend.tests.helpers.wake_rules import as_cause
 from backend.tests.helpers.urgent_news import sent_job
 
 
-def test_incident_move_is_unheld_and_claimable_within_five_minutes(api):
+def test_incident_news_is_unheld_and_claimable_within_five_minutes(api):
     r = runner(api)
     assign(api, r, 'cpo')
     ready(api, r, ['cpo'])
     with api.app.state.store.transaction() as c:
         put(c, 'cpo', 'lead')
-        incident = H.task_create(c, 'bot:cpo', 'Restore sign-in', 'Repair the outage', 'bot:ops', labels=['incident'])
+        incident = H.task_create(c, 'bot:ops', 'Restore sign-in', 'Repair the outage', 'bot:cpo', labels=['incident'])
         c.execute('DELETE FROM jobs')
-        H.task_update(c, 'bot:ops', incident['id'], status='doing')
-        job = c.execute(
-            "SELECT j.*,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "WHERE j.bot_id='cpo' ORDER BY j.rowid DESC LIMIT 1"
-        ).fetchone()
+        # News about an open incident on the bot's turn. A run about a task starts only while its bot has a turn on it
+        # (task_wakes.may_start), and a finished task wakes nobody.
+        msg, job = sent_job(c, incident, 'bot:cpo', 'Sign-in works again for most people')
         assert job is not None and job['held'] == 0 and job['state'] == 'queued'
-        assert json.loads(job['refs'])['rule'] == 'incident_news'
+        assert msg['refs']['rule'] == 'incident_news'
         created = job['created_at']
     attempt = claim(api, r, 'cpo')
     assert attempt
@@ -35,53 +33,22 @@ def test_incident_move_is_unheld_and_claimable_within_five_minutes(api):
     assert (H.parse_ts(started) - H.parse_ts(created)).total_seconds() < 300
 
 
-def test_stale_suggestion_and_refused_move_need_action_but_routine_review_stays_held(api):
+def test_old_check_and_review_news_is_ordinary_digest_news_for_a_lead(api):
+    """Stale checks, refused moves and review requests left with the old engine: only incidents are urgent now."""
     with api.app.state.store.transaction() as c:
         put(c, 'cpo', 'lead')
-        mine = H.task_create(c, 'bot:ops', 'Check the rollout', 'x', 'bot:cpo')
         requested = H.task_create(c, 'bot:cpo', 'Build a feature', 'x', 'bot:ops')
         c.execute('DELETE FROM jobs')
-        H.task_comment(
-            c,
-            H.KEEPER,
-            mine['id'],
-            'Stale check: parent is done. Suggest: mark done.',
-            extra_refs={'stale_check': 'suggestion-1', 'wake': 'stall', 'wake_batch': 'rule'},
-        )
-        raw = c.execute(
-            "SELECT m.refs,j.held FROM messages m JOIN jobs j ON j.message_id=m.id "
-            "WHERE j.bot_id='cpo' ORDER BY j.rowid DESC LIMIT 1"
-        ).fetchone()
-        msg, job = {'refs': json.loads(raw['refs'])}, raw
-        assert msg['refs']['rule'] == 'task_action' and job['held'] == 0
-        assert 'wake_batch' not in msg['refs']
-        # Even a sweep-shaped notice cannot be held again by the enqueue trigger.
-        _, job = sent_job(
-            c,
-            mine,
-            'bot:cpo',
-            'Suggestion from a scheduled check',
-            {'stale_check': 'suggestion-2', 'wake': 'stalled', 'sweep': 'check'},
-        )
-        assert job['held'] == 0
-        _, job = sent_job(
-            c,
-            requested,
-            'bot:cpo',
-            'A refused review move needs attention',
-            {'news': 'blocker', 'review_gate': 'receipt'},
-        )
-        assert job['held'] == 0
-        msg, job = sent_job(
-            c, requested, 'bot:cpo', 'Ready for review: feature entered Review 1', {'news': 'ready_for_review'}
-        )
-        assert msg['refs']['rule'] == 'profile_lead_digest' and job['held'] == 1
+        for text, refs in [
+            ('Suggestion from a scheduled check', {'stale_check': 'suggestion-2', 'wake': 'stalled'}),
+            ('A refused review move needs attention', {'news': 'refused_move', 'review_gate': 'receipt'}),
+            ('Ready for review: feature entered Review 1', {'news': 'ready_for_review'}),
+        ]:
+            msg, job = sent_job(c, requested, 'bot:cpo', text, refs)
+            assert msg['refs']['rule'] == 'profile_lead_digest' and job['held'] == 1
         W.tick(c, job['created_at'])
         due = c.execute('SELECT hold_until FROM jobs WHERE id=?', (job['id'],)).fetchone()[0]
         assert due == W.digest_time(job['created_at'], 9)
-        # A stale suggestion about another bot's task is not an action for this recipient.
-        msg, job = sent_job(c, requested, 'bot:cpo', 'Stale check for the owner', {'stale_check': 'other'})
-        assert msg['refs']['rule'] == 'profile_lead_digest' and job['held'] == 1
 
 
 @pytest.mark.parametrize('profile', ['lead', 'doer', 'custom'])
@@ -94,20 +61,11 @@ def test_urgent_news_overrides_batch_rows_for_every_batching_profile(api, profil
             (H.now(), H.now()),
         )
         incident = H.task_create(c, 'bot:cpo', 'Incident: Outage', 'x', 'bot:ops')
-        mine = H.task_create(c, 'bot:ops', 'Own this work', 'x', 'bot:cpo')
         other = H.task_create(c, 'bot:ops', 'Other work', 'x', 'bot:ops')
         c.execute('DELETE FROM jobs')
-        # A lead's own profile already wakes review requests under its own rule name, which urgency preserves.
-        review_rule = 'profile_lead_request' if profile == 'lead' else 'direct_review_request'
-        for task, refs, rule in [
-            (incident, {}, 'incident_news'),
-            (mine, {'news': 'task_blocked'}, 'task_blocker'),
-            (mine, {'wake': 'review_request'}, review_rule),
-            (mine, {'needs_action': True, 'wake': 'stalled'}, 'needs_action'),
-        ]:
-            msg, job = sent_job(c, task, 'bot:cpo', 'New urgent news ' + rule, refs)
-            assert msg['refs']['rule'] == rule and job['held'] == 0
-        msg, job = sent_job(c, other, 'bot:cpo', 'Other task is blocked', {'news': 'task_blocked'})
+        msg, job = sent_job(c, incident, 'bot:cpo', 'New incident news')
+        assert msg['refs']['rule'] == 'incident_news' and job['held'] == 0
+        msg, job = sent_job(c, other, 'bot:cpo', 'Other task news', {'news': 'task_blocked'})
         assert job['held'] == 1 and msg['refs']['rule'] == 'batch-all'
         c.execute("DELETE FROM rules WHERE id='batch-all'")
         with as_cause('bot:cpo'):
@@ -142,7 +100,7 @@ def test_watcher_incident_flag_survives_protocol_and_marks_new_tasks(api):
     tid = first['tasks']['error:outage']
     with api.app.state.store.transaction() as c:
         assert 'incident' in H.task_labels(H.task(c, tid))
-        H.task_update(c, H.KEEPER, tid, status='declined')
+        H.task_close(c, H.KEEPER, tid, 'Not an outage.')
     second = report(api, r, dict(raw, op='comment', ref='new', text='Recurred'))
     with api.app.state.store.read() as c:
         assert 'incident' in H.task_labels(H.task(c, second['tasks']['error:outage']))
@@ -162,15 +120,10 @@ def test_a_named_waking_rule_keeps_its_name_and_an_urgent_comment_stays_editable
         H.task_comment_edit(c, H.KEEPER, incident['id'], said['id'], 'Clearer words')
 
 
-def test_incident_type_and_plain_rule_words_are_listed(api):
+def test_incident_label_and_plain_rule_words_are_listed(api):
     with api.app.state.store.transaction() as c:
         put(c, 'cpo', 'lead')
-        c.execute(
-            "INSERT INTO task_types(id,name,created_at,updated_at) VALUES('incident-kind','Incident',?,?)",
-            (H.now(), H.now()),
-        )
-        task = H.task_create(c, 'bot:ops', 'Restore the server', 'x', 'bot:cpo', type='Incident')
+        task = H.task_create(c, 'bot:ops', 'Restore the server', 'x', 'bot:cpo', labels=['incident'])
         assert R.judge(c, H.KEEPER, 'bot:cpo', 'notice', {'task': task['id']}, 'Moved', None).rule == 'incident_news'
-        rows = {r['id']: r for r in R.BUILTINS}
-        for key in ('incident_news', 'task_action', 'task_blocker', 'direct_review_request'):
-            assert rows[key]['protected'] and rows[key]['then'] == 'wake' and rows[key]['words']
+        row = {r['id']: r for r in R.BUILTINS}['incident_news']
+        assert row['protected'] and row['then'] == 'wake' and row['words']

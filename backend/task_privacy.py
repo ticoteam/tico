@@ -1511,7 +1511,16 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, reach=Non
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
 # The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
-STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers"
+STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,askers"
+# Who has an ask open on the task's current visit that names a person and is not answered yet (hubdb.status_counts):
+# a bot's ask counts toward its needs_human only where the reader may read the task.
+_ASKERS = (
+    "(SELECT json_group_array(r.added_by_id) FROM visits v JOIN requirements r ON r.visit_id = v.id "
+    "WHERE v.task_id = tasks.id AND v.left_at IS NULL AND r.withdrawn_at IS NULL AND r.person_id LIKE 'human:%' "
+    "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id = r.id AND a.visit_id = v.id "
+    "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again'))) AS askers"
+)
+STATUS_TASK_SELECT = STATUS_TASK_COLUMNS.replace(",askers", "," + _ASKERS)
 
 
 def status_tasks_sql(match):
@@ -1520,10 +1529,10 @@ def status_tasks_sql(match):
     to test status and privacy columns stored past the bodies; a busy team's page spent most of a second there."""
     live = "status IN (%s)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
     return (
-        f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner_id{match} AND {live} "
-        f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester_id{match} AND {live} "
+        f"SELECT {STATUS_TASK_SELECT} FROM tasks WHERE owner_id{match} AND {live} "
+        f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks WHERE requester_id{match} AND {live} "
         # `+` keeps the few private tasks on their own index (tasks_private_status), not the owner's every task.
-        f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
+        f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
         f"AND (+owner_id{match} OR +requester_id{match})"
     )
 
@@ -1578,11 +1587,12 @@ def status(c, who, row, *, tasks=None):
             t["owner_id"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks
         )
     if "needs_human" in row:
-        # One per readable open task the bot filed for a person (hubdb.status_counts).
+        # One per readable open task the bot filed for a person, and one per unanswered ask it put to a person on a
+        # readable open task (hubdb.status_counts).
         bot = "bot:" + row["bot"]
         row["needs_human"] = sum(
             t["status"] in H.ACTIVE_STATUSES and t["requester_id"] == bot and H.is_human(t["owner_id"]) for t in tasks
-        )
+        ) + sum(json.loads(t.get("askers") or "[]").count(bot) for t in tasks if t["status"] == "open")
     return row
 
 
