@@ -2437,6 +2437,7 @@ def _unreviewed_runs(c, who, auth):
 NEEDS_PLATE_WARN = 10  # more items than this on one person's Needs you plate is a warning
 NEEDS_PLATE_BAD = 25  # more than this is bad
 NEEDS_PLATE_ASKERS = 3  # the bots named on a plate, most items first
+NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_run", "broken")
 NEVER_STUCK_KEY = "health:never_stuck"  # registry_metadata: the hourly never-stuck reading (record_never_stuck)
 
 
@@ -2558,7 +2559,11 @@ def _never_stuck_check(c):
     items = [{"text": line} for line in reading.get("breaks") or []]
     if reading.get("broken"):
         summary += f" {_plural(reading['broken'], 'rule break')}: " + "; ".join(i["text"] for i in items[:5])
-    return _check("never_stuck", "Tasks", "bad" if reading.get("broken") else "ok", summary, items=items)
+    check = _check("never_stuck", "Tasks", "bad" if reading.get("broken") else "ok", summary, items=items)
+    # The same numbers as fields, so a screen reads them rather than the sentence.
+    check["counts"] = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
+    check["at"] = reading.get("at")
+    return check
 
 
 def _prime_claims(c, settings=None):

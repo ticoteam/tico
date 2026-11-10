@@ -69,6 +69,7 @@ SUBCOMMANDS = [
     "relay",
     "call",
     "sleep",
+    "ok",
     "notice",
     "settings",
     "release",
@@ -661,6 +662,8 @@ class Stub(BaseHTTPRequestHandler):
                 "/comments",
                 "/api/v2/webhooks",
                 "/api/v2/release/now",
+                "/oks",
+                "/thumbs",
             )
         ):
             return self.reply(200, {"ok": True})
@@ -831,6 +834,48 @@ class AgainstAStub(unittest.TestCase):
         for argv in (["comment", "T1", "x"], ["comment-edit", "T1", "m-1", "x"]):
             with self.assertRaises(SystemExit):
                 hubcli.parser().parse_args(["task", *argv, "--approval-id", "a-1"])
+
+    def test_an_ok_bound_to_a_subject_is_asked_on_the_task_and_used_once_by_its_id(self):
+        content = '{"project":"launch","usd":"10.00"}'
+        argv = ("task", "ask", "T1", "Raise it?", "--to", "human:ana", "--for", "budget_raise:launch")
+        code, out = run_hub(*argv, "--content", content, "--version", "3", env=self.env)
+        self.assertEqual(code, 0, out)
+        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks/T1/oks"]
+        self.assertEqual(
+            posted,
+            [
+                {
+                    "to": "human:ana",
+                    "line": "Raise it?",
+                    "version": 3,
+                    "subject": "budget_raise:launch",
+                    "content": {"project": "launch", "usd": "10.00"},
+                }
+            ],
+        )
+        code, out = run_hub("ok", "use", "r-1", "--for", "budget_raise:launch", "--content", content, env=self.env)
+        self.assertEqual(code, 0, out)
+        used = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/oks/r-1/use"]
+        self.assertEqual(used, [{"subject": "budget_raise:launch", "content": {"project": "launch", "usd": "10.00"}}])
+        code, _ = run_hub(*argv, "--choices", "a,b", "--content", content, "--version", "3", env=self.env)
+        self.assertNotEqual(code, 0)  # a bound OK is never a question with choices
+
+    def test_an_ask_is_rated_through_its_task_and_approval_is_no_feedback_subject(self):
+        from clients import hubtools
+
+        code, out = run_hub("task", "thumbs", "T1", "r-2", "down", "--note", "Don't ask, just archive", env=self.env)
+        self.assertEqual(code, 0, out)
+        rated = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks/T1/asks/r-2/thumbs"]
+        self.assertEqual(rated, [{"up": False, "note": "Don't ask, just archive"}])
+        with self.assertRaises(SystemExit):
+            hubcli.parser().parse_args(["task", "thumbs", "T1", "r-2", "sideways"])
+        for argv in (["feedback", "give", "approval", "a-1", "up"], ["feedback", "markers", "approval", "a-1"]):
+            with self.assertRaises(SystemExit):
+                hubcli.parser().parse_args(argv)
+        hubcli.parser().parse_args(["feedback", "markers", "ask", "v-1:r-2"])
+        give = hubtools.BY_NAME["hub_feedback_give"]["inputSchema"]["properties"]["subject_type"]["enum"]
+        markers = hubtools.BY_NAME["hub_feedback_markers"]["inputSchema"]["properties"]["subject_type"]["enum"]
+        self.assertEqual((give, markers), (["message", "task"], ["message", "task", "ask"]))
 
     def test_a_webhook_filters_by_pipeline_and_task_types_are_gone(self):
         from clients import hubtools

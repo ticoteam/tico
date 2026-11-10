@@ -1284,16 +1284,16 @@ def covers(row, method, path):
 
 def runnable(c, method, path, body):
     """A task change as the route takes it. "closed" is not a status a task update sets: closing is `close`, so a card
-    that says `{"status": "closed"}` closes (every Confirm of one failed with "body.status: Input should be ..."). One
-    without the task's version gets the one it has now (and failed with "body.version: Field required"); a change to
-    the task after that is still a conflict, not a silent overwrite."""
+    that says `{"status": "closed"}` closes (every Confirm of one failed with "body.status: Input should be ..."). It
+    carries the version the Assistant saw: one without it is refused, never given the task's version now, or an edit
+    made from an older read would pass over changes made since."""
     m = re.fullmatch(r"/api/v2/tasks/([^/]+)", path or "")
     if method != "POST" or not m or m.group(1) == "dry-run" or not isinstance(body, dict):
         return body
     if body.get("status") == "closed":
         body = {**{k: v for k, v in body.items() if k != "status"}, "close": True}
-    if "version" not in body and (t := H.task(c, m.group(1))):
-        body = {**body, "version": t["version"]}
+    if body.get("version") is None:
+        raise Problem("version", "A task change carries the version you saw: run `hub task show <id>` first", 422)
     return body
 
 
@@ -1747,7 +1747,10 @@ def outcome(response):
     detail = None
     try:
         payload = response.json()
-        detail = (payload.get("error") or {}).get("detail") if isinstance(payload, dict) else None
+        if isinstance(payload, dict):
+            # Either {"error": {"code", "detail"}} or a refusal's flat {"error": code, "detail": words}.
+            error = payload.get("error")
+            detail = error.get("detail") if isinstance(error, dict) else payload.get("detail") or error
     except ValueError:
         pass
     return {"status_code": response.status_code, "error": str(detail or f"HTTP {response.status_code}")[:300]}

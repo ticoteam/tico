@@ -1155,23 +1155,34 @@ def test_words_in_a_message_or_file_never_approve_only_the_persons_own(api):
     assert decision(api, q["spend"]) is None and decision(api, own) is None
 
 
-def test_a_close_card_without_the_tasks_version_still_runs(api):
+def test_a_task_change_card_carries_the_version_the_assistant_saw_and_never_a_fresh_one(api):
+    """A card's task change keeps the version the Assistant read. Without one it is refused, alone or as a bulk step:
+    filling in the task's version now would let an edit made from an older read pass over changes made since."""
     with api.app.state.store.transaction() as c:
         launch = H.task_create(c, "human:ana", "Plan the launch", "For ops.", "bot:ops")
-    action = post(
-        api,
-        "assistant/actions",
-        {"summary": "Close the launch task", "path": f"/api/v2/tasks/{launch['id']}", "body": {"close": True}},
+    path = f"/api/v2/tasks/{launch['id']}"
+    for body in (
+        {"summary": "Rename it", "path": path, "body": {"title": "Launch plan"}},
+        {"summary": "Rename all", "path": assistant.BATCH_PATH, "body": {"actions": [{"path": path, "body": {"title": "X"}}]}},
+    ):
+        refused = api.post("/api/v2/assistant/actions", json=body, headers=headers("ana-test"))
+        assert refused.status_code == 422 and "version" in refused.text, refused.text
+    seen = launch["version"]
+    card = post(
+        api, "assistant/actions", {"summary": "Rename it", "path": path, "body": {"title": "Launch plan", "version": seen}}
     )["action"]
-    assert action["body"]["version"] == launch["version"]
-    done = post(api, f"assistant/actions/{action['id']}/confirm", {})["action"]
-    assert done["status"] == "done", done["result"]
+    assert card["body"]["version"] == seen
+    # Someone changes the task after the Assistant read it.
+    post(api, f"tasks/{launch['id']}", {"title": "Plan the launch, v2", "version": seen})
+    stale = api.post(f"/api/v2/assistant/actions/{card['id']}/confirm", json={}, headers=headers("ana-test"))
+    assert stale.status_code != 200 or stale.json()["action"]["status"] != "done", stale.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, launch["id"])["title"] == "Plan the launch, v2"
 
 
 def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
-    """The cards an assistant wrote for "close these" carried `{"status": "closed"}` and no version: every Confirm
-    failed with "body.version: Field required; body.status: Input should be ...". A card like that, new or already
-    waiting, now closes the task with the version it has when the person clicks."""
+    """The cards an assistant wrote for "close these" carried `{"status": "closed"}`: a card like that, new or already
+    waiting, closes the task, with the version the Assistant saw."""
     import json
 
     with api.app.state.store.transaction() as c:
@@ -1183,7 +1194,8 @@ def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
         {"summary": "Close old task 0", "path": f"/api/v2/tasks/{tasks[0]['id']}", "body": {"version": 1}},
     )["action"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assistant_actions SET body=? WHERE id=?", (json.dumps({"status": "closed"}), stale["id"]))
+        stored = json.dumps({"status": "closed", "version": tasks[0]["version"]})
+        c.execute("UPDATE assistant_actions SET body=? WHERE id=?", (stored, stale["id"]))
     done = post(api, f"assistant/actions/{stale['id']}/confirm", {})["action"]
     assert done["status"] == "done", done["result"]
     # A new one is stored as the close it is, and so is each step of a bulk card.
@@ -1193,18 +1205,15 @@ def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
         {
             "summary": "Close old task 1",
             "path": f"/api/v2/tasks/{tasks[1]['id']}",
-            "body": {"status": "closed", "note": "Stale"},
+            "body": {"status": "closed", "note": "Stale", "version": tasks[1]["version"]},
         },
     )["action"]
     assert fresh["body"] == {"close": True, "note": "Stale", "version": tasks[1]["version"]}
+    step = {"path": f"/api/v2/tasks/{tasks[2]['id']}", "body": {"status": "closed", "version": tasks[2]["version"]}}
     bulk = post(
         api,
         "assistant/actions",
-        {
-            "summary": "Close the rest",
-            "path": assistant.BATCH_PATH,
-            "body": {"actions": [{"path": f"/api/v2/tasks/{tasks[2]['id']}", "body": {"status": "closed"}}]},
-        },
+        {"summary": "Close the rest", "path": assistant.BATCH_PATH, "body": {"actions": [step]}},
     )["action"]
     for action in (fresh, bulk):
         assert post(api, f"assistant/actions/{action['id']}/confirm", {})["action"]["status"] == "done"

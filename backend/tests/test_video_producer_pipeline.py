@@ -7,6 +7,7 @@ reading as pending."""
 import importlib.machinery
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,20 +126,92 @@ def test_a_self_stage_is_done_on_its_done_file_and_the_budget_gates_it(repo):
     assert pipeline.next_step(repo.project, stages).startswith("waiting: make the final files")
 
 
-def test_going_over_budget_asks_the_owner_for_a_raise_and_an_approved_raise_lets_self_stages_go_on(repo, tmp_path):
-    stages = cfg(repo)
+class FakeOks:
+    """Stands in for `hub ok use` against Tico's OK grants (backend/task_asks.py use): exit 0 only for an OK that was
+    given, for the same subject and exactly the same content, and not used before; it is used then."""
+
+    def __init__(self):
+        self.grants, self.calls = {}, []
+
+    def ask(self, rid, subject, content, given=True):
+        self.grants[rid] = {"subject": subject, "content": content, "given": given, "used": False}
+
+    def run(self, command, **kwargs):
+        self.calls.append(command)
+        assert command[:3] == ["hub", "ok", "use"]
+        rid, subject = command[3], command[command.index("--for") + 1]
+        content = json.loads(command[command.index("--content") + 1])
+        grant = self.grants.get(rid)
+        refusal = (
+            "No such OK"
+            if not grant
+            else "This OK was already used"
+            if grant["used"]
+            else "This OK is for something else"
+            if grant["subject"] != subject
+            else "It changed after it was asked about"
+            if grant["content"] != content
+            else "It waits for an OK"
+            if not grant["given"]
+            else None
+        )
+        if refusal:
+            return subprocess.CompletedProcess(command, 1, "", json.dumps({"error": refusal}))
+        grant["used"] = True
+        return subprocess.CompletedProcess(command, 0, json.dumps({"ok": True}), "")
+
+
+def over_budget(repo):
     finished_up_to_shots(repo)
     put(repo, "shots", "clip.mp4", cost=10.0)
     (repo.project / "shots" / ".done").write_text("")
+
+
+def test_going_over_budget_asks_the_owner_for_an_ok_bound_to_the_project_and_amount(repo):
+    stages = cfg(repo)
+    over_budget(repo)
     ask = pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee")
     assert ask.startswith("over budget (10.00 of 10.00 USD used): ask the owner for an OK: hub task ask T-1")
-    assert "--to 'Ana Lee'" in ask and "--kind ok" in ask and "--choices" not in ask and "--show" not in ask
+    assert "--to 'Ana Lee'" in ask and "--for budget_raise:launch" in ask
+    assert """--content '{"project":"launch","usd":"10.00"}'""" in ask and "--choices" not in ask
     assert "Spend 10 USD more on launch?" in ask
+    assert "software/pipeline.py raise projects/launch --usd 10.00 --ok <the requirement id it printed>" in ask
     assert pipeline.next_step(repo.project, stages, owner="").startswith("waiting: no owner")
-    pipeline.main(["raise", str(repo.project), "--usd", "10", "--ok", "req-42"])
-    pipeline.main(["raise", str(repo.project), "--usd", "10", "--ok", "req-42"])  # the same OK counts once
+
+
+def test_a_raise_is_recorded_only_after_tico_takes_the_owners_ok_once(repo, monkeypatch, capsys):
+    stages = cfg(repo)
+    over_budget(repo)
+    oks = FakeOks()
+    monkeypatch.setattr(pipeline.subprocess, "run", oks.run)
+    oks.ask("req-1", "budget_raise:launch", {"project": "launch", "usd": "10.00"})
+    oks.ask("req-2", "budget_raise:launch", {"project": "launch", "usd": "10.00"}, given=False)
+
+    def raise_with(ok, usd="10"):
+        return pipeline.main(["raise", str(repo.project), "--usd", usd, "--ok", ok])
+
+    assert raise_with("made-up-OK") == 2  # never asked
+    assert raise_with("req-2") == 2  # asked, not given yet
+    assert raise_with("req-1", usd="1000000") == 2  # given for 10 USD, not for a million
+    assert not (repo.project / "budget.json").exists()
+    assert "did not take OK" in capsys.readouterr().err
+    assert raise_with("req-1") == 0
+    assert raise_with("req-1") == 0  # recorded once; Tico is not asked again
+    assert len([c for c in oks.calls if c[3] == "req-1"]) == 2
     assert json.loads((repo.project / "budget.json").read_text())["extra_usd"] == 10.0
     assert pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee").startswith("self: proceed with cut")
+    (repo.project / "budget.json").unlink()  # a lost record does not let the used OK raise it again
+    assert raise_with("req-1") == 2
+    assert not (repo.project / "budget.json").exists()
+
+
+def test_a_raise_is_refused_when_hub_cannot_run(repo, monkeypatch):
+    def broken(command, **kwargs):
+        raise OSError("hub: not found")
+
+    monkeypatch.setattr(pipeline.subprocess, "run", broken)
+    assert pipeline.main(["raise", str(repo.project), "--usd", "10", "--ok", "req-1"]) == 2
+    assert not (repo.project / "budget.json").exists()
 
 
 def test_a_bot_mover_is_approved_by_that_bot_and_the_hand_off_says_how_to_review(repo, monkeypatch):
