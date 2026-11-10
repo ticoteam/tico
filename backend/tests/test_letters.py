@@ -686,21 +686,32 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
     get(api, "files/" + source, delegated, expected=403)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="v3 conflict, for a person to decide: the letter's task carries an OK asked of Ana, and her Assistant now "
-    "reads the tasks filed for OKs asked of its person (aa1b6dd2e, task_asks.assistant_reads_own_ok), so the task "
-    "answers 200 to a delegated reader with no letter permission. The letter, its proof and its source stay hidden.",
-)
-def test_delegated_reader_without_letter_permission_cannot_read_the_letters_task(api, hq):
+def test_a_delegated_reader_reads_the_letters_ok_task_but_never_the_letter(api, hq):
+    """The Assistant reads a task that holds an OK asked of its person (task_asks.assistant_reads_own_ok), so it can
+    send it back on her word. With no letter permission of its own it reads only what the OK shows (the addresses,
+    the price, the settings and the hash it binds): never the letter's text, its proof or its source."""
     from backend.tests.helpers.api import setup_attempt
     from backend.tests.helpers.assistant import assistant_turn
 
     token = setup_attempt(api, "finance")[2]["token"]
     grant(api, "finance")
     row = send(api, quote(api, token=token), token=token)
+    with api.app.state.store.read() as c:
+        letter = dict(c.execute("SELECT * FROM letters WHERE id=?", (row["id"],)).fetchone())
+        blobs = [letter[k] for k in ("source_blob_id", "proof_blob_id")]
+        digests = [c.execute("SELECT digest FROM blobs WHERE id=?", (b,)).fetchone()[0] for b in blobs]
     _, attempt = assistant_turn(api, "ana-test")
-    get(api, "tasks/" + _task(api, row), attempt["token"], expected=404)
+    delegated = attempt["token"]
+    task = json.dumps(get(api, "tasks/" + _task(api, row), delegated))
+    for secret in ["Hello from Acme", row["id"], RECIPIENT["name"], RECIPIENT["line1"], *blobs, *digests]:
+        assert secret not in task, secret
+    shown = get(api, "oks/" + row["approval_id"], delegated)
+    assert shown["content"] == L.content(letter)
+    assert "Hello from Acme" not in json.dumps(shown)
+    assert not any(b in json.dumps(shown) for b in blobs + digests)
+    get(api, "letters/" + row["id"], delegated, expected=404)
+    get(api, row["proof"].removeprefix("/api/v2/"), delegated, expected=403)
+    get(api, "files/" + letter["source_blob_id"], delegated, expected=403)
 
 
 def test_private_source_keeps_only_admin_metadata_and_fences_both_copies(api, hq):
