@@ -1,4 +1,4 @@
-"""Plumbing for the redesign scenarios: one org per scenario on the factory's disposable hub, the API calls a teammate
+"""Plumbing for the redesign scenarios: one org per scenario on a disposable hub (world.py), the API calls a teammate
 makes, and the Unmet marker that turns a missing route or refused behaviour into "not built yet".
 
 A scenario is setup + steps + checks. Steps run in order and keep what they got in a facts dict. A step the product
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 from typing import Any, Callable
 from urllib.parse import quote
 
-from ..factory.world import World
+from .world import World
 
 W1 = "wave 1 · renames & moves"
 W2 = "wave 2 · budgets"
@@ -148,7 +148,7 @@ def task_id_of(reply):
 
 # ---------------------------------------------------------------------------------------------- the org
 class Org(World):
-    """The factory's World (clock, server, runner) with the scenario org on it, in Acme names: Dana (owner) at the top;
+    """The World (world.py: clock, server, runner) with the scenario org on it, in Acme names: Dana (owner) at the top;
     Omar and Priya, people, under her; Engineering Lead under her too (so Omar is a peer of the lead); two builders
     under the lead; and the Release Manager under Dana. Emails are @acme.example."""
 
@@ -201,7 +201,7 @@ class Org(World):
                 )
             for bot, boss in reports.items():
                 c.execute("UPDATE bot_config SET reports_to=? WHERE bot=?", (boss, bot))
-            # The factory seeds one owner and one operator for every bot and its runner. Dana is the owner here: the
+            # The world seeds one owner and one operator for every bot and its runner. Dana is the owner here: the
             # stored owner (backend/access.py OWNER, read once at seed time) and those operators move to her.
             from backend.access import OWNER
 
@@ -232,7 +232,7 @@ class Org(World):
         return self
 
     def configure(self):
-        """The factory's Dev board is not used: each scenario builds the org it needs."""
+        """Nothing more: each scenario builds the org it needs."""
 
     def _registered(self, method, path):
         for route in self.app.routes:
