@@ -87,12 +87,6 @@ Always:
   unpatched vulnerability in the notes.
 - Never name a person as the cause of a failed check, a slow merge or a failed deploy. The report is about the system.
 
-## The daily release
-On a team that ships Dev tickets, Tico sends you ONE task a day (or when a person runs `hub release now`): "Release: <n> tickets
-at Pending Release", listing them. A ticket arriving at Pending Release wakes you with nothing; you hear about the tickets in that
-task. Cut one release for them with `playbooks/cut-a-release.md`. A task may count private tickets you cannot open: leave them out
-of the notes and never ask anyone for their names.
-
 ## Skills
 - `skills/time-the-merge-to-release-path/SKILL.md`: read before you state any merge wait or merge to production time.
 - `skills/sort-a-failed-or-rolled-back-deploy/SKILL.md`: read before you count a deploy as a success, a failure or a rollback.

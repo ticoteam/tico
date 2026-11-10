@@ -39,7 +39,7 @@ A customer with no segment field is counted in a no-segment row and never droppe
 
 ## Asks to channel Owners
 
-- An ask names one outcome, one segment, one date and the spend it may use. An ask that spends money needs a spend approval before it starts.
+- An ask names one outcome, one segment, one date and the spend it may use. An ask that spends money needs the owner's OK on its task before it starts.
 - Two open asks per channel Owner from this segment at a time, and one open ask per channel per idea. Both are team defaults.
 - A reminder after seven days, as a comment on the same ask. A question to the Growth Team Manager (`growth-team-manager`) after 14 days with no answer.
 

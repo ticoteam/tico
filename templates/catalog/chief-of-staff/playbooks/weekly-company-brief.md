@@ -27,7 +27,7 @@ and you never guess at them. If a source refuses you, note which one and carry o
 
 | Section | What belongs in it |
 |---|---|
-| Needs you | Approvals, questions and tasks waiting on the owner, oldest first, with the age |
+| Needs you | Asks and tasks waiting on the owner, oldest first, with the age |
 | Goals | One line per goal: colour, movement since last week, the evidence, next step and its owner |
 | Stalled | A goal or task with no change past the threshold in `knowledge/rhythm.md` |
 | What moved | Shipped, decided or closed this week, from tasks, updates and meetings |

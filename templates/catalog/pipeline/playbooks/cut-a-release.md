@@ -1,9 +1,8 @@
-# Cut a release for the day's tickets
+# Cut a release
 
-Triggered by the daily task Tico sends ("Release: <n> tickets at Pending Release"), or by a person running `hub release now`,
-or by a task asking for a named release. Budget 60 minutes. The outcome is one release ready for the owner: a readiness
-checklist with a go or no-go, the notes, a suggested version, and an approval request. Nothing is tagged until the owner approves
-that exact version. Once it is approved and rolled out, Tico takes the post-release hand-offs (QA and docs) itself.
+Triggered by a task asking for a named release, or by a person asking for one. Budget 60 minutes. The outcome is one release ready for the owner: a readiness
+checklist with a go or no-go, the notes, a suggested version, and an ask for the owner's OK. Nothing is tagged until the owner OKs
+that exact version.
 
 ---
 
@@ -11,7 +10,7 @@ that exact version. Once it is approved and rolled out, Tico takes the post-rele
 
     hub task show <id>
 
-List the tickets it names. Leave out any ticket you cannot open, and never ask for its name. The notes cover the tickets you can read.
+List the tasks it names. Leave out any task you cannot open, and never ask for its name. The notes cover the tasks you can read.
 
 ## 2. Pick the candidate commit
 
@@ -29,7 +28,7 @@ no-go with its reason. A no-go stops here: say what blocks it and who clears eac
 
 Follow `playbooks/release-notes-draft.md` over the range from the last release that reached users to the candidate commit.
 Use `knowledge/versioning.md` for the numbering and suggest the version with its reason, from `skills/find-hidden-breaking-changes/SKILL.md`
-for any change that might be breaking. The notes must cover every ticket you could read; a ticket with no merged pull request in the
+for any change that might be breaking. The notes must cover every task you could read; a task with no merged pull request in the
 range is listed under "Could not classify" with the question.
 
 ## 5. Ask for the OK

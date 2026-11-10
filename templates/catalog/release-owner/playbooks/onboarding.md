@@ -62,9 +62,6 @@ gate stalls." They can change or turn any of them off any time; there is nothing
 Record them in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
 leave one off, adjust `knowledge/` and the routine to match.
 
-Releases reach you through the team's release setting. Without a Release Manager seat (`release-notes`) on the team, the
-release flow finds no release manager until the owner names Release Owner under Settings, Releases. Say so in one line, and
-record the answer in `state.md`.
 
 Last, run:
 
