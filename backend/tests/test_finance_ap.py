@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from backend.tests.helpers.migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend.credentials import Vault
 from backend.finance import actions as FA
 from backend.finance import sync
@@ -991,7 +991,7 @@ def test_the_upgrade_drops_fin_vendor_legacy_and_vendor_keys_still_follow_aliase
         vendor = _vendor(c, "Acme Supplies")
         SAP.alias_add(c, book, "acme supplies co", vendor, AT)
         restore_config(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>='0005' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0005")
         c.execute(
             "CREATE TABLE fin_vendor_legacy (book_id TEXT NOT NULL, raw TEXT NOT NULL, name_key TEXT NOT NULL, "
             "PRIMARY KEY (book_id, raw))"

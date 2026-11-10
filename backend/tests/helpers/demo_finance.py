@@ -113,26 +113,19 @@ def _bills_are_drafted_by_accounts_payable_and_approved_by_ana(book):
     )
 
 
-def _rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_ago(book):
-    settings, now = book
+def _rules_are_in_force_and_the_bookkeepers_proposal_waits_for_ana(book):
+    settings, _ = book
     with signed_in(settings) as api:
         rules = {r["name"]: r for r in api.get("/api/v2/finance/rules").json()["rules"]}
-        queue = api.get("/api/v2/needs-you").json()["items"]
-    for name in ("Spend over $500 needs Ana", "Marketplace fees go to 6200", C["proposal"]["name"]):
+    for name in ("Spend over $500 needs Ana", "Marketplace fees go to 6200"):
         assert rules[name]["active"], name
+    assert not rules.get(C["proposal"]["name"], {}).get("active")
     with sqlite3.connect(settings.db_path) as db:
         [(status, approval_id)] = db.execute(
             "SELECT status, approval_id FROM fin_actions WHERE kind = 'rule_create' AND actor = ?", (BOOKKEEPER,)
         ).fetchall()
-        waiting = db.execute("SELECT COUNT(*) FROM fin_actions WHERE status = 'needs_approval'").fetchone()[0]
-        decision, decided_by, decided_at = db.execute(
-            "SELECT decision, decided_by_id, decided_at FROM approvals WHERE id = ?", (approval_id,)
-        ).fetchone()
-    assert status == "committed"
-    assert waiting == 0
-    assert (decision, decided_by) == ("approved", "human:ana")
-    assert decided_at[:10] == (now - timedelta(days=2)).date().isoformat()
-    assert approval_id not in [item["id"] for item in queue]
+        [(kind,)] = db.execute("SELECT kind FROM requirements WHERE id = ?", (approval_id,)).fetchall()
+    assert (status, kind) == ("needs_approval", "ok")
 
 
 def _the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_again(book):
@@ -158,6 +151,6 @@ CHECKS = (
     _budgets_are_monthly_and_only_paid_advertising_is_near_its_limit,
     _invoices_one_paid_and_one_overdue_that_the_chase_task_covers,
     _bills_are_drafted_by_accounts_payable_and_approved_by_ana,
-    _rules_are_in_force_and_the_bookkeepers_proposal_was_approved_two_days_ago,
+    _rules_are_in_force_and_the_bookkeepers_proposal_waits_for_ana,
     _the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_again,
 )

@@ -5,7 +5,7 @@ The org here: ops reports to coo, coo to Ana (the owner). A cap on (ops, Ana) li
 from backend import task_caps
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.helpers.migrations import restore_config
+from backend.tests.helpers.migrations import restore_config, forget_from
 from backend.tests.helpers.task_caps import as_bot
 
 
@@ -171,7 +171,7 @@ def test_the_upgrade_drops_the_retired_send_table_and_the_log_keeps_counting(api
         # As a file from before 0004 has it: that migration and every later one not run yet. The reruns read
         # bot_config.config (0061), which 0070 dropped: the column goes back first, as on a file from before 0070.
         restore_config(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>='0004' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0004")
     store.initialize(seed_market=False)
     with store.transaction() as c:
         tables = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}

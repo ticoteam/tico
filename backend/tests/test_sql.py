@@ -1177,10 +1177,10 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
     for who in callers:
         compare(who)
     # Cached columns are metadata only: schema changes cannot leave a newly added column hidden/stale.
-    query(api, 'SELECT * FROM task_types')
+    query(api, 'SELECT * FROM tags')
     with store.transaction() as c:
-        c.execute('ALTER TABLE task_types ADD COLUMN synthetic_fixture TEXT')
-    assert 'synthetic_fixture' in query(api, 'SELECT * FROM task_types')['columns']
+        c.execute('ALTER TABLE tags ADD COLUMN synthetic_fixture TEXT')
+    assert 'synthetic_fixture' in query(api, 'SELECT * FROM tags')['columns']
 
 
 def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_path):
@@ -1618,3 +1618,18 @@ def test_an_event_or_blob_on_a_message_whose_task_list_cannot_be_read_is_hidden_
     assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'") == ['blob-scalar']
     # The bot reads the same rows through its own gate and reaches the scalar message's blob too.
     assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'", world["attempt"]["token"]) == ['blob-scalar']
+
+
+def test_sql_opens_on_a_new_database_for_the_owner_and_a_member(company):
+    """Every table the SQL views name is in a new database: none of the tables the cut-over dropped is named."""
+    from backend import sql as S
+    from backend.auth import Auth, Identity
+
+    auth = Auth(company)
+    for who in (Identity('human:ana', 'owner'), Identity('human:ben', 'human')):
+        with company.read() as c:
+            conn = S.connect(company.settings.db_path, c, auth, who)
+            try:
+                assert S.run(conn, 'SELECT count(*) FROM tasks', [], 10, 20)['rows'] == [[0]]
+            finally:
+                conn.close()

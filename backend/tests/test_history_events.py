@@ -14,6 +14,7 @@ from backend import hubdb as H
 from backend.config import Settings
 from backend.store import Store
 from backend.tests.helpers.history_events import OLD, migration
+from backend.tests.helpers.migrations import forget_from
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SOURCES = ("task_events", "goal_events", "market_events", "company_events", "strategy_events")
@@ -150,7 +151,7 @@ def test_an_existing_file_moves_on_boot_and_booting_again_changes_nothing(tmp_pa
         for statement in OLD:
             c.execute(statement)
         fill(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>='0064_history_events' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0064_history_events")
     boot(path)
     with sqlite3.connect(path) as c:
         assert not set(SOURCES) & {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}

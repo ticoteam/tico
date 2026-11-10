@@ -563,18 +563,27 @@ def test_a_task_that_goes_private_with_its_new_owner_is_private_before_anyone_he
         assert key in before or H.task_private_readable(c, who, task), (key, who)
 
 
-def test_a_stage_that_asks_a_bot_who_cannot_read_the_private_task_refuses_the_move(c):
+def test_a_stage_that_asks_a_bot_brings_it_in_to_read_the_private_task(c):
     _private_owner(c, "bot:reviewer")
     X.bot(c, "reviewer")
+    X.bot(c, "outsider")
     row = _new(c, by=HELPER, pipeline="terms")
-    woken = X.wakes(c, row["id"])
-    assert H.attempt(c, H.task_move, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"])) is None
+    H.task_move(c, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"]))
     after = H.task(c, row["id"])
-    assert (after["stage_id"], after["owner_id"], H.task_private(c, after)) == (row["stage_id"], BUILDER, False)
-    assert X.wakes(c, row["id"]) == woken
-    with _refused("task_requirement") as refusal:
-        H.task_move(c, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"]))
-    assert "cannot read this task" in refusal.value.detail
+    assert (after["owner_id"], H.task_private(c, after)) == (COUNSEL, True)
+    # The stage's bot reads it, and nobody else was added.
+    assert H.task_private_readable(c, "bot:reviewer", after)
+    assert H.task_readers(after) == ["bot:reviewer"]
+    assert not H.task_private_readable(c, "bot:outsider", after)
+    assert not H.task_private_readable(c, BEN, after)
+    # Its history says who brought the bot in.
+    readers = c.execute(
+        "SELECT actor_id, new FROM history_events WHERE subject_id=? AND kind='reader'", (row["id"],)
+    ).fetchall()
+    assert [tuple(r) for r in readers] == [(COUNSEL, "bot:reviewer")]
+    # The spec does not end a reader's access when the task leaves the stage: the bot keeps reading it.
+    H.task_move(c, COUNSEL, row["id"], "Draft", "Back to drafting.", _version(c, row["id"]))
+    assert H.task_private_readable(c, "bot:reviewer", H.task(c, row["id"]))
 
 
 def test_a_child_restored_before_its_parent_is_under_it_again_once_both_are_back(c):
