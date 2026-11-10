@@ -1156,19 +1156,30 @@ def delegated(refs) -> bool:
     return bool(via) and via not in OWN_HAND_VIA
 
 
-def person_sent(message):
-    """Whether a message is a person's own: one a person typed themselves, or the keeper's carrier of one
-    (threads._carrier writes refs.carries = the message, refs.from = its sender and the source's refs.via). A message
-    the Assistant, BotOps or a token wrote in their name is not (delegated): it never lifts a protection a person's
-    act lifts (the 7 runs, a backoff, a snooze). The row-level test is person_sent_sql."""
+def by_own_hand(actor) -> bool:
+    """Whether this request's act is a person's own, in their own session: not the Assistant, BotOps, an automation or
+    a personal token acting as them (VIA, BY_TOKEN, set by backend/app.py for the request). The engine's twin of
+    task_asks.refuses_ok_by, and the act's twin of typed_by_person: only this lifts a task Late brought to a person."""
+    return is_human(actor) and not (VIA.get() or BY_TOKEN.get())
+
+
+def in_person_name(message):
+    """Whether a message is in a person's name: one they typed, one the Assistant, BotOps or a token wrote for them
+    (they act with the person's rights), or the keeper's carrier of one (threads._carrier: refs.carries, refs.from).
+    Enough for the claim's order, a snooze or done hold, fences and labels. in_person_name_sql is the row test."""
     message = message or {}
     sender = str(message.get("sender_id") or "")
-    refs = _json(message.get("refs"), {}) or {}
-    if delegated(refs):
-        return False
     if is_human(sender):
         return True
+    refs = _json(message.get("refs"), {}) or {}
     return sender == KEEPER and bool(refs.get("carries")) and is_human(str(refs.get("from") or ""))
+
+
+def typed_by_person(message):
+    """Whether a message is in a person's name and typed by their own hand: not delegated (the Assistant, BotOps, a
+    token; a carrier copies its source's refs.via). Only that lifts a safeguard against runaway automatic runs and
+    spend: the 7 runs and level person, a retry backoff, a usage-limit cooldown. typed_by_person_sql is the row test."""
+    return in_person_name(message) and not delegated((message or {}).get("refs"))
 
 
 def _json(value, default=None) -> Any:
@@ -6436,25 +6447,19 @@ def unheld_sql(alias="j"):
 MESSAGE_TASK_SQL = f"coalesce({_task_ref_sql('$.task')}, {_task_ref_sql('$.task_id')}, cv.task_id)"
 
 
-def person_sent_sql(alias="m"):
-    """SQL (person_sent over a row): the message `alias` is a person's own, typed by one or the keeper carrying one. A
-    notice that carries a Home or thread message a bot hears is the person's for the claim's order, fences and
-    protections, as the message itself is. Not a message written in their name (delegated)."""
-    own = ",".join(f"'{v}'" for v in OWN_HAND_VIA)
-    return (
-        f"(coalesce(json_extract({alias}.refs,'$.via'),'') IN ('',{own}) AND ({alias}.sender_id LIKE 'human:%' "
-        f"OR ({alias}.sender_id='keeper' AND json_extract({alias}.refs,'$.carries') IS NOT NULL "
-        f"AND json_extract({alias}.refs,'$.from') LIKE 'human:%')))"
-    )
-
-
-def person_named_sql(alias="m"):
-    """SQL: the message `alias` is in a person's name, typed by them or written for them (the Assistant, BotOps, a
-    token), or the keeper's carrier of one. For "a person is owed the answer"; person_sent_sql for "a person acted"."""
+def in_person_name_sql(alias="m"):
+    """SQL (in_person_name over a row): the message `alias` is in a person's name, typed by them or written for them,
+    or the keeper's carrier of one."""
     return (
         f"({alias}.sender_id LIKE 'human:%' OR ({alias}.sender_id='keeper' "
         f"AND json_extract({alias}.refs,'$.carries') IS NOT NULL AND json_extract({alias}.refs,'$.from') LIKE 'human:%'))"
     )
+
+
+def typed_by_person_sql(alias="m"):
+    """SQL (typed_by_person over a row): in a person's name and not delegated (refs.via empty or one of OWN_HAND_VIA)."""
+    own = ",".join(f"'{v}'" for v in OWN_HAND_VIA)
+    return f"({in_person_name_sql(alias)} AND coalesce(json_extract({alias}.refs,'$.via'),'') IN ('',{own}))"
 
 
 def _mirror_task_note(conn, actor, task_row, note):

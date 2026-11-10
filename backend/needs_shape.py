@@ -12,7 +12,7 @@ adds the fields every item has, whatever its kind, so a client lists, orders and
 
 # Each action, and the write it is (the v2 spec, backend/openapi_v2.py, has them all).
 ACTIONS = {
-    "update": "work the task: POST /api/v2/tasks/{task id}/done, /move or /try-again, or comment on it",
+    "update": "work the task: POST /api/v2/tasks/{task id}/done or /move, or comment on it (/try-again only in the person's own session)",
     "answer": "POST /api/v2/tasks/{task id}/asks/{requirement id}/answer (or /give to hand it to someone else)",
     "decide": "the proposal's decision: POST /api/v2/proposals/{id}/decide",
     "add_reading": "POST /api/v2/kpis/{kpi id}/readings",

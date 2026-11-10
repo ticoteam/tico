@@ -159,6 +159,29 @@ def test_try_again_is_a_persons_and_a_bot_is_told_what_it_can_do(c, general, lat
     assert _ladder(c, task_id) == ("person", 3) and _states(c, task_id) == [("person", ANA), ("person", ANA)]
 
 
+@pytest.mark.parametrize("via", ["assistant", "botops", "token"])
+def test_try_again_and_a_change_after_late_need_a_persons_own_hand(c, general, later, via):
+    """The Assistant, BotOps and a personal token act in a person's name, but restarting the ladder is the person's own
+    act in Tico: Try again is refused with what to do, and a change they make on a task Late brought to the person
+    leaves it with the person."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    c.execute(
+        "UPDATE visits SET level='person', person_id=?, tries=3, next_try_at=NULL, late_person_at=? WHERE task_id=?",
+        (ANA, H.now(), task_id),
+    )
+    mark = H.BY_TOKEN.set(True) if via == "token" else H.VIA.set(via)
+    try:
+        with pytest.raises(H.Refused, match="task_needs_person") as refused:
+            E.try_again(c, task_id, ANA)
+        assert "Ask them to press it" in str(refused.value)
+        E._reset_ladder(c, _visit(c, task_id), H.now(), ANA)
+    finally:
+        (H.BY_TOKEN if via == "token" else H.VIA).reset(mark)
+    assert _ladder(c, task_id) == ("person", 3)
+    E.try_again(c, task_id, ANA)  # her own hand
+    assert _ladder(c, task_id) == ("owner", 0)
+
+
 def test_a_task_that_changed_starts_the_count_again_and_the_next_wake_is_not_a_try(c, general, later):
     stages = (
         {

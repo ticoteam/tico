@@ -1109,7 +1109,7 @@ def _reset_ladder(conn: "sqlite3.Connection", visit: Row, ts: str, by: str) -> N
     has no turn now are canceled (`_drop_stale`)."""
     mark = progress_mark(conn, visit["id"])
     look = _h().shift(ts, seconds=FIRST_TRY_S)
-    if visit.get("level") == "person" and visit.get("late_person_at") and not is_human(by):
+    if visit.get("level") == "person" and visit.get("late_person_at") and not _h().by_own_hand(by):
         conn.execute(
             "UPDATE visits SET progress_mark=?, last_change_at=?, next_try_at=? WHERE id=?",
             (mark, ts, look, visit["id"]),
@@ -1133,8 +1133,8 @@ def changed(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
 
 def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
     """Try again: hand a task the ladder or Late brought to a person back to its owner, with the count at zero. The
-    owner is woken once. Only a person tries again: a bot that could restart the ladder could keep a task going
-    round it for ever."""
+    owner is woken once. Only a person tries again, in their own session (H.by_own_hand): a bot, or the Assistant or
+    BotOps acting for a person, that could restart the ladder could keep a task going round it for ever."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1145,6 +1145,14 @@ def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None
             by,
             "task_needs_person",
             "Try again needs a person. You can reassign it, ask a person, snooze it or close it.",
+            task_id,
+        )
+    if not H.by_own_hand(by):
+        _refuse(
+            conn,
+            by,
+            "task_needs_person",
+            "Try again is the person's own, in Tico: the Assistant, BotOps and tokens can't. Ask them to press it.",
             task_id,
         )
     if row["status"] != "open":

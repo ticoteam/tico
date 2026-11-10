@@ -1435,7 +1435,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
 # The queued job of a task. INDEXED BY jobs_queued: the expression on the message cannot use an index, and with the
 # stale sqlite_stat1 row for messages the planner scanned all of them (40-44 ms a call on TIDY v0.5.1, 545 an hour).
 TASK_WAIT_SQL = (
-    f"SELECT j.bot_id,{H.person_sent_sql()} AS person_sent FROM jobs j INDEXED BY jobs_queued "
+    f"SELECT j.bot_id,{H.in_person_name_sql()} AS person_sent FROM jobs j INDEXED BY jobs_queued "
     "JOIN messages m ON m.id=j.message_id "
     "JOIN conversations cv ON cv.id=m.conversation_id "
     f"WHERE j.state='queued' AND {H.MESSAGE_TASK_SQL}=? ORDER BY j.created_at LIMIT 1"
@@ -1488,7 +1488,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     run for a message a person sent, whichever bot it went to (a person's task answered by the bot that asked it).
     A run waiting for memory or its ChatGPT login (backend/login_waits.py) says so in `waiting` and its label; `auth` lets it
     name the bot holding it."""
-    person = H.person_sent_sql()
+    person = H.in_person_name_sql()
     which = (
         f"AND (j.bot_id=? OR {person}) "
         if bot and people

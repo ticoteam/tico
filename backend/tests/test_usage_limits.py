@@ -185,7 +185,7 @@ def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
     assert any(j["state"] == "queued" and j["caused_by"] == "human:ana" for j in jobs)
     assert any(j["state"] == "queued" and H._json(j["refs"], {}).get("carries") == carried["id"] for j in jobs)
     assert next(j for j in jobs if j["message_id"] == automatic["id"])["state"] == "canceled"
-    assert all(j["state"] != "queued" or H.person_sent(j) or j["caused_by"] == "human:ana" for j in jobs)
+    assert all(j["state"] != "queued" or H.in_person_name(j) or j["caused_by"] == "human:ana" for j in jobs)
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
         assert (row["status"], row["stage_id"], row["owner_id"]) == before

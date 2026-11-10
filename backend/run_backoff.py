@@ -306,7 +306,7 @@ def person_waiting(c, bot):
     return bool(
         c.execute(
             "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
-            f"AND {H.person_sent_sql()} AND m.created_at>? LIMIT 1",
+            f"AND {H.typed_by_person_sql()} AND m.created_at>? LIMIT 1",
             (bot, _since_failure(c, bot)),
         ).fetchone()
     )
@@ -317,7 +317,7 @@ def job_refusal(c, bot, message):
     (execution.job_refusal)."""
     if refusal(c, bot) != "backoff":
         return None
-    fresh = H.person_sent(message) and str(message.get("created_at") or "") > _since_failure(c, bot)
+    fresh = H.typed_by_person(message) and str(message.get("created_at") or "") > _since_failure(c, bot)
     return None if fresh else "backoff"
 
 

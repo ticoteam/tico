@@ -600,7 +600,9 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     Late's one look for the manager bot needs none), and while the visit has started fewer than 7 runs since it last
     changed, the leases about to start included. An engine wake must also be about the task's open visit. When the
     run is held its queued job is canceled, here. True for a person's own message (their words always get an answer)
-    and anything about no task on the engine. A quiet message is held like any other once it has a job."""
+    and anything about no task on the engine. A message in a person's name they did not type themselves (the
+    Assistant, BotOps, a token: hubdb.delegated) gets past a snooze, a closed task and the turns, as theirs would,
+    but not a person's level or the 7 runs: lifting those is the person's own act. A quiet message is held like any other once it has a job."""
     from . import task_engine as E
 
     H = _h()
@@ -615,7 +617,8 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     refs: Row = H._json(found[2], {}) or {}
     # Quiet only keeps a message from queueing a run: a job that exists anyway (a deferred delivery's deadline) is held
     # like any other.
-    if H.person_sent({"sender_id": found[3], "refs": refs}):
+    said = {"sender_id": found[3], "refs": refs}
+    if H.typed_by_person(said):
         return True
     if found[3] == H.KEEPER and refs.get("command") and refs.get("goal_action") == "clear":
         # The server's "/goal clear" (chat_goals.clear_task_goal) does no work on the task: it stops the harness
@@ -634,7 +637,7 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
         allowed = False
     else:
         kind = parts[2] if found[0] and task["id"] == parts[0] and len(parts) > 2 else ""
-        allowed = _may_start(conn, task, str(found[1] or ""), kind, attempt)
+        allowed = _may_start(conn, task, str(found[1] or ""), kind, attempt, H.in_person_name(said))
     if allowed:
         return True
     conn.execute("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (message_id,))
@@ -665,9 +668,17 @@ def message_task(conn: "sqlite3.Connection", message_id: str | None, carried: bo
     return str(named) if named else None
 
 
-def _may_start(conn: "sqlite3.Connection", task: Row, bot: str, kind: str, attempt: str | None) -> bool:
+def _may_start(
+    conn: "sqlite3.Connection", task: Row, bot: str, kind: str, attempt: str | None, named: bool = False
+) -> bool:
     from . import waiting_on as W
 
+    if named:  # in a person's name: only their level and the 7 runs hold it (may_start)
+        if not task.get("visit"):
+            return True
+        if (task["visit"].get("level") or "owner") == "person":
+            return False
+        return runs_since(conn, task, starting=True, besides=attempt) < RUNS
     if task["status"] != "open" or task.get("snooze") or not task.get("visit"):
         return False
     if (task["visit"].get("level") or "owner") == "person":

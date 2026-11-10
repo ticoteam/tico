@@ -110,7 +110,7 @@ def claim_message_sql(bot="j.bot_id", message="m"):
     return (
         f"EXISTS(SELECT 1 FROM bots claim_bot LEFT JOIN bot_config claim_config ON claim_config.bot=claim_bot.id "
         f"WHERE claim_bot.id={bot} AND claim_bot.state='active' AND ("
-        + H.person_sent_sql(message)
+        + H.in_person_name_sql(message)
         + f" OR coalesce(claim_config.onboarding_state,'') NOT IN {statuses.PARKED_SQL} "
         f"OR {message}.sender_id='bot:'||coalesce(claim_config.reports_to,'')))"
     )
