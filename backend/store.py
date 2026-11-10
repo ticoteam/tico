@@ -427,6 +427,12 @@ def refused(c, identity, exc, savepoint="domain_write"):
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
+    return refusal_problem(exc)
+
+
+def refusal_problem(exc):
+    """The Problem a refusal answers with, for a write that does not go through `mutate` (it has no savepoint to undo
+    and keeps no audit of its own): a refusal is always a clean 4xx, never an uncaught error."""
     # The engine's refusals (a rule that starts with `task_`) are 409: the task is not where the caller thought, or
     # the move is not allowed now. What is missing, the commands allowed next and the task's version ride in `extra`
     # (docs/dev/pipelines-v3-cutover.md, "HTTP").
@@ -1188,6 +1194,10 @@ def _close_idle(conns):
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
+        # Whether this start made the database file: it then has nothing from an older release, so initialize's cutover
+        # sets up the built-ins and says nothing of moving them (backend/redesign_migration.py `_finish`).
+        path = getattr(settings, "db_path", None)
+        self.new_file = path is not None and (not path.exists() or not path.stat().st_size)
         # The server's file reader, set by the app once it has one (backend/media.py); None until then.
         self.blobs = None
         # The flight recorder (backend/flight.py) times every statement and write transaction when one is given.
@@ -2294,7 +2304,6 @@ class Store:
                 # (backend/tests/test_events_indexes.py), and no read is target-only. 118 MB on TIDY. An older release
                 # recreates it when it starts; the next start drops it again.
                 c.execute("DROP INDEX IF EXISTS events_target_action")
-                R.ensure_task_sweep(c)
                 # The Assistant's pending actions (backend/assistant.py) and the "via" of a task-history row.
                 from .assistant import ensure_schema as ensure_assistant_schema
 
@@ -2414,7 +2423,7 @@ class Store:
         c.close()
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.
-        redesign_migration.cutover(self)
+        redesign_migration.cutover(self, new=self.new_file)
 
     def close(self):
         """Closes the store's idle read connections now, as the finalizer does once the store is freed. A connection

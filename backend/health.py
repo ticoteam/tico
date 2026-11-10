@@ -2472,17 +2472,20 @@ def _plate_check(c, who, auth, full):
 
     over = []
     visible_sql = auth.task_sql(c, who) if full else None
+    plates = waiting_on.needs_by_person(c)  # one pass over the open tasks for every person's plate
     for person in _plate_people(c, auth) if full else [who]:
-        items = waiting_on.needs(c, person.actor)
+        items = plates.get(person.actor, [])
         if visible_sql and person.actor != who.actor:
             # Another person's plate counts only what the reader may read: a private task is not theirs to count.
             readable = _readable(c, visible_sql, sorted({tid for item in items for tid in _plate_tasks(item)}))
             items = [item for item in items if any(tid in readable for tid in _plate_tasks(item))]
         if len(items) > NEEDS_PLATE_WARN:
-            H.prime_tasks(c, [item.get("task_id") for item in items])
             bots = {}
             for item in items:
-                asker = (H.task(c, item.get("task_id") or "") or {}).get("requester_id")
+                # The row Needs you's pass already read for this snapshot (waiting_on.prime): no read of its own.
+                asker = (H._one(c, "SELECT * FROM tasks WHERE id=?", (item.get("task_id") or "",)) or {}).get(
+                    "requester_id"
+                )
                 if H.is_bot(asker):
                     bots[asker] = bots.get(asker, 0) + 1
             over.append((len(items), person.actor, bots))
@@ -2640,18 +2643,21 @@ def _claimed_oks_check(c):
 
     try:
         waiting = len(support.claimed(c))
+        refused = support.refused_lately(c)
     except sqlite3.OperationalError:  # an install that never made the tables: nothing was claimed
-        waiting = 0
-    if not waiting:
+        waiting = refused = 0
+    said = []
+    if waiting:
+        said.append(
+            f"{_plural(waiting, 'report')} to Tico support OK'd and not sent yet; Maintenance tries again each run."
+        )
+    if refused:
+        said.append(f"{_plural(refused, 'report')} OK'd this week could not be sent; its task says why.")
+    if not said:
         check = _check("claimed_oks", "OK'd sends", "ok", "Nothing OK'd waits to be sent.")
     else:
-        check = _check(
-            "claimed_oks",
-            "OK'd sends",
-            "warn",
-            f"{_plural(waiting, 'report')} to Tico support OK'd and not sent yet; Maintenance tries again each run.",
-        )
-    check["counts"] = {"claimed_not_delivered": waiting}
+        check = _check("claimed_oks", "OK'd sends", "warn", " ".join(said))
+    check["counts"] = {"claimed_not_delivered": waiting, "claimed_refused": refused}
     return check
 
 

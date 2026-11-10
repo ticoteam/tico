@@ -101,8 +101,18 @@ def test_health_takes_the_same_statements_however_many_refused_queues_it_shows(a
     machine = setup(api, monkeypatch, tasks=2)
     at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
     busy(api, machine, 0, 40)
-    at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     store = api.app.state.store
+    with store.transaction() as c:
+        # Every bot is held for its failed runs until its next try (backend/run_backoff.py), so the claim passes
+        # over its queue: a refusal v3 keeps (the claim no longer judges a task's waits; the engine wakes only the
+        # bot whose turn it is).
+        for k in range(40):
+            c.execute(
+                "INSERT OR REPLACE INTO run_backoff(bot,fails,wait_until,error_class,last_failed_at,held_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (f"busy-{k}", 3, "2026-10-26T00:00:00.000000Z", "crash", *["2026-10-24T12:10:00.000000Z"] * 2),
+            )
+    at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     with store.read() as c:
         values = {f"busy-{k}": Q.current(c, store.settings, f"busy-{k}") for k in range(40)}
     refusable = sorted(slug for slug, value in values.items() if value and value["reason"] != "lane_held")

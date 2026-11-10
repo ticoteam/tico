@@ -23,9 +23,11 @@ MACHINE = datetime(2026, 11, 6, 18, 30, tzinfo=timezone.utc)
 # one, the fix f5a873860 case), a Pacific evening, the Sunday to Monday edge of a growth window, and the night after
 # spring-forward. It is months before MACHINE.
 LONG_AFTER = datetime(2026, 3, 9, 2, 0, tzinfo=timezone.utc)
-# Columns that hold a future time by design: a schedule's next run, a message's expiry, a task's due date and the end
-# of a snooze.
-FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at", "until_at"}
+# Columns that hold a future time by design: a schedule's next run, a message's expiry, a task's due date, the end
+# of a snooze and when the never-stuck check next looks at a visit.
+FUTURE_BY_DESIGN = {"next_due_at", "expires_at", "due_at", "until_at", "next_try_at"}
+# A history row whose new value is a future time by design: a snooze records the date it ends.
+FUTURE_HISTORY = "kind='snooze'"
 
 
 def signed_in(settings):
@@ -48,9 +50,10 @@ def nothing_is_dated_after(settings, moment, label, run_on_the_machines_clock=Fa
                     and column in ("started_at", "first_started_at")
                 ):
                     continue
+                skip = f" AND NOT ({FUTURE_HISTORY})" if (table, column) == ("history_events", "new") else ""
                 count = db.execute(
                     f'SELECT count(*) FROM "{table}" WHERE typeof("{column}")=\'text\' AND "{column}" > ? '
-                    f'AND "{column}" LIKE \'20__-__-__T%\'',
+                    f'AND "{column}" LIKE \'20__-__-__T%\'' + skip,
                     (cut,),
                 ).fetchone()[0]
                 if count:

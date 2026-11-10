@@ -146,8 +146,19 @@ def _asked(conn: "sqlite3.Connection", row: Row, requirement_id: str, by: str) -
     _refuse(conn, by, "task_requirement", "That is not asked of this task", row["id"])
 
 
-def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, value: str, notes: str | None) -> None:
-    """Refuses an answer that does not fit the requirement or comes from someone it is not asked of. Writes nothing."""
+def _may_answer(
+    conn: "sqlite3.Connection",
+    by: str,
+    row: Row,
+    requirement: Row,
+    value: str,
+    notes: str | None,
+    *,
+    own_click: bool = False,
+) -> None:
+    """Refuses an answer that does not fit the requirement or comes from someone it is not asked of. Writes nothing.
+    An OK added to one task is a person's: a bot never answers one, and the one who asked it OKs it only as a person,
+    by their own click in their own session (`own_click`), never through the Assistant, BotOps or a token."""
     task_id = row["id"]
     kind = requirement["kind"]
     if value == PUSHED_PAST:
@@ -173,8 +184,11 @@ def _may_answer(conn: "sqlite3.Connection", by: str, row: Row, requirement: Row,
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
+    if kind == "ok" and requirement.get("visit_id") and not is_human(by):
+        _refuse(conn, by, "task_requirement", "An OK is a person's to give", task_id)
     if kind == "ok" and value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
-        _refuse(conn, by, "task_requirement", "Nobody OKs their own ask", task_id)
+        if not own_click:
+            _refuse(conn, by, "task_requirement", "Your own ask is OK'd only by your own click in Tico", task_id)
     if kind == "ok":
         from . import task_asks
 
@@ -206,7 +220,8 @@ def _write(conn: "sqlite3.Connection", row: Row, requirement_id: str, by: str, v
         (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, H.now()),
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
-    H.history_event(conn, "task", row["id"], by, "answer", None, value, notes, data)
+    # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
+    H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
 
 
@@ -273,15 +288,16 @@ def answer(
     notes: str | None = None,
     *,
     seen_version: int | str | None = None,
+    own_click: bool = False,
 ) -> Row:
     """Answer a requirement of the task's open visit: `done` (owner says done), `ok`, `no` with notes or `again` (an
     OK), or the choice or text (a question). If that was the last thing missing, the task moves in the same step. The
-    same answer given twice is one answer."""
+    same answer given twice is one answer. `own_click`: the person's own click in their own session (_may_answer)."""
     row = _open_task(conn, task_id, by)
     E.check_version(conn, by, row, seen_version)
     requirement = _asked(conn, row, requirement_id, by)
     value = str(value or "").strip()
-    _may_answer(conn, by, row, requirement, value, notes)
+    _may_answer(conn, by, row, requirement, value, notes, own_click=own_click)
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
     if newest and (newest["by_id"], newest["answer"], newest.get("notes")) == (str(by), value, notes):
         out = E.task(conn, task_id) or row
@@ -348,11 +364,9 @@ def give_to(
         _refuse(conn, by, "identity", "Only who it waits on, whoever asked it, or who works the task gives it", task_id)
     if person == current:
         return row
-    if kind == "ok" and requirement.get("visit_id") and person == requirement.get("added_by_id"):
-        _refuse(conn, by, "task_requirement", "Nobody OKs their own ask: give it to someone else", task_id)
     if requirement.get("visit_id"):
         conn.execute("UPDATE requirements SET person_id=? WHERE id=?", (person, requirement_id))
-        H.history_event(conn, "task", task_id, by, "give", current, person, None, {"requirement": requirement_id})
+        H._task_event(conn, task_id, by, "give", current, person, None, data={"requirement": requirement_id})
         E.changed(conn, task_id, by)
         return E.task(conn, task_id) or row
     answer_id = _write(conn, row, requirement_id, by, GIVE, person)
@@ -400,7 +414,7 @@ def undo(conn: "sqlite3.Connection", answer_id: str, by: str) -> Row:
         task_asks.revoke(conn, found["requirement_id"])
     # A wake this answer caused and no run took yet is moot.
     task_wakes.cancel(conn, f"{task_id}:{visit['id']}:answer:{answer_id}")
-    H.history_event(conn, "task", task_id, by, "answer_undone", found["answer"], None, None, {"answer_id": answer_id})
+    H._task_event(conn, task_id, by, "answer_undone", found["answer"], None, None, data={"answer_id": answer_id})
     if stays:
         moved = E.advance(conn, task_id)
         if moved is None:

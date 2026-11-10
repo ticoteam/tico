@@ -1008,9 +1008,14 @@ def _printed_to_stderr():
 
 
 def _finish(c, who, mid, waiting):
-    """Record a pass, log it and tell the owner once. With nobody to tell yet, `owner_wait` keeps it for `catch_up`."""
-    told = _tell_owner(c, who, mid)
+    """Record a pass, log it and tell the owner once. With nobody to tell yet, `owner_wait` keeps it for `catch_up`. On a
+    new database (`new`) nothing came from an older release: what it set up is its own built-ins, so no one is told and
+    the log line is not a warning."""
     previous = state(c)
+    new = bool(previous.get("new"))
+    if new:
+        c.execute("UPDATE redesign_migrated SET told=? WHERE migration=? AND told IS NULL", (_now(), mid))
+    told = None if new else _tell_owner(c, who, mid)
     total = totals(c, mid)
     untold = c.execute("SELECT 1 FROM redesign_migrated WHERE migration=? AND told IS NULL LIMIT 1", (mid,)).fetchone()
     record = {
@@ -1020,6 +1025,7 @@ def _finish(c, who, mid, waiting):
         **total,
         "told": told or previous.get("told"),
         "owner_wait": who.role != "owner" or bool(waiting) or bool(untold),
+        **({"new": True} if new else {}),
     }
     _set_meta(c, CUTOVER, json.dumps(record, sort_keys=True))
     line = (
@@ -1027,6 +1033,9 @@ def _finish(c, who, mid, waiting):
         f"{total['failed']} failed, {waiting} wait for an owner; owner told: "
         f"{told or ('no one yet' if record['owner_wait'] else 'nothing new')}"
     )
+    if new:
+        log.info("%s (a new database)", line)
+        return told
     log.warning("%s", line)
     # The server's log handler is the in-app ring (diagnostics.py), so the operator's container log gets it from here.
     if not _printed_to_stderr():
@@ -1039,12 +1048,13 @@ def _finish(c, who, mid, waiting):
     return told
 
 
-def cutover(store):
+def cutover(store, new=False):
     """Once per install, at startup (before the scheduler starts): every routine, wake rule, system job, inbox, limit
     and budget moves to the redesign. Each object moves in its own write and is marked in the same write, so a restart
     part way goes on where it stopped and nothing moves twice. An object with a `keeps` flag, or one that fails,
     stays as it was (marked, never tried again) and is listed once for the owner. What needs a person to own it, on an
-    install with nobody yet, waits for `catch_up`. Returns the result, or None when it already ran."""
+    install with nobody yet, waits for `catch_up`. `new`: the database was made by this start (Store.initialize), so
+    it tells no one and logs no warning (`_finish`). Returns the result, or None when it already ran."""
     with store.transaction() as c:
         ensure(c)
         record = state(c)
@@ -1054,7 +1064,8 @@ def cutover(store):
         mid = record.get("migration") or "mig_" + H.new_id()
         if not record:
             now = _now()
-            _set_meta(c, CUTOVER, json.dumps({"state": "running", "migration": mid, "at": now}, sort_keys=True))
+            began = {"state": "running", "migration": mid, "at": now, **({"new": True} if new else {})}
+            _set_meta(c, CUTOVER, json.dumps(began, sort_keys=True))
         else:
             log.warning("redesign cutover %s: resuming after a restart", mid)
         objects = plan(c, who)

@@ -541,18 +541,97 @@ def test_a_replayed_refusal_on_a_private_task_says_again_what_is_missing_to_who_
         assert store.replayed_refusal(c, "human:cara", receipt) == receipt  # may not read it: the receipt as kept
 
 
-def test_nobody_oks_their_own_ask_and_an_ok_is_asked_only_of_a_person(c):
+def test_a_bot_never_answers_its_own_ask_and_an_ok_is_asked_only_of_a_person(c):
     row = _new(c, by=BEN, owner=BUILDER)
     for to, kind in ((BUILDER, "ok"), (BUILDER, "answer"), (HELPER, "ok")):
         with _refused("task_requirement"):
             H.task_ask(c, BUILDER, row["id"], to, "Ship it on Monday?", kind=kind, seen_version=_version(c, row["id"]))
     assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1  # nothing was asked
-    asked = H.task_ask(c, ANA, row["id"], BEN, "Ship it on Monday?", kind="ok")["requirement_id"]
-    with _refused("task_requirement"):
-        H.task_give(c, ANA, row["id"], asked, ANA)  # given back to the one who asked it, it would be her own OK
-    with _refused("task_requirement"):
-        H.task_answer(c, ANA, row["id"], asked, "ok")
     H.task_ask(c, BUILDER, row["id"], HELPER, "Which day suits the launch?", seen_version=_version(c, row["id"]))
+
+
+def test_a_persons_own_ask_is_okd_only_by_their_own_click(c):
+    """A person who asked for an OK may give it to themself: their own signed-in click is what an OK is. The
+    Assistant or BotOps acting for them, or a token (no own click), never gives it; a bot never answers an OK."""
+    row = _new(c, by=BEN, owner=BUILDER)
+    asked = H.task_ask(c, ANA, row["id"], BEN, "Ship it on Monday?", kind="ok")["requirement_id"]
+    H.task_give(c, ANA, row["id"], asked, ANA)  # given back to the one who asked it
+    with _refused("task_requirement"):
+        H.task_answer(c, ANA, row["id"], asked, "ok")  # a token, or any call that is not her own click
+    via = H.VIA.set("assistant")
+    try:
+        with _refused("task_requirement"):
+            H.task_answer(c, ANA, row["id"], asked, "ok", own_click=True)
+    finally:
+        H.VIA.reset(via)
+    with _refused("task_requirement"):
+        H.task_answer(
+            c, BUILDER, row["id"], asked, "no", "Not yet", _version(c, row["id"])
+        )  # a bot answers no OK, not even a send back
+    H.task_answer(c, ANA, row["id"], asked, "ok", own_click=True)
+    mine = H.task_ask(c, ANA, row["id"], ANA, "OK my own wording?", kind="ok")["requirement_id"]  # asked of herself
+    H.task_answer(c, ANA, row["id"], mine, "ok", own_click=True)
+    met = {r["requirement_id"]: r["met"] for r in H.task_view(c, row["id"], ANA)["to_leave"]}
+    assert met[asked] and met[mine]
+
+
+def test_a_bots_new_ask_keeps_what_was_decided_and_replaces_only_its_open_ask(c):
+    """C15: a bot's new ask replaces its ask that is still open. An answered question and an OK'd OK stay on the task,
+    met, with their answers (smoke 2026-11-10, item 3)."""
+    row = _new(c, by=BEN, owner=BUILDER)
+    question = H.task_ask(c, BUILDER, row["id"], BEN, "Which CRM?", seen_version=_version(c, row["id"]))
+    H.task_answer(c, BEN, row["id"], question["requirement_id"], "New CRM")
+    ok = H.task_ask(c, BUILDER, row["id"], BEN, "OK the budget?", kind="ok", seen_version=_version(c, row["id"]))
+    H.task_answer(c, BEN, row["id"], ok["requirement_id"], "ok")
+    open_one = H.task_ask(c, BUILDER, row["id"], BEN, "Which day?", seen_version=_version(c, row["id"]))
+    last = H.task_ask(c, BUILDER, row["id"], BEN, "Which week?", seen_version=_version(c, row["id"]))
+    shown = {r["requirement_id"]: r for r in H.task_view(c, row["id"], BEN)["to_leave"]}
+    assert open_one["requirement_id"] not in shown  # it was still open: replaced
+    assert (
+        shown[question["requirement_id"]]["met"] and shown[question["requirement_id"]]["answer"]["value"] == "New CRM"
+    )
+    assert shown[ok["requirement_id"]]["met"] and shown[ok["requirement_id"]]["standing"] == "OK'd"
+    assert not shown[last["requirement_id"]]["met"]
+
+
+def test_a_bots_new_ask_never_drops_an_ok_given_for_exact_content_it_has_not_used(c):
+    from backend import task_asks
+
+    row = _new(c, by=BEN, owner=BUILDER)
+    asked = task_asks.ask_ok(
+        c,
+        BUILDER,
+        BEN,
+        "Raise the budget?",
+        shows=[],
+        subject="budget_raise:b1",
+        content={"cents": 500},
+        task_id=row["id"],
+    )
+    rid = asked["requirement_id"]
+    task_asks.show(c, BEN, rid, {"cents": 500}, own_click=True)
+    task_asks.give_ok(c, BEN, rid, task_asks.content_hash({"cents": 500}), own_click=True)
+    with _refused("task_requirement"):
+        H.task_ask(c, BUILDER, row["id"], BEN, "Which week?", seen_version=_version(c, row["id"]))
+    assert task_asks.standing(c, rid) == task_asks.OK  # still good, for that content only
+    task_asks.use(c, rid, "budget_raise:b1", {"cents": 500}, BUILDER)
+    H.task_ask(c, BUILDER, row["id"], BEN, "Which week?", seen_version=_version(c, row["id"]))
+    assert task_asks.standing(c, rid) == task_asks.USED
+    assert H.task_view(c, row["id"], BEN)["to_leave"][-1]["requirement_id"] == rid  # what was decided stays
+
+
+def test_an_answer_the_assistant_gives_for_a_person_says_so_on_the_task(c):
+    row = _new(c, by=BEN, owner=BUILDER)
+    asked = H.task_ask(c, BUILDER, row["id"], BEN, "Which CRM?", seen_version=_version(c, row["id"]))["requirement_id"]
+    via = H.VIA.set("assistant")
+    try:
+        H.task_answer(c, BEN, row["id"], asked, "New CRM")
+    finally:
+        H.VIA.reset(via)
+    answer = next(r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == asked)["answer"]
+    assert (answer["by"], answer["via"]) == (BEN, "assistant")
+    history = [e for e in H.task_history(c, row["id"]) if e["field"] == "answer"]
+    assert [(e["actor"], e["via"]) for e in history] == [(BEN, "assistant")]
 
 
 def test_an_ask_names_only_someone_who_can_read_the_task(c):
@@ -726,6 +805,10 @@ def test_a_private_task_waits_before_a_stage_whose_owner_cannot_read_it_until_so
     assert X.wakes(c, row["id"], "bot:reviewer") == []
     turn = H.task_view(c, row["id"], ANA)["turn"]
     assert "reviewer" in turn["line"] and "Who can see" in turn["fix"]
+    from backend import waiting_on as W
+
+    (wait,) = W.waiting_on(c, row["id"])  # Needs you, lists and briefs read this line, not "Moving to Review"
+    assert wait.line == "Waits on Ana to share it: reviewer owns Review and cannot read this private task", wait
     never_stuck.check(c)
     assert E.task(c, row["id"])["stage"]["name"] == "Draft"  # still held: nothing was shared
     H.set_task_readers(c, ANA, row["id"], add=["bot:reviewer"])

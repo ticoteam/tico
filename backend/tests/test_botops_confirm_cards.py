@@ -132,12 +132,14 @@ def test_a_bulk_step_its_route_refuses_gets_no_card_and_its_value_goes_nowhere(a
     with api.app.state.store.transaction() as c:
         tasks = [H.task_create(c, "human:ben", f"Old task {i}", "Stale.", "bot:ops") for i in range(2)]
     _, attempt = assistant_turn(api, "ben-test", "Close my old tasks")
-    steps = [{"path": f"/api/v2/tasks/{t['id']}", "body": {"close": True}} for t in tasks]
+    steps = [
+        {"path": f"/api/v2/tasks/{t['id']}/move", "body": {"to": "closed", "version": t["version"]}} for t in tasks
+    ]
     steps[1]["body"]["key"] = "sk-not-for-cards"
     post(
         api,
-        f"tasks/{tasks[1]['id']}",
-        {"close": True, "key": "sk-not-for-cards", "version": tasks[1]["version"]},
+        f"tasks/{tasks[1]['id']}/move",
+        {"to": "closed", "key": "sk-not-for-cards", "version": tasks[1]["version"]},
         token="ben-test",
         expected=422,
     )
