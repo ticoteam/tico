@@ -774,3 +774,52 @@ def test_undo_puts_back_a_decision_logged_before_a_tasks_column_was_renamed(api,
         c.execute("UPDATE strategy_actions SET changes=? WHERE id=?", (json.dumps(changes), made["id"]))
     assert post(api, f"strategy-bot/log/{made['id']}/undo", {})["state"] == "undone"
     assert task(api, first)["owner_id"] == "bot:ops"
+
+
+def test_the_strategy_bot_never_changes_who_reads_files_under_or_holds_up_a_persons_task(api):
+    """A person's task stays theirs in who reads it, what is filed under it, and what it holds up or waits on, even
+    though the Strategy Bot is its requester. Each try is refused on the server (409 `proposed`) and changes nothing,
+    and the owner is offered each one in Needs you."""
+    strategy_token = with_strategy_bot(api)
+    bot(api, "ops")
+    with api.app.state.store.transaction() as c:
+        private = H.task_create(
+            c, STRATEGY_BOT, "Keep the packet quiet", "Private body.", OWNER, private=True, lint=False
+        )["id"]
+        filed = H.task_create(c, STRATEGY_BOT, "Draft the packet", "Work it.", "bot:ops", private=True, lint=False)[
+            "id"
+        ]
+        held = H.task_create(c, STRATEGY_BOT, "Send the packet", "Work it.", STRATEGY_BOT, private=True, lint=False)[
+            "id"
+        ]
+        waits = H.task_create(c, STRATEGY_BOT, "Wait on the packet", "Work it.", "bot:ops", private=True, lint=False)[
+            "id"
+        ]
+    post(api, f"tasks/{private}/readers", {"add": ["bot:ops"]})
+    for other in (filed, held, waits):
+        post(api, f"tasks/{other}/readers", {"add": ["bot:ops", "human:ana"]})
+    post(api, f"tasks/{waits}/relations", {"task": private, "kind": "blocked_by"})
+    start = {t: task(api, t)["version"] for t in (private, filed, held, waits)}
+    logged = len(get(api, "strategy-bot/log")["items"])
+    tries = [
+        (private, "/readers", {"remove": ["bot:ops"]}),  # who reads the person's task
+        (filed, "/relations", {"task": private, "kind": "parent"}),  # filed under the person's task
+        (held, "/relations", {"task": private, "kind": "blocked_by"}),  # the person's task holds it up
+        (waits, "/relations", {"task": private, "kind": "blocked_by", "remove": True}),  # the hold is taken off
+    ]
+    for tid, path, body in tries:
+        r = api.post(f"/api/v2/tasks/{tid}{path}", json=body, headers=headers(strategy_token))
+        assert r.status_code == 409 and "proposal" in r.text, (tid, path, body, r.text)
+    try:
+        with api.app.state.store.transaction() as c:
+            H.task_create(c, STRATEGY_BOT, "Chase the packet", "Work it.", "bot:ops", parent_id=private, lint=False)
+    except H.Refused as exc:
+        assert "stays the owner's" in str(exc), str(exc)
+    else:
+        raise AssertionError("filing under a person's task was not refused")
+    assert {t: task(api, t)["version"] for t in (private, filed, held, waits)} == start
+    assert len(get(api, "strategy-bot/log")["items"]) == logged + len(tries)
+    assert all(
+        x["kind"] == "person_task" and x["state"] == "proposed"
+        for x in get(api, "strategy-bot/log")["items"][: len(tries)]
+    )

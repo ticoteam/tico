@@ -3896,6 +3896,9 @@ def set_task_readers(conn, actor, task_id, add=(), remove=(), *, replace=None, m
         refuse(conn, actor, "lint", f"A private task lists at most {MAX_TASK_READERS} readers: add a group instead")
     if wanted == before:
         return before
+    from .strategy_acts import TASK, person_task
+
+    person_task(conn, actor, row, f"change who can read {TASK}")  # a person's task stays theirs
     conn.execute(
         "UPDATE tasks SET readers=?, updated_at=? WHERE id=?", (_dump(wanted) if wanted else None, now(), task_id)
     )
@@ -6999,6 +7002,10 @@ def task_create(
         if again:
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
+    if parent:
+        from .strategy_acts import TASK, person_task
+
+        person_task(conn, actor, parent, f"file a task under {TASK}")  # a person's subtasks are theirs
     from . import review_gate, visual_specs
 
     body = visual_specs.child_body(conn, parent_id, body)  # tickets under a spec'd roadmap card get its spec
