@@ -304,7 +304,7 @@ def step_never_stuck(ctx: "Context") -> tuple[str, bool]:
     return SR.words_of(done, none="Nothing to do"), SR.nothing(done)
 
 
-def step_deferred(ctx):
+def step_deferred(ctx: "Context") -> tuple[str, bool]:
     # Deferred items whose deadline came: one run per session carries them (backend/delivery.py). A snooze's end is the
     # never-stuck check's (backend/never_stuck.py).
     with ctx.locked("deferred") as c:
@@ -394,7 +394,7 @@ def step_go_live_expiry(ctx):
     return SR.words_of(ended, "go-live ended", "Nothing to end", "go-lives ended"), SR.nothing(ended)
 
 
-def step_drop_unreadable(ctx):
+def step_drop_unreadable(ctx: "Context") -> tuple[str, bool]:
     # Every minute: queued jobs whose message their bot may no longer read, which no claim would ever take, are dropped.
     # The privacy scan is a read and does not need the writer lock; each drop is its own short write.
     from . import task_privacy
