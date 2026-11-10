@@ -271,6 +271,23 @@ impl Tico {
         note_state(store, id, &view)?;
         Ok(view)
     }
+    /// Reads the meeting back without sharing anything (the sync worker shares), and notes if it was paused,
+    /// resumed or ended there. A call's recording watches for its call's end this way.
+    pub fn read_live(&self, store: &Store, id: &str) -> Result<Value> {
+        let _guard = store.live_lock();
+        let context = store.context(id)?;
+        ensure!(
+            context.live_destination == self.destination.id && !context.live_id.is_empty(),
+            "Connect this meeting to Tico first"
+        );
+        let view = self.call(
+            &format!("/api/v2/live-meetings/{}", context.live_id),
+            None,
+            "",
+        )?;
+        note_state(store, id, &view)?;
+        Ok(view)
+    }
     /// Shares streamed turns and finished chunks as new transcript text while the meeting is
     /// live, and corrections of streamed turns while it is live or paused.
     pub fn push_live(&self, store: &Store, id: &str) -> Result<()> {

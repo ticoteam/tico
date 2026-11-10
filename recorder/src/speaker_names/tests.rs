@@ -856,3 +856,20 @@ fn vote_tallies_say_why_a_name_is_withheld() {
     );
     assert_eq!(tallies[0].speech, 20_000);
 }
+
+#[test]
+fn who_is_in_the_meet_window_is_kept_for_its_recording_only() {
+    let observed = Observation {
+        participants: vec!["Ana Ruiz".into(), "ana ruiz".into(), "Ben Ito".into()],
+        self_names: vec!["Chris".into()],
+        ..Default::default()
+    };
+    note_present("rec-1", &observed);
+    assert_eq!(
+        present("rec-1"),
+        Some(vec!["Chris".into(), "Ana Ruiz".into(), "Ben Ito".into()])
+    );
+    assert_eq!(present("rec-2"), None, "another recording's window");
+    note_present("rec-1", &Observation::default());
+    assert_eq!(present("rec-1"), None, "nobody seen");
+}
