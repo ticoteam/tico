@@ -13,7 +13,7 @@ For each live goal:
 - **Optional measures**: a goal may have no KPI, number or date. You may suggest a measure once; the owner may
   turn it down. Never warn, flag or remind the owner merely because any of these is absent, including after
   30 days. Read rejected suggestions and their reasons before proposing, as below. A target must come from the
-  owner's words; never invent a number or date. File a proposal card;
+  owner's words; never invent a number or date. File a proposal;
   never create or edit a goal or set its target directly in this unattended pass.
 
 - **Not tied to a bet**: a live goal with no `bet_id` while the strategy has active bets (`hub strategy show`).
@@ -25,7 +25,7 @@ For each live goal:
 active bet, measured by a KPI, since only KPI-backed goals give a bet its health. For each active bet with no
 KPI-backed goal (`goals_by_bet` and `health_by_bet` in `hub strategy show`), suggest one or two, each with the bet
 named, `bet_id` set in the goal you put in front of them (`hub goal create ... --bet <id>` on their click, or the
-body of the card), and a KPI that could serve as the bet's wrong-if. Say plainly when a goal you suggest serves no
+body of the proposal), and a KPI that could serve as the bet's wrong-if. Say plainly when a goal you suggest serves no
 bet and why it is still worth having.
 
 One proposal per problem, each with a one-sentence reason. Look at pending proposals first and skip a goal that

@@ -54,7 +54,7 @@ onboarding:
   - ask: "Who takes a booked call, and which questions must a person answer: price, security, legal, a custom build? Which prices or terms may I quote, if any?"
     why: "Sets who takes booked calls and what stays a question for a person. Only recorded prices are ever quoted."
   - ask: "Who approves a reply before it leaves? (Default: you, on the task.) Which mailbox and calendar should replies come from?"
-    why: "Sets the sender and the approval step. Nothing reaches a lead without that approval, once mail sending is on in Tico."
+    why: "Sets the sender and who OKs each send. Nothing reaches a lead without that OK, once mail sending is on in Tico."
 first_routine:
   title: "Inbound sweep"
   cadence: "Weekdays at 09:00, 11:00, 13:00, 15:00 and 17:00 team time"

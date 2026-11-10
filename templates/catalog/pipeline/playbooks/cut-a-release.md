@@ -33,7 +33,7 @@ range is listed under "Could not classify" with the question.
 
 ## 5. Ask for the OK
 
-    hub task ask <id> --to <owner> "Publish release 1.4.2 at commit abc1234? <the readiness recommendation in a few words>" --version N
+    hub task ask <id> --to <owner> "Publish release 1.4.2 at commit abc1234? <the readiness recommendation in a few words>" --kind ok --version N
 
 The ask names one version at one commit, as `playbooks/rollout.md` step 0 describes. Put the readiness report and the
 notes' SHA-256 in a comment on the task. A publish goes through only on that OK.

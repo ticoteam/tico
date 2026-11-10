@@ -119,10 +119,9 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     for task in tasks:
         assert task["requester_id"] == "human:owner" and task["status"] == "open"
         assert task["goal_id"] == goals[task["owner_id"]]["id"]
-        # Each ends by asking the owner one Yes/No question on the task, in their Needs you.
-        assert re.search(
-            r'hub task ask <this task> --to owner --choices Yes,No "Is [^"]+ good to go\?"', task["body"]
-        ), task["body"]
+        # Each ends by asking the owner one Yes/No question on the task, which the owner sees in Needs you.
+        ask = r'hub task ask <id> --to owner "Approve [^"]+\?" --choices Yes,No --version N'
+        assert re.search(ask, task["body"]), task["body"]
 
 
 def test_the_sample_company_is_only_for_a_new_company_and_only_the_owner_starts_it(environment):

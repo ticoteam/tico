@@ -645,8 +645,8 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"task": {"id": "T2", "owner": body["owner"], "title": body["title"]}})
         if self.path == "/api/v2/bots/writer/tools":
             return self.reply(200, {"ok": True, "dry_run": bool(body.get("dry_run"))})
-        if self.path == "/api/v2/approvals":
-            return self.reply(200, {"id": "ap-1", "kind": body.get("kind"), "decision": None})
+        if self.path == "/api/v2/support/reports":
+            return self.reply(200, {"id": "r-1", "requirement_id": "r-1", "task_id": "T9", "status": "pending"})
         if self.path == "/api/v2/support/tickets/from-approval":
             return self.reply(200, {"ticket": {"id": "sup_1"}, "approval": body.get("approval"), "again": False})
         if any(
@@ -779,22 +779,23 @@ class AgainstAStub(unittest.TestCase):
         self.assertTrue(posted["dry_run"])
         self.assertEqual(posted["mcp"]["url"], "https://mcp.notion.example/mcp")
 
-    def test_support_report_drafts_an_approval_with_the_exact_message_and_send_names_it(self):
+    def test_support_report_asks_an_ok_on_the_exact_message_and_send_names_it(self):
         import hashlib
 
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "report.md"
             report.write_bytes(b"hub task update fails.\r\nError: refused (version)\r\n\r\n")
-            code, out = run_hub("support", "report", "--file", str(report), "--no-ids", env=self.env)
+            argv = ("support", "report", "--file", str(report), "--no-ids", "--task", "T9")
+            code, out = run_hub(*argv, env=self.env)
         self.assertEqual(code, 0, out)
-        self.assertEqual(out["approval"], "ap-1")
-        self.assertIn("hub support send --approval ap-1", out["next"])
-        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/approvals")
+        self.assertEqual((out["ok"], out["task_id"]), ("r-1", "T9"))
+        self.assertIn("hub support send --ok r-1", out["next"])
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/reports")
         message = "hub task update fails.\nError: refused (version)"
         self.assertEqual(
             posted,
             {
-                "kind": "support",
+                "task_id": "T9",
                 "payload": {
                     "message": message,
                     "content_sha256": hashlib.sha256(message.encode()).hexdigest(),
@@ -802,10 +803,10 @@ class AgainstAStub(unittest.TestCase):
                 },
             },
         )
-        code, out = run_hub("support", "send", "--approval", "ap-1", env=self.env)
+        code, out = run_hub("support", "send", "--ok", "r-1", env=self.env)
         self.assertEqual((code, out["ticket"]["id"]), (0, "sup_1"))
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
-        self.assertEqual(posted, {"approval": "ap-1"})
+        self.assertEqual(posted, {"approval": "r-1"})
 
     def test_task_snooze_sends_its_date_why_and_version(self):
         def last(method, path):

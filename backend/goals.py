@@ -701,14 +701,16 @@ def _from_owner(conn, row, at):
             "basis": "checkin",
             "reason": f"Check-in {_age(said['created_at'], at)} ago: {said['signal'].replace('_', ' ')}",
         }
+    # A closed task was dropped, not finished: it earns no credit and is not counted. Done is finished.
     tasks = conn.execute(
-        "SELECT status, done_at, closed_at, updated_at FROM tasks WHERE goal_id=? AND coalesce(private,1)=0",
+        "SELECT status, coalesce(done_at, updated_at) AS done_at, updated_at FROM tasks "
+        "WHERE goal_id=? AND coalesce(private,1)=0 AND status!='closed'",
         (row["id"],),
     ).fetchall()
     if not tasks:
         return None
-    finished = [t["done_at"] or t["closed_at"] for t in tasks if t["done_at"] or t["closed_at"]]
-    waiting = [t for t in tasks if not (t["done_at"] or t["closed_at"])]
+    finished = [t["done_at"] for t in tasks if t["status"] == "done"]
+    waiting = [t for t in tasks if t["status"] != "done"]
     if not waiting:
         return {"status": "green", "basis": "tasks", "reason": f"All {len(tasks)} tasks done"}
     latest = max(finished, default=None)

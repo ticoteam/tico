@@ -21,7 +21,7 @@ Steps:
      server is not working.
    - Credential: `hub credential list` names each credential and the bots that have it, never a value. Then ask the
      bot for one read-only call that uses it, and report that result in one line.
-   - Mail sending: `hub bot mail <slug>` shows whether the bot sends without approval and its forward targets. Do not
+   - Mail sending: `hub bot mail <slug>` shows whether the bot sends without a person's OK and its forward targets. Do not
      say "on" before it does.
    - Placement or going live: `hub bot status list`, then `hub health check`.
 2. Read the result, not the request. A setting that reads back correctly is saved. It is working only when the check
