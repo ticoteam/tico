@@ -398,3 +398,52 @@ def test_a_needs_you_batch_never_gives_a_bound_ok_but_sends_one_back(api):
     assert status == 200 and done["errors"] == [], (status, code, detail, done)
     assert standing(api, rid) == K.SENT_BACK
     assert use(api, rid, bot)[0] == 409
+
+
+# ----------------------------------------------------------------------------- review 2: files, revocation, kinds
+def a_file(api, bot="ops", fid=None, text_digest="d1"):
+    """A bot's published file with one version, as files.py keeps it."""
+    fid = fid or "f" + H.new_id()[:8]
+    at = H.now()
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,current_version,first_activity_at,"
+            "last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (fid, bot, "bot", "cuts/" + fid + ".md", "Intro cut", "doc", "tico_blob", 1, at, at),
+        )
+        c.execute(
+            "INSERT OR IGNORE INTO blobs(id,owner,digest,size,name,content_type,created_at) VALUES(?,?,?,?,?,?,?)",
+            ("b" + fid, "bot:" + bot, text_digest, 10, "intro.md", "text/markdown", at),
+        )
+        c.execute(
+            "INSERT INTO bot_file_versions(file_id,version,blob_id,digest,size,name,mime,repo_path,actor,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (fid, 1, "b" + fid, text_digest, 10, "intro.md", "text/markdown", "cuts/" + fid + ".md", "bot:" + bot, at),
+        )
+    return fid
+
+
+def test_a_person_or_the_assistant_never_approves_a_file_by_a_direct_review(api):
+    """Codex review 2, finding 1: POST /api/v2/file-reviews took a person's or the Assistant's verdict and counted it
+    as a person's approval with no OK at all. A person approves a file only by a bound OK; a direct review is a bot's."""
+    from backend.tests.helpers.assistant import assistant_turn
+
+    bot = as_bot(api)
+    fid = a_file(api)
+    tid = bots_task(api, bot)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (tid,))
+    _, attempt = assistant_turn(api, "ana-test")
+    for token in ("ana-test", attempt["token"]):
+        status, code, _, _ = call(api, "POST", "file-reviews", token, {"file": fid, "task": tid, "verdict": "approve"})
+        assert status == 403, (token, status, code)
+    with api.app.state.store.transaction() as c:  # a person's review row from before still counts for nothing
+        c.execute(
+            "INSERT INTO bot_file_activity(file_id,actor,action,task_id,version,digest,created_at,detail) "
+            "VALUES(?,?,'reviewed',?,1,'d1',?,?)",
+            (fid, "human:ana", tid, H.now(), '{"verdict": "approve"}'),
+        )
+    found = get(api, f"file-approvals?file={fid}", token="ana-test")
+    assert not found["approved"], found
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM ok_grants WHERE subject LIKE ?", (f"file:{fid}%",)).fetchone()
