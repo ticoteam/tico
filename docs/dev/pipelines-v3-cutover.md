@@ -146,7 +146,7 @@ not ready (`worktree_waits`, for that task only). Each stops the tries and shows
 | `POST /api/v2/tasks/{id}/owner` | `owner, why?, version` | reassign |
 | `POST /api/v2/tasks/{id}/snooze` | `until?, why?, version` | |
 | `POST /api/v2/tasks/{id}/unsnooze` | `why?` | |
-| `POST /api/v2/tasks/{id}/try-again` | `why?` | a person hands a task back to its owner |
+| `POST /api/v2/tasks/{id}/try-again` | `why?` | a person hands a task back to its owner, in their own session: the Assistant, BotOps and tokens get `task_needs_person` |
 | `POST /api/v2/tasks/{id}/asks` | `to, line, kind?, choices?, show?, version` | ask a person (C19) |
 | `DELETE /api/v2/tasks/{id}/asks/{requirement_id}` | `why?` | withdraw |
 | `POST /api/v2/tasks/{id}/asks/{requirement_id}/answer` | `value, note?, version` | OK, send back (`no` with a note), look again, or an answer |

@@ -1924,7 +1924,7 @@ def finished_before_start(c, row):
     msg = H.message(
         c, c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0], include_deleted=True
     )
-    if msg and H.person_sent(msg):
+    if msg and H.in_person_name(msg):
         return False
     task_id = H.message_task_id(msg, H.conversation(c, msg["conversation_id"])) if msg else None
     task = H.task(c, task_id) if task_id else None
@@ -1977,7 +1977,7 @@ def login_class(c, task, msg, routine):
     for the rest. A routine's or a timed wake's turn is "other" whatever its labels, so standing watches never jump the
     queue. The labels count on the task or on the work it serves (its parents)."""
     msg = msg or {}
-    person = H.person_sent(msg)
+    person = H.in_person_name(msg)
     if routine or (not person and (msg.get("refs") or {}).get("wake")):
         return "other"
     labels = set(H.task_labels(task))
@@ -2164,7 +2164,7 @@ def person_wrote_since(c, bot, since):
     return (
         c.execute(
             "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
-            f"AND {H.person_sent_sql()} AND (m.kind<>'notice' OR m.sender_id='keeper') AND m.created_at>? LIMIT 1",
+            f"AND {H.typed_by_person_sql()} AND (m.kind<>'notice' OR m.sender_id='keeper') AND m.created_at>? LIMIT 1",
             (bot, max(since, last or "")),
         ).fetchone()
         is not None
@@ -2710,7 +2710,7 @@ def unfenced_sql():
     owner."""
     task_sql = queued_task_sql()
     return (
-        f"(({task_quarantine.free_sql(task_sql)}) AND (({H.person_sent_sql()} AND cv.kind='chat' AND {task_sql} IS NULL) "
+        f"(({task_quarantine.free_sql(task_sql)}) AND (({H.in_person_name_sql()} AND cv.kind='chat' AND {task_sql} IS NULL) "
         "OR NOT EXISTS(SELECT 1 FROM jobs u JOIN messages um ON um.id=u.message_id "
         "JOIN conversations uc ON uc.id=um.conversation_id WHERE u.bot_id=j.bot_id AND u.state='uncertain' "
         f"AND (({task_sql} IS NOT NULL AND "
@@ -2828,7 +2828,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
             return why  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
     task_id = work_task_id(message, conversation)
-    if task_id and message.get("sender_id") == H.KEEPER and not H.person_sent(message) and task_snoozed(c, task_id):
+    if task_id and message.get("sender_id") == H.KEEPER and not H.in_person_name(message) and task_snoozed(c, task_id):
         # Tico wakes no bot about a snoozed task (docs/pipelines-v3.md, rule 7); a person still can, through the
         # keeper's carrier of their own message too (task_wakes.may_start).
         return "task_wait"
@@ -2845,7 +2845,7 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         )
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
-    if wanted and not H.person_sent(message) and check_models.dropped(c, task_id):
+    if wanted and not H.in_person_name(message) and check_models.dropped(c, task_id):
         return "check_model"  # hold_unrunnable cancels it on the scheduler's next tick
     config = check_models.apply(followed, wanted)
     if (
@@ -3082,7 +3082,7 @@ def quiet_recheck(c, aid, body, task, msg):
     return (
         c.execute(
             "SELECT 1 FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=? "
-            f"AND m.deleted_at IS NULL AND ({H.person_named_sql()} "
+            f"AND m.deleted_at IS NULL AND ({H.in_person_name_sql()} "
             f"OR json_extract(m.refs,'$.{wake_rules.CAUSED_BY}') LIKE 'human:%') LIMIT 1",
             (aid,),
         ).fetchone()
@@ -3129,12 +3129,12 @@ def queued_jobs_sql(bots=None):
     """A bot's queued jobs in the order its claim takes them, each with whether the interrupted-work fence and a claim
     scope let it through. With `bots`, the same rows for all of them at once (prime_claimables)."""
     return (
-        f"SELECT j.*,m.sender_id,{H.person_sent_sql()} person_sent,{unfenced_sql()} free,{scoped_sql()} in_scope,"
+        f"SELECT j.*,m.sender_id,{H.in_person_name_sql()} person_sent,{unfenced_sql()} free,{scoped_sql()} in_scope,"
         f"{task_quarantine.free_sql(queued_task_sql())} quarantine_free FROM jobs j "
         "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
         f"WHERE j.bot_id{'=?' if bots is None else ' IN (' + ','.join('?' * len(bots)) + ')'} "
         "AND j.state='queued' AND j.held=0 "
-        f"ORDER BY j.redirect DESC,CASE WHEN {H.person_sent_sql()} THEN 0 ELSE 1 END,j.created_at,j.id"
+        f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,j.id"
     )
 
 
@@ -4436,13 +4436,13 @@ class Execution:
             f"AND {lifecycle.claim_message_sql()} "
             f"AND {unfenced_sql()} AND {scoped_sql()} "
             + ("AND j.id=? " if job_id is not None else "")
-            + ("AND " + H.person_sent_sql() + " " if people_only else "")
+            + ("AND " + H.in_person_name_sql() + " " if people_only else "")
             +
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
             # then task rank, then the longest waiting.
             "ORDER BY j.redirect DESC,CASE WHEN "
-            + H.person_sent_sql()
+            + H.in_person_name_sql()
             + " THEN 0 ELSE 1 END,"
             f"CASE j.bot_id {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,"
             "(qt.rank IS NULL),qt.rank,j.created_at,j.id",
@@ -8187,7 +8187,7 @@ class Execution:
             "WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
             f"AND t.status NOT IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) "
             "AND t.owner_id LIKE 'bot:%' AND j.bot_id=substr(t.owner_id,5) AND j.state='queued' "
-            "AND m.id=j.message_id AND NOT " + H.person_sent_sql() + " "
+            "AND m.id=j.message_id AND NOT " + H.in_person_name_sql() + " "
             f"AND {H.MESSAGE_TASK_SQL}=t.id",
             H.ACTIVE_STATUSES,
         ).fetchall():

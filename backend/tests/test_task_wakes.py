@@ -169,10 +169,10 @@ def test_only_words_a_person_typed_themselves_start_a_run_past_the_seven(c, gene
         written = H.say(c, ANA, BUILDER, "Keep going on this.", refs={"task": row["id"]})
     finally:
         (H.BY_TOKEN if via == "token" else H.VIA).reset(mark)
-    assert H.delegated(written["refs"]) and not H.person_sent(written)
+    assert H.delegated(written["refs"]) and not H.typed_by_person(written) and H.in_person_name(written)
     assert not task_wakes.may_start(c, written) and _state(c, written["id"]) == "canceled"
     carrier = threads._carrier(c, H.conversation(c, written["conversation_id"]), written, BUILDER, "mention", None)
-    assert carrier and not H.person_sent(H.message(c, carrier))
+    assert carrier and not H.typed_by_person(H.message(c, carrier))
     assert not task_wakes.may_start(c, carrier) and _state(c, carrier) == "canceled"
     slack = H.say(c, ANA, BUILDER, "Typed in Slack.", refs={"task": row["id"], "via": "slack"})
     assert task_wakes.may_start(c, slack) and _state(c, slack["id"]) == "queued"
@@ -196,9 +196,11 @@ def test_a_quiet_message_whose_job_was_queued_is_held_like_any_other(c, general)
     assert not task_wakes.may_start(c, quiet) and _state(c, quiet) == "canceled"  # an eighth run never starts
 
 
-def test_a_persons_own_message_on_a_snoozed_task_starts_a_run(c, general, monkeypatch):
-    """A person wrote on a snoozed task and the keeper carries it to the bot: their words get an answer, at the claim's
-    first check (execution.job_refusal) as in may_start."""
+@pytest.mark.parametrize("via", ["", "assistant"])
+def test_a_persons_own_message_on_a_snoozed_task_starts_a_run(c, general, monkeypatch, via):
+    """A person wrote on a snoozed task, or the Assistant did in their name, and the keeper carries it to the bot:
+    their words get an answer, at the claim's first check (execution.job_refusal) as in may_start. Only the seven
+    runs need a person's own hand; lifting a snooze is theirs in their name too."""
     from backend import execution
     from backend import task_engine as E
     from backend.enqueue import enqueue
@@ -209,10 +211,12 @@ def test_a_persons_own_message_on_a_snoozed_task_starts_a_run(c, general, monkey
     said, carrier = H.new_id(), H.new_id()
     c.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
-        "VALUES (?,?,?,?,'say','Is the note ready?','{}',?)",
-        (said, row["conversation_id"], ANA, BUILDER, H.now()),
+        "VALUES (?,?,?,?,'say','Is the note ready?',?,?)",
+        (said, row["conversation_id"], ANA, BUILDER, H._dump({"via": via} if via else {}), H.now()),
     )
-    refs = H._dump({"carries": said, "wake": "thread", "reason": "mention", "from": ANA})
+    refs = H._dump(
+        {"carries": said, "wake": "thread", "reason": "mention", "from": ANA, **({"via": via} if via else {})}
+    )
     c.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
         "VALUES (?,?,?,?,'notice','Is the note ready?',?,?)",

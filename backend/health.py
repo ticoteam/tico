@@ -885,7 +885,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
         r["bot_id"]: r["oldest"]
         for r in c.execute(
             "SELECT j.bot_id, min(j.created_at) oldest FROM jobs j JOIN messages m ON m.id=j.message_id "
-            f"WHERE j.state='queued' AND {H.person_sent_sql()} GROUP BY j.bot_id"
+            f"WHERE j.state='queued' AND {H.in_person_name_sql()} GROUP BY j.bot_id"
         )
     }
     assigned = {
