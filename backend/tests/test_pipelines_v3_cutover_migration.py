@@ -357,11 +357,14 @@ def test_a_refused_tico_05_database_is_left_byte_for_byte_as_it_was(tmp_path, le
             shutil.copyfile(made / name, path.parent / name)
     writer.close()
     before = _files(path.parent)
-    assert set(before) == {
-        "no log": {"hub.sqlite"},
-        "log and index": {"hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm"},
-        "log only": {"hub.sqlite", "hub.sqlite-wal"},
-    }[left]
+    assert (
+        set(before)
+        == {
+            "no log": {"hub.sqlite"},
+            "log and index": {"hub.sqlite", "hub.sqlite-wal", "hub.sqlite-shm"},
+            "log only": {"hub.sqlite", "hub.sqlite-wal"},
+        }[left]
+    )
     with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):
         migrations.preflight(path)
     with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):

@@ -54,7 +54,8 @@ def company_file(api):
     preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
     assert preview.status_code == 200, preview.text
     done = api.post(
-        "/api/v2/onboarding/company/import", json={**body, "fingerprint": preview.json()["fingerprint"]},
+        "/api/v2/onboarding/company/import",
+        json={**body, "fingerprint": preview.json()["fingerprint"]},
         headers=signed_in(),
     )
     assert done.status_code == 200, done.text
