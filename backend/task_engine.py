@@ -59,11 +59,13 @@ def _refuse(
     version: object = None,
     kept: tuple[str, Sequence[str]] | None = None,
     to: str | None = None,
+    said: Row | None = None,
 ) -> NoReturn:
     """Refuse, with what the caller needs to act on it: what is `missing`, the commands allowed next (`then`, by name,
     for `row`: `_then`) and the task's `version`. They go out with the refusal (store.refused), so a bot is never left
     to guess. `kept` is the detail and what is missing as kept on record (`_said` for ON_RECORD), when they name less
-    than the caller is told. `to` is the stage a held forward move was going to.
+    than the caller is told. `to` is the stage a held forward move was going to. `said` is a `shut_out`: its `cause`
+    and `fix` go out with the refusal.
 
     The refusal carries `again`: what `refusal_extra` needs to say `missing` and `next` again from the task as it is
     then, for a replay whose receipt could not keep them (store.replayed_refusal). Ids and names only."""
@@ -75,6 +77,8 @@ def _refuse(
         extra["next"] = _then(row, *then)
     if version is not None:
         extra["version"] = int(str(version) or 0)
+    if said:
+        extra["cause"], extra["fix"] = said["cause"], said["fix"]
     stored: Row | None = None
     if kept is not None and (kept[0] != detail or list(kept[1]) != list(missing)):
         stored = {"detail": kept[0], "extra": {**extra, **({"missing": list(kept[1])} if kept[1] else {})}}
@@ -223,6 +227,47 @@ def owner_for(stage_row: Row, assignee: str | None, current: str | None = None) 
     if stage_row.get("owner") == "assignee":
         return assignee
     return stage_row.get("owner") or None
+
+
+def shut_out(conn: "sqlite3.Connection", row: Row, target: Row, owner: str | None = None) -> Row | None:
+    """Why private task `row` may not go into work stage `target`, as a plain `{"who", "cause", "fix"}`, or None when
+    it may. The engine never adds a reader, an owner or a party to a private task (docs/pipelines-v3.md, "Private
+    tasks. Same engine. Who can see them doesn't change."), so the task stops before a stage whose owner, or someone the
+    stage asks, cannot read it, and waits until a person who can see it shares it. `owner` is who would own it there
+    (`owner_for`). A task the new owner keeps private by default is judged as it will be: private."""
+    H = _h()
+    if target["kind"] != "work":
+        return None
+    if owner is None:
+        owner = owner_for(target, row.get("assignee_id"), row.get("owner_id"))
+    private = H.task_private(conn, row)
+    new_owner = owner if owner and owner != row.get("owner_id") else None
+    goes_private = not private and bool(new_owner) and bool(H.private_tasks_default(conn, new_owner))
+    if not private and not goes_private:
+        return None
+    full: Row = H.task(conn, row["id"]) or row
+    after: Row = {**full, "owner_id": owner, "private": 1}
+    blocked: list[tuple[str, str]] = []
+    if private and new_owner and not H.task_private_readable(conn, new_owner, full):
+        blocked.append((new_owner, "owns"))
+    for requirement in R.on_stage(conn, target["id"]):
+        who = R.person_of(conn, requirement, "") if requirement["kind"] in ("ok", "answer") else None
+        if who and who != owner and not H.task_private_readable(conn, who, after):
+            blocked.append((who, "is asked in"))
+    if not blocked:
+        return None
+    who, how = blocked[0]
+    name = H.actor_name(conn, who)
+    if goes_private:
+        cause = (
+            f"{name} {how} {target['name']} and could not read this task there: "
+            f"{H.actor_name(conn, new_owner)} keeps its tasks private"
+        )
+        fix = f"Make it private and add {name} under Who can see"
+    else:
+        cause = f"{name} {how} {target['name']} and cannot read this private task"
+        fix = f"Someone who can see it adds {name} under Who can see"
+    return {"who": who, "cause": cause, "fix": fix}
 
 
 # ----------------------------------------------------------------------------- the writer
@@ -654,6 +699,19 @@ def move(
     target, kind = _target(conn, by, row, to)
     if not target or kind is None:
         return row
+    held = shut_out(conn, row, target)
+    if held:
+        _refuse(
+            conn,
+            by,
+            "task_not_shared",
+            f"{held['cause']}. {held['fix']}, then move it again.",
+            task_id,
+            row=row,
+            then=("snooze", "close"),
+            version=row.get("version"),
+            said=held,
+        )
     ts = H.now()
     visit = row["visit"]
     pushed: list[Row] = []
@@ -741,13 +799,9 @@ def move(
 
 def _owned(conn: "sqlite3.Connection", before: Row, after: Row, by: str) -> None:
     """Who has the task now comes first, before anyone is woken or anything hears of the move: what follows a new
-    owner, its private default among it (task_effects.owner_moved), then, on a private task in a work stage, everyone
-    the stage asks is brought in to read it (task_calls.bring_in_asked). The caller reads the task again after."""
-    from . import task_calls
-
+    owner, its private default among it (task_effects.owner_moved). Nobody is made a reader: a move that would need
+    one is held first (`shut_out`). The caller reads the task again after."""
     task_effects.owner_moved(conn, before, after, by)
-    if after["stage"]["kind"] == "work":
-        task_calls.bring_in_asked(conn, after["id"], by)
 
 
 def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -> None:
@@ -817,13 +871,14 @@ def _tell_manager(conn: "sqlite3.Connection", row: Row, text: str, what: str) ->
 
 
 def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
-    """Forward, by the engine: move the task to its next stage if everything is met and there is room. Returns the moved
-    task, or None when it stays."""
+    """Forward, by the engine: move the task to its next stage if everything is met, there is room, and nobody there
+    is shut out of a private task (`shut_out`: it waits until it is shared). Returns the moved task, or None when it
+    stays."""
     row = task(conn, task_id)
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return None
     target = next_stage(conn, row)
-    if not target or R.unmet(conn, row) or not has_room(conn, target):
+    if not target or R.unmet(conn, row) or not has_room(conn, target) or shut_out(conn, row, target):
         return None
     return move(conn, task_id, target["id"], SYSTEM, seen_version=row.get("version"))
 

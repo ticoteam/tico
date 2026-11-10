@@ -215,19 +215,18 @@ def reassigned(
     conn: "sqlite3.Connection", before: Row, after: Row, by: str, why: str | None = None, revision: str | None = None
 ) -> None:
     """A task was given to another owner in its stage. Someone handing a bot's work to someone else is what became of
-    the run that made it; then everything that follows the owner (`_follow_owner`), and whoever the task asks is
-    brought in to read it if it is private now (task_calls.bring_in_asked); then `task.assigned` is published."""
+    the run that made it; then everything that follows the owner (`_follow_owner`); then `task.assigned` is published.
+    Nobody is made a reader of a private task."""
     H = _h()
     actor = cause(by)
     old, new = before.get("owner_id"), after.get("owner_id")
     if old == new:
         return
-    from . import run_triggers, task_calls
+    from . import run_triggers
 
     runs: Any = run_triggers
     runs.turn_result(conn, actor, before, "overridden", H.event)
     _follow_owner(conn, before, after, actor)
-    task_calls.bring_in_asked(conn, after["id"], by)
     _publish_owner(conn, before, after, actor, revision)
     H.event(conn, actor, "task.update", after["id"], {"owner": new, "note": why})
     H.recount(conn, [new, old, after.get("requester_id")])

@@ -332,27 +332,6 @@ def bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str) -> None
     H.task_reach(conn, actor, row, who)
 
 
-def bring_in_asked(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
-    """A private task that just entered a stage or changed owner: everyone its open visit asks, bot or person, becomes
-    a reader of this task and nothing else, recorded in its history as brought in by its owner (by `by` when the owner
-    is a person). The stage's rule is the pipeline's configuration, so this is never refused. Before anyone is woken,
-    so the one asked can open what they are woken for. They stay readers after the task leaves the stage, as a person
-    an ask brought in does."""
-    from . import task_engine as E
-    from . import task_requirements as R
-
-    H = _h()
-    row = E.task(conn, task_id)
-    if not row or not row.get("visit") or not H.task_private(conn, row):
-        return
-    owner = row.get("owner_id")
-    for requirement in R.for_visit(conn, row["visit"]):
-        who = R.person_of(conn, requirement, row["visit"]["id"]) if requirement["kind"] in ("ok", "answer") else None
-        if who:
-            H.task_reach(conn, str(owner) if is_bot(owner) else by, row, who)
-            row = E.task(conn, task_id) or row
-
-
 @_task_write()
 def task_ask(
     conn: "sqlite3.Connection",
@@ -696,6 +675,13 @@ def task_view(
             }
         )
     following = E.next_stage(conn, row) if live else None
+    ready = bool(waits) and all(wait["state"] == W.ROOM for wait in waits)
+    held = E.shut_out(conn, row, following) if following and ready else None
+    for wait in waits:
+        if held and wait["state"] == W.ROOM:
+            # Everything is met, and the next stage has someone who cannot read this private task: it waits there
+            # until someone who can see it shares it (the never-stuck pass then moves it).
+            wait["line"], wait["fix"] = held["cause"], held["fix"]
     # The task that filed this one, and the tasks this one filed, only as far as `viewer` may read them
     # (`_readable`): one they may not read is left out whole, its id, status and that it exists at all.
     above = conn.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (task_id,)).fetchone()

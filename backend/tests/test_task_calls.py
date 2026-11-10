@@ -579,7 +579,7 @@ def _published(monkeypatch):
 
 @pytest.mark.parametrize("how", ["move", "reassign"])
 def test_a_task_that_goes_private_with_its_new_owner_is_private_before_anyone_hears(c, monkeypatch, how):
-    _private_owner(c, BEN)
+    _private_owner(c, HELPER)  # the stage asks the bot that asked for the task: it reads it once it is private
     row = _new(c, by=HELPER, pipeline="terms")  # a bot's task for a bot: nobody else reads it once it is private
     published = _published(monkeypatch)
     before = {w[0] for w in X.wakes(c, row["id"])}
@@ -589,34 +589,57 @@ def test_a_task_that_goes_private_with_its_new_owner_is_private_before_anyone_he
         out = H.task_reassign(c, BUILDER, row["id"], COUNSEL, "Counsel drafts this.", _version(c, row["id"]))
     assert out["owner_id"] == COUNSEL and H.task_private(c, H.task(c, row["id"]))
     assert published and all(private for _, private in published), published
-    # Whom the stage asks reads it: brought in, as an ask on a private task brings them in.
-    assert H.task_private_readable(c, BEN, H.task(c, row["id"]))
+    # Nobody was made a reader.
     task = H.task(c, row["id"])
+    assert H.task_readers(task) == [] and not H.task_private_readable(c, BEN, task)
     for key, who in X.wakes(c, row["id"]):
         assert key in before or H.task_private_readable(c, who, task), (key, who)
 
 
-def test_a_stage_that_asks_a_bot_brings_it_in_to_read_the_private_task(c):
+def test_a_move_into_a_stage_whose_asked_bot_could_not_read_the_private_task_is_held_and_shares_nothing(c):
+    """The engine never adds a reader to a private task: a move into a stage that asks a bot who could not read the
+    task there (here it goes private with Counsel) is refused with its cause and its fix, and the task stays."""
     _private_owner(c, "bot:reviewer")
     X.bot(c, "reviewer")
-    X.bot(c, "outsider")
     row = _new(c, by=HELPER, pipeline="terms")
-    H.task_move(c, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"]))
-    after = H.task(c, row["id"])
-    assert (after["owner_id"], H.task_private(c, after)) == (COUNSEL, True)
-    # The stage's bot reads it, and nobody else was added.
-    assert H.task_private_readable(c, "bot:reviewer", after)
-    assert H.task_readers(after) == ["bot:reviewer"]
-    assert not H.task_private_readable(c, "bot:outsider", after)
-    assert not H.task_private_readable(c, BEN, after)
-    # Its history says who brought the bot in.
-    readers = c.execute(
-        "SELECT actor_id, new FROM history_events WHERE subject_id=? AND kind='reader'", (row["id"],)
-    ).fetchall()
-    assert [tuple(r) for r in readers] == [(COUNSEL, "bot:reviewer")]
-    # The spec does not end a reader's access when the task leaves the stage: the bot keeps reading it.
-    H.task_move(c, COUNSEL, row["id"], "Draft", "Back to drafting.", _version(c, row["id"]))
-    assert H.task_private_readable(c, "bot:reviewer", H.task(c, row["id"]))
+    with _refused("task_not_shared") as refused:
+        H.task_move(c, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"]))
+    extra = refused.value.extra
+    assert "reviewer" in extra["cause"] and "Who can see" in extra["fix"]
+    after = E.task(c, row["id"])
+    assert (after["stage"]["name"], after["owner_id"], H.task_private(c, after)) == ("Draft", BUILDER, False)
+    assert H.task_readers(after) == []
+    assert not c.execute("SELECT 1 FROM history_events WHERE subject_id=? AND kind='reader'", (row["id"],)).fetchone()
+
+
+def test_a_private_task_waits_before_a_stage_whose_owner_cannot_read_it_until_someone_who_can_shares_it(c):
+    """Everything is met, and the next stage's owner cannot read the private task: the engine does not move it (that
+    would make the owner a party), says why and what fixes it, and wakes nobody there. Once a person who reads it
+    adds the owner under Who can see, the never-stuck pass moves it on."""
+    from backend import never_stuck
+
+    X.bot(c, "reviewer")
+    stages = (
+        {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+        {"name": "Review", "owner": "bot:reviewer", "requirements": [{"kind": "owner_done"}]},
+    )
+    X.pipeline(c, "notes", "Notes", stages, manager=MANAGER)
+    row = _new(c, pipeline="notes", private=True)
+    with _refused("task_not_shared"):
+        H.task_move(c, ANA, row["id"], "Review", None, _version(c, row["id"]))
+    H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
+    held = E.task(c, row["id"])
+    assert (held["stage"]["name"], held["owner_id"]) == ("Draft", BUILDER)
+    assert not H.task_private_readable(c, "bot:reviewer", H.task(c, row["id"]))
+    assert X.wakes(c, row["id"], "bot:reviewer") == []
+    turn = H.task_view(c, row["id"], ANA)["turn"]
+    assert "reviewer" in turn["line"] and "Who can see" in turn["fix"]
+    never_stuck.check(c)
+    assert E.task(c, row["id"])["stage"]["name"] == "Draft"  # still held: nothing was shared
+    H.set_task_readers(c, ANA, row["id"], add=["bot:reviewer"])
+    never_stuck.check(c)
+    moved = E.task(c, row["id"])
+    assert (moved["stage"]["name"], moved["owner_id"]) == ("Review", "bot:reviewer")
 
 
 def test_a_child_restored_before_its_parent_is_under_it_again_once_both_are_back(c):

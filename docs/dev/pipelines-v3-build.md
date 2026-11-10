@@ -168,6 +168,7 @@ task_not_met         not met: <requirement line>            (forward with no why
 task_no_push_past    <requirement> can't be pushed past. Move back or close.
 task_needs_person    <requirement> needs a person; try again needs a person; a bot closing a person's request
 task_stage_full      no room in <stage>
+task_not_shared      <who> owns / is asked in <stage> and cannot read this private task (`cause`, `fix`)
 task_why             say why
 task_no_such_stage   no such stage in this pipeline
 task_ended           the task is Done / Closed. Reopen it first.
