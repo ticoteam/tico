@@ -296,7 +296,8 @@ Also, decided here: `check_blocked`, `still_needed`, `approvals_routes`, `ask_re
 `pipeline_exceptions`, `repo_waits`, `task_review`, `settings_asks`, `qa_defaults`, `qa_waivers`, `task_types`,
 `pipeline_requirements`, `pipeline_setup`, `pipeline_manager`, `pipeline_overview`, `pipeline_factories`,
 `pipeline_github_checks` (back in phase 3 as a requirement kind), `requirement_attachments` (back in phase 2),
-`quiet_work`'s defer, the parent-changing calls of `task_relations`, `evals/factory` (the rig replaces it), and in
+`quiet_work`'s defer, the parent-changing calls and the `blocks` relation of `task_relations` (a task waits on no
+relation: `add_blocker`, `remove_blocker`, `set_parent`, `live_blocker` and the rest are gone), `evals/factory` (the rig replaces it), and in
 `hubdb.py`: `_set_status`, `try_auto_move`, the approval functions, the type and step functions, the old status sets.
 
 `pipeline_stats` goes, but two things in it are kept and move to their one user first: the bot page's queue counts
