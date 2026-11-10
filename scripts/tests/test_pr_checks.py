@@ -51,7 +51,7 @@ def test_uncertain_changes_run_the_smoke_set_never_everything_and_ui_keeps_its_m
         assert set(smoke_tests) <= set(plan["python"]) and set(smoke_scripts) <= set(plan["browser"]), changed
         assert "--all" not in plan["browser"] and plan["uncertain"], changed
     assert checks.selection(["docs/missing.md"])["python"] is not None
-    main = checks.selection(["backend/task_loops.py"], "push")
+    main = checks.selection(["backend/task_engine.py"], "push")
     assert main["python"] is None and main["browser"] is None and main["caddy"]
     ui = checks.selection(["ui/app/chat.ts"])
     # The audited UI map's scripts run, with any core script the dependency map finds using the file.
@@ -89,7 +89,7 @@ def test_measured_groups_cover_files_once_and_do_not_repeat_the_old_count_imbala
 
 def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pytest(tmp_path, monkeypatch, mapped):
     files = {
-        "backend/tests/test_task_loops.py": 2,
+        "backend/tests/test_task_engine.py": 2,
         "backend/tests/test_auth.py": 10,
         "backend/tests/test_api.py": 30,
         "scripts/tests/test_release_checks.py": 6,
@@ -101,18 +101,18 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     imaged = []
     monkeypatch.setattr(checks, "image_checks", lambda changed: imaged.append(changed))
     monkeypatch.setattr(
-        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/task_loops.py"]
+        checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/task_engine.py"]
     )
     target = tmp_path / "plan.json"
     timing_dir = tmp_path / "previous" / "pr-python-timings-python-1"
     timing_dir.mkdir(parents=True)
-    (timing_dir / "durations.json").write_text(json.dumps({"backend/tests/test_task_loops.py": 100}))
+    (timing_dir / "durations.json").write_text(json.dumps({"backend/tests/test_task_engine.py": 100}))
     focused = checks.prepare("pull_request", "base", target, timing_dir.parent)
-    assert imaged == [["backend/task_loops.py"]]
+    assert imaged == [["backend/task_engine.py"]]
     assert focused["timed_files"] == 1
     assert (
         sorted(sum([j["files"] for j in focused["matrix"]["include"] if j["suite"].startswith("python-")], []))
-        == sorted(set(checks.selection(["backend/task_loops.py"])["python"]) & set(files))
+        == sorted(set(checks.selection(["backend/task_engine.py"])["python"]) & set(files))
         == sorted(files)
     )
     main = checks.prepare("push", "base", target)
@@ -128,16 +128,16 @@ def test_plan_keeps_full_collection_on_main_and_conftest_and_never_runs_bare_pyt
     monkeypatch.setattr(
         checks.subprocess, "run", lambda command, **kw: calls.append(command) or SimpleNamespace(returncode=1)
     )
-    focused["matrix"] = {"include": [{"suite": "python-1", "files": ["backend/tests/test_task_loops.py"]}]}
+    focused["matrix"] = {"include": [{"suite": "python-1", "files": ["backend/tests/test_task_engine.py"]}]}
     target.write_text(json.dumps(focused))
     # Missing selected paths fail before subprocess starts, rather than widening to an implicit full run.
     with pytest.raises(RuntimeError, match="nonempty"):
         checks.run(target, "python-1")
     assert not calls
     (tmp_path / "backend/tests").mkdir(parents=True)
-    (tmp_path / "backend/tests/test_task_loops.py").touch()
+    (tmp_path / "backend/tests/test_task_engine.py").touch()
     assert checks.run(target, "python-1") == 1
-    assert calls[-1][-1] == "backend/tests/test_task_loops.py"
+    assert calls[-1][-1] == "backend/tests/test_task_engine.py"
     monkeypatch.setattr(checks.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
     (tmp_path / "ci-results/python-1.xml").write_text('<testsuite><testcase><skipped/></testcase></testsuite>')
     with pytest.raises(RuntimeError, match="skip every test"):
@@ -243,9 +243,9 @@ def test_rust_crates_run_cargo_test_when_their_inputs_change_and_a_red_crate_fai
         for event in ("pull_request", "push"):
             plan = checks.selection(changed, event)
             assert plan["rust"] == crates and plan["conformance"], (changed, event)
-    for changed in (["backend/harness_actions.py"], ["backend/task_loops.py"], ["ui/app/chat.ts"], []):
+    for changed in (["backend/harness_actions.py"], ["backend/task_engine.py"], ["ui/app/chat.ts"], []):
         assert checks.selection(changed)["rust"] == [] and checks.selection(changed, "push")["rust"] == []
-    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_loops.py": 1}))
+    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_engine.py": 1}))
     monkeypatch.setattr(
         checks,
         "changed_files",
@@ -407,7 +407,7 @@ def test_a_route_change_selects_the_contract_tests(repo_map):
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
     # CHANGELOG.md and docs/openapi/v2.json are gone; pytest.ini is a tracked file a test reads.
     for read, reader in (("pytest.ini", "backend/tests/test_ddl_guard.py"),):
-        both = checks.selection(["backend/task_loops.py", read])["python"]
+        both = checks.selection(["backend/task_engine.py", read])["python"]
         assert reader in both and "backend/tests/test_scheduler.py" in both, read
     monkeypatch.setattr(
         checks,
@@ -480,7 +480,7 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     assert set(smoke_tests) <= set(checks.selection(["backend/broken.py"], root=tmp_path, core=[])["python"])
     # On this checkout: a test-only change runs that test and the few that import, read or list it (or every file,
     # like test_local_imports), not the suite; the scheduler's guard follows
-    # task_loops; the shared helper reaches the Caddy container test through caddy_assets.
+    # task_engine; the shared helper reaches the Caddy container test through caddy_assets.
     # test_ddl_guard scans all of backend/ (it skips tests at run time, which the map cannot see), so it is the twentieth;
     # test_schema_every_table reads every table the source makes in the same way, so it is the twenty-first;
     # test_system_jobs_list scans all of backend/ for recorded job keys, so it is one more.
@@ -490,9 +490,9 @@ def test_hub_change_selects_every_test_that_imports_it_transitively_and_no_other
     # baseline test modules the OWNED_DATA table names by path, run for any test file change too: about 36 files.
     # The bound leaves room for a few more such script tests, so adding one doesn't fail every queue group behind it;
     # it is still a small share of the suite's ~1,500 test files.
-    alone = checks.selection(["backend/tests/test_task_loops.py"])["python"]
-    assert "backend/tests/test_task_loops.py" in alone and len(alone) < 50
-    loops = checks.selection(["backend/task_loops.py"])
+    alone = checks.selection(["backend/tests/test_task_engine.py"])["python"]
+    assert "backend/tests/test_task_engine.py" in alone and len(alone) < 50
+    loops = checks.selection(["backend/task_engine.py"])
     assert "backend/tests/test_scheduler.py" in loops["python"] and not loops["caddy"]
     assert checks.selection(["backend/caddy_assets.py"])["caddy"]
 
@@ -1006,13 +1006,13 @@ def test_a_queue_group_diffs_the_same_files_its_pull_request_run_did_plus_the_ch
     git("merge", "-q", "--no-ff", "--no-edit", "two")
     behind = git("rev-parse", "HEAD")
     assert checks.changed_files(base, behind, root=tmp_path) == ["one.py", "two.py"]
-    for files in (["backend/task_loops.py"], ["conftest.py"], ["ui/app/chat.ts"], [checks.PR_WORKFLOW]):
+    for files in (["backend/task_engine.py"], ["conftest.py"], ["ui/app/chat.ts"], [checks.PR_WORKFLOW]):
         pr, queue = checks.selection(files, "pull_request"), checks.selection(files, "merge_group")
         assert pr == queue, files
 
 
 def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_gates(tmp_path, monkeypatch, mapped):
-    files = {"backend/tests/test_task_loops.py": 2, "backend/tests/test_auth.py": 10}
+    files = {"backend/tests/test_task_engine.py": 2, "backend/tests/test_auth.py": 10}
     monkeypatch.setattr(checks, "collect", lambda: Counter(files))
 
     def refuse(*args, **kwargs):
@@ -1024,14 +1024,14 @@ def test_a_merge_group_plans_its_own_selection_and_never_runs_the_pull_request_g
 
     def fake_changed(base, head="HEAD", only=None):
         seen.append((base, head, only))
-        return [] if only else ["backend/task_loops.py"]
+        return [] if only else ["backend/task_engine.py"]
 
     monkeypatch.setattr(checks, "changed_files", fake_changed)
     target = tmp_path / "plan.json"
     plan = checks.prepare("merge_group", "queue-base", target, head="queue-head")
     assert seen == [("queue-base", "queue-head", None), ("queue-base", "queue-head", "A")]
     assert plan["reason"].startswith("measured dependency map") and plan["python"] is not None
-    expected = sorted(set(checks.selection(["backend/task_loops.py"])["python"]) & set(files))
+    expected = sorted(set(checks.selection(["backend/task_engine.py"])["python"]) & set(files))
     assert plan["python"] == expected
     # An empty group diff falls back to the full suite, as a pull request's does.
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [])
@@ -1368,7 +1368,7 @@ def test_an_index_html_script_rename_counts_as_a_change_to_the_file_it_loads(tmp
 @pytest.mark.parametrize("event", ["pull_request", "merge_group"])
 def test_pull_requests_and_queue_groups_never_run_the_full_suite_or_every_browser_script(event, mapped):
     changes = (
-        ["backend/task_loops.py"],
+        ["backend/task_engine.py"],
         ["conftest.py"],
         ["requirements.txt"],
         ["pytest.ini"],
@@ -1640,7 +1640,7 @@ def test_a_full_queue_group_packs_at_the_target_and_a_narrowed_one_stays_under_t
 
 
 def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_an_unreadable_diff(mapped):
-    assert checks.queue_jobs(["backend/task_loops.py", "ui/app/chat.ts"]) == dict.fromkeys(
+    assert checks.queue_jobs(["backend/task_engine.py", "ui/app/chat.ts"]) == dict.fromkeys(
         checks.QUEUE_JOB_PATHS, False
     )
     # The screen relay is a Rust crate the lint checks, and the Caddy image compiles it.
@@ -1666,12 +1666,12 @@ def test_queue_jobs_start_only_for_a_change_to_their_folders_and_all_start_for_a
 def test_the_plan_decides_the_queue_jobs_on_both_tiers_and_a_group_checks_its_merge_commit_without_a_static_vm(
     tmp_path, monkeypatch, mapped
 ):
-    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_loops.py": 2}))
+    monkeypatch.setattr(checks, "collect", lambda: Counter({"backend/tests/test_task_engine.py": 2}))
     monkeypatch.setattr(checks, "image_checks", lambda changed: None)
     monkeypatch.setattr(
         checks,
         "changed_files",
-        lambda base, head="HEAD", only=None: [] if only else ["app/src/main.rs", "backend/task_loops.py"],
+        lambda base, head="HEAD", only=None: [] if only else ["app/src/main.rs", "backend/task_engine.py"],
     )
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
