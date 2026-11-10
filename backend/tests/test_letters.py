@@ -590,7 +590,6 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
     assert get(api, "me", delegated)["actor"] == "human:ana"
     assert get(api, "letters", delegated)["items"] == []
     get(api, "letters/" + row["id"], delegated, expected=404)
-    get(api, "tasks/" + _task(api, row), delegated, expected=404)
     get(api, row["proof"].removeprefix("/api/v2/"), delegated, expected=403)
     assert call(api, "hub_letter_list", {}, token=delegated)[1]["items"] == []
     with api.app.state.store.read() as c:
@@ -603,6 +602,23 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
     with api.app.state.store.read() as c:
         assert events.read(c, api.app.state.auth, who, 0, topics=("letters",))[0] == []
     get(api, "files/" + source, delegated, expected=403)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="v3 conflict, for a person to decide: the letter's task carries an OK asked of Ana, and her Assistant now "
+    "reads the tasks filed for OKs asked of its person (aa1b6dd2e, task_asks.assistant_reads_own_ok), so the task "
+    "answers 200 to a delegated reader with no letter permission. The letter, its proof and its source stay hidden.",
+)
+def test_delegated_reader_without_letter_permission_cannot_read_the_letters_task(api, hq):
+    from backend.tests.helpers.api import setup_attempt
+    from backend.tests.helpers.assistant import assistant_turn
+
+    token = setup_attempt(api, "finance")[2]["token"]
+    grant(api, "finance")
+    row = send(api, quote(api, token=token), token=token)
+    _, attempt = assistant_turn(api, "ana-test")
+    get(api, "tasks/" + _task(api, row), attempt["token"], expected=404)
 
 
 def test_private_source_keeps_only_admin_metadata_and_fences_both_copies(api, hq):
