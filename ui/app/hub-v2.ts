@@ -328,7 +328,7 @@ async function v2NeedsMend(d: NeedsChange) {
     needsTake({...d, version: null, next: null});
     return true;
   }
-  const held = S.v2.needsVersion;
+  const held = S.v2.needsVersion, list = S.v2.needs;
   if (!d.version || d.version === held) return false;
   const whole = async () => { await v2NeedsRead(); return true; };
   if (!held || d.base !== held || !Array.isArray(d.changed) || !Array.isArray(d.removed) || d.folded_task_ids === null) return whole();
@@ -337,6 +337,9 @@ async function v2NeedsMend(d: NeedsChange) {
   let plateCount = d.plate_count;
   if (d.changed.length) {
     const r = await v2Get<NeedsRead & {positions: Record<string, number>}>(`/v2/needs-you?ids=${encodeURIComponent(d.changed.join(','))}`);
+    // A whole read or a page landed while this was out: the list it mended from is gone. Its answer may hold this
+    // version already; else read it whole.
+    if (S.v2.needs !== list || S.v2.needsVersion !== held) return S.v2.needsVersion === d.version ? true : whole();
     if (!r || r.version !== d.version) return whole();
     plateCount = r.plate_count ?? plateCount;
     // Unchanged items kept their order against each other, so each changed one goes back at its place, first place

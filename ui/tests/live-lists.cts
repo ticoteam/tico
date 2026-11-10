@@ -22,7 +22,10 @@ declare const LIVE_SOON: Map<string, unknown>;
 declare function liveEmit(topic: string, data: unknown): void;
 declare function refresh(force: boolean): Promise<void>;
 declare function botNeedsChanged(slug: string): void;
-declare const S: {v2: {needs: unknown[]; needsCount?: number}};
+declare const S: {v2: {needs: ({id: string} & Record<string, unknown>)[]; needsCount?: number; needsVersion?: string | null; needsNext?: string | null}};
+declare let v2Get: (path: string) => Promise<unknown>;
+declare function v2NeedsMend(d: unknown): Promise<unknown>;
+declare function needsTake(d: unknown): void;
 
 const BOTS = [['ops', 'Ops'], ['pm', 'PM']].map(([name, display_name]) => ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}));
 // The server's tasks by id (as GET /api/v2/tasks/{id} and a `tasks` event's `task` carry them).
@@ -247,6 +250,28 @@ const holdNext = (match: Held['match']): Held => {
   slow.go();
   await pin('My tasks').locator('li', {hasText: 'Plan the offsite'}).waitFor();
   assert.doesNotMatch(await pin('My tasks').textContent() || '', /Sign the lease/, 'a task finished while the place was read stays off My tasks');
+  // Needs you: a mend's read of the changed ids that lands after a newer whole read does not put the older list back.
+  assert.deepEqual(await page.evaluate(async () => {
+    const real = v2Get, kept = {needs: S.v2.needs, version: S.v2.needsVersion, next: S.v2.needsNext, count: S.v2.needsCount};
+    let release = () => {};
+    const gate = new Promise<void>(done => { release = done; });
+    v2Get = async (path: string) => {
+      if (!path.includes('ids=')) return null;
+      await gate;
+      return {version: 'p2', count: 2, positions: {a: 0}, items: [{id: 'a', kind: 'task', line: 'A2'}]};
+    };
+    Object.assign(S.v2, {needs: [{id: 'a', kind: 'task', line: 'A1'}, {id: 'b', kind: 'task', line: 'B'}], needsVersion: 'p1', needsNext: null, needsCount: 2});
+    try {
+      const mend = v2NeedsMend({version: 'p2', base: 'p1', count: 2, changed: ['a'], removed: []});
+      needsTake({items: [{id: 'c', kind: 'task', line: 'C'}], version: 'p3', count: 1, next: null});
+      release();
+      await mend;
+      return {version: S.v2.needsVersion, ids: S.v2.needs.map(x => x.id)};
+    } finally {
+      v2Get = real;
+      Object.assign(S.v2, {needs: kept.needs, needsVersion: kept.version, needsNext: kept.next, needsCount: kept.count});
+    }
+  }), {version: 'p3', ids: ['c']});
 
   assert.deepEqual(errors, []);
   await browser.close();
