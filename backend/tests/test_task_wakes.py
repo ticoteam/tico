@@ -82,11 +82,52 @@ def test_a_wake_may_start_only_for_a_bot_whose_turn_it_is(c, general):
         c, row, MANAGER, row["visit"], "Late: look once.", wake_key=f"{row['id']}:{row['visit']['id']}:late"
     )
     assert task_wakes.may_start(c, look)  # Late's one look for the manager bot needs no turn
-    chat = H.say(c, ANA, REVIEWER, "Any news?")
-    assert task_wakes.may_start(c, chat["id"])  # not a wake about a task: not the engine's to hold
+    chat = _chat_run(c, row["conversation_id"], REVIEWER)
+    assert task_wakes.may_start(c, chat)  # not a wake about a task: not the engine's to hold
     E.snooze(c, row["id"], ANA)
     c.execute("UPDATE jobs SET state='queued' WHERE id=?", (start,))
     assert not task_wakes.may_start(c, start) and _state(c, start) == "canceled"  # a snoozed task wakes nobody
+
+
+def _start(company, c, message_id):
+    """The claim's preparation of a queued job (execution.Execution.start_claimed), as `claim` calls it in its write."""
+    from backend.execution import Execution
+
+    job = c.execute("SELECT id, message_id, bot_id FROM jobs WHERE id=?", (message_id,)).fetchone()
+    row = {"id": job[0], "message_id": job[1], "bot_id": job[2], "generation": 1}
+    return Execution(company, None).start_claimed(c, None, None, None, row)
+
+
+def test_a_claim_starts_no_run_the_engine_holds_and_the_check_takes_the_task_on(company, c, general, monkeypatch):
+    """The claim asks may_start in its own write: a refused wake is canceled and nothing is leased, and the never-stuck
+    check takes the task on from there (here: 7 runs since the change, so a person has it)."""
+    from backend import execution
+    from backend import never_stuck as NS
+
+    # Whether the bot may read the message is the claim's check before this one, and not what is tested here.
+    monkeypatch.setattr(execution, "job_message_readable", lambda conn, bot, message: True)
+
+    other = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    stray = task_wakes.add(c, other, REVIEWER, other["visit"], "Look at this.", wake_key=f"{other['id']}:stray")
+    assert _start(company, c, stray) == {"attempt": None}  # the reviewer has no turn on that task
+    assert _state(c, stray) == "canceled"
+    assert c.execute("SELECT COUNT(*) FROM attempts WHERE job_id=?", (stray,)).fetchone()[0] == 0
+    mine = X.new_task(c, ANA, "Plan the week", assignee=BUILDER)
+    start = c.execute(
+        "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' AND m.wake_key LIKE ?",
+        (mine["id"] + ":%",),
+    ).fetchone()[0]
+    for _ in range(task_wakes.RUNS):  # seven runs since the change, and its wake is queued again
+        X.ran(c, mine["id"], BUILDER)
+        c.execute("UPDATE jobs SET state='queued' WHERE id=?", (start,))
+    assert _start(company, c, start) == {"attempt": None}  # an eighth run never starts
+    assert _state(c, start) == "canceled"
+    assert c.execute("SELECT COUNT(*) FROM attempts WHERE job_id=?", (start,)).fetchone()[0] == task_wakes.RUNS
+    at = H.now()
+    for _ in range(6):
+        at = H.shift(at, hours=12)
+        NS.check(c, at)
+    assert c.execute("SELECT level FROM visits WHERE id=?", (mine["visit"]["id"],)).fetchone()[0] == "person"
 
 
 def _chat_run(c, conversation_id, bot):
@@ -102,6 +143,7 @@ def _chat_run(c, conversation_id, bot):
         "VALUES (?,?,?,?,?,'completed',?)",
         (run, H.actor_id(bot), H.now(), H.now(), H.now(), message),
     )
+    return message
 
 
 def test_a_run_counts_for_the_task_it_names_and_by_its_conversation_only_when_one_open_task_has_it(c, general):
