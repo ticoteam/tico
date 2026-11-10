@@ -69,6 +69,12 @@ class HubCase(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        # The tables the task engine writes (assignments, pipelines, jobs) are made when the store starts, not by
+        # hubdb's migrations: start one on the file first.
+        from backend.store import Store
+        from backend.tests.helpers.api import api_settings
+
+        Store(api_settings(Path(self.dir.name))).initialize()
         self.conn = H.connect(Path(self.dir.name) / "hub.db")
         self.addCleanup(self.conn.close)
         H.sync_registry(self.conn, EMPLOYEES, PEOPLE)

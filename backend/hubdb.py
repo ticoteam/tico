@@ -247,8 +247,6 @@ TASK_STATUSES = ("open", "done", "closed")
 ACTIVE_STATUSES = ("open",)  # not yet finished
 TASK_ENDED = {"done": "marked done", "closed": "closed"}
 # tasks_due_active (TASKS_DUE_INDEX) is built from ACTIVE_STATUSES, word for word with TASKS_DUE_SQL.
-# The numbered start-up step that seeded the old General type's steps (PIPELINES_SCHEMA) reads this list, as it was.
-STEP_STATUSES = ("open", "doing", "review", "ready", "done", "closed")
 # The product lane is retired. Old rows may still say 'product' (so it is
 # still a lane to read and filter), but every new or moved task is company work.
 TASK_LANES = ("company", "product")
@@ -707,33 +705,13 @@ TAGS_SCHEMA = TAGS_TABLES_SCHEMA + TAGS_BACKFILL
 
 GENERAL_TYPE = "general"
 GENERAL_PIPELINE = "general"  # the pipeline a task goes into when none is named
-PIPELINES_SCHEMA = (
-    """
-CREATE TABLE IF NOT EXISTS task_types (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, created_at TEXT, updated_at TEXT);
-CREATE TABLE IF NOT EXISTS task_steps (
-  id TEXT PRIMARY KEY, type_id TEXT NOT NULL REFERENCES task_types(id), name TEXT NOT NULL,
-  position INTEGER NOT NULL, status TEXT NOT NULL
-    CHECK(status IN ('open','doing','waiting','review','ready','done','closed','declined')),
-  UNIQUE(type_id, name));
-CREATE INDEX IF NOT EXISTS task_steps_type ON task_steps(type_id, position, id);
-ALTER TABLE tasks ADD COLUMN type_id TEXT REFERENCES task_types(id);
-ALTER TABLE tasks ADD COLUMN step_id TEXT REFERENCES task_steps(id);
-CREATE INDEX IF NOT EXISTS tasks_type_step ON tasks(type_id, step_id);
-INSERT OR IGNORE INTO task_types(id,name,created_at,updated_at)
-  VALUES('general','General',strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+# Numbered step 14 made the old engine's task types and steps. A database that ran it has them until the Pipelines v3
+# cut-over drops them; a new database never makes them (only a database with no tasks runs these steps). The two
+# columns stay: a shipped migration file reads them, and the cut-over drops them with the old tasks table.
+PIPELINES_SCHEMA = """
+ALTER TABLE tasks ADD COLUMN type_id TEXT;
+ALTER TABLE tasks ADD COLUMN step_id TEXT;
 """
-    + "\n".join(
-        f"INSERT OR IGNORE INTO task_steps(id,type_id,name,position,status) "
-        f"VALUES('general-{status}','general','{status.title()}',{position},'{status}');"
-        for position, status in enumerate(STEP_STATUSES)
-    )
-    + """
-UPDATE tasks SET type_id='general', step_id=(SELECT id FROM task_steps
-  WHERE type_id='general' AND status=tasks.status ORDER BY position,id LIMIT 1)
-  WHERE type_id IS NULL;
-"""
-)
 
 TASK_LINKS_V2_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_links(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -767,16 +745,11 @@ CREATE TABLE IF NOT EXISTS task_file_reviews(
  PRIMARY KEY(file_id,version));
 """
 
-# A numbered type gives each of its tasks the team's next number, kept for good; `step_rank` is a
-# task's place within its step, apart from `rank`, its place in the owner's queue. Every task
-# already in a step keeps the order it was filed in (rowid order), so a new one joins the end.
+# Each task's team-wide number, kept for good. (This step also numbered the old engine's types and ranked tasks in
+# their steps; a new database never makes those.)
 NUMBERS_SCHEMA = """
-ALTER TABLE task_types ADD COLUMN numbered INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE tasks ADD COLUMN number INTEGER;
-ALTER TABLE tasks ADD COLUMN step_rank REAL;
 CREATE UNIQUE INDEX IF NOT EXISTS tasks_number ON tasks(number);
-CREATE INDEX IF NOT EXISTS tasks_step_rank ON tasks(step_id, step_rank);
-UPDATE tasks SET step_rank=rowid WHERE step_id IS NOT NULL AND step_rank IS NULL;
 """
 
 # Existing records have no reliable sensitivity marker. Preserve them privately on upgrade;
