@@ -123,6 +123,17 @@ def held_locally(verdict):
     return verdict
 
 
+CHANGED = "The task changed while this was checked, so nothing was written. Send it again."
+
+
+def stale(verdict, obj_now, audience_now):
+    """Whether the task or the audience moved since `verdict` was checked."""
+    if verdict.get("obj") and obj_now != verdict["obj"]:
+        return True
+    author = verdict.get("author")
+    return sorted({r for r in audience_now or () if r and r != author}) != list(verdict.get("recipients") or [])
+
+
 def not_asked(rule):
     return f'Not asked. A rule covers this: "{rule.get("text") or "a rule"}" Act on the rule instead of asking.'
 
@@ -192,18 +203,31 @@ class TaskRules:
                     lambda c: self.audience(c, who, row, to),
                     obj=f"{row['id']}@{row['version']}",
                     context={"task": row["title"]},
+                    track_route=True,  # the audience is kept even when no rule matches: apply compares it
                 )
             )
         except Exception:  # fail closed: the write is refused, never sent unchecked
             LOG.exception("Task rule check failed")
             return org_rule_check.refused(Problem("rule_check", FAILED, 503, retryable=True))
 
-    def apply(self, c, who, task_id, verdict, said, replay, *, hands_over=False, ask=False):
-        """The verdict inside the write: the gate (`org_rule_check.apply`), or a refusal. An ask (`ask`) a rule covers
-        is refused back to the bot with the rule's words, and nothing is held. A person's ask is held or warned like
-        their other writes."""
+    def apply(self, c, who, task_id, verdict, said, replay, *, to=None, hands_over=False, ask=False):
+        """The verdict inside the write: the gate (`org_rule_check.apply`), or a refusal. The task and the audience
+        are read again here and must be the ones checked (`obj_now`, `audience_now`): a task edited, handed over or
+        given new people since its check is a 409 (`task_changed`, nothing written; sent again, it is checked again),
+        `version` sent or not. A verdict that holds still holds. An ask (`ask`) a rule covers is refused back to the
+        bot with the rule's words, and nothing is held. A person's ask is held or warned like their other writes."""
         if not verdict:
             return None
+        if "refused" in verdict:
+            raise verdict["refused"]
+        row = H.task(c, task_id)
+        if "applied" not in verdict:
+            obj_now = org_rule_check.current_obj(c, verdict.get("obj")) if verdict.get("obj") else None
+            audience_now = self.audience(c, who, row, to)
+            if not org_rule_check.holds(verdict) and stale(verdict, obj_now, audience_now):
+                raise Problem("task_changed", CHANGED, 409, retryable=True)
+        else:
+            obj_now = audience_now = None
         cause = local_cause(verdict)
         bot_ask = ask and H.is_bot(str(verdict.get("author") or ""))
         if bot_ask and cause:
@@ -214,6 +238,8 @@ class TaskRules:
             rules = covering(verdict)
             if rules:
                 H.refuse(c, who.actor, COVERS, not_asked(rules[0]))
-        row = H.task(c, task_id)
         payload = said_text(row, said, hands_over, hide_task=bool(row and H.task_private(c, row)))
-        return org_rule_check.apply(c, verdict, payload, replay)
+        gate = org_rule_check.apply(c, verdict, payload, replay, obj_now=obj_now, audience_now=audience_now)
+        if gate and gate.get("moved"):
+            raise Problem("task_changed", CHANGED, 409, retryable=True)
+        return gate

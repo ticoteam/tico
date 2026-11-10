@@ -10,6 +10,7 @@ from backend.store import H
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.org_rules import rule
 from backend.tests.test_org_rule_check import (  # noqa: F401 - fixtures
+    COLOR,
     _not_a_friday,
     color_rule,
     hold_row,
@@ -295,6 +296,59 @@ def test_a_rule_past_what_one_call_judges_still_holds_the_write(ruled, monkeypat
     assert done_by_ops(api, task, "Our favorite color is red.")["held"]
     assert len(judge.calls) == 3 and reasons(api) == []
     assert row(api, task["id"])["status"] != "done"
+
+
+def between_check_and_write(monkeypatch, change):
+    """`change(c)` runs once, after the route's check and before its write."""
+    from backend import task_rule_gate
+
+    real, done = task_rule_gate.TaskRules.check, []
+
+    def check(self, *a, **k):
+        verdict = real(self, *a, **k)
+        if not done:
+            done.append(1)
+            with self.store.transaction() as c:
+                change(c)
+        return verdict
+
+    monkeypatch.setattr(task_rule_gate.TaskRules, "check", check)
+
+
+def test_a_hand_off_checked_safe_then_given_a_forbidden_body_is_not_delivered(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api)
+    task = task_for_ops(api)
+    between_check_and_write(
+        monkeypatch,
+        lambda c: c.execute(
+            "UPDATE tasks SET body='Our favorite color is red.', version=version+1 WHERE id=?", (task["id"],)
+        ),
+    )
+    # A person hands it on (no ask ingest, which has its own check of the task).
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    r = api.post(f"/api/v2/tasks/{task['id']}/owner", json={"owner": "ben"}, headers=headers("ana-test"))
+    assert r.status_code == 409 and problem(r.json())[0] == "task_changed", r.text
+    assert row(api, task["id"])["owner_id"] == "bot:ops"
+    # Sent again, it is checked again, on the body as it is now.
+    r = api.post(f"/api/v2/tasks/{task['id']}/owner", json={"owner": "ben"}, headers=headers("ana-test"))
+    assert r.status_code == 200 and r.json()["held"], r.text
+    assert row(api, task["id"])["owner_id"] == "bot:ops"
+
+
+def test_a_snooze_checked_for_some_people_is_not_written_once_the_task_has_others(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    task = task_for_ops(api)
+    between_check_and_write(
+        monkeypatch,
+        lambda c: c.execute("UPDATE tasks SET requester_id='human:cara' WHERE id=?", (task["id"],)),
+    )
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/snooze", json={"why": "Waiting on the launch."}, headers=headers("ops-test")
+    )
+    assert r.status_code == 409 and problem(r.json())[0] == "task_changed", r.text
+    assert sql(api, "SELECT 1 FROM snoozes WHERE task_id=?", (task["id"],)) == []
 
 
 def test_a_held_hand_off_of_a_private_task_keeps_its_text_off_the_hold(ruled):

@@ -34,7 +34,7 @@ def parse_until(value):
             if at.tzinfo is None:
                 at = at.replace(tzinfo=ZONE)
     except ValueError:
-        raise Problem("date", "until is an ISO-8601 date or date-time", 422)
+        raise Problem("date", "until is an ISO-8601 date or date-time", 422) from None
     stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     if stamp <= H.now():
         raise Problem("date", "until is a date to come", 422)
@@ -118,7 +118,15 @@ def register(
         spec = writes[operation]
         replay = {"task": task_id, "body": body.model_dump(mode="json", by_alias=True), "params": params or {}}
         gate = task_rules.apply(
-            c, who, task_id, verdict, spec["said"](body), replay, hands_over=spec["hands_over"], ask=spec["ask"]
+            c,
+            who,
+            task_id,
+            verdict,
+            spec["said"](body),
+            replay,
+            to=spec["to"](body),
+            hands_over=spec["hands_over"],
+            ask=spec["ask"],
         )
         if task_rule_gate.held(gate):
             return org_rule_check.answer(gate)
