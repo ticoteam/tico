@@ -36,7 +36,8 @@ const HELD_AT_LOGIN_CAP: &str = "Interrupted at the end of the shared login's gr
 /// stays refused, backend/execution.py refuse_start), so the turn gives up and reports itself interrupted, which the
 /// server settles as skipped. A fresh wake comes on a new lease.
 const START_WAIT_TRIES: u32 = 5;
-const START_REFUSED: &str = "Execution interrupted after stop: the server kept refusing this turn's start";
+const START_REFUSED: &str =
+    "Execution interrupted after stop: the server kept refusing this turn's start";
 const OWN_INTERRUPT: &[&str] = &[
     "Lease expired",
     "Execution interrupted after stop",
