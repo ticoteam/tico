@@ -92,6 +92,19 @@ def _usable(conn: "sqlite3.Connection", bot: str | None, seen: dict[str, str | N
     return is_bot(bot) and task_wakes.cannot_run(conn, bot, seen) is None
 
 
+def _reads(conn: "sqlite3.Connection", actor: str | None, row: Row) -> bool:
+    """Whether `actor` may read this task already. The engine never adds a reader (docs/pipelines-v3.md: private
+    tasks, "Who can see them doesn't change"), so on a private task the ladder skips a manager bot that cannot read it,
+    and a bot that cannot read it is never woken: the task goes to a person who may."""
+    return bool(actor) and bool(_h().task_private_readable(conn, actor, row))
+
+
+def _manager(conn: "sqlite3.Connection", row: Row, seen: dict[str, str | None]) -> str | None:
+    """The pipeline's manager bot when it can take this task now: it can run, and it reads the task."""
+    manager: str | None = _part(row, "pipeline").get("manager_id")
+    return manager if _usable(conn, manager, seen) and _reads(conn, manager, row) else None
+
+
 # ----------------------------------------------------------------------------- the pass
 def check(
     conn: "sqlite3.Connection", now: str | None = None, failures: list[tuple[str, Exception]] | None = None
@@ -180,8 +193,9 @@ def _ladder(
     # Whoever has the task's own work, before a bot that was only asked for an OK or an answer; the manager bot at
     # level manager.
     target = W.turn(conn, row, waits)
-    manager: str | None = _part(row, "pipeline").get("manager_id")
-    if target and level == "manager" and not _usable(conn, manager, seen):
+    manager = _manager(conn, row, seen)
+    if target and ((level == "manager" and not manager) or (is_bot(target) and not _reads(conn, target, row))):
+        # The manager bot cannot take it any more, or the bot whose turn it is cannot read this private task: a person.
         _to_person(conn, row, level, done)
         return
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
@@ -227,7 +241,7 @@ def _ladder(
         if level == "manager" and tries == 0:
             lead = f"{_name(conn, row.get('owner_id'))} could not take this task further. {MANAGER_HAS_IT}"
         _try(conn, row, target, level, tries + 1, f"{lead} Try {tries + 1} of {TRIES}.", at, epoch, done)
-    elif level == "owner" and manager != target and _usable(conn, manager, seen) and runs < RUNS:
+    elif level == "owner" and manager and manager != target and runs < RUNS:
         _to_manager(conn, row, manager, f"{_name(conn, target)} stopped {TRIES} times without finishing it.", at, done)
     else:
         _to_person(conn, row, level, done)
@@ -344,11 +358,25 @@ def _to_person(conn: "sqlite3.Connection", row: Row, level: str, done: dict[str,
     """Hand the task to a person. It shows in their Needs you, once, and nothing more runs until a person acts: every
     wake still queued for the task is canceled. A live run goes on."""
     visit = row["visit"]
-    person = W.person_for(conn, row)
+    person = _person(conn, row)
     conn.execute("UPDATE visits SET level='person', person_id=?, next_try_at=NULL WHERE id=?", (person, visit["id"]))
     task_wakes.drop(conn, row["id"])
     _event(conn, row["id"], "ladder", level, "person", {"person": person})
     done["to_person"] += 1
+
+
+def _person(conn: "sqlite3.Connection", row: Row) -> str | None:
+    """The person a task falls to (`waiting_on.person_for`). On a private task, one who may read it already: the one the
+    ladder chose, its owner where that is a person, else whoever asked for it. Nobody is made a reader."""
+    H = _h()
+    chosen = W.person_for(conn, row)
+    if not H.task_private(conn, row):
+        return chosen
+    visit = _part(row, "visit")
+    for person in (visit.get("person_id"), row.get("owner_id"), row.get("requester_id"), chosen):
+        if R.active_person(conn, person) and _reads(conn, person, row):
+            return person
+    return chosen
 
 
 # ----------------------------------------------------------------------------- late
@@ -392,7 +420,7 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
     spent = _spent(conn, visit, at)
     if spent < minutes * 60:
         return
-    manager: str | None = _part(row, "pipeline").get("manager_id")
+    manager = _manager(conn, row, seen)
     said = f"Late: {_span(spent)} in {stage['name']}, expected {_span(minutes * 60)}."
     if not visit.get("late_told_at"):
         conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
@@ -403,14 +431,14 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
         head = waits[0] if waits else None
         level = fresh["visit"].get("level") or "owner"
         target = W.turn(conn, fresh, waits)
-        if target and level == "owner" and manager != target and _usable(conn, manager, seen):
+        if target and level == "owner" and manager and manager != target:
             # A bot's turn: Late hands the task to the manager bot, once per visit, on the same 3 tries. Never a second
             # set, and never back down from a person.
             _to_manager(conn, fresh, manager, f"{said} {_name(conn, target)} has it.", at, done)
         elif (
             head
             and not W.turns(conn, fresh, waits)
-            and is_bot(manager)
+            and manager
             and level == "owner"
             and manager != head.who
             and task_wakes.runs_since(conn, fresh) < RUNS

@@ -794,3 +794,47 @@ def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, ge
         plan = " | ".join(str(found[-1]) for found in c.execute("EXPLAIN QUERY PLAN " + sql).fetchall())
         assert "SCAN m" not in plan and "SCAN messages" not in plan, (sql, plan)
     assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
+
+
+def _private(c, title, owner, pipeline="general"):
+    made = H.task_create(c, ANA, title, "Only us.", owner, pipeline=pipeline, private=True, lint=False)
+    assert H.task_private(c, H.task(c, made["id"])) and H.task_readers(H.task(c, made["id"])) == []
+    return made["id"]
+
+
+def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_not_a_manager_bot_who_cannot(
+    c, general, later
+):
+    """Private tasks: same engine, and who can see them does not change. The engine never adds a reader: the manager
+    bot's look and its tries are skipped when it cannot read the task, which goes to a person who can. Health names no
+    task's title."""
+    from backend import health
+
+    stages = ({"name": "Draft", "owner": ANA, "expected_minutes": 60, "requirements": [{"kind": "owner_done"}]},)
+    X.pipeline(c, "ops", "Ops", stages, manager=MANAGER)
+    hers = _private(c, "Sort the March invoices", ANA, "ops")
+    assert H.task(c, hers)["owner_id"] == ANA
+    assert later(minutes=61) == {"late": 1}  # late, and the manager bot that cannot read it is not sent to look
+    assert later(hours=3) == {}  # her own turn already: nothing is added
+    assert H.task_readers(H.task(c, hers)) == [] and X.wakes(c, hers, MANAGER) == []
+    X.pipeline(c, "intake", "Intake", ({"name": "Triage", "requirements": [{"kind": "owner_done"}]},), manager=MANAGER)
+    nobodys = _private(c, "Sort the April invoices", ANA, "intake")  # no owner: the manager bot's turn to pick one
+    assert later(seconds=10) == {"to_person": 1} and _visit(c, nobodys)["person_id"] == ANA
+    assert H.task_readers(H.task(c, nobodys)) == [] and X.wakes(c, nobodys, MANAGER) == []
+    built = _private(c, "Draft the salary review", BUILDER)
+    for gap in (0, 120, 900, 3600):
+        if gap:
+            assert later(seconds=gap) == {"woken": 1}
+        X.ran(c, built, BUILDER)
+    assert later(seconds=120) == {"to_person": 1}  # three tries: the manager bot cannot read it, so its requester
+    assert _ladder(c, built)[0] == "person" and _visit(c, built)["person_id"] == ANA
+    assert H.task_readers(H.task(c, built)) == [] and X.wakes(c, built, MANAGER) == []
+    shared = _private(c, "Draft the bonus plan", BUILDER)
+    H.set_task_readers(c, ANA, shared, add=[MANAGER])  # a person shared it with the manager bot
+    for gap in (0, 120, 900, 3600):
+        if gap:
+            assert later(seconds=gap) == {"woken": 1}
+        X.ran(c, shared, BUILDER)
+    assert later(seconds=120) == {"to_manager": 1, "woken": 1} and _ladder(c, shared) == ("manager", 1)
+    reading = repr(health.never_stuck_reading(c))
+    assert not any(title in reading for title in ("invoices", "salary review", "bonus plan"))

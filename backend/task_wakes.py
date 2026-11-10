@@ -79,20 +79,6 @@ ENGINE_REFS = (
 )
 
 
-def _bring_in_manager(conn: "sqlite3.Connection", task: Row, target: str) -> bool:
-    """The pipeline's manager bot is woken about a private task it cannot read (a task with no owner, or one the ladder
-    hands it): it becomes a reader of that task, as a task event, the way a stage's own rule brings in the bot it names.
-    The pipeline's settings chose that bot to look after its tasks. Whether it reads the task now."""
-    H = _h()
-    found = conn.execute(
-        "SELECT p.manager_id FROM tasks t JOIN pipelines p ON p.id = t.pipeline_id WHERE t.id=?", (task["id"],)
-    ).fetchone()
-    if not found or not found[0] or found[0] != target or not H.is_bot(target):
-        return False
-    H.set_task_readers(conn, H.KEEPER, task["id"], add=[target])
-    return bool(H.task_private_readable(conn, target, H.task(conn, task["id"])))
-
-
 def add(
     conn: "sqlite3.Connection",
     task: Row,
@@ -123,8 +109,8 @@ def add(
         return None
     if not H._actor_exists(conn, target):
         return None
-    if not H.task_private_readable(conn, target, task) and not _bring_in_manager(conn, task, target):
-        return None
+    if not H.task_private_readable(conn, target, task):
+        return None  # the engine never adds a reader: who can see a private task does not change
     waiting: list[Any] = []
     carried: Row = {}
     parts: list[Row] = []
