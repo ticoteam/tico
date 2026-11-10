@@ -85,7 +85,10 @@ def test_the_ok_from_the_preview_sends_it_once_and_finishes_its_task(store):
         assert found["approved"]
         S._permit(c, row, found)
         assert K.standing(c, queued["approval_id"]) == K.USED
-        assert H.task(c, K.task_of(c, queued["approval_id"]))["status"] == "done"
+        task_id = K.task_of(c, queued["approval_id"])
+        assert H.task(c, task_id)["status"] == "open"  # claimed: done only once the provider took it
+        S._finish(c, row, "sent", "msg-1")
+        assert H.task(c, task_id)["status"] == "done"
         with pytest.raises(H.Refused, match="consumed"):
             K.use(c, queued["approval_id"], "email_send:" + queued["id"], S.content(row), "bot:ops")
 

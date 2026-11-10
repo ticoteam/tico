@@ -441,7 +441,7 @@ def _problem(
     """(rule, words, task id) of why the act may not go ahead on this grant now, or None when it may."""
     if not row:
         return ("not-found", "No such OK", None)
-    state, requirement, visit = _state(conn, row)
+    state, _requirement, visit = _state(conn, row)
     task_id = str(visit["task_id"]) if visit else None
     if by != row["asked_by_id"]:
         return ("identity", "Only whoever asked for this OK may use it", task_id)
@@ -525,6 +525,20 @@ def withdraw(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
     if requirement and not requirement.get("withdrawn_at"):
         H.attempt(conn, H.task_withdraw_ask, SYSTEM, requirement_id, why)
     settle(conn, requirement_id, why)
+
+
+def not_done(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
+    """The act an OK was used for did not happen after all (a provider refused the email, or never said it took it):
+    the OK stays used, so it lets nothing else go, and a task ask_ok filed for it ends closed with `why`, never done
+    as if the act happened. Any other task, and a task that already ended, is left as it is."""
+    H = _h()
+    row = grant(conn, requirement_id)
+    if not row or not row.get("used_at"):
+        return
+    H.event(conn, SYSTEM, "ok.not_done", requirement_id, {"subject": row["subject"], "why": why[:300]})
+    task_id = task_of(conn, requirement_id)
+    if row.get("filed") and task_id and _task_status(conn, task_id) == "open":
+        H.attempt(conn, H.task_close, SYSTEM, task_id, why)
 
 
 def settle(conn: "sqlite3.Connection", requirement_id: str, note: str) -> None:

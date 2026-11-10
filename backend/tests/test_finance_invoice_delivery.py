@@ -177,6 +177,53 @@ def test_a_failed_send_raises_one_needs_you_and_a_retry_that_delivers_clears_it(
         assert delivery.pending(c) == []
 
 
+def _sent_by_the_queue(books, c, send_id: str, status: str, detail: str = "") -> dict:
+    """The person OKs the frozen email from its preview, the queue claims the OK and hands the email to the provider,
+    and the provider answers `status` (email_sending: _permit, then _finish)."""
+    from backend import email_sending as S
+    from backend.auth import Auth, Identity
+
+    auth = Auth(books)
+    sid = task_asks.grant(c, send_id)["subject"].removeprefix("email_send:")
+    row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+    shown = S.shown_to(c, Identity(OWNER, "human"), row)
+    task_asks.give_ok(c, OWNER, send_id, shown, own_click=True, ctx=task_asks.Context(auth=auth))
+    row = c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone()
+    found = S.decision(c, auth, row, dispatch=True)
+    assert found["approved"], found
+    S._permit(c, row, found)
+    S._finish(c, row, status, "msg-1" if status == "sent" else "", detail)
+    return dict(c.execute("SELECT * FROM email_sends WHERE id=?", (sid,)).fetchone())
+
+
+def test_the_queue_records_a_delivered_invoice_email_on_the_invoice(books):
+    with books.transaction() as c:
+        iid, send_id, _text = _approved_reminder(c)
+        _sent_by_the_queue(books, c, send_id, "sent")
+        assert tuple(
+            c.execute(
+                "SELECT delivered_at IS NOT NULL, delivery_reason FROM fin_invoice_reminders WHERE invoice_id=?", (iid,)
+            ).fetchone()
+        ) == (1, None)
+        assert delivery.pending(c) == []
+        assert H.task(c, task_asks.task_of(c, send_id))["status"] == "done"
+
+
+@pytest.mark.parametrize("status", ["failed", "unknown"])
+def test_a_send_the_provider_did_not_take_is_recorded_and_its_ok_does_not_look_sent(books, status):
+    """The OK was claimed before the provider was called, so it lets nothing else go. The provider's failure is
+    recorded on the invoice (one Needs-you), and the OK's task ends closed with what happened, never done as sent."""
+    with books.transaction() as c:
+        iid, send_id, _text = _approved_reminder(c)
+        _sent_by_the_queue(books, c, send_id, status, "550 no such user" if status == "failed" else "")
+        reason = c.execute("SELECT delivery_reason FROM fin_invoice_reminders WHERE invoice_id=?", (iid,)).fetchone()[0]
+        assert reason and (("550" in reason) if status == "failed" else ("confirm" in reason)), reason
+        assert len([r for r in c.execute("SELECT title FROM tasks WHERE title LIKE '%not sent%'")]) == 1
+        assert task_asks.standing(c, send_id) == task_asks.USED
+        task = H.task(c, task_asks.task_of(c, send_id))
+        assert task["status"] == "closed" and "Sent the email." not in (task.get("note") or ""), task
+
+
 def test_a_reminder_no_report_covers_for_a_day_raises_one_needs_you(books):
     with books.transaction() as c:
         _iid, _send_id, _text = _approved_reminder(c)
