@@ -78,7 +78,7 @@ def test_private_work_is_neither_returned_nor_changed_by_its_service_key(api):
             c.execute("ALTER TABLE tasks ADD COLUMN private INTEGER NOT NULL DEFAULT 0")
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (task["id"],))
         before = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
-    for body in ({}, {"body": "Overwrite", "owner": "human:cara"}, {"close": True}, {"step": "open"}):
+    for body in ({}, {"body": "Overwrite", "owner": "human:cara"}, {"close": True}, {"due": "2027-01-01T00:00:00Z"}):
         refused = inbound(api, secret, 403, key="report", **body)
         assert "Please review" not in str(refused)
     with api.app.state.store.read() as c:
@@ -150,3 +150,28 @@ def test_a_key_made_with_a_personal_token_ends_with_that_token(api):
     assert api.get("/api/v2/system/update", headers=update).status_code == 200
     post(api, "me/tokens/" + token["id"] + "/revoke", {})
     assert api.get("/api/v2/system/update", headers=update).status_code == 401
+
+
+def test_a_later_call_reopens_reassigns_edits_and_closes_through_the_task_calls(company):
+    from types import SimpleNamespace
+
+    from backend import service_keys as SK
+    from backend.store import H
+
+    def call(**fields):
+        base = {"owner": None, "body": None, "labels": None, "due": None, "links": [], "close": False, "note": None}
+        return SimpleNamespace(**{**base, **fields})
+
+    with company.transaction() as c:
+        task_id = H.task_create(c, H.KEEPER, "Review the report", "Please review.", "human:ben", lint=False)["id"]
+        H.task_close(c, H.KEEPER, task_id, "Approved in billing.")
+        assert SK._apply(c, call(owner="human:cara", body="Two charts moved."), H.task(c, task_id), "", "Billing")
+        row = H.task(c, task_id)
+        assert (row["status"], row["owner_id"], row["body"]) == ("open", "human:cara", "Two charts moved.")
+        kinds = [
+            r[0] for r in c.execute("SELECT kind FROM history_events WHERE subject_id=? ORDER BY rowid", (task_id,))
+        ]
+        assert "reassign" in kinds and kinds.count("move") >= 3  # filed, closed, reopened: each a move
+        assert not SK._apply(c, call(owner="human:cara"), H.task(c, task_id), "", "Billing")  # nothing differs
+        assert SK._apply(c, call(close=True, note="Done in billing."), H.task(c, task_id), "", "Billing")
+        assert H.task(c, task_id)["status"] == "closed"

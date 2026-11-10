@@ -222,14 +222,6 @@ def register(
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return mutate(request, body, lambda c: settings_admin.set_fallback(c, request.state.identity, bot, body))
 
-    @app.post("/api/v2/bots/{bot}/keep-tasks-going")
-    def bot_keep_tasks_going(request: Request, bot: str, body: M.BotKeepTasksGoing):
-        with store.read() as c:
-            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
-        return mutate(
-            request, body, lambda c: settings_admin.set_keep_tasks_going(c, request.state.identity, bot, body)
-        )
-
     @app.post("/api/v2/bots/{bot}/turns-at-once")
     def bot_turns_at_once(request: Request, bot: str, body: M.BotTurnsAtOnce):
         """How many turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
@@ -380,7 +372,7 @@ def register(
                     paused_by = {"name": person["name"], "at": record["created_at"]}
             tasks = H._rows(
                 c.execute(
-                    f"SELECT * FROM {H.TASKS} tasks WHERE owner_id=? AND status IN ('open','doing','waiting')",
+                    "SELECT * FROM tasks WHERE owner_id=? AND status='open'",
                     ('bot:' + bot,),
                 )
             )
