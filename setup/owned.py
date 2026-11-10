@@ -437,15 +437,24 @@ class StrictDeployer(Deployer):
         try:
             made = self.iam.create_instance_profile(InstanceProfileName=n, Tags=self.n.tags(self.p.name))
             self.j.made("profile", ((made or {}).get("InstanceProfile") or {}).get("InstanceProfileId", ""))
-            self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
+            self.add_role(n)
         except self.iam.exceptions.EntityAlreadyExistsException:
             prof = instance_profile(self.iam, n)
             if not prof:
                 raise not_ours("IAM instance profile", n, self.n, self.p.name) from None
             self.prove_profile(prof)
             if not prof.get("Roles"):  # an earlier run stopped between creating it and adding the role
-                self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
+                self.add_role(n)
         return n
+
+    def add_role(self, n: str) -> None:
+        """Adds the role to the profile, both read again right before it (tags and recorded ids)."""
+        prof = instance_profile(self.iam, n)
+        if prof is None:
+            raise not_ours("IAM instance profile", n, self.n, self.p.name)
+        self.prove_profile(prof)
+        self.prove_role(n)
+        self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
 
     def prove_role(self, n: str) -> str:
         """The role's RoleId, read now: it must carry this install's tags and be the role this install recorded (or the
@@ -770,15 +779,25 @@ def destroy(ec2, iam, ssm, found, say, sleep, names: Names, name: str, ids: dict
             _delete_sg(ec2, g, sleep)
         else:
             left(f"security group {g}")
-    for n in found.get("iam-role", []):
+
+    def profile_now(n: str) -> tuple[dict | None, bool]:
+        """(the profile read just now, whether it is this install's: its tags and recorded id)."""
         prof = instance_profile(iam, n)
         pid = (prof or {}).get("InstanceProfileId", "")
-        if prof is not None and not (profile_is_ours(prof, n, names) and recorded(ids, "profile", pid)):
+        return prof, prof is not None and profile_is_ours(prof, n, names) and recorded(ids, "profile", pid)
+
+    for n in found.get("iam-role", []):
+        prof, ours = profile_now(n)
+        if prof is not None and not ours:
             left(f"IAM instance profile {n}", f"was not made by this install; the role {n} stays with it")
             continue
         try:
             if prof and any(r.get("RoleName") == n for r in prof.get("Roles") or []):
                 iam.remove_role_from_instance_profile(InstanceProfileName=n, RoleName=n)
+                prof, ours = profile_now(n)  # IAM has no conditional delete: read again right before it
+                if prof is not None and not ours:
+                    left(f"IAM instance profile {n}", f"was replaced while its role was removed; the role {n} stays")
+                    continue
             if prof:
                 iam.delete_instance_profile(InstanceProfileName=n)
         except iam.exceptions.NoSuchEntityException:
@@ -935,7 +954,9 @@ def create_s3(
     prove_user()
     keys = sorted(iam.list_access_keys(UserName=user)["AccessKeyMetadata"], key=lambda k: k["CreateDate"])
     if len(keys) >= 2:  # IAM allows two; a secret cannot be read back, so a re-run makes a new one
+        prove_user()
         iam.delete_access_key(UserName=user, AccessKeyId=keys[0]["AccessKeyId"])
+    prove_user()
     key = iam.create_access_key(UserName=user)["AccessKey"]
     say(f"  created an access key for {user}")
     return {

@@ -1906,3 +1906,65 @@ def test_a_refused_route53_batch_leaves_no_pending_record_and_a_lost_answer_is_a
         assert saved.get("dns_pending", []) == []
         s = state.load(DOMAIN)[0]
         state.save(DOMAIN, {**s, "dns_records": []})
+
+
+def test_an_instance_profile_role_or_backup_user_is_read_again_right_before_each_iam_write():
+    # Codex review 4: the profile and role were proven, then written later without a fresh read. Each is read again
+    # (tags and recorded id) right before add_role_to_instance_profile, remove_role_from_instance_profile,
+    # delete_instance_profile, delete_access_key and create_access_key; a replacement in between is never written.
+    p = hub_plan(domain=DOMAIN)
+
+    def deploy(iam, ids, hook, swap):
+        real = getattr(iam, hook)
+
+        def then(**kw):
+            out = real(**kw)
+            swap(iam)
+            return out
+
+        setattr(iam, hook, then)
+        with pytest.raises((MissingInput, SystemExit), match="hub-hotmic"):
+            strict_dep(p, fakes.FakeEC2(), iam, fakes.FakeSSM(), ids=ids).ensure_role()
+        assert not iam.called("add_role_to_instance_profile")
+
+    def other_profile(iam):
+        iam.profiles["hub-hotmic"]["InstanceProfileId"] = "AIPAOTHER"
+
+    def other_role(iam):
+        iam.roles["hub-hotmic"] = {"RoleId": "AROAOTHER", "Tags": HUB_OURS}
+
+    deploy(IAM(), {}, "create_instance_profile", other_profile)  # made, then deleted and made again
+    deploy(IAM(), {}, "put_role_policy", other_role)
+    iam = IAM()  # the re-run branch: an earlier run made the profile but stopped before adding the role
+    iam.roles["hub-hotmic"] = {"RoleId": "AROAFIRST", "Tags": HUB_OURS}
+    iam.profiles["hub-hotmic"] = {"Tags": HUB_OURS, "Roles": [], "InstanceProfileId": "AIPAFIRST"}
+    deploy(iam, {"role": "AROAFIRST", "profile": "AIPAFIRST"}, "put_role_policy", other_role)
+
+    d, ec2, iam, ssm = id_install()
+    real = iam.remove_role_from_instance_profile
+
+    def removed(**kw):
+        real(**kw)
+        iam.profiles["hub-hotmic"]["InstanceProfileId"] = "AIPAPRODUCTION"  # replaced right after
+
+    iam.remove_role_from_instance_profile = removed
+    out = []
+    owned.destroy(
+        ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, out.append, None, names=HUB_ID, name="hotmic", ids=HUB_IDS
+    )
+    assert iam.called("remove_role_from_instance_profile") and not iam.called("delete_instance_profile")
+    assert "left alone: IAM instance profile hub-hotmic" in "\n".join(out)
+
+    for keys in ([], [{"AccessKeyId": "AKIA1", "CreateDate": 1}, {"AccessKeyId": "AKIA2", "CreateDate": 2}]):
+        s3, iam = S3(), IAM()
+
+        def listed(UserName, keys=keys, iam=iam):
+            iam.users[UserName] = {"UserId": "AIDAOTHER", "Tags": iam.users[UserName]["Tags"]}  # replaced meanwhile
+            return {"AccessKeyMetadata": keys}
+
+        iam.list_access_keys = listed
+        with pytest.raises(MissingInput, match="IAM user hub-backup-acme"):
+            owned.create_s3(
+                s3, iam, domain=DOMAIN, region="us-west-2", account_id=ACCOUNT, name="acme", names=HUB, ids={}
+            )
+        assert not iam.called("delete_access_key") and not iam.called("create_access_key")
