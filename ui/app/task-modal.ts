@@ -91,7 +91,7 @@ function taskDialogWire(d: ModalDialog) {
     d.tfEl = null; d.tfOpen = null;
     d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     taskLiveStop(d);
-    d.taskOpening = {}; d.askDrafts = new Map();
+    d.taskOpening = {};
   });
 }
 function taskModal(): ModalDialog {
@@ -144,9 +144,9 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   if (!d.open || String(d.dataset.task) !== String(task.id)) {
     taskLiveStop(d);
     d.tpOff?.(); d.tpOff = null; d.tpEl = null;
-    d.taskOpening = {pending: !d.open}; d.askDrafts = new Map(); d.tfEl = null; d.tfOpen = null;
+    d.taskOpening = {pending: !d.open}; d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !!opts.thread);     // a redraw of the same task keeps the view it had
-  } else askDraftCapture(d);
+  }
   const opening = d.taskOpening, scroll = opts.detail && d.open ? d.scrollTop : 0;
   // A redraw of the open task (a property saved, the task changed) keeps its conversation and its runs as they are, as
   // the files keep theirs (tfAdopt): the thread stays on screen, scrolled where it was, with what is typed in its box,
@@ -217,7 +217,6 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   const keep = !a ? '' : a.matches('[data-modal-close]') ? '[data-modal-close]' : a.matches('[data-task-more]') ? '[data-task-more]' : a.matches('.tmodal-title') ? '.tmodal-title'
     : a.matches('[data-thread-back]') ? '[data-thread-back]' : a.matches('.tthread-title') ? '.tthread-title'
     : a instanceof HTMLElement && a.dataset.prop ? `[data-prop="${CSS.escape(a.dataset.prop)}"]` : '';
-  askDraftCapture(d);
   taskModalRunsKeep(d, kept);
   taskLiveFocusKeep(d);
   const fullForm = taskFormCapture(d);
@@ -612,7 +611,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
   verdict: v => `recorded the verdict ${v || 'none'}`,
   lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment'};
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
-function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '', canAnswer = true) {
+function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '') {
   if (x.kind === 'event') {
     if (x.field === 'status' && x.old == null) return '';           // created: the header says so
     // The type and first step a task is filed with are part of its creation too, not moves.
@@ -659,7 +658,7 @@ function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | unde
       ${m.refs?.quiet ? '<span class="muted" title="Saved for the bot\'s next run on this task">saved</span>' : ''}
       <span class="spacer"></span>${m.edited_at ? `<span class="muted" title="Edited ${esc(fmt(m.edited_at))}">edited</span>` : ''}<time class="muted tnum" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div>
     <div class="bubble ${person ? 'you' : 'bot'}"${fb ? ` data-fb-press="${esc(fb)}"` : ''}>${body ? `<div class="md">${safeMd(body)}</div>` : ''}
-    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, askTargetOf(m), m.sender_id, taskId, files, canAnswer) : ''}${fbRowHTML(fb, m.body || '')}</div>${taskStepsHTML(m)}</div>`;
+    ${tfCommentFilesHTML(m, files)}${ask ? askHTML(ask, m.answers, m.sender_id, files) : ''}${fbRowHTML(fb, m.body || '')}</div>${taskStepsHTML(m)}</div>`;
 }
 // A bot's work on this task stopped on an account (backend/reconnects.py): its one line, the fix for the person who
 // can make it, and Reconnected once it works. A missing secret's fix is its credential card (ui/credential-card.ts).
@@ -914,7 +913,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   }
   state.data = data;
   taskComposerToPaint(state);
-  // `can_comment`: false for someone who may read the task but not comment on it; they get no box and no answer controls
+  // `can_comment`: false for someone who may read the task but not comment on it; they get no box
   const can = data.can_comment !== false, d = state.dialog;
   $('form', host).hidden = !can;
   if (d.canComment !== can) { d.canComment = can; if (d.tfEl) tfPaint(d); }
@@ -927,19 +926,17 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   const live = taskLiveHTML(data.execution, state.stopping, sent);
   const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
   // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.ts sourceRunsHTML).
-  const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id, can));
+  const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id));
   const isUpdate = (x: ModalLine) => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
   state.openLines ||= new Set();
   const html = (sourceRunsHTML(said, {isUpdate, open: (run: ModalLine[]) => run.some(x => state.openLines!.has(x.message!.id)),
-    line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id, can), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id, can)}) || '<p class="muted">Nothing said yet.</p>') + wait;
+    line: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id), draw: (x: ModalLine) => commentLineHTML(x, 0, lines, files, state.id)}) || '<p class="muted">Nothing said yet.</p>') + wait;
   const thread = $('.task-comments', host);
-  if (!can) d.askDrafts?.clear();
-  if (can && askBusy(thread)) return;     // never under someone answering
   if (html !== state.rendered) {
     // At the newest comment, new ones keep it in view; scrolled up, nothing moves (ui/app/stick-scroll.ts).
     const stick = stickScroll(thread);
     if (!state.rendered) stick.toBottom();
-    stick.update(() => { visualSwap(thread, html); askDraftRestore(thread, d); }, {fresh: !!state.rendered});
+    stick.update(() => { visualSwap(thread, html); }, {fresh: !!state.rendered});
     // A working run's steps, left open, follow it as it moves on.
     const liveSteps = $('details.run-steps[data-live][open]', thread);
     if (liveSteps) void taskStepsOpen(liveSteps);
