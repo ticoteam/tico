@@ -450,6 +450,9 @@ def two_installs():
     ]
     iam = IAM()
     iam.roles = {"tico-hotmic": TICO_TAGS, "hub-hotmic": HUB_TAGS}
+    iam.profiles = {
+        n: {"Tags": tags, "Roles": [n]} for n, tags in (("tico-hotmic", TICO_TAGS), ("hub-hotmic", HUB_TAGS))
+    }
 
     ssm = fakes.FakeSSM()
     ssm.params = {"/tico/hotmic/env": TICO_TAGS, "/hub/hotmic/env": HUB_TAGS}
@@ -1307,3 +1310,20 @@ def test_an_old_install_re_saved_keeps_the_backup_user_backup_storage_made_for_i
     code, out = go(bs, deps=d)
     assert code == 0, out
     assert len(iam.called("create_user")) == 1 and state.load_backup(DOMAIN)["name"] == "hub-hotmicapp-com"
+
+
+def test_a_role_without_a_profile_or_beside_someone_elses_is_modelled_and_handled_apart():
+    ec2, ssm = fakes.FakeEC2(), fakes.FakeSSM()
+    iam = fakes.FakeIAM(role_tags=HUB_TAGS, profile_tags=None)  # setup's role; its profile was never made
+    assert aws.instance_profile(iam, "hub-hotmic") is None
+    aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, say=print, sleep=lambda s: None, names=HUB, name="hotmic")
+    assert iam.called("delete_role") == [{"RoleName": "hub-hotmic"}] and not iam.called("delete_instance_profile")
+    with pytest.raises(fakes._Exc.NoSuchEntityException):
+        iam.get_instance_profile(InstanceProfileName="hub-hotmic")  # still none: never made up from the role's tags
+    iam = fakes.FakeIAM(role_tags=HUB_TAGS, profile_tags=PRODUCTION)  # someone else's profile of that name
+    aws.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, say=print, sleep=lambda s: None, names=HUB, name="hotmic")
+    assert not iam.called("delete_role") and not iam.called("delete_instance_profile")
+    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
+    dep = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=print, sleep=lambda s: None)
+    with pytest.raises(MissingInput, match="IAM instance profile hub-hotmic"):
+        dep.preflight()

@@ -183,10 +183,12 @@ class FakeEC2:
 class FakeIAM:
     exceptions = _Exc
 
-    def __init__(self, role_tags=None):
-        # role_tags: every role exists with these tags (None: none until made), and so does its profile; roles and
+    def __init__(self, role_tags=None, profile_tags=...):
+        # role_tags: every role exists with these tags (None: none until made). profile_tags: every instance profile
+        # exists with these tags, holding the role of its name (default: role_tags; None: none until made). roles and
         # profiles: the ones made here or set by a test (a role as its tags, or {"RoleId", "Tags"}); gone: deleted.
         self.calls, self.role_tags, self.profiles, self.roles, self.gone = [], role_tags, {}, {}, set()
+        self.profile_tags = role_tags if profile_tags is ... else profile_tags
 
     def _rec(self, name, **kw):
         self.calls.append((name, kw))
@@ -230,8 +232,13 @@ class FakeIAM:
 
     def create_instance_profile(self, **kw):
         self._rec("create_instance_profile", **kw)
-        if kw["InstanceProfileName"] in self.profiles:
+        try:
+            self.get_instance_profile(kw["InstanceProfileName"])
+        except _Exc.NoSuchEntityException:
+            pass
+        else:
             raise _Exc.EntityAlreadyExistsException()
+        self.gone.discard(("profile", kw["InstanceProfileName"]))
         self.profiles[kw["InstanceProfileName"]] = {"Tags": kw.get("Tags", []), "Roles": []}
         return {"InstanceProfile": {"InstanceProfileName": kw["InstanceProfileName"], "InstanceProfileId": "AIPANEW"}}
 
@@ -247,11 +254,14 @@ class FakeIAM:
     def delete_instance_profile(self, **kw):
         self._rec("delete_instance_profile", **kw)
         self.profiles.pop(kw["InstanceProfileName"], None)
+        self.gone.add(("profile", kw["InstanceProfileName"]))
 
     def get_instance_profile(self, InstanceProfileName):
         p = self.profiles.get(InstanceProfileName)
-        if p is None:  # a role that exists, set up by setup, has its profile beside it
-            p = {"Tags": self.list_role_tags(RoleName=InstanceProfileName)["Tags"], "Roles": [InstanceProfileName]}
+        if p is None:  # exists on its own only as profile_tags says; never made up from a role's tags
+            if self.profile_tags is None or ("profile", InstanceProfileName) in self.gone:
+                raise _Exc.NoSuchEntityException()
+            p = {"Tags": self.profile_tags, "Roles": [InstanceProfileName]}
         roles = [{"RoleName": r} for r in p["Roles"]]
         pid = p.get("InstanceProfileId", f"AIPA{InstanceProfileName}")
         return {
