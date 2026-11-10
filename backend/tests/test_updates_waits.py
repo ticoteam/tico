@@ -48,3 +48,17 @@ def test_a_persons_draft_lists_what_waits_on_someone_else(c):
     waiting = section(facts, "Waiting on someone else:")
     assert sorted(w.split(" (")[0] for w in waiting) == ["Book the venue", "Draft the brief"], waiting
     assert given["id"]
+
+
+def test_a_persons_draft_reads_her_answers_from_the_answers(c):
+    task = H.task_create(c, "bot:ops", "Pick the launch date", "Please.", "bot:ops", lint=False)
+    added = H.task_ask(c, "bot:ops", task["id"], ANA, "Which date?", seen_version=task["version"])
+    first = H.task_answer(c, ANA, task["id"], added["requirement_id"], "The 11th")
+    H.task_answer_undo(c, ANA, first["answer_id"])  # taken back: not hers any more
+    H.task_answer(c, ANA, task["id"], added["requirement_id"], "The 12th")
+    hidden = H.task_create(c, "bot:ops", "Private pick", "Please.", "bot:ops", lint=False, private=True)
+    other = H.task_ask(c, "bot:ops", hidden["id"], ANA, "Secret?", seen_version=H.task(c, hidden["id"])["version"])
+    H.task_answer(c, ANA, hidden["id"], other["requirement_id"], "Secret answer")
+    facts = updates.draft_facts(c, ANA, "daily", DAY)[0]
+    assert "On Pick the launch date: The 12th" in facts
+    assert "Secret answer" not in facts and "The 11th" not in facts

@@ -842,6 +842,8 @@ def shared_tasks_sql(hidden, prefix=""):
     return rule
 
 
+# How an OK's answer reads in a draft; a question's answer is its own words.
+_ANSWER_WORDS = {"ok": "OK", "no": "Sent back", "again": "Asked to look again"}
 WAITING_MAX = 8  # tasks a request or a draft lists as waiting on someone else
 WAITING_SCAN = 50  # newest open tasks whose waits are read for that list
 
@@ -937,7 +939,20 @@ def draft_facts(c, author, kind, day):
         "ORDER BY e.created_at DESC LIMIT ?",
         (author, since, DRAFT_LIST_MAX),
     ).fetchall()
-    # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
+    # ...their answers to asks on shared tasks (the engine's answers, the newest of each ask and not taken back)...
+    answers = [
+        (r["title"], f"{_ANSWER_WORDS.get(r['answer'], r['answer'])}{': ' + r['notes'] if r['notes'] else ''}")
+        for r in c.execute(
+            "SELECT t.title, a.answer, a.notes FROM answers a JOIN visits v ON v.id=a.visit_id "
+            "JOIN tasks t ON t.id=v.task_id JOIN requirements q ON q.id=a.requirement_id "
+            "WHERE a.by_id=? AND a.undone_at IS NULL AND a.created_at>=? AND q.kind IN ('ok','answer') "
+            "AND a.answer NOT IN ('pushed_past','give') AND NOT EXISTS (SELECT 1 FROM answers later "
+            "WHERE later.visit_id=a.visit_id AND later.requirement_id=a.requirement_id AND later.undone_at IS NULL "
+            f"AND later.rowid>a.rowid) AND {shared_tasks_sql(hidden, 't.')} ORDER BY a.created_at DESC LIMIT ?",
+            (author, since, DRAFT_LIST_MAX),
+        ).fetchall()
+    ]
+    # ...then their comments; a message counts only when every task it names is shared.
     said = lambda where: [
         (title, m["body"])
         for m in c.execute(
@@ -948,7 +963,6 @@ def draft_facts(c, author, kind, day):
         ).fetchall()
         if (title := _shared_message(c, m, shared))
     ][:DRAFT_LIST_MAX]
-    answers = said("kind='answer'")
     comments = said("kind IN ('say','ask') AND ref_task_id IS NOT NULL AND json_extract(refs,'$.comment')")
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.
