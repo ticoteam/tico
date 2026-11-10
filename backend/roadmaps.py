@@ -211,25 +211,28 @@ def approve(c, actor, task_id, operation, values, approval_id=None):
         # Publishing is the owner's at every level: the Strategy Bot publishes only what a person approved, whatever the
         # team's setting for other bots.
         strategy_acts.gate(c, actor, "publish", f"publish a change to a task on the public roadmap ({operation})")
-    # From here the approval is checked exactly; for the Strategy Bot whatever the setting, so any id is not enough.
+    # From here the OK is checked exactly; for the Strategy Bot whatever the setting, so any id is not enough. The OK
+    # (backend/task_asks.py) is the one this actor asked on this task for exactly this publication, given from its
+    # preview by the person's own click, and it is used here, once.
+    from . import task_asks
+
     expected = publication_payload(task_id, operation, values)
-    row = H.approval(c, approval_id) if approval_id else None
-    if (
-        not row
-        or row['kind'] != 'publish'
-        or row['requested_by_id'] != actor
-        or row['task_id'] != task_id
-        or row['payload'] != expected
-        or row['decision'] != 'approved'
-        or row['consumed_at']
-    ):
+    subject = publication_subject(task_id)
+    if not approval_id or not task_asks.passes(c, approval_id, subject, expected, actor):
         H.refuse(
             c,
             actor,
             'approval',
-            'Public changes need an exact approved publish payload; use POST /api/v2/tasks/{id}/publication-preview',
+            'Public changes need an OK of exactly this publication; use POST /api/v2/tasks/{id}/publication-preview',
         )
-    H.approval_consume(c, actor, approval_id)
+    task_asks.use(c, approval_id, subject, expected, actor)
+
+
+def publication_subject(task_id):
+    """The subject of an OK to publish a change to one task (backend/task_asks.py): asked with
+    task_asks.ask_ok(..., subject=publication_subject(id), content=publication_payload(id, operation, values),
+    task_id=id)."""
+    return f'publish:{task_id}'
 
 
 def publication(c, actor, row, visibility=None, public_title=None, public_summary=None, approval_id=None, allowance=0):
