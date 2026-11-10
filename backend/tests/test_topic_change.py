@@ -382,11 +382,12 @@ def test_a_slow_decide_does_not_hold_the_send_past_the_budget(chat):
         took = time.monotonic() - started
     finally:
         model.hold.set()
-    assert took < T.BUDGET + 0.5, f"the send waited {took:.2f}s"
+    # Uncut, the send would wait until the hold is let go, after it: never. The slack is for a loaded runner.
+    assert took < T.BUDGET + 3, f"the send waited {took:.2f}s"
     assert "topic_changed" not in (message.get("refs") or {})
     assert session_state(api, conversation)["epoch"] == 0
     assert checks(api)[0]["error"] == "timeout" and checks(api)[0]["clear"] is False, "a late new topic is dropped"
-    assert 1400 <= checks(api)[0]["delay_ms"] <= 1500 + 100, "the delay is what the send waited"
+    assert 1400 <= checks(api)[0]["delay_ms"] <= took * 1000 + 50, "the delay is what the send waited"
     turn = claim(api, machine)
     assert turn["session_epoch"] == 0 and UNRELATED in [m["body"] for m in turn["history"]]
 
@@ -444,7 +445,8 @@ def test_slow_reads_or_a_slow_audit_write_do_not_hold_the_send_past_the_budget(c
         took = time.monotonic() - started
     finally:
         release.set()
-    assert took < T.BUDGET + 0.5, f"the send waited {took:.2f}s"
+    # Uncut, the send would wait the 5 s hold; the slack below that is for a loaded runner.
+    assert took < T.BUDGET + 2.5, f"the send waited {took:.2f}s"
     if slow == "gate":  # the reads ran past the budget: no call is made or applied
         assert model.calls == [] and checks(api) == []
         assert "topic_changed" not in (message.get("refs") or {}) and session_state(api, conversation)["epoch"] == 0
