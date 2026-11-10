@@ -240,6 +240,19 @@ def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
     assert api.writes() == [("POST", "tasks/T1", {"version": 3, "labels": ["bug", "docs"]})]
 
 
+def test_label_as_taught_needs_no_version_and_guards_the_labels_with_the_version_it_read(monkeypatch):
+    # policies/handoffs.md teaches `hub task label <id> --add x` with no version: a label change only adds or takes
+    # off what it names, so it runs at the version it read, and a change made in between is refused (task_changed).
+    api = Recorder(task={"id": "T1", "version": 7, "labels": ["bug"]})
+    hubtools.task_label(api, {"id": "T1", "add": ["pricing-page"]})
+    assert api.writes() == [("POST", "tasks/T1", {"version": 7, "labels": ["bug", "pricing-page"]})]
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    cli = Recorder(task={"id": "T1", "version": 7, "labels": []})
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    assert remotecli.main(hubcli.parser().parse_args(["task", "label", "T1", "--add", "pricing-page"])) == 0
+    assert cli.writes() == [("POST", "tasks/T1", {"version": 7, "labels": ["pricing-page"]})]
+
+
 @pytest.mark.parametrize(
     "name, args",
     [
@@ -252,12 +265,11 @@ def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
         ("hub_task_give", {"id": "T1", "requirement": "r9", "to": "ben"}),
         ("hub_task_snooze", {"id": "T1", "why": "x"}),
         ("hub_task_update", {"id": "T1", "title": "x"}),
-        ("hub_task_label", {"id": "T1", "add": ["x"]}),
     ],
 )
-def test_without_a_version_a_change_says_to_show_the_task_first_and_sends_nothing(name, args):
+def test_without_a_version_a_change_says_to_add_the_version_and_sends_nothing(name, args):
     api = Recorder()
-    with pytest.raises(ValueError, match=r"^Run `hub task show T1` first\.$"):
+    with pytest.raises(ValueError, match=r"^Add --version N"):
         hubtools.BY_NAME[name]["fn"](api, args)
     assert api.calls == []
     # Over MCP it is the tool's own answer, not a schema error: the bot is told what to run.
@@ -266,7 +278,7 @@ def test_without_a_version_a_change_says_to_show_the_task_first_and_sends_nothin
     )
     assert reply["result"]["structuredContent"] == {
         "error": "usage",
-        "detail": "Run `hub task show T1` first.",
+        "detail": hubtools.version_needed("T1"),
         "retryable": False,
     }
 
@@ -277,7 +289,7 @@ def test_without_a_version_the_cli_prints_the_same_line_and_exits_one(monkeypatc
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: api)
     assert remotecli.main(hubcli.parser().parse_args(["task", "done", "T1", "-m", "x"])) == 1
     printed = json.loads(capsys.readouterr().out)
-    assert printed == {"error": "usage", "detail": "Run `hub task show T1` first.", "retryable": False}
+    assert printed == {"error": "usage", "detail": hubtools.version_needed("T1"), "retryable": False}
     assert api.writes() == []
 
 

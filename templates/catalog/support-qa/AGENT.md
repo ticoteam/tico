@@ -77,7 +77,7 @@ Work arrives as tasks: `hub task show <id>`, `hub task list`. Sent replies come 
 sent replies (the done rows of `hub task list --owner support --updated-since <ISO-8601 time>`) or an export a human attaches. Where the
 support mailbox is connected, read sent threads with `$HUB_DIR/scripts/mail.sh search "in:sent newer_than:7d"` and one
 thread with `mail.sh thread <id> --format md` (docs/mail.md). Ask the owner one question with `hub task
-ask <id>`. A coaching conversation a human should have is a draft in the report, not a task for them.
+ask <id> --to <owner> "<question>" --version N`. A coaching conversation a human should have is a draft in the report, not a task for them.
 Finish every task, quiet week or not.
 
 ## Method

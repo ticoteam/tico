@@ -1121,7 +1121,9 @@ def task_worktree_attach(api, args):
 
 # The task engine's commands (docs/pipelines-v3.md S16, docs/dev/pipelines-v3-cutover.md "Bot commands"). Every change
 # carries the version the caller was shown: hub_task_show, a list row and every wake print it. The tools are stateless:
-# none reads the task to find a version just before it writes, because a version read then would check nothing.
+# none reads the task to find a version just before it writes, because a version read then would check nothing. The
+# one exception is a label change (hub_task_label): it only adds or takes off labels, so it reads the labels it changes
+# and, given no version, sends the one it read; a change made between that read and the write is refused, never lost.
 VERSION = {
     "type": "integer",
     "minimum": 0,
@@ -1132,11 +1134,19 @@ WHY = _s("Why, in one plain sentence. A bot always says why")
 
 
 def _seen(args):
-    """The version the caller was shown, as it was given. Without one the caller is told to read the task first."""
+    """The version the caller was shown, as it was given. Without one the caller is told where to find it."""
     version = args.get("version")
     if version in (None, ""):
-        raise ValueError(f"Run `hub task show {args.get('id') or '<id>'}` first.")
+        raise ValueError(version_needed(args.get("id")))
     return version
+
+
+def version_needed(task_id=None):
+    """The refusal of a change sent without a version: what to add, and where the number is printed."""
+    return (
+        f"Add --version N: the version you were last shown (`hub task show {task_id or '<id>'}` prints it, as do a "
+        "list row and your wake)."
+    )
 
 
 def _why(args, field="why"):
@@ -1771,8 +1781,9 @@ def task_restore(api, args):
 @tool(
     "hub_task_label",
     "Add or remove labels on a task. A project is a label; so is a kind (bug, front-end). A bot "
-    "changes labels on a task it owns or asked for; goal:on/goal:off need a person. It is a field edit: it carries "
-    "the version you were shown, and a task that changed since is refused.",
+    "changes labels on a task it owns or asked for; goal:on/goal:off need a person. It only adds or takes off the "
+    "labels named, so the version is optional: given, a task that changed since you were shown it is refused; left "
+    "out, the labels are read and changed at the version read, and a change made in between is refused, never lost.",
     {
         "id": TASK_ID,
         "add": {"type": "array", "items": {"type": "string"}, "description": "Labels to add"},
@@ -1784,8 +1795,10 @@ def task_restore(api, args):
     writes=True,
 )
 def task_label(api, args):
-    version = _seen(args)  # the labels are read to add to them; the version sent is the one the caller saw
-    current = api.get("tasks/" + args["id"])["task"]
+    current = api.get("tasks/" + args["id"])["task"]  # the labels it adds to or takes from
+    # The version the caller saw, when given; else the one just read, which guards these labels against a change
+    # made since the read (task_changed: read again and run it again).
+    version = args.get("version") if args.get("version") not in (None, "") else current.get("version")
     labels = [x for x in current.get("labels") or []]
     drop = {str(x).strip().lower() for x in args.get("remove") or []}
     labels = [x for x in labels if x not in drop]

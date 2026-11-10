@@ -706,12 +706,15 @@ class AgainstAStub(unittest.TestCase):
         posted = next(b for m, p, _, b in Stub.seen if m == "POST")
         self.assertEqual(posted, {"version": 2, "title": "Ship it", "note": "renamed"})
 
-    def test_a_change_without_a_version_says_to_show_the_task_first_and_sends_nothing(self):
+    def test_a_change_without_a_version_says_to_add_the_version_and_sends_nothing(self):
+        from clients.hubtools import version_needed
+
         for argv in (["task", "update", "T1", "--title", "x"], ["task", "done", "T1", "-m", "x"]):
             Stub.seen.clear()
             code, out = run_hub(*argv, env=self.env)
             self.assertEqual(code, 1, out)
-            self.assertEqual((out["error"], out["detail"]), ("usage", "Run `hub task show T1` first."))
+            self.assertEqual((out["error"], out["detail"]), ("usage", version_needed("T1")))
+            self.assertIn("--version N", out["detail"])
             self.assertFalse([s for s in Stub.seen if s[0] == "POST"])
 
     def test_a_refusal_prints_what_is_missing_and_the_commands_allowed_next(self):

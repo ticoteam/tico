@@ -1297,7 +1297,7 @@ def runnable(c, method, path, body):
     if method != "POST" or not m or m.group(1) == "dry-run" or not isinstance(body, dict):
         return path, body
     if body.get("version") is None:
-        raise Problem("version", "A task change carries the version you saw: run `hub task show <id>` first", 422)
+        raise Problem("version", "A task change carries the version you saw: add it (`hub task show <id>` prints it)", 422)
     if m.group(2):
         return path, body
     to = "closed" if body.get("close") else _MOVES.get(str(body.get("status") or ""))

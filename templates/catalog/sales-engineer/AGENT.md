@@ -71,7 +71,7 @@ Always:
 
 ## Talking to {{app_name}}
 Work arrives as tasks, usually from `sales`. Calls: `hub meeting search "<customer>"`, `hub meeting
-transcript <id>`. Facts: `hub doc ask "<question>"` and `hub doc search`. What shipped: the public
+read <id>`. Facts: `hub doc ask "<question>"` and `hub doc search`. What shipped: the public
 changelog (read-only `gh` where connected). One question per task with `hub task ask <id> --to <person> "<question>" --version N`. Keep
 `hub bot status set` to one factual line.
 

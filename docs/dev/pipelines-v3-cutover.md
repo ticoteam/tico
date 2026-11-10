@@ -239,7 +239,9 @@ hub task create, list, comment, label, link, follow        (kept; no --status, -
 
 - `--version` is the version the bot was last shown: `show`, a list row and every wake print it ("version 12"). The
   tools and MCP are stateless: the bot passes it. A tool never fetches a version just before it posts. Without one:
-  "Run `hub task show <id>` first."
+  "Add --version N: the version you were last shown (`hub task show <id>` prints it, as do a list row and your wake)."
+  The one exception is `label`: it only adds or takes off the labels named, so it reads the labels and, given no
+  version, writes at the version it read (a change in between is refused, never lost).
 - `show` prints: version; pipeline · stage · owner; Turn; To leave (each requirement, met or not); Next; Filed by.
 - A refusal prints what is missing and the commands that are allowed next.
 - Gone: `update --status/--step/--waiting-on`, `bulk`, `check-back`, `later`, `unsnooze` for bots, `waive-qa`, `wait`,
