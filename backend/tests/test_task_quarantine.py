@@ -610,6 +610,7 @@ def test_an_external_agent_cannot_write_a_held_task_but_can_write_another_over_m
         result = post(api, "tasks/" + first["id"], {"version": row["version"], "number": 993}, token, expected=403)
         assert result["error"]["code"] == "identity"
     assert [row["task_id"] for row in holds(api)] == [first["id"]]
+
     def done(row):
         version = get(api, "tasks/" + row["id"])["task"]["version"]
         return call(api, "hub_task_done", {"id": row["id"], "note": "Checked.", "version": version}, token=token)[0]

@@ -35,7 +35,11 @@ def test_cross_task_provenance_filters_comments_asks_answers_and_mutation_receip
     asked = post(
         api,
         f"tasks/{target['id']}/asks",
-        {'to': 'ana', 'line': 'Which packet is final?', 'version': get(api, 'tasks/' + target['id'])['task']['version']},
+        {
+            'to': 'ana',
+            'line': 'Which packet is final?',
+            'version': get(api, 'tasks/' + target['id'])['task']['version'],
+        },
         token=bot_token(api, 'ops'),
     )
     with api.app.state.store.transaction() as c:  # each task has its own room, so the cross-room reply is set here
@@ -86,7 +90,13 @@ def test_a_pipeline_edit_leaves_a_hidden_done_task_as_it_was_and_renames_its_sta
     row = post(
         api,
         'tasks',
-        {'owner': 'priya', 'title': 'Review private packet', 'body': 'Review it.', 'private': True, 'pipeline': 'reviews'},
+        {
+            'owner': 'priya',
+            'title': 'Review private packet',
+            'body': 'Review it.',
+            'private': True,
+            'pipeline': 'reviews',
+        },
         'ben-test',
     )
     done = post(api, f"tasks/{row['id']}/done", {'version': row['version'], 'note': 'Reviewed.'}, 'priya-test')

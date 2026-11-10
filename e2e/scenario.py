@@ -52,9 +52,7 @@ def populate(client):
     assigned = api.call(
         "post", "tasks/%s/owner" % made["id"], json={"version": made["version"], "owner": "bot:ops", "why": "Yours."}
     )
-    api.call(
-        "post", "tasks/%s/done" % made["id"], json={"version": assigned["task"]["version"], "note": "Drafted."}
-    )
+    api.call("post", "tasks/%s/done" % made["id"], json={"version": assigned["task"]["version"], "note": "Drafted."})
     open_task = api.call(
         "post", "tasks", json={"title": "Check the vendor list", "body": "Compare the three.", "owner": "bot:ops"}
     )["task"]
@@ -82,7 +80,12 @@ def populate(client):
         "post",
         "tasks/%s/asks" % open_task["id"],
         token=bot_token,
-        json={"to": "human:ana", "line": "Spend $5 on ads for the launch test?", "kind": "ok", "version": seen["version"]},
+        json={
+            "to": "human:ana",
+            "line": "Spend $5 on ads for the launch test?",
+            "kind": "ok",
+            "version": seen["version"],
+        },
     )
     ids["ask"] = asked["requirement_id"]
     api.call(
@@ -93,7 +96,12 @@ def populate(client):
         "post",
         "tasks/%s/asks" % open_task["id"],
         token=bot_token,
-        json={"to": "human:ana", "line": "Spend $9 on ads for a second test?", "kind": "ok", "version": seen["version"]},
+        json={
+            "to": "human:ana",
+            "line": "Spend $9 on ads for a second test?",
+            "kind": "ok",
+            "version": seen["version"],
+        },
     )
     ids["pending_ask"] = waiting["requirement_id"]  # still open: it shows in Needs you
     finish_turn(client, machine, attempt)

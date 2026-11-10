@@ -183,7 +183,10 @@ def test_renaming_or_removing_a_stage_a_wake_rule_names_flags_the_rule(api):
     convert(api, pipe, [("rule_rej", "QA/PR Rejected")])
     aid = wake_id(api, pipe)
     assert detail(api, aid)["problems"] == []
-    record = {**pipe, "stages": [{**s, "name": "Rejected" if s["name"] == "QA/PR Rejected" else s["name"]} for s in pipe["stages"]]}
+    record = {
+        **pipe,
+        "stages": [{**s, "name": "Rejected" if s["name"] == "QA/PR Rejected" else s["name"]} for s in pipe["stages"]],
+    }
     record.pop("may_change", None)
     post(api, "pipelines/" + pipe["id"], record)
     [problem] = detail(api, aid)["problems"]

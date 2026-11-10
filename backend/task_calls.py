@@ -657,7 +657,6 @@ def task_view(
     from . import task_requirements as R
     from . import waiting_on as W
 
-    H = _h()
     row = E.task(conn, task_id)
     if not row:
         return None
