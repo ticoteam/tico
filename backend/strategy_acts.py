@@ -23,6 +23,7 @@ import contextvars
 
 from . import strategy_bot
 from . import hubdb as H
+from . import task_trigger_rules as triggers
 from .migrations import renames
 
 STRATEGY_BOT = "bot:" + strategy_bot.SLUG
@@ -31,10 +32,10 @@ MAX_CHANGES = 10
 LOG_PAGE = 50
 # What Undo says it put back or kept, in the owner's words.
 PLAIN = {"owner_id": "its owner", "status": "its status", "rank": "its place in the queue", "note": "its note"}
-# The fields Undo puts back, with the task events that mean someone changed one since: a step move is a status change.
+# The fields Undo puts back, with the task history kinds that mean someone changed one since.
 EVENTS = {
-    "owner_id": ("owner",),
-    "status": ("status", "step", "type"),
+    "owner_id": ("reassign",),
+    "status": ("move",),
     "rank": ("rank",),
     "note": ("note",),
     # A task the decision made is someone else's work once they reword it, so Undo leaves it open.
@@ -331,8 +332,6 @@ def _undone(c, change):
 
 FIELDS = (
     "status",
-    "step_id",
-    "step_rank",
     "owner_id",
     "rank",
     "note",
@@ -371,25 +370,20 @@ def _apply(c, change, goal_id, reason):
         )
         return {"task_id": made["id"], "made": True, "before": None, "after": _snapshot(H.task(c, made["id"]))}
     row = H.task(c, change["task_id"])
+    if not row:
+        H.refuse(c, STRATEGY_BOT, "not-found", "Task not found")
     before = _snapshot(row)
+    # Each write is the Strategy Bot's own, at the version just read, and raises the task's version.
     if do == "reorder":
-        H.task_update(
-            c, STRATEGY_BOT, row["id"], rank=H._queue_end(c, row["owner_id"], top=True), mover=True, quiet=True
-        )
+        rank = H._queue_end(c, row["owner_id"], top=True)
+        H.task_update(c, STRATEGY_BOT, row["id"], rank=rank, mover=True, quiet=True, seen_version=row["version"])
     elif do == "reassign":
-        H.task_update(c, STRATEGY_BOT, row["id"], owner=change["owner"], mover=True)
+        H.task_reassign(c, STRATEGY_BOT, row["id"], change["owner"], reason, row["version"], mover=True)
     else:
-        H.task_close(
-            c, H.KEEPER, row["id"], change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}", strict=False
-        )
-        c.execute("UPDATE tasks SET closed_by_id=? WHERE id=?", (STRATEGY_BOT, row["id"]))
-    _bump(c, row["id"])
+        # A bot does not close what a person asked for: refused, the close becomes the owner's proposal.
+        note = change["note"] or f"Closed by the {strategy_bot.name(c)}: {reason}"
+        H.task_close(c, STRATEGY_BOT, row["id"], note, row["version"], mover=True)
     return {"task_id": row["id"], "made": False, "before": before, "after": _snapshot(H.task(c, row["id"]))}
-
-
-def _bump(c, task_id):
-    """A form or bot holding the task from before this write gets a version conflict, as after any task update."""
-    c.execute("UPDATE tasks SET version=version+1 WHERE id=?", (task_id,))
 
 
 def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
@@ -432,12 +426,10 @@ def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
             if why:
                 left.append({"change": change, "text": describe(c, change, caller), "why": why, "kind": kind})
                 continue
-            c.execute("SAVEPOINT strategy_change")
             try:
-                out = _apply(c, change, goal_id, reason)
+                with triggers.savepoint(c):
+                    out = _apply(c, change, goal_id, reason)
             except H.Refused as exc:
-                c.execute("ROLLBACK TO strategy_change")
-                c.execute("RELEASE strategy_change")
                 left.append(
                     {
                         "change": change,
@@ -447,7 +439,6 @@ def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
                     }
                 )
                 continue
-            c.execute("RELEASE strategy_change")
             text = describe(c, change, caller)
             if out["made"]:
                 # Its title is the Strategy Bot's, but the task is the company's now: named as it is when read.
@@ -504,17 +495,14 @@ def _propose(c, reason, left):
         + lines
         + "\nNothing changed. Make the change yourself if you agree, or close this to leave it."
     )
-    c.execute("SAVEPOINT strategy_propose")
     try:
         # Private, between the owner and the Strategy Bot that asks: it names company tasks by their titles, which a
         # person who reads the owner's work may not be allowed to open. The Strategy Bot stays its requester, so the 5 a
         # day and a repeated proposal are still counted (strategy_bot.asked_today).
-        made = H.task_create(c, STRATEGY_BOT, title, body, owner, lint=False, private=True)
+        with triggers.savepoint(c):
+            made = H.task_create(c, STRATEGY_BOT, title, body, owner, lint=False, private=True)
     except H.Refused as exc:
-        c.execute("ROLLBACK TO strategy_propose")
-        c.execute("RELEASE strategy_propose")
         return None, f"Not in Needs you: {exc.detail or exc.rule}; it stays here in the log"
-    c.execute("RELEASE strategy_propose")
     return made["id"], ""
 
 
@@ -679,18 +667,14 @@ def undo(c, actor, action_id):
                 # alone, so nothing is refused and its readers keep it.
                 note(f"{TASK} is private, so Undo leaves it as it is")
                 continue
-            c.execute("SAVEPOINT strategy_undo")
             try:
-                did = (_unmake if item.get("made") else _restore)(c, actor, task, item, row["created_at"], note)
+                with triggers.savepoint(c):
+                    did = (_unmake if item.get("made") else _restore)(c, actor, task, item, row["created_at"], note)
             except H.Refused as exc:
-                c.execute("ROLLBACK TO strategy_undo")
-                c.execute("RELEASE strategy_undo")
                 note(f"{TASK} could not be put back: {_refusal(c, task, exc)}")
                 continue
-            c.execute("RELEASE strategy_undo")
             if did:
                 restored.append({"task_id": task["id"], "text": did})
-                _bump(c, task["id"])
                 _tell(c, actor, H.task(c, task["id"]), item["after"]["owner_id"])
     finally:
         ACTION.reset(token)
@@ -728,7 +712,7 @@ def _later(c, task_id, fields, since, action_id):
 
 
 def _value(task, field):
-    return (task.get("status"), task.get("step_id")) if field == "status" else task.get(field)
+    return task.get(field)
 
 
 def _changed_since(c, task, after, field, since):
@@ -774,31 +758,30 @@ def _restore(c, actor, task, item, since, note):
             back.append(field)
     if not back:
         return None
-    put = {}
-    if "owner_id" in back:
-        put["owner"] = before["owner_id"]
-        # A new owner otherwise puts it at the bottom of their queue: the place goes back too, or stays as it is now.
-        put["rank"] = before["rank"] if "rank" in back else task["rank"]
-    elif "rank" in back:
-        put["rank"] = before["rank"]
-    if "status" in back:
-        put["status"] = before["status"]
-        if before.get("step_id"):
-            put["step"], put["step_rank"] = before["step_id"], before.get("step_rank")
-    if "note" in back:
-        put["note"] = before.get("note") or ""
     # A task private since the decision (moved under a private task) is not the owner's to write: Tico puts it back.
-    H.task_update(c, H.KEEPER if H.task_private(c, task) else actor, task["id"], mover=True, **put)
+    writer = H.KEEPER if H.task_private(c, task) else actor
+    why = f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} did this on its own"
     if "status" in back:
-        c.execute(
-            "UPDATE tasks SET closed_at=?, closed_by_id=? WHERE id=?",
-            (before.get("closed_at"), before.get("closed_by_id"), task["id"]),
-        )
+        # A decision only closes a task, so its status goes back by reopening it.
+        H.task_move(c, writer, task["id"], H.TASK_REOPEN, why, mover=True)
+    if "owner_id" in back:
+        H.task_reassign(c, writer, task["id"], before["owner_id"], why, mover=True)
+    fields = {}
+    if "owner_id" in back:
+        # A new owner puts it at the bottom of their queue: the place goes back too, or stays as it was.
+        fields["rank"] = before["rank"] if "rank" in back else task["rank"]
+    elif "rank" in back:
+        fields["rank"] = before["rank"]
+    if "note" in back:
+        fields["note"] = before.get("note") or ""
+    if fields:
+        H.task_update(c, writer, task["id"], mover=True, **fields)
     return f"{TASK}: {', '.join(PLAIN[f] for f in back)} put back"
 
 
 def _tell(c, actor, task, held_by):
-    """Tell each bot the Undo changed things for: the task's owner now, and the bot the decision gave it to."""
+    """Tell each bot the Undo changed things for: the task's owner now, and the bot the decision gave it to. News, not
+    work: a reopen or a reassign wakes whoever has the turn itself."""
     said = (
         f"{_name(c, actor)} undid a decision the {strategy_bot.name(c)} made on its own; "
         "this task is back as it was before it"
@@ -811,7 +794,7 @@ def _tell(c, actor, task, held_by):
                 bot,
                 said
                 + ("." if bot == task["owner_id"] else f", with {_name(c, task['owner_id'])}. It is no longer yours."),
-                {"wake": "assignment"} if bot == task["owner_id"] else None,
+                {"quiet": True},
             )
 
 

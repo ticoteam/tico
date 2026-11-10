@@ -10,7 +10,6 @@ import pytest
 from backend import threads, updates
 from backend.auth import Identity
 from backend.store import H, Problem, digest
-from backend.tests.old_asks import old_answer, old_ask
 from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
 
 MORNING = datetime(2026, 9, 29, 13, 0, tzinfo=timezone.utc)  # Tuesday 06:00 Pacific
@@ -389,26 +388,18 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     say(api, "My salary talks are next week")  # her private Assistant chat
     store = api.app.state.store
     with store.transaction() as c:
-        ask = old_ask(
+        # Her answers are the engine's: one on the shared budget, one on her private raise plan, which stays out.
+        ask = H.task_ask(
             c,
             "bot:ops",
+            budget["id"],
             "human:ana",
             "Search or social first?",
-            conversation_id=H.task(c, budget["id"])["conversation_id"],
-            refs={"task": budget["id"]},
+            seen_version=H.task(c, budget["id"])["version"],
         )
-        old_answer(c, "human:ana", ask, "Search ads first")
-        old_answer(c, "human:ana", old_ask(c, "bot:ops", "human:ana", "Lunch?"), "Chat answer, no task")
-        # Her answer names the shared budget but replies on the private raise plan: every task it names must be shared.
-        on_raise = old_ask(
-            c,
-            "bot:ops",
-            "human:ana",
-            "Can the raise wait?",
-            refs={"task": raise_plan["id"]},
-            conversation_id=H.task(c, raise_plan["id"])["conversation_id"],
-        )
-        old_answer(c, "human:ana", on_raise, "Mixed answer about the raise", refs={"task": budget["id"]})
+        H.task_answer(c, "human:ana", budget["id"], ask["requirement_id"], "Search ads first")
+        on_raise = H.task_ask(c, H.KEEPER, raise_plan["id"], "human:ana", "Can the raise wait?")
+        H.task_answer(c, "human:ana", raise_plan["id"], on_raise["requirement_id"], "Mixed answer about the raise")
     for task in (budget, raise_plan, audit):  # her decisions and comments, on each kind of task
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
         post(api, f"tasks/{task['id']}/done", {"version": get(api, f"tasks/{task['id']}")["task"]["version"]})
@@ -468,7 +459,6 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         "Pending import",
         "Deleted meeting",
         "Not her meeting",
-        "Chat answer",
         "Mixed answer",
     ):
         assert secret not in seen[0], secret + " reached a company-wide draft"

@@ -185,6 +185,32 @@ def test_a_bots_open_ask_counts_as_waiting_on_a_person_until_it_is_answered(c):
     assert H.status_counts(c, BUILDER) == before
 
 
+def test_a_thumbs_down_that_lets_the_task_finish_is_the_persons_move(c):
+    row = _new(c)
+    asked = H.task_ask(c, BUILDER, row["id"], ANA, "Ship it on Monday or Friday?", seen_version=_version(c, row["id"]))
+    H.task_done(c, BUILDER, row["id"], "Drafted both.", _version(c, row["id"]))
+    out = H.task_thumbs(c, ANA, row["id"], asked["requirement_id"], False, "Either day is fine; do not ask.")
+    assert out["status"] == "done"
+    updates = c.execute(
+        "SELECT actor FROM events WHERE action='task.update' AND target=? AND detail LIKE '%\"done\"%'", (row["id"],)
+    ).fetchall()
+    assert [u[0] for u in updates] == [ANA]  # what the move causes is Ana's, not Tico's
+
+
+def test_a_thumb_is_offered_only_on_a_bots_ask(c):
+    row = _new(c, by=BEN)
+    theirs = H.task_ask(c, BEN, row["id"], ANA, "Which venue do we book?", seen_version=_version(c, row["id"]))
+    ask = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == theirs["requirement_id"])
+    assert "thumbs" not in ask["may"]  # a person's ask on a bot's task
+    with _refused("Only a bot's ask takes a thumb"):
+        H.task_thumbs(c, ANA, row["id"], theirs["requirement_id"], True)
+    stage_ok = X.requirement(c, "general-todo", "ok", person=ANA, line="OK the venue")
+    mine = _new(c, owner=BEN, title="Book the venue")
+    on_bot = next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == stage_ok)
+    on_person = next(r for r in H.task_view(c, mine["id"], ANA)["to_leave"] if r["requirement_id"] == stage_ok)
+    assert "thumbs" in on_bot["may"] and "thumbs" not in on_person["may"]  # a stage's ask is the owner bot's
+
+
 def test_a_bots_ask_to_a_person_is_plain_words(c):
     row = _new(c)
     with _refused("lint"):
@@ -211,6 +237,30 @@ def test_a_bot_cannot_close_what_a_person_asked_for_and_a_person_closes_it_with_
     assert (closed["status"], closed["closed_by_id"]) == ("closed", ANA)
     assert H.task(c, child["id"])["status"] == "closed"
     assert ("task.close", row["id"]) in _events(c, row["id"])
+
+
+def _told(c, child_id, parent_id):
+    """What the bot that filed `child_id` heard of how it ended: its result, or the engine's wake on the parent."""
+    rows = c.execute(
+        "SELECT recipient_id, wake_key FROM messages WHERE wake_key LIKE ? OR wake_key LIKE ?",
+        (f"{child_id}:%:result", f"{parent_id}:%:filed:{child_id}"),
+    ).fetchall()
+    return [(r[0], "filed" if ":filed:" in r[1] else "result") for r in rows]
+
+
+@pytest.mark.parametrize("how", ["parent_closed", "parent_snoozed", "parent_told"])
+def test_a_bot_that_filed_a_sub_task_hears_once_how_it_ended(c, how):
+    parent = _new(c)
+    child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=parent["id"])
+    if how == "parent_closed":
+        H.task_close(c, ANA, parent["id"], "The launch is off.")  # its sub-task closes with it
+    else:
+        if how == "parent_snoozed":
+            H.task_snooze(c, BUILDER, parent["id"], "Waiting on the numbers.", None, _version(c, parent["id"]))
+        H.task_done(c, HELPER, child["id"], "Here they are.", _version(c, child["id"]))
+    assert H.task(c, child["id"])["status"] in ("done", "closed")
+    # Once: the result, or the engine's wake on the parent when it gave one.
+    assert _told(c, child["id"], parent["id"]) == [(BUILDER, "filed" if how == "parent_told" else "result")]
 
 
 def test_a_person_reopens_with_a_reason_and_a_bot_does_not_reopen_what_a_person_closed(c):
@@ -349,6 +399,75 @@ def test_a_private_sub_tasks_title_is_not_shown_to_someone_who_reads_only_its_pa
     assert "Salary" in json.dumps(H.task_view(c, parent["id"]))  # the engine's own read hides nothing
 
 
+def _offsite(company):
+    """A public task Ben asked for, with a private sub-task Ana reads and Ben does not. Its stage waits on it."""
+    with company.transaction() as c:
+        for slug in ("builder", "helper", "manager"):
+            X.bot(c, slug)
+        parent = _new(c, by=BEN, owner=BUILDER, title="Plan the offsite")
+        child = _new(c, by=BUILDER, owner=HELPER, title="Salary numbers for the offsite", parent_id=parent["id"])
+        c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([ANA]), child["id"]))
+        c.execute("UPDATE requirements SET kind='linked_done' WHERE stage_id='general-todo'")
+        assert H.task_private_readable(c, ANA, H.task(c, child["id"]))
+        assert not H.task_private_readable(c, BEN, H.task(c, child["id"]))
+    return parent["id"]
+
+
+def _move_through_the_store(company, who, task_id, key):
+    """A move as a route makes it: one write with an idempotency key. Returns the refusal (a Problem)."""
+    from backend.auth import Identity
+    from backend.store import Problem
+
+    with pytest.raises(Problem) as refused:
+        company.mutate(
+            Identity(who, "human"),
+            f"/api/v2/tasks/{task_id}/move",
+            key,
+            {"to": "next"},
+            lambda c: H.task_move(c, who, task_id, H.TASK_NEXT, None, None, mover=True),
+        )
+    return refused.value
+
+
+def test_a_refusal_names_a_private_sub_task_only_to_who_may_read_it_and_never_on_record(company):
+    parent = _offsite(company)
+    ben = _move_through_the_store(company, BEN, parent, "ben-1")
+    assert ben.code == "task_not_met"
+    assert "Salary" not in json.dumps([ben.detail, ben.extra]) and "A sub-task" in json.dumps(ben.extra["missing"])
+    ana = _move_through_the_store(company, ANA, parent, "ana-1")
+    assert "Salary" in json.dumps([ana.detail, ana.extra["missing"]])  # Ana reads it: she is told which
+    with company.transaction() as c:
+        kept = [r[0] for r in c.execute("SELECT detail FROM refusals WHERE rule='task_not_met'")]
+        kept += [r[0] for r in c.execute("SELECT detail FROM events WHERE action='refused'")]
+        kept += [r[0] for r in c.execute("SELECT response FROM idempotency WHERE key IN ('ben-1','ana-1')")]
+    assert len(kept) >= 6 and not [k for k in kept if "Salary" in k]  # the audit and the receipts keep neither
+
+
+def test_a_replayed_refusal_on_a_private_task_says_again_what_is_missing_to_who_may_read_it(company):
+    """The receipt keeps no private words; its replay (store.replayed_refusal, which Store.mutate runs on a replayed
+    receipt) builds `missing` and `next` again from the task for a caller who may read it."""
+    from backend import store
+
+    with company.transaction() as c:
+        for slug in ("builder", "helper", "manager"):
+            X.bot(c, slug)
+        row = _new(c, by=BEN, owner=BUILDER, private=True)
+        H.task_ask(c, BUILDER, row["id"], BEN, "Do we drop the Acme contract?", seen_version=_version(c, row["id"]))
+    first = _move_through_the_store(company, BEN, row["id"], "ben-1")
+    assert first.code == "task_not_met" and "Acme" in json.dumps(first.extra["missing"]) and first.extra["next"]
+    with company.transaction() as c:
+        stored = c.execute("SELECT response FROM idempotency WHERE key='ben-1'").fetchone()[0]
+        assert "Acme" not in stored  # never kept: built again on a replay
+        receipt = json.loads(stored)
+        replayed = store.replayed_refusal(c, BEN, receipt)["_refusal"]
+        assert (replayed["code"], replayed["detail"]) == ("task_not_met", "Private task write refused")
+        assert (replayed["extra"]["missing"], replayed["extra"]["next"]) == (
+            first.extra["missing"],
+            first.extra["next"],
+        )
+        assert store.replayed_refusal(c, "human:cara", receipt) == receipt  # may not read it: the receipt as kept
+
+
 def test_an_ask_names_only_someone_who_can_read_the_task(c):
     row = _new(c, by=BEN, owner=BUILDER, private=True)
     with _refused("private"):
@@ -393,6 +512,69 @@ def test_a_move_into_a_stage_someone_else_owns_does_what_a_reassignment_does(c):
     assert (out["stage"]["name"], out["owner_id"]) == ("Check", HELPER)
     assert c.execute("SELECT COUNT(*) FROM task_delegations WHERE task_id=?", (row["id"],)).fetchone()[0] == 0
     assert H.task(c, row["id"])["rank"] != rank or rank is None  # at the end of the new owner's queue
+
+
+COUNSEL = "bot:counsel"
+
+
+def _private_owner(c, approver):
+    """A pipeline whose Check stage is owned by a bot that keeps its tasks private and asks `approver` for an OK."""
+    from backend import bot_settings as BS
+
+    X.bot(c, "counsel")
+    BS.write(c, "counsel", {"name": "counsel", "runtime": "fake", "status": "active", "private_tasks_default": True})
+    stages = (
+        {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "ok", "person": approver, "line": "OK it"}]},
+        {"name": "Check", "owner": COUNSEL, "requirements": [{"kind": "ok", "person": approver, "line": "OK it"}]},
+    )
+    X.pipeline(c, "terms", "Terms", stages, manager=MANAGER)
+
+
+def _published(monkeypatch):
+    """(event, whether the task was private when it went out) for each event a move publishes."""
+    from backend import task_effects
+
+    out, real = [], task_effects._publish
+
+    def publish(conn, name, row, *rest):
+        out.append((name, H.task_private(conn, H.task(conn, row["id"]))))
+        return real(conn, name, row, *rest)
+
+    monkeypatch.setattr(task_effects, "_publish", publish)
+    return out
+
+
+@pytest.mark.parametrize("how", ["move", "reassign"])
+def test_a_task_that_goes_private_with_its_new_owner_is_private_before_anyone_hears(c, monkeypatch, how):
+    _private_owner(c, BEN)
+    row = _new(c, by=HELPER, pipeline="terms")  # a bot's task for a bot: nobody else reads it once it is private
+    published = _published(monkeypatch)
+    before = {w[0] for w in X.wakes(c, row["id"])}
+    if how == "move":
+        out = H.task_move(c, BUILDER, row["id"], "Check", "Drafted; Ben checks it there.", _version(c, row["id"]))
+    else:
+        out = H.task_reassign(c, BUILDER, row["id"], COUNSEL, "Counsel drafts this.", _version(c, row["id"]))
+    assert out["owner_id"] == COUNSEL and H.task_private(c, H.task(c, row["id"]))
+    assert published and all(private for _, private in published), published
+    # Whom the stage asks reads it: brought in, as an ask on a private task brings them in.
+    assert H.task_private_readable(c, BEN, H.task(c, row["id"]))
+    task = H.task(c, row["id"])
+    for key, who in X.wakes(c, row["id"]):
+        assert key in before or H.task_private_readable(c, who, task), (key, who)
+
+
+def test_a_stage_that_asks_a_bot_who_cannot_read_the_private_task_refuses_the_move(c):
+    _private_owner(c, "bot:reviewer")
+    X.bot(c, "reviewer")
+    row = _new(c, by=HELPER, pipeline="terms")
+    woken = X.wakes(c, row["id"])
+    assert H.attempt(c, H.task_move, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"])) is None
+    after = H.task(c, row["id"])
+    assert (after["stage_id"], after["owner_id"], H.task_private(c, after)) == (row["stage_id"], BUILDER, False)
+    assert X.wakes(c, row["id"]) == woken
+    with _refused("task_requirement") as refusal:
+        H.task_move(c, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"]))
+    assert "cannot read this task" in refusal.value.detail
 
 
 def test_a_child_restored_before_its_parent_is_under_it_again_once_both_are_back(c):

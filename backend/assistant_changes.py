@@ -1,14 +1,14 @@
 """What the person's Assistant did for them, and taking one of those changes back (docs/assistant.md, "Undo").
 
 `GET /api/v2/assistant/changes` lists the writes recorded `via: assistant` by the caller, newest first: a task filed,
-changed or closed, an approval decided, an automation or an org rule changed, a message sent. Each says what it did in
-one line, the words of the person it acted on (the cited message), the object it touched, and whether it can be undone
-and, when not, why.
+moved (done, closed, reopened, to another stage) or given to someone else, an automation or an org rule changed, a
+message sent. Each says what it did in one line, the words of the person it acted on (the cited message), the object it
+touched, and whether it can be undone and, when not, why.
 
-`POST /api/v2/assistant/changes/{id}/restore` undoes one: a task's status or owner goes back to its earlier value, an
-approval goes back to waiting for the person, an automation goes back to the version before the change, an org rule
-added is retired. A message sent stays sent. Restoring twice is a no-op (`already: true`), and every restore is
-recorded as an event of the person's own.
+`POST /api/v2/assistant/changes/{id}/restore` undoes one: a task's move is a move back to where it was, with a why, and
+a hand-over gives it back (both through the task calls, never a direct write); an automation goes back to the version
+before the change, an org rule added is retired. A message sent stays sent. Restoring twice is a no-op
+(`already: true`), and every restore is recorded as an event of the person's own.
 
 Only the caller's own changes are listed or restored; anything else is a 404.
 """
@@ -29,9 +29,9 @@ LIST_DAYS_MAX = 90
 PAGE = 50
 PAGE_MAX = 100
 WORDS = 200
-TASK_ACTIONS = ("task.create", "task.update", "task.close")
 RESTORE_ACTION = "assistant.change.restore"
-TASK_FIELD_KEY = {"status": "status", "owner": "owner_id"}  # a task history field (kind) -> the tasks column it sets
+MOVES = ("move", "reassign")  # the task history kinds an undo puts back
+UNDO_WHY = "Undo of the Assistant's change"
 
 
 def install(app, store, auth, mutate, settings):
@@ -73,9 +73,16 @@ def listing(c, auth, who, days, limit, before, settings):
     sources = (
         (
             "event",
-            "SELECT * FROM events WHERE actor=? AND created_at>=? AND " + cut + " AND action IN (?,?,?,?) "
+            "SELECT * FROM events WHERE actor=? AND created_at>=? AND " + cut + " AND action='task.create' "
             "AND json_extract(detail,'$.via')='assistant' ORDER BY created_at DESC, id DESC LIMIT ?",
-            (who.actor, since, *cut_args, *TASK_ACTIONS, "approval.decide", fetch),
+            (who.actor, since, *cut_args, fetch),
+        ),
+        (
+            "move",
+            "SELECT * FROM history_events WHERE subject_type='task' AND actor_id=? AND created_at>=? AND " + cut + " "
+            "AND via='assistant' AND kind IN (?,?) AND coalesce(json_extract(data,'$.move'),'') <> 'new' "
+            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            (who.actor, since, *cut_args, *MOVES, fetch),
         ),
         (
             "audit",
@@ -112,18 +119,14 @@ def describe(c, auth, who, kind, row, settings):
     if kind == "event":
         detail = json.loads(row["detail"] or "{}") or {}
         target = row["target"] or ""
-        obj = (
-            target
-            if ":" in target
-            else (
-                f"task:{target}"
-                if row["action"].startswith("task.")
-                else f"approval:{target}"
-                if row["action"].startswith("approval.")
-                else target
-            )
-        )
+        obj = target if ":" in target else f"task:{target}"
         what = event_line(c, auth, who, row, detail, obj)
+        words = cited_words(c, detail.get("delegation"))
+        undo, why = undoable(c, auth, who, kind, row, detail, settings)
+    elif kind == "move":
+        detail = json.loads(row["data"] or "{}") or {}
+        obj = f"task:{row['subject_id']}"
+        what = move_line(c, auth, who, row, detail)
         words = cited_words(c, detail.get("delegation"))
         undo, why = undoable(c, auth, who, kind, row, detail, settings)
     elif kind == "audit":
@@ -162,23 +165,29 @@ def setting_line(c, row):
     return f"Changed {bot}'s {row['field'].replace('_', ' ')}"
 
 
+def _label(c, auth, who, task_id):
+    """A task as a line names it: its title, or that the person can no longer see it."""
+    if can_see(c, auth, who, task_id):
+        return f"'{(H.task(c, task_id) or {}).get('title') or 'a task'}'"
+    return "a task you can no longer see"
+
+
 def event_line(c, auth, who, row, detail, obj):
-    """A plain line for an event the Assistant wrote: the task's title, the status it set, the approval's decision. A task
-    the person can no longer see is named without its title."""
-    action = row["action"]
-    if action == "approval.decide":
-        ask = H.approval(c, row["target"]) or {}
-        return f"{'Approved' if detail.get('decision') == 'approved' else 'Declined'} a {ask.get('kind', 'request')} request"
-    if obj.startswith("task:") and can_see(c, auth, who, row["target"]):
-        label = f"'{(H.task(c, row['target']) or {}).get('title') or 'a task'}'"
-    else:
-        label = "a task you can no longer see"
-    if action == "task.create":
-        return f"Filed {label}"
-    if action == "task.close":
-        return f"Closed {label}"
-    status = detail.get("status")
-    return f"Set {label} to {status}" if status else f"Changed {label}"
+    """A plain line for a task the Assistant filed."""
+    return f"Filed {_label(c, auth, who, row['target'])}" if obj.startswith("task:") else f"Changed {obj}"
+
+
+def move_line(c, auth, who, row, detail):
+    """A plain line for a task the Assistant moved or gave to someone: done, closed, reopened, moved to a stage."""
+    label = _label(c, auth, who, row["subject_id"])
+    if row["kind"] == "reassign":
+        return f"Gave {label} to {H.actor_name(c, row['new']) if row['new'] else 'nobody'}"
+    move = detail.get("move")
+    words = {"done": "Marked {} done", "closed": "Closed {}", "reopen": "Reopened {}", "back": "Moved {} back"}
+    if move in words:
+        return words[move].format(label)
+    stage = c.execute("SELECT name FROM stages WHERE id=?", (row["new"],)).fetchone()
+    return f"Moved {label} to {stage['name'] if stage else 'another stage'}"
 
 
 def audit_line(obj, before, after):
@@ -223,69 +232,35 @@ def can_see(c, auth, who, task_id):
     return bool(task_id) and bool(views._readable_task_ids(c, auth.task_sql(c, who), [task_id]))
 
 
-def task_field_rows(c, who, row, detail):
-    """The task's history rows (status, owner) that this event wrote, by the person's Assistant, read as the task's
-    history has always been read (H.TASK_EVENT_COLUMNS). A row belongs to the first task event at or after it: it is later
-    than the task's previous event and no later than this one. So a note-only update right after a close reads none of the
-    close's rows. A status row must carry the value the event set; an owner row is the event's when it is the only owner
-    change in its window."""
-    at, task = row["created_at"], row["target"]
-    previous = (
-        c.execute(
-            "SELECT MAX(created_at) FROM events WHERE target=? AND action IN (?,?,?) AND created_at<?",
-            (task, *TASK_ACTIONS, at),
-        ).fetchone()[0]
-        or ""
-    )
-    rows = [
-        dict(r)
-        for r in c.execute(
-            f"SELECT {H.TASK_EVENT_COLUMNS} FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id=? "
-            "AND via='assistant' AND kind IN ('status','owner') AND created_at<=? AND created_at>? ORDER BY created_at DESC",
-            (task, who.actor, at, previous),
-        )
-    ]
-    want = "closed" if row["action"] == "task.close" else detail.get("status")
-    out = [r for r in rows if r["field"] == "status" and want is not None and r["new"] == want][:1]
-    out += [r for r in rows if r["field"] == "owner"][:1]
-    return out
-
-
-def approval_undoable(c, auth, who, row):
-    """An approval decision is taken back only while it is the approval's current decision: the latest one recorded."""
-    ask = H.approval(c, row["target"])
-    if not ask or ask.get("decided_by_id") != who.actor or ask.get("decided_via") != "assistant":
-        return False, "the decision is no longer your Assistant's"
-    if ask.get("consumed_at"):
-        return False, "it already ran"
-    latest = c.execute(
-        "SELECT id FROM events WHERE action='approval.decide' AND target=? ORDER BY created_at DESC, id DESC LIMIT 1",
-        (row["target"],),
+def _last_change(c, task_id):
+    """The task's newest move or hand-over, as its history has it."""
+    return c.execute(
+        "SELECT id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind IN (?,?) "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        (task_id, *MOVES),
     ).fetchone()
-    if latest and latest["id"] != row["id"]:
-        return False, "it changed again since"
-    return True, ""
 
 
 def undoable(c, auth, who, kind, row, detail, settings):
     """(undoable, why_not): whether the change can be taken back as it stands, and the reason when it cannot."""
     if kind == "event":
-        action = row["action"]
-        if action == "approval.decide":
-            return approval_undoable(c, auth, who, row)
-        if action == "task.create":
-            return False, "close the task on its page if it is not wanted"
-        if not can_see(c, auth, who, row["target"]):
+        return False, "close the task on its page if it is not wanted"
+    if kind == "move":
+        task_id = row["subject_id"]
+        if not can_see(c, auth, who, task_id):
             return False, "a task you can no longer see"
-        rows = task_field_rows(c, who, row, detail)
-        if not rows:
-            return False, "only its note changed"
-        task = H.task(c, row["target"]) or {}
-        for field_row in rows:
-            if field_row["field"] == "owner" and not field_row["old"]:
+        latest = _last_change(c, task_id)
+        if not latest or latest["id"] != row["id"]:
+            return False, "it changed again since"
+        task = H.task(c, task_id) or {}
+        if row["kind"] == "reassign":
+            if not row["old"]:
                 return False, "it had no owner before"
-            if (task.get(TASK_FIELD_KEY[field_row["field"]]) or None) != (field_row["new"] or None):
+            if task.get("owner_id") != row["new"]:
                 return False, "it changed again since"
+            return True, ""
+        if not row["old"] or task.get("stage_id") != row["new"]:
+            return False, "it changed again since"
         return True, ""
     if kind == "setting":
         if row["undone_at"]:
@@ -325,6 +300,8 @@ def restore(c, auth, who, cid, settings):
     detail = (
         json.loads(row["detail"] or "{}")
         if kind == "event"
+        else json.loads(row["data"] or "{}") or {}
+        if kind == "move"
         else {
             "before": json.loads(row["before"]) if row["before"] else None,
             "after": json.loads(row["after"]) if row["after"] else None,
@@ -337,18 +314,12 @@ def restore(c, auth, who, cid, settings):
         config = settings._config(c, row["bot"])
         settings.undo(c, who, row["id"], M.SettingsUndo(expected_revision=config["revision"]))
         obj = f"setting:{row['bot']}:{row['field']}"
-    elif kind == "event" and row["action"] in ("approval.decide",):
+    elif kind in ("event", "move"):
         undo, why = undoable(c, auth, who, kind, row, detail, settings)
         if not undo:
             raise Problem("not_undoable", why, 409)
-        H.approval_undo(c, who.actor, row["target"])
-        obj = f"approval:{row['target']}"
-    elif kind == "event":
-        undo, why = undoable(c, auth, who, kind, row, detail, settings)
-        if not undo:
-            raise Problem("not_undoable", why, 409)
-        restore_task(c, who, row, detail)
-        obj = f"task:{row['target']}"
+        restore_task(c, who, row)
+        obj = f"task:{row['subject_id']}"
     else:
         undo, why = undoable(c, auth, who, kind, row, detail, settings)
         if not undo:
@@ -376,6 +347,13 @@ def find(c, who, cid):
     ).fetchone()
     if row:
         return dict(row), "event"
+    row = c.execute(
+        "SELECT * FROM history_events WHERE id=? AND subject_type='task' AND actor_id=? AND via='assistant' "
+        "AND kind IN (?,?)",
+        (cid, who.actor, *MOVES),
+    ).fetchone()
+    if row:
+        return dict(row), "move"
     row = c.execute("SELECT * FROM audit_log WHERE id=? AND actor=? AND via='assistant'", (cid, who.actor)).fetchone()
     if row:
         return dict(row), "audit"
@@ -389,16 +367,18 @@ def find(c, who, cid):
     return None, None
 
 
-def restore_task(c, who, row, detail):
-    """Put back each status and owner the change set, to the value the task had before it."""
-    for field_row in task_field_rows(c, who, row, detail):
-        if field_row["field"] == "status" and field_row["old"] == "closed":
-            # task_update refuses a closed status: only task_close closes, so an undone reopen closes the task again.
-            H.task_close(c, who.actor, row["target"], note="Restored by the Assistant's undo")
-        elif field_row["field"] == "status":
-            H.task_update(c, who.actor, row["target"], status=field_row["old"] or "open")
-        elif field_row["field"] == "owner" and field_row["old"]:
-            H.task_update(c, who.actor, row["target"], owner=field_row["old"])
+def restore_task(c, who, row):
+    """Take a move or a hand-over back, through the task calls: a move back to the stage the task was in, a reopen
+    undone by finishing or closing it again, a hand-over undone by giving it back. Always with a why."""
+    task_id = row["subject_id"]
+    if row["kind"] == "reassign":
+        H.task_reassign(c, who.actor, task_id, row["old"], UNDO_WHY)
+        return
+    stage = c.execute("SELECT kind FROM stages WHERE id=?", (row["old"],)).fetchone()
+    to = {"done": H.TASK_DONE, "closed": H.TASK_CLOSED}.get(stage["kind"] if stage else "", row["old"])
+    if (H.task(c, task_id) or {}).get("status") != "open" and to not in (H.TASK_DONE, H.TASK_CLOSED):
+        to = H.TASK_REOPEN  # a done or closed task goes back to work by a reopen, which lands where it left
+    H.task_move(c, who.actor, task_id, to, UNDO_WHY)
 
 
 def restore_automation(c, who, aid, before):

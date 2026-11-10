@@ -16,7 +16,7 @@ Rows are appended, never deleted: `dropped` is a status. Every change leaves a `
 proposals (`goal_proposals`) that the goal's or KPI's owner confirms.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import timezone
 
 from .batch_work import isolated
 from . import strategy_bot
@@ -702,8 +702,7 @@ def _from_owner(conn, row, at):
             "reason": f"Check-in {_age(said['created_at'], at)} ago: {said['signal'].replace('_', ' ')}",
         }
     tasks = conn.execute(
-        "SELECT status, done_at, closed_at, updated_at FROM tasks WHERE goal_id=? "
-        "AND status!='declined' AND coalesce(private,1)=0",
+        "SELECT status, done_at, closed_at, updated_at FROM tasks WHERE goal_id=? AND coalesce(private,1)=0",
         (row["id"],),
     ).fetchall()
     if not tasks:

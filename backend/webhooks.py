@@ -150,8 +150,6 @@ def links_for(type_, subject, data):
     app = api = ""
     if group == "task":
         app, api = f"#/task/{subject}", f"/api/v2/tasks/{subject}"
-    elif group == "approval" and data.get("task_id"):
-        app, api = f"#/task/{data['task_id']}", f"/api/v2/tasks/{data['task_id']}"
     elif group == "bot":
         app, api = f"#/bot/{subject}", f"/api/v2/bots/{subject}"
     elif group == "thread":
@@ -223,7 +221,7 @@ def _task_readable(c, actor, task_id, cache):
 
 def view_for(c, actor, type_, subject, data, cache):
     """`data` as this person may have it, or None when none of it is theirs. The event's own rules, one per group:
-    a task by the task's privacy, an approval by who decides it, a Needs-you item by who it is for, a bot by who may
+    a task by the task's privacy, a bot by who may
     read it; Health and inbound mail are for owners and admins; the rest is company-wide."""
     if _left(c, actor, cache):
         return None
@@ -234,13 +232,6 @@ def view_for(c, actor, type_, subject, data, cache):
     # custom event about one.
     if H.task(c, subject) and not _task_readable(c, actor, subject, cache):
         return None
-    if group == "approval":
-        row = c.execute("SELECT decision_owner, task_id FROM approvals WHERE id=?", (subject,)).fetchone()
-        if not row or not (actor == row["decision_owner"] or _admin(c, actor, cache)):
-            return None
-        return data if not row["task_id"] or _task_readable(c, actor, row["task_id"], cache) else None
-    if group == "needs_you":
-        return data if data.get("to") == actor else None
     if group == "bot":
         auth, who = _state["auth"], _identity(c, actor, cache)
         if auth and who:
@@ -402,17 +393,17 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
 # ----------------------------------------------------------------------------------------------------- endpoint filters
 def _facts(c, name, subject, data, actor):
     """What an event is about, for an endpoint's filter: the bots in it (a task's owner and whoever acted), the task's
-    owner (whose department counts) and the task's type. A key is missing when the event has no such thing, and a
+    owner (whose department counts) and the task's pipeline. A key is missing when the event has no such thing, and a
     filter on a missing key lets the event through: a release note is not a department's."""
     data = data if isinstance(data, dict) else {}
     row = None
-    for guess in (subject, (data.get("approval") or {}).get("task"), (data.get("item") or {}).get("task")):
+    for guess in (subject, (data.get("item") or {}).get("task")):
         row = H.task(c, str(guess)) if guess and isinstance(guess, str) else None
         if row:
             break
     if row:
         who = {a for a in (row.get("owner_id"), actor) if a and H.is_bot(a)}
-        return {"bots": who, "owner_id": row.get("owner_id"), "type": row.get("type_id")}
+        return {"bots": who, "owner_id": row.get("owner_id"), "pipeline": row.get("pipeline_id")}
     if name.split(".")[0] == "bot":
         return {"bots": {H.bot_actor(subject)}}
     return {}
@@ -424,7 +415,7 @@ def passes(c, filt, facts):
         return True
     if filt.get("bots") and "bots" in facts and not facts["bots"] & set(filt["bots"]):
         return False
-    if filt.get("task_types") and "type" in facts and facts["type"] not in filt["task_types"]:
+    if filt.get("pipelines") and "pipeline" in facts and facts["pipeline"] not in filt["pipelines"]:
         return False
     if filt.get("departments") and "owner_id" in facts and _state.get("settings") is not None:
         from . import task_rules
@@ -461,12 +452,12 @@ def _filtered(c, hooks, name, subject, data, actor):
 class FilterIn(Contract):
     departments: list[str] = Field(default_factory=list, max_length=MAX_FILTER)
     bots: list[str] = Field(default_factory=list, max_length=MAX_FILTER)
-    task_types: list[str] = Field(default_factory=list, max_length=MAX_FILTER)
+    pipelines: list[str] = Field(default_factory=list, max_length=MAX_FILTER)
 
 
 def clean_filter(c, filt):
     """The stored form of a filter: only the lists that hold something, each name once, in the same spelling the
-    events carry (bots as `bot:<id>`, task types by id). An unknown department or task type is refused."""
+    events carry (bots as `bot:<id>`, pipelines by id). An unknown department or pipeline is refused."""
     if not filt:
         return {}
     out = {}
@@ -483,15 +474,20 @@ def clean_filter(c, filt):
     if filt.bots:
         named = [b.removeprefix("bot:") for b in filt.bots if b.strip()]
         out["bots"] = list(dict.fromkeys(H.bot_actor((H.resolve_bot(c, b) or {}).get("id", b)) for b in named))
-    if filt.task_types:
+    if filt.pipelines:
+        from . import task_engine
+
         ids = []
-        for item in filt.task_types:
-            found = H.type_get(c, item)
+        for item in filt.pipelines:
+            found = (
+                task_engine.pipeline(c, item)
+                or c.execute("SELECT * FROM pipelines WHERE name=? AND retired_at IS NULL", (item,)).fetchone()
+            )
             if not found:
-                raise Problem("webhook", f"No task type {item}", 422)
+                raise Problem("webhook", f"No pipeline {item}", 422)
             if found["id"] not in ids:
                 ids.append(found["id"])
-        out["task_types"] = ids
+        out["pipelines"] = ids
     return out
 
 
@@ -682,7 +678,7 @@ def view(hook, who, tally=None):
         "revision": hook["revision"],
         "old_secret_until": grace,
         "can_change": mine,
-        "filter": {"departments": [], "bots": [], "task_types": [], **filter_of(hook)},
+        "filter": {"departments": [], "bots": [], "pipelines": [], **filter_of(hook)},
         "headers": [
             {
                 "name": h["name"],
@@ -862,22 +858,17 @@ def _insert(c, vault, who, spec, owner, requested_by="", headers=()):
     return {**view(c.execute("SELECT * FROM webhooks WHERE id=?", (hook_id,)).fetchone(), who), "secret": secret}
 
 
-def _approval_payload(spec):
-    digest = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
-    return {
-        "to": spec["url"],
-        "cc": "",
-        "subject": f"Create webhook endpoint {spec['name']}",
-        "body_sha256": digest,
-        "mailbox": "webhooks",
-        "webhook": spec,
-    }
+def _subject(spec):
+    """An OK's subject for one exact endpoint a bot asks for: the same details are the same ask."""
+    return "webhook:" + hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()[:32]
 
 
 def create(c, vault, who, body):
-    """A person's endpoint, with its secret in the answer (shown once). A bot's request files a `send` approval
-    instead and the answer says so. Asking again with the same details after a person approved it makes the endpoint,
-    owned by that person, and spends the approval."""
+    """A person's endpoint, with its secret in the answer (shown once). A bot's request asks a person for an OK of these
+    exact details (backend/task_asks.py) and the answer says `approval`. Asking again with the same details once the
+    person OK'd it from its preview makes the endpoint, owned by that person, and uses the OK."""
+    from . import task_asks
+
     spec = _spec(body)
     if is_person(who):
         owner_only_http(who, spec["allow_http"])
@@ -886,24 +877,38 @@ def create(c, vault, who, body):
         raise Problem("forbidden", "Only people and bots ask for webhook endpoints", 403)
     if body.headers:
         raise Problem("forbidden", "A person sets custom headers; a bot asks without them", 403)
-    payload = _approval_payload(spec)
-    digest = H.payload_hash(payload)
-    approved = c.execute(
-        "SELECT * FROM approvals WHERE payload_hash=? AND requested_by_id=? AND kind='send' AND "
-        "decision='approved' AND consumed_at IS NULL ORDER BY decided_at LIMIT 1",
-        (digest, who.actor),
-    ).fetchone()
-    if approved:
-        H.approval_consume(c, who.actor, approved["id"])
-        return _insert(c, vault, who, spec, approved["decided_by_id"], requested_by=who.actor)
-    open_ = c.execute("SELECT id FROM approvals WHERE payload_hash=? AND decision IS NULL", (digest,)).fetchone()
+    subject = _subject(spec)
+    found = task_asks.latest(c, subject)
+    if (
+        found
+        and found["asked_by_id"] == who.actor
+        and task_asks.passes(c, found["requirement_id"], subject, spec, who.actor)
+    ):
+        task_asks.use(c, found["requirement_id"], subject, spec, who.actor)
+        task_asks.settle(c, found["requirement_id"], "Made the webhook endpoint.")
+        return _insert(c, vault, who, spec, found["ok_by_id"], requested_by=who.actor)
     owner_only_http(who, spec["allow_http"])
     check_address(spec["url"], False)
+    person = H.human_actor(H.default_human(c)) if H.default_human(c) else None
+    if not person:
+        raise Problem("approval", "Nobody can approve this: the company has no person yet", 422)
     try:
-        aid = open_["id"] if open_ else H.approval_request(c, who.actor, "send", payload)["id"]
+        asked = task_asks.ask_ok(
+            c,
+            who.actor,
+            person,
+            "Make this webhook endpoint?",
+            shows=["webhook:" + spec["name"]],
+            subject=subject,
+            content=spec,
+            title=f"Make webhook endpoint {spec['name']}"[:200],
+        )
     except H.Refused as exc:
         raise Problem("approval", str(exc), 422) from exc
-    return {"approval": {"id": aid, "status": "pending"}, "webhook": None}
+    return {
+        "approval": {"id": asked["requirement_id"], "task_id": asked["task_id"], "status": "pending"},
+        "webhook": None,
+    }
 
 
 def carried(before, after):

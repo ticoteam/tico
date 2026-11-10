@@ -110,6 +110,8 @@ TABLES = {
     rows.RequirementRow: "requirements",
     rows.AnswerRow: "answers",
     rows.SnoozeRow: "snoozes",
+    rows.OkGrantRow: "ok_grants",
+    rows.OkShownRow: "ok_shown",
     rows.LinkRow: "links",
     rows.EffectRow: "effects",
     rows.TaskMoveGuardRow: "task_move_guards",

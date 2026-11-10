@@ -142,6 +142,16 @@ def write_registry(settings):
     )
 
 
+def version(c, task_id):
+    """The task's version now: what whoever acts on it next in this transaction was just shown."""
+    return hubdb.task(c, task_id)["version"]
+
+
+def say_done(c, actor, task_id, note):
+    """`actor` says the task's work is done, with what was done (the sections use it too)."""
+    return hubdb.task_done(c, actor, task_id, note, version(c, task_id))
+
+
 def populate(settings, now=None):
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(second=0, microsecond=0)
     write_registry(settings)
@@ -546,44 +556,36 @@ class Builder:
 
     # ------------------------------------------------------------------ work and conversation
     def tasks_and_chats(self):
+        """The week's tasks in the order the team made and worked them: each is filed when it was asked for (a sub-task
+        under the task it came from), and its owner moves it on when it last changed: a note on an open task, with an
+        ask or a snooze where one waits, done with what was done, or closed by whoever asked for it."""
+        steps = []  # (days ago, then, kind, row): filing comes before working at the same moment
+        for row in D.TASKS:
+            key, status, created, changed, note = row[0], row[5], row[6], row[7], row[8]
+            steps.append((created, 0, "file", row))
+            if status != "open" or note or key in D.TASK_ASKS or key in D.TASK_SNOOZES:
+                steps.append((changed, 1, "work", row))
+        steps += [(row[5], 0, "ask", row) for row in D.ASKS]
+
         def work(c):
-            for key, title, body, owner, requester, status, created, changed, note, parent in D.TASKS:
-                self.at(days=created)
-                task = hubdb.task_create(
-                    c, requester, title, body, owner, parent_id=self.tasks.get(parent), allow_planned=True
-                )
-                self.tasks[key] = task["id"]
-            for key, title, owner, target, body, created, _ in D.ASKS:
-                self.at(days=created)
-                due = stamp(self.now + timedelta(days=D.ASK_DUE[key])) if key in D.ASK_DUE else None
-                task = hubdb.task_create(c, owner, title, body, target, due=due, allow_planned=True)
-                self.tasks[key] = task["id"]
+            for days, _then, kind, row in sorted(steps, key=lambda step: (-step[0], step[1])):
+                self.at(days=days)
+                if kind == "file":
+                    key, title, body, owner, requester, _status, _created, _changed, _note, parent = row
+                    made = hubdb.task_create(
+                        c, requester, title, body, owner, parent_id=self.tasks.get(parent), allow_planned=True
+                    )
+                    self.tasks[key] = made["id"]
+                elif kind == "ask":
+                    key, title, owner, target, body, _created, _status = row
+                    due = stamp(self.now + timedelta(days=D.ASK_DUE[key])) if key in D.ASK_DUE else None
+                    self.tasks[key] = hubdb.task_create(c, owner, title, body, target, due=due, allow_planned=True)[
+                        "id"
+                    ]
+                else:
+                    self.work_task(c, row)
 
         self.write(work)
-
-        def move(c):
-            # Creation lists parents first. Apply descendant states before a parent's finish closes open subtasks.
-            for key, title, body, owner, requester, status, created, changed, note, parent in reversed(D.TASKS):
-                tid = self.tasks[key]
-                if status == "open":
-                    continue
-                self.at(days=changed)
-                if status == "closed":
-                    hubdb.task_update(c, owner, tid, status="done", note=note)
-                    self.at(days=changed - 0.2)
-                    hubdb.task_close(c, requester, tid, "Thanks.")
-                else:
-                    hubdb.task_update(c, owner, tid, status=status, note=note)
-
-        self.write(move)
-
-        def approve(c):
-            self.at(days=D.APPROVAL["days"])
-            hubdb.approval_request(
-                c, D.APPROVAL["by"], D.APPROVAL["kind"], D.APPROVAL["payload"], self.tasks[D.APPROVAL["task"]]
-            )
-
-        self.write(approve)
 
         for bot, (hours, lines) in D.CHATS.items():
             self.at(hours=hours)
@@ -606,6 +608,26 @@ class Builder:
                             in_reply_to=last["id"],
                         )
                     )
+
+    def work_task(self, c, row):
+        """One task of D.TASKS at its last change: done by its owner, closed by whoever asked for it, or still open with
+        its owner's note and what it waits on."""
+        key, _title, _body, owner, requester, status, _created, _changed, note, _parent = row
+        tid = self.tasks[key]
+        if status == "done":
+            say_done(c, owner, tid, note)
+            return
+        if status == "closed":
+            hubdb.task_close(c, requester, tid, note, version(c, tid))
+            return
+        if note:
+            hubdb.task_update(c, owner, tid, note=note, seen_version=version(c, tid))
+        if key in D.TASK_ASKS:
+            person, line, kind, choices = D.TASK_ASKS[key]
+            hubdb.task_ask(c, owner, tid, person, line, kind=kind, choices=choices, seen_version=version(c, tid))
+        if key in D.TASK_SNOOZES:
+            why, days = D.TASK_SNOOZES[key]
+            hubdb.task_snooze(c, owner, tid, why, stamp(self.now + timedelta(days=days)), version(c, tid))
 
     def meetings(self):
         for entry in D.MEETINGS:
@@ -644,14 +666,14 @@ class Builder:
                 self.call("POST", f"/api/meetings/{result['id']}/items/{items[text]}/push", {"force": True})
             if entry.get("send_to"):
                 sent = self.call("POST", f"/api/meetings/{result['id']}/send", {"bot_id": entry["send_to"]})
-                if entry.get("send_status") and sent.get("task"):
+                if entry.get("send_note") and sent.get("task"):
                     self.write(
                         lambda c: hubdb.task_update(
                             c,
                             "bot:" + entry["send_to"],
                             sent["task"],
-                            status=entry["send_status"],
-                            note="Reading the call for follow-ups.",
+                            note=entry["send_note"],
+                            seen_version=version(c, sent["task"]),
                         )
                     )
         self.granola()
@@ -807,7 +829,7 @@ class Builder:
                     },
                 )
                 if task:
-                    hubdb.task_update(c, "bot:" + bot, task["id"], status="done", note=summary)
+                    say_done(c, "bot:" + bot, task["id"], summary)
                     c.execute(
                         "INSERT INTO schedule_occurrences VALUES(?,?,?,'completed')",
                         (routine["id"], turn["started_at"], task["id"]),
@@ -890,16 +912,10 @@ class Builder:
         def run(c):
             for index, (at, bot, title, asker, trigger, note) in enumerate(sorted(work)):
                 self.clock.at = at
-                # Long finished: the notices are quiet, so no bot is woken for work already done. A chat has no task.
+                # A chat has no task. A task's wake is done with when the bot finishes it below.
                 task = (
                     hubdb.task_create(
-                        c,
-                        asker,
-                        title,
-                        note if trigger == "routine" else title,
-                        "bot:" + bot,
-                        deduplicate=False,
-                        quiet_notice=True,
+                        c, asker, title, note if trigger == "routine" else title, "bot:" + bot, deduplicate=False
                     )
                     if title
                     else None
@@ -933,7 +949,7 @@ class Builder:
                     },
                 )
                 if task:
-                    hubdb.task_update(c, "bot:" + bot, task["id"], status="done", note=note, quiet=True)
+                    say_done(c, "bot:" + bot, task["id"], note)
 
         self.write(run)
 
@@ -1146,7 +1162,7 @@ class Builder:
             for row in rows:
                 made = datetime.fromisoformat(row["created_at"].rstrip("Z")).replace(tzinfo=timezone.utc)
                 self.clock.at = made + timedelta(hours=2)
-                hubdb.task_update(c, done["owner"], row["id"], status="done", note=done["note"])
+                say_done(c, done["owner"], row["id"], done["note"])
 
         self.write(work)
 
@@ -1177,11 +1193,10 @@ class Builder:
             c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running','input')")
             c.execute("DELETE FROM update_queue")
             when = stamp(self.now)
-            # A manager's assignment is stamped by a trigger on SQLite's clock; the demo assigned it at its build time.
-            # Before the stamps below: this update writes change-feed rows of its own.
-            c.execute("UPDATE task_types SET manager_since=? WHERE manager_since IS NOT NULL", (when,))
+            # The task engine stamps its own rows on the build's clock, and nothing here writes them.
             for (table,) in c.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' "
+                "AND name NOT IN ('tasks','visits','answers','requirements','snoozes','links')"
             ).fetchall():
                 columns = {row[1] for row in c.execute(f'PRAGMA table_info("{table}")')}
                 for column in [name for name in ("created_at", "updated_at") if name in columns]:

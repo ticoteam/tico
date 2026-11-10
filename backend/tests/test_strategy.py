@@ -349,10 +349,16 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
     post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
     assert get(api, f"goals/{goal['id']}")["goal"]["bet_id"] == two["id"]
     with api.app.state.store.read() as c:
-        closed = H._one(c, "SELECT status, note FROM tasks WHERE id=?", (task["id"],))
-        assert closed["status"] in ("done", "closed")
+        closed = H._one(c, "SELECT status FROM tasks WHERE id=?", (task["id"],))
+        assert closed["status"] == "closed"
         assert not H._one(c, "SELECT 1 AS x FROM goal_asks WHERE ref=?", (proposal["id"],))
-    assert closed["note"] == "Resolved: the goals were realigned with the strategy."
+        why = H._one(
+            c,
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (task["id"],),
+        )
+    assert why["note"] == "Resolved: the goals were realigned with the strategy."
 
 
 def realign_card(api):
