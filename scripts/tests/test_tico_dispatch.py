@@ -99,7 +99,10 @@ def test_a_computer_word_from_a_persons_terminal_reaches_tico_computer_with_a_no
     if 'restart' in args:  # the update chain of a scripts/tico from before tico-computer: silent
         assert done.stderr == ''
     else:
-        assert done.stderr == f"tico: this computer's commands are tico-computer now: running tico-computer {' '.join(args)}\n"
+        assert (
+            done.stderr
+            == f"tico: this computer's commands are tico-computer now: running tico-computer {' '.join(args)}\n"
+        )
 
 
 @pytest.mark.parametrize('args', COMPUTER_WORDS)

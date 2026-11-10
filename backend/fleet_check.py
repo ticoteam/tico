@@ -122,7 +122,11 @@ def check(c, who, auth, settings):
             reason = (one(c, PAUSE_REASON_SQL, (bid,)) or {"reason": ""})["reason"] or ""
             if "limit" in reason.lower():
                 add(
-                    bot, "paused_over_limit", HIGH, f"{name} is paused: it went over a limit.", f"tico bot resume {slug}"
+                    bot,
+                    "paused_over_limit",
+                    HIGH,
+                    f"{name} is paused: it went over a limit.",
+                    f"tico bot resume {slug}",
                 )
             else:
                 add(bot, "paused", LOW, f"{name} is paused.", f"tico bot resume {slug}")

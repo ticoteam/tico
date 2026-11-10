@@ -39,7 +39,9 @@ def test_the_rename_script_finds_nothing_left_to_change():
         [sys.executable, str(SCRIPT), "--check"], cwd=ROOT, capture_output=True, text=True, timeout=300
     )
     assert done.returncode == 0, (
-        "a text teaches `hub <command>`; run python3 scripts/cleanup/rename_hub_to_tico.py\n" + done.stdout + done.stderr
+        "a text teaches `hub <command>`; run python3 scripts/cleanup/rename_hub_to_tico.py\n"
+        + done.stdout
+        + done.stderr
     )
     assert done.stdout.startswith("would rewrite 0 ")
 

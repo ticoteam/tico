@@ -5284,7 +5284,10 @@ REMOVED = [
     (("task", "types"), PIPELINE_INSTEAD),
     (("pipeline",), PIPELINE_INSTEAD),
     (("pipeline-manager",), PIPELINE_INSTEAD),
-    (("growth", "idea"), 'a growth idea is a task: tico task create --owner <bot> --title "..." --label channel:<slug>'),
+    (
+        ("growth", "idea"),
+        'a growth idea is a task: tico task create --owner <bot> --title "..." --label channel:<slug>',
+    ),
 ]
 REMOVED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)  # the subcommands `tico notice` has now

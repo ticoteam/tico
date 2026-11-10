@@ -304,4 +304,6 @@ def test_a_line_written_with_tico_is_read_like_one_written_with_hub(tmp_path):
     olds = {(f.path, f.kind, f.fixable) for f in bot_names.scan(root, bot_names.load_names())}
     assert olds == {("AGENT.md", "command", True), ("run.py", "command", False)}
     bot_names.fix(root, bot_names.scan(root, bot_names.load_names()))
-    assert (root / "AGENT.md").read_text() == "Say it with `tico message send hello`.\n\n```\ntico meeting granola status\n```\n"
+    assert (
+        root / "AGENT.md"
+    ).read_text() == "Say it with `tico message send hello`.\n\n```\ntico meeting granola status\n```\n"
