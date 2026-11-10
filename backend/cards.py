@@ -397,12 +397,15 @@ def needs_list(ctx):
 
 
 def needs_brief(items, n):
+    """The first `n` Needs you items (views.needs_items) as a card's rows. A row says the item's own `line` (the ask,
+    the missing work, the Paused cause, the mention's first line); the task's title only when the item has none, and
+    only from its brief, which needs_items gives for a task the reader may read."""
     return [
         {
             "id": it.get("id"),
             "kind": it.get("kind"),
-            "title": it.get("title") or "",
-            "task_id": it.get("task_id") or (it.get("id") if it.get("kind") in ("task", "ask") else None),
+            "title": it.get("line") or (it.get("task") or {}).get("title") or "",
+            "task_id": it.get("task_id") or (it.get("id") if it.get("kind") == "task" else None),
         }
         for it in items[:n]
     ]
