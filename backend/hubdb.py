@@ -6970,7 +6970,8 @@ def status_result(conn, actor, bot_slug, last_result=None, last_turn_at=None, ne
 def status_counts(conn, actor):
     """`(open_tasks, needs_human)` for a bot, as they are now.
 
-    `needs_human` is the open tasks the bot asked a person for."""
+    `needs_human` is one per thing of the bot's that waits on a person: an open task it asked a person for, and an
+    ask it put on a task (an OK or a question naming a person) that is still unanswered."""
     live = ACTIVE_STATUSES
     marks = ",".join("?" * len(live))
     open_tasks = conn.execute(
@@ -6980,7 +6981,15 @@ def status_counts(conn, actor):
         f"SELECT COUNT(*) FROM tasks t WHERE t.status IN ({marks}) AND t.requester_id=? AND t.owner_id LIKE 'human:%'",
         (*live, actor),
     ).fetchone()[0]
-    return open_tasks, waits
+    asks = conn.execute(
+        "SELECT COUNT(*) FROM requirements r JOIN visits v ON v.id = r.visit_id AND v.left_at IS NULL "
+        "JOIN tasks t ON t.id = v.task_id AND t.status = 'open' "
+        "WHERE r.added_by_id=? AND r.withdrawn_at IS NULL AND r.person_id LIKE 'human:%' AND NOT EXISTS "
+        "(SELECT 1 FROM answers a WHERE a.requirement_id = r.id AND a.visit_id = v.id AND a.undone_at IS NULL "
+        "AND a.answer NOT IN ('give', 'again'))",
+        (actor,),
+    ).fetchone()[0]
+    return open_tasks, waits + asks
 
 
 def _recount(conn, actor):
@@ -8018,8 +8027,8 @@ def task_origin(conn, row):
 # ----------------------------------------------------------------------------- the task calls
 # Done, move, close, reassign, asks, answers and snooze (backend/task_calls.py), under the names every caller uses:
 # H.task_move(...). Imported last: task_calls reads hubdb when a call runs, not when it loads.
-from . import task_calls as _task_calls  # noqa: E402
-from .task_calls import (  # noqa: E402
+from . import task_calls as _task_calls
+from .task_calls import (
     attempt as attempt,
     task_answer as task_answer,
     task_answer_undo as task_answer_undo,
