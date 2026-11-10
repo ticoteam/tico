@@ -5,6 +5,14 @@
 
 .tree a.node:hover .ub,.tree a.node.cur .ub{opacity:.9;filter:none}
 .settings-tabs{margin-bottom:16px}
+/* Settings search (ui/app/settings-search.ts): one box above the tabs, its matches a list under it. */
+.settings-search{margin-bottom:12px;max-width:420px}
+.settings-search input[type=search]{width:100%;min-height:36px}
+.settings-search-hits{list-style:none;margin:6px 0 0;padding:4px;border:1px solid var(--line);border-radius:var(--r-ctl);background:var(--surface)}
+.settings-search-hits a{display:block;padding:7px 10px;border-radius:6px;color:var(--ink);text-decoration:none}
+.settings-search-hits a:hover,.settings-search-hits .cur a{background:var(--surface2)}
+.settings-search-none{padding:7px 10px;color:var(--muted)}
+@media (max-width:760px){.settings-search{max-width:none}.settings-search input[type=search]{min-height:40px}}
 /* A phone: the tabs are one row that scrolls sideways (as the task list's and meetings' filter rows do), More's
    tabs open inline at its end, and settingsTabIntoView() keeps the current tab in view. The rule under the row is
    an inset shadow, so the scrolling box does not clip the current tab's underline. */

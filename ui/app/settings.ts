@@ -272,6 +272,7 @@ function pageSettings() {
   const built = $('#settings-tabs');
   if (built && built.dataset.role === (S.me?.role || '') && built.dataset.admin === String(settingsIsAdmin())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
+    ${settingsSearchHTML()}
     <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" role="tablist" aria-label="Settings">
       <button type="button" data-settings-tab="general" role="tab">General</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">People</button>' : ''}
@@ -354,6 +355,7 @@ function pageSettings() {
   $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
+  settingsSearchBind();
   $('#settings-history-view')?.addEventListener('click', (event: Event) => {
     const button = eventElement(event)?.closest<HTMLElement>('[data-history-view]');
     if (button) settingsHistoryShow(button.dataset.historyView);

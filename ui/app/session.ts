@@ -206,6 +206,7 @@ function sessionReturn() {
   SESSION.watch?.disconnect(); SESSION.watch = null;
   taskLiveIdentity(identity);
   SESSION.identity = identity;
+  if (typeof chatIdentityRestore === 'function') chatIdentityRestore();   // bot drafts and pending sends (pill.ts)
   SESSION.restoring = null; SESSION.reopen = null;
   let kept: SessionKept | null = null;
   try { kept = JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null'); } catch {}
