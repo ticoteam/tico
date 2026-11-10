@@ -145,3 +145,46 @@ def test_a_person_caused_notice_on_a_done_task_does_not_keep_the_claim_from_the_
     assert attempt is not None and attempt["job_id"] == open_job
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (done_job,)).fetchone()[0] == "canceled"
+
+
+def test_a_head_job_the_engine_holds_at_start_does_not_keep_the_claim_from_the_work_behind_it(api, monkeypatch):
+    """The start cancels the oldest job (task_wakes.may_start says no: no turn or 7 runs); the same claim goes on to
+    the job behind it instead of answering nothing until the next poll."""
+    from backend import task_wakes
+
+    machine, task, original = task_attempt(api)
+    other = post(api, "tasks", {"owner": "ops", "title": "Count the lines", "body": "Count them."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed',finished_at=? WHERE id=?", (H.now(), original["id"]))
+        c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','running')")
+        sent = {}
+        for name, on in (("held", task), ("open", other)):
+            sent[name] = H.say(
+                c,
+                H.KEEPER,
+                "bot:ops",
+                "A comment from human:ana",
+                kind="notice",
+                conversation_id=on["conversation_id"],
+                refs={"task": on["id"], "trigger": "other", "wake": "update", "caused_by": "human:ana"},
+            )
+        c.execute("UPDATE jobs SET created_at=? WHERE message_id=?", (H.shift(H.now(), minutes=-5), sent["held"]["id"]))
+        held_job, open_job = (
+            c.execute("SELECT id FROM jobs WHERE message_id=?", (sent[k]["id"],)).fetchone()[0]
+            for k in ("held", "open")
+        )
+    real = task_wakes.may_start
+
+    def may_start(conn, message, attempt=None):
+        found = message if isinstance(message, str) else message["id"]
+        if found != sent["held"]["id"]:
+            return real(conn, message, attempt=attempt)
+        conn.execute("UPDATE jobs SET state='canceled' WHERE message_id=? AND state='queued'", (found,))
+        return False  # as may_start answers for a bot with no turn on the task, or at its 7 runs
+
+    monkeypatch.setattr(task_wakes, "may_start", may_start)
+    body = {"next_run": True, "busy_bots": [], "busy_lanes": [], "start_places": True}
+    attempt = post(api, "jobs/claim", body, token=machine["token"])["attempt"]
+    assert attempt is not None and attempt["job_id"] == open_job
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (held_job,)).fetchone()[0] == "canceled"
