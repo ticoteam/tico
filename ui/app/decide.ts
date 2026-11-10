@@ -551,5 +551,5 @@ function decideOpenWhere(it: NeedsEntry) {
   decideStop();
   if (it.kind === 'mention' && !it.task_id && it.conversation_id && typeof threadHref === 'function') { location.hash = threadHref(it.conversation_id); return; }
   const id = it.task_id || it.task_ids?.[0] || it.task?.id;
-  if (id) taskModalOpen('t' + id);
+  if (id) taskModalOpen(id);
 }

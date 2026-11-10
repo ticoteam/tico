@@ -117,9 +117,6 @@ dialog.tf-view::backdrop{background:rgba(0,0,0,.6)}
 .ask-o{color:var(--muted)}.ask-o::before{content:"— "}
 .ask-answers time{margin-left:auto;font-size:var(--t-xs)}
 /* board covers */
-.bcard-cover{margin:-7px -9px 7px;height:96px;border-radius:7px 7px 0 0;background:var(--surface2)}
-.bcard-cover[style*="aspect-ratio"]{height:auto;max-height:140px}
-.bcard-cover.failed{display:none}
 /* pinned Tasks views in the left rail */
 .side-pins{margin-top:4px}
 .side-pins-h{margin:10px 0 2px;padding:0 10px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}

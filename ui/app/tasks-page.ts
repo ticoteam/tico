@@ -155,7 +155,7 @@ function pageTasks(_forced?: string, openId = '') {
     const want = DECIDE_WANT; DECIDE_WANT = '';
     if (want && TASKS_ST === state) await decideWanted(want);
   });
-  if (openId) taskModalOpen('t' + openId.replace(/^t/, ''));
+  if (openId) taskModalOpen(openId);
 }
 // The page goes: its listeners, its pipeline view and its timers with it.
 function tasksLeave() {
@@ -337,7 +337,7 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   }
   if (it) { decideOpen(it.id); return; }
   const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
-  if (task) taskModalOpen('t' + task);
+  if (task) taskModalOpen(task);
 }
 
 // ---- the view button, filters
@@ -491,7 +491,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
       d.close();
       if (TASKS_ST) void tasksLoad(TASKS_ST);
       await v2Refresh();
-      if (made?.id) taskModalOpen('t' + made.id);
+      if (made?.id) taskModalOpen(made.id);
     } catch (e) { msg.textContent = errorMessage(e, ''); msg.hidden = false; btn.disabled = false; }
   };
   if (!d.open) d.showModal();

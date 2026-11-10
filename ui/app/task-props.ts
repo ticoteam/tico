@@ -139,7 +139,7 @@ function taskPropsHTML(t: PropTask): string {
     rows.push(row('parent', 'Part of', txt(parent.title), {words: parent.title}));
   } else if (parent) {
     rows.push(`<div class="prop" data-prop-row="parent"><span class="prop-k" aria-hidden="true">Part of</span><span class="prop-vwrap">`
-      + `<button type="button" class="prop-v prop-link" data-open-task="t${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button>`
+      + `<button type="button" class="prop-v prop-link" data-open-task="${esc(parent.id)}" aria-label="Part of: ${esc(parent.title)}. Open it"><span class="prop-txt">${esc(parent.title)}</span></button>`
       + (r.links ? `<button type="button" class="prop-x" data-prop-clear="parent" aria-label="Clear Part of" title="Clear">${TL_ICON.x}</button>` : '') + '</span></div>');
   } else rows.push(row('parent', 'Part of', txt(r.links ? 'Add parent' : 'None'), {edit: r.links, empty: true, words: 'none'}));
   if (t.verdict) rows.push(row('verdict', 'Verdict', taskVerdictHTML(t), {words: VERDICT_WORDS[t.verdict]?.[0] || t.verdict}));

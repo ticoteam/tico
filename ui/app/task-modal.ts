@@ -121,10 +121,10 @@ window.addEventListener('popstate', () => {
   const d = $('#task-modal');
   if (d?.open && d.returnContext && !history.state?.taskModal) d.close();
 });
-// Opens a task by its key ('t' + id, or the id) in the task's window.
-async function taskModalOpen(key: string, d?: ModalDialog) {
+// Opens a task by its id in the task's window.
+async function taskModalOpen(id: string, d?: ModalDialog) {
   const from = S.route, load = ++TASK_MODAL_LOAD;
-  const detail: ModalDetail | null = await v2Get(`/v2/tasks/${encodeURIComponent(key.replace(/^t/, ''))}`);
+  const detail: ModalDetail | null = await v2Get(`/v2/tasks/${encodeURIComponent(id)}`);
   if (S.route !== from || load !== TASK_MODAL_LOAD || !detail?.task) return;
   void taskModalShow(detail.task, d, {detail});
 }
@@ -491,7 +491,7 @@ function taskRelHTML(t: ModalTask) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]): [string, string, string, TaskRelRow[]] => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
   const milestones = taskMilestoneHTML(t);
   return `<section class="tsec task-related${groups.length || milestones ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
-    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="t${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
+    ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
 }
 // ---- saving a task's properties. One save at a time per dialog, each with the version the last one returned, so a
 // quick second edit never trips over the first. The dialog redraws at once with the task the server sent back; the

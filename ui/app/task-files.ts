@@ -596,21 +596,3 @@ function askHTML(ask: TfAsk | null | undefined, answers: TfAnswer[] | null | und
   return `<div class="ask ro${answered ? ' answered' : ''}${mine ? ' mine' : ''}">${body}${list}</div>`;
 }
 
-// ---- the board: a cover from the newest picture (an image's thumb or a video's poster), and a dot for an open question.
-// `cover` ({url, width, height}) when the server sends one; else the newest image or video among the attachments.
-function taskCover(t: {cover?: {url: string; width?: number | null; height?: number | null; alt?: string} | null; attachments?: TfAttachment[] | null; open_asks?: unknown}): {url: string; width?: number | null; height?: number | null; alt?: string} | null {
-  if (t.cover?.url) return t.cover;
-  const list = (t.attachments || []).filter(a => ['image', 'video'].includes(tfKind(a.name, a.content_type)));
-  const a = list.at(-1);
-  if (!a) return null;
-  const base = String(a.url || `${API}/v2/files/${encodeURIComponent(a.id)}`).split('?')[0] ?? '';
-  const image = tfKind(a.name, a.content_type) === 'image';
-  return {url: base + (image ? '/thumb' : '/poster'), alt: image && Number(a.size || 0) <= TF_INLINE_IMAGE ? base : ''};
-}
-function taskCoverHTML(t: Parameters<typeof taskCover>[0]): string {
-  const c = taskCover(t);
-  if (!c) return '';
-  const ratio = c.width && c.height ? ` style="aspect-ratio:${Number(c.width)}/${Number(c.height)}"` : '';
-  return `<div class="bcard-cover tf-skel"${ratio}><img alt="" data-tf-src="${esc(c.url)}"${c.alt ? ` data-tf-alt="${esc(c.alt)}"` : ''}></div>`;
-}
-const taskAskDot = (t: {open_asks?: unknown} | null | undefined): string => Number(t?.open_asks) > 0 ? '<span class="ask-dot" title="Open question" aria-label="Open question"></span>' : '';

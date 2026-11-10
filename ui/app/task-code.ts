@@ -314,7 +314,7 @@ function taskRailBind(d: TaskRailDialog, t: CodeTask): void {
       const k = taskRailFind(st.kids, String(opener.dataset.subOpen));
       if (k) void taskModalShow({...k, links: k.links || [], labels: k.labels || []}, d);
       // The parent is not one of the children, so its full task is read when it opens (taskModalOpen).
-      else if (t.parent && String(t.parent.id) === opener.dataset.subOpen) void taskModalOpen(`t${t.parent.id}`, d);
+      else if (t.parent && String(t.parent.id) === opener.dataset.subOpen) void taskModalOpen(String(t.parent.id), d);
       return;
     }
     const drop = eventElement(ev)?.closest<HTMLButtonElement>('[data-code-drop]');
