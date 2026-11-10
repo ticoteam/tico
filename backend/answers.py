@@ -441,6 +441,9 @@ def thumbs_down(
         _refuse(conn, by, "task_why", "Say what was wrong", task_id)
     still_asked = row["status"] == "open" and _part(row, "visit").get("id") == visit["id"]
     still_asked = still_asked and any(r["id"] == requirement_id for r in R.for_visit(conn, visit))
+    asked = R.person_of(conn, requirement, visit["id"])
+    if send_back and still_asked and not _tc().may_handle_ask(conn, by, row, requirement, recipient=asked):
+        _refuse(conn, by, "identity", "Only who was asked, whoever asked, or who works the task sends it back", task_id)
     out: Row = dict(row)
     if send_back and still_asked and not requirement.get("visit_id"):
         out = answer(conn, task_id, requirement_id, by, NO, reason)

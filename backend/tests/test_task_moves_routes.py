@@ -321,3 +321,26 @@ def test_a_reader_who_cannot_work_the_task_cannot_give_someone_elses_ask_away(ap
         leave(post(api, f"tasks/{tid}/asks/{rid}/give", {"to": "cara"}, token="ben-test"), rid)["who"] == "human:cara"
     )
     assert leave(post(api, f"tasks/{tid}/asks/{rid}/give", {"to": "ben"}), rid)["who"] == "human:ben"
+
+
+def test_a_reader_who_was_not_asked_cannot_send_a_bots_ask_back(api):
+    """Codex review 2, 2: the bot said its own work is done and waits only on Ben's answer. Cara's thumbs down would
+    withdraw that ask and so finish the task: refused. Ben, who was asked, may decline it."""
+    bot = as_bot(api)
+    made = task(api, owner="ops")
+    tid = made["id"]
+    rid = ask(api, tid, line="Which month suits the team?", kind="answer", token=bot)
+    own = next(r for r in show(api, tid)["to_leave"] if r["kind"] == "owner_done")["requirement_id"]
+    version = show(api, tid)["version"]
+    done = api.post(
+        f"/api/v2/tasks/{tid}/asks/{own}/answer", json={"value": "done", "version": version}, headers=headers(bot)
+    )
+    assert done.status_code == 200, done.text
+    before = show(api, tid)
+    assert before["status"] == "open"
+    thumbs = f"tasks/{tid}/asks/{rid}/thumbs"
+    body = refused(api, thumbs, {"up": False, "note": "Nobody needs this"}, token="cara-test", status=403)
+    assert body["error"]["code"] == "identity"
+    assert show(api, tid) == before
+    post(api, thumbs, {"up": False, "note": "We already picked June"}, token="ben-test")
+    assert show(api, tid)["status"] == "done"
