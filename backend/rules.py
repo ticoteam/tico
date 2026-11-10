@@ -986,10 +986,35 @@ def _close(conn, tid, params, said):
     H.task_close(conn, H.KEEPER, tid, said)
 
 
+def _needs_why(conn, tid, to):
+    """Whether a move of the task to `to` is a reopen, a close or a move back: those carry the rule's reason. A forward
+    move, or one to Done, carries none, so it is refused while the stage needs anything (a rule never pushes past)."""
+    from . import task_engine as E
+
+    if to in (H.TASK_CLOSED, H.TASK_REOPEN):
+        return True
+    if to in (H.TASK_NEXT, H.TASK_DONE):
+        return False
+    row = E.task(conn, tid)
+    if not row:
+        return False
+    order = E.stages(conn, row["pipeline_id"])
+    target = next((s for s in order if s["id"] == to), None) or next(
+        (s for s in order if s["name"].lower() == to.strip().lower()), None
+    )
+    if not target:
+        return False  # no such stage: the engine refuses it
+    here = row["stage"]
+    if target["kind"] == "closed" or here["kind"] != "work":
+        return True  # a close, or a reopen into a work stage
+    work = [s["id"] for s in order if s["kind"] == "work"]
+    return target["kind"] == "work" and work.index(target["id"]) < work.index(here["id"])
+
+
 def _move(conn, tid, params, said):
     """`params.stage`: a stage of the task's pipeline (by id or name), or next, done, closed or reopen."""
     to = str(params["stage"])
-    H.task_move(conn, H.KEEPER, tid, to, said if to in (H.TASK_CLOSED, H.TASK_REOPEN) else None)
+    H.task_move(conn, H.KEEPER, tid, to, said if _needs_why(conn, tid, to) else None)
     return {"stage": to}
 
 
