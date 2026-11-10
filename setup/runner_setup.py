@@ -165,9 +165,8 @@ def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
         role="runner",
         boundary=s.aws_permissions_boundary,
         prefix=s.asset_prefix,
+        install_id=s.install_id,
     )
-    p.server_id = awsmod.server_identity(s.asset_prefix, s.server_url, s.aws_region)
-    p.legacy_ok = bool(own_record(s, p.name))
     return p
 
 
@@ -231,6 +230,8 @@ def save_aws_runner(s: Settings, plan: awsmod.AwsPlan, label: str, iid: str) -> 
         "name": plan.name,
         "asset_prefix": s.asset_prefix,
         "aws_account_id": s.aws_account_id,
+        "install_id": s.install_id,
+        "aws_ids": s.aws_ids,
     }
     state.save_runner(runner_key(s, plan.name), data, replaces=plan.name)
 
@@ -291,6 +292,11 @@ def run_runner(args, io: IO, deps: Deps) -> int:
         )
         a.get("aws_profile", "AWS profile (blank for the default credentials)", flag="--aws-profile", required=False)
         s.asset_prefix = runner_prefix(s, label, getattr(args, "asset_prefix", None))
+        # This runner's own install id: kept from its record, or new (a record from before ids keeps none: the tags
+        # alone, as before). Another server's runner of the same name, in any region, carries another id.
+        rec = own_record(s, s.aws_name or f"runner-{awsmod.slug(label)}")
+        s.install_id = rec.get("install_id", "") if rec else awsmod.new_install_id()
+        s.aws_ids = dict(rec.get("aws_ids") or {})
     io.say("\nPlan")
     for line in plan_lines(s, label):
         io.say(line)
@@ -358,8 +364,13 @@ def run_runner(args, io: IO, deps: Deps) -> int:
         plan = _aws_plan(s, label)
         ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
         awsmod.check_account(own_record(s, plan.name).get("aws_account_id", ""), account, f"Runner {plan.name}")
-        s.aws_account_id = account
-        d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
+        if s.install_id:
+            s.aws_account_id = account
+
+        def keep_ids() -> None:
+            save_aws_runner(s, plan, label, s.aws_ids.get("instance", ""))
+
+        d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep, ids=s.aws_ids, save=keep_ids)
         d.preflight()
         existing = d.find_instance()
         if existing:

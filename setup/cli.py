@@ -241,7 +241,9 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     domain = args.domain.lower()
     saved, _ = state.load(domain)
     mine = state.load_backup(domain)  # an earlier backup-storage for this domain
-    names = awsmod.Names(awsmod.asset_prefix(args.asset_prefix, saved or mine))
+    # The server install's id, else this storage's own; a new one only when neither exists (older ones keep none).
+    install_id = saved.get("install_id") or mine.get("install_id") or ("" if saved or mine else awsmod.new_install_id())
+    names = awsmod.Names(awsmod.asset_prefix(args.asset_prefix, saved or mine), install_id)
     # An install saved before --asset-prefix (no asset_prefix key) had its backup user named after the domain.
     server_name = saved.get("aws_name") if "asset_prefix" in saved else ""
     name = (args.name or mine.get("name") or server_name or awsmod.slug(args.domain)).strip().lower()
@@ -256,6 +258,9 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     # Before the first AWS write, beside (never in) the server's state: a retry keeps it all without the flags.
     record = {**mine, "asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region}
     record["aws_account_id"] = account
+    if install_id:
+        record["install_id"] = install_id
+    ids = record.setdefault("aws_ids", {})
     state.save_backup(domain, record)
 
     def claim(bucket: str, on: bool) -> None:
@@ -271,6 +276,8 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
         name=name,
         say=io.say,
         names=names,
+        ids=ids,
+        save=lambda: state.save_backup(domain, record),
         claims=record.get("bucket_claims", ""),
         claim=claim,
     )

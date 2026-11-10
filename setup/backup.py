@@ -75,6 +75,8 @@ def create_s3(
     name: str,
     say: Callable[[str], None] = print,
     names: awsmod.Names = awsmod.DEFAULT_NAMES,
+    ids: dict | None = None,
+    save: Callable[[], None] = lambda: None,
     claims: str = "",
     claim: Callable[[str, bool], None] | None = None,
 ) -> dict[str, str]:
@@ -97,7 +99,10 @@ def create_s3(
         user_exists = True
     except iam.exceptions.NoSuchEntityException:
         user_id, user_exists = "", False
+    ids = ids if ids is not None else {}
     if user_exists and not names.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
+        raise awsmod.not_ours("IAM user", user, names, name)
+    if user_exists and ids.get("backup_user") and user_id != ids["backup_user"]:
         raise awsmod.not_ours("IAM user", user, names, name)
     awsmod.ensure_bucket(s3, owned, region, names, name, proof, claim or (lambda b, on: None), pick)
     say(f"  created bucket {bucket}" if proof == "absent" else f"  bucket {bucket} exists; keeping it")
@@ -165,6 +170,9 @@ def create_s3(
             raise awsmod.not_ours("IAM user", user, names, name) from None
         user_id = ((made or {}).get("User") or {}).get("UserId", "")
         say(f"  created IAM user {user}")
+    if user_id and ids.get("backup_user") != user_id:
+        ids["backup_user"] = user_id
+        save()
 
     def prove_user() -> None:
         # IAM has no compare-and-swap: the user is re-read by UserId right before each write; one replaced in the

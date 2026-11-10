@@ -97,6 +97,8 @@ class Settings:
     domain: str = ""
     dns_name: str = ""  # optional operational record, separate from the public domain
     dns_zone: str = ""  # exact authoritative Route 53 zone for dns_name
+    install_id: str = ""  # aws.Names.install_id: made once by a new install, saved before its first AWS write
+    aws_ids: dict = field(default_factory=dict)  # aws.Deployer.ids: the immutable ids of what this install made
     dns_owned: str = ""  # the hostnames whose Route 53 records setup wrote, comma-separated: re-runs may update them
     replace_dns: bool = False  # --replace-dns, this run only: an existing Route 53 record may be pointed at this server
     front_door: str = "caddy"

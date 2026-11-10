@@ -31,7 +31,9 @@ def test_the_preview_create_command_names_everything_after_its_name_under_the_bo
     assert code == 0, out
     # One CreateRole call carries the boundary and both tags: DevOps's role refuses one that would get them later.
     (role,) = iam.called("create_role")
-    assert role["RoleName"] == f"tico-{NAME}" and role["PermissionsBoundary"] == BOUNDARY and role["Tags"] == OURS
+    assert role["RoleName"] == f"tico-{NAME}" and role["PermissionsBoundary"] == BOUNDARY
+    install = {"Key": "tico-setup-install", "Value": state.load(DOMAIN)[0]["install_id"]}
+    assert role["Tags"] == [*OURS, install]  # the install id: a new install's root proof of ownership
     assert iam.called("attach_role_policy") == [{"RoleName": f"tico-{NAME}", "PolicyArn": aws.SSM_CORE}]
     (inline,) = iam.called("put_role_policy")
     assert inline["RoleName"] == f"tico-{NAME}"

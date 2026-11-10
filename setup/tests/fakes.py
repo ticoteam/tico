@@ -239,8 +239,9 @@ class FakeIAM:
         else:
             raise _Exc.EntityAlreadyExistsException()
         self.gone.discard(("profile", kw["InstanceProfileName"]))
-        self.profiles[kw["InstanceProfileName"]] = {"Tags": kw.get("Tags", []), "Roles": []}
-        return {"InstanceProfile": {"InstanceProfileName": kw["InstanceProfileName"], "InstanceProfileId": "AIPANEW"}}
+        pid = f"AIPANEW{kw['InstanceProfileName']}"
+        self.profiles[kw["InstanceProfileName"]] = {"Tags": kw.get("Tags", []), "Roles": [], "InstanceProfileId": pid}
+        return {"InstanceProfile": {"InstanceProfileName": kw["InstanceProfileName"], "InstanceProfileId": pid}}
 
     def add_role_to_instance_profile(self, **kw):
         self._rec("add_role_to_instance_profile", **kw)

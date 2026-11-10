@@ -1277,10 +1277,11 @@ def test_another_servers_runner_role_in_another_region_is_never_reused(monkeypat
     before = len(log)
     code, out = go([*argv, "--label", "b1", "--aws-region", "us-west-2"], deps=d)
     assert code == 2 and "already the runner of https://a.example (us-east-2)" in out and len(log) == before, out
-    # Its own runner, made here, carries the identity on the role, profile and parameter.
+    # Its own runner, made here, carries its own install id on the role, profile and parameter.
     code, out = go([*argv, "--label", "b2", "--aws-region", "us-west-2"], deps=d)
     assert code == 0, out
-    mine = {"Key": "tico-setup-server", "Value": aws.server_identity("tico", "https://c.example.com", "us-west-2")}
+    (rec,) = [r for r in state.load_runners() if r.get("name") == "runner-b2"]
+    mine = {"Key": "tico-setup-install", "Value": rec["install_id"]}
     assert mine in iam.called("create_role")[0]["Tags"] and mine in iam.profiles["tico-runner-b2"]["Tags"]
     assert mine in ssm.called("put_parameter")[0]["Tags"]
 
@@ -1327,3 +1328,33 @@ def test_a_role_without_a_profile_or_beside_someone_elses_is_modelled_and_handle
     dep = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=print, sleep=lambda s: None)
     with pytest.raises(MissingInput, match="IAM instance profile hub-hotmic"):
         dep.preflight()
+
+
+@pytest.mark.parametrize("region", ["us-west-2", "us-east-2"])
+def test_two_installs_sharing_a_prefix_and_name_never_touch_each_others_resources(tmp_path, region):
+    # Codex review 3, case 1: the prefix and name tags alone let a second domain reuse the first's server and env, and
+    # another region rewrite its (global) IAM role. The install id, saved before the first write, tells them apart.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    first = state.load(DOMAIN)[0]
+    other = "hub2.hotmicapp.com"
+    r = fakes.FakeResolver({(DOMAIN, dns.A): ["203.0.113.9"], (other, dns.A): ["203.0.113.9"]}, {ZONE: fakes.R53_NS})
+    d.resolver, d.public_resolvers = r, (lambda: [("Google", r)])
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    argv[argv.index(DOMAIN)] = other
+    argv[argv.index("us-west-2")] = region
+    if region != "us-west-2":  # EC2 and SSM are regional; IAM is global, so only the role and profile are shared
+        west, east = d.aws_clients, (FilteredEC2(), fakes.FakeSSM())
+        d.aws_clients = lambda r, p: (
+            west(r, p) if r == "us-west-2" else (*map(Spy, (east[0], iam, east[1]), [log] * 3), HOTMIC_ACCOUNT)
+        )
+    before = len(log)
+    code, out = go(argv, deps=d)
+    what = "SSM parameter /hub/hotmic/env" if region == "us-west-2" else "IAM role hub-hotmic"
+    assert code == 2 and f"{what} already exists and was not made by this setup" in out, out
+    writes = [n for n, _ in log[before:] if not n.startswith(("describe_", "get_", "list_", "head_"))]
+    assert not [n for n in writes if n in ("put_parameter", "put_role_policy", "attach_role_policy", "run_instances")]
+    assert first["install_id"] and state.load(other)[0]["install_id"] != first["install_id"]
+    # The first install's re-run still owns everything it made.
+    code, out = go(hub_args(tmp_path), deps=d)
+    assert code == 0 and "already exists; reusing it" in out, out

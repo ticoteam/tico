@@ -401,7 +401,8 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
         if s.backup == "aws":
             _, iam, _, account = deps.aws_clients(s.aws_region, s.aws_profile)
             awsmod.check_account(s.aws_account_id, account, s.domain)
-            s.aws_account_id = account
+            if s.install_id:
+                s.aws_account_id = account
             values = bk.create_s3(
                 deps.aws_s3(s.aws_region, s.aws_profile),
                 iam,
@@ -410,7 +411,9 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
                 account_id=account,
                 name=s.aws_name or awsmod.slug(s.domain),
                 say=io.say,
-                names=awsmod.Names(s.asset_prefix),
+                names=awsmod.Names(s.asset_prefix, s.install_id),
+                ids=s.aws_ids,
+                save=lambda: state.save(s.domain, {**state.load(s.domain)[0], **s.public()}),
                 claims=s.bucket_claims,
                 claim=lambda bucket, on: save_claim(s, bucket, on),
             )
@@ -456,7 +459,18 @@ def aws_plan(s: Settings) -> awsmod.AwsPlan:
         boundary=s.aws_permissions_boundary,
         plan_bucket=s.plan_bucket if s.company_file_data else "",
         prefix=s.asset_prefix,
+        install_id=s.install_id,
     )
+
+
+def deployer(s: Settings, plan, clients, io: IO, deps: Deps) -> awsmod.Deployer:
+    """The install's Deployer, with the ids of what it made kept in its saved state as each is made."""
+    ec2, iam, ssm, account = clients
+
+    def save() -> None:
+        state.save(s.domain, {**state.load(s.domain)[0], **s.public()})
+
+    return awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep, ids=s.aws_ids, save=save)
 
 
 def cloudname(s: Settings) -> str:
@@ -566,7 +580,7 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
                 add(line)
     if s.backup == "aws":
         add("Backups: create the backup storage on AWS")
-        names = awsmod.Names(s.asset_prefix)
+        names = awsmod.Names(s.asset_prefix, s.install_id)
         L += [
             f"       - {x}"
             for x in bk.aws_plan_lines(s.domain, s.aws_region, s.aws_name or awsmod.slug(s.domain), names)
@@ -680,7 +694,7 @@ def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> boo
     ours = {r.value for r in records} | {s.server_ip} - {""}
     changes, created, found = route53.plan(client, zid, records, replaceable(s), ours)
     refuse_dns(s, found)
-    route53.apply(client, zid, changes, awsmod.Names(s.asset_prefix))
+    route53.apply(client, zid, changes, awsmod.Names(s.asset_prefix, s.install_id))
     io.say("  Route 53 records written." if changes else "  Route 53 records already point here; left as they are.")
     s.dns_owned = ",".join(sorted(set(filter(None, s.dns_owned.split(","))) | created))
     saved = state.load(s.domain)[0]
@@ -783,6 +797,10 @@ def run(args, io: IO, deps: Deps) -> int:
         )
     # Without a server install, the prefix `setup backup-storage` made the domain's bucket with.
     s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), kept or state.load_backup(s.domain))
+    if not kept and not dry:
+        # A new install: its id goes on everything it makes, and is saved before the first AWS write (below). An install
+        # saved before ids keeps none, and with it the two tags alone, as before.
+        s.install_id = awsmod.new_install_id()
     hosted.gather(args, s, dry)
     if s.target == "aws" and s.company_file_data and not s.plan_bucket and not s.hosted:
         # Saved before any cloud writes, so retries use the same bucket and chart. No credentials in its name.
@@ -878,22 +896,21 @@ def run(args, io: IO, deps: Deps) -> int:
     cf = deps.cloudflare(s.cf_token) if s.cf_token else None
     if cf and s.runner() and not s.runner_given:
         runner_record_free(s, cf)
-    if not kept and s.asset_prefix != awsmod.DEFAULT_PREFIX:
-        # Before the first AWS write: a retry after a failure from here on keeps the prefix without the flag.
+    if not kept:
+        # Before the first AWS write: a retry after a failure from here on keeps the prefix and install id.
         state.save(s.domain, s.public())
     s.replace_dns = bool(getattr(args, "replace_dns", False))
     ours = {s.server_ip} - {""}
     if s.target == "aws":
         # Before the first write, backup storage included: a name something else holds stops the run here.
-        ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
-        awsmod.check_account(s.aws_account_id, account, s.domain)
+        clients = deps.aws_clients(s.aws_region, s.aws_profile)
+        awsmod.check_account(s.aws_account_id, clients[3], s.domain)
         plan = aws_plan(s)
-        awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep).preflight()
-        ours = awsmod.addresses(ec2, plan.name, plan.names)
-        # After the tag proof and before the first write: the account (an install saved before it was kept takes this
-        # one, once) and region every later run and destroy must match.
-        s.aws_account_id = account
-        state.save(s.domain, s.public())
+        deployer(s, plan, clients, io, deps).preflight()
+        ours = awsmod.addresses(clients[0], plan.name, plan.names)
+        if s.install_id:  # before the first write: the account every later run and destroy must match
+            s.aws_account_id = clients[3]
+            state.save(s.domain, {**state.load(s.domain)[0], **s.public()})
     dns_preflight(s, deps, zone, records, ours)
     if not provision_backup(io, s, deps, cf):
         return 1
@@ -1029,8 +1046,9 @@ def _aws(
 ) -> tuple[remote.Shell, list[dnsmod.Record]] | None:
     plan = aws_plan(s)
     io.say("\nAWS")
-    ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
-    d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
+    clients = deps.aws_clients(s.aws_region, s.aws_profile)
+    ec2, iam, ssm, account = clients
+    d = deployer(s, plan, clients, io, deps)
     plan_s3 = deps.aws_s3(s.plan_bucket_region or s.aws_region, s.aws_profile) if plan.plan_bucket else None
     if plan_s3 and s.plan_bucket_managed:
         try:
@@ -1426,7 +1444,7 @@ def destroy(args, io: IO, deps: Deps) -> int:
     if domain:
         awsmod.check_name(args.name, awsmod.saved_name(saved), domain)
     given_prefix = getattr(args, "asset_prefix", None)
-    names = awsmod.Names(awsmod.asset_prefix(given_prefix, saved))
+    names = awsmod.Names(awsmod.asset_prefix(given_prefix, saved), saved.get("install_id", ""))
     had_account = saved.get("aws_account_id", "")
     if had_account:  # a whole saved install: its own name, prefix, region and account, nothing else
         awsmod.check_region(saved.get("aws_region", ""), args.aws_region, domain)

@@ -1,6 +1,9 @@
 """Create (and destroy) the one EC2 server. boto3 is imported only when the AWS target is used.
 
-Everything gets two tags, Names.managed_tag and Names.name_tag, and destroy only touches what carries both.
+Everything gets two tags, Names.managed_tag and Names.name_tag, and destroy only touches what carries both. A new install
+also gets a random install id (Names.install_tag), saved before its first AWS write: when an install has one, that tag,
+not the prefix and name, is what makes a resource its own, and the immutable id of each resource it made (Deployer.ids)
+must still match.
 """
 
 from __future__ import annotations
@@ -9,6 +12,7 @@ import gzip
 import hashlib
 import json
 import re
+import secrets
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -60,6 +64,14 @@ class Names:
     Names on the server itself (/opt/tico, containers, TICO_* settings) are not AWS names and do not change."""
 
     prefix: str = DEFAULT_PREFIX
+    # A new install's random id (new_install_id). Set, a resource is this install's only when it carries it too: two
+    # installs of the same prefix and name, in any region or account, never take each other's. Empty (an install saved
+    # before it had one): the two tags alone, as before.
+    install_id: str = ""
+
+    @property
+    def install_tag(self) -> str:
+        return f"{self.prefix}-setup-install"
 
     @property
     def managed_tag(self) -> tuple[str, str]:
@@ -114,11 +126,15 @@ class Names:
 
     def tags(self, plan_name: str, resource_name: str = "") -> list[dict]:
         t = [{"Key": self.managed_tag[0], "Value": self.managed_tag[1]}, {"Key": self.name_tag, "Value": plan_name}]
+        t += [{"Key": self.install_tag, "Value": self.install_id}] if self.install_id else []
         return t + ([{"Key": "Name", "Value": resource_name}] if resource_name else [])
 
     def is_ours(self, resource_tags: list[dict] | None, name: str) -> bool:
-        """The destroy filter: both tags, exact values. A same-named resource without them is never touched."""
+        """The destroy filter: both tags, exact values, and this install's id when it has one. A same-named resource
+        without them is never touched."""
         d = {t["Key"]: t["Value"] for t in resource_tags or []}
+        if self.install_id and d.get(self.install_tag) != self.install_id:
+            return False
         return d.get(self.managed_tag[0]) == self.managed_tag[1] and d.get(self.name_tag) == name
 
     def filters(self, name: str) -> list[dict]:
@@ -131,12 +147,17 @@ class Names:
 DEFAULT_NAMES = Names()
 
 
+def new_install_id() -> str:
+    return secrets.token_hex(8)
+
+
 def not_ours(kind: str, resource: str, names: Names, name: str, pick: str = "--name or --asset-prefix") -> MissingInput:
     """The refusal for a name this install would take that something it did not make already holds."""
+    install = f", {names.install_tag}={names.install_id}" if names.install_id else ""
     return MissingInput(
         f"{kind} {resource} already exists and was not made by this setup (it lacks the tags "
-        f"{names.managed_tag[0]}={names.managed_tag[1]} and {names.name_tag}={name}); refusing to reuse or change it. "
-        f"Pick another {pick}."
+        f"{names.managed_tag[0]}={names.managed_tag[1]} and {names.name_tag}={name}{install}, or is not the one this "
+        f"install recorded); refusing to reuse or change it. Pick another {pick}."
     )
 
 
@@ -285,15 +306,11 @@ class AwsPlan:
     boundary: str = ""  # the permissions boundary the IAM role is created under, when the account requires one
     plan_bucket: str = ""  # --plan-bucket: the role may read its own starter plan there, plans/<name>/*
     prefix: str = DEFAULT_PREFIX  # --asset-prefix
-    # A runner's server and region (server_identity): its IAM role and profile are global, so they carry it as a tag
-    # and another server's runner of the same name, in any region, is never reused. legacy_ok: a role from before that
-    # tag is accepted only when this computer saved this server's runner of that name.
-    server_id: str = ""
-    legacy_ok: bool = False
+    install_id: str = ""  # Names.install_id
 
     @property
     def names(self) -> Names:
-        return Names(self.prefix)
+        return Names(self.prefix, self.install_id)
 
     @property
     def volume_gib(self) -> int:
@@ -339,13 +356,14 @@ class AwsPlan:
                 if self.elastic_ip
                 else "No Elastic IP: nothing connects in"
             ),
-            f"Tags on everything: {n.managed_tag[0]}={n.managed_tag[1]}, {n.name_tag}={self.name}",
+            f"Tags on everything: {n.managed_tag[0]}={n.managed_tag[1]}, {n.name_tag}={self.name}"
+            + (f", {n.install_tag}={self.install_id}" if self.install_id else ""),
             f"Estimated cost: about ${self.monthly_usd:.0f}/month running 24/7 (list prices, us-east-1; other regions differ)",
         ]
 
 
 def server_identity(prefix: str, server_url: str, region: str) -> str:
-    """A short, fixed digest of everything that makes a runner another server's: prefix, full server URL and region."""
+    """A short, fixed digest of what makes a runner's saved record another server's: prefix, full URL and region."""
     return hashlib.sha256(f"{prefix}|{server_url}|{region}".encode()).hexdigest()[:20]
 
 
@@ -361,6 +379,7 @@ def plan_aws(
     boundary: str = "",
     plan_bucket: str = "",
     prefix: str = DEFAULT_PREFIX,
+    install_id: str = "",
 ) -> AwsPlan:
     if instance_type not in HOURLY:
         raise ValueError(f"instance type must be one of {', '.join(HOURLY)}")
@@ -379,6 +398,7 @@ def plan_aws(
         boundary=boundary,
         plan_bucket=plan_bucket,
         prefix=prefix,
+        install_id=install_id,
     )
     if role == "runner":
         p.warnings.append(
@@ -428,28 +448,26 @@ class Deployer:
         account_id: str,
         say: Callable[[str], None] = print,
         sleep: Callable[[float], None] = time.sleep,
+        ids: dict | None = None,
+        save: Callable[[], None] = lambda: None,
     ):
         self.p, self.ec2, self.iam, self.ssm, self.say, self.sleep = plan, ec2, iam, ssm, say, sleep
         self.account_id = account_id
         self.n = plan.names
-        self.role_id = ""  # the IAM role preflight or ensure_role proved setup's, by its immutable RoleId
+        # The immutable ids of what this install made (role, profile, sg, eip, instance), kept in its saved state by
+        # save(): every later run, and destroy, acts only on those same resources.
+        self.ids = ids if ids is not None else {}
+        self.save = save
 
-    @property
-    def server_key(self) -> str:
-        return f"{self.n.prefix}-setup-server"
+    def keep(self, kind: str, value: str) -> None:
+        if value and self.ids.get(kind) != value:
+            self.ids[kind] = value
+            self.save()
 
-    def tags(self) -> list[dict]:
-        """This install's tags, plus a runner's server identity."""
-        extra = [{"Key": self.server_key, "Value": self.p.server_id}] if self.p.server_id else []
-        return self.n.tags(self.p.name) + extra
-
-    def ours(self, tags: list[dict] | None) -> bool:
-        if not self.n.is_ours(tags, self.p.name):
-            return False
-        if not self.p.server_id:
-            return True
-        got = {t["Key"]: t["Value"] for t in tags or []}.get(self.server_key)
-        return got == self.p.server_id or (got is None and self.p.legacy_ok)
+    def same(self, kind: str, value: str, what: str, resource: str) -> None:
+        """Refuses a resource that is not the one this install recorded making (one deleted and made again is another)."""
+        if self.ids.get(kind) and value != self.ids[kind]:
+            raise not_ours(what, resource, self.n, self.p.name)
 
     @property
     def param_name(self) -> str:
@@ -461,6 +479,9 @@ class Deployer:
             + [{"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}]
         )
         found = [i for res in r["Reservations"] for i in res["Instances"] if self.n.is_ours(i.get("Tags"), self.p.name)]
+        if found:
+            self.same("instance", found[0]["InstanceId"], "EC2 instance", self.n.resource(self.p.name))
+            self.keep("instance", found[0]["InstanceId"])
         return found[0] if found else None
 
     def put_env(self, env_text: str, *, company_file=False) -> None:
@@ -475,7 +496,7 @@ class Deployer:
                 + starter.IMPORT_IN_APP
             )
         tags = self.param_tags()
-        if tags is not None and not self.ours(tags):
+        if tags is not None and not self.n.is_ours(tags, self.p.name):
             raise not_ours("SSM parameter", self.param_name, self.n, self.p.name)
         if tags is None:  # created, never overwritten: one made meanwhile by someone else fails here
             self.ssm.put_parameter(
@@ -483,10 +504,12 @@ class Deployer:
                 Value=env_text,
                 Type="SecureString",
                 Overwrite=False,
-                Tags=self.tags(),
+                Tags=self.n.tags(self.p.name),
                 **tier,
             )
-            self.ssm.add_tags_to_resource(ResourceType="Parameter", ResourceId=self.param_name, Tags=self.tags())
+            self.ssm.add_tags_to_resource(
+                ResourceType="Parameter", ResourceId=self.param_name, Tags=self.n.tags(self.p.name)
+            )
         else:
             # Tags were read just above. SSM has no conditional put, so a parameter replaced in that instant is the
             # one residual window; it is never re-tagged here, so a replacement keeps its own tags.
@@ -509,17 +532,24 @@ class Deployer:
         """Reads only, before setup's first write: every fixed name this install takes is free or already its own.
         Something else of that name is refused here, so nothing is created, changed or tagged first."""
         tags = self.param_tags()
-        if tags is not None and not self.ours(tags):
+        if tags is not None and not self.n.is_ours(tags, self.p.name):
             raise not_ours("SSM parameter", self.param_name, self.n, self.p.name)
         tags = self.role_tags()
-        if tags is not None and not self.ours(tags):
+        if tags is not None and not self.n.is_ours(tags, self.p.name):
             raise not_ours("IAM role", self.n.resource(self.p.name), self.n, self.p.name)
         n = self.n.resource(self.p.name)
         if tags is not None:
-            self.role_id = self.prove_role(n)
-        prof = instance_profile(self.iam, n)
-        if prof is not None and not (profile_is_ours(prof, n, self.n) and self.ours(prof.get("Tags"))):
+            self.keep("role", self.prove_role(n))
+        self.prove_profile(instance_profile(self.iam, n))
+        self.find_instance()  # also refuses an instance that is not the recorded one
+
+    def prove_profile(self, prof: dict | None) -> None:
+        n = self.n.resource(self.p.name)
+        if prof is None:
+            return
+        if not profile_is_ours(prof, n, self.n):
             raise not_ours("IAM instance profile", n, self.n, self.p.name)
+        self.same("profile", prof.get("InstanceProfileId", ""), "IAM instance profile", n)
 
     def ensure_plan_bucket(self, s3, region: str, claims: str = "", claim=None) -> None:
         """Configure only setup's dedicated bucket, in the installer's account. Never adopt an unrelated bucket.
@@ -614,18 +644,18 @@ class Deployer:
         boundary = {"PermissionsBoundary": self.p.boundary} if self.p.boundary else {}
         try:
             made = self.iam.create_role(
-                RoleName=n, AssumeRolePolicyDocument=json.dumps(trust), Tags=self.tags(), **boundary
+                RoleName=n, AssumeRolePolicyDocument=json.dumps(trust), Tags=self.n.tags(self.p.name), **boundary
             )
-            self.role_id = ((made or {}).get("Role") or {}).get("RoleId", "")
+            self.keep("role", ((made or {}).get("Role") or {}).get("RoleId", ""))
         except self.iam.exceptions.EntityAlreadyExistsException:
-            if not self.ours(self.iam.list_role_tags(RoleName=n)["Tags"]):
+            if not self.n.is_ours(self.iam.list_role_tags(RoleName=n)["Tags"], self.p.name):
                 raise SystemExit(
                     f"IAM role {n} exists but was not created by tico setup; refusing to reuse it."
                 ) from None
-            self.role_id = self.prove_role(n, self.role_id)
-        # IAM has no compare-and-swap: the role is re-read by RoleId right before each write, and a role replaced in
-        # the instant between that read and the write is the residual window.
-        self.prove_role(n, self.role_id)
+            self.keep("role", self.prove_role(n))
+        # IAM and SSM have no conditional writes: the role is read again, by its install id tag and recorded RoleId,
+        # right before each write. That re-read is the bar; a replacement made in the instant after it is not caught.
+        self.prove_role(n)
         self.iam.attach_role_policy(RoleName=n, PolicyArn=SSM_CORE)
         arn = self.ssm_param_arn()
         pol = {
@@ -641,28 +671,31 @@ class Deployer:
                     "Resource": f"arn:aws:s3:::{self.p.plan_bucket}/plans/{self.p.name}/*",
                 }
             )
-        self.prove_role(n, self.role_id)
+        self.prove_role(n)
         self.iam.put_role_policy(RoleName=n, PolicyName=self.n.role_policy, PolicyDocument=json.dumps(pol))
         try:
-            self.iam.create_instance_profile(InstanceProfileName=n, Tags=self.tags())
+            made = self.iam.create_instance_profile(InstanceProfileName=n, Tags=self.n.tags(self.p.name))
+            self.keep("profile", ((made or {}).get("InstanceProfile") or {}).get("InstanceProfileId", ""))
             self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
         except self.iam.exceptions.EntityAlreadyExistsException:
             prof = instance_profile(self.iam, n)
-            if not prof or not (profile_is_ours(prof, n, self.n) and self.ours(prof.get("Tags"))):
+            if not prof:
                 raise not_ours("IAM instance profile", n, self.n, self.p.name) from None
+            self.prove_profile(prof)
+            self.keep("profile", prof.get("InstanceProfileId", ""))
             if not prof.get("Roles"):  # an earlier run stopped between creating it and adding the role
                 self.iam.add_role_to_instance_profile(InstanceProfileName=n, RoleName=n)
         return n
 
-    def prove_role(self, n: str, role_id: str = "") -> str:
-        """The role's RoleId, read now: it must carry this install's tags and, given role_id, be that same role (one
-        deleted and made again under the name is another role)."""
+    def prove_role(self, n: str) -> str:
+        """The role's RoleId, read now: it must carry this install's tags and be the role this install recorded."""
         role = self.iam.get_role(RoleName=n)["Role"]
         tags = role.get("Tags")
         if tags is None:  # GetRole returns tags on real IAM; older fakes and SDKs may not
             tags = self.iam.list_role_tags(RoleName=n)["Tags"]
-        if not self.ours(tags) or (role_id and role.get("RoleId") != role_id):
+        if not self.n.is_ours(tags, self.p.name):
             raise not_ours("IAM role", n, self.n, self.p.name)
+        self.same("role", role.get("RoleId", ""), "IAM role", n)
         return role.get("RoleId", "")
 
     def ssm_param_arn(self) -> str:
@@ -671,7 +704,10 @@ class Deployer:
     def ensure_sg(self) -> str:
         n = self.n.resource(self.p.name)
         r = self.ec2.describe_security_groups(Filters=self.n.filters(self.p.name))["SecurityGroups"]
+        r = [g for g in r if self.n.is_ours(g.get("Tags"), self.p.name)]
         if r:
+            self.same("sg", r[0]["GroupId"], "Security group", n)
+            self.keep("sg", r[0]["GroupId"])
             return r[0]["GroupId"]
         vpcs = self.ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
         if not vpcs:
@@ -684,6 +720,7 @@ class Deployer:
             VpcId=vpcs[0]["VpcId"],
             TagSpecifications=[{"ResourceType": "security-group", "Tags": self.n.tags(self.p.name, n)}],
         )["GroupId"]
+        self.keep("sg", gid)
         if self.p.ports:
             perms = [
                 {
@@ -701,7 +738,10 @@ class Deployer:
 
     def ensure_eip(self) -> tuple[str, str]:
         r = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
+        r = [a for a in r if self.n.is_ours(a.get("Tags"), self.p.name)]
         if r:
+            self.same("eip", r[0]["AllocationId"], "Elastic IP", self.n.resource(self.p.name))
+            self.keep("eip", r[0]["AllocationId"])
             return r[0]["AllocationId"], r[0]["PublicIp"]
         a = self.ec2.allocate_address(
             Domain="vpc",
@@ -709,6 +749,7 @@ class Deployer:
                 {"ResourceType": "elastic-ip", "Tags": self.n.tags(self.p.name, self.n.resource(self.p.name))}
             ],
         )
+        self.keep("eip", a["AllocationId"])
         return a["AllocationId"], a["PublicIp"]
 
     def public_subnet(self) -> str:
@@ -781,7 +822,9 @@ class Deployer:
             args["SubnetId"] = subnet
         for attempt in range(8):  # a new instance profile takes a few seconds to be usable
             try:
-                return self.ec2.run_instances(**args)["Instances"][0]["InstanceId"]
+                iid = self.ec2.run_instances(**args)["Instances"][0]["InstanceId"]
+                self.keep("instance", iid)
+                return iid
             except Exception as e:  # botocore ClientError, without importing botocore here
                 if not ("Instance Profile" in str(e) or "iamInstanceProfile" in str(e)) or attempt == 7:
                     raise
