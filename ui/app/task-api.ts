@@ -145,19 +145,63 @@ function taskRowsLive<T extends TaskLiveRow>(rows: T[], events: LiveTaskEvent[],
   for (const d of events) moved = taskRowsPut(rows, taskOfEvent<T>(d), taskEventId(d), has) || moved;
   return moved;
 }
+// A read and the events that come while it is out. A read answers the list as it was when the server read it; an event
+// that came after (a task removed, a title changed) must not be undone by that older answer landing later. So while a
+// list's read is out its events are held as well as shown, and when the read lands the held ones newer than it go over
+// it again: a removal stays removed. Each event carries its change number (`seq`, backend/events.py _event) and a list
+// read its cursor (`<seq>.<tag>`, backend/task_reads.py): what a read already holds is never played twice, and an event
+// it covers that comes late is dropped. A read that is no longer the list's newest (the page was left or read again)
+// is dropped whole.
+/** One live list's reads against its events. `ticket` is its newest read; `held`, the events since a read went out (null
+ * while none is out); `seq`, the change number the rows are as of (0: not known). */
+interface TaskFeed { ticket: number; held: LiveTaskEvent[] | null; seq: number }
+const taskFeedNew = (): TaskFeed => ({ticket: 0, held: null, seq: 0});
+/** The change number a list read was taken at: its cursor's first part, 0 when it gave none. */
+const taskCursorSeq = (cursor: string | null | undefined): number => Number(String(cursor || '').split('.')[0]) || 0;
+const taskEventSeq = (d: LiveTaskEvent): number => Number(d.seq) || 0;
+/** A read goes out: its ticket, which taskFeedLanded asks back. */
+function taskFeedRead(feed: TaskFeed): number {
+  feed.held ||= [];
+  return ++feed.ticket;
+}
+/** Events as they come: the ones the rows do not already hold, kept too while a read is out. */
+function taskFeedEvents(feed: TaskFeed, events: LiveTaskEvent[]): LiveTaskEvent[] {
+  const fresh = events.filter(d => !taskEventSeq(d) || taskEventSeq(d) > feed.seq);
+  feed.held?.push(...fresh);
+  return fresh;
+}
+/** The read with `ticket` landed, as of `cursor`: null when a newer read is out (drop this one), else the events to put
+ * over its rows (the held ones newer than it; all of them when the read gave no cursor). */
+function taskFeedLanded(feed: TaskFeed, ticket: number, cursor?: string | null): LiveTaskEvent[] | null {
+  if (ticket !== feed.ticket) return null;
+  const seq = taskCursorSeq(cursor), held = feed.held || [];
+  feed.held = null;
+  if (seq) feed.seq = seq;
+  return held.filter(d => !seq || !taskEventSeq(d) || taskEventSeq(d) > seq);
+}
+/** The read with `ticket` failed: nothing is held for it any longer. */
+function taskFeedFailed(feed: TaskFeed, ticket: number): void {
+  if (ticket === feed.ticket) feed.held = null;
+}
 /** Catches `rows` up from `cursor` (taskChanges under the list's own `query`): the rows that changed go through
- * taskRowsPut, the ones `gone` come out. `still()` is asked once the answer is in: false drops it (the list was read
- * again meanwhile). Answers the next cursor, or 'reset' when only a full read will do (no cursor, or too old). */
+ * taskRowsPut, the ones `gone` come out, then the events that came meanwhile go over them again (`feed`). `still()` is
+ * asked once the answer is in: false drops it (the page was left). Answers the next cursor (`again` when a held event
+ * was a bulk change: catch up once more), 'reset' when only a full read will do (no cursor, or too old), or null. */
 async function taskRowsCatchUp<T extends TaskLiveRow>(rows: T[], cursor: string, query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sort'>,
-  has: (t: T) => boolean, still: () => boolean): Promise<{cursor: string; moved: boolean} | 'reset' | null> {
+  has: (t: T) => boolean, still: () => boolean, feed: TaskFeed): Promise<{cursor: string; moved: boolean; again?: boolean} | 'reset' | null> {
   if (!cursor) return 'reset';
-  const out = await taskChanges(query, cursor);
-  if (!still()) return null;
-  if (out.reset) return 'reset';
+  const ticket = taskFeedRead(feed);
+  let out: TaskChanges;
+  try { out = await taskChanges(query, cursor); } catch (e) { taskFeedFailed(feed, ticket); throw e; }
+  if (!still()) { taskFeedFailed(feed, ticket); return null; }
+  if (out.reset) { taskFeedFailed(feed, ticket); return 'reset'; }
+  const held = taskFeedLanded(feed, ticket, out.cursor || cursor);
+  if (!held) return null;
   let moved = false;
   for (const id of out.gone) moved = taskRowsPut(rows, null, id, has) || moved;
   for (const t of out.tasks) moved = taskRowsPut(rows, t as unknown as T, String(t.id), has) || moved;
-  return {cursor: out.cursor || cursor, moved};
+  const after = taskRowsLive(rows, held, has);
+  return {cursor: out.cursor || cursor, moved: moved || after === true, ...(after === 'bulk' ? {again: true} : {})};
 }
 async function needsYou(): Promise<NeedsEntry[]> {
   const res = await get<{items?: NeedsEntry[]}>('/v2/needs-you', {fresh: true});

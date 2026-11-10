@@ -28,6 +28,8 @@ interface DashState {
   reading?: boolean;
   choicesBy?: Record<string, Promise<DashChoices>>;
   choicesAt?: number;
+  /** The place's reads against the live task events (task-api.ts TaskFeed): a read that lands late undoes no newer event. */
+  feed: TaskFeed;
 }
 let DASH: DashState | null = null;
 // A place drawn on this grid under its own head (the Growth page, ui/app/growth-page.ts): {head(state) → its HTML,
@@ -226,7 +228,7 @@ function dashPrefetch() {
 }
 async function pageDashboard(place: string, {month = ''}: {month?: string} = {}) {
   const team = place.startsWith('team:'), own = DASH_PLACES[place];
-  const state: DashState = {place, month, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now()};
+  const state: DashState = {place, month, view: null, choices: null, root: null, menu: null, editing: false, readAt: Date.now(), feed: taskFeedNew()};
   const key = state.key = dashKey(state), kept = (S.lastRead.places ||= {})[key];
   const main = $('#main'); main.classList.add('dash-layout');
   const head = own ? own.head(state) : `<h1>${team ? '' : 'Company'}</h1>${team ? '' : dashTabsHTML(place === 'person:me' ? 'mine' : 'dashboard')}<span class="spacer"></span>`;
@@ -245,8 +247,10 @@ async function pageDashboard(place: string, {month = ''}: {month?: string} = {})
   own?.wire?.(state);
   if (kept) { state.view = kept; dashDraw(state); }
   let view: DashView;
+  const ticket = taskFeedRead(state.feed);
   try { view = await get<DashView>(dashReadUrl(state)); }
   catch (e) {
+    taskFeedFailed(state.feed, ticket);
     if (DASH !== state) return;
     if (kept) delete S.lastRead.places[key];
     $('#dash-grid').innerHTML = `<p class="empty">${esc(!team ? errorMessage(e, '') : errorStatus(e) === 404 ? 'No such team' : errorStatus(e) === 403 ? 'This team page is not shared with you' : errorMessage(e, ''))}</p>`;
@@ -256,22 +260,26 @@ async function pageDashboard(place: string, {month = ''}: {month?: string} = {})
   // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
   if (DASH !== state) { S.lastRead.places[key] ||= view; return; }
   // The month moved while the read was out: that read draws.
-  if (dashKey(state) !== key) return;
+  const held = taskFeedLanded(state.feed, ticket);
+  if (dashKey(state) !== key || !held) return;
   // A write made while the read was out already drew its own answer.
   if (state.view !== kept && state.view) return;
   if (kept && sameData(view, kept)) return;
   state.view = view;
   dashDraw(state);
+  dashTasksPut(held);
 }
 // Read the place again and draw it (the Growth page after its month or its settings change). The newest read wins.
 async function dashRefresh(state: DashState) {
-  const seq = state.refreshSeq = (state.refreshSeq || 0) + 1;
+  const seq = state.refreshSeq = (state.refreshSeq || 0) + 1, ticket = taskFeedRead(state.feed);
   try {
     const view = await get<DashView>(dashReadUrl(state), {fresh: true});
-    if (DASH !== state || state.refreshSeq !== seq || !Array.isArray(view?.pins)) return;
+    const held = DASH === state && state.refreshSeq === seq ? taskFeedLanded(state.feed, ticket) : null;
+    if (!held || !Array.isArray(view?.pins)) { taskFeedFailed(state.feed, ticket); return; }
     state.view = view;
     dashDraw(state);
-  } catch (e) { if (DASH === state && state.refreshSeq === seq) dashToast(errorMessage(e, '')); }
+    dashTasksPut(held);
+  } catch (e) { taskFeedFailed(state.feed, ticket); if (DASH === state && state.refreshSeq === seq) dashToast(errorMessage(e, '')); }
 }
 // "Seen by" is the group's Read (backend/teammate_access.py): it opens the group's Access editor, for its leads
 // and the admins (the same people who arrange the page), and the page is read again after a save.
@@ -313,6 +321,10 @@ const dashTaskOrder = (a: DashTaskRow, b: DashTaskRow) => (a.due_at ? 0 : 1) - (
   || String(a.due_at || '').localeCompare(String(b.due_at || '')) || String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
   || a.id.localeCompare(b.id);
 function dashTasksLive(events: LiveTaskEvent[]): void {
+  if (DASH?.place !== 'person:me' || !events.length) return;
+  dashTasksPut(taskFeedEvents(DASH.feed, events));
+}
+function dashTasksPut(events: LiveTaskEvent[]): void {
   if (DASH?.place !== 'person:me' || !events.length) return;
   const me = myActor();
   dashCardsPatch('my_tasks', (d, card) => {
@@ -373,12 +385,16 @@ async function dashReread(state: DashState | null) {
   if (!state.root) return;
   if (state.menu || state.root.querySelector<HTMLDialogElement>('#dash-dialog')?.open || state.root.querySelector('.dash-pin.dragging')) return;
   state.reading = true;
+  const ticket = taskFeedRead(state.feed);
   try {
     const view = await get<DashView>(dashApi(state.place), {fresh: true});
-    if (DASH !== state || !Array.isArray(view?.pins) || sameData(view, state.view)) return;
+    // What came while the read was out was drawn already and goes over the answer again.
+    const held = DASH === state ? taskFeedLanded(state.feed, ticket) : null;
+    if (!held || !Array.isArray(view?.pins) || sameData(view, state.view)) return;
     state.view = view;
     dashDraw(state);
-  } catch (e) { /* the next change or tick reads again */ }
+    dashTasksPut(held);
+  } catch (e) { taskFeedFailed(state.feed, ticket); /* the next change or tick reads again */ }
   finally { state.reading = false; state.readAt = Date.now(); }
 }
 setInterval(() => {

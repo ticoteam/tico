@@ -5,7 +5,9 @@
 //  - a bot's page: its Open rows and its filter tabs (Assigned to others), decided by each tab's rows client-side;
 //  - a person's page: the tasks they own, open and finished (a snoozed one is off it);
 //  - My dashboard: My tasks from the reader's task events, Needs you from the list the app holds, Unread threads from
-//    read and activity events; the place is not read again for any of them.
+//    read and activity events; the place is not read again for any of them;
+//  - a read that lands late (Codex review 1): a first read or a catch-up held back by a slow server, a removal coming
+//    while it is out, then the older answer: the row stays gone.
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -42,7 +44,15 @@ const HOME_PLACE = {place: 'person:ana', kind: 'person', saved: false, can_edit:
   dashCard('unread_threads', 'Unread threads', {count: 2, threads: [{id: 'th1', title: 'Launch', unread: 1, activity: true, updated_at: '2026-11-09T10:00:00Z', audience: 'everyone'},
     {id: 'th2', title: 'Hiring', unread: 2, activity: true, updated_at: '2026-11-09T09:00:00Z', audience: 'everyone'}]}, {count: 5}),
 ]};
-const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', kinds: ['delete'], gone: true}; };
+const gone = (id: string, seq?: number) => { SERVER.delete(id); return {...(seq ? {seq} : {}), id, kind: 'delete', kinds: ['delete'], gone: true}; };
+// A read the server is slow to answer: the next request `match` names is answered as it was read, once `go()` is called.
+type Held = {match: (p: string, q: URLSearchParams) => boolean; seen: Promise<void>; arrived: () => void; gate: Promise<void>; go: () => void};
+let holding: Held | null = null;
+const holdNext = (match: Held['match']): Held => {
+  let arrived = () => {}, go = () => {};
+  const seen = new Promise<void>(done => { arrived = done; }), gate = new Promise<void>(done => { go = done; });
+  return holding = {match, seen, arrived, gate, go};
+};
 
 (async () => {
   const browser = await chromium.launch();
@@ -52,9 +62,16 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
   // Every list read the page makes, by kind; a delta (changed_after) is counted apart with its cursor.
   const reads = {tasks: 0, tabs: 0, places: 0, changed: [] as string[], streams: [] as string[]};
   let delta: {tasks: Task[]; gone: string[]} = {tasks: [], gone: []};
-  await page.route('**/*', (route: Route) => {
+  await page.route('**/*', async (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname, q = url.searchParams;
-    const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+    const held = holding?.match(p, q) ? holding : null;
+    if (held) holding = null;
+    // The answer is what the server read when the request came; a held one is sent only once the test lets it go.
+    const json = async (body: unknown) => {
+      const text = JSON.stringify(body);
+      if (held) { held.arrived(); await held.gate; }
+      return route.fulfill({contentType: 'application/json', body: text});
+    };
     if (url.origin !== 'https://tico-ui.test') return route.abort();
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
@@ -63,7 +80,7 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
     if (p === '/api/employees') return json(BOTS);
-    if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}]});
+    if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}, {id: 'kim', name: 'Kim'}]});
     if (p === '/api/v2/status') return json({bots: BOTS.map(b => ({bot: b.name, state: 'idle'}))});
     if (p === '/api/v2/needs-you') return json({items: [], count: 0, version: 'v0'});
     if (p === '/api/v2/events') { reads.streams.push(url.search); return; }               // held open: events come by liveEmit
@@ -184,6 +201,52 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
   assert.match(await pin('Unread threads').locator('li').first().textContent() || '', /Hiring[\s\S]*3 new/);
   await settled();
   assert.equal(reads.places, placed, 'no read of the place follows an event');
+
+  // ---- a read that lands late: the events that came while it was out go over it
+  // A person's page, first read: Kim's tasks are read, one is removed while the answer is on its way, then it lands.
+  put(task('t20', 'Ship the stickers', 'spec', {owner_id: 'human:kim'}));
+  put(task('t21', 'Frame the poster', 'spec', {owner_id: 'human:kim'}));
+  let slow = holdNext((p, q) => p === '/api/v2/tasks' && q.get('owner') === 'human:kim' && !q.get('changed_after'));
+  await page.evaluate(() => { location.hash = '#/person/kim'; });
+  await slow.seen;
+  await emit('tasks', gone('t20', 13));
+  await settled();
+  slow.go();
+  await page.locator('#person-tasks', {hasText: 'Frame the poster'}).waitFor({timeout: t(8000)});
+  assert.doesNotMatch(await text('#person-tasks'), /Ship the stickers/, 'a task removed while the first read was out stays removed');
+  // Its catch-up: the delta read has the poster, which is removed while the delta is out (the delta's cursor is 30).
+  delta = {tasks: [task('t21', 'Frame the poster again', 'spec', {owner_id: 'human:kim'}), task('t22', 'Hang the sign', 'spec', {owner_id: 'human:kim'})], gone: []};
+  slow = holdNext((p, q) => p === '/api/v2/tasks' && !!q.get('changed_after'));
+  void page.evaluate(() => refresh(false));
+  await slow.seen;
+  await emit('tasks', gone('t21', 31));
+  await settled();
+  slow.go();
+  await page.locator('#person-tasks', {hasText: 'Hang the sign'}).waitFor();
+  assert.doesNotMatch(await text('#person-tasks'), /Frame the poster/, 'a task removed while the catch-up was out stays removed');
+  delta = {tasks: [], gone: []};
+  // A bot's page, first read: the PM's open tasks are read, one is removed while the answer is on its way.
+  put(task('t23', 'Write the launch post', 'spec', {owner_id: 'bot:pm'}));
+  put(task('t24', 'Plan the launch call', 'spec', {owner_id: 'bot:pm'}));
+  slow = holdNext((p, q) => p === '/api/v2/tasks' && q.get('owner') === 'pm' && q.get('status') === 'open');
+  await page.evaluate(() => { location.hash = '#/bot/pm/tasks'; });
+  await slow.seen;
+  await emit('tasks', gone('t23', 14));
+  await settled();
+  slow.go();
+  await page.locator('#t-open', {hasText: 'Plan the launch call'}).waitFor({timeout: t(8000)});
+  assert.doesNotMatch(await text('#t-open'), /Write the launch post/, "a bot's task removed while the first read was out stays removed");
+  // My dashboard read again on coming back: a task of Ana's finished while the read is out stays off My tasks.
+  await page.evaluate(() => { location.hash = '#/person/sam'; });
+  await page.locator('#person-tasks', {hasText: 'Book the bus'}).waitFor();
+  slow = holdNext(p => decodeURIComponent(p) === '/api/v2/places/person:me');
+  await page.evaluate(() => { location.hash = '#/home'; });
+  await slow.seen;
+  await emit('tasks', {...event(task('t10', 'Sign the lease', 'done', {owner_id: 'human:ana'})), seq: 40});
+  await settled();
+  slow.go();
+  await pin('My tasks').locator('li', {hasText: 'Plan the offsite'}).waitFor();
+  assert.doesNotMatch(await pin('My tasks').textContent() || '', /Sign the lease/, 'a task finished while the place was read stays off My tasks');
 
   assert.deepEqual(errors, []);
   await browser.close();

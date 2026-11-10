@@ -24,7 +24,8 @@ interface TasksPageState {
   pipelines: PipelineRec[];
   loading: boolean;
   failed: string;
-  seq: number;
+  /** The view's reads against its live events (task-api.ts TaskFeed): a read that lands late undoes no newer event. */
+  feed: TaskFeed;
   /** Where the list's catch-up resumes (GET /v2/tasks?changed_after); '' until a full read gave one. */
   cursor: string;
   /** A live change came while a read was on its way: catch up once it lands. */
@@ -69,7 +70,7 @@ function tasksURLWrite(state: TasksPageState) {
 function pageTasks(openId = '') {
   tasksLeave();
   const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
-    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, failed: '', seq: 0, cursor: '', behind: false, abort: new AbortController()};
+    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, failed: '', feed: taskFeedNew(), cursor: '', behind: false, abort: new AbortController()};
   TASKS_ST = state;
   const main = $('#main');
   main.classList.add('tasks-layout');
@@ -202,8 +203,9 @@ function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
 /** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
  * the pipeline's open tasks. */
 async function tasksLoad(state: TasksPageState): Promise<void> {
-  const seq = ++state.seq;
+  const ticket = taskFeedRead(state.feed);
   state.behind = false;
+  let held: LiveTaskEvent[] | null = [];
   try {
     const query = tasksQuery(state);
     const [pipelines, rows] = await Promise.all([
@@ -211,17 +213,22 @@ async function tasksLoad(state: TasksPageState): Promise<void> {
       query ? taskBriefsPage({...query, sort: state.archive && state.archive !== 'snoozed' ? 'finished' : 'queue', limit: state.archive ? 200 : 500})
         : needsYou(),
     ]);
-    if (TASKS_ST !== state || seq !== state.seq) return;
+    if (TASKS_ST !== state) return;
+    held = taskFeedLanded(state.feed, ticket, Array.isArray(rows) ? '' : rows.cursor);
+    if (!held) return;
     state.pipelines = pipelines;
     if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
     if (Array.isArray(rows)) { state.needs = rows; state.cursor = ''; }
     else { state.tasks = rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline); state.cursor = rows.cursor; }
     state.failed = '';
   } catch (e) {
-    if (TASKS_ST !== state || seq !== state.seq) return;
+    if (TASKS_ST !== state || ticket !== state.feed.ticket) return;
+    taskFeedFailed(state.feed, ticket);
     state.failed = errorMessage(e, 'Tasks did not load.');
   }
   state.loading = false;
+  // What came while the read was out goes over it: a task removed meanwhile stays removed.
+  if (held?.length) tasksEventsPut(state, held);
   tasksRender(state);
   if (state.behind) void tasksCatchUp(state);
 }
@@ -233,13 +240,13 @@ async function tasksCatchUp(state: TasksPageState | null): Promise<void> {
   const query = tasksQuery(state);
   if (!query) { tasksNeedsLive(); return; }
   if (!state.cursor) { await tasksLoad(state); return; }
-  const seq = state.seq;
   try {
-    const out = await taskRowsCatchUp(state.tasks, state.cursor, query, t => tasksViewHas(state, t), () => TASKS_ST === state && seq === state.seq);
+    const out = await taskRowsCatchUp(state.tasks, state.cursor, query, t => tasksViewHas(state, t), () => TASKS_ST === state && !state.loading, state.feed);
     if (!out) return;
     if (out === 'reset') { await tasksLoad(state); return; }
     state.cursor = out.cursor;
     tasksRender(state);
+    if (out.again) void tasksCatchUp(state);
   } catch { /* the next refresh tries again */ }
 }
 /** One task as the viewer reads it now (an event's, a delta's, a write's reply): in place, added, or out of the view. */
@@ -253,11 +260,16 @@ function tasksTaskPut(state: TasksPageState, t: TaskAny | null, id: string | nul
   if (moved && draw) tasksRender(state);
   return moved;
 }
-/** Live task events (refresh.ts liveTasksApply): each carries the task as this viewer reads it, or says it is gone. */
+/** Live task events (refresh.ts liveTasksApply): each carries the task as this viewer reads it, or says it is gone. While
+ * a read is out they are held for it too; before the first read lands there is nothing to put them on. */
 function tasksLiveApply(events: LiveTaskEvent[]): void {
   const state = TASKS_ST;
   if (!state || !isTasksRoute(S.route)) return;
-  if (state.loading) { state.behind = true; return; }
+  events = taskFeedEvents(state.feed, events);
+  if (state.loading) return;
+  tasksEventsPut(state, events);
+}
+function tasksEventsPut(state: TasksPageState, events: LiveTaskEvent[]): void {
   if (events.some(d => d.bulk)) { void tasksCatchUp(state); return; }
   let moved = false;
   for (const d of events) moved = tasksTaskPut(state, d.gone ? null : (d.task as TaskAny | null | undefined) ?? null, String(d.id ?? ''), false) || moved;
