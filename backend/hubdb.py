@@ -2055,7 +2055,8 @@ def _task_facts(conn, task_id, actor, **more):
         "id": task_id,
         "title": row.get("title"),
         "status": row.get("status"),
-        "step": row.get("step_id"),
+        "pipeline": row.get("pipeline_id"),
+        "stage": row.get("stage_id"),
         "owner_id": row.get("owner_id"),
         "requester_id": row.get("requester_id"),
         "actor": actor,
@@ -3587,96 +3588,14 @@ def can_move(conn, actor):
     return bool(row and set(row.get("teams") or []) & set(MOVER_TEAMS))
 
 
-# ----------------------------------------------------------------------------- task pipelines
-def type_get(conn, value):
-    row = _one(
-        conn,
-        "SELECT * FROM task_types WHERE id=? OR name=? COLLATE NOCASE ORDER BY id=? DESC LIMIT 1",
-        (value, value, value),
-    )
-    if row:
-        row["numbered"] = bool(row.get("numbered"))
-        row["steps_only"] = bool(row.get("steps_only"))
-        row["steps"] = _step_views(
-            conn, _rows(conn.execute("SELECT * FROM task_steps WHERE type_id=? ORDER BY position,id", (row["id"],)))
-        )
-    return row
-
-
-def _step_views(conn, steps):
-    """Steps as callers read them: a check step's pool as a list and its limit (backend/check_pools.py), and its flow
-    with step names (backend/step_flow.py)."""
-    from . import check_pools, step_flow
-
-    steps = [check_pools.view(step) for step in steps] if steps and "check_pool" in steps[0] else steps
-    if not steps or "flow" not in steps[0]:
-        return steps
-    by_type = {}
-    for step in steps:
-        by_type.setdefault(step["type_id"], []).append(step)
-    shown = {s["id"]: s for group in by_type.values() for s in step_flow.view(conn, group)}
-    return [shown[step["id"]] for step in steps]
-
-
-def type_list(conn):
-    from .read_cache import rows as shared_rows
-
-    rows = _rows(conn.execute("SELECT * FROM task_types ORDER BY id<>?,name", (GENERAL_TYPE,)))
-    # Shared between snapshots until a step changes (backend/roster_clock.py); copied, since views add keys to them.
-    steps = _step_views(conn, [dict(r) for r in shared_rows(conn, "SELECT * FROM task_steps ORDER BY position,id")])
-    for row in rows:
-        row["numbered"] = bool(row.get("numbered"))
-        row["steps_only"] = bool(row.get("steps_only"))
-        row["steps"] = [step for step in steps if step["type_id"] == row["id"]]
-    return rows
-
-
-# What every bot may do with the tasks of a type, beyond the tasks it is a party to. A team's board
-# (a developer board, a support queue) is shared work: the bots that file, build and hand it on need
-# to read all of it, where a person's own to-dos stay with the people and bots on them.
-#   read: read every task of the type, comment on it and file a subtask under it.
-#   work: also change it as its owner or requester could (step, owner, due, body, rank), add or
-#         remove its links, and close it once it is in a ready step (shipped). Moving it into ready
-#         and its labels stay with people.
-TYPE_BOTS = ("read", "work")
-
-
-def _type_bots(conn, actor, bots):
-    if bots in (None, "", "parties"):
-        return None
-    if bots not in TYPE_BOTS:
-        refuse(conn, actor, "kind", f"bots is parties, {' or '.join(TYPE_BOTS)}, not {bots}")
-    return bots
-
-
-def type_bots(conn, row):
-    """What every bot may do with this task because of its type: None, "read" or "work"."""
-    type_id = (
-        row.get("type_id")
-        if "type_id" in row
-        else ((_one(conn, "SELECT type_id FROM tasks WHERE id=?", (row["id"],)) or {}).get("type_id"))
-    )
-    if not type_id:
-        return None
-    found = _one(conn, "SELECT bots FROM task_types WHERE id=?", (type_id,))
-    return (found or {}).get("bots") or None
-
-
-def type_bot_reads(conn, actor, row):
-    return is_bot(actor) and task_private_readable(conn, actor, row) and type_bots(conn, row) in TYPE_BOTS
-
-
-def type_bot_works(conn, actor, row):
-    return is_bot(actor) and task_private_readable(conn, actor, row) and type_bots(conn, row) == "work"
-
-
+# ----------------------------------------------------------------------------- who works a task
 TASK_MANAGER = "bot:task-manager"
 
 
 def task_manager_acts(conn, actor, row):
-    """The Task Manager's narrow mover right (docs/task-manager.md): on a task it may read it closes with a note, sets
-    status, step and waits, relates, comments and reassigns within the department. It is not a `mover` (no lane, number,
-    labels, types or tags) and never a bot with rights on a bot, a credential, a send or spending. The slug alone is not
+    """The Task Manager's narrow mover right (docs/task-manager.md): on a task it may read it moves and closes it with
+    a note, relates, comments and reassigns within the department. It is not a `mover` (no lane, number, labels or
+    tags) and never a bot with rights on a bot, a credential, a send or spending. The slug alone is not
     enough: the bot behind it must be built from the task-manager template, so a bot someone names the same cannot ride on
     it. A private task it is not on stays unreadable (task_private_readable), so this never widens privacy."""
     if actor != TASK_MANAGER or not row:
@@ -4203,56 +4122,14 @@ def isolate_private_task(conn, row):
     return task(conn, row["id"])
 
 
-def bot_readable_types(conn):
-    """The ids of the types whose every task any bot may read."""
-    return [
-        r[0]
-        for r in conn.execute(
-            "SELECT id FROM task_types WHERE bots IN (%s)" % ",".join("?" * len(TYPE_BOTS)), TYPE_BOTS
-        )
-    ]
-
-
-def _type_writer(conn, actor, mover):
-    _writer(conn, actor)
-    if not (actor == KEEPER or mover or mover is None and can_move(conn, actor)):
-        refuse(conn, actor, "identity", "Task types are managed by movers")
-
-
-def _type_name(conn, actor, name, type_id=None):
-    name = str(name or "").strip()
-    if not name:
-        refuse(conn, actor, "lint", "Give the type a name")
-    existing = type_get(conn, name)
-    if existing and existing["id"] != type_id:
-        refuse(conn, actor, "duplicate", "A task type already has that name")
-    return name
-
-
 def task_reopen_hint(conn, actor, row):
     """Name a next move the caller is allowed to make; closure retains its own authority."""
     closer = row.get('closed_by_id') or row['requester_id']
     if row['status'] == 'closed' and is_bot(actor) and (actor != row['requester_id'] or is_human(closer)):
         return f"ask {actor_name(conn, closer)} to reopen it, or file a new task"
     if actor == row['owner_id'] or is_human(actor) or (actor == row['requester_id'] and row['status'] == 'closed'):
-        return f"reopen it with `hub task update {row['id']} --status doing`, or file a new task"
-    return "ask the owner to reopen it with " + f"`hub task update {row['id']} --status doing`, or file a new task"
-
-
-def _closes_by_hand(actor):
-    return (actor or "").startswith("human:")
-
-
-# The note on a waiting task's move out of a retired waiting step: its step came from its history, not from a move
-# anyone made (task_blocked.forget_retired_resumes).
-RETIRED_WAITING = "Waiting is a tag now, not a step"
-
-
-def steps_only(conn, row):
-    """The step names of the task's type when it finishes and reopens its tasks only by a step move
-    (`_task_state`), else an empty list."""
-    typ = type_get(conn, row.get("type_id") or GENERAL_TYPE) or {}
-    return [s["name"] for s in typ["steps"]] if typ.get("steps_only") else []
+        return f"reopen it with `hub task move {row['id']} reopen -m \"why\" --version N`, or file a new task"
+    return f"ask the owner to reopen it with `hub task move {row['id']} reopen`, or file a new task"
 
 
 def _number_free(conn, actor, number):
@@ -4479,18 +4356,9 @@ def _set_task_tags(conn, actor, task_id, labels, note="", approval_id=None, appr
                 save_metadata(conn, "qa-default:" + task_id, {**saved, "author": "qa" in keys})
 
 
-def type_manager(conn, row):
-    """The id of the bot that manages this task's type (task_types.manager, which a seeded type names by a legacy
-    slug such as `engineering-lead`), or None."""
-    manager = (_one(conn, "SELECT manager FROM task_types WHERE id=?", (row.get("type_id") or "",)) or {}).get(
-        "manager"
-    )
-    return (resolve_bot(conn, manager) or {}).get("id", manager) if manager else None
-
-
 def _label_writer(conn, actor, row, labels, approval_id=None):
     """A bot that is not a mover changing labels on `row` (task_update): it may change a classification label
-    on a task it manages, one it owns or asked for or whose type it manages (task_types.manager), and nothing
+    on a task it manages, one it owns or asked for or whose pipeline it manages, and nothing
     else. A label Tico acts on (WORKFLOW_LABELS) stays a mover's. A label on a public roadmap puts the task
     there once it is public, so adding or removing one takes the bot's exact approved publish approval
     (roadmaps.approve), or a mover when the team does not ask bots for one. Refused as rule `label`, which
@@ -4501,13 +4369,14 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
     changed = sorted(set(keys) ^ set(task_labels(row)))
     if not changed:
         return False
-    slug, teams = actor_id(actor), ", ".join(MOVER_TEAMS)
-    if not task_participant(conn, actor, row) and type_manager(conn, row) != slug:
+    teams = ", ".join(MOVER_TEAMS)
+    pipe = (_one(conn, "SELECT manager_id FROM pipelines WHERE id=?", (row.get("pipeline_id") or "",)) or {})
+    if not task_participant(conn, actor, row) and pipe.get("manager_id") != actor:
         refuse(
             conn,
             actor,
             "label",
-            f"{actor_name(conn, actor)} changes labels only on a task it owns, asked for, whose party it manages or whose type it manages; labels on "
+            f"{actor_name(conn, actor)} changes labels only on a task it owns, asked for, whose party it manages or whose pipeline it manages; labels on "
             f"{row['id']} are changed by a person on the {teams} teams",
             task=row["id"],
         )
@@ -4979,7 +4848,6 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
         and not task_participant(conn, actor, row)
         and not delegated
         and not task_ancestor_party(conn, actor, row)
-        and not type_bot_works(conn, actor, row)
         and not (kind is None and task_manager_acts(conn, actor, row))
     ):  # relations only, never pull request links
         refuse(
@@ -5048,7 +4916,6 @@ def _task_parent(conn, actor, task_id, parent_id):
     if (
         is_bot(actor)
         and not task_participant(conn, actor, parent)
-        and not type_bot_reads(conn, actor, parent)
         and not task_ancestor_party(conn, actor, parent)
         and not _one(
             conn,
@@ -5056,7 +4923,7 @@ def _task_parent(conn, actor, task_id, parent_id):
             (parent["id"], actor, now()),
         )
     ):
-        refuse(conn, actor, "identity", "This task type does not allow unrelated bots to create subtasks")
+        refuse(conn, actor, "identity", "Only the task's parties, their managers and delegates file a subtask under it")
     if task_id and (parent["id"] == task_id or task_id in TR.ancestors(conn, parent["id"])):
         refuse(conn, actor, "kind", "a task cannot become its own ancestor")
     return parent
@@ -5133,24 +5000,24 @@ def pr_state(links):
 
 
 def ticket_refs(conn, ids):
-    """Each task's ticket label (its type's prefix and number, D41) and its stage's name, for many ids in one query:
-    {id: {"label": str|None, "step": str|None}}. A task with no number, no prefix or no stage has None for that."""
+    """Each task's label (its pipeline's prefix and its number) and its stage's name, for many ids in one query:
+    {id: {"label": str|None, "stage": str|None}}. A task with no number, no prefix or no stage has None for that."""
     ids = list(ids)
-    refs: dict[str, dict[str, str | None]] = {ident: {"label": None, "step": None} for ident in ids}
+    refs: dict[str, dict[str, str | None]] = {ident: {"label": None, "stage": None} for ident in ids}
     if not ids:
         return refs
     marks = ",".join("?" * len(ids))
     for row in _rows(
         conn.execute(
-            "SELECT k.id, k.number, t.prefix, s.name AS step FROM tasks k "
-            "LEFT JOIN task_types t ON t.id = k.type_id LEFT JOIN task_steps s ON s.id = k.step_id "
+            "SELECT k.id, k.number, p.prefix, s.name AS stage FROM tasks k "
+            "LEFT JOIN pipelines p ON p.id = k.pipeline_id LEFT JOIN stages s ON s.id = k.stage_id "
             f"WHERE k.id IN ({marks})",
             ids,
         )
     ):
         if row["prefix"] and row["number"]:
             refs[row["id"]]["label"] = f"{row['prefix']}{row['number']}"
-        refs[row["id"]]["step"] = row["step"]
+        refs[row["id"]]["stage"] = row["stage"]
     return refs
 
 
@@ -8737,9 +8604,6 @@ def labels_in_use(conn, visible="1"):
     ]
 
 
-STEP_POSITION = "(SELECT position FROM task_steps WHERE task_steps.id=tasks.step_id)"
-
-
 def tasks(
     conn,
     owner=None,
@@ -8751,11 +8615,8 @@ def tasks(
     offset=0,
     order="queue",
     visible=None,
-    type_id=None,
-    step_ids=None,
     number=None,
     updated_since=None,
-    tickets=True,
     member=None,
     role=None,
     ids=None,
@@ -8764,9 +8625,8 @@ def tasks(
     exclude_owner=None,
 ):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
-    `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `order="step"` is
-    a board's: by step, then each task's place in it. `updated_since` is a stored timestamp.
-    `tickets=False` leaves out the tasks on a numbered type. `member` keeps the tasks that actor is on
+    `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `updated_since` is a stored timestamp.
+    `member` keeps the tasks that actor is on
     in some role (task_roles), or in `role` when given. `ids` limits it to those tasks (a delta
     read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both.
     `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match."""
@@ -8797,12 +8657,6 @@ def tasks(
     if lane:
         where.append("lane=?")
         args.append(lane)
-    if type_id:
-        where.append("type_id=?")
-        args.append(type_id)
-    if step_ids:
-        where.append(f"step_id IN ({','.join('?' * len(step_ids))})")
-        args += list(step_ids)
     if number is not None:
         where.append("number=?")
         args.append(number)
@@ -8818,10 +8672,6 @@ def tasks(
             "sh.task_id=tasks.id AND sh.kind='snoozed' AND sh.released_at IS NULL AND sh.until_at>?)"
         )
         args.append(now())
-    if not tickets:
-        where.append(
-            "NOT EXISTS (SELECT 1 FROM task_types WHERE task_types.id=tasks.type_id AND task_types.numbered=1)"
-        )
     if label:
         where.append(
             "EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
@@ -8845,10 +8695,8 @@ def tasks(
         ordering = "(rank IS NULL), rank, created_at, id"
     elif order == "finished":
         ordering = "COALESCE(done_at,closed_at,updated_at,created_at) DESC, id DESC"  # most recently done first
-    elif order == "step":
-        ordering = f"{STEP_POSITION} IS NULL, {STEP_POSITION}, step_id, (step_rank IS NULL), step_rank, created_at, id"
     else:
-        raise ValueError("task order is queue, finished or step")
+        raise ValueError("task order is queue or finished")
     page = (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))
     if order == "queue" and limit is not None:
         # The page's ids first, then its full rows. Sorting `SELECT *` copied every visible task's body into the
@@ -8926,14 +8774,12 @@ def task_flow(
     owner_kind=None,
     label=None,
     recurring=None,
-    type_id=None,
 ):
     """How tasks moved through their statuses between `since` and `until`, read from the task history.
 
     Every status change is already an event, so nothing extra is stored. `days` counts the tasks
-    that entered each stage on each local day ("created" is a new task, "open" a reopened one);
-    with `type_id`, each of that type's steps is a stage too, keyed "step:<id>". `stages` is how
-    long tasks sat in a stage they left in the window, and `people` is the same count by the
+    that entered each status on each local day ("created" is a new task, "open" a reopened one). `stages` is how
+    long tasks sat in a status they left in the window, and `people` is the same count by the
     task's current owner. `visible` is the caller's WHERE fragment over task columns
     (`Auth.task_sql`); the other filters also apply to the task as it is now.
     """
@@ -8947,9 +8793,6 @@ def task_flow(
     if owner_kind in ("bot", "human"):
         where.append("owner_id LIKE ?")
         args.append(owner_kind + ":%")
-    if type_id:
-        where.append("type_id=?")
-        args.append(type_id)
     if label:
         where.append(
             "EXISTS (SELECT 1 FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
@@ -8964,12 +8807,10 @@ def task_flow(
         elif recurring:
             where.append("0")
     picked = "picked AS (SELECT id, owner_id FROM tasks WHERE " + " AND ".join(where) + ")"
-    fields = "e.subject_type='task' AND " + (
-        "e.kind='status'" if not type_id else "(e.kind='status' OR (e.kind='step' AND e.new IS NOT NULL))"
-    )
+    fields = "e.subject_type='task' AND e.kind='status'"
     window = f"{fields} AND e.created_at>=?" + (" AND e.created_at<?" if until else "")
     window_args = [since] + ([until] if until else [])
-    stage = "CASE WHEN e.kind='step' THEN 'step:' || e.new WHEN e.old IS NULL THEN 'created' ELSE e.new END"
+    stage = "CASE WHEN e.old IS NULL THEN 'created' ELSE e.new END"
     days, people = {}, {}
     for day, owner_actor, name, n in conn.execute(
         f"WITH {picked} SELECT date(e.created_at, ?) AS day, t.owner_id, {stage} AS stage, count(*) FROM history_events e "
@@ -8980,13 +8821,13 @@ def task_flow(
         days[day][name] = days[day].get(name, 0) + n
         people.setdefault(owner_actor, {})
         people[owner_actor][name] = people[owner_actor].get(name, 0) + n
-    # Time in a stage: from entering it to the field's next change, for stages left in the window.
+    # Time in a status: from entering it to the next change, for statuses left in the window.
     spans = {}
     for name, hours in conn.execute(
         f"WITH {picked}, s AS (SELECT e.kind, e.new, e.created_at, LEAD(e.created_at) OVER "
         "(PARTITION BY e.subject_id, e.kind ORDER BY e.created_at, e.id) AS left_at FROM history_events e "
         f"WHERE {fields} AND e.subject_id IN (SELECT e.subject_id FROM history_events e JOIN picked t "
-        f"ON t.id=e.subject_id WHERE {window})) SELECT CASE WHEN kind='step' THEN 'step:' || new ELSE new END, "
+        f"ON t.id=e.subject_id WHERE {window})) SELECT new, "
         "(julianday(left_at)-julianday(created_at))*24 FROM s WHERE new IS NOT NULL AND left_at>=?"
         + (" AND left_at<?" if until else ""),
         (*args, *window_args, *window_args),
@@ -9002,17 +8843,9 @@ def task_flow(
     for counts in days.values():
         for name, n in counts.items():
             totals[name] = totals.get(name, 0) + n
-    steps = (
-        _rows(
-            conn.execute("SELECT id, name, position FROM task_steps WHERE type_id=? ORDER BY position, id", (type_id,))
-        )
-        if type_id
-        else []
-    )
     return {
         "days": [{"day": day, **days[day]} for day in sorted(days)],
         "totals": totals,
-        "steps": steps,
         "stages": {name: summary(values) for name, values in spans.items()},
         "people": sorted(
             ({"actor": actor, **counts} for actor, counts in people.items()),
