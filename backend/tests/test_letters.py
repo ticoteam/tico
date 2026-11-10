@@ -96,6 +96,33 @@ def test_changed_hash_asks_again_and_keeps_the_older_proof(api, hq):
     assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1
 
 
+def test_an_ok_of_a_letter_requoted_after_it_was_shown_is_refused_and_the_new_quote_is_shown(api, hq):
+    """The person opened the letter, then it was quoted again (a new total) and asked again before their click: the
+    click on what they saw gives no OK, on the old ask or the new one; the letter's preview then shows the new quote,
+    whose own OK mails it."""
+    row = send(api, quote(api))
+    seen = fetch(api, row)
+    old_hash, old_ask = seen["shown_hash"], seen["approval_id"]
+    hq.changed = True
+    service = api.app.state.letters
+    service.requote(row["id"])
+    with api.app.state.store.transaction() as c:
+        service.ask(c, dict(c.execute("SELECT * FROM letters WHERE id=?", (row["id"],)).fetchone()))
+    after = fetch(api, row)
+    assert after["approval_id"] != old_ask and after["total_micros"] == 1800000
+    assert after["shown_hash"] != old_hash
+    refused = post(api, f"tasks/{_task(api, seen)}/asks/{old_ask}/ok", {"shown_hash": old_hash}, expected=409)
+    assert refused["error"] == "task_requirement"
+    changed = post(
+        api, f"tasks/{_task(api, after)}/asks/{after['approval_id']}/ok", {"shown_hash": old_hash}, expected=409
+    )
+    assert changed["error"] == "task_changed"
+    assert asked(api, after)["ok_at"] is None and hq.provider_submits == 0
+    approve(api, after)
+    done = fetch(api, row)
+    assert done["status"] == "submitted" and hq.provider_submits == 1
+
+
 def test_bot_needs_send_access_and_grants_are_audited(api, hq):
     ident, token = bot(api)
     refused = post(api, "letters/quotes", {"text": "Hello", "recipient": RECIPIENT}, token=token, expected=403)

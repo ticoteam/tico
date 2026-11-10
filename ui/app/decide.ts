@@ -78,7 +78,7 @@ const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.
 const decideCurrent = (st: DecState) => st.at && !st.gone.has(st.at) ? st.items.get(st.at) || null : null;
 function decideSync(st: DecState, items: NeedsEntry[]) {
   const fresh = decideOrdered(items), keys = new Set(fresh.map(it => it.id));
-  const before = st.order;
+  const before = st.order, was = st.at ? st.items.get(st.at) : undefined;
   st.items = new Map(fresh.map(it => [it.id, it]));
   const order = before.filter(k => keys.has(k));
   fresh.forEach((it, i) => {
@@ -87,10 +87,13 @@ function decideSync(st: DecState, items: NeedsEntry[]) {
     order.splice(prev ? order.indexOf(prev.id) + 1 : 0, 0, it.id);
   });
   for (const k of [...st.gone]) if (!keys.has(k)) st.gone.delete(k);
-  // The item on screen left the list (answered elsewhere): the next one takes its place.
+  // The item on screen left the list (answered elsewhere): the same ask asked again (a letter quoted again) takes its
+  // place, else the next one.
   if (st.at && !keys.has(st.at)) {
-    const i = before.indexOf(st.at);
-    st.at = before.slice(i + 1).find(k => keys.has(k) && !st.gone.has(k))
+    const i = before.indexOf(st.at), shows = (it?: NeedsEntry) => (it?.ask?.shows || []).join('\n');
+    const again = was?.kind === 'ask' ? fresh.find(it => it.kind === 'ask' && !before.includes(it.id) && !st.gone.has(it.id)
+      && (it.task_id === was.task_id || !!shows(was) && shows(it) === shows(was))) : undefined;
+    st.at = again?.id || before.slice(i + 1).find(k => keys.has(k) && !st.gone.has(k))
       || before.slice(0, Math.max(i, 0)).reverse().find(k => keys.has(k) && !st.gone.has(k)) || null;
   }
   st.order = order;
@@ -556,6 +559,8 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
     if (code === 'task_changed') { await decideOkLoad(st, it, true); return; }     // the new content, and a new click
     st.error = taskRefusedOf(e)?.detail || errorMessage(e, 'Not approved.');
     decidePaintSide(st);
+    if (code === 'task_requirement') void v2Refresh();     // not asked any more: an ask that took its place comes in
+
   }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
