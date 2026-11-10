@@ -218,6 +218,18 @@ def call_sweeps(ctx: Context) -> tuple[str, bool]:
     return "Done", True
 
 
+def jev_verdicts(ctx: Context) -> tuple[str | None, bool]:
+    # Jev's verdicts on pages attached to page requirements (backend/page_verdicts.py): a few a beat, each model call
+    # made with no transaction held, each verdict recorded in its own short write.
+    from . import page_verdicts
+
+    at = ctx.at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    given = page_verdicts.run(ctx.store, at)
+    if not given:
+        return None, True
+    return f"Jev gave {given} verdicts", False
+
+
 # ----------------------------------------------------------------------------- the steps, in the order they run
 MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
     timedelta(minutes=1),
@@ -296,6 +308,7 @@ STEPS = [
     ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
+    Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}
 CONTROLLED = {step.control: step for step in STEPS if step.control}

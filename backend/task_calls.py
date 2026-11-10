@@ -402,18 +402,28 @@ def task_answer(
     seen_version: int | str | None = None,
     *,
     own_click: bool = False,
+    page_version: int | str | None = None,
 ) -> Row:
-    """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; the choice or the
-    text on a question; `done` on the owner's own work. If that was the last thing missing the task moves on. The
-    result carries `answer_id`. `own_click` says the request is the person's own click in their own session
-    (task_asks.own_click): only that OKs an OK the person asked themself."""
+    """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; `ok` or `no` on a
+    page, for the version shown (`page_version`); the choice or the text on a question; `done` on the owner's own
+    work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
+    request is the person's own click in their own session (task_asks.own_click): only that OKs an OK the person
+    asked themself."""
     from . import answers as A
 
     row = _open(conn, actor, task_id, work=False)
     _owners_done_is_work(conn, actor, row, requirement_id)
     with task_effects.because(actor):
         return A.answer(
-            conn, task_id, requirement_id, actor, value, note, seen_version=seen_version, own_click=own_click
+            conn,
+            task_id,
+            requirement_id,
+            actor,
+            value,
+            note,
+            seen_version=seen_version,
+            own_click=own_click,
+            page_version=page_version,
         )
 
 
@@ -564,6 +574,10 @@ def _may(
             out += ["ok", "no"]
     if kind == "answer" and not standing.met and asked:
         out.append("answer")
+    # A page is answered once Jev has looked: by whom it waits on, or any person when it names nobody (answers).
+    if kind == "page" and standing.state == R.WAITING and standing.on not in (R.JEV, R.GITHUB):
+        if viewer == standing.on or (standing.on is None and human):
+            out += ["ok", "no"]
     # Give: whoever it waits on, whoever asked it, or someone who works the task (may_handle_ask); the owner's own work
     # is given by someone who works the task, which reassigns it.
     if kind in ("ok", "answer") and standing.state == R.WAITING:
@@ -579,6 +593,17 @@ def _may(
     if kind in ("ok", "answer") and human and is_bot(asker):
         out.append("thumbs")
     return out
+
+
+def _page_of(conn: "sqlite3.Connection", visit_id: str, requirement: Row) -> Row | None:
+    """The page attached to a page requirement on this visit: {file_id, version, ref}, or None."""
+    from . import task_pages
+
+    found = task_pages.current(conn, visit_id, requirement["id"])
+    if not found:
+        return None
+    ref = f"page:{found['file_id']}@{found['version']}"
+    return {"file_id": found["file_id"], "version": int(found["version"]), "ref": ref}
 
 
 # The viewer of what is kept on record (the audit of a refusal, a stored response): anyone may come to read it, so a
@@ -810,6 +835,9 @@ def task_view(
         # A bound OK's line, what it shows and a send back's note are its parties' (task_asks.party): anyone else who
         # reads the task learns only that it waits on a person.
         private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
+        # A page requirement shows the page attached now, at its pinned version: what an OK of it is for.
+        page = _page_of(conn, visit["id"], requirement) if requirement["kind"] == "page" else None
+        shows = [page["ref"]] if page else [] if private else requirement.get("shows") or []
         to_leave.append(
             {
                 "requirement_id": requirement["id"],
@@ -824,10 +852,11 @@ def task_view(
                 if requirement.get("visit_id")
                 else None,
                 "choices": None if private else requirement.get("choices"),
-                "shows": [] if private else requirement.get("shows") or [],
+                "shows": shows,
                 # What it shows is where its words come from: a reader who may not open one of those pages reads
                 # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
-                **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
+                **({"source": shows} if shows else {}),
+                **({"page": page} if page else {}),
                 "answer": _answer_view(conn, task_id, answer, private) if answer else None,
                 "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
             }

@@ -424,7 +424,15 @@ def register(
         # the right to edit the task.
         note = task_rule_gate.warn_on(gate, body.note) if body.note else org_rule_check.warn_line(gate) or body.note
         done = H.task_answer(
-            c, who.actor, task_id, asked, body.value, note, body.version, own_click=task_asks.own_click(who)
+            c,
+            who.actor,
+            task_id,
+            asked,
+            body.value,
+            note,
+            body.version,
+            own_click=task_asks.own_click(who),
+            page_version=body.page_version,
         )
         # An answer on the Strategy Bot's merged item goes to each original it stands for.
         strategy_merge.on_answer(c, who.actor, task_id, body.value)
@@ -444,6 +452,27 @@ def register(
         """OK, send back (`no` with a note), look again (`again`), or the answer to a question. A requirement of the
         stage is answered here too."""
         return checked(request, tid, body, "task_ask_answer", {"requirement_id": requirement_id})
+
+    @app.post("/api/v2/tasks/{tid}/pages")
+    def task_page_attach(request: Request, tid: str, body: M.TaskPageAttach):
+        """Attach a page to a page requirement of the task's stage: Jev checks it, then a person OKs it if one is
+        named. Attaching again replaces the page."""
+        from . import files as F
+        from . import task_pages
+
+        def call(c: Any, who: Any, task_id: str) -> Any:
+            ref = body.page.strip()
+            try:
+                file_id, _ = task_pages.parse_ref(ref)
+            except ValueError as exc:
+                raise Problem("validation", str(exc), 422) from None
+            row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
+            if not row or not F.file_visible(c, auth, who, row, {}):
+                raise Problem("not_found", "That page is not one you can read", 404)
+            made = task_pages.attach(c, task_id, body.requirement, ref, who.actor, seen_version=body.version)
+            return {"page": {"file_id": made["file_id"], "version": made["version"]}}
+
+        return work(request, tid, body, call)
 
     @app.post("/api/v2/tasks/{tid}/asks/{requirement_id}/give")
     def task_give(request: Request, tid: str, requirement_id: str, body: M.TaskAskGive):

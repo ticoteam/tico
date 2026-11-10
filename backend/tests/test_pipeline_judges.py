@@ -370,3 +370,29 @@ def test_no_evidence_is_not_met_even_over_the_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(backend_judge, "over_spend_cap", lambda conn, settings, *a, **k: (12.0, 10.0))
     result = P.judge_once(c, REQ, no_evidence, settings=_settings(path), engine=_engine(0.95))
     assert result["verdict"] == "not_met" and result["p"] == 0.0
+
+
+def test_a_failed_call_is_marked_failed_and_a_model_that_was_unsure_is_not(tmp_path, monkeypatch):
+    """The Jev step retries a failed call (page_verdicts TRIES) and never a model's own unsure: `failed` tells them apart."""
+    monkeypatch.setattr(P, "_installed_store", None)
+    path = tmp_path / "hub.sqlite"
+    copy_booted(path)
+    c = hub(path)
+    settings = _settings(path)
+
+    def broken(model, state, questions, label):
+        raise J.JudgeError("unavailable", "the model did not answer")
+
+    assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=broken)["failed"] is True
+    assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=None)["failed"] is True
+    assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(float("nan")))["failed"] is True
+    assert "failed" not in P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.5))
+    monkeypatch.setattr(backend_judge, "over_spend_cap", lambda conn, settings, *a, **k: (12.0, 10.0))
+    assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.95))["failed"] is True
+
+
+def test_the_judge_is_shown_what_a_page_is_judged_against():
+    """A review page's commits and a Validate page's release go to the judge beside the work (page_verdicts)."""
+    context = {"heads": {"acme/app#12": "aaa"}, "release": ["v1.2.0"]}
+    assert P._state(REQ, _work_fields(context=context))["work"]["context"] == context
+    assert "context" not in P._state(REQ, _work_fields())["work"]

@@ -40,6 +40,7 @@ ORDER = [
     "repository_waits",
     "entity_links",
     "call_sweeps",
+    "jev_verdicts",
 ]
 
 

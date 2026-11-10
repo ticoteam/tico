@@ -8,8 +8,8 @@ call over the team's Decide cap are all unsure, and nothing unsure passes work.
 The judge model is Jev alone: Decide Low (`tico-decide-low`), by Chris's decision on Nov 9. No pipeline picks another
 model. Jev goes through judge.server_engine, so its spend counts against the team's Decide cap.
 
-Nothing on a task calls the judge yet: it comes back as a requirement kind in phase 2 (docs/pipelines-v3.md, D9). Until
-then the eval (evals/pipeline_judge) is its one caller. The model is never asked while a write transaction is open.
+A page requirement's verdicts call it (backend/page_verdicts.py, through `judge_outside`), and the eval
+(evals/pipeline_judge). The model is never asked while a write transaction is open.
 """
 
 import hashlib
@@ -141,6 +141,9 @@ def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str,
         value = attachment.get("task_" + key)
         if value not in (None, ""):
             work[key] = value
+    if attachment.get("context"):
+        # What the page is judged against besides the rubric: the commits a review is for, the release it went out in.
+        work["context"] = attachment["context"]
     return {
         "requirement": {
             "name": requirement.get("name") or "",
@@ -225,7 +228,8 @@ def judge_once(
     """Judge one attachment against one requirement's rubric with one model.
 
     Returns {"verdict": "met" | "not_met" | "unsure", "p": float, "model", "cost_usd", "latency_ms", "provider",
-    "reason", "requirement_id", "attachment_id"}. The model is Jev (judge_model_of).
+    "reason", "requirement_id", "attachment_id"}, and `failed: True` when the call itself failed. The model is Jev
+    (judge_model_of).
     `engine` (or the module's ENGINE) makes the call; with neither, every answer is unsure. An attachment with no id is no
     evidence: it is not met with p 0 and no model is asked. A failed call, an unreadable answer, or a call over the team's
     Decide cap (checked when `settings` is given) is unsure with p 0.5, never a pass.
@@ -233,13 +237,34 @@ def judge_once(
     chosen = judge_model_of(c, requirement.get("pipeline_id"))
     base = _base(requirement, attachment, chosen)
 
-    def unsure(why: str) -> dict[str, Any]:
-        return {**base, "verdict": "unsure", "p": 0.5, "reason": why}
-
     if not attachment.get("id"):
         return _ask(base, requirement, attachment, None)  # no evidence is not met, whatever the model or the cap
     if settings is not None and judge.over_spend_cap(c, settings) is not None:
-        return unsure("Decide has reached the team's monthly spend cap")
+        return _failed(base, "Decide has reached the team's monthly spend cap")
+    return _ask(base, requirement, attachment, engine or _default_engine())
+
+
+def _failed(base: dict[str, Any], why: str) -> dict[str, Any]:
+    """The call itself failed (no model, an error, an unreadable answer, over the Decide cap): unsure with p 0.5, never a
+    pass, and `failed` so a caller that retries (page_verdicts) can tell it from a model that was unsure."""
+    return {**base, "verdict": "unsure", "p": 0.5, "reason": why, "failed": True}
+
+
+def judge_outside(
+    store: Any,
+    requirement: dict[str, Any],
+    attachment: dict[str, Any],
+    *,
+    engine: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None,
+) -> dict[str, Any]:
+    """`judge_once` with no snapshot held during the model call: the model and the Decide cap are read in a short read,
+    then the model is asked with no connection (the Jev step, page_verdicts.run)."""
+    with store.read() as c:
+        chosen = judge_model_of(c, requirement.get("pipeline_id"))
+        capped = judge.over_spend_cap(c, store.settings) is not None
+    base = _base(requirement, attachment, chosen)
+    if capped and attachment.get("id"):
+        return _failed(base, "Decide has reached the team's monthly spend cap")
     return _ask(base, requirement, attachment, engine or _default_engine())
 
 
@@ -253,9 +278,6 @@ def _ask(
     cap already checked). Safe to run while no database snapshot is held."""
     chosen = base["model"]
 
-    def unsure(why: str) -> dict[str, Any]:
-        return {**base, "verdict": "unsure", "p": 0.5, "reason": why}
-
     if not attachment.get("id"):
         # No evidence row: nothing to read, so the answer is not met and no model is asked (it cost nothing and needs no
         # person to fix what is missing).
@@ -263,15 +285,15 @@ def _ask(
 
     ask = engine
     if ask is None:
-        return unsure("No judge is configured on this server")
+        return _failed(base, "No judge is configured on this server")
     state = _state(requirement, attachment)
     try:
         result = ask(chosen, state, _questions(), QUESTION_SET)
     except JudgeError as exc:
-        return unsure(judge.FAILED.get(J.error_code(exc), exc.detail))
+        return _failed(base, judge.FAILED.get(J.error_code(exc), exc.detail))
     p = _probability(result.get("p"))
     if p is None:
-        return unsure("The judge's answer could not be read")
+        return _failed(base, "The judge's answer could not be read")
     verdict = verdict_of(p)
     reason = " ".join(str(result.get("reason") or "").split())[:REASON_BYTES]
     if _cannot_see(attachment, state):

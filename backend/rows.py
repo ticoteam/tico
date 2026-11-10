@@ -1622,6 +1622,8 @@ class RequirementPageRow(TypedDict):
     attached_by_id: str
     created_at: str
     replaced_at: str | None
+    rubric_hash: str | None
+    judged_against: str
 
 
 class PageVerdictRow(TypedDict):

@@ -129,8 +129,131 @@ def owed(conn: "sqlite3.Connection", now: str, limit: int = 20) -> list[Row]:
     return [dict(zip(names, found, strict=True)) for found in cursor.fetchall()]
 
 
+# The pages still counted on an open visit that wait on one verdict: what the Jev step judges and then nudges.
+WAITING_SQL = (
+    "SELECT p.*, v.task_id FROM requirement_pages p JOIN visits v ON v.id = p.visit_id AND v.left_at IS NULL "
+    "WHERE p.file_id=? AND p.version=? AND p.rubric_hash=? AND p.replaced_at IS NULL ORDER BY p.created_at, p.id"
+)
+ORPHAN_WAIT_H = 24  # a verdict no open task waits on is looked at again after this long, not judged
+BATCH = 5  # verdicts a Heartbeat beat judges at most: each is a model call, and the beat runs every few seconds
+
+
+def _waiting(conn: "sqlite3.Connection", row: Row) -> list[Row]:
+    cursor = conn.execute(WAITING_SQL, (row["file_id"], int(row["version"]), row["rubric_hash"]))
+    names = [d[0] for d in cursor.description]
+    return [dict(zip(names, found, strict=True)) for found in cursor.fetchall()]
+
+
+def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
+    """What Jev is asked for one owed verdict: the requirement (name, rubric, the pipeline's goal) and the attachment
+    (the page's text at its version, the task's title and spec, the context it is judged against)."""
+    from . import pipeline_judges as PJ
+    from . import task_engine as E
+    from . import task_requirements as R
+
+    requirement = R.get(conn, page["requirement_id"]) or {"id": page["requirement_id"], "kind": "page"}
+    task = E.task(conn, page["task_id"]) or {}
+    judged: Row = json.loads(page.get("judged_against") or "{}")
+    version = _one(
+        conn,
+        "SELECT v.mime, v.digest, v.size, f.title FROM bot_file_versions v JOIN bot_files f ON f.id = v.file_id "
+        "WHERE v.file_id=? AND v.version=?",
+        (row["file_id"], int(row["version"])),
+    )
+    text, cut = (
+        PJ.text_of(conn, {"mime": version["mime"], "blob_digest": version["digest"], "blob_size": version["size"]})
+        if version
+        else (None, False)
+    )
+    asked: Row = {
+        "id": requirement["id"],
+        "name": R.name_of(requirement),
+        "rubric": judged.get("rubric") or R.name_of(requirement),
+        "goal": ((task.get("pipeline") or {}).get("goal")) or "",
+        "pipeline_id": task.get("pipeline_id"),
+    }
+    attachment: Row = {
+        "id": f"page:{row['file_id']}@{row['version']}",
+        "source": f"page:{row['file_id']}@{row['version']}",
+        "file_version": int(row["version"]),
+        "digest": (version or {}).get("digest") or "",
+        "text": text,
+        "truncated": cut,
+        "task_title": task.get("title") or "",
+        "task_spec": task.get("body") or "",
+        "task_work_version": task.get("version") or 0,
+        "context": judged.get("context") or {},
+    }
+    return asked, attachment
+
+
+def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
+    """After a verdict: a history line on each task whose page it is, then the task moves on if that was the last thing
+    it needed, else its ladder starts again. Jev's send back wakes a bot owner with the reasons."""
+    from . import task_engine as E
+    from . import task_requirements as R
+
+    said = str(verdict["verdict"])
+    reasons = " ".join(str(verdict.get("reasons") or verdict.get("last_error") or "").split())
+    for page in pages:
+        task_id = str(page["task_id"])
+        E._event(  # pyright: ignore[reportPrivateUsage]
+            conn,
+            task_id,
+            E.SYSTEM,
+            "jev_verdict",
+            None,
+            said,
+            reasons or None,
+            {"requirement": page["requirement_id"], "file_id": page["file_id"], "version": page["version"]},
+        )
+        if E.advance(conn, task_id) is not None:
+            continue
+        E.changed(conn, task_id, E.SYSTEM)
+        if said == "not_met":
+            requirement = R.get(conn, page["requirement_id"]) or {"kind": "page"}
+            line = (
+                f'Jev sent back "{R.name_of(requirement)}": {reasons}'
+                if reasons
+                else (f'Jev sent back "{R.name_of(requirement)}"')
+            )
+            E.tell_owner(conn, task_id, line, f"jev:{verdict['id']}")
+
+
 def run(store: Any, now: str | None = None) -> int:
     """The Jev step on the Heartbeat: read what is `owed` in a short read, judge each with no transaction held
-    (pipeline_judges.judge_once, Decide's cap checked), then `record` each in its own short write and nudge its tasks
-    (task_engine.changed / advance). Returns how many verdicts it gave. Track B."""
-    raise NotImplementedError("page_verdicts.run: track B")
+    (pipeline_judges.judge_outside, Decide's cap checked), then `record` each in its own short write and nudge its tasks
+    (task_engine.advance, else changed). A verdict no open task waits on any more is put off ORPHAN_WAIT_H, not judged.
+    Returns how many verdicts it gave."""
+    from . import pipeline_judges as PJ
+
+    H = _h()
+    now = now or H.now()
+    jobs: list[tuple[Row, Row, Row]] = []
+    orphans: list[str] = []
+    with store.read() as c:
+        for row in owed(c, now, BATCH):
+            pages = _waiting(c, row)
+            if not pages:
+                orphans.append(str(row["id"]))
+                continue
+            asked, attachment = _job(c, row, pages[0])
+            jobs.append((row, asked, attachment))
+    if orphans:
+        with store.transaction() as c:
+            later = H.shift(now, hours=ORPHAN_WAIT_H)
+            for verdict_id in orphans:
+                c.execute("UPDATE page_verdicts SET next_try_at=? WHERE id=? AND verdict IS NULL", (later, verdict_id))
+    given = 0
+    for row, asked, attachment in jobs:
+        result = PJ.judge_outside(store, asked, attachment)
+        with store.transaction() as c:
+            again = _one(c, "SELECT verdict FROM page_verdicts WHERE id=?", (row["id"],))
+            if not again or again["verdict"] is not None:
+                continue  # given meanwhile: nothing to record or nudge
+            saved = record(c, str(row["id"]), result, failed=bool(result.get("failed")))
+            if saved["verdict"] is None:
+                continue
+            given += 1
+            _nudge(c, saved, _waiting(c, saved))
+    return given
