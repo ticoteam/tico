@@ -181,7 +181,7 @@ def _verify(recorded, known):
 
 
 @contextmanager
-def _read_only(path):
+def read_only(path):
     """A connection that reads the database as it is, with what its write-ahead log holds, and changes no byte of it,
     of its -wal or of its -shm, and makes no file next to it. A read-write connection would merge the log into the
     file when it closes; a plain read-only one still writes the -shm index and makes a missing -wal and -shm.
@@ -212,7 +212,7 @@ def preflight(path, *, adopt_legacy=False, directory=None):
     path = Path(path)
     if not path.is_file() or path.stat().st_size == 0:
         return
-    with _read_only(path) as conn:
+    with read_only(path) as conn:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not tables:
             return

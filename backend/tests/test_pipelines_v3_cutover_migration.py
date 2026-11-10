@@ -8,8 +8,9 @@ import sqlite3
 
 import pytest
 
-from backend import migrations
+from backend import boot as boot_step, migrations, replication
 from backend.tests.helpers.migrations import FIXTURES, PIPELINES_V3, boot, snapshot
+from backend.tests.helpers.replication import prepare
 
 CUTOVER = importlib.import_module("backend.migrations.20261110054000_pipelines_v3_cutover")
 V3 = importlib.import_module("backend.migrations.20261110010000_pipelines_v3")
@@ -334,19 +335,19 @@ def _files(directory):
     return {path.name: path.read_bytes() for path in sorted(directory.iterdir())}
 
 
-@pytest.mark.parametrize("left", ["no log", "log and index", "log only"])
-def test_a_refused_tico_05_database_is_left_byte_for_byte_as_it_was(tmp_path, left):
-    """Its only task is in the write-ahead log, not yet in the file: the refusal must read the log to see it, and leave
-    the file, its -wal and its -shm (where there are any) unchanged, and make no new file. A read-write check merged
-    the log into the file on close, and a plain read-only one writes the -shm or makes it."""
-    made, path = tmp_path / "made", tmp_path / "old" / "hub.sqlite"
+def _old_with_its_task_in_the_log(made, path, left, environment_id=None):
+    """A 0.5 database whose only task is in the write-ahead log, not yet in the file, copied to `path` with what a
+    server that stopped (cleanly, or without closing) left beside it. Returns the files there, by name."""
     made.mkdir()
-    path.parent.mkdir()
+    path.parent.mkdir(exist_ok=True)
     writer = sqlite3.connect(made / "hub.sqlite", isolation_level=None)
     writer.execute("PRAGMA journal_mode=WAL")
     writer.executescript(OLD)
     writer.execute("PRAGMA user_version=71")
     writer.execute(migrations.TABLE)
+    writer.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    if environment_id:
+        writer.execute("INSERT INTO registry_metadata VALUES('docker-environment-id', ?)", (f'"{environment_id}"',))
     writer.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     writer.execute("PRAGMA wal_autocheckpoint=0")
     writer.execute("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Old', 'doing')")
@@ -356,7 +357,7 @@ def test_a_refused_tico_05_database_is_left_byte_for_byte_as_it_was(tmp_path, le
         if (made / name).exists() and not (left == "log only" and name.endswith("-shm")):
             shutil.copyfile(made / name, path.parent / name)
     writer.close()
-    before = _files(path.parent)
+    before = _database_files(path.parent)
     assert (
         set(before)
         == {
@@ -365,8 +366,58 @@ def test_a_refused_tico_05_database_is_left_byte_for_byte_as_it_was(tmp_path, le
             "log only": {"hub.sqlite", "hub.sqlite-wal"},
         }[left]
     )
+    return before
+
+
+def _database_files(directory):
+    return {path.name: path.read_bytes() for path in sorted(directory.glob("hub.sqlite*"))}
+
+
+@pytest.mark.parametrize("left", ["no log", "log and index", "log only"])
+def test_a_refused_tico_05_database_is_left_byte_for_byte_as_it_was(tmp_path, left):
+    """The refusal must read the log to see the task, and leave the file, its -wal and its -shm (where there are any)
+    unchanged, and make no new file. A read-write check merged the log into the file on close, and a plain read-only
+    one writes the -shm or makes it."""
+    path = tmp_path / "old" / "hub.sqlite"
+    before = _old_with_its_task_in_the_log(tmp_path / "made", path, left)
+    assert _files(path.parent) == before
     with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):
         migrations.preflight(path)
     with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):
         boot(path)
     assert _files(path.parent) == before
+
+
+@pytest.mark.parametrize(
+    ("left", "stored", "configured"),
+    [("no log", None, None), ("log and index", "acme", "acme-other"), ("log only", "acme", None)],
+)
+def test_the_docker_start_refuses_a_tico_05_database_before_writing_its_id(tmp_path, left, stored, configured):
+    """`docker/entrypoint.sh prepare` (backend/boot.py) writes the install's id into the database before the server
+    starts. On a 0.5 database with tasks it refuses first: no id row added or changed, no -wal or -shm made, and the
+    tunnel, Caddy files and environment markers after it are not written either."""
+    data = tmp_path / "data"
+    before = _old_with_its_task_in_the_log(tmp_path / "made", data / "hub.sqlite", left, stored)
+    result, _ = prepare(tmp_path, **({"TICO_ENVIRONMENT_ID": configured} if configured else {}))
+    assert result.returncode != 0
+    assert "tasks from Tico 0.5" in result.stderr and "Traceback" not in result.stderr
+    assert _database_files(data) == before
+    assert not (data / replication.LOCAL_MARKER).exists()
+    # The Slack gateway reads the id beside it, and leaves the database as it was too.
+    assert boot_step.stored_environment_id({"TICO_DB": str(data / "hub.sqlite")}, tries=1) == stored
+    assert _database_files(data) == before
+
+
+@pytest.mark.parametrize("which", ["fresh", "0.5 with no tasks"])
+def test_the_docker_start_still_prepares_a_new_volume_and_a_tico_05_database_with_no_tasks(tmp_path, which):
+    data = tmp_path / "data"
+    if which != "fresh":
+        data.mkdir()
+        shutil.copyfile(_v05(tmp_path), data / "hub.sqlite")
+    result, _ = prepare(tmp_path, TICO_ENVIRONMENT_ID="acme")
+    assert result.returncode == 0, result.stderr
+    with sqlite3.connect(data / "hub.sqlite") as c:
+        assert c.execute("SELECT value FROM registry_metadata WHERE key='docker-environment-id'").fetchone() == (
+            '"acme"',
+        )
+    boot(data / "hub.sqlite")  # and the server's own start takes it
