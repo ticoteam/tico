@@ -1,8 +1,12 @@
+# pyright: strict
 """The pipelines' settings records (docs/dev/pipelines-v3-cutover.md, "HTTP"): read them, save one, retire one.
 
 The record is `pipeline_settings`'s: these routes read and write it whole, and every check is there. A private pipeline
 (phase 2) is not built: everyone on the team reads every pipeline.
 """
+
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Request
 
@@ -10,9 +14,12 @@ from . import models as M
 from . import pipeline_settings
 from .store import Problem
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
-def register(app, auth, mutate, store):
-    def record(c, who, pipeline_id):
+
+def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any) -> None:
+    def record(c: Any, who: Any, pipeline_id: str) -> dict[str, Any]:
         found = pipeline_settings.read(c, pipeline_id)
         if not found:
             raise Problem("not_found", "No such pipeline", 404)
@@ -22,7 +29,7 @@ def register(app, auth, mutate, store):
     @app.get("/api/v2/pipelines")
     def pipelines(request: Request):
         """Every pipeline, in the order they were made, each as its settings record."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
         with store.read() as c:
             ids = [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY created_at, id")]
@@ -30,7 +37,7 @@ def register(app, auth, mutate, store):
 
     @app.get("/api/v2/pipelines/{pipeline_id}")
     def pipeline(request: Request, pipeline_id: str):
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
         with store.read() as c:
             return {"pipeline": record(c, who, pipeline_id)}
@@ -39,10 +46,10 @@ def register(app, auth, mutate, store):
     def pipeline_save(request: Request, pipeline_id: str, body: M.PipelineRecord):
         """Make the pipeline or change it: the whole record, with the `settings_version` it was read at (a bot must
         give it; a person may leave it out)."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
 
-        def write(c):
+        def write(c: Any) -> dict[str, Any]:
             given = body.model_dump()
             seen = given.pop("settings_version", None)
             given.pop("may_change", None)
@@ -54,10 +61,10 @@ def register(app, auth, mutate, store):
     @app.post("/api/v2/pipelines/{pipeline_id}/retire")
     def pipeline_retire(request: Request, pipeline_id: str, body: M.PipelineRetire):
         """Take a pipeline out of use once it holds no open task."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
 
-        def write(c):
+        def write(c: Any) -> dict[str, Any]:
             pipeline_settings.retire(c, who.actor, pipeline_id, body.settings_version)
             return {"pipeline": record(c, who, pipeline_id)}
 

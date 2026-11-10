@@ -486,7 +486,7 @@ def is_poll(operation, result):
     return operation.endswith(("/renew", "/events"))
 
 
-def encode(value):
+def encode(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
