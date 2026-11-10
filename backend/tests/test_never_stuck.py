@@ -797,7 +797,31 @@ def test_the_heartbeat_runs_the_check_and_reports_a_task_it_could_not_check(api,
     ctx = HB.Context(scheduler, at)
     with pytest.raises(HB.Failed, match="1 task could not be checked"):
         S.step_never_stuck(ctx)
-    assert ctx.failures == [{"never_stuck": task_id, "error": "ValueError"}]
+    # The pass's failures reach service_health, which everyone reads: the error type and a count, never the task's id.
+    assert ctx.failures == [{"never_stuck": "ValueError", "tasks": "1"}]
+    assert task_id not in repr(ctx.failures)
+
+
+def test_a_private_rows_failure_keeps_its_id_and_words_out_of_service_health(c):
+    """service_health is readable by everyone (sql.py). Work on a task (its id may be a private task's, its error may
+    quote the title) records the error type only, under a digest of the row; the row clears it when it next works."""
+    import json
+
+    from backend.batch_work import isolated
+
+    secret = "task-secret-id"
+    failures: list[dict[str, str]] = []
+    with isolated(c, "ship_deployed", secret, failures, private=True):
+        raise ValueError("Acquire Initech: the title")
+    rows = c.execute(
+        "SELECT service, last_error, detail FROM service_health WHERE service LIKE 'background:%'"
+    ).fetchall()
+    assert len(rows) == 1 and failures == [{"ship_deployed": "ValueError"}]
+    shown = json.dumps([tuple(row) for row in rows])
+    assert secret not in shown and "Initech" not in shown and "ValueError" in shown
+    with isolated(c, "ship_deployed", secret, failures, private=True):
+        pass
+    assert not c.execute("SELECT 1 FROM service_health WHERE service LIKE 'background:%'").fetchone()
 
 
 def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, general, later):

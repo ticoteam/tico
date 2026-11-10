@@ -296,9 +296,13 @@ def step_never_stuck(ctx: "Context") -> tuple[str, bool]:
     failed: list[tuple[str, Exception]] = []
     with ctx.locked("never_stuck") as c:
         done = never_stuck.check(c, stamp(ctx.at), failed)
+    # service_health (the pass's failures) is readable by everyone (sql.py): it holds error types and counts, never a
+    # task's id, which may be a private task's. The server log names the task.
+    kinds: dict[str, int] = {}
     for task_id, error in failed:
-        ctx.failures.append({"never_stuck": task_id, "error": type(error).__name__})
+        kinds[type(error).__name__] = kinds.get(type(error).__name__, 0) + 1
         report("never_stuck", task_id, error)
+    ctx.failures.extend({"never_stuck": kind, "tasks": str(count)} for kind, count in kinds.items())
     if failed:
         raise Failed(f"Failed: {SR.count_words(len(failed), 'task')} could not be checked")
     return SR.words_of(done, none="Nothing to do"), SR.nothing(done)
