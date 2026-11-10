@@ -19,7 +19,7 @@ from backend.tests.helpers.api import assign, claim, get, post, ready, runner  #
 from backend.tests.helpers.finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
 from backend.tests.helpers.mcp import call, rpc
 from backend.tests.helpers.finance_bookkeeper_turns import CONFIG, _library_file, ask, chart, hire, mercury  # noqa: F401
-from backend.tests.helpers.finance_oks import give
+from backend.tests.helpers.finance_oks import give, the_ok
 
 PAYEE = {
     "name": "Northwind Hosting",
@@ -157,7 +157,7 @@ def test_pay_turn(api):
     assert not err and asked["status"] == "needs_approval" and asked["kind"] == "payment_create", asked
     assert asked["approver"] == OWNER, asked  # money out waits for one person: the owner here
     assert fake.sent("request_send_money") == []  # nothing was sent to the bank
-    assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "spend"
+    assert the_ok(api, asked["approval_id"])["subject"].startswith("finance:")
 
 
 # ----------------------------------------------------------------------------- invoices (playbook: invoice-overdue.md)
@@ -342,7 +342,7 @@ def test_close_period_takes_the_month_and_nothing_else(api):
     err, asked = ask(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
     assert not err and asked["status"] == "needs_approval" and asked["rule"] == "default:close", asked
     assert asked["approver"] == OWNER, asked
-    assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "finance"
+    assert the_ok(api, asked["approval_id"])["subject"].startswith("finance:")
     err, noted = ask(
         api, token, "close_period", {"month": "2026-10", "note": "Software over plan by 12%"}, "close:2026-10:note"
     )
