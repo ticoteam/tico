@@ -19,6 +19,7 @@ from backend.company_page import release
 from backend.company_page import schedule as S
 from backend.company_page import stats as ST
 from backend.store import H, Problem
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.helpers.org_rule_check import Judge
 from backend.tests.helpers.org_rules import org, rule
@@ -375,7 +376,9 @@ def test_the_batch_decide_path_takes_only_the_persons_own_click(page):
     """An OK bound to content is given only from its preview: the batch walk refuses it for anyone, the person
     included, and a send back through it stays theirs."""
     aid = page.ask(page.draft())["approval"]["id"]
-    item, say_ok = {"key": f"ask:{aid}", "title": "Board edition"}, {"decision": "ok"}
+    with page.store.read() as c:
+        key = X.ask_key(c, aid)
+    item, say_ok = {"key": key, "title": "Board edition"}, {"decision": "ok"}
     identities = page.store.settings.test_identities
     for token in ("ana-token", "ana-assistant", "ana-test"):
         with pytest.raises(Problem):

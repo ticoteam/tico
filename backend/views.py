@@ -2085,7 +2085,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
         items.append(
             {
                 "kind": it["kind"],
-                "id": it["requirement_id"] if it["kind"] == "ask" else it["task_id"],
+                "id": waiting_on.ask_id(it) if it["kind"] == "ask" else it["task_id"],
                 "task_id": it["task_id"],
                 "requirement_id": it["requirement_id"],
                 "line": it["line"],
@@ -2128,7 +2128,12 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             if item["task_id"] not in views:
                 views[item["task_id"]] = H.task_view(c, item["task_id"], who.actor) or {}
             item["ask"] = next(
-                (r for r in views[item["task_id"]].get("to_leave") or () if r["requirement_id"] == item["id"]), None
+                (
+                    r
+                    for r in views[item["task_id"]].get("to_leave") or ()
+                    if r["requirement_id"] == item["requirement_id"]
+                ),
+                None,
             )
             # What the task waits on says only "a person's OK" for a bound OK (waiting_on); its own line is this
             # person's to read when they are one of its parties, as their read of the task gives it.

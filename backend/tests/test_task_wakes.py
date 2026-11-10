@@ -152,6 +152,32 @@ def test_every_automatic_start_about_a_task_is_held_by_its_turn_and_its_seven_ru
     assert task_wakes.may_start(c, asked) and _state(c, asked["id"]) == "queued"  # a person's own words still start
 
 
+@pytest.mark.parametrize("via", ["assistant", "botops", "token"])
+def test_only_words_a_person_typed_themselves_start_a_run_past_the_seven(c, general, via):
+    """The 7 runs hold "until a person acts": a message the Assistant or BotOps writes in a person's name, or one sent
+    with a personal token, is no person's act, and neither is the keeper's carrier of one. A message typed in Slack is
+    the person's own."""
+    from backend import threads
+
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    for _ in range(task_wakes.RUNS):
+        X.ran(c, row["id"], BUILDER)
+        task_wakes.add(c, row, BUILDER, row["visit"], "Carry on.", wake_key=f"{row['id']}:{H.new_id()}")
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+    mark = H.BY_TOKEN.set(True) if via == "token" else H.VIA.set(via)
+    try:
+        written = H.say(c, ANA, BUILDER, "Keep going on this.", refs={"task": row["id"]})
+    finally:
+        (H.BY_TOKEN if via == "token" else H.VIA).reset(mark)
+    assert H.delegated(written["refs"]) and not H.person_sent(written)
+    assert not task_wakes.may_start(c, written) and _state(c, written["id"]) == "canceled"
+    carrier = threads._carrier(c, H.conversation(c, written["conversation_id"]), written, BUILDER, "mention", None)
+    assert carrier and not H.person_sent(H.message(c, carrier))
+    assert not task_wakes.may_start(c, carrier) and _state(c, carrier) == "canceled"
+    slack = H.say(c, ANA, BUILDER, "Typed in Slack.", refs={"task": row["id"], "via": "slack"})
+    assert task_wakes.may_start(c, slack) and _state(c, slack["id"]) == "queued"
+
+
 def test_a_quiet_message_whose_job_was_queued_is_held_like_any_other(c, general):
     """Quiet keeps a message from queueing a run; it never lets a run that was queued anyway (a deferred delivery's
     deadline, delivery._fire) past the turn and the 7 runs."""

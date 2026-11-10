@@ -180,6 +180,27 @@ def test_asking_again_with_other_content_withdraws_the_old_ok_even_one_that_was_
     K.use(c, second["requirement_id"], SUBJECT, redrafted, SENDER)
 
 
+def test_asking_about_a_subject_another_asked_about_leaves_their_ask_alone(c):
+    """A bot's subject (a GENERIC kind) is its own words: another bot asking about the same subject on its own task never
+    withdraws the first one's ask, private task and all. Both stand side by side, each used by whoever asked it. The
+    same asker asking again on another task leaves the first too; on the same task it replaces it."""
+    mine = H.task_create(c, SENDER, "Raise the launch budget", "More for the launch.", SENDER, lint=False, private=True)
+    theirs = H.task_create(c, OTHER, "Answer the ticket", "Reply to TK-1.", OTHER, lint=False)
+    first = _ask(c, task_id=mine["id"])
+    second = _ask(c, by=OTHER, content={**EMAIL, "body_sha256": "b" * 64}, task_id=theirs["id"])
+    assert K.standing(c, first["requirement_id"]) == K.WAITING
+    assert H.task(c, mine["id"])["status"] == "open"
+    assert K.standing(c, second["requirement_id"]) == K.WAITING
+    elsewhere = H.task_create(c, SENDER, "Another reply", "Reply again.", SENDER, lint=False)
+    third = _ask(c, content={**EMAIL, "body_sha256": "c" * 64}, task_id=elsewhere["id"])
+    assert K.standing(c, first["requirement_id"]) == K.WAITING and third["task_id"] == elsewhere["id"]
+    again = _ask(c, content={**EMAIL, "body_sha256": "d" * 64}, task_id=mine["id"])
+    assert K.standing(c, first["requirement_id"]) == K.WITHDRAWN
+    assert K.standing(c, again["requirement_id"]) == K.WAITING and K.standing(c, third["requirement_id"]) == K.WAITING
+    _ok(c, second, content={**EMAIL, "body_sha256": "b" * 64})
+    K.use(c, second["requirement_id"], SUBJECT, {**EMAIL, "body_sha256": "b" * 64}, OTHER)
+
+
 def test_an_ok_on_a_task_that_was_closed_is_not_used(c):
     row = H.task_create(c, ANA, "Answer the supplier", "Reply to the supplier.", SENDER, lint=False)
     asked = _ask(c, task_id=row["id"])

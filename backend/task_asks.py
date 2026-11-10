@@ -515,7 +515,8 @@ def ask_ok(
     """Ask `person` (always a person by name) to OK `content` before `subject` is done. The OK goes on `task_id`, the
     task the work belongs to; with none, a task is filed in General first, asked for by `by`: owned by `by` when that
     is a bot or a person, by `person` when it is the engine. The same subject asked again with the same content is the
-    same ask; with other content, the old ask is withdrawn and a new one made. Returns {task_id, requirement_id}."""
+    same ask; with other content, the old ask is withdrawn and a new one made (for a GENERIC subject, only the same
+    asker's on the same task). Returns {task_id, requirement_id}."""
     H = _h()
     subject = str(subject or "").strip()
     if not kind_of(subject) or ":" not in subject:
@@ -531,11 +532,20 @@ def ask_ok(
     if not is_human(target) or not R.active_person(conn, target):
         _refuse(conn, by, "task_requirement", "An OK to send, spend or publish is asked of a person who is here")
     digest = content_hash(content)
+    # A subject a module owns names one object (an email, a letter, an edition): the module checked the asker's rights
+    # on it, and one live OK per object is what it reads back (`latest`), so asking again replaces anyone's. A GENERIC
+    # subject is the asker's own words: only the same asker's ask on the same task is replaced; another's is never
+    # touched (they stand side by side, each used by whoever asked it).
+    own_words = kind_of(subject) in GENERIC and kind_of(subject) not in OWNED
     for old in conn.execute(
         "SELECT requirement_id FROM ok_grants WHERE subject=? AND used_at IS NULL", (subject,)
     ).fetchall():
         before = grant(conn, str(old[0]))
         if not before:
+            continue
+        if own_words and (
+            before["asked_by_id"] != by or (task_id is not None and task_of(conn, before["requirement_id"]) != task_id)
+        ):
             continue
         state = _state(conn, before)[0]
         if state == SENT_BACK and before["asked_by_id"] == by:

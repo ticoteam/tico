@@ -7,8 +7,9 @@ the person's chat with it: what was decided, and the questions, instructions and
 reply, split per item, comes back on those items the next time that bot comes up. Any front end runs the same loop:
 the hub tools an outside agent (Grok Bot, Meta Muse) calls, a page.
 
-The list is Needs you (`waiting_on.needs`): every OK and question a bot asked of the person (`ask:<requirement>`) and
-every task a bot filed for them (`task:<task>`); a batch holds only what bots are waiting on. A decision is what the
+The list is Needs you (`waiting_on.needs`): every OK and question a bot asked of the person
+(`ask:<visit>:<requirement>`) and every task a bot filed for them (`task:<task>`); a batch holds only what bots are
+waiting on. A decision is what the
 Needs-you buttons do: OK, Send back (with notes), an answer, Done or Close (`_apply_decide`, through the task calls).
 An OK that is bound to what it lets go (send, spend, publish: backend/task_asks.py) is never given on a walk: it is
 the person's own click on its preview in Tico. The person's Assistant may walk the list for them, as them; it never
@@ -62,6 +63,7 @@ def _row(c, entry):
     """One Needs-you entry as a front end presents it: the whole ask, never a clipped title. None for what no bot is
     waiting on (a person's own to-do, a bot that cannot run)."""
     from . import task_requirements as R
+    from . import waiting_on
 
     task = H.task(c, entry["task_id"]) if entry.get("task_id") else None
     if not task:
@@ -73,7 +75,7 @@ def _row(c, entry):
         frm = requirement.get("added_by_id") if requirement.get("visit_id") else task.get("owner_id")
         kind = requirement["kind"]
         row = {
-            "key": "ask:" + entry["requirement_id"],
+            "key": "ask:" + waiting_on.ask_id(entry),
             "kind": kind,
             "title": _clip(entry.get("line") or requirement.get("line"), 160),
             "task": entry["task_id"],
@@ -510,9 +512,12 @@ def _apply_decide(c, who, item, r):
     decision, text = r["decision"], (r.get("text") or "")[:2000]
     kind, ident = item["key"].split(":", 1)
     if kind == "ask":
-        task_id = task_asks.task_of(c, ident)
-        if not task_id:
+        found = _task_of_key(c, item["key"])
+        if not found:
             raise Problem("not_found", f"{item['title']} is not asked any more", 404)
+        # The requirement: a stage's is on every task in the stage, so it is answered on the item's own task, whose
+        # answer checks that it is still asked there.
+        task_id, ident = found["id"], ident.rsplit(":", 1)[-1]
         if decision == "ok":
             if task_asks.grant(c, ident):
                 raise Problem("decision", task_asks.FROM_PREVIEW, 409)
@@ -535,13 +540,15 @@ def _apply_decide(c, who, item, r):
 
 
 def _task_of_key(c, key):
-    """The task an item is about: the task itself, or the task an ask is on."""
+    """The task an item is about: the task itself, or for an ask (`ask:<visit>:<requirement>`, waiting_on.ask_id) the
+    task whose visit it was asked on, while that visit is still the task's own: once it moved on, it is not asked."""
     kind, ident = key.split(":", 1)
     if kind == "task":
         return H.task(c, ident)
     if kind == "ask":
-        found = task_asks.task_of(c, ident)
-        return H.task(c, found) if found else None
+        visit = ident.split(":", 1)[0]
+        found = c.execute("SELECT task_id FROM visits WHERE id=? AND left_at IS NULL", (visit,)).fetchone()
+        return H.task(c, found[0]) if found else None
     return None
 
 

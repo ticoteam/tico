@@ -289,7 +289,7 @@ def test_a_personal_token_never_gives_an_ok_on_anyones_ask_but_sends_back_and_he
     with api.app.state.store.transaction() as c:
         from backend import batch
 
-        item = {"key": "ask:" + asks[0], "title": "OK?"}
+        item = {"key": X.ask_key(c, asks[0]), "title": "OK?"}
         with pytest.raises(Exception) as refused:
             batch._apply_decide(c, ids["ana-token"], item, {"decision": "ok"})
         assert getattr(refused.value, "detail", "") == K.OWN_IN_TICO, refused.value
@@ -418,7 +418,7 @@ def test_a_needs_you_batch_never_gives_a_bound_ok_but_sends_one_back(api):
     keys = [batch["item"]["key"]] if batch.get("item") else []
     n = None
     for i in range(1, batch["total"] + 1):
-        if batch.get("item") and batch["item"]["key"] == "ask:" + rid:
+        if batch.get("item") and batch["item"]["key"].endswith(":" + rid):
             n = i
             break
         _, _, _, batch = call(api, "POST", f"batch/{out['id']}/next", "ben-test", {})

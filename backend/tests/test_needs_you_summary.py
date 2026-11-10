@@ -29,3 +29,21 @@ def test_another_persons_private_task_is_not_counted_for_you(api):
     )
     cara = get(api, "needs-you/summary", "cara-test")
     assert cara["total"] == get(api, "needs-you?count=1", "cara-test")["count"] == 0
+
+
+def test_a_stage_ok_on_two_tasks_is_two_items_each_its_own(api):
+    """A stage's OK is one requirement on every task in the stage: each task's ask is its own item (its visit and the
+    requirement), answered by the requirement on that task. Its live mark and a mend by `ids` reach that one alone."""
+    from backend.tests.helpers import engine as X
+
+    with api.app.state.store.transaction() as c:
+        stage_ok = X.requirement(c, "general-todo", "ok", person="human:ana", line="OK the spend")
+        ads = H.task_create(c, "human:ana", "Run the ads", "x", "bot:finance", lint=False)
+        launch = H.task_create(c, "human:ana", "Run the launch ads", "x", "bot:finance", lint=False)
+    items = [i for i in get(api, "needs-you")["items"] if i["kind"] == "ask"]
+    assert sorted(i["task_id"] for i in items) == sorted([ads["id"], launch["id"]])
+    assert len({i["id"] for i in items}) == 2 and {i["requirement_id"] for i in items} == {stage_ok}
+    assert all(i["ask"] and i["ask"]["requirement_id"] == stage_ok for i in items)
+    one = next(i for i in items if i["task_id"] == ads["id"])
+    mended = get(api, f"needs-you?ids={one['id']}")
+    assert [i["task_id"] for i in mended["items"]] == [ads["id"]] and list(mended["positions"]) == [one["id"]]

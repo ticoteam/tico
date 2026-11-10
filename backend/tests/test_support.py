@@ -9,6 +9,7 @@ import pytest
 
 from backend import support
 from backend.auth import Identity
+from backend.tests.helpers import engine as X
 from backend.tests.helpers.onboarding import TOKEN, as_person, environment, signed_in  # noqa: F401
 from backend import bot_settings as BS
 from backend.tests.helpers.support import ContractHQ, TICKET_ID, documented, file, hq
@@ -742,7 +743,8 @@ def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(e
     )
     token = signed_in("approver-token")
     b = api.post("/api/v2/batch", json={}, headers=token).json()
-    assert b.get("item", {}).get("key") == "ask:" + approval["id"], b
+    with api.app.state.store.read() as c:
+        assert b.get("item", {}).get("key") == X.ask_key(c, approval["id"]), b
     # A report's OK is bound to its preview: walking the list, an OK is refused as it is said.
     r = api.post(f"/api/v2/batch/{b['id']}/respond", json={"kind": "decide", "decision": "ok"}, headers=token)
     assert r.status_code == 422 and task_asks.FROM_PREVIEW in r.text, r.text
