@@ -417,8 +417,8 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     while the task is open, not snoozed and not at level person, while its bot has a turn on it (`waiting_on.turns`;
     Late's one look for the manager bot needs none), and while the visit has started fewer than 7 runs since it last
     changed, the leases about to start included. An engine wake must also be about the task's open visit. When the
-    run is held its queued job is canceled, here. True for a person's own message (their words always get an answer),
-    a quiet note, and anything about no task on the engine."""
+    run is held its queued job is canceled, here. True for a person's own message (their words always get an answer)
+    and anything about no task on the engine. A quiet message is held like any other once it has a job."""
     from . import task_engine as E
 
     H = _h()
@@ -431,7 +431,9 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     if not found:
         return True
     refs: Row = H._json(found[2], {}) or {}
-    if refs.get("quiet") or H.person_sent({"sender_id": found[3], "refs": refs}):
+    # Quiet only keeps a message from queueing a run: a job that exists anyway (a deferred delivery's deadline) is held
+    # like any other.
+    if H.person_sent({"sender_id": found[3], "refs": refs}):
         return True
     parts = str(found[0] or "").split(":")
     task = E.task(conn, parts[0]) if found[0] else None

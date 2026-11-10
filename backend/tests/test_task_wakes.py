@@ -128,6 +128,24 @@ def test_every_automatic_start_about_a_task_is_held_by_its_turn_and_its_seven_ru
     assert task_wakes.may_start(c, asked) and _state(c, asked["id"]) == "queued"  # a person's own words still start
 
 
+def test_a_quiet_message_whose_job_was_queued_is_held_like_any_other(c, general):
+    """Quiet keeps a message from queueing a run; it never lets a run that was queued anyway (a deferred delivery's
+    deadline, delivery._fire) past the turn and the 7 runs."""
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    for _ in range(task_wakes.RUNS):
+        X.ran(c, row["id"], BUILDER)
+        task_wakes.add(c, row, BUILDER, row["visit"], "Carry on.", wake_key=f"{row['id']}:{H.new_id()}")
+    c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+    quiet = H.new_id()
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'notice','The build went green.',?,?)",
+        (quiet, row["conversation_id"], H.KEEPER, BUILDER, H._dump({"task": row["id"], "quiet": True}), H.now()),
+    )
+    c.execute("INSERT INTO jobs(id,message_id,bot_id,created_at) VALUES(?,?,?,?)", (quiet, quiet, "builder", H.now()))
+    assert not task_wakes.may_start(c, quiet) and _state(c, quiet) == "canceled"  # an eighth run never starts
+
+
 def _start(company, c, message_id):
     """The claim's preparation of a queued job (execution.Execution.start_claimed), as `claim` calls it in its write."""
     from backend.execution import Execution
