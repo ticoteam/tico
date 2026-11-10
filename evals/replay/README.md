@@ -30,7 +30,7 @@ folder) and are passed with `--cases`. `cases/example.yaml` is made up and shows
 
 2. **A person reviews each draft**: cut names, customers, links and figures the replay does not need (what is cut from
    the original transcript is cut from the baseline too), write the `done` checks and `limits`, add `person` answers
-   for the questions the bot is likely to ask (answered in order, on the task or on a card it files), and set `reviewed_by` to their name. `prompt.exact: false` means the bot's
+   for the questions the bot is likely to ask (answered in order, on the task or on a task it files for them), and set `reviewed_by` to their name. `prompt.exact: false` means the bot's
    instructions changed after the task ran; the baseline is then the old run on an older prompt.
 3. `run.py --check` lists any case that cannot run: unsigned, or still holding a common key or token shape, a password,
    an email address or a phone number. The check is a backstop: a token with no telling shape passes it, so the

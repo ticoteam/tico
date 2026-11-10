@@ -28,6 +28,8 @@ interface RoadmapRankingState {
   previous: number[];
   next: number | null | undefined;
   seq: number;
+  menuAnchor?: HTMLElement | null;
+  menuField?: string;
 }
 interface RoadmapRankTask {
   id: string;
@@ -68,7 +70,9 @@ interface RoadmapTags {
   tags?: { key: string; label?: string | null; is_template?: boolean }[];
 }
 
-const roadmapTask = (t: PropTask): boolean => pipelineType(t)?.role === 'product-roadmap';
+// A roadmap task is one in the Product pipeline (D31); its id is the preset's until the pipelines list says otherwise.
+let ROADMAP_PRODUCT_ID = 'product';
+const roadmapTask = (t: PropTask): boolean => t.pipeline_id === ROADMAP_PRODUCT_ID;
 const REQUEST_SOURCE: Record<string, string> = {manual: 'Added by hand', public_form: 'Public roadmap', inbox: 'Email', meeting: 'Meeting'};
 const ROADMAP_SORTS = [['requester_count', 'Requests'], ['external_requesters', 'External'], ['important', 'Important'], ['organization', 'Organization'], ['size', 'Size']];
 
@@ -187,19 +191,25 @@ function roadmapCommentsBind(state: TaskChatState) {
 }
 let ROADMAP_RANKING: RoadmapRankingState | null = null;
 function roadmapRankingRefresh() { if (S.route === '#/roadmap' && ROADMAP_RANKING) void roadmapRankingLoad(ROADMAP_RANKING); }
+// The public roadmap reads the Product pipeline (D31).
+const roadmapPipeline = () => pipelinesAll().then(list => {
+  const product = list.find(p => !p.retired_at && (p.preset === 'product' || p.id === 'product'));
+  if (product) ROADMAP_PRODUCT_ID = product.id;
+  return product;
+}).catch(() => undefined);
 function pageRoadmap() {
   const state: RoadmapRankingState = ROADMAP_RANKING = {sort: 'requester_count', direction: 'desc', offset: 0, previous: [], next: null, seq: 0};
   $('#main').innerHTML = `<div class="roadmap-page"><header class="meeting-head"><h1 data-roadmap-title></h1><button class="primary" type="button" data-roadmap-new>New task</button></header>
     <div class="roadmap-sort"><button type="button" class="tl-chip tl-chip-main tl-groupchip" data-roadmap-sort aria-haspopup="menu"><span class="k">Sort</span><span data-sort-word>Requests</span>${TL_ICON.caret}</button><button class="ghost" type="button" data-roadmap-direction aria-label="Sort ascending">↓</button></div>
     <div data-roadmap-table></div><div class="row roadmap-pager"><button class="ghost" type="button" data-roadmap-back disabled>Previous</button><button class="ghost" type="button" data-roadmap-next disabled>Next</button><span class="err" role="status" data-roadmap-error></span></div></div><div id="task-filter-pop" class="tl-pop" popover></div>`;
   $('#task-filter-pop').onkeydown = tasksMenuKeys;
-  $('[data-roadmap-new]').onclick = () => { void taskTypesLoad().then(() => { const product = pipelineProductType(); const manager = botByRef(product?.manager) || S.emps.find(e => product?.manager && e.template === product.manager); openTaskCreate(manager?.id || '', {type: product?.id || 'product-roadmap'}); }); };
+  $('[data-roadmap-new]').onclick = () => { void roadmapPipeline().then(product => openTaskCreate(botByRef(product?.manager_id)?.id || '', {pipeline: product?.id || 'product'})); };
   $('[data-roadmap-sort]').onclick = (ev: MouseEvent) => tasksMenu(state, ev.currentTarget as HTMLElement | null, `<div class="tl-menu" role="menu" aria-label="Sort roadmap">${ROADMAP_SORTS.map(([key, label]) => `<button type="button" class="tl-mi" role="menuitemradio" aria-checked="${state.sort === key}" data-sort="${key}">${label}</button>`).join('')}</div>`, (pop: HTMLElement) => pop.onclick = (e: MouseEvent) => { const button = eventElement(e)?.closest<HTMLElement>('[data-sort]'); if (button) { state.sort = button.dataset.sort; state.offset = 0; state.previous = []; tasksMenuClose(); void roadmapRankingLoad(state); } });
   $('[data-roadmap-direction]').onclick = () => { state.direction = state.direction === 'desc' ? 'asc' : 'desc'; state.offset = 0; state.previous = []; void roadmapRankingLoad(state); };
   $('[data-roadmap-back]').onclick = () => { state.offset = state.previous.pop() || 0; void roadmapRankingLoad(state); };
   $('[data-roadmap-next]').onclick = () => { if (state.next != null) { state.previous.push(state.offset); state.offset = state.next; void roadmapRankingLoad(state); } };
   void roadmapRankingLoad(state);
-  void taskTypesLoad({cached: true}).then(() => { const title = $('[data-roadmap-title]'); if (title) title.textContent = pipelineProductType()?.name || ''; });
+  void roadmapPipeline().then(product => { const title = $('[data-roadmap-title]'); if (title) title.textContent = product?.name || ''; });
 }
 async function roadmapRankingLoad(state: RoadmapRankingState) {
   const seq = ++state.seq;

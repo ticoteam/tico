@@ -82,8 +82,10 @@ def test_the_owner_comes_from_the_pipeline_or_the_command_and_is_asked_for_when_
     waiting = pipeline.next_step(repo.project, stages, task="T-1")
     assert waiting.startswith("waiting: no owner is named") and "--owner" in waiting
     step = pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee")
-    assert step.startswith("hub task ask T-1 --to 'Ana Lee' 'Approve the script files for launch?'")
-    assert "--show file:projects/launch/script/intro.md" in step and step.endswith("--version N")
+    publish, ask = step.splitlines()
+    assert publish == "1. hub file publish projects/launch/script/intro.md"
+    assert ask.startswith("2. hub task ask T-1 --to 'Ana Lee' 'OK the script files for launch?' --kind ok")
+    assert "--show file:<FILE@N> --version N" in ask
     repo.approved.add(script.relative_to(repo.root).as_posix())
     assert pipeline.next_step(repo.project, stages, owner="Ana Lee").startswith("waiting: make the storyboard files")
     put(repo, "storyboard", "sheet.html")  # now the storyboard waits for the owner
@@ -91,7 +93,7 @@ def test_the_owner_comes_from_the_pipeline_or_the_command_and_is_asked_for_when_
         (repo.root / "pipeline.yaml").read_text().replace('owner: ""', "owner: Ana Lee")
     )
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1")  # the owner comes from pipeline.yaml
-    assert "--to 'Ana Lee'" in step and "--show file:projects/launch/storyboard/sheet.html" in step
+    assert "--to 'Ana Lee'" in step and "hub file publish projects/launch/storyboard/sheet.html" in step
 
 
 def test_a_bot_mover_gets_a_hand_off_task_not_a_question(repo):
@@ -130,7 +132,7 @@ def test_going_over_budget_asks_the_owner_for_a_raise_and_an_approved_raise_lets
     (repo.project / "shots" / ".done").write_text("")
     ask = pipeline.next_step(repo.project, stages, task="T-1", owner="Ana Lee")
     assert ask.startswith("over budget (10.00 of 10.00 USD used): ask the owner for an OK: hub task ask T-1")
-    assert "--to 'Ana Lee'" in ask and "--choices 'Raise budget,Stop'" in ask
+    assert "--to 'Ana Lee'" in ask and "--kind ok" in ask and "--choices" not in ask and "--show" not in ask
     assert "Spend 10 USD more on launch?" in ask
     assert pipeline.next_step(repo.project, stages, owner="").startswith("waiting: no owner")
     pipeline.main(["raise", str(repo.project), "--usd", "10", "--ok", "req-42"])
@@ -200,8 +202,8 @@ def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monke
     )
     assert REAL_APPROVAL(script) == (False, {})
     step = pipeline.next_step(repo.project, cfg(repo), task="T-1", owner="Ana Lee")
-    assert step.startswith("hub task ask T-1 --to 'Ana Lee' 'Approve the script files for launch?'")
-    assert "--show file:projects/launch/script/intro.md" in step
+    assert step.startswith("1. hub file publish projects/launch/script/intro.md")
+    assert "hub task ask T-1 --to 'Ana Lee' 'OK the script files for launch?' --kind ok --show file:<FILE@N>" in step
     assert pipeline.gate(script) == 1
 
 

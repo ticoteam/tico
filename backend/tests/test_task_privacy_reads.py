@@ -226,7 +226,7 @@ def test_private_execution_output_context_and_grants_revoke_on_reassignment(api)
     )
     get(api, f"turns/{attempt['id']}/steps", expected=404)
     get(api, f"turns/{attempt['id']}/steps", "ben-test")
-    post(api, "tasks/" + row["id"], {"version": attempt["task"]["version"], "owner": "finance"}, "ben-test")
+    post(api, "tasks/" + row["id"] + "/owner", {"version": attempt["task"]["version"], "owner": "finance"}, "ben-test")
     get(api, "messages/" + attempt["message"]["id"], attempt["token"], expected=404)
     assert api.get(
         f"/api/v2/conversations/{row['conversation_id']}/messages", headers=headers(attempt["token"])

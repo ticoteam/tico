@@ -54,7 +54,7 @@ audio are cards too (see [Video and audio](#video-and-audio)) and count toward t
 - **"Couldn't show this visual"** shows, with **Open in file viewer**, when the visual can't be displayed.
 
 On a task, **Open in file viewer** and **Newer version** open the task's own file panel at that version; see
-[Tasks](tasks.md#files-and-questions-on-the-page). In a thread they open the file viewer.
+[Tasks](tasks.md#files). In a thread they open the file viewer.
 
 A visual shows as a file chip instead of a card only when its type or size isn't one that shows inline (see
 [Types and limits](#types-and-limits)).

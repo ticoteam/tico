@@ -44,28 +44,6 @@ and a task's acceptance criteria are `acceptance_criteria`, a list.
 - The runner wire keeps its `attempt` keys, so runners on older releases keep working.
 - Event names in the audit log keep `attempt`, for example `attempt.input.moved`.
 
-## Holds
-
-A task no longer has `snoozed_until`, `snoozed_by` or `snoozed_note` fields. Its `holds` list carries those facts and
-the blocked ones. Each hold has `kind` (`blocked` or `snoozed`), `reason`, `since`, `until`, `by` and `cause`. The snooze
-and unsnooze endpoints keep working as before.
-
-```json
-{"id": "t_8f2", "title": "Send the Q4 invoice", "created_at": "2026-10-02T09:12:00Z",
- "holds": [{"kind": "snoozed", "reason": "waiting on the vendor", "since": "2026-10-02T09:12:00Z",
-            "until": "2026-10-09T09:00:00Z", "by": "human:sam"}]}
-```
-
-The example is abridged. The old response for the same task had `"created"`, `"snoozed_until"` and `"snoozed_by"`
-at the top level, and no `holds`.
-
-In hub SQL the holds are rows of `task_holds` (`kind`, `cause`, `reason`, `by_id`, `until_at`, `created_at`,
-`released_at`, ...), read with their task. The `tasks` columns `snoozed_until`, `snoozed_by_id`, `snoozed_note`,
-`blocked_since`, `blocked_reason`, `blocked_kind`, `blocked_from_step`, `blocked_from_status`, `blocked_gate` and
-`holds_cleared_at` are gone: a query that read `tasks.snoozed_until` reads
-`(SELECT until_at FROM task_holds h WHERE h.task_id=tasks.id AND h.kind='snoozed' AND h.released_at IS NULL)`.
-The runner wire is unchanged: a claimed task still carries those fields (`blocked_gate_json`, `snoozed_by`, ...).
-
 ## Needs you
 
 Each needs-you item has `id`, `kind`, `title`, `body`, `subject`, `created_at` and `actions`. It had `created`.

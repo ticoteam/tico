@@ -112,9 +112,7 @@ except that a person's message, a new thread or a reply in one, to a paused or q
 bot is back (the gateway tells the person in the thread that it waits and when the bot is back); the cap on bot-to-bot traffic, the unsolicited cap, the lint, the escape rule (a message that
 names a `secrets/` path is refused and recorded as such).
 
-A follow-up in a thread is linked to the bot's last line (`in_reply_to`); when that bot has one open
-question task to that person, the follow-up answers it (`question_tasks.answer_from_reply`), so the
-question task closes.
+A follow-up in a thread is linked to the bot's last line (`in_reply_to`).
 
 The bot's run gets the text, and in the message's `refs.slack` the channel or DM name, the
 thread permalink, the sender's email, the last twelve exchanges of the thread and a note that

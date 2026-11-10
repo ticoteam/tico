@@ -17,115 +17,70 @@ interface BotFilterTab {
 }
 interface BotFilterRead {
   tabs: Record<string, BotFilterTab>;
-  tasks: Map<string, TaskRow>;
-  extras: NeedsItem[];
+  tasks: Map<string, TaskAny>;
+  extras: NeedsEntry[];
 }
-// The task list a v2 read returns (GET /v2/tasks with brief=true).
+// A task as GET /v2/tasks?brief=true lists it: the task without its text, so with its times.
+type BotListTask = TaskBriefV3 & {created_at?: string | null; updated_at?: string | null; done_at?: string | null; closed_at?: string | null};
 interface BotTaskList {
-  tasks?: TaskRow[];
+  tasks?: BotListTask[];
 }
-// The pill's state for a keeper bot (ui/app/pill.ts): what is typed, the files on it and which bot it goes to.
+// The pill's state for a bot (ui/app/pill.ts): what is typed, the files on it and which bot it goes to.
 interface BotPillState {
   sending?: boolean | undefined;
   files: File[];
   slug: string | null;
 }
 
-// The text a need row shows (the rows carry these fields beside what NeedsItem names).
-interface NeedsItem {
-  first_line?: string;
-  title?: string;
+// ---- tasks on a bot's page (S14): each row is the title, a Late tag, and its stage dimmed at the right
+const V2_ACTIVE = ['open'];
+const V2_ENDED = ['done', 'closed'];
+// Stage names by stage id, from the pipelines list: a list row names only its stage's id.
+const BOT_STAGE_NAMES = new Map<string, string>();
+async function botStageNamesLoad() {
+  try {
+    for (const p of await pipelinesAll()) for (const st of p.stages) if (st.id) BOT_STAGE_NAMES.set(st.id, st.name);
+  } catch { /* rows show without their stage until the next read */ }
 }
-
-// ---- tasks on a keeper bot's page: hub.db instead of Issues ----
-const V2_ACTIVE = ['open', 'doing', 'waiting'];
-const V2_ENDED = ['review', 'ready', 'done', 'closed', 'declined'];   // the rest of backend/hubdb.py TASK_STATUSES
-const V2_GROUPS: [string, string][] = [['doing', 'Doing'], ['waiting', 'Waiting'],
-                   ['done', 'Done'], ['declined', 'Declined'], ['closed', 'Closed']];
-// Keep titles compact, with status text only when the section does not already name the state.
-// Show the avatar of whoever holds the task (your own photo for you).
-function taskStateLabel(t: TaskRow): string {
-  if (taskNeedsMe(t) || t.status === 'declined') return 'Needs you';
-  if (t.status === 'waiting') return 'Waiting';
-  if (t.status === 'doing' || (t.status === 'open' && !actorPerson(t.owner_id))) return 'Doing';
-  return 'To do';
+function botTaskStage(t: TaskAny): string {
+  const stage = 'stage' in t ? t.stage as {name?: string} | null | undefined : null;
+  return stage?.name || BOT_STAGE_NAMES.get(t.stage_id || '') || '';
 }
-function actorAvatarOnly(a: string): string {
-  const slug = actorSlug(a), pid = actorPerson(a);
-  if (slug && botRow(slug))
-    return `<a class="who-av" href="#/bot/${encodeURIComponent(slug)}" title="${esc(empName(slug))}">${avatar(slug, 22)}</a>`;
-  const person = pid === S.me?.id ? (mePerson() || {id: pid, name: S.me?.name}) : (S.people || []).find(p => p.id === pid) || {id: pid, name: actorLabel(a)};
-  return `<span class="who-av" title="${esc(pid === S.me?.id ? 'You' : actorLabel(a))}">${personAvatar(person, 22)}</span>`;
+function botTaskRowHTML(t: TaskAny): string {
+  const stage = t.status === 'open' ? botTaskStage(t) : '';
+  return taskRowHTML(t, {after: stage ? `<span class="muted">${esc(stage)}</span>` : ''});
 }
-// `below` is one more line under the title, as a Blocked row's "Waits on …". `card` is the Needs you card the row
-// opens instead of the task (decide.js), when it is answered on a card.
-function v2TaskRow(t: TaskRow, slug?: string | null, showStatus = true, below = '', card = ''): string {
-  // On a bot's page the other party is whoever is not the bot; on a person's page (no slug) it is the requester.
-  const other = slug && actorSlug(taskRequester(t)) === slug ? t.owner_id : taskRequester(t);
-  const age = taskAge(t);
-  // On a bot's page a row says only what its tab doesn't: no "Open" on your own task under Needs you, no "Doing" under
-  // Doing, and no avatar when the holder is you or this bot.
-  const ownerIsMe = actorPerson(t.owner_id) === S.me?.id, mineOpen = t.status === 'open' && ownerIsMe;
-  const statusShown = !slug || !(mineOpen || taskStatusLabel(t) === 'Doing');
-  const holderShown = !slug || !(actorSlug(t.owner_id) === slug || ownerIsMe);
-  return `<div class="trow${showStatus ? '' : ' status-in-heading'}" data-task-detail="${esc(t.id)}" data-task-version="${esc(t.version || '')}"${card ? ` data-need-card="${esc(card)}"` : ''}><div class="trow-head">
-      ${showStatus ? `<span class="pill ${(V2_PILL as Record<string, string | undefined>)[t.status] ?? ''}">${esc(({open: !actorPerson(t.owner_id) ? 'Doing · starting' : ownerIsMe ? 'Needs you' : 'To do', waiting: taskBlockedHold(t) ? 'Blocked' : 'Waiting', doing: 'Doing'} as Record<string, string | undefined>)[t.status] || t.status || '')}</span>${statusShown ? taskStatusText(t) : ''}` : ''}
-      <a class="ttl" data-task-detail-open href="#/task/${encodeURIComponent(t.id)}" title="${esc(`${t.title || ''} · ${taskStateLabel(t)} · ${age}`)}">${esc(t.title || '')}</a>${prStateBadge(t.pr_state)}
-      <span class="tags">${actorChip(other)}</span>${holderShown ? actorAvatarOnly(t.owner_id) : ''}
-      <span class="muted tnum" title="${esc(taskAgeTitle(t))}">${esc(age)}</span></div>${below ? `<div class="trow-waits muted">${esc(below)}</div>` : ''}</div>`;
-}
-// The rail and person rows open the same complete task as the manager; actor links keep their own destination.
-document.addEventListener('click', ev => {
-  const from = ev.target instanceof Element ? ev.target : null;
-  const row = from?.closest<HTMLElement>('[data-task-detail]');
-  if (!from || !row || ev.defaultPrevented || ev.button || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
-  const link = from.closest('a');
-  if (link && !link.hasAttribute('data-task-detail-open')) return;
-  ev.preventDefault();
-  void taskModalOpen('t' + (row.dataset.taskDetail ?? ''));
-});
-function v2TaskGroups(list: TaskRow[], slug: string | null | undefined, statuses: string[]): string {
-  const out = V2_GROUPS.filter(([k]) => statuses.includes(k)).map(([k, label]) => {
-    const rows = list.filter(t => (t.status === 'open' ? 'doing' : String(t.status)) === k);
-    return rows.length ? `<div class="v2-group"><h3>${esc(label)} <span class="muted">${rows.length}</span></h3>${
-      rows.map(t => v2TaskRow(t, slug, false)).join('')}</div>` : '';
-  }).filter(Boolean).join('');
-  return out;
-}
-function taskNeedsMe(task: TaskRow | NeedsItem | null | undefined): boolean {
-  // A need of kind task is listed as a NeedsItem but is read here as the task row it is.
-  const row = task as TaskRow | null | undefined;
-  const me = myActor();
-  return !!me && (row?.owner_id === me || (row?.ask?.recipient_id === me && !row?.ask?.older) || taskWaitingOn(row) === me);
-}
-// The server counts editable filters for the viewer; Needs you also keeps questions and approvals.
-// Done recently uses the bot’s finished work. A failed task load is retried, never shown as an empty list.
+// The task a Needs-you item is about: an ask's or a task's own, a stuck stretch's first.
+const botNeedTaskId = (it: NeedsEntry) => String(it.task_id || it.task_ids?.[0] || it.task?.id || '');
+// Done recently needs only what changed since the window opened. A failed task load is retried, never shown as an
+// empty list.
 async function loadBotTasksV2(slug: string) {
   const pane = $('#t-open'); if (!pane) return;
   const seen = BOT_TASKS_CACHE.get(slug);
   if (seen) botTasksRender(slug, seen.owned);   // last time's list at once; the fresh one follows
   let open: BotTaskList | null = null, ended: BotTaskList | null = null;
-  // Done recently needs only what changed since the window opened: the bot's whole history was read on every refresh,
-  // and past the server's 500-row page it pushed open tasks out. The day is the cut, so an unchanged list stays a 304.
+  // The day is the cut, so an unchanged list stays a 304.
   const since = new Date(Date.now() - (BOT_DONE_RECENT_DAYS + 1) * 86400000).toISOString().slice(0, 10) + 'T00:00:00Z';
   const who = encodeURIComponent(slug);
+  const names = BOT_STAGE_NAMES.size ? null : botStageNamesLoad();
   const filtered = botTaskFilterRead(slug);
   for (const wait of [0, 600, 2000]) {
     if (wait) await new Promise(done => setTimeout(done, wait));
     if (!$('#t-open') || BOT?.slug !== slug) return;
     [open, ended] = await Promise.all([
-      open || v2Get(`/v2/tasks?owner=${who}&status=${V2_ACTIVE.join(',')}&snoozed=all&brief=true`),     // snoozed show with their chip
+      open || v2Get(`/v2/tasks?owner=${who}&status=${V2_ACTIVE.join(',')}&snoozed=all&brief=true`),
       ended || v2Get(`/v2/tasks?owner=${who}&status=${V2_ENDED.join(',')}&snoozed=all&brief=true&updated_since=${since}`)]);
     if (open && ended) break;
   }
+  await names;
   if (!$('#t-open')) return;
   // A task that finished between the two reads is in both: the later copy wins.
-  const byId = new Map<string, TaskRow>();
+  const byId = new Map<string, BotListTask>();
   for (const t of [...(open?.tasks || []), ...(ended?.tasks || [])]) {
     const was = byId.get(t.id);
     if (!was || String(t.updated_at || '') >= String(was.updated_at || '')) byId.set(t.id, t);
   }
-  const owned: {tasks: TaskRow[]} | null = open && ended ? {tasks: [...byId.values()]} : null;
+  const owned: {tasks: BotListTask[]} | null = open && ended ? {tasks: [...byId.values()]} : null;
   if (!owned) {
     if (!seen) $('#t-open').innerHTML = '<div class="err">Could not load the tasks. They will show on the next refresh.</div>';
     return;
@@ -134,15 +89,15 @@ async function loadBotTasksV2(slug: string) {
   botTasksRender(slug, owned);
   await filtered;
 }
-// Default tab identities (also used by non-Keeper bots) and Done recently. [key, label, count id]; the ids predate the tabs. A bot that is not
+// Default tab identities and Done recently. [key, label, count id]; the ids predate the tabs. A bot that is not
 // on Tico's task list (Issues) shows these four.
-const BOT_TASK_TABS: [string, string, string][] = [['needs', 'Needs you', 'cnt-needs'], ['active', 'Doing', 'cnt-active'],
-                       ['blocked', 'Blocked', 'cnt-blocked'], ['done', 'Done recently', 'cnt-done']];
+const BOT_TASK_TABS: [string, string, string][] = [['needs', 'Needs you', 'cnt-needs'], ['active', 'Open', 'cnt-active'],
+                       ['blocked', 'Waiting', 'cnt-blocked'], ['done', 'Done recently', 'cnt-done']];
 const BOT_DONE_RECENT_DAYS = 14;
 const BOT_TASK_DEFAULT_CONDITIONS: Record<string, BotSidebarCondition[]> = {
   needs: [{field: 'needs', value: 'you'}],
-  active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open', 'doing']}],
-  blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['waiting']}, {field: 'waiting_on', value: 'not_me'}],
+  active: [{field: 'assigned_to', value: 'this_bot'}, {field: 'status', value: ['open']}],
+  blocked: [{field: 'assigned_to', value: 'this_bot'}, {field: 'waiting_on', value: 'not_me'}],
 };
 // Upgrade browser caches too, keeping the key, name, order and count setting of old layouts.
 function botTaskTabDefaults(tab: BotSidebarTab): BotSidebarTab {
@@ -186,7 +141,7 @@ function botTaskTabsPaint(slug: string) {
   if (seen) botTasksRender(slug, seen.owned);
   else botTaskTabShow(slug, botTaskTabFirst(slug, needsMeCount(slug)));
 }
-// Until a person picks: Needs you while it has rows, else Doing, else the first tab there is.
+// Until a person picks: Needs you while it has rows, else Open, else the first tab there is.
 function botTaskTabFirst(slug: string, needed: number): string | undefined {
   const keys = botTaskTabList(slug).map(tab => tab.key), picked = BOT_TASK_TAB.get(slug);
   if (picked !== undefined && keys.includes(picked)) return picked;
@@ -256,9 +211,9 @@ function botTaskFilterTurn<T>(slug: string, job: () => Promise<T>): Promise<T> {
 const botTaskFilterRead = (slug: string) => botTaskFilterTurn(slug, () => botTaskFilterReadNow(slug));
 async function botTaskFilterReadNow(slug: string) {
   // Keep each URL below common proxy limits even after many Needs you pages have been read.
-  const extras = botNeedsExtras(slug), chunks: string[] = [];
+  const extras = botNeeds(slug), chunks: string[] = [];
   let query = '';
-  for (const id of new Set(extras.map(it => String(it.id)))) {
+  for (const id of new Set(extras.map(botNeedTaskId).filter(Boolean))) {
     const encoded = encodeURIComponent(id);
     if (query && query.length + encoded.length + 3 > 4000) { chunks.push(query); query = ''; }
     query += (query ? '%2C' : '') + encoded;
@@ -276,7 +231,7 @@ async function botTaskFilterReadNow(slug: string) {
   }
   const was: Record<string, BotFilterTab> = BOT_TASK_FILTERED.get(slug)?.tabs || {};
   const read: BotFilterRead = {tabs: Object.fromEntries((got.tabs || []).map((tab: BotFilterTab): [string, BotFilterTab] => [tab.key, tab])),
-                tasks: new Map((got.tasks || []).map((t: TaskRow): [string, TaskRow] => [String(t.id), t])), extras};
+                tasks: new Map((got.tasks || []).map((t: TaskV3): [string, TaskAny] => [String(t.id), t])), extras};
   // A tab someone read further into stays that far on a refresh: its later pages are read again after the fresh first.
   for (const tab of Object.values(read.tabs)) {
     const before = was[tab.key];
@@ -287,11 +242,11 @@ async function botTaskFilterReadNow(slug: string) {
   BOT_TASK_FILTERED.set(slug, read);
   botTaskFilterPaint(slug);
   // The initial Needs you read or a live event may finish while this request is in flight.
-  const latest = botNeedsExtras(slug).map(it => String(it.id)).sort().join(',');
+  const latest = botNeeds(slug).map(it => String(it.id)).sort().join(',');
   if (latest !== extras.map(it => String(it.id)).sort().join(',')) void botTaskFilterRead(slug);
 }
 // The tab's next page onto the rows it holds; false when it could not be read or the tab is no longer the one asked.
-async function botTaskFilterPage(slug: string, tab: BotFilterTab, tasks: Map<string, TaskRow>): Promise<boolean> {
+async function botTaskFilterPage(slug: string, tab: BotFilterTab, tasks: Map<string, TaskAny>): Promise<boolean> {
   const got = await v2Get(`${botTaskFilterPath(slug)}?tab=${tab.key}&before=${encodeURIComponent(tab.next ?? '')}`);
   const page = got?.tabs?.[0];
   if (!page || page.key !== tab.key || page.name !== tab.name) return false;
@@ -310,8 +265,8 @@ function botTaskFilterPaint(slug: string) {
     const counted = got.tabs[tab.key ?? ''], list = $(tab.key === 'active' ? '#t-open' : '#t-' + tab.key);
     if (!counted || counted.name !== tab.name) continue;
     botTaskCount('cnt-' + tab.key, counted.count);
-    const rows = counted.ids.map(id => got.tasks.get(String(id))).filter((t): t is TaskRow => !!t);
-    if (list) botTaskList(list, rows.map(t => v2TaskRow(t, slug, true, t.status === 'waiting' ? botTaskWaitsOn(t) : '')), '<div class="rail-empty">None</div>',
+    const rows = counted.ids.map(id => got.tasks.get(String(id))).filter((t): t is TaskAny => !!t);
+    if (list) botTaskList(list, rows.map(botTaskRowHTML), '<div class="rail-empty">None</div>',
       counted.next ? `<button type="button" class="ghost bot-done-more" data-bot-filter-more="${tab.key}">Show more</button>` : '');
   }
   const needed = botNeedsPaint(slug);
@@ -331,44 +286,28 @@ document.addEventListener('click', async ev => {
   if (read) botTaskFilterPaint(slug);
   else toast('Could not load more. Try again.', true);
 });
-// What a blocked task waits on: the person or bot it names, else the first line of its note.
-function botTaskWaitsOn(t: TaskRow): string {
-  if (taskBotWait(t) || taskBlockedHold(t)) return taskWaitLine(t);
-  if (t.waiting_on) return `Waits on ${actorPerson(t.waiting_on) === S.me?.id ? 'you' : actorLabel(t.waiting_on)}`;
-  const line = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean);
-  return line ? (line.length > 140 ? line.slice(0, 139) + '…' : line) : 'Waits on: not said';
-}
-// Questions and approvals remain in Needs you even when its task filter is changed.
-function botNeedsExtras(slug: string): NeedsItem[] {
-  return botNeeds(slug).filter(it => ['question', 'approval'].includes(it.kind) || it.ask?.recipient_id === myActor());
-}
-// An approval or a question asked outside any task, one line in the rail: a tap opens its card (decide.js).
-function botNeedRow(it: NeedsItem): string {
-  const from = it.requester_id || '', title = approvalTitle(it) || it.first_line || it.title || '';
-  return `<div class="trow" data-need-card="${esc(decideItemKey(it))}"><div class="trow-head">
-      <span class="pill needs">${it.kind === 'approval' ? 'Approval' : 'Question'}</span>
-      <a class="ttl" href="${esc(NEEDS_YOU)}" aria-haspopup="dialog" title="${esc(plainActors(title))}">${esc(plainActors(title))}</a>
-      <span class="tags">${actorChip(from)}</span>
-      <span class="muted tnum" title="${esc(fmt(it.created_at))}">${esc(ageShort(it.created_at))}</span></div></div>`;
-}
-// Keep questions, approvals and matching tasks once each; one answered on a card leaves at once.
+// Needs you: the tasks the tab counts, and what else of this bot's is in the person's Needs you (a stuck stretch, an ask
+// on a task the tab does not hold), each once.
 function botNeedsPaint(slug: string): Set<string> {
   const host = $('#bot-needs'), filtered = BOT_TASK_FILTERED.get(slug), counted = filtered?.tabs.needs;
-  // Supplemental rows and their overlap count belong to the same completed filter read.
-  // New questions wait for that read instead of being added again to its task count.
-  const extras = counted && filtered?.extras ? filtered.extras : botNeedsExtras(slug);
-  const tasks: TaskRow[] = counted && filtered ? counted.ids.map(id => filtered.tasks.get(String(id))).filter((t): t is TaskRow => !!t) : [];
-  const items = counted ? [...extras, ...tasks.filter(t => !extras.some(it => String(it.id) === String(t.id)))]
-    : [...extras, ...botNeeds(slug).filter(it => it.kind === 'waiting' && !extras.some(extra => extra.id === it.id))];
+  // Extra rows and their overlap count belong to the same completed filter read.
+  const extras = counted && filtered?.extras ? filtered.extras : botNeeds(slug);
+  const tasks: TaskAny[] = counted && filtered ? counted.ids.map(id => filtered.tasks.get(String(id))).filter((t): t is TaskAny => !!t) : [];
+  const held = new Set([...tasks.map(t => String(t.id)), ...(counted?.matched_ids || [])]);
+  const rest = new Map<string, TaskAny>();
+  for (const it of extras) {
+    const id = botNeedTaskId(it);
+    if (id && it.task && !held.has(id) && !rest.has(id)) rest.set(id, it.task);
+  }
+  const items = [...tasks, ...rest.values()];
   if (!host || BOT?.slug !== slug) return new Set();
-  botTaskCount('cnt-needs', counted ? Number(counted.count) + extras.filter(it => !(counted.matched_ids || counted.ids).includes(String(it.id))).length : Math.max(items.length, needsMeCount(slug)));
-  const list = $('#t-needs'), shown = items.filter(it => !decideGone('kind' in it && it.kind === 'approval' ? decideItemKey(it) : 'task:' + it.id));
+  botTaskCount('cnt-needs', counted ? Number(counted.count) + rest.size : Math.max(items.length, needsMeCount(slug)));
+  const list = $('#t-needs');
   // Some of this bot's items may be on Needs you pages not read yet.
   const more = needsMoreButton()
     + (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
-  list.innerHTML = shown.length || more ? `<div class="bot-task-list">${shown.map(it =>
-    'kind' in it && it.kind === 'approval' ? botNeedRow(it) : v2TaskRow(it as TaskRow, slug, true, '', decideCardKey(needsItem(it.id)))).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
-  return new Set(items.map(it => String(it.id)));
+  list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(botTaskRowHTML).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
+  return new Set(items.map(t => String(t.id)));
 }
 // Needs you changed: refresh filter membership and supplement deduplication.
 function botNeedsChanged(slug: string) {
@@ -378,25 +317,25 @@ function botNeedsChanged(slug: string) {
     void botTaskFilterRead(slug);
   }
 }
-function botTasksRender(slug: string, owned: {tasks: TaskRow[]}) {
+function botTasksRender(slug: string, owned: {tasks: BotListTask[]}) {
   if (!$('#t-open') || BOT?.slug !== slug) return;
   const needed = botNeedsPaint(slug);
   const mine = owned.tasks || [];
-  const newest = (a: TaskRow, b: TaskRow) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
-  // Fallback while filters load (and for non-Keeper bots); saved filters are painted from server results below.
-  const active = mine.filter(t => ['open', 'doing'].includes(String(t.status))).sort(newest);
-  const blocked = mine.filter(t => t.status === 'waiting' && t.waiting_on !== 'human:' + S.me?.id).sort(newest);
-  // Done recently: the bot's own work finished in the last two weeks, most recently done first. A schedule's runs (a
-  // sweep every 30 minutes) are not work a person asked for; they live under Automations › Runs.
-  const doneAt = (t: TaskRow) => String(t.done_at || t.closed_at || t.updated_at || '');
+  const newest = (a: BotListTask, b: BotListTask) => String(b.created_at || '').localeCompare(String(a.created_at || ''));
+  // Until the filters are read; saved filters are painted from the server's lists below. Waiting: its turn is someone
+  // else's, not this bot's and not yours.
+  const active = mine.filter(t => t.status === 'open').sort(newest);
+  const waiting = mine.filter(t => t.status === 'open' && t.turn?.who && ![`bot:${slug}`, myActor()].includes(t.turn.who)).sort(newest);
+  // Done recently: the bot's own work finished in the last two weeks, most recently done first.
+  const doneAt = (t: BotListTask) => String(t.done_at || t.closed_at || t.updated_at || '');
   const since = new Date(Date.now() - BOT_DONE_RECENT_DAYS * 86400000).toISOString();
-  const finished = mine.filter(t => !V2_ACTIVE.includes(String(t.status)) && !isRecurringTask(t) && doneAt(t) >= since)
+  const finished = mine.filter(t => t.status !== 'open' && doneAt(t) >= since)
     .sort((a, b) => doneAt(b).localeCompare(doneAt(a)));
   botTaskCount('cnt-active', active.length);
-  botTaskCount('cnt-blocked', blocked.length);
+  botTaskCount('cnt-blocked', waiting.length);
   botTaskCount('cnt-done', finished.length);
-  botTaskList($('#t-open'), active.map(t => v2TaskRow(t, slug)), '<div class="rail-empty">None</div>');
-  botTaskList($('#t-blocked'), blocked.map(t => v2TaskRow(t, slug, true, botTaskWaitsOn(t))), '<div class="rail-empty">Nothing is blocked.</div>');
+  botTaskList($('#t-open'), active.map(botTaskRowHTML), '<div class="rail-empty">None</div>');
+  botTaskList($('#t-blocked'), waiting.map(botTaskRowHTML), '<div class="rail-empty">None</div>');
   const done = BOT_DONE.get(slug);
   BOT_DONE.set(slug, {rows: finished, shown: done?.shown || BOT_DONE_PAGE});
   botTaskFilterPaint(slug);
@@ -424,12 +363,12 @@ function botTaskList(host: Element, rows: string[], empty: string, tail = '') {
 }
 // Done recently is drawn only while its tab is open, a page at a time: a busy bot finishes hundreds of tasks in two
 // weeks, and every row (an avatar each) was built on every refresh behind a folded tab.
-const BOT_DONE = new Map<string, {rows: TaskRow[]; shown: number}>(), BOT_DONE_PAGE = 50;
+const BOT_DONE = new Map<string, {rows: TaskAny[]; shown: number}>(), BOT_DONE_PAGE = 50;
 function botDonePaint(slug: string) {
   const host = $('#t-done'), done = BOT_DONE.get(slug);
   if (!host || !done || BOT?.slug !== slug || $('#bot-done')?.hidden) return;
   const rows = done.rows.slice(0, done.shown), more = done.rows.length - rows.length;
-  botTaskList(host, rows.map(t => v2TaskRow(t, slug, false)), '<div class="rail-empty">Nothing done in the last two weeks.</div>',
+  botTaskList(host, rows.map(botTaskRowHTML), '<div class="rail-empty">Nothing done in the last two weeks.</div>',
     more > 0 ? `<button type="button" class="ghost bot-done-more" data-bot-done-more>Show ${Math.min(more, BOT_DONE_PAGE)} more</button>` : '');
 }
 document.addEventListener('click', ev => {
@@ -441,7 +380,7 @@ document.addEventListener('click', ev => {
   botDonePaint(BOT.slug);
 });
 
-// the pill's "Send as task" on a keeper bot: a hub task, not an Issue
+// the pill's "Send as task": a task for the bot
 async function v2PillTask(P: BotPillState, text: string) {
   if (P.sending) return;
   P.sending = true;

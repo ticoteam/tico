@@ -40,11 +40,11 @@ write "open question" and name who decides.
 ## 4. Attach it and ask for the OK
 
     hub page publish reports/<name>.html --title "Spec: <problem, under ten words>" --cadence none --task <id>
-    hub task ask <id> --to <your manager or the person who approves specs> "Approve the spec for <problem>? It decides <one line>." --show page:<page id> --version N
+    hub task ask <id> --to <your manager or the person who OKs specs> "OK the spec for <problem>? It decides <one line>." --kind ok --show page:<page id> --version N
 
 `--task` files the page on the task. Publishing the same path again adds a version, so fix a page by publishing it again
 before you ask. Nothing starts in Engineering until that OK. When it comes, finish the task:
-`hub task done <id> -m "Spec approved: <page>" --version N`.
+`hub task done <id> -m "Spec OK'd: <page>" --version N`.
 
 ## 5. After it ships
 

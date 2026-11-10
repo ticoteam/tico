@@ -280,7 +280,7 @@ so is choosing another model that is not offered yet.
 
 #### A warning about a cheaper task model
 
-A bot that has requested send, spend or publish approvals, or holds a tool grant that can write beyond its
+A bot that has asked a person to OK something on a task, or holds a tool grant that can write beyond its
 own repository, can show a warning under **Task model**. The warning compares models from the same provider
 using their listed output prices. Another provider's model, or one without a listed price, is not judged.
 

@@ -140,7 +140,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal(await page.locator('#dash-grid .dash-none').count(), CARDS.length, `${tag}: each says it has nothing yet`);
   assert.equal(await page.locator('.dash-head [data-gr-ns]').isVisible(), false, `${tag}: no North Star line`);
   assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker`);
-  assert.equal(await page.locator('.dash-head [data-gr-board]').getAttribute('href'), '#/tasks?view=board&type=idea&who=all', `${tag}: the Growth board link`);
+  assert.equal(await page.locator('.dash-head [data-gr-board]').getAttribute('href'), '#/tasks?pipeline=general&who=all', `${tag}: the Growth board link`);
   assert.equal(await page.locator('.dash-actions').isVisible(), true, `${tag}: the owner arranges`);
   await flat(page, `${tag}: empty`);
   await themed(page, `growth-${width}-empty`);

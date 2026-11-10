@@ -50,7 +50,7 @@ decisions list.
 ## 6. File at most two briefs
 
 A problem earns a brief when it meets the threshold in `knowledge/product-practice.md` and no brief for it is open. Write
-each with `playbooks/write-a-board-brief.md`. At most two new briefs a week. Any further problem waits for the next
+each with `playbooks/write-a-product-brief.md`. At most two new briefs a week. Any further problem waits for the next
 review, and the review says so.
 
 ## 7. Write and hand over

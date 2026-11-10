@@ -30,7 +30,6 @@ interface SettingsBot extends CloudMachineBot {
   revision?: number; role?: string; description?: string; can_manage?: boolean;
   readiness?: { gateway?: string | null; problems?: string[] } | null;
   agent?: (BotAgent & { model?: string; harness?: string }) | null;
-  task_flow?: { going: number; waiting: number } | null; keep_tasks_going?: number | null;
 }
 
 const settingsBotName = (id: unknown) => botRow(id)?.display_name || botSlug(id);
@@ -282,7 +281,7 @@ function renderSettingsBots() {
     const badges = `${isBuiltInBot(e.id) ? '<span class="pill" data-built-in>Built-in</span>' : ''}${botPausedBadge(e.id, true) || (e.status && e.status !== 'active' ? `<span class="pill">${esc(statusWord(e.status))}</span>` : '')}`;
     const model = e.agent ? `<span class="muted" title="${esc(e.agent.model ? `profile's model · ${e.agent.model}` : "the profile's own model")}">${esc(agentKind(e.agent))}</span>` : settingsChoiceCell(e, 'model');
     return `<tr data-settings-bot="${esc(e.id)}"><td class="settings-pick">${pick(e)}</td>
-      <td class="sb-cell-name"><div class="sb-bot">${avatar(e.id, 27, stateOf(e.id))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${encodeURIComponent(e.id)}">${shownName(e)}</a>${botDisplayName(e.id) !== (e.display_name || e.slug) ? `<span class="mono muted">${esc(e.slug)}</span>` : ''}${badges}</div>${e.task_flow ? `<small data-task-flow>${e.task_flow.going} of ${e.keep_tasks_going == null ? 'unlimited' : e.keep_tasks_going} tasks going, ${e.task_flow.waiting} waiting to start</small>` : ''}${e.team || problem ? `<small>${e.team ? esc(teamLabel(e.team)) : ''}${e.team && problem ? ' · ' : ''}${problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''}</small>` : ''}</div></div></td>
+      <td class="sb-cell-name"><div class="sb-bot">${avatar(e.id, 27, stateOf(e.id))}<div class="sb-text"><div class="sb-line"><a class="sb-name" href="#/bot/${encodeURIComponent(e.id)}">${shownName(e)}</a>${botDisplayName(e.id) !== (e.display_name || e.slug) ? `<span class="mono muted">${esc(e.slug)}</span>` : ''}${badges}</div>${e.team || problem ? `<small>${e.team ? esc(teamLabel(e.team)) : ''}${e.team && problem ? ' · ' : ''}${problem ? `<span class="sb-problem">${esc(problem)}</span>` : ''}</small>` : ''}</div></div></td>
       <td class="sb-cell-access" aria-label="Access: ${esc(settingsAccessWord(e))}"><span class="sb-access-label" aria-hidden="true">Access:</span>${settingsAccessCell(e)}</td><td class="sb-cell-model"><div class="sb-model-wrap">${model}${e.agent ? '' : settingsTaskIndicator(e)}</div>${settingsBotSearchMatch(e)}</td>
       <td class="sb-cell-fallback">${e.agent ? '<span class="muted">-</span>' : settingsChoiceCell(e, 'fallback')}</td>
       <td class="sb-cell-owners">${stack(e)}</td><td class="sb-cell-computer">${settingsMachineSelect(e)}</td>

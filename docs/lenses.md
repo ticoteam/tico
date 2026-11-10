@@ -64,7 +64,7 @@ the code `empty`.
 - **Sharpen** (owner only): files one research task for the Librarian for one item, once. Its findings go to the
   market page Open questions.
 - A run the **Strategy Bot** starts files one `strategy_draft` proposal with the changes, marked as from the lens. It
-  shows as a Decide card, "Confirm or reject a change to the strategy from the Blue Ocean lens". Confirming writes the
+  reaches you as a task, "Confirm or reject a change to the strategy from the Blue Ocean lens". Confirming writes the
   draft as you; publishing stays your click. The Strategy Bot suggests a lens when a bet trips and in its weekly note, and
   never runs one unasked.
 

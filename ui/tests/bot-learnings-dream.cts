@@ -10,7 +10,7 @@ interface DreamRecord {
   task: string;
   status: string;
   state: string;
-  questions: {task_id: string; text: string; mine: boolean} | null;
+  questions: {task_id: string; requirement_id: string; text: string; mine: boolean} | null;
   summary: string | null;
   closed_at: string | null;
   started_at: string;
@@ -39,6 +39,7 @@ declare const window: Window & typeof globalThis & {
   md: (text: string) => string;
   ago: () => string;
   toast: (message: string) => void;
+  newRequestId: () => string;
   BOT: {slug: string};
   state: DreamState;
   get: (url: string) => Promise<unknown>;
@@ -62,10 +63,11 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       window.ago = () => 'today';
       window.toast = message => { throw new Error('toast: ' + message); };
       window.BOT = {slug: 'ops'};
+      window.newRequestId = () => 'req-1';
       const row = (subject: string, task?: string) => ({subject, author: 'ops', when: '2026-11-02T10:00:00Z', files: ['memory/learnings.md'],
         source: task ? {task, title: 'Dream'} : null});
       window.state = {
-        dream: {task: 't1', status: 'waiting', state: 'asking', questions: {task_id: 'q1', text: questions, mine: true},
+        dream: {task: 't1', status: 'waiting', state: 'asking', questions: {task_id: 't1', requirement_id: 'r1', text: questions, mine: true},
                 summary: null, closed_at: null, started_at: '2026-11-02T09:00:00Z'},
         posts: [], dreamReads: 0,
       };
@@ -82,6 +84,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
         return {};
       };
     }, QUESTIONS);
+    await page.addScriptTag({path: path.join(__dirname, '../../build/ui/app/task-api.js')});
     await page.addScriptTag({path: path.join(__dirname, '../../build/ui/app/bot-learnings.js')});
 
     // The split: an intro, numbered questions, suggestions as chips.
@@ -93,7 +96,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     for (const width of [1280, 390]) {
       await page.setViewportSize({width, height: 800});
       await page.evaluate(text => {
-        state.dream = {task: 't1', status: 'waiting', state: 'asking', questions: {task_id: 'q1', text, mine: true},
+        state.dream = {task: 't1', status: 'waiting', state: 'asking', questions: {task_id: 't1', requirement_id: 'r1', text, mine: true},
                        summary: null, closed_at: null, started_at: '2026-11-02T09:00:00Z'};
         state.posts = [];
       }, QUESTIONS);
@@ -120,11 +123,11 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       await page.locator('.learn-panel textarea').nth(1).fill('No, keep it');
       await page.locator('.learn-panel .dream-actions .primary').click();
 
-      // One numbered reply to the question itself; then the done view with this dream's commit only.
+      // One numbered answer to the dream's ask; then the done view with this dream's commit only.
       await page.locator('[data-dream-wake]').waitFor();
       const answer = await page.evaluate(() => state.posts.find(p => p.url.includes('/answer')));
-      assert.equal(answer!.url, '/v2/tasks/q1/answers');
-      assert.equal((answer!.body as {other: string}).other, '1. the whole team\n2. No, keep it');
+      assert.equal(answer!.url, '/v2/tasks/t1/asks/r1/answer');
+      assert.deepEqual(answer!.body, {value: '1. the whole team\n2. No, keep it'});
       assert.equal(await page.locator('.learn-panel .dream-line').innerText(), 'Awake');
       assert.ok((await page.locator('.dream-summary').innerText()).includes('Merged two report rules'));
       assert.deepEqual(await page.locator('.dream-commits .lr-subject').allInnerTexts(), ['Dream: merged report rules']);

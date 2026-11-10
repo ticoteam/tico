@@ -182,13 +182,12 @@ async function assistantRail(slug: string, load: number) {
   if (!ASSISTANT_RAIL_WATCH) { ASSISTANT_RAIL_WATCH = true; BOT_WIDE.addEventListener('change', assistantRailFit); }   // bot-page.ts loads after this file
   new MutationObserver(assistantRailFit).observe(rail, {subtree: true, attributes: true, attributeFilter: ['hidden']});
   window.botFiles?.mount($('#asst-files'), {slug, get, esc, openFile: openFileLink});
-  const [owned, latest] = await Promise.all([v2Get(`/v2/tasks?owner=${encodeURIComponent(slug)}&status=${V2_ACTIVE.join(',')}&brief=true`),
+  const [owned, latest] = await Promise.all([taskBriefs({owner: slug, status: 'open'}).catch(() => [] as TaskBriefV3[]),
     v2Get(`/v2/updates?bot=${encodeURIComponent(slug)}&limit=1`)]);
   if (load !== ASSISTANT_LOAD || S.route !== ASSISTANT || !rail.isConnected) return;
-  const active = (owned?.tasks || []).filter((t: TaskRow) => V2_ACTIVE.includes(String(t.status)))
-    .sort((a: TaskRow, b: TaskRow) => String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')));
+  const active = owned.filter(t => t.status === 'open');
   const act = $('#asst-active');
-  act.querySelector('.tpane').innerHTML = `<div class="bot-task-list">${active.map((t: TaskRow) => v2TaskRow(t, slug)).join('')}</div>`;
+  act.querySelector('.tpane').innerHTML = `<div class="bot-task-list">${active.map(t => botTaskRowHTML(t)).join('')}</div>`;
   act.hidden = !active.length;
   const u = latest?.updates?.[0], up = $('#asst-latest');
   if (u) {

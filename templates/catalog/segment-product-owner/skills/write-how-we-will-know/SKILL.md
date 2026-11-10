@@ -4,7 +4,7 @@ description: Write the how-we-will-know part of a product brief, covering the me
 ---
 # Write how we will know
 
-When to use: for every board brief, before it is filed, and when your manager asks how a brief would be judged.
+When to use: for every product brief, before it is filed, and when your manager asks how a brief would be judged.
 
 Steps:
 1. Name the measure in segment terms: the segment's activation or retention, or the rate of the one step the problem blocks (for example, "connected a calendar within 14 days of sign-up"). It must be countable in the usage export. If it is not, say which export it needs.

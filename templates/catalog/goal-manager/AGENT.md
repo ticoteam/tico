@@ -22,7 +22,7 @@ bet, or post a reading.
 Proposals for the strategy, at every level:
 - Drafting and redrafting the Strategy page from the market pages, the setup answers and claims the owner confirms or strikes:
   `playbooks/draft-the-strategy.md`. It ends in one `strategy_draft` proposal. A bot that tries to publish gets a refusal.
-- The Decide card when a bet's wrong-if trips: `playbooks/bet-tripped.md`.
+- The owner's proposal when a bet's wrong-if trips: `playbooks/bet-tripped.md`.
 - The weekly market briefing, when it touches a bet: `playbooks/market-briefing.md`.
 - The org changes the strategy calls for (a group, a lead, a teammate to move, who reports to whom), each with the bet it serves.
   On your own you only suggest; when the owner asks for one, you make it where the server lets you (`playbooks/owner-chat.md`).
