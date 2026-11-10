@@ -1398,7 +1398,7 @@
               "standing": "Spend $9 on ads for a second test?",
               "who": "human:ana"
             },
-            "id": "<pending_ask>",
+            "id": "<id19>:<pending_ask>",
             "kind": "ask",
             "line": "Spend $9 on ads for a second test?",
             "missing": [
