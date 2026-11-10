@@ -245,6 +245,21 @@ class StuckSpellRow(TypedDict):
     end_reason: str | None
 
 
+class StuckAlarmRow(TypedDict):
+    """One stuck alarm for a card (backend/stuck_alarm.py): open while cleared_at is NULL, at most one open per card.
+    The alarm filed one task to its recipient (alarm_task_id) when it was raised."""
+
+    id: str
+    task_id: str
+    factory_id: str | None
+    recipient: str
+    alarm_task_id: str | None
+    stuck_since: str
+    raised_at: str
+    cleared_at: str | None
+    clear_reason: str | None
+
+
 class QuarantineHoldRow(TypedDict):
     """One bot's refusal-count hold on a task or chat (migration 0094)."""
 
