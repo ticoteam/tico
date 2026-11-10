@@ -176,7 +176,7 @@ def _ladder(
     epoch: str = visit.get("last_change_at") or visit["entered_at"]
     tries = int(visit.get("tries") or 0)
     # Before the ladder tries anyone, every bot that has a turn gets back a wake it lost (R3).
-    woken, spent_by = _recover(conn, row, target, W.turns(conn, row, waits), level, tries, epoch, at, done)
+    woken, spent_by = _recover(conn, row, target, waits, level, tries, epoch, at, done)
     if not target or target in woken:
         return
     if task_wakes.live_run(conn, row, target, at) or task_wakes.queued(conn, row["id"], target):
@@ -226,7 +226,7 @@ def _recover(
     conn: "sqlite3.Connection",
     row: Row,
     target: str | None,
-    turns: set[str],
+    waits: list[W.Wait],
     level: str,
     tries: int,
     epoch: str,
@@ -235,7 +235,8 @@ def _recover(
 ) -> tuple[set[str], set[str]]:
     """Write again the lost wake of every bot that has a turn and is not on it: no live run, no queued wake, no wake
     unread in its own inbox. The same words, on this pass, and nothing is counted (R3). Once per bot, level, try and
-    change: when that one is lost too, the bot's try is spent. Returns the bots woken, and those whose try is spent.
+    change: when that one is lost too, the bot's try is spent. A bot named on an ask that was never woken for it (the
+    ask came while a person had the task) gets that wake now. Returns the bots woken, and those whose try is spent.
 
     For the bot the ladder tries (`target`) a wake is lost only since the last change: after a change the ladder wakes
     it anyway. Any other bot (one named on an OK or an answer) is woken by nothing else, so its newest wake in the
@@ -243,7 +244,7 @@ def _recover(
     visit = row["visit"]
     woken: set[str] = set()
     spent: set[str] = set()
-    for bot in sorted(turns):
+    for bot in sorted(W.turns(conn, row, waits)):
         if task_wakes.live_run(conn, row, bot, at) or task_wakes.queued(conn, row["id"], bot):
             continue
         inbox = task_wakes.inbox(conn, row, bot)
@@ -251,6 +252,10 @@ def _recover(
             continue
         lost = task_wakes.lost(conn, row, bot, whole_visit=bot != target)
         if not lost:
+            asks = [w.requirement_id for w in waits if w.who == bot and w.ask and w.requirement_id]
+            if any([task_wakes.ask(conn, row, R.get(conn, rid)) for rid in asks]):
+                done["woken"] += 1
+                woken.add(bot)
             continue
         key = f"{row['id']}:{visit['id']}:lost:{_slug(bot)}:{level}:{tries}:{epoch}"
         if task_wakes.add(conn, row, bot, visit, lost["body"], level=level, try_n=tries, wake_key=key):

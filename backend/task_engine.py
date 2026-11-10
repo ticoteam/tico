@@ -1110,17 +1110,10 @@ def add_requirement(
     _event(conn, task_id, by, "requirement", None, requirement_id, line.strip(), {"kind": kind, "person": person})
     out = _task(conn, task_id)
     out["requirement_id"] = requirement_id
-    if is_bot(person) and not out.get("snooze"):
-        # A person finds it in Needs you. A bot that is named is woken, once.
-        lead = f"{H.actor_name(conn, by)} asks you: {line.strip()}"
-        task_wakes.add(
-            conn,
-            out,
-            person,
-            out["visit"],
-            task_wakes.body(conn, out, lead),
-            wake_key=f"{task_id}:{visit['id']}:ask:{requirement_id}",
-        )
+    # A person finds it in Needs you. A bot that is named is woken, once, when it has a turn now: not while a person
+    # has the task (Late or the ladder brought it there) or it is snoozed. Then the never-stuck check wakes it once it
+    # has one.
+    task_wakes.ask(conn, out, R.get(conn, requirement_id))
     return out
 
 

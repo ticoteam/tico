@@ -261,7 +261,22 @@ def test_a_late_task_goes_to_the_manager_bot_once_and_at_three_times_the_time_to
     assert _ladder(c, task_id)[0] == "person" and ("person", ANA) in _states(c, task_id)
     E.try_again(c, task_id, ANA)
     assert _ladder(c, task_id) == ("owner", 0)
+    assert later(seconds=10) == {"woken": 1}  # a person acted: the reviewer's OK reaches it now
     assert later(days=30) == {}  # late once per visit: it is not handed up again
+
+
+def test_an_ask_added_while_a_person_has_the_task_wakes_nobody_until_a_person_acts(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    assert later(days=1).get("to_manager") == 1 and later(days=2) == {"to_person": 1}  # Late took it to Ana
+    # A run of the manager bot that was still going asks the reviewer for an OK. Only Ana has a turn: no bot is woken.
+    E.add_requirement(c, task_id, MANAGER, "ok", REVIEWER, "OK the note", seen_version=E.task(c, task_id)["version"])
+    assert _ladder(c, task_id)[0] == "person" and X.wakes(c, task_id, REVIEWER) == []
+    assert later(days=1) == {} and _queued(c, task_id) == []
+    # Ana acts: every bot that has a turn now is woken, the reviewer named on that OK too.
+    E.try_again(c, task_id, ANA)
+    assert later(seconds=10) == {"woken": 1} and _queued(c, task_id) == [BUILDER, REVIEWER]
+    assert _said(c, task_id, REVIEWER) == ["manager asks you: OK the note"]
+    assert later(seconds=10) == {}  # once
 
 
 def test_a_hand_over_takes_back_the_wakes_no_run_has_taken(c, general, later):

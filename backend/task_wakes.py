@@ -166,6 +166,26 @@ def add(
     return message["id"]
 
 
+def ask(conn: "sqlite3.Connection", task: Row, requirement: Row | None) -> str | None:
+    """Wake the bot an ask added to this task names (an OK or an answer), once per ask, keyed
+    `<task>:<visit>:ask:<requirement>`: only while that bot has a turn on the task (`waiting_on.turns`), so never while
+    a person has it or it is snoozed. The never-stuck check calls this again for a bot that has a turn and was never
+    woken for its ask: the ask it got while a person had the task reaches it once a person acts."""
+    from . import waiting_on as W
+
+    H = _h()
+    visit: Row = task.get("visit") or {}
+    if not requirement or requirement.get("visit_id") != visit.get("id") or requirement.get("withdrawn_at"):
+        return None
+    bot = requirement.get("person_id")
+    if not H.is_bot(bot) or task.get("status") != "open" or task.get("snooze") or bot not in W.turns(conn, task):
+        return None
+    lead = f"{H.actor_name(conn, requirement.get('added_by_id'))} asks you: {requirement.get('line') or ''}"
+    return add(
+        conn, task, bot, visit, body(conn, task, lead), wake_key=f"{task['id']}:{visit['id']}:ask:{requirement['id']}"
+    )
+
+
 # Why a bot cannot run, as the rest of a sentence about it: "Builder has no computer". The never-stuck check reads this
 # before it wakes anyone, and `waiting_on` shows the task as Paused with the cause. Every cause is a read of saved state:
 # nothing here asks a computer. The three in COMPANY_WIDE stop every bot they touch and are whole sentences.
