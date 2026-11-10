@@ -4430,9 +4430,14 @@ def intake_resolve(api, args):
     "hub_task_attach",
     "Attach a deliverable (a report, a draft) to a task so the people on it "
     "can open it in Tico. Returns the link to put in your note; never link a path on your "
-    "Mac or an s3:// URI. Send the text as-is, or content_base64 for a binary file.",
+    "Mac or an s3:// URI. Send the text as-is, or content_base64 for a binary file. "
+    "With req and page instead, attach a page to the stage's page requirement: Jev checks it, then the person it "
+    "names OKs that version. Attaching again replaces it.",
     {
         "id": _s("Task id"),
+        "req": _s("The page requirement's name or id, e.g. Spec page"),
+        "page": _s("page:<file id> for its newest version, or page:<file id>@<version>"),
+        "version": VERSION,
         "name": _s("File name with its extension, e.g. 2026-09-15-draft-review.md"),
         "path": _s("A local file to stream when this server supports multipart uploads"),
         "poster": _s("Optional local PNG or JPEG poster with path"),
@@ -4440,10 +4445,17 @@ def intake_resolve(api, args):
         "content_base64": _s("The file's bytes, base64-encoded, for anything that is not text"),
         "note": {"type": "string", "maxLength": 500},
     },
-    required=("id", "name"),
+    required=("id",),
     writes=True,
 )
 def task_attach(api, args):
+    if args.get("req") or args.get("page"):
+        if not (args.get("req") and args.get("page")):
+            raise ValueError("A page requirement takes both req and page, e.g. req: Spec page, page: page:file-…")
+        body = {"requirement": args["req"], "page": args["page"], "version": _seen(args)}
+        return _asked(api, args).post(f"tasks/{args['id']}/pages", body, key=_key(args))
+    if not args.get("name"):
+        raise ValueError("Say the file's name (name), or attach a page with req and page")
     body = {"name": args["name"]}
     if args.get("path"):
         if not hasattr(api, "post_multipart"):
