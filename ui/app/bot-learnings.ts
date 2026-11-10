@@ -8,8 +8,8 @@
    to answer, then its summary and the commits it made. A question also shows as a small card on the bot's page, and the button carries a mark. */
 'use strict';
 
-/** A dream's open questions: the question task, its text, and whether they are this bot's to answer. */
-interface DreamQuestions { task_id: string; mine: boolean; text: string; }
+/** A dream's open questions: its ask on the dream task (the requirement), its text, and whether they are yours to answer. */
+interface DreamQuestions { task_id: string; requirement_id: string; mine: boolean; text: string; }
 /** The bot's dream (GET /api/v2/bots/{bot}/dream): what it is doing, and its questions while it asks. */
 interface BotDream {
   state: 'starting' | 'dreaming' | 'asking' | 'done' | 'stopped';
@@ -137,7 +137,7 @@ function dreamQuestionsHTML(q: DreamQuestions) {
   </form>`;
 }
 
-// Send the answers as one answer to the question task, numbered to match, as Needs you answers it: it wakes the bot.
+// Send the answers as one answer to the dream's ask, numbered to match, as Needs you answers it: it wakes the bot.
 function dreamWire(root: HTMLElement, q: DreamQuestions, sent: () => void) {
   const form = root.querySelector<HTMLFormElement>('.dream-form');
   if (!form) return;
@@ -160,7 +160,7 @@ function dreamWire(root: HTMLElement, q: DreamQuestions, sent: () => void) {
     const button = form.querySelector<HTMLButtonElement>('[type="submit"]');
     if (button) button.disabled = true;
     try {
-      await post(`/v2/tasks/${encodeURIComponent(q.task_id)}/answers`, {target: {task: q.task_id}, answers: {}, other: text});
+      await taskAnswer(q.task_id, q.requirement_id, text || '', null);
       sent();
     } catch (e) { if (button) button.disabled = false; toast(errorMessage(e, '')); }
   });

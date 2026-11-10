@@ -150,7 +150,7 @@ function taskDoneMotion(key: string): void {
     el.classList.add('m-task-done');
     if (motionStill()) continue;
     const chip = el.querySelector(':scope > .tl-status');
-    if (chip) chip.innerHTML = MOTION_CHECK + esc(typeof STATUS_WORD === 'object' && STATUS_WORD.done || 'Done');
+    if (chip) chip.innerHTML = MOTION_CHECK + 'Done';
     else if (el.matches('.bcard')) el.insertAdjacentHTML('beforeend', MOTION_CHECK);
   }
 }

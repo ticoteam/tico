@@ -12,8 +12,6 @@ declare var TASKS_ST: Tasks.Globals['TASKS_ST'];
 declare var TASK_EDIT_DRAFTS: Tasks.Globals['TASK_EDIT_DRAFTS'];
 declare var TASK_EDIT_STORAGE: Tasks.Globals['TASK_EDIT_STORAGE'];
 declare var TASK_MODAL_BACK: Tasks.Globals['TASK_MODAL_BACK'];
-declare var TASK_TYPES: Tasks.Globals['TASK_TYPES'];
-declare var TASK_TYPES_READ: Tasks.Globals['TASK_TYPES_READ'];
 declare var get: Tasks.Globals['get'];
 declare var oldView: Tasks.WindowMarks['oldView'];
 declare var sessionKeep: Tasks.Globals['sessionKeep'];
@@ -68,7 +66,7 @@ const init = () => {
    await page.route('**/api/v2/presence**', route => route.fulfill({json: {actors: []}}));
    await page.evaluate(async task => taskModalShow(task), task);
    const idle = () => page.waitForFunction(() => !taskModal().taskLive!.reading && !taskModal().taskLive!.draft.flight);
-   const tasksReady = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tl-row, #task-body .bcard, #task-body .tl-empty'));
+   const tasksReady = () => page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body .tk-row, #task-body .empty'));
    const emit = (topic: string) => page.evaluate(topic => {
     for (const source of taskSources!) if (!source.closed) source.dispatchEvent(new MessageEvent(topic, {data: JSON.stringify({kinds: ['update']})}));
    }, topic);
@@ -102,9 +100,8 @@ const init = () => {
    await page.locator('[data-task-edit-current]:not([hidden])').waitFor();
    await retry(); assert.equal(task.body, 'Original details plus A');
    // The publication fields use the same field base as title/details, even through a clean focused redraw.
-   task.type_id = 'draft-roadmap'; task.public_title = 'Public A'; task.public_summary = 'Summary A';
-   await page.evaluate(() => { TASK_TYPES.push({id: 'draft-roadmap', role: 'product-roadmap', name: 'Roadmap', steps: []}); TASK_TYPES_READ = true; });
-   await page.route('**/api/v2/task-types', route => route.fulfill({json: {types: [{id: 'draft-roadmap', role: 'product-roadmap', name: 'Roadmap', steps: []}]}}));
+   // A task in the Product pipeline is a roadmap item (ui/app/roadmaps.ts roadmapTask).
+   Object.assign(task, {pipeline_id: 'product', public_title: 'Public A', public_summary: 'Summary A'});
    await update();
    for (const [key, label] of [['public_title', 'Public title'], ['public_summary', 'Public summary']] as const) {
     const box = page.getByRole('textbox', {name: label, exact: true}), base = task.version, original = task[key];
@@ -178,7 +175,8 @@ const init = () => {
    for (let i = 0; i < boxes.length; i++) await page.getByRole('textbox', {name: boxes[i]!, exact: true}).fill(values[i]!);
    for (let i = 0; i < boxes.length; i++) {
     const box = page.getByRole('textbox', {name: boxes[i]!, exact: true});
-    await box.focus(); await box.press('Home'); await box.press('ArrowRight'); await box.press('ArrowRight');
+    // Home only scrolls in a Mac text box; the Mac's own line-start key is Meta+ArrowLeft.
+    await box.focus(); await box.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home'); await box.press('ArrowRight'); await box.press('ArrowRight');
     if (i === 0) { task.run_model = null; task.can_set_run_model = false; task.version++; }
     for (const redraw of [update, refresh]) {
      await redraw();
@@ -310,7 +308,7 @@ const init = () => {
    }
    assert.equal(task.title, 'Sign-in title to keep');
    assert.equal(task.public_title, 'Recovered public title'); assert.equal(task.public_summary, 'Recovered public summary');
-   assert.equal(task.size, 5); assert.equal(task.due_at!.slice(0, 10), '2026-12-15');
+   assert.equal(task.size, 5); assert.equal(new Date(task.due_at!).toLocaleDateString('sv'), '2026-12-15', 'the day as the viewer picked it');
    // Ana's expired-session recovery never appears or autosaves when Ben signs into this same tab.
    offline = true;
    await fillTitle('Ana private title'); await title.evaluate(el => el.blur()); await error.waitFor(); await idle();

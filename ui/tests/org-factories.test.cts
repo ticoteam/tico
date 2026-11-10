@@ -10,7 +10,9 @@ const path: typeof import('node:path') = require('node:path');
 const vm: typeof import('node:vm') = require('node:vm');
 const {transformSync} = require('esbuild') as typeof import('esbuild');
 
-// The overview the Factories section reads: the factories, their pipelines (with the server's counts), and the edges and inputs.
+// What the Factories section reads, kept in one shape here: the factories and their pipelines. The section reads them as
+// GET /api/v2/factories (the factories and each pipeline's counts) and GET /api/v2/pipelines (the records); context()
+// answers both from it.
 interface OrgPipe {id: string; name: string; goal: string | null; manager_id: string | null; owner: string; visibility: string;
   factory_id: string | null; cards: number; overdue: number; for_you: number; live: number}
 interface OrgFactory {id: string; name: string; goal: string | null; manager_id: string | null; done: number; overdue: number; live: number}
@@ -54,7 +56,14 @@ const botByRef = (ref: string) => { const key = String(ref || '').replace(/^bot:
 // As issues.js: named by the roster row's display name, which a slug or id alone does not reach.
 const botDisplayName = (id: string) => { const row = botRow(id); return row?.display_name || row?.slug || id; };
 
-function context(get: () => Promise<unknown> = async () => { throw new Error('the test sets get'); }) {
+function context(read: () => Promise<unknown> = async () => { throw new Error('the test sets get'); }) {
+  // The two reads of one overview: an overview without its lists answers as the server's empty lists would.
+  const get = async (route: string) => {
+    const map = (await read()) as Partial<OrgOverview>;
+    assert.match(route, /^\/v2\/factories\?period=/);
+    return {factories: map.factories, pipelines: (map.pipelines || []).map(p => ({id: p.id, name: p.name, factory_id: p.factory_id, open: p.cards, files_into: [], mark: null}))};
+  };
+  const pipelinesAll = async () => ((await read()) as Partial<OrgOverview>).pipelines?.map(p => ({...p, retired_at: null, stages: []})) ?? [];
   const ctx = vm.createContext({
     esc: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[c]!),
     TASKS: '#/tasks',
@@ -68,9 +77,9 @@ function context(get: () => Promise<unknown> = async () => { throw new Error('th
     orgChartShape: () => {},
     orgChartTop: () => ({id: 'ana'}),
     document: {addEventListener() {}},
-    get,
+    get, pipelinesAll,
   });
-  for (const file of ['overview-factories.ts', 'org-factories.ts', 'redesign-org.ts']) {
+  for (const file of ['pipeline-api.ts', 'overview-factories.ts', 'org-factories.ts', 'redesign-org.ts']) {
     const loader = file.endsWith('.ts') ? 'ts' : 'js';
     const js = transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader, target: 'es2022'}).code;
     vm.runInContext(js, ctx, {filename: file});
@@ -93,6 +102,11 @@ const overview = (extra: OrgPipe[] = []): OrgOverview => ({
   edges: [], inputs: [],
 });
 const legal = pipe('legal', 'Legal', 'gc', null, {visibility: 'members'});
+
+// The section drawn from an overview, through the same grouping the map uses.
+const sectionOf = (ctx: import('node:vm').Context, map: OrgOverview): string => ctx.orgFactoriesHtml(ctx.ofGroups(
+  {factories: map.factories, pipelines: map.pipelines.map(p => ({id: p.id, name: p.name, factory_id: p.factory_id, open: p.cards, files_into: [], mark: null}))},
+  map.pipelines.map(p => ({...p, retired_at: null, stages: []}))));
 
 // The markup of one box, from its opening tag to its close (boxes hold no nested section).
 const box = (html: string, id: string) => {
@@ -124,14 +138,14 @@ const test = (name: string, fn: () => unknown) => tests.push([name, fn]);
 
 test('one box per factory that has pipelines', async () => {
   const {ctx} = await page();
-  const html = ctx.orgFactoriesHtml(overview());
+  const html = sectionOf(ctx, overview());
   assert.equal(count(html, /data-org-fac="/g), 3);
   assert.match(html, /<h2 id="org-fac-title">Factories<\/h2>/);
 });
 
 test('a Factory Manager sits on top only for a factory with two or more pipelines', async () => {
   const {ctx} = await page();
-  const html = ctx.orgFactoriesHtml(overview());
+  const html = sectionOf(ctx, overview());
   assert.equal(count(html, /data-org-card="fm"/g), 2);
   assert.match(box(html, 'f-growth'), /data-org-card="fm"[\s\S]*href="#\/bot\/growth-fm"/);
   assert.match(box(html, 'f-product'), /data-org-card="fm"[\s\S]*href="#\/bot\/product-fm"/, 'a bot: prefixed manager');
@@ -141,17 +155,17 @@ test('a Factory Manager sits on top only for a factory with two or more pipeline
 
 test('a chip opens its pipeline by the route the map uses', async () => {
   const {ctx} = await page();
-  const html = ctx.orgFactoriesHtml(overview());
+  const html = sectionOf(ctx, overview());
   const chip = box(html, 'f-growth').match(/<a class="org-fac-chip" href="([^"]*)"[^>]*>Marketing/);
   assert.ok(chip, 'the Marketing card has its chip');
-  assert.equal(decode(chip[1]!), vm.runInContext('ofPipelineHref("marketing")', ctx));
-  assert.equal(decode(chip[1]!), '#/tasks?type=marketing&view=board');
+  assert.equal(decode(chip[1]!), vm.runInContext('pipelineHref("marketing")', ctx));
+  assert.equal(decode(chip[1]!), '#/tasks?pipeline=marketing');
 });
 
 test('a manager stored as a slug is shown by its roster id, name and avatar', async () => {
   const map = overview();   // Marketing's manager is stored as bot:marketing-manager (its slug)
   const {ctx} = await page(map);
-  const html = ctx.orgFactoriesHtml(map);
+  const html = sectionOf(ctx, map);
   const card = box(html, 'f-growth');
   assert.match(card, /href="#\/bot\/b-42"/, 'the link names the roster id');
   assert.match(card, /<b>Marketing Manager<\/b>/, 'the name is the bot\'s display name');
@@ -159,27 +173,27 @@ test('a manager stored as a slug is shown by its roster id, name and avatar', as
   assert.doesNotMatch(html, /marketing-manager/, 'the slug appears nowhere on the card');
   // A bare slug resolves the same way.
   map.pipelines[0]!.manager_id = 'marketing-manager';
-  assert.match(ctx.orgFactoriesHtml(map), /href="#\/bot\/b-42"/);
+  assert.match(sectionOf(ctx, map), /href="#\/bot\/b-42"/);
 });
 
 test('the section is locked: no people-chart controls, buttons or edit menus', async () => {
   const {ctx} = await page();
-  const html = ctx.orgFactoriesHtml(overview([legal]));
+  const html = sectionOf(ctx, overview([legal]));
   assert.doesNotMatch(html, /data-rdo-|<button|<select|<input|draggable/);
   assert.equal(count(html, /data-org-card="/g), count(html, /class="[^"]*org-fac-lock/g), 'every card carries the lock');
 });
 
 test('no factories: nothing to draw, even with pipelines outside them', async () => {
   const {ctx} = await page();
-  assert.equal(ctx.orgFactoriesHtml({factories: [], pipelines: [], edges: [], inputs: []}), '');
-  assert.equal(ctx.orgFactoriesHtml({factories: [], pipelines: [legal], edges: [], inputs: []}), '');
+  assert.equal(sectionOf(ctx, {factories: [], pipelines: [], edges: [], inputs: []}), '');
+  assert.equal(sectionOf(ctx, {factories: [], pipelines: [legal], edges: [], inputs: []}), '');
 });
 
 test('a private pipeline shows only when the overview returned it', async () => {
   const {ctx} = await page();
-  const without = ctx.orgFactoriesHtml(overview());
+  const without = sectionOf(ctx, overview());
   assert.doesNotMatch(without, /Legal|General Counsel|data-org-loose/);
-  const withIt = ctx.orgFactoriesHtml(overview([legal]));
+  const withIt = sectionOf(ctx, overview([legal]));
   assert.match(withIt, /data-org-loose[\s\S]*Not in a factory[\s\S]*General Counsel/);
   assert.ok(withIt.indexOf('data-org-loose') > withIt.indexOf('data-org-fac="f-success"'), 'after the factories');
 });
@@ -188,23 +202,23 @@ test('a pipeline with no manager keeps its chip', async () => {
   const {ctx} = await page();
   const map = overview();
   map.pipelines[0] = pipe('marketing', 'Marketing', null, 'f-growth');
-  const html = ctx.orgFactoriesHtml(map);
+  const html = sectionOf(ctx, map);
   assert.match(box(html, 'f-growth'), /No manager/);
-  assert.match(box(html, 'f-growth'), /<a class="org-fac-chip" href="#\/tasks\?type=marketing&amp;view=board"/);
+  assert.match(box(html, 'f-growth'), /<a class="org-fac-chip" href="#\/tasks\?pipeline=marketing"/);
 });
 
 test('names from the overview are escaped', async () => {
   const {ctx} = await page();
   const map = overview();
   map.pipelines[1] = pipe('sales', '<img src=x onerror=alert(1)>', 'sales-mgr', 'f-growth');
-  assert.doesNotMatch(ctx.orgFactoriesHtml(map), /<img/);
+  assert.doesNotMatch(sectionOf(ctx, map), /<img/);
 });
 
 test('a factory with four pipelines draws them in one row under its Factory Manager', async () => {
   const map = overview();
   map.pipelines.push(pipe('ads', 'Ads', 'ads-mgr', 'f-growth'), pipe('seo', 'SEO', 'seo-mgr', 'f-growth'));
   const {ctx} = await page(map);
-  const growth = box(ctx.orgFactoriesHtml(map), 'f-growth');
+  const growth = box(sectionOf(ctx, map), 'f-growth');
   assert.match(growth, /<div class="rdo-br"><div class="rdo-top has-row"><div class="rdo-card org-fac-card fm"/);
   assert.equal(count(growth, /<ul class="rdo-row"><li>/g), 1);
   assert.equal(count(growth, /<li><div class="rdo-card org-fac-card pm"/g), 4);
@@ -234,7 +248,7 @@ test('mount draws into a connected host, draws nothing when the read fails or la
   ctx = context(async () => ({}));
   const bare = {isConnected: true, innerHTML: ''};
   await ctx.orgFactoriesMount(bare);
-  assert.equal(bare.innerHTML, '', 'a reply without the overview lists draws nothing');
+  assert.equal(bare.innerHTML, '', 'a reply with no factories draws nothing');
 
   ctx = context(async () => overview());
   const gone = {isConnected: false, innerHTML: ''};

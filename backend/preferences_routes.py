@@ -3,7 +3,6 @@ own. The server checks the values of the keys it acts on: the web's Send way, me
 Strategy Bot from one's own chart."""
 
 import json
-import re
 
 from fastapi import Request
 
@@ -16,10 +15,37 @@ from .store import H, Problem, encode
 SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d", "7d", "never"))
 
 
-def check(who, key, value):
-    """Refuse a key or a value the server does not keep."""
+# The keys a client keeps here: the web's (ui/app: pill, rails, sidebar, tasks-page, task-list, pipeline-rail), the
+# Strategy Bot's chart switch and meetings' auto share. Every other row in `preferences` is the server's own
+# (getting started, the changelog, the Librarian's setup, ...) and is written only by its module.
+KEYS = frozenset(
+    {
+        "compose.send_way",
+        "ui.rails",
+        "org.history",
+        "org.mine",
+        "tasks.view",
+        "tasks.pins",
+        "pipeline.rail_hidden",
+        "meetings.auto_share",
+        strategy_bot.HIDE_PREF,
+    }
+)
+MAX_BYTES = 4096
+
+
+def known(key):
     if key.startswith("assistant."):
         raise Problem("forbidden", "Your Assistant's settings are set in Settings > General", 403)
+    if key not in KEYS:
+        raise Problem("key", "No such preference", 422)
+
+
+def check(who, key, value):
+    """Refuse a key or a value the server does not keep."""
+    known(key)
+    if len(encode(value).encode()) > MAX_BYTES:
+        raise Problem("validation", f"A preference is at most {MAX_BYTES} bytes", 422)
     if key == "meetings.auto_share":
         views.human_only(who)
         if not isinstance(value, bool):
@@ -34,8 +60,6 @@ def check(who, key, value):
         views.human_only(who)
         if not isinstance(value, bool):
             raise Problem("validation", strategy_bot.HIDE_PREF + " is a boolean", 422)
-    if not re.fullmatch(r"[a-z0-9_.-]{1,64}", key):
-        raise Problem("kind", "A preference key is lower-case letters, digits, dots, dashes", 422)
 
 
 def register(app, auth, mutate, store):
@@ -44,6 +68,7 @@ def register(app, auth, mutate, store):
         """One of the caller's own preferences; null when it has none."""
         who = request.state.identity
         auth.domain(who)
+        known(key)
         with store.read() as c:
             row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (who.actor, key)).fetchone()
             return {"key": key, "value": json.loads(row[0]) if row else None}

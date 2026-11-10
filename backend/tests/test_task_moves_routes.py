@@ -282,3 +282,20 @@ def test_an_ok_is_only_the_asked_persons_own_click_on_exactly_what_they_were_sho
     assert no(api, f"oks/{rid}/use", use, bot, 422)["code"] == "consumed"
     assert get(api, f"oks/{rid}", token="ben-test")["standing"] == "used"
     assert api.get("/api/v2/oks/nope", headers=headers("ben-test")).status_code == 404
+
+
+def test_an_unrelated_reader_cannot_finish_or_hand_over_through_the_owners_done(api):
+    """The owner's own "done" is the owner's: answering it or giving it away is /done or /owner by another road, and
+    is refused to a reader who may not work the task, as those two are."""
+    made = task(api)
+    tid = made["id"]
+    [own] = show(api, tid, token="cara-test")["to_leave"]
+    assert own["kind"] == "owner_done"
+    rid = own["requirement_id"]
+    control = refused(api, f"tasks/{tid}/done", {}, token="cara-test", status=403)
+    assert refused(api, f"tasks/{tid}/owner", {"owner": "cara", "why": "Mine now"}, token="cara-test", status=403)
+    assert refused(api, f"tasks/{tid}/asks/{rid}/answer", {"value": "done"}, token="cara-test", status=403) == control
+    given = refused(api, f"tasks/{tid}/asks/{rid}/give", {"to": "cara"}, token="cara-test", status=403)
+    assert given["error"] == control["error"]
+    shown = show(api, tid)
+    assert shown["status"] == "open" and shown["owner_id"] == "human:ben"

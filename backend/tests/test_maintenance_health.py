@@ -33,6 +33,8 @@ from backend import (
     replication,
     routines,
     support,
+    task_asks,
+    task_engine as TE,
 )
 from backend.enqueue import enqueue_stored
 from backend.maintenance_steps import check_health
@@ -162,8 +164,6 @@ def registry(api, check_id):
 
 def open_approvals(api, kind):
     """The OKs asked for reports of `kind` (support: subject support:<key>) still waiting for their person."""
-    from backend import task_asks
-
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT requirement_id FROM ok_grants WHERE subject LIKE ?", (kind + ":%",)).fetchall()
         return [{"id": r[0]} for r in rows if task_asks.standing(c, r[0]) == task_asks.WAITING]
@@ -377,43 +377,6 @@ def run_step(api, when):
     ctx["now"] = when
     with store.read() as r:
         return check_health.run(r, ctx)
-
-
-def test_the_first_run_adopts_the_health_monitor_task_it_still_has_instead_of_opening_one(
-    environment, readers, code_findings
-):
-    api, _ = built(environment)
-    store = api.app.state.store
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    sig = MH.signature("push_stuck")
-    with store.transaction() as c:
-        # The Health Monitor as it was: its bot, its finding, and the task its watcher filed for that finding.
-        c.execute(
-            "INSERT INTO bots(id,slug,display_name,state,created_at) VALUES(?,?,?,?,?)",
-            (HM_SLUG, HM_SLUG, "Health Monitor", "active", H.now()),
-        )
-        c.execute(
-            "INSERT INTO health_findings(key,signature,check_id,kind,title,detail,fix,first_seen_at,last_seen_at,"
-            "present,occurrences,severity) VALUES(?,?,?,?,?,?,?,?,?,1,3,'warn')",
-            ("push_stuck:A", sig, "push_stuck", MH.SETUP, "Pushes are stuck", "detail", "fix", H.now(), H.now()),
-        )
-        tid = H.task_create(
-            c, H.KEEPER, "Pushes are stuck", "The Health Monitor's task.", H.bot_actor("botops"), lint=False
-        )["id"]
-        c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (f"bot:{HM_SLUG}", tid))
-        c.execute(
-            "INSERT INTO watcher_items(bot,key,task_id,created_at) VALUES(?,?,?,?)",
-            (HM_SLUG, "hm:push_stuck:A", tid, H.now()),
-        )
-    with store.transaction() as c:
-        retire_migration().up(c)
-    result = run(api)
-    assert botops_tasks(api) == [], "no new Health task: the migrated one is adopted"
-    with store.read() as c:
-        task = H.task(c, tid)
-    assert task["status"] in H.ACTIVE_STATUSES and task["owner_id"] == "bot:botops"
-    assert registry(api, "push_stuck")["task"] == tid and result["woke"] == 0
-    assert result["details"]["tasks"] == {sig: tid}
 
 
 def retire_migration():
@@ -1034,7 +997,7 @@ def _part_reopens(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     code_findings[:] = []
     run(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["id"],))
+        TE.move(c, first["id"], TE.DONE, H.KEEPER, "fixed")
     code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
     run(api)
     tasks = botops_tasks(api)
@@ -1106,7 +1069,7 @@ def _part_person_owned(api, runner, monkeypatch, hq=None, comments=None, clock=N
     with store.read() as c:
         person = api.app.state.auth.owner_identity(c).actor
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id=? WHERE id=?", (person, first["id"]))
+        TE.reassign(c, first["id"], person, H.KEEPER)
     before = len(comments)  # the creation's wake is on the task already: count from here
     code_findings[:] = []
     cleared = run(api)
@@ -1249,7 +1212,7 @@ def _part_owner_approved(api, runner, monkeypatch, hq=None, comments=None, clock
     assert [m["body"][:37] for m in ticket["messages"]] == ["[Health Monitor] Seen again (2 times)"]
 
 
-def _part_sent_as_requester(api, runner, monkeypatch, *, requester, hq=None, comments=None, clock=None):
+def _part_sent_as_requester(api, runner, monkeypatch, hq=None, comments=None, clock=None):
     code_findings = _code_findings(monkeypatch)
     store, support, auth, settings = (
         api.app.state.store,
@@ -1264,10 +1227,7 @@ def _part_sent_as_requester(api, runner, monkeypatch, *, requester, hq=None, com
     (approval,) = open_approvals(api, "support")
     assert first["approval"] == approval["id"] and hq.seen == []
     with store.read() as c:
-        asked_by = c.execute("SELECT asked_by_id FROM ok_grants WHERE requirement_id=?", (approval["id"],)).fetchone()[
-            0
-        ]
-    assert asked_by == "bot:botops" and requester  # v3 starts over: every report is asked by BotOps
+        assert task_asks.grant(c, approval["id"])["asked_by_id"] == "bot:botops"
     answer_report(api, approval["id"])
 
     def unreachable(who, approval_id):
@@ -1456,7 +1416,7 @@ def _part_held_by_rule(api, runner, monkeypatch, hq=None, comments=None, clock=N
     real = rules.judge
 
     def held(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided=None):
-        if (refs or {}).get("wake") == "health":
+        if (refs or {}).get("trigger_source") == "check_health":
             return rules.Decision(rules.NOTE, rules.MANAGER_NOTE, rules.HOLD_ROW)
         return real(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
 
@@ -1758,7 +1718,7 @@ def _part_own_key(api, runner, monkeypatch, hq=None, comments=None, clock=None):
 
 # ------------------------------------------------------------------------------------- the stories
 def _fresh(api, hq=None, comments=None):
-    """What a section of a story leaves behind, wiped: findings, reports, approvals, wakes and Health tasks (kept, renamed
+    """What a section of a story leaves behind, wiped: findings, reports, OKs, wakes and Health tasks (kept, renamed
     and closed), so the next section starts as on a new install. BotOps is active again, the team rule back to its default."""
     with api.app.state.store.transaction() as c:
         for (tid,) in c.execute("SELECT id FROM tasks WHERE title LIKE 'Health:%' AND status='open'").fetchall():
@@ -1852,7 +1812,7 @@ def test_a_copy_run_from_source_files_no_automatic_report_until_it_names_an_hq(
     assert file_due(api, run(api))[sig]["ticket"] and len(hq.tickets) == 2
 
 
-def test_with_the_team_rule_off_approval_decline_approve_and_send_as_the_requester(environment, monkeypatch, hq, clock):
+def test_with_the_team_rule_off_an_ok_sent_back_given_and_sent_as_whoever_asked(environment, monkeypatch, hq, clock):
     _story(
         environment,
         monkeypatch,
@@ -1860,8 +1820,7 @@ def test_with_the_team_rule_off_approval_decline_approve_and_send_as_the_request
             _part_one_approval,
             _part_declined,
             _part_owner_approved,
-            (_part_sent_as_requester, {"requester": "bot:botops"}),
-            (_part_sent_as_requester, {"requester": H.KEEPER}),
+            _part_sent_as_requester,
             _part_approved_cap,
             _part_send_resets,
         ],
@@ -1888,7 +1847,7 @@ def test_a_grouped_wake_once_held_by_rule_gate_and_caps_then_wakes_once(environm
     )
 
 
-def test_a_grouped_wake_hides_a_private_title_and_find_stuck_hands_botops_its_list(environment, monkeypatch, clock):
+def test_a_grouped_wake_hides_a_private_title(environment, monkeypatch, clock):
     _story(environment, monkeypatch, [_part_private_title], clock=clock)
 
 

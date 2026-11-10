@@ -57,7 +57,7 @@ function route(hash: string = location.hash): void {
   if (!S.route.startsWith(MESSAGING)) { MESSAGING_LOAD++; MESSAGING_LIST = null; }
   decideStop();     // the Needs you card closes with its page; its waiting answer goes now
   window.liveMeetingsStop?.();
-  v2ChatStop(); meetStop(); onbStop(); TASKS_ST?.layoutAbort?.abort(); tasksKeep(TASKS_ST); TASKS_ST = null; // page-local work never outlives its page
+  v2ChatStop(); meetStop(); onbStop(); tasksLeave(); // page-local work never outlives its page
   if (S.route !== '#/usage') USE = null;
   if (!S.route.startsWith('#/replay')) replayStop();
   if (!/^#\/computers\/[^/?]+\/screen$/.test(S.route)) screenStop();

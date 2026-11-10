@@ -3,8 +3,8 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// What GET /v2/release-schedule answers (backend/release_flow.py): the daily release as the page shows it.
-interface SettingsReleaseLast { at?: string; sent?: boolean; tickets?: number; task?: string | null; reason?: string | null; }
+// What GET /v2/release-schedule answers (backend/release_schedule_routes.py): the daily release as the page shows it.
+interface SettingsReleaseLast { at?: string; sent?: boolean; tasks?: number; task?: string | null; reason?: string | null; }
 interface SettingsReleaseSchedule {
   on: boolean;
   times?: string[];
@@ -20,15 +20,16 @@ interface SettingsReleaseSchedule {
   can_release?: boolean;
 }
 // What POST /v2/release/now answers: whether a task was filed or woken, and why not when neither.
-interface SettingsReleaseNowAnswer { sent?: boolean; tickets?: number; reason?: string | null; }
+interface SettingsReleaseNowAnswer { sent?: boolean; tasks?: number; reason?: string | null; task?: string | null; }
 
-// The daily release (backend/release_flow.py): on or off, one or two company times, the Release Manager and
-// Technical Writer ("" finds each by its starter template), the next and last hour, and what waits at Pending
-// Release. Owners and admins change it (`can_change`); a Dev tickets mover asks for a release now (`can_release`).
+// The daily release (docs/pipelines-v3.md D13): on or off, one or two company times, the Release Manager and
+// Technical Writer ("" finds each by its starter template), the next and last hour, and how many tasks wait for a
+// release. Owners and admins change it (`can_change`); `can_release` may ask for a release now.
 let RELEASE_VIEW: SettingsReleaseSchedule | null = null, RELEASE_AT = 0;
 // The last answer under the card (Saved, or what Release now did) survives the repaint the fresh schedule causes.
 let RELEASE_NOTE = {text: '', failed: false};
-const RELEASE_REASONS: Record<string, string> = {nothing_pending: 'Nothing at Pending Release', already_open: 'Woke the open release task', no_release_manager: 'No Release Manager'};
+const RELEASE_REASONS: Record<string, string> = {nothing_pending: 'No tasks wait for a release', already_open: 'A release task is open', no_release_manager: 'No Release Manager'};
+const releaseTasks = (n: number | undefined) => `${n ?? 0} task${n === 1 ? '' : 's'}`;
 async function releaseScheduleLoad(force?: boolean): Promise<SettingsReleaseSchedule> {
   if (!force && RELEASE_VIEW && Date.now() - RELEASE_AT < 60000) return RELEASE_VIEW;
   RELEASE_AT = Date.now();
@@ -38,7 +39,7 @@ async function releaseScheduleLoad(force?: boolean): Promise<SettingsReleaseSche
 function releaseLastHTML(last: SettingsReleaseLast | null | undefined): string {
   if (!last) return '<span class="muted">Not run yet</span>';
   const when = `<span class="tnum muted" title="${esc(fmt(last.at))}">${esc(ago(last.at))}</span>`;
-  const what = last.sent ? `${last.tickets} ticket${last.tickets === 1 ? '' : 's'}${last.task ? ` · <a href="#/task/${encodeURIComponent(last.task)}">Release task</a>` : ''}`
+  const what = last.sent ? `${releaseTasks(last.tasks)}${last.task ? ` · <a href="#/task/${encodeURIComponent(last.task)}">Release task</a>` : ''}`
     : esc(RELEASE_REASONS[last.reason ?? ''] || last.reason || 'Nothing sent');
   return `<span data-release-last>${what}</span> ${when}`;
 }
@@ -50,9 +51,9 @@ function releaseBotPick(name: string, chosen: string | null | undefined, found: 
 }
 function releaseNowButtonHTML(v: SettingsReleaseSchedule | null | undefined, cls = 'ghost'): string {
   if (!v?.can_release) return '';
-  return `<button type="button" class="${cls}" data-release-now${v.pending ? '' : ' disabled title="Nothing at Pending Release"'}>Release now</button>`;
+  return `<button type="button" class="${cls}" data-release-now${v.pending ? '' : ' disabled title="No tasks wait for a release"'}>Release now</button>`;
 }
-// With a note the server asks even when nothing is at Pending Release (work merged without a Dev ticket), so the
+// With a note the server asks even when no task waits for a release, so the
 // card's field lights the button; the board's button has no field and stays off while nothing waits.
 function releaseNoteHTML(v: SettingsReleaseSchedule): string {
   return v.can_release ? '<input type="text" data-release-note maxlength="1000" placeholder="Note" aria-label="Release note">' : '';
@@ -73,7 +74,7 @@ function releaseCardHTML(v: SettingsReleaseSchedule): string {
     <div class="sb-row"><span>Writer</span>${writer}<span></span></div>
     <div class="sb-row"><span>Next</span><div class="rel-line">${v.on && v.next ? `<span class="tnum" title="${esc(fmt(v.next))}" data-release-next>${esc(until(v.next))}</span>` : '<span class="muted">Off</span>'}</div><span></span></div>
     <div class="sb-row"><span>Last</span><div class="rel-line">${releaseLastHTML(v.last)}</div><span></span></div>
-    <div class="sb-row"><span>Pending</span><div class="rel-line"><span class="tnum" data-release-pending>${v.pending} ticket${v.pending === 1 ? '' : 's'}</span>${releaseNoteHTML(v)}${releaseNowButtonHTML(v)}</div><span></span></div>
+    <div class="sb-row"><span>Pending</span><div class="rel-line"><span class="tnum" data-release-pending>${releaseTasks(v.pending)}</span>${releaseNoteHTML(v)}${releaseNowButtonHTML(v)}</div><span></span></div>
   </div><p class="settings-cell-note${RELEASE_NOTE.failed ? ' err' : ''}" role="status" data-release-status>${esc(RELEASE_NOTE.text)}</p>`;
 }
 function releaseStatus(text: string, failed?: boolean): void {
@@ -91,7 +92,7 @@ async function releaseNow(button: HTMLButtonElement | null, note = ''): Promise<
   let text = '', failed = false;
   try {
     const out: SettingsReleaseNowAnswer = await post('/v2/release/now', note ? {note} : {});
-    text = out.sent ? (out.tickets ? `Asked for a release of ${out.tickets} ticket${out.tickets === 1 ? '' : 's'}` : 'Asked for a release') : (RELEASE_REASONS[out.reason ?? ''] || 'Nothing sent');
+    text = out.sent ? (out.tasks ? `Asked for a release of ${releaseTasks(out.tasks)}` : 'Asked for a release') : (RELEASE_REASONS[out.reason ?? ''] || 'Nothing sent');
     void releaseScheduleLoad(true).then(() => { releaseCardPaint(); boardReleaseSlots(); }).catch(() => {});
   } catch (e) { text = errorMessage(e, 'Try again'); failed = true; }
   finally { if (button?.isConnected) button.disabled = false; }
@@ -144,7 +145,7 @@ async function renderReleaseCard(): Promise<void> {
   if (Array.isArray(RELEASE_VIEW?.times)) releaseCardPaint();
 }
 
-// The board's Pending Release column carries Release now for those who may ask (tasks.js draws the slot).
+// A list's release slot carries Release now for those who may ask (a page draws [data-release-slot]).
 function boardReleaseSlots(): void {
   const slots = document.querySelectorAll<HTMLElement>('[data-release-slot]');
   if (!slots.length) return;

@@ -10,7 +10,7 @@
 type WhTab = 'incoming' | 'outgoing' | 'gateway';
 type WhEventType = import('../types/api').EventType;
 type WhWake = import('../types/api').WebhookWakeUrl;
-type WhFilterKey = 'departments' | 'bots' | 'task_types';
+type WhFilterKey = 'departments' | 'bots' | 'pipelines';
 type WhFilter = Partial<Record<WhFilterKey, string[]>>;
 type WhChoices = Record<WhFilterKey, [string, string][]>;
 /** A custom header as an endpoint holds it (backend/webhooks.py): a secret's value never comes back, `set` says it has one. */
@@ -443,17 +443,17 @@ function whEventsValue(box: HTMLElement): string[] {
 }
 // The events an endpoint may subscribe to: the catalog less the ones only rules see (`outbound: false`).
 const whOutbound = (types: WhEventType[]) => types.filter(t => t.outbound !== false);
-// Filters (backend/webhooks.py FilterIn): departments, bots, task types. A list left empty lets every event through.
+// Filters (backend/webhooks.py FilterIn): departments, bots, pipelines. A list left empty lets every event through.
 // A name the lists no longer have (a removed bot) stays, checked, so saving keeps it.
-const WH_FILTERS: [WhFilterKey, string][] = [['departments', 'Departments'], ['bots', 'Bots'], ['task_types', 'Task types']];
+const WH_FILTERS: [WhFilterKey, string][] = [['departments', 'Departments'], ['bots', 'Bots'], ['pipelines', 'Pipelines']];
 let WH_DEPTS: { task_rule_departments: { id: string; name: string }[] } | null = null;
 async function whFilterChoices(): Promise<WhChoices> {
-  const [routines] = await Promise.all([SYSTEM_ROUTINES || WH_DEPTS || get<{ task_rule_departments?: { id: string; name: string }[] }>('/v2/system-routines').catch(() => null), taskTypesLoad({cached: true}).catch(() => [])]);
+  const [routines, pipelines] = await Promise.all([SYSTEM_ROUTINES || WH_DEPTS || get<{ task_rule_departments?: { id: string; name: string }[] }>('/v2/system-routines').catch(() => null), pipelinesAll().catch((): PipelineRec[] => [])]);
   if (routines?.task_rule_departments) WH_DEPTS = {task_rule_departments: routines.task_rule_departments};
   return {
     departments: (routines?.task_rule_departments || []).map((d): [string, string] => [d.id, d.name]),
     bots: (S.emps || []).filter(e => e.status !== 'archived').map((e): [string, string] => [e.id, empName(e.id)]).sort((a, b) => a[1].localeCompare(b[1])),
-    task_types: (TASK_TYPES || []).map((t): [string, string] => [t.id, t.name]),
+    pipelines: pipelines.filter(p => !p.retired_at).map((p): [string, string] => [p.id, p.name]),
   };
 }
 const whFilterIds = (key: WhFilterKey, list: string[] | undefined) => (list || []).map(v => key === 'bots' ? String(v).replace(/^bot:/, '') : String(v));
@@ -472,7 +472,7 @@ function whFiltersBind(box: HTMLElement) {
   box.addEventListener('change', sync); sync();
 }
 function whFiltersValue(box: HTMLElement) {
-  const out: Record<string, string[]> = {departments: [], bots: [], task_types: []};
+  const out: Record<string, string[]> = {departments: [], bots: [], pipelines: []};
   box.querySelectorAll<HTMLElement>('[data-filter]').forEach(g => { out[g.dataset.filter!] = [...g.querySelectorAll<HTMLInputElement>('input:checked')].map(i => i.value); });
   return out;
 }

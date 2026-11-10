@@ -155,7 +155,15 @@ def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api
     goal_event(api, machine, attempt, 'met', 'The summary is in Docs.')
     assert get(api, f"conversations/{task['conversation_id']}/goal")['goal']['status'] == 'met'
     done = get(api, 'tasks/' + task['id'])['task']
-    assert done['status'] == 'done' and done['note'] == 'The summary is in Docs.'
+    assert done['status'] == 'done'
+    with api.app.state.store.read() as c:  # the goal's note is the owner's answer to "owner says done"
+        notes = [
+            r[0]
+            for r in c.execute(
+                "SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=?", (task['id'],)
+            )
+        ]
+    assert notes == ['The summary is in Docs.']
 
 
 def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_completes_the_task(api):
@@ -258,7 +266,7 @@ def test_a_done_tasks_goal_is_met_even_when_the_bot_signs_off_waiting(api):
     machine, task = task_goal_world(api)
     attempt = claim(api, machine)
     with api.app.state.store.transaction() as c:  # the bot marks its task done, then says what it waits on elsewhere
-        H.task_update(c, 'bot:ops', task['id'], status='done', note='Published.')
+        H.task_done(c, 'bot:ops', task['id'], 'Published.', H.task(c, task['id'])['version'])
     goal_event(api, machine, attempt, 'paused', 'Waiting on: Ana to "close" it.')
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
     assert goal['status'] == 'met' and goal['note'] == 'Waiting on: Ana to "close" it.'

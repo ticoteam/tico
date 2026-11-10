@@ -1,6 +1,7 @@
 """The Librarian (backend/librarian.py, docs/librarian.md): a person's question goes to a private docs
 conversation with the built-in bot, a bot asks with a message flagged needs-action, and the Librarian acts as itself."""
 
+import json
 import pytest
 
 from backend import librarian
@@ -317,13 +318,18 @@ def test_market_questions_are_kept_as_answered_so_the_owner_can_skip_and_resume(
 
 
 def test_a_market_setup_task_is_only_ever_the_owners_own_librarian_task(desk):
-    # The owner can write any preferences row, so a stored task id is checked: it must be the Librarian's task and
+    # A preferences row may hold any task id (an old client, a restore), so a stored task id is checked: it must be the Librarian's task and
     # the owner's own, or the setup shows no task.
     elsewhere = post(desk, "tasks", {"owner": "ops", "title": "Not the Librarian's", "body": "x"})
     elsewhere = elsewhere.get("task", elsewhere)
     bens = post(desk, "librarian/setup/docs", {"note": "On the wiki"}, token="ben-test")["task_id"]
     for forged in (elsewhere["id"], bens):
-        post(desk, "preferences/librarian.market_setup", {"value": {"task_id": forged}})
+        with desk.app.state.store.transaction() as c:
+            c.execute(
+                "INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:ana','librarian.market_setup',?,?) "
+                "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value",
+                (json.dumps({"task_id": forged}), "2026-11-10T00:00:00Z"),
+            )
         assert get(desk, "librarian/setup")["market"]["task"] is None
     done = post(
         desk,

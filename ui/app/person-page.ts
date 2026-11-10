@@ -288,7 +288,7 @@ function pagePerson(id: string | undefined, tab: string | undefined) {
   if (tab === 'slack') personSlackLoad(p);
 }
 // The human's tasks: what they own, active first, finished behind a toggle. The rows are
-// the same as a keeper bot's (v2TaskRow), opening the shared task detail.
+// the shared task row (S1), opening the shared task detail.
 /** The person whose tasks the page shows: ui/app/refresh.ts reads it on every live change. */ let PERSON_TASKS: string | null = null;
 // Shown only to whoever manages this person: the read is refused to everyone else.
 async function personAccessLoad(p: RosterPerson) {
@@ -302,21 +302,15 @@ async function personTasksLoad(p: RosterPerson) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;
   const owner = 'human:' + p.id;
-  const d: {tasks?: TaskRow[]} | null = await v2Get(`/v2/tasks?owner=${encodeURIComponent(owner)}&status=all&brief=true`);
+  const all = await taskBriefs({owner, status: 'all'}).catch(() => [] as TaskBriefV3[]);
   if (!$('#person-tasks') || PERSON_TASKS !== p.id) return;
-  const all = d?.tasks || [];
-  const active = all.filter(t => V2_ACTIVE.includes(String(t.status)));
-  const finished = all.filter(t => !V2_ACTIVE.includes(String(t.status)));
+  const active = all.filter(t => t.status === 'open');
+  const finished = all.filter(t => t.status !== 'open');
   const first = firstName(p.name) || p.id;
-  // A human's open task is to do, not "doing" the way a bot's is the moment it is assigned.
-  const groups = (list: TaskRow[], kinds: [string, string][]) => kinds.map(([k, label]) => {
-    const rows = list.filter(t => String(t.status) === k);
-    return rows.length ? `<div class="v2-group"><h3>${label} <span class="muted">${rows.length}</span></h3>${rows.map(t => v2TaskRow(t, '', false)).join('')}</div>` : '';
-  }).join('');
-  $('#person-tasks').innerHTML = (active.length ? groups(active, [['open', esc(needsWho({owner}))], ['doing', 'Doing'], ['waiting', 'Waiting']])
+  $('#person-tasks').innerHTML = (active.length ? `<div class="v2-group">${active.map(t => taskRowHTML(t)).join('')}</div>`
       : `<div class="empty">No active tasks. <a href="#" data-person-task-add>Give ${esc(first)} a task</a>.</div>`)
     + (finished.length ? `<details class="person-tasks-done"><summary class="muted">Finished <span class="cnt">${finished.length}</span></summary>${
-        groups(finished, [['done', 'Done'], ['declined', 'Declined'], ['closed', 'Closed']])}</details>` : '');
+        finished.map(t => taskRowHTML(t, {look: 'archive'})).join('')}</details>` : '');
   const link = $('#person-tasks [data-person-task-add]');
   if (link) link.onclick = (ev: Event) => { ev.preventDefault(); personTaskModal(p); };
 }

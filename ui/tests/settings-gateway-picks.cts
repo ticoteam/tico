@@ -41,7 +41,7 @@ declare function renderSettingsBots(): void;
     const catalog = {models: served.models, harnesses, gateway: served.gateway, default: {runtime: 'pi', model: 'tico-medium-1.0'}};
     const bot = (name: string, display: string, model: string, extra: Record<string, unknown> = {}) => ({name, display_name: display, description: '', status: 'active', owner_id: 'ana',
       repo: 'bot-' + name, can_manage: true, users: [], bot_owners: [], revision: 1, model, harness: 'pi', reasoning_effort: 'high',
-      keep_tasks_going: null, task_flow: {going: 0, waiting: 0}, task_model: null, thread_mode: 'personal', bot_contact: 'open',
+      task_model: null, thread_mode: 'personal', bot_contact: 'open',
       machine: {runner_id: 'r1', label: 'Box', owner_id: 'ana', generation: 1}, ...extra});
     const bots = [bot('seller', 'Seller', 'tico-medium-1.0'), bot('old', 'Old Hand', 'tico-retired-1.0'),
       bot('writer', 'Writer', 'tico-low-fast'), bot('banker', 'Banker', 'tico-medium-1.1')];

@@ -1,6 +1,5 @@
 """Helpers that other tests share, moved out of test_status_reads.py so they import no test file."""
 
-from backend import question_tasks as QT
 from backend.store import H
 from backend.tests.helpers.api import claim, post, ready
 from backend.tests.helpers.run_backoff import setup
@@ -37,7 +36,8 @@ def busy(api, machine, first, count, live=1):
                 task = H.task_create(c, "human:ana", f"Work {slug} {k}", "Do it.", "bot:" + slug, private=k == 3)
                 first_task = first_task or task["id"]
                 if k in (1, 2):
-                    QT.ask_plain(c, "bot:" + slug, "human:ana", "Which one?", parent=task)
+                    seen = H.task(c, task["id"])["version"]
+                    H.task_ask(c, "bot:" + slug, task["id"], "human:ana", "Which one?", seen_version=seen)
             H.task_create(c, "bot:" + slug, f"Need {slug}", "Please look.", "human:ben", private=bool(n % 2))
             H.status_set(
                 c, "bot:" + slug, slug, state="crashed" if n % 3 == 2 else "idle", focus="Working", task_id=first_task

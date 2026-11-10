@@ -40,9 +40,7 @@ def prepared(api, gh):
             (json.dumps({'schema_version': 1, 'bots': {}, 'worktrees': True}),),
         )
         task = H.task_create(c, 'human:ana', 'Build product', 'Implement product', 'bot:cmo')
-        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         other = H.task_create(c, 'human:ana', 'Other work', 'Implement docs', 'bot:cpo')
-        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
         until = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         c.execute(
             "INSERT INTO messages(id,sender_id,recipient_id,kind,body,created_at) VALUES('m1','human:ana','bot:cmo','say','Work',?)",
@@ -55,6 +53,21 @@ def prepared(api, gh):
             (job, until, H.now()),
         )
     return api, task['id'], other['id']
+
+
+def end(c, tid, status='closed', by='human:ana'):
+    """Close, finish or reopen a task through the engine (its status changes only through a move)."""
+    seen = H.task(c, tid)['version']
+    if status == 'closed':
+        return H.task_close(c, by, tid, 'Not needed.', seen)
+    if status == 'done':
+        return H.task_done(c, by, tid, 'Finished.', seen)
+    return H.task_move(c, by, tid, H.TASK_REOPEN, 'Back to work.', seen)
+
+
+def give(c, tid, owner, by='human:ana'):
+    """Hand a task to `owner` through the engine."""
+    return H.task_reassign(c, by, tid, owner, 'Over to you.', H.task(c, tid)['version'])
 
 
 def post(api, path, body, token='owner-test'):

@@ -1,0 +1,113 @@
+import type {Route} from 'playwright';
+// Offline browser check of a pipeline's columns on the Tasks page (docs/pipelines-v3.md S7): a task dragged to another
+// column is moved by the engine (POST /api/v2/tasks/{id}/move) and shows there. When the move is refused:
+// - with requirements a person may push past, the page asks "Move to Build without Spec page?" and sends the why;
+// - with a refusal it cannot push past, it shows the engine's line and the task stays where it was.
+// Letting go after a drag never opens the task.
+const {chromium} = require('playwright') as typeof import('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
+
+const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
+const config = {version: '0.1.0', app_name: 'Tico', local: true};
+const req = {kind: 'owner_done', settings: {}, can_push_past: true, who_oks: 'none', person_id: null, line: ''};
+const stage = (id: string, name: string) => ({id, name, purpose: '', owner: null, by_hand: false, task_limit: null,
+  expected_minutes: null, expected_bots_only: false, on_enter: {}, requirements: [req]});
+const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
+  factory_id: null, preset: null, settings_version: 1, retired_at: null, stages: [stage('spec', 'Spec'), stage('build', 'Build')],
+  done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
+const brief = (id: string, title: string, stageId: string, version = 1) => ({id, title, number: 1, pipeline_id: 'product', stage_id: stageId,
+  status: 'open', owner_id: 'human:ana', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false, turn: null,
+  version, created_at: '2026-11-09T10:00:00Z', updated_at: '2026-11-09T10:00:00Z'});
+
+(async () => {
+  const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL ?? 'chrome') as string});
+  const errors: string[] = [];
+  const tasks = [brief('t1', 'Saved carts', 'spec'), brief('t2', 'Refund flow', 'spec')];
+  const moves: {id: string; body: Record<string, unknown>}[] = [];
+  try {
+    const page = await browser.newPage({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
+    page.on('pageerror', (error: Error) => errors.push(error.message));
+    await page.route('**/*', (route: Route) => {
+      const r = route.request(), url = new URL(r.url()), p = url.pathname;
+      const json = (body: unknown, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+      if (url.origin !== 'http://tico-ui.test') return route.abort();
+      if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+      const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
+      if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
+      if (p === '/api/me') return json({...me, config});
+      if (p === '/api/v2/config') return json(config);
+      if (p === '/api/employees') return json([]);
+      if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
+      if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
+      if (p === '/api/v2/pipelines/product') return json(pipeline);
+      if (p === '/api/v2/tasks' && r.method() === 'GET') return json({tasks});
+      const move = p.match(/^\/api\/v2\/tasks\/([^/]+)\/move$/);
+      if (move && r.method() === 'POST') {
+        const id = move[1]!, body = JSON.parse(r.postData() || '{}') as Record<string, unknown>;
+        moves.push({id, body});
+        if (id === 't1' && !body['why']) {
+          return json({error: 'task_not_met', detail: 'Spec page is not met.', missing: ['Spec page'], next: ['move'], version: 1}, 409);
+        }
+        if (id === 't2') {
+          return json({error: 'task_no_push_past', detail: "PR merged can't be pushed past. Move back or close.", missing: ['PR merged'], next: [], version: 1}, 409);
+        }
+        const t = tasks.find(x => x.id === id)!;
+        Object.assign(t, {stage_id: 'build', version: t.version + 1});
+        return json({task: t});
+      }
+      if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
+      return json(unrouted(p));
+    });
+    await page.goto('http://tico-ui.test/#/tasks?pipeline=product&layout=columns');
+    const card = (id: string) => page.locator(`.tk-card[data-task="${id}"]`);
+    const inCol = (col: string, id: string) => page.locator(`[data-pv-col="${col}"] .tk-card[data-task="${id}"]`);
+    await card('t1').waitFor();
+
+    // Drags a task to a column with the mouse, in steps, as a person would.
+    const drag = async (id: string, col: string) => {
+      // The page draws again after each read: both boxes are read in one go, once both are on screen.
+      const boxes = await page.waitForFunction(([t, c]) => {
+        const a = document.querySelector(`.tk-card[data-task="${t}"]`)?.getBoundingClientRect();
+        const b = document.querySelector(`[data-pv-col="${c}"]`)?.getBoundingClientRect();
+        return a?.width && b?.width ? {from: {x: a.x, y: a.y, height: a.height}, to: {x: b.x, y: b.y, width: b.width}} : null;
+      }, [id, col]);
+      const {from, to} = await boxes.jsonValue() as {from: {x: number; y: number; height: number}; to: {x: number; y: number; width: number}};
+      await page.mouse.move(from.x + 20, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(from.x + 40, from.y + from.height / 2, {steps: 3});
+      await page.mouse.move(to.x + to.width / 2, to.y + 40, {steps: 8});
+      await page.mouse.up();
+    };
+
+    // A refusal that can be pushed past asks why, then moves with it.
+    await drag('t1', 'build');
+    const bar = page.locator('form.pv-bar[data-pv-push]');
+    await bar.waitFor();
+    assert.equal((await bar.locator('.pv-bar-text').innerText()).trim(), 'Move to Build without Spec page?');
+    assert.equal(await inCol('spec', 't1').count(), 1, 'refused: the task is back in Spec');
+    assert.ok(!(await page.evaluate(() => location.hash)).startsWith('#/task/'), 'the drag opened nothing');
+    assert.deepEqual(moves[0], {id: 't1', body: {to: 'next', version: 1}}, 'the next stage is asked for as next');
+    await bar.locator('input[name="why"]').fill('Spec is in the doc');
+    await bar.locator('button[type="submit"]').click();
+    await inCol('build', 't1').waitFor();
+    assert.deepEqual(moves[1], {id: 't1', body: {to: 'next', why: 'Spec is in the doc', version: 1}});
+    assert.equal(await page.locator('.pv-bar').count(), 0, 'nothing left to say');
+
+    // A refusal it cannot push past says the engine's line, and the task stays.
+    await drag('t2', 'build');
+    const said = page.locator('.pv-bar[role="alert"]');
+    await said.waitFor();
+    assert.equal(await said.locator('input').count(), 0, 'no why to give');
+    assert.equal((await said.locator('.pv-bar-text').innerText()).trim(), "Refund flow: PR merged can't be pushed past. Move back or close. Missing: PR merged.");
+    assert.equal(await inCol('spec', 't2').count(), 1, 'it stays in Spec');
+    assert.ok(!(await page.evaluate(() => location.hash)).startsWith('#/task/'), 'the drag opened nothing');
+    await said.locator('[data-pv-bar-x]').click();
+    assert.equal(await page.locator('.pv-bar').count(), 0, 'closed');
+
+    assert.deepEqual(errors, []);
+    console.log('PASS: a dragged task moves, a refused one says why, with a why to push past only where it may be.');
+  } finally { await browser.close(); }
+})().catch(error => { console.error(error); process.exitCode = 1; });

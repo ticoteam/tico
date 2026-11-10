@@ -11,7 +11,7 @@ from backend import worktrees as W
 from backend.tests.helpers.github_app import api, gh, auth, connect
 from backend.tests.helpers.repositories import put
 from backend.enqueue import enqueue_stored
-from backend.tests.helpers.worktrees import mark_ready, post, prepared
+from backend.tests.helpers.worktrees import end, give, mark_ready, post, prepared
 
 
 def started_task(api, title):
@@ -129,7 +129,7 @@ def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
         assert row['state'] == 'present' and json.loads(row['detail'])['ahead'] == 2
         H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
         c.execute("UPDATE task_links SET state='open' WHERE kind='pr'")
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid, 'closed')
     # Closed with its pull request still open, the tree goes at once (its branch is on GitHub already).
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
     assert [a['action'] for a in actions] == ['remove'] and 'release' not in actions[0]
@@ -140,7 +140,7 @@ def test_heartbeat_cleanup_waits_for_prs_restore_and_old_report(prepared):
     body['worktrees'][0]['state'] = 'removed'
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='open' WHERE id=?", (tid,))
+        end(c, tid, 'open')
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['action'] == 'restore'
     route = f'/api/v2/tasks/{tid}/links/{link["link_id"]}'
     progress = api.patch(
@@ -259,7 +259,7 @@ def _unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_remo
             cleanup_retry_generation='previous-request',
         )
         c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['link_id']))
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid, 'closed')
     report = {
         'link_id': link['link_id'],
         'state': 'present',
@@ -283,7 +283,6 @@ def _unlink_retries_exhausted_cleanup_with_move_rights_and_keeps_work_until_remo
         assert saved['cleanup_attempts'] == W.CLEANUP_TRIES and saved['cleanup_gave_up']
         assert saved['cleanup_retry_generation'] == 'previous-request'
         H.task_unlink(c, 'human:ana', tid, link['link_id'], mover=True)
-        H.task_update(c, 'human:ana', tid, owner='human:ana', mover=True)
         rows = W.inventory(c, 'r1')
         assert len(rows) == 1 and rows[0]['owner_id'] == 'bot:cmo'
         assert rows[0]['state'] == 'present' and rows[0]['path'] == link['path']
@@ -363,7 +362,7 @@ def test_old_computer_token_needs_an_outstanding_action(prepared):
         c.execute("DELETE FROM assignments WHERE bot='cmo'")
     assert post(api, route, {}, 'runner-test').status_code == 403
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid, 'closed')
     assert post(api, route, {}, 'runner-test').status_code == 200
 
 
@@ -399,7 +398,7 @@ def test_heartbeat_writes_only_changes_and_backs_off_a_refused_cleanup(prepared)
     # Closed and finished: cleanup is asked. The computer refuses (it keeps files), so it is asked again only after
     # a wait, and not at all after CLEANUP_TRIES.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid, 'closed')
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['action'] == 'remove'
     report['error'] = 'Worktree action failed; history kept. kept: ignored files'
     asked = [post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] for _ in range(4)]
@@ -479,7 +478,7 @@ def test_a_refused_cleanup_keeps_its_error_across_a_computer_restart(prepared):
             return json.loads(c.execute('SELECT detail FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0])
 
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid, 'closed')
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'][0]['action'] == 'remove'
     report['error'] = refused
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'], (
@@ -499,13 +498,13 @@ def test_a_refused_cleanup_keeps_its_error_across_a_computer_restart(prepared):
     assert detail()['error'] == refused and detail()['cleanup_gave_up'], 'a cleanup given up stays given up'
     # Reopened, removal is no longer asked: the refusal is forgotten.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='open' WHERE id=?", (tid,))
+        end(c, tid, 'open')
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
     post(api, 'runners/heartbeat', body, 'runner-test')
     assert not any(key in detail() for key in ('error', 'cleanup_requested', 'cleanup_attempts', 'cleanup_gave_up'))
     # Closed again, a removal that succeeds clears the refusal it followed.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid, 'closed')
     report['error'] = refused
     post(api, 'runners/heartbeat', body, 'runner-test')
     post(api, 'runners/heartbeat', body, 'runner-test')
@@ -539,7 +538,7 @@ def test_a_closed_task_removes_its_tree_while_its_pull_request_is_still_open(pre
     with api.app_state.store.transaction() as c:
         pr = H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/9')
         c.execute("UPDATE task_links SET state='open' WHERE id=?", (pr['id'],))
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid, 'closed')
     actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
     # Not a release: the computer saves the unsaved and unpushed work to its wip/ branch first.
     assert [(a['action'], a['task_closed'], a['prs_finished'], a.get('release')) for a in actions] == [
@@ -583,7 +582,9 @@ def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prep
     assert refused.status_code == 409
     error = refused.json()['error']
     assert error['code'] == 'worktree_limit' and 'free themselves once you are idle' in error['detail']
-    assert len(error['worktrees']) == W.LIMIT and {w['clear'] for w in error['worktrees']} == {'merged'}
+    # The merged pull request clears the tree it was opened from; trees added after it are still in progress.
+    assert len(error['worktrees']) == W.LIMIT and error['worktrees'][0]['clear'] == 'merged'
+    assert {w['clear'] for w in error['worktrees'][1:]} == {'in_progress'}
     # A new open pull request on the task means its worktree is in use again: no release.
     with api.app_state.store.transaction() as c:
         H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/2')
@@ -596,7 +597,7 @@ def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prep
     body['worktrees'][0]['state'] = 'removed'
     post(api, 'runners/heartbeat', body, 'runner-test')
     with api.app_state.store.read() as c:
-        assert H.task(c, tid)['status'] == 'waiting'
+        assert H.task(c, tid)['status'] == 'open'  # the release is the next stage's business, not the tree's
         assert c.execute('SELECT state FROM task_links WHERE id=?', (link['link_id'],)).fetchone()[0] == 'removed'
         released = c.execute(
             "SELECT detail FROM events WHERE action='worktree.released' AND target=? "
@@ -1194,7 +1195,7 @@ def test_a_computer_reads_the_status_only_of_tasks_it_ran_that_bots_session_for(
                 "VALUES(?,?,'cmo',?,1,?,'completed',?,?,?)",
                 (aid, job, runner, 'synthetic-' + aid, H.now(), H.now(), lane),
             )
-        c.execute("UPDATE tasks SET status='done' WHERE id IN (?,?)", (tid, other))
+        end(c, tid, 'done'), end(c, other, 'done')
     asked = {
         'sessions': [
             {'bot': 'cmo', 'task': tid},
@@ -1229,7 +1230,7 @@ def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_it
     assert 'worktree_actions_skipped' not in beat.json()
     # Owned by a bot this computer does not host: readiness still passes, counts the skip and says nothing of it.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))
+        give(c, tid, 'bot:cpo')
         c.execute("UPDATE task_links SET detail=json_set(detail,'$.owner','bot:cpo') WHERE id=?", (link['link_id'],))
     beat = post(api, 'runners/heartbeat', quiet, 'runner-test')
     assert beat.status_code == 200, beat.text
@@ -1237,12 +1238,12 @@ def test_readiness_skips_a_private_worktree_it_cannot_read_and_keeps_the_ones_it
     assert tid not in beat.text and tid[:8] not in beat.text and 'Secret plan' not in beat.text
     # Back with the hosted bot, the computer's report on its own worktree is answered, not refused.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:cmo' WHERE id=?", (tid,))
+        give(c, tid, 'bot:cmo')
         c.execute("UPDATE task_links SET detail=json_set(detail,'$.owner','bot:cmo') WHERE id=?", (link['link_id'],))
     assert mark_ready(api, tid, link['link_id']).status_code == 200
     # A removal always reaches the computer holding the worktree, even once nobody it hosts can read the task.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed',owner_id='human:bea' WHERE id=?", (tid,))
+        give(c, tid, 'human:ana'), end(c, tid)
     present = {
         **quiet,
         'worktrees': [
@@ -1330,7 +1331,7 @@ def test_a_pending_tree_with_a_checkout_on_disk_is_removed_the_normal_way_when_i
         'last_commit': 'c' * 40,
     }
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid, 'closed')
     actions = post(api, 'runners/heartbeat', {**HEARTBEAT, 'worktrees': [report]}, 'runner-test').json()[
         'worktree_actions'
     ]
@@ -1615,7 +1616,7 @@ def test_only_the_task_owners_own_turn_holds_its_tree(prepared):
         c.execute("UPDATE attempts SET task_id=? WHERE id='a1'", (tid,))  # cmo's turn on the task is running
         assert W.live_turn(c, tid, 'bot:cmo')
         assert not W.live_turn(c, tid, 'bot:cpo')  # a reviewer's or other bot's view
-        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))  # the task moved to another bot
+        give(c, tid, 'bot:cpo')  # the task moved to another bot
         assert not W.live_turn(c, tid, 'bot:cmo')  # the former owner's turn holds nothing
         row = {'task_id': tid, 'owner': 'bot:cmo', 'repo': 'Acme/product', 'branch': None}
         assert W.held_reason(c, row, {}) == ''
@@ -1768,11 +1769,6 @@ def test_old_merged_pr_releases_its_tree_but_keeps_a_newer_doing_allocation(prep
         held = {w['link_id']: w for w in W.holdings(c, 'bot:cmo')}
         assert held[newer['link_id']]['clear'] == 'in_progress'
         assert held[original['link_id']]['clear'] == 'merged'
-    # Review-step cleanup keeps its established behavior, including task-wide finished PRs.
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='review' WHERE id=?", (tid,))
-    actions = post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions']
-    assert {a['link_id'] for a in actions if a['action'] == 'remove'} == {original['link_id'], newer['link_id']}
 
 
 @pytest.mark.parametrize('manager', ['bot', 'person'])
