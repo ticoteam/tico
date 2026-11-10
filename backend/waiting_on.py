@@ -345,15 +345,18 @@ def of(
         ahead = E.next_stage(conn, row)
         full = bool(ahead) and not E.has_room(conn, ahead)
         name = ahead["name"] if ahead else "the next stage"
-        out.append(
-            Wait(
-                ROOM,
-                ahead["id"] if ahead else None,
-                f"No room in {name}" if full else f"Moving to {name}",
-                None,
-                entered,
-            )
-        )
+        line = f"No room in {name}" if full else f"Moving to {name}"
+        held = E.shut_out(conn, row, ahead) if ahead and not full else None
+        if held:
+            # The next stage's owner, or someone it asks, cannot read this private task: it waits until someone who
+            # can see it shares it (the engine never adds a reader). Who that is, and why.
+            from . import hubdb
+
+            H: Any = hubdb
+            sharer = person_for(conn, row)
+            by = str(H.actor_name(conn, sharer)) if sharer else "someone who can see it"
+            line = f"Waits on {by} to share it: {held['cause']}"
+        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
     if visit.get("level") == "person" and not by_hand:
         # The ladder or Late brought the task to a person. It is in their list whatever else it waits on, and the
         # first thing it says is why.

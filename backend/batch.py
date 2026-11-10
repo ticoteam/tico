@@ -519,7 +519,7 @@ def _apply_decide(c, who, item, r):
             if getattr(who, "via", "") or getattr(who, "via_token", False):
                 # An OK is the person's own, in Tico: whoever walks the list for them may send back, never OK.
                 raise Problem("ok_not_asked", "An OK is the person's own, in Tico. Send back is yours to say", 403)
-            H.task_answer(c, who.actor, task_id, ident, "ok", text or None)
+            H.task_answer(c, who.actor, task_id, ident, "ok", text or None, own_click=task_asks.own_click(who))
             return f"OK'd: {item['title']}"
         if decision == "send_back":
             H.task_answer(c, who.actor, task_id, ident, "no", text)
