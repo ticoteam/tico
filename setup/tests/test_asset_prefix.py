@@ -261,6 +261,7 @@ def test_backup_storage_takes_name_and_otherwise_the_saved_one():
     argv = ["backup-storage", "--domain", "tico.example.com", "--aws-region", "us-west-2"]
     assert go([*argv, "--name", "acme"], deps=d)[0] == 0
     state.save("tico.example.com", {"aws_name": "saved-name"})
+    d.aws_s3 = lambda region, profile: S3()  # the acme bucket is acme's: another name never takes it
     assert go(argv, deps=d)[0] == 0
     assert [c["UserName"] for c in iam.called("create_user")] == ["tico-backup-acme", "tico-backup-saved-name"]
     code, out = go([*argv, "--name", "Not_A_Name"], deps=d)
@@ -733,3 +734,35 @@ def test_a_hub_runner_saves_its_prefix_and_keeps_it(monkeypatch):
     code, out = go([*argv, "--asset-prefix", "tico"], deps=d)
     assert code == 2 and "named with --asset-prefix hub" in out
     assert go(argv, deps=d)[0] == 0 and ssm.called("put_parameter")[-1]["Name"] == "/hub/runner-b1/env"
+
+
+# --- never touch what this setup did not make ---------------------------------------------------------------------
+
+
+def test_a_backup_bucket_another_prefix_made_is_refused_before_any_write():
+    """hub + backup-foo.example.com and hub-backup + foo.example.com spell the same bucket."""
+    s3, iam = S3(), IAM()
+    kw = dict(region="us-west-2", account_id=ACCOUNT, say=lambda _: None)
+    backup.create_s3(s3, iam, domain="backup-foo.example.com", name="a", names=HUB, **kw)
+    bucket = HUB.backup_bucket("backup-foo.example.com", ACCOUNT)
+    assert aws.Names("hub-backup").backup_bucket("foo.example.com", ACCOUNT) == bucket
+    before, users = len(s3.calls), dict(iam.users)
+    with pytest.raises(MissingInput, match=f"S3 bucket {bucket} .*another --asset-prefix"):
+        backup.create_s3(s3, iam, domain="foo.example.com", name="b", names=aws.Names("hub-backup"), **kw)
+    assert [n for n, _ in s3.calls[before:]] == ["head_bucket", "get_bucket_tagging"]
+    assert iam.users == users and len(iam.called("put_user_policy")) == 1
+    assert all(c[1].get("ExpectedBucketOwner") == ACCOUNT for c in s3.calls[before:])
+
+
+def test_an_untagged_backup_bucket_is_refused_and_a_new_one_is_tagged_first():
+    s3, iam = S3(), IAM()
+    bucket = aws.DEFAULT_NAMES.backup_bucket("tico.example.com", ACCOUNT)
+    s3.tagsets[bucket] = []  # exists, made by someone else
+    with pytest.raises(MissingInput, match=f"S3 bucket {bucket} "):
+        backup.create_s3(
+            s3, iam, domain="tico.example.com", region="us-west-2", account_id=ACCOUNT, name="acme", say=print
+        )
+    assert [n for n, _ in s3.calls] == ["head_bucket", "get_bucket_tagging"] and not iam.calls
+    s3, _, _ = created_backup()
+    writes = [n for n, _ in s3.calls if n not in ("head_bucket", "get_bucket_tagging")]
+    assert writes[:2] == ["create_bucket", "put_bucket_tagging"]

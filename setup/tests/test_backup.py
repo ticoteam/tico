@@ -17,9 +17,12 @@ class FakeS3:
     def __init__(self, exists=False):
         self.exists, self.calls = exists, []
 
-    def head_bucket(self, Bucket):
+    def head_bucket(self, **kw):
         if not self.exists:
             raise Missing("404")
+
+    def get_bucket_tagging(self, **kw):
+        return {"TagSet": OURS}
 
     def __getattr__(self, name):
         return lambda **kw: self.calls.append((name, kw))
@@ -111,7 +114,7 @@ def test_the_iam_user_can_only_reach_that_bucket_and_is_tagged():
 
 def test_a_bucket_someone_else_owns_is_an_error_not_a_silent_success():
     class Forbidden(FakeS3):
-        def head_bucket(self, Bucket):
+        def head_bucket(self, **kw):
             raise Missing("403")
 
     with pytest.raises(RuntimeError, match="403"):

@@ -130,6 +130,15 @@ class Names:
 DEFAULT_NAMES = Names()
 
 
+def not_ours(kind: str, resource: str, names: Names, name: str, pick: str = "--name or --asset-prefix") -> MissingInput:
+    """The refusal for a name this install would take that something it did not make already holds."""
+    return MissingInput(
+        f"{kind} {resource} already exists and was not made by this setup (it lacks the tags "
+        f"{names.managed_tag[0]}={names.managed_tag[1]} and {names.name_tag}={name}); refusing to reuse or change it. "
+        f"Pick another {pick}."
+    )
+
+
 def asset_prefix(given: str | None, saved: dict | None) -> str:
     """--asset-prefix on the first run, then the one saved with the install: its resources are found by their names, so
     a different one later is refused rather than applied. Saved state from before the flag means tico."""

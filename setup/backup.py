@@ -75,22 +75,41 @@ def create_s3(
     say: Callable[[str], None] = print,
     names: awsmod.Names = awsmod.DEFAULT_NAMES,
 ) -> dict[str, str]:
-    """Returns the .env values. Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest."""
+    """Returns the .env values. Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest.
+    Only a bucket (in this account) and a user that carry both of this install's tags are reused; anything else of the
+    same name is refused before the first write."""
     bucket = names.backup_bucket(domain, account_id)
+    owned = {"Bucket": bucket, "ExpectedBucketOwner": account_id}
     try:
-        s3.head_bucket(Bucket=bucket)
-        say(f"  bucket {bucket} exists; keeping it")
+        s3.head_bucket(**owned)
+        exists = True
     except Exception as e:
         code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
         if code not in ("404", "NoSuchBucket", "NotFound"):
             raise RuntimeError(f"cannot use bucket {bucket}: {code or e}") from e
+        exists = False
+    if exists and not names.is_ours(bucket_tags(s3, owned), name):
+        raise awsmod.not_ours("S3 bucket", bucket, names, name, pick="--domain or another --asset-prefix")
+    user = names.backup_user(name)
+    try:
+        iam.get_user(UserName=user)
+        user_exists = True
+    except iam.exceptions.NoSuchEntityException:
+        user_exists = False
+    if user_exists and not names.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
+        raise awsmod.not_ours("IAM user", user, names, name)
+    if exists:
+        say(f"  bucket {bucket} exists; keeping it")
+    else:
         args = {"Bucket": bucket}
         if region != "us-east-1":
             args["CreateBucketConfiguration"] = {"LocationConstraint": region}
         s3.create_bucket(**args)
+        # Tagged at once, so a retry after a failure below still knows the bucket for its own.
+        s3.put_bucket_tagging(**owned, Tagging={"TagSet": names.tags(name)})
         say(f"  created bucket {bucket}")
     s3.put_public_access_block(
-        Bucket=bucket,
+        **owned,
         PublicAccessBlockConfiguration={
             "BlockPublicAcls": True,
             "IgnorePublicAcls": True,
@@ -98,15 +117,15 @@ def create_s3(
             "RestrictPublicBuckets": True,
         },
     )
-    s3.put_bucket_versioning(Bucket=bucket, VersioningConfiguration={"Status": "Enabled"})
+    s3.put_bucket_versioning(**owned, VersioningConfiguration={"Status": "Enabled"})
     s3.put_bucket_encryption(
-        Bucket=bucket,
+        **owned,
         ServerSideEncryptionConfiguration={
             "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
         },
     )
     s3.put_bucket_lifecycle_configuration(
-        Bucket=bucket,
+        **owned,
         LifecycleConfiguration={
             "Rules": [
                 {
@@ -128,7 +147,7 @@ def create_s3(
         },
     )
     s3.put_bucket_policy(
-        Bucket=bucket,
+        **owned,
         Policy=json.dumps(
             {
                 "Version": "2012-10-17",
@@ -145,14 +164,8 @@ def create_s3(
             }
         ),
     )
-    s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": names.tags(name)})
 
-    user = names.backup_user(name)
-    try:
-        iam.get_user(UserName=user)
-        if not names.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
-            raise RuntimeError(f"IAM user {user} exists but was not created by tico setup; refusing to touch it")
-    except iam.exceptions.NoSuchEntityException:
+    if not user_exists:
         iam.create_user(UserName=user, Tags=names.tags(name))
         say(f"  created IAM user {user}")
     iam.put_user_policy(UserName=user, PolicyName=names.backup_policy, PolicyDocument=json.dumps(policy(bucket)))
@@ -167,6 +180,15 @@ def create_s3(
         "LITESTREAM_ACCESS_KEY_ID": key["AccessKeyId"],
         "LITESTREAM_SECRET_ACCESS_KEY": key["SecretAccessKey"],
     }
+
+
+def bucket_tags(s3, owned: dict) -> list[dict]:
+    try:
+        return s3.get_bucket_tagging(**owned).get("TagSet") or []
+    except Exception as e:  # NoSuchTagSet: a bucket with no tags at all
+        if str(getattr(e, "response", {}).get("Error", {}).get("Code", "")) == "NoSuchTagSet":
+            return []
+        raise
 
 
 def r2_endpoint(account_id: str) -> str:
