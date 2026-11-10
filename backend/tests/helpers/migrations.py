@@ -58,8 +58,18 @@ def restore_before_cutover(c):
             c.execute(f"ALTER TABLE tasks ADD COLUMN {column} TEXT")
 
 
+# The first file of Pipelines v3. The files from it on, but the cut-over, were made with the new engine: a replay of an
+# older file never needs them again, and some (an ALTER TABLE ADD COLUMN) cannot run twice.
+PIPELINES_V3 = "20261110010000_pipelines_v3"
+CUTOVER = "20261110054000_pipelines_v3_cutover"
+
+
 def forget_from(c, version):
     """The file as an install from before migration `version` left it: the records from that one on are forgotten, so
-    they run again on the next start, and what the cut-over took away is back for them."""
-    c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (version,))
+    they run again on the next start, and what the cut-over took away is back for them. The files of Pipelines v3 stay
+    recorded, but the cut-over, which runs again after the replayed ones and takes that away again."""
+    c.execute(
+        "DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%' AND (version<? OR version=?)",
+        (version, PIPELINES_V3, CUTOVER),
+    )
     restore_before_cutover(c)

@@ -9,14 +9,6 @@ The task rule that closed a done task after a day went with the old engine: a ta
 from . import groups, people
 from .store import H
 
-# Run at start (backend/store.py): what the close rule left behind in a database made before 0.6.
-SCHEMA = """
-DROP INDEX IF EXISTS tasks_rule_due;
-DROP INDEX IF EXISTS tasks_rule_done_due;
-DROP TABLE IF EXISTS task_rules;
-"""
-
-
 def departments(settings):
     from . import recruit, recruit_rank
     import yaml
