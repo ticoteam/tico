@@ -2143,3 +2143,33 @@ fn a_refused_line_on_a_call_reads_the_meeting_instead_of_retrying() {
     assert_eq!(tico.asked("POST /api/v2/live-meetings/live-1/chunks"), 1);
     assert_eq!(store.context(&record.id).unwrap().live_state, "ended");
 }
+
+#[test]
+fn a_call_waiting_for_sign_in_goes_when_its_card_is_replaced_another_org_signs_in_or_it_is_old() {
+    let tico = FakeTico::start(|method, path| source_answer(method, path, "live"));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    let signed_in = app.config.destinations.clone();
+    let claims = || tico.asked(&format!("POST {}", claim_path()));
+    let wait = |app: &mut Recorder, setup: &dyn Fn(&mut Recorder)| {
+        app.config.destinations.clear();
+        app.link(&call_link(&tico));
+        assert_eq!(app.connect.as_deref(), Some(tico.url.as_str()));
+        setup(app);
+        app.config.destinations = signed_in.clone();
+        app.continue_call();
+        settle(app, |_| false);
+    };
+    // Another connect link replaces the card.
+    wait(&mut app, &|app| {
+        app.link("tico-recorder://connect?server=https://other.example.com")
+    });
+    // Another org's sign-in finishes first.
+    wait(&mut app, &|app| {
+        app.config.destinations = vec![connection("other", "other.example.com")];
+        app.continue_call();
+    });
+    // Five minutes pass.
+    wait(&mut app, &|app| app.expire_pending_call());
+    assert_eq!(claims(), 0, "{:?}", tico.seen());
+}

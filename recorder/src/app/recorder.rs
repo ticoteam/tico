@@ -86,6 +86,8 @@ const CALL_READ_EVERY: Duration = Duration::from_secs(5);
 const CALL_PRESENCE_EVERY: Duration = Duration::from_secs(10);
 /// How long giving a call back waits for the last words to be transcribed and shared.
 const CALL_LAST_WORDS: Duration = Duration::from_secs(120);
+/// A call link waiting for its org's sign-in is dropped after this long.
+const PENDING_CALL_FOR: Duration = Duration::from_secs(300);
 /// A release Tico did not take is tried this many times in all, a little later each time.
 const RELEASE_TRIES: u32 = 5;
 /// A call's source to give back (`Recorder::release_call`).
@@ -473,8 +475,9 @@ pub struct Recorder {
     /// Call sources waiting to be given back, and the one being given back now.
     releases: std::collections::VecDeque<Release>,
     releasing: Option<Release>,
-    /// A call link waiting for sign-in to its org: (org address, call id).
-    pending_call: Option<(String, String)>,
+    /// A call link waiting for sign-in to its org: (org address, call id, when it came). It goes after
+    /// `PENDING_CALL_FOR`, and when its sign-in card is dismissed or replaced or another org signs in.
+    pending_call: Option<(String, String, Instant)>,
     /// The call being claimed now: (connection id, call id).
     claiming: Option<(String, String)>,
     /// When the call recording's live meeting was last read here, and its Meet names last sent.
@@ -902,7 +905,7 @@ impl Recorder {
         match self.connection_for(address) {
             Some(destination) => self.claim_call(&destination, call),
             None => {
-                self.pending_call = Some((address.to_owned(), call.to_owned()));
+                self.pending_call = Some((address.to_owned(), call.to_owned(), Instant::now()));
                 if !self.signing_in {
                     self.connect = Some(address.to_owned());
                 }
@@ -911,7 +914,8 @@ impl Recorder {
     }
     /// After a sign-in: a call link that waited for it goes on when that org is signed in now.
     pub fn continue_call(&mut self) {
-        if let Some((address, call)) = self.pending_call.take()
+        if let Some((address, call, at)) = self.pending_call.take()
+            && at.elapsed() < PENDING_CALL_FOR
             && let Some(destination) = self.connection_for(&address)
         {
             self.claim_call(&destination, &call);
@@ -1882,6 +1886,13 @@ impl Recorder {
         self.sync_saved();
         self.watch_call();
         self.next_release();
+        if self
+            .pending_call
+            .as_ref()
+            .is_some_and(|(_, _, at)| at.elapsed() >= PENDING_CALL_FOR)
+        {
+            self.pending_call = None;
+        }
         self.watch_inputs();
         let outside = self.outside_state();
         if outside != self.outside {
@@ -3056,6 +3067,7 @@ impl Recorder {
         let root = self.store.root().to_path_buf();
         self.signing_in = true;
         self.connect = None;
+        self.drop_pending_call_unless(&address);
         self.job("signin", move || {
             let name = sign_in_saving(&root, &address, |url| {
                 signin::open_browser(url);
@@ -3096,6 +3108,8 @@ impl Recorder {
         if orgs.is_empty() {
             return;
         }
+        // Signing in to the desktop app's orgs is not the call's sign-in: its card may not be the one answered.
+        self.pending_call = None;
         let root = self.store.root().to_path_buf();
         self.signing_in = true;
         self.connect = None;
@@ -3214,19 +3228,42 @@ impl Recorder {
         if let Some(address) = link_address(link, "open") {
             match self.connection_for(&address) {
                 Some(id) => self.choose_connection(&id),
-                None if !self.signing_in => self.connect = Some(address),
+                None if !self.signing_in => {
+                    self.drop_pending_call_unless(&address);
+                    self.connect = Some(address)
+                }
                 None => {}
             }
             return;
         }
         match connect_address(link) {
-            Some(address) => self.connect = Some(address),
+            Some(address) => {
+                self.drop_pending_call_unless(&address);
+                self.connect = Some(address)
+            }
             None => self.error = "That link is not a Tico Recorder connect link".into(),
         }
     }
     pub fn confirm_connect(&mut self) {
         if let Some(address) = self.connect.take() {
             self.sign_in(&address);
+        }
+    }
+    /// Drops the waiting call link unless it is for the org at `address`.
+    fn drop_pending_call_unless(&mut self, address: &str) {
+        let bare = |text: &str| text.trim().trim_end_matches('/').to_owned();
+        if self
+            .pending_call
+            .as_ref()
+            .is_some_and(|(waiting, _, _)| bare(waiting) != bare(address))
+        {
+            self.pending_call = None;
+        }
+    }
+    #[cfg(test)]
+    pub fn expire_pending_call(&mut self) {
+        if let Some((_, _, at)) = &mut self.pending_call {
+            *at = Instant::now() - PENDING_CALL_FOR;
         }
     }
     pub fn dismiss_connect(&mut self) {
