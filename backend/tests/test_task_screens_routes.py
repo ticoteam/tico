@@ -149,3 +149,11 @@ def test_a_bots_page_says_why_it_cant_run_and_the_fix(api):
         c.execute("UPDATE bots SET state='paused' WHERE id='ops'")
     seen = get(api, "bots/ops")["cant_run"]
     assert seen["fix"] == "resume" and seen["cause"].endswith("is paused")
+
+
+def test_waiting_on_narrows_the_changes_since_a_cursor(api):
+    cursor = get(api, "tasks")["cursor"]
+    bens = post(api, "tasks", {"title": "Book the barn", "body": "As discussed.", "owner": "ben"})
+    post(api, "tasks", {"title": "Order the cake", "body": "As discussed.", "owner": "cara"})
+    seen = get(api, f"tasks?waiting_on=ben&changed_after={cursor}")
+    assert [t["id"] for t in seen["tasks"]] == [bens["id"]]
