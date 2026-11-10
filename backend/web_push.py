@@ -216,6 +216,11 @@ def subscribe(c, who, body):
     actor = person(who)
     endpoint = clean_endpoint(body.endpoint)
     p256dh, auth = clean_keys(body.keys)
+    kept = c.execute(
+        "SELECT actor, p256dh, auth, gone_at FROM push_subscriptions WHERE endpoint=?", (endpoint,)
+    ).fetchone()
+    if kept and tuple(kept) == (actor, p256dh, auth, None):
+        return {"subscribed": True}  # the page checks on each load: an unchanged browser writes nothing
     now = H.now()
     c.execute(
         "INSERT INTO push_subscriptions(id, actor, endpoint, p256dh, auth, created_at) VALUES(?,?,?,?,?,?) "
@@ -278,12 +283,24 @@ def _message(payload):
 
 
 def send(store, vault, actors, payload, *, ttl=RING_TTL, urgency="high"):
-    """Queue `payload` to every live subscription of `actors` (people only); the futures of the sends. Nothing is sent
-    in a rehearsal (backend/devcopy.py)."""
+    """Queue `payload` to every live subscription of `actors`; the futures of the sends. Only people who have Browser
+    notifications on and have not left are sent to, and nothing is sent in a rehearsal (backend/devcopy.py)."""
+    from . import people as P
+    from . import views
+    from .auth import standing
+
     people = sorted({str(a) for a in actors or () if H.is_human(str(a))})
     if not people or getattr(store.settings, "rehearsal", False):
         return []
     with store.read() as c:
+        roster = views.roster(c)
+        people = [
+            a
+            for a in people
+            if (P.person(H.actor_id(a), roster) or {}).get("notify_browser") is True and not standing(c, H.actor_id(a))
+        ]
+        if not people:
+            return []
         marks = ",".join("?" * len(people))
         rows = [
             dict(r)

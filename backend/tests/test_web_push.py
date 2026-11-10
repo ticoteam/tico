@@ -92,9 +92,13 @@ def rows(api):
 
 
 def test_a_person_manages_only_their_own_browsers_and_bots_are_refused(api):
-    mine = "https://fcm.googleapis.com/fcm/send/ben-browser"
-    assert subscribe(api, "ben-test", mine).status_code == 200
+    mine, keys = "https://fcm.googleapis.com/fcm/send/ben-browser", browser()[2]
+    assert subscribe(api, "ben-test", mine, keys).status_code == 200
     assert rows(api)[mine]["actor"] == "human:ben"
+    # The page checks on each load: the same browser again writes nothing more.
+    assert subscribe(api, "ben-test", mine, keys).status_code == 200
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM events WHERE action='push.subscribe'").fetchone()[0] == 1
     # Someone else removing Ben's browser gets the same quiet answer and removes nothing.
     assert unsubscribe(api, "cara-test", mine).status_code == 200
     assert mine in rows(api)
@@ -137,6 +141,11 @@ def test_keys_that_are_not_a_p256_point_and_a_16_byte_secret_are_refused(api):
     assert rows(api) == {}
 
 
+def browser_notifications(api, token, person):
+    answer = api.post(f"/api/v2/humans/{person}", json={"notify_browser": True}, headers=headers(token))
+    assert answer.status_code == 200 and answer.json()["notify_browser"] is True, answer.text
+
+
 class Now:
     """An executor that runs each send at once, so a test reads the outcome right after the ring."""
 
@@ -157,6 +166,8 @@ def test_a_ring_reaches_only_the_rung_peoples_live_browsers_and_a_410_retires_on
     )
     for token, endpoint, keys in (("ben-test", ben, ben_keys), ("cara-test", cara, cara_keys), ("ana-test", ana, None)):
         assert subscribe(api, token, endpoint, keys).status_code == 200
+    browser_notifications(api, "ben-test", "ben")
+    browser_notifications(api, "cara-test", "cara")
     sent, answers = [], {ben: 410, cara: 201}
 
     def transmit(endpoint, body, headers):
@@ -166,7 +177,8 @@ def test_a_ring_reaches_only_the_rung_peoples_live_browsers_and_a_410_retires_on
     monkeypatch.setattr(W, "transmit", transmit)
     payload = {"title": "Ana", "body": "# Launch", "url": "/#/threads/t1?call=c1", "tag": "call-c1"}
     assert W.ring_hook in call_ring.HOOKS
-    call_ring.ring(api.app, "c1", ["human:ben", "human:cara", "bot:ops"], payload)
+    # Ana is rung too, but her Browser notifications are off; a bot is never sent to.
+    call_ring.ring(api.app, "c1", ["human:ben", "human:cara", "human:ana", "bot:ops"], payload)
     assert sorted(e for e, _, _ in sent) == sorted([ben, cara])
     by = {e: (b, h) for e, b, h in sent}
     body, sent_headers = by[cara]
@@ -193,6 +205,7 @@ def test_a_failed_send_is_recorded_and_the_ring_still_returns(api, monkeypatch):
     monkeypatch.setattr(W, "_pool", lambda: Now())
     endpoint = "https://fcm.googleapis.com/fcm/send/ben"
     assert subscribe(api, "ben-test", endpoint).status_code == 200
+    browser_notifications(api, "ben-test", "ben")
 
     def refuse(endpoint, body, headers):
         raise OSError("network down")
@@ -209,6 +222,7 @@ def test_the_private_key_is_sealed_and_never_in_an_answer(api, monkeypatch):
     answers = [api.get("/api/v2/push/key", headers=headers("ben-test"))]
     endpoint = "https://fcm.googleapis.com/fcm/send/ben"
     answers.append(subscribe(api, "ben-test", endpoint))
+    browser_notifications(api, "ben-test", "ben")
     call_ring.ring(api.app, "c1", ["human:ben"], {"title": "Ana", "tag": "call-c1"})
     answers.append(unsubscribe(api, "ben-test", endpoint))
     store = api.app.state.store
