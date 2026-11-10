@@ -38,7 +38,7 @@ BOT_STATUS_STATES = (
     "paused",
     "quarantined",
 )
-TASK_STATUSES = ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined")
+TASK_STATUSES = ("open", "done", "closed")
 JOB_STATES = ("queued", "leased", "running", "input", "completed", "failed", "uncertain", "canceled")
 ATTEMPT_STATES = ("leased", "running", "input", "completed", "failed", "interrupted", "expired")
 RUN_STATUSES = ("queued", "running", "waiting", "ok", "failed", "empty", "skipped", "held")
@@ -97,9 +97,9 @@ class Column:
 
 # Hot and growing tables use triggers; small tables use a CHECK rebuilt into the table.
 COLUMNS = (
-    Column("tasks", "status", TASK_STATUSES, nullable=True),
-    # The status a blocked hold returns its task to (backend/migrations/0075_task_holds.py).
-    Column("task_holds", "from_status", TASK_STATUSES, nullable=True),
+    # A task is open, done or closed, never without a status (docs/pipelines-v3.md). What it waits on is read, not
+    # stored (backend/waiting_on.py).
+    Column("tasks", "status", TASK_STATUSES),
     # "done" is the spelling older hubs stored for a finished job (seen on Tico Team, Nov 2).
     Column("jobs", "state", JOB_STATES, retired=(("cancelled", "canceled"), ("done", "completed"))),
     # NULL for a run recorded with no lease (backend/migrations/0072_turns_into_attempts.py); attempts' CHECK keeps a
@@ -124,7 +124,6 @@ COLUMNS = (
     Column("goals", "suggest_status", COLOURS, nullable=True, enforce="check"),
     Column("goal_proposals", "status", ("pending", "confirmed", "rejected"), enforce="check"),
     Column("bot_files", "state", ("ready", "deleted", "not_synced"), enforce="check"),
-    Column("approvals", "decision", ("approved", "declined", "withdrawn"), nullable=True, enforce="check"),
     Column(
         "doc_sources",
         "status",

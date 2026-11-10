@@ -6,8 +6,9 @@ cut-over, this file wins.
 
 ## Decided
 
-- **No migration.** Every task that exists is deleted. Every company starts over on 0.6.0. No backfill, no status
-  mapping, no rollback to 0.5.
+- **No migration.** No task is carried over, and none is deleted in place. A database that still has tasks was made
+  by 0.5: 0.6 does not open it, and says so with nothing changed, so it still runs on 0.5. Every company starts over on
+  a new database. No backfill, no status mapping.
 - **One branch**, `chris/pipelines-v3-cutover`. It is not green until the end. It merges to main once, through the queue.
 - A track works in its own worktree and branch, cut from the cut-over branch. It edits **only the files it owns** (the
   table at the end). It needs a change in a file it does not own: it says so in its report and does not make it.
@@ -237,24 +238,35 @@ hub task create, list, comment, label, link, follow        (kept; no --status, -
 
 ## The database change
 
-One migration, `<timestamp>_pipelines_v3_cutover.py`, with `FOREIGN_KEYS_OFF = True`, in this order:
+One migration, `20261110054000_pipelines_v3_cutover.py`, with `FOREIGN_KEYS_OFF = True`:
 
-1. Delete every row of every table that hangs off a task, then every row of `tasks`. The track lists the tables from
-   the schema; the migration's test proves no row is left that names a task. The v3 tables (`pipelines`, `stages`,
-   `requirements`, `visits`, `answers`, `snoozes`, `links`, `effects`) are emptied too.
-2. Rebuild `tasks` without the dead columns and their foreign keys (`type_id`, `step_id`, `step_rank`, `waiting_on`,
-   `blocked_reason`, `check_back_at` and the rest the track finds unused), with its indexes.
-3. Drop the old tables, children before parents: `task_steps`, `task_types`, `stage_requirements`, the old
-   `stage_visits`, `task_holds`, `approvals` and the tables only the deleted modules use.
-4. Replace `tasks_move_only`: it loses its first `WHEN` line, so it holds for every task. Add `tasks_enter_only`, a
-   `BEFORE INSERT` twin: a row may be inserted only with `pipeline_id` and `stage_id` NULL and `status = 'open'`.
-5. Delete settings, rules and automations that name a step, a type or an approval.
+1. A database with any task is refused: the migration stops, nothing is changed, and the message says to run 0.5 on it
+   or set up a new company.
+2. `tasks` is made again without the dead columns and their foreign keys: `type_id`, `step_id`, `step_rank`,
+   `check_back_at`, `check_back_note`, `questions`, `question_topic`, `if_no_answer`, `review`, `spend`, `answer`,
+   `asked_at`, `next_run`, `carried_by`, `resume`, `verdict`, `verdict_head`, `building_started_at`,
+   `building_seconds`, `blocker_key`, `stale_asked_at`. Its indexes and triggers go with the old table; the start-up
+   code makes them again, so any that names a dead column or an old status must be changed by its owner.
+3. `tasks_move_only` loses its first `WHEN` line, so it holds for every task. `tasks_enter_only` is its `BEFORE INSERT`
+   twin: a row may be inserted only with `pipeline_id` and `stage_id` NULL and `status = 'open'`.
+4. The old tables are dropped: `task_types`, `task_steps`, `stage_requirements`, `stage_requirement_versions`,
+   `stage_visits`, `stage_decisions`, `task_holds`, `approvals`, `pipeline_links`, `pipeline_members`,
+   `pipeline_handoffs`, `pipeline_check_runs`, `pipeline_check_cursor`, `pipeline_manager_actions`,
+   `pipeline_manager_runs`, `review_claims`, `requirement_attachments`, `stuck_alarms`, `stuck_spells`,
+   `task_check_back_wakes`, `task_milestone_waits`, `milestones`, `check_waits`, `stale_judged`, `stale_suggestions`.
+5. The trash is emptied.
+
+Every file that still names a dropped column or table is listed, with line numbers, in the session scratchpad file
+`dead_columns.md`. A statement that names one fails at run time; a trigger or index that names one fails at start.
+
+A next-run task is gone with its columns: a task for a bot wakes it.
 
 Schema code that runs after the migrations must not bring the old tables back. hubdb's startup column adds for
 `approvals` (and any other dropped table) go. A cloud step in `Store.initialize` that creates or alters a dropped
 table, or gives `tasks` a foreign key to one (step 48 among them), is skipped. One test starts a fresh database, one
 at today's main and one some releases behind, each through the whole of `Store.initialize`, and checks: none of the
-dropped tables exists, `tasks` has no dead column and no foreign key to one, a second start changes nothing.
+dropped tables exists, `tasks` has no dead column and no foreign key to one, a second start changes nothing. A
+database with a task is refused untouched.
 
 After migrations, every start calls `pipeline_settings.ensure_presets`, which makes General with its requirement when
 it is missing. The test snapshot is taken after it.
