@@ -134,6 +134,9 @@ class Settings:
     aws_instance_type: str = "t4g.small"
     aws_os: str = "ubuntu"
     aws_instance_id: str = ""
+    aws_account_id: str = (
+        ""  # the account the install was made in, from STS; a later run or destroy in another is refused
+    )
     aws_name: str = ""  # --name: the resources are <asset_prefix>-<name>; blank derives it from the domain
     asset_prefix: str = (
         DEFAULT_PREFIX  # --asset-prefix: the first word of every AWS name; saved the first time, then fixed

@@ -250,9 +250,13 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
             "--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit"
         )
     awsmod.check_name(args.name, mine.get("name", ""), domain)
-    # Before the first AWS write, beside (never in) the server's state: a retry keeps both without the flags.
-    state.save_backup(domain, {"asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region})
+    awsmod.check_region(mine.get("aws_region", ""), args.aws_region, f"Backup storage for {domain}")
     _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
+    awsmod.check_account(mine.get("aws_account_id", ""), account, f"Backup storage for {domain}")
+    # Before the first AWS write, beside (never in) the server's state: a retry keeps it all without the flags.
+    state.save_backup(
+        domain, {"asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region, "aws_account_id": account}
+    )
     values = bk.create_s3(
         deps.aws_s3(args.aws_region, args.aws_profile),
         iam,

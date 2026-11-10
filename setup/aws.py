@@ -182,6 +182,23 @@ def check_name(given: str | None, had: str, domain: str) -> None:
         )
 
 
+def check_account(had: str, account: str, what: str) -> None:
+    """An install's resources are its account's: the same names and tags in another account are someone else's."""
+    if had and account != had:
+        raise MissingInput(
+            f"{what} was set up in AWS account {had}, but these credentials are for account {account}; refusing to "
+            "change anything there. Use that account's credentials (--aws-profile)."
+        )
+
+
+def check_region(had: str, given: str | None, what: str) -> None:
+    if had and given and given != had:
+        raise MissingInput(
+            f"{what} was set up in {had}, and its region cannot change on a later run. Leave --aws-region out or pass "
+            f"--aws-region {had}; another region is another install."
+        )
+
+
 @dataclass
 class AwsPlan:
     name: str

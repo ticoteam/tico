@@ -75,6 +75,11 @@ python3 -m setup destroy --domain tico.example.com --dry-run   # list what carri
 python3 -m setup destroy --domain tico.example.com             # asks you to type the name
 ```
 
+An install keeps the AWS account and region it was made in: a later run, `runner`, `backup-storage` or `destroy` with
+credentials for another account, or another `--aws-region`, is refused before anything changes (an install saved
+before this takes the account it runs in once its tags check out). Without a saved install that records them, destroy
+fills nothing in by default: it deletes only with `--asset-prefix`, `--name` and `--aws-region` all given.
+
 Destroy deletes the instance and its data with it, and leaves your DNS records alone. With `--dns` (and `--domain`) it
 first deletes the domain's A and AAAA records in Route 53 too, but only those that still point at this server's
 addresses; a record someone has pointed elsewhere is left and named. If Route 53 can't be read, nothing at all is

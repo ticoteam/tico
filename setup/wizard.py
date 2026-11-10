@@ -394,6 +394,8 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
     try:
         if s.backup == "aws":
             _, iam, _, account = deps.aws_clients(s.aws_region, s.aws_profile)
+            awsmod.check_account(s.aws_account_id, account, s.domain)
+            s.aws_account_id = account
             values = bk.create_s3(
                 deps.aws_s3(s.aws_region, s.aws_profile),
                 iam,
@@ -747,6 +749,12 @@ def run(args, io: IO, deps: Deps) -> int:
 
     s = gather(io, args, s, dry, restore=None if saved else restore)
     kept = saved
+    if (
+        s.target == "aws"
+        and kept.get("target") == "aws"
+        and (kept.get("aws_account_id") or kept.get("aws_instance_id"))
+    ):
+        awsmod.check_region(kept.get("aws_region", ""), s.aws_region, s.domain)
     # Without a server install, the prefix `setup backup-storage` made the domain's bucket with.
     s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), kept or state.load_backup(s.domain))
     hosted.gather(args, s, dry)
@@ -852,9 +860,14 @@ def run(args, io: IO, deps: Deps) -> int:
     if s.target == "aws":
         # Before the first write, backup storage included: a name something else holds stops the run here.
         ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
+        awsmod.check_account(s.aws_account_id, account, s.domain)
         plan = aws_plan(s)
         awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep).preflight()
         ours = awsmod.addresses(ec2, plan.name, plan.names)
+        # After the tag proof and before the first write: the account (an install saved before it was kept takes this
+        # one, once) and region every later run and destroy must match.
+        s.aws_account_id = account
+        state.save(s.domain, s.public())
     dns_preflight(s, deps, zone, records, ours)
     if not provision_backup(io, s, deps, cf):
         return 1
@@ -1376,14 +1389,22 @@ def destroy(args, io: IO, deps: Deps) -> int:
     hosted.check_dns_identity(args, saved.get("dns_name", ""), saved.get("dns_zone", ""))
     if saved.get("target") in cloudmod.PROVIDERS:
         return _destroy_hint(io, saved)
-    if args.domain:
-        awsmod.check_name(args.name, awsmod.saved_name(saved), args.domain.lower())
-    name = args.name or saved.get("aws_name") or (awsmod.slug(args.domain) if args.domain else "")
+    domain = (args.domain or "").lower()
+    if domain:
+        awsmod.check_name(args.name, awsmod.saved_name(saved), domain)
+    given_prefix = getattr(args, "asset_prefix", None)
+    names = awsmod.Names(awsmod.asset_prefix(given_prefix, saved))
+    had_account = saved.get("aws_account_id", "")
+    if had_account:  # a whole saved install: its own name, prefix, region and account, nothing else
+        awsmod.check_region(saved.get("aws_region", ""), args.aws_region, domain)
+        name, region = awsmod.saved_name(saved), saved["aws_region"]
+    else:
+        name = args.name or awsmod.saved_name(saved) or (awsmod.slug(domain) if domain else "")
+        region = args.aws_region or saved.get("aws_region") or os.environ.get("AWS_REGION") or "us-east-1"
     if not name:
         raise MissingInput("Pass --domain or --name")
-    names = awsmod.Names(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved))
-    region = args.aws_region or saved.get("aws_region") or os.environ.get("AWS_REGION") or "us-east-1"
-    ec2, iam, ssm, _ = deps.aws_clients(region, args.aws_profile or saved.get("aws_profile", ""))
+    ec2, iam, ssm, account = deps.aws_clients(region, args.aws_profile or saved.get("aws_profile", ""))
+    awsmod.check_account(had_account, account, domain)
     found = awsmod.discover(ec2, iam, ssm, name, names)
     if not found:
         io.say(f"Nothing tagged {names.managed_tag[0]}={names.managed_tag[1]}, {names.name_tag}={name} in {region}.")
@@ -1392,6 +1413,13 @@ def destroy(args, io: IO, deps: Deps) -> int:
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")
+    if not had_account and not (args.name and given_prefix and args.aws_region):
+        # No saved install says which account, region, prefix and name are its own: never filled in by a default.
+        raise MissingInput(
+            ("No saved install for " + domain + " records" if domain else "No saved install records")
+            + " its AWS account and region, so setup will not guess what to delete. Pass --asset-prefix, --name and "
+            "--aws-region naming exactly the install to delete; only what carries its tags is deleted."
+        )
     records = None
     if getattr(args, "dns", False):
         records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name, names))

@@ -101,6 +101,9 @@ def test_cloudflare_tunnel_flow_creates_tunnel_and_uses_its_token(monkeypatch):
     )
 
 
+WHOLE = ["--asset-prefix", "tico", "--name", "tico-example-com", "--aws-region", "us-east-1"]
+
+
 def test_destroy_dry_run_and_confirmation():
     ec2, iam, ssm, factory = aws_clients(
         fakes.FakeEC2(
@@ -117,11 +120,11 @@ def test_destroy_dry_run_and_confirmation():
     )
     d = fakes.deps()
     d.aws_clients = factory
-    code, out = go(["destroy", "--domain", "tico.example.com", "--dry-run"], deps=d)
+    code, out = go(["destroy", "--domain", "tico.example.com", *WHOLE, "--dry-run"], deps=d)
     assert code == 0 and "instance: i-mine" in out and not ec2.called("terminate_instances")
-    code, out = go(["destroy", "--domain", "tico.example.com"], deps=d)  # non-interactive without --yes
+    code, out = go(["destroy", "--domain", "tico.example.com", *WHOLE], deps=d)  # non-interactive without --yes
     assert code == 1 and not ec2.called("terminate_instances")
-    code, out = go(["destroy", "--domain", "tico.example.com", "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", "tico.example.com", *WHOLE, "--yes"], deps=d)
     assert code == 0 and ec2.called("terminate_instances")
 
 

@@ -203,6 +203,18 @@ def runner_prefix(s: Settings, label: str, given: str | None) -> str:
     return prefix
 
 
+def own_record(s: Settings, name: str) -> dict:
+    """This server's saved runner of that name and region, if this computer set it up."""
+    return next(
+        (
+            r
+            for r in state.load_runners(s.server_url)
+            if r.get("target") == "aws" and r.get("name") == name and r.get("aws_region") == s.aws_region
+        ),
+        {},
+    )
+
+
 def save_aws_runner(s: Settings, plan: awsmod.AwsPlan, label: str, iid: str) -> None:
     data = {
         "server_url": s.server_url,
@@ -213,6 +225,7 @@ def save_aws_runner(s: Settings, plan: awsmod.AwsPlan, label: str, iid: str) -> 
         "instance_id": iid,
         "name": plan.name,
         "asset_prefix": s.asset_prefix,
+        "aws_account_id": s.aws_account_id,
     }
     state.save_runner(runner_key(s, plan.name), data, replaces=plan.name)
 
@@ -339,6 +352,8 @@ def run_runner(args, io: IO, deps: Deps) -> int:
     elif s.target == "aws":
         plan = _aws_plan(s, label)
         ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
+        awsmod.check_account(own_record(s, plan.name).get("aws_account_id", ""), account, f"Runner {plan.name}")
+        s.aws_account_id = account
         d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
         d.preflight()
         existing = d.find_instance()

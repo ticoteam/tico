@@ -57,7 +57,20 @@ CREATE = [
 ]
 
 
-DESTROY = ["destroy", "--name", NAME, "--domain", DOMAIN, "--aws-region", "us-east-2", "--dns", "--yes"]
+# Without a saved install on the computer that runs it, destroy needs the whole identity: prefix, name and region.
+DESTROY = [
+    "destroy",
+    "--name",
+    NAME,
+    "--asset-prefix",
+    "tico",
+    "--domain",
+    DOMAIN,
+    "--aws-region",
+    "us-east-2",
+    "--dns",
+    "--yes",
+]
 
 
 @pytest.fixture(autouse=True)

@@ -480,14 +480,20 @@ def deleted(ec2, iam, ssm):
 @pytest.mark.parametrize(
     ("argv", "prefix", "other"),
     [
-        (["--name", "hotmic"], "tico", "hub"),  # no saved install, no flag: today's tico names
-        (["--name", "hotmic", "--asset-prefix", "hub"], "hub", "tico"),
-        (["--domain", "hub.hotmicapp.com"], "hub", "tico"),  # the saved install's prefix
-        (["--domain", "old.example.com"], "tico", "hub"),  # saved before the flag existed
+        (["--name", "hotmic", "--asset-prefix", "tico", "--aws-region", "us-east-1"], "tico", "hub"),
+        (["--name", "hotmic", "--asset-prefix", "hub", "--aws-region", "us-east-1"], "hub", "tico"),
+        (["--domain", "hub.hotmicapp.com"], "hub", "tico"),  # the saved install's prefix, account and region
+        # saved before the flag (and the account) existed: named in full
+        (
+            ["--domain", "old.example.com", "--name", "hotmic", "--asset-prefix", "tico", "--aws-region", "us-east-1"],
+            "tico",
+            "hub",
+        ),
     ],
 )
 def test_destroy_deletes_only_the_install_of_its_own_prefix(argv, prefix, other):
-    state.save("hub.hotmicapp.com", {"domain": "hub.hotmicapp.com", "aws_name": "hotmic", "asset_prefix": "hub"})
+    hub = {"domain": "hub.hotmicapp.com", "aws_name": "hotmic", "asset_prefix": "hub", "target": "aws"}
+    state.save("hub.hotmicapp.com", hub | {"aws_account_id": ACCOUNT, "aws_region": "us-east-1"})
     state.save("old.example.com", {"domain": "old.example.com", "aws_name": "hotmic"})
     d, ec2, iam, ssm = two_installs()
     code, out = go(["destroy", *argv, "--yes"], deps=d)
@@ -1006,3 +1012,71 @@ def test_a_prompted_domain_restores_its_whole_saved_install(tmp_path):
     assert f"Resuming from the last run for {DOMAIN}" in out
     assert "Security group hub-hotmic:" in out and "SSM SecureString /hub/hotmic/env" in out, out
     assert "hub-hub-hotmicapp-com" not in out
+
+
+# --- Codex's second review -----------------------------------------------------------------------------------------
+
+
+def test_an_install_keeps_its_aws_account_and_region_and_destroy_never_guesses_them(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    saved = state.load(DOMAIN)[0]
+    assert (saved["aws_account_id"], saved["aws_region"]) == (HOTMIC_ACCOUNT, "us-west-2")
+    # Another account (the same tags could be another install there) or another region: refused before any call.
+    d.aws_clients = lambda region, profile: (Spy(ec2, log), Spy(iam, log), Spy(ssm, log), "999999999999")
+    log.clear()
+    code, out = go(hub_args(tmp_path), deps=d)
+    assert code == 2 and f"set up in AWS account {HOTMIC_ACCOUNT}" in out, out
+    code, out = go(["destroy", "--domain", DOMAIN, "--yes"], deps=d)
+    assert code == 2 and f"set up in AWS account {HOTMIC_ACCOUNT}" in out, out
+    assert not [c for c, _ in log if not c.startswith(READS)]
+    d.aws_clients = lambda region, profile: (Spy(ec2, log), Spy(iam, log), Spy(ssm, log), HOTMIC_ACCOUNT)
+    code, out = go([*hub_args(tmp_path), "--aws-region", "us-east-1"], deps=d)
+    assert code == 2 and "in us-west-2" in out and "cannot change" in out, out
+    code, out = go(["destroy", "--domain", DOMAIN, "--aws-region", "us-east-1", "--yes"], deps=d)
+    assert code == 2 and "in us-west-2" in out, out
+    assert not [c for c, _ in log if not c.startswith(READS)]
+
+
+def test_destroy_without_a_saved_install_deletes_only_what_the_flags_name_in_full():
+    d, ec2, iam, ssm = two_installs()
+    code, out = go(["destroy", "--name", "hotmic", "--yes"], deps=d)
+    assert code == 2 and "--asset-prefix, --name and --aws-region" in out, out
+    state.save("old.example.com", {"domain": "old.example.com", "aws_name": "hotmic", "target": "aws"})  # no account
+    code, out = go(["destroy", "--domain", "old.example.com", "--yes"], deps=d)
+    assert code == 2 and "--asset-prefix, --name and --aws-region" in out, out
+    assert deleted(ec2, iam, ssm)["instances"] == []
+    argv = ["destroy", "--name", "hotmic", "--asset-prefix", "tico", "--aws-region", "us-east-1", "--yes"]
+    code, out = go(argv, deps=d)
+    assert code == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-tico"], out
+
+
+def test_an_install_saved_before_the_account_was_adopts_it_once_after_the_tag_proof(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    saved = state.load(DOMAIN)[0]
+    del saved["aws_account_id"]
+    state.save(DOMAIN, saved)
+    assert go(hub_args(tmp_path), deps=d)[0] == 0
+    assert state.load(DOMAIN)[0]["aws_account_id"] == HOTMIC_ACCOUNT
+
+
+def test_a_runner_and_backup_storage_keep_their_aws_account(monkeypatch):
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://other.example"]
+    argv += ["--label", "b1", "--aws-region", "us-west-2"]
+    assert go(argv, deps=d)[0] == 0
+    assert state.load_runners()[0]["aws_account_id"] == HOTMIC_ACCOUNT
+    bs = ["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2"]
+    assert go(bs, deps=d)[0] == 0 and state.load_backup("laptop.example.com")["aws_account_id"] == HOTMIC_ACCOUNT
+    d.aws_clients = lambda region, profile: (Spy(ec2, log), Spy(iam, log), Spy(ssm, log), "999999999999")
+    log.clear()
+    code, out = go(argv, deps=d)
+    assert code == 2 and f"set up in AWS account {HOTMIC_ACCOUNT}" in out, out
+    code, out = go(bs, deps=d)
+    assert code == 2 and f"set up in AWS account {HOTMIC_ACCOUNT}" in out, out
+    code, out = go(["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-east-1"], deps=d)
+    assert code == 2 and "set up in us-west-2" in out, out
+    assert not [c for c, _ in log if not c.startswith(READS)]
