@@ -1107,56 +1107,6 @@ def catch_up(store):
     }
 
 
-REPAIR = "stale_review_repair"  # registry_metadata: set once the converted Stale ticket review automation is undone
-
-
-def repair_stale_review(c):
-    """Undo the cutover's conversion of Stale ticket review, once, at startup before the cutover (backend/store.py).
-    The converted automation's first step was a find that matched nothing, so it never reviewed a task, and its
-    conversion turned the team rule `stale_review` off. Where that automation exists: the rule goes on if the
-    automation was on, the automation is deleted through `automations.remove` (on record), and the read-only mirror
-    every built-in job has takes its place in the cutover's mark. Returns the removed automation ids. Later starts
-    find the marker and do nothing; an install without the automation gets only the marker."""
-    from . import automations, team_rules
-
-    if _meta(c, REPAIR):
-        return []
-    # The no-op is the one with steps; a read-only mirror (steps []) is what a fixed cutover makes.
-    found = c.execute(
-        "SELECT * FROM automations WHERE deleted_at IS NULL AND "
-        "json_extract(flow,'$.source.kind')='system_job' "
-        "AND json_extract(flow,'$.source.id')='job:stale_review' "
-        "AND json_array_length(json_extract(flow,'$.steps'))>0"
-    ).fetchall()
-    from . import system_routines as SR
-
-    removed = []
-    for row in found:
-        if row["enabled"]:
-            team_rules.save(c, H.KEEPER, {"stale_review": True})
-        automations.remove(c, H.KEEPER, row, via="migration repair")
-        removed.append(row["id"])
-        # In its place the read-only mirror every other built-in job has (`_builtins`), so the job still shows on the
-        # Automations page, and the cutover's mark points at it.
-        job = SR.BY_KEY["stale_review"]
-        owner = (json.loads(row["flow"] or "{}") or {}).get("owner") or row["owner_id"]
-        controls = {"on": True, "schedule": job.schedule, **(SR.config(c).get(job.key) or {})}
-        aid = _save(
-            c,
-            system_who(c),
-            _mirror(
-                job.name, owner, "job." + job.key, controls, {"kind": "system_job", "id": "job:stale_review"}, job.what
-            ),
-        )
-        c.execute(
-            "UPDATE redesign_migrated SET outcome='converted', automation=?, why='' "
-            "WHERE kind='system_job' AND id='job:stale_review'",
-            (aid,),
-        )
-    _set_meta(c, REPAIR, json.dumps({"at": _now(), "removed": removed}, sort_keys=True))
-    return removed
-
-
 PROMPT_REPAIR = "inbox_prompt_repair"  # registry_metadata: set once the cutover's inbox prompts are repaired
 
 
