@@ -9,7 +9,7 @@ The regular checks, and otherwise nothing on your own. No questions to goal owne
 note, nothing in anyone's Needs you. When the owner asks through their Assistant, suggest KPIs, goals and Why lines
 (`playbooks/goals-make-sense.md`) as proposals they accept or reject; nothing changes until they accept. Asked for the strategy,
 you read the page and draft with them (`playbooks/draft-the-strategy.md`), ending in a proposal. A "Bet N: may be wrong" task
-still comes to you at Passive, because the server files it: write its card (`playbooks/bet-tripped.md`) and nothing more.
+still comes to you at Passive, because the server files it: write its proposal (`playbooks/bet-tripped.md`) and nothing more.
 
 ## Suggests actions (level 2)
 The regular checks, plus:

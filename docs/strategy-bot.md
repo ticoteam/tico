@@ -14,7 +14,7 @@ owner can also confirm Suggests actions as their own choice, so a later change t
 
 | Level | Name | What the Strategy Bot does |
 |---|---|---|
-| 1 | **Passive** | Keeps the regular checks running (KPI readings and the automatic goal colours) and otherwise acts only when asked through your Assistant. It proposes a strategy draft when you ask, writes the card when a bet's wrong-if trips, suggests KPIs, goals and Why lines when you ask, and changes nothing until you accept. |
+| 1 | **Passive** | Keeps the regular checks running (KPI readings and the automatic goal colours) and otherwise acts only when asked through your Assistant. It proposes a strategy draft when you ask, writes the proposal when a bet's wrong-if trips, suggests KPIs, goals and Why lines when you ask, and changes nothing until you accept. |
 | 2 | **Suggests actions** (default) | Also takes "Draft the strategy" tasks, asks you for the vision, proposes Why lines, sends a Monday note, asks a goal's owner what is happening, and suggests how your bots could recover a goal that falls behind, as items in **Needs you** that you approve one by one. |
 | 3 | **Acts on its own** | Also decides on its own: makes, reorders, reassigns and closes bot tasks itself to recover a goal, each decision with an Undo. |
 
@@ -74,7 +74,7 @@ the bets, and you publish:
 - **Publishing is yours.** The Strategy Bot ends a drafting run by asking you to confirm and publish from the Strategy page.
   It cannot publish, and it cannot write the draft: the server refuses every bot.
 - **When a bet may be wrong.** When a bet's wrong-if trips (a KPI crosses its threshold, a cited market entity
-  changes, a check-by date passes), the server files a task and the Strategy Bot writes one Decide card: retire the bet,
+  changes, a check-by date passes), the server files a task and the Strategy Bot writes one proposal: retire the bet,
   rewrite it, or keep it with a new wrong-if, with its pick. This happens at every level, Passive included.
 - **Goals from the strategy.** When you ask for goals, or after you publish, it suggests one or two per active bet,
   each tied to its bet with a KPI, and the Monday note names each active bet with no KPI-backed goal or with gray
@@ -88,7 +88,7 @@ the bets, and you publish:
   you accept ([A goal's Why](goals-and-kpis.md#a-goals-why), [Strategy](#strategy)).
 - **Asks for nothing.** There is no vision ask, no Why bundle in **Needs you**, no ask to a goal's owner and no Monday
   note. Those start at **Suggests actions**. An ask filed earlier stays until it is settled. The one exception is a
-  bet whose wrong-if trips: the server detects it, so its Decide card still reaches you.
+  bet whose wrong-if trips: the server detects it, so its proposal still reaches you.
 - **Changes no tasks.** It creates, reorders, reassigns and closes nothing of anyone's. Going down to Passive withdraws
   the recoveries still waiting, and pauses a Monday note the server started (when the level went above Passive, or on
   an install that never chose a level).
@@ -134,14 +134,12 @@ the rest wait for the next day. The server refuses a sixth.
 Nobody messages the Strategy Bot directly, the owner included: everyone's one DM is their
 [Assistant](assistant.md#helpers-through-the-assistant). Ask it for strategy advice and it files the
 Strategy Bot a task citing your words. The Strategy Bot works that task in its own turn with its own rights, so a change
-that stays yours (below) comes back to you as a proposal or a Confirm card. Your own goal changes do not go to it that way:
+that stays yours (below) comes back to you as a proposal or an ask to OK. Your own goal changes do not go to it that way:
 the Assistant reads each one back in your chat, and only your yes saves it ([Goals, agreed in words](assistant.md#goals-agreed-in-words)). The Strategy Bot's goal suggestions are read back the same way: a yes in your chat confirms one, and it leaves **Needs you**.
 Bots still message it, in its goals session.
 
-Before this change the owner messaged the Strategy Bot itself. That DM stays yours as read-only history under
-**Earlier chats** on your Assistant page, and Confirm cards still waiting there moved to your Assistant DM once. If you
-hand ownership to someone else (Settings > People), that earlier DM goes with the owner seat to the new owner, and the
-cards waiting on you are withdrawn.
+An earlier DM with the Strategy Bot stays yours as read-only history under **Earlier chats** on your Assistant page.
+If you hand ownership to someone else (Settings > People), that earlier DM goes with the owner seat to the new owner.
 
 ## What it has learned
 
@@ -190,10 +188,12 @@ open", without its words. It lists:
 One decision is one entry. Every change in it carries the same action id in each task's history.
 
 Only the owner sees **Undo**, and it asks once before it acts. Undo puts each task back as it was before the
-decision: its owner, its status and step, its place in the queue and its note. A task the decision created is closed.
-Each bot whose task changed is told, including a bot that loses a task it was given. If someone changed a task after
-the decision, their change stays, and a task the decision created that someone has changed stays open. If Tico can't
-put one task back, the others are still put back.
+decision: its owner, its status and stage, its place in the queue, its note and who follows it, and every task a close
+ended under it opens again. A task the decision created is closed. Undo never makes a task private: a task that would
+turn private going back to a bot that now keeps its tasks private stays where it is.
+Each bot whose task changed is told, including a bot that loses a task it was given. If anything happened to a task
+after the decision (someone changed it, asked or answered on it, snoozed it or filed a task under it), Undo leaves it as
+it is, and a task the decision created stays open. If Tico can't put one task back, the others are still put back.
 The entry then says, in plain words, what could not be restored. An entry is undone once. Your Undo stands: the
 Strategy Bot never makes a change you undid alone again (the same new task for the same bot, or the same reorder, reassign or
 close of a task); tried again, it becomes an item in your **Needs you**.

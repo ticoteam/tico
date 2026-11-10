@@ -138,7 +138,7 @@ and stop the bot computers with it (**Stop bot computers too**, on by default). 
 The server is quiet when, for all of those hours, nobody used the app signed in and no run started or ended, and right
 now nothing is queued or running, no computer is working on a job, nothing is being sent or due to be retried within
 15 minutes (Slack posts, outgoing webhooks) and no routine, time-sensitive Maintenance step, daily system job or release
-hour is due in the next 15 minutes. Maintenance wakes the server only for a run where enabled Find stuck or Update is
+hour is due in the next 15 minutes. Maintenance wakes the server only for a run where an enabled Update is
 due, following the run's schedule and each step's cadence. Pause stops those wakes; a run already going keeps the
 server up. Collect, Clean up, Check health, Learn, Suggest, Dream and other interval housekeeping catch up after a wake.
 Tico then records "server.sleep" in History and asks to stop the

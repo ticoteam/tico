@@ -208,7 +208,7 @@ the request. A timeout or invalid response fails the step without storing sugges
 Suggestions wait in a hidden install-owned table. Update resolves each role to an active bot by its template and checks
 the condition against fresh counts immediately before sending. A missing operand makes a comparison false, including
 `ne`; a stale suggestion becomes `condition_false`. A missing role stays pending. Finance uses the existing Finance bot
-template priority. `person_money_cap` uses spend alerts' company-owner lookup and keeper notice path; it waits if that
+template priority. `person_money_cap` uses spend alerts' company-owner lookup and notice path; it waits if that
 person cannot be resolved or fresh local monthly spend is unknown or does not exceed the company pool's monthly cap.
 A zero-work bot gets a delivery-only turn, and redos consume nothing. Retries re-check conditions and role ownership.
 

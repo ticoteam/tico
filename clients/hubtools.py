@@ -8549,16 +8549,17 @@ def support_file(api, args):
 @tool(
     "hub_support_report",
     "Report a Tico bug to the Tico team (the maintainers). When the team lets bots send reports without "
-    "asking, it is sent at once and this returns the ticket. Otherwise it drafts it for a person, who sees the whole message "
-    "in Needs you and approves or declines it: nothing leaves this install until then, and afterwards send it with "
-    "hub_support_send. Write it self-contained: what failed, since when, the exact error, what you tried. No secrets, "
-    "tokens or customer data. Don't hand the person a copy-and-paste task instead.",
+    "asking, it is sent at once and this returns the ticket. Otherwise a person is asked for an OK on a task: they see "
+    "the whole message in Needs you. Nothing leaves this install until they OK it; then send it with hub_support_send. "
+    "Write it self-contained: what failed, since when, the exact error, what you tried. No secrets, tokens or customer "
+    "data. Don't hand the person a copy-and-paste task instead.",
     {
         "message": _s("The whole report, plain text, up to 4000 characters"),
         "include_ids": {
             "type": "boolean",
             "description": "Send the Tico version and this install's ID with it (default true)",
         },
+        "task": _s("The task the report belongs to; the OK is asked on it. Without one, a task is filed"),
     },
     required=("message",),
     writes=True,
@@ -8568,41 +8569,46 @@ def support_report(api, args):
     payload = {"message": message, "content_sha256": hashlib.sha256(message.encode("utf-8")).hexdigest()}
     if args.get("include_ids") is False:
         payload["include_ids"] = False
-    row = api.post("approvals", {"kind": "support", "payload": payload}, key=_key(args))
+    body = {"payload": payload}
+    if args.get("task"):
+        body["task_id"] = args["task"]
+    row = api.post("support/reports", body, key=_key(args))
     if row.get("sent"):
-        # The team rule let it go at once (backend/support.py send_by_rule): filed as the install's default person.
+        # The team rule let it go at once (backend/support.py Support.report): filed as the install's default person.
         return {
             "ticket": row.get("ticket"),
             "sent": True,
             "filed_as": row.get("filed_as"),
-            "next": "Sent to the Tico team without a person's approval. Replies reach the person it was filed as.",
+            "next": "Sent to the Tico team without a person's OK. Replies reach the person it was filed as.",
         }
+    ok = row.get("requirement_id") or row.get("id")
     return {
-        "approval": row.get("id"),
-        "decision": row.get("decision"),
-        "next": "A person must approve it in Needs you. Then send it: hub support send --approval "
-        f"{row.get('id')} (hub_support_send). Until then nothing is sent.",
+        "ok": ok,
+        "task_id": row.get("task_id"),
+        "status": row.get("status") or "pending",
+        "next": f"A person must OK it in Needs you. Then send it: hub support send --ok {ok} (hub_support_send). "
+        "Until then nothing is sent.",
     }
 
 
 def support_message(value):
     """The report as backend/support.py `clean_message` keeps it (line ends as \\n, no blank space round it), so the hash
-    a person approves is the hash of what is sent."""
+    a person OKs is the hash of what is sent."""
     return str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 @tool(
     "hub_support_send",
-    "Send a Tico bug report a person approved (hub_support_report gave its approval id). It is filed as "
-    "the person who approved it and its replies reach their Support page. Before a yes, after a no, or for someone "
-    "else's approval it is refused; a second call answers with the same ticket. When Tico support cannot be reached "
-    "the approval is not spent: try again later.",
-    {"approval": _s("The approval id hub_support_report returned")},
-    required=("approval",),
+    "Send a Tico bug report a person OK'd (hub_support_report gave its OK id). It is filed as the person who "
+    "OK'd it and its replies reach their Support page. Before their OK, after they send it back, or for an OK you did "
+    "not ask for, it is refused; a second call answers with the same ticket. When Tico support cannot be reached the "
+    "OK is not used: try again later.",
+    {"ok": _s("The OK id hub_support_report returned")},
+    required=("ok",),
     writes=True,
 )
 def support_send(api, args):
-    return api.post("support/tickets/from-approval", {"approval": args["approval"]}, key=_key(args))
+    return api.post("support/tickets/from-approval", {"approval": args["ok"]}, key=_key(args))
 
 
 @tool(
@@ -8619,7 +8625,7 @@ def health_findings(api, args):
     "hub_health_report",
     "Report a health finding as a Tico bug. The server writes the report from the finding and attaches the "
     "redacted diagnostics bundle: one ticket per problem, and a message on it when it happens again. With the team rule "
-    "off it drafts a support approval instead.",
+    "off it asks a person for an OK first.",
     {"key": _s("The finding's key or signature, from its task")},
     writes=True,
 )
@@ -8678,7 +8684,7 @@ def task_manager_run(api, args):
     return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 
-MAINTENANCE_STEPS = ["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+MAINTENANCE_STEPS = ["collect", "clean_up", "check_health", "learn", "suggest", "update", "dream"]
 
 
 @tool(
@@ -8695,7 +8701,7 @@ def maintenance_status(api, args):
     "hub_maintenance_set",
     "Maintenance: set the schedule (hourly, 2h, 3h, 6h, 12h or daily), pause or resume it, or set the "
     "monthly judge spend cap in dollars. With `step`, change that step: `enabled` on or off, `frequency` (run = every run, "
-    "day, week, or custom with `custom_every` and `custom_unit`) and `max_bots` for find_stuck and dream. "
+    "day, week, or custom with `custom_every` and `custom_unit`) and `max_bots` for dream. "
     "The owner or an admin.",
     {
         "schedule": {"type": "string", "enum": ["hourly", "2h", "3h", "6h", "12h", "daily"]},

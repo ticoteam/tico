@@ -48,8 +48,8 @@ payroll run, a renewal or a board report gets its task in time:
   zone).
 - A task a run opens (a `create_task` step, or a bot turn) is due at the end of its due day in `tz` (its `due` argument
   overrides it), and it carries the occurrence: `tasks.occurrence` is `<automation id>:<due day>`, and the task's
-  notice carries `due_on`, and `rule_due_id` when one is set. Its due is a deadline, not a wake date, and the asks
-  sweep never expires it. It reads as its due day in `tz`, whatever the viewer's zone. A step that sets its own
+  notice carries `due_on`, and `rule_due_id` when one is set. Its due is a deadline, not a wake date.
+  It reads as its due day in `tz`, whatever the viewer's zone. A step that sets its own
   `due` keeps that instant.
 - One task per occurrence and step: a retry of a run that already made it reuses that task, so nothing is filed twice.
   An occurrence's task is not parked until its due day, even while its bot is idle (its bot works it through the lead

@@ -4,7 +4,7 @@ A webhook is one program posting a small message to another over HTTP. Tico does
 
 - **Incoming**: something outside Tico (a payment service, a code host, a form, a script) posts to an address Tico gives you. Tico
   keeps the call, starts your routines and rules, and can wake a bot.
-- **Outgoing**: Tico posts to an address you choose when something happens in Tico, such as a task finishing or an approval being asked.
+- **Outgoing**: Tico posts to an address you choose when something happens in Tico, such as a task finishing.
 - **Through Tico Gateway**: a second address for an incoming webhook that keeps what is sent while your server is off or asleep.
 
 Incoming webhooks are a built-in row on Automations (**Incoming webhooks**), outgoing ones are on Tools (**Add tool → Outgoing webhook**,
@@ -280,12 +280,10 @@ description and an example (`--group task` narrows it). A few:
 
 | Group | Events |
 |---|---|
-| `task` | `task.created`, `assigned`, `step_changed`, `state_changed`, `commented`, `done`, `declined`, `closed`, `blocked`, `reopened` |
-| `approval` | `approval.requested`, `decided`, `withdrawn` |
-| `needs_you` | `needs_you.created`, `answered` |
+| `task` | `task.created`, `assigned`, `step_changed` (moved to another stage, Done and Closed included), `commented`, `done`, `closed`, `reopened` |
 | `bot` | `bot.run_failed`, `held`, `released` |
 | `thread` | `thread.created`, `message.created` (outgoing webhooks only), `message.held` ([Threads](threads.md)) |
-| other | `release.published`, `meeting.ready`, `strategy.published`, `market.insight.urgent`, `market.briefing`, `inbound.received`, `health.finding` |
+| other | `meeting.ready`, `strategy.published`, `market.insight.urgent`, `market.briefing`, `inbound.received`, `health.finding` |
 | `custom` | `custom.<name>`, which only a person or a rule sends (below) |
 
 `webhook.received` and `tico.notice` are for rules only: an endpoint cannot subscribe to them (use a rule with `forward`).
@@ -367,10 +365,10 @@ canceled or withheld.
 ### Only some events
 
 An endpoint can narrow what it hears, beyond its event names, by **department** (of the task's owner), **bot** (the task's owner
-or whoever acted) and **task type**:
+or whoever acted) and **pipeline** (`pipelines`, by id or name):
 
 ```
-hub webhook update acme --departments sales --bots ops --task-types bug
+hub webhook update acme --departments sales --bots ops
 hub webhook update acme --no-filter
 ```
 
@@ -435,12 +433,13 @@ is refused (`hub webhook example` too); turn the endpoint back on first.
 
 - People make and manage their own endpoints. The owner and admins manage all of them. BotOps asked by a person has that person's
   rights.
-- A bot cannot make an endpoint itself. Its request files an approval of kind *send*. A person approves, and the bot repeats the
-  call. The approver then owns the endpoint.
+- A bot cannot make an endpoint itself. Its request asks a person for an OK of those exact details, on a task
+  ([Asks and OKs](tasks.md#asks-and-oks)). Once the person OKs it from its preview, the bot repeats the call and the
+  endpoint is made, owned by that person.
 - Bots can list endpoints without the full address. They cannot read send logs.
 - A bot sends a custom event only while its sending policy is **On their own** (Settings → Bots → <bot> → Email
   sending), and only to an endpoint that listens for it. The Strategy Bot sends nothing.
-- An endpoint hears about a task, approval or bot only if its owner could read it. A thread or message event goes only to an
+- An endpoint hears about a task or bot only if its owner could read it. A thread or message event goes only to an
   endpoint whose owner may read that thread. `message.held` goes to owner and admin endpoints, as does a health, inbound or
   webhook event. Thread events carry ids and facts, never a message's words.
 - A person can have 50 endpoints.

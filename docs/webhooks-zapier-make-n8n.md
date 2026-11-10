@@ -79,7 +79,7 @@ Make the trigger that waits for a call and copy its address.
 Add an outgoing endpoint (Tools → Add tool → Outgoing webhook), or:
 
 ```
-hub webhook create --name "Zapier tasks" --url https://hooks.zapier.com/hooks/catch/000000/example/ --events task.done task.blocked
+hub webhook create --name "Zapier tasks" --url https://hooks.zapier.com/hooks/catch/000000/example/ --events task.done task.closed
 ```
 
 Tico shows a signing secret. These tools do not check it, so you can ignore it. The address still has to be `https` and public.

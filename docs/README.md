@@ -63,5 +63,5 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - Staff only: [Manage a company's billing](staff-billing.md) (credit, minimum balance, grace, enforcement, reversals) and
   [Review the Hosting waitlist](staff-waitlist.md).
 
-[Task types and steps](tasks.md): custom pipelines, status mapping, and CLI, MCP, API and SQL examples;
+[Tasks](tasks.md): pipelines and stages, asks and OKs, snooze, and the CLI, MCP and API;
 editing and deleting your own comments.

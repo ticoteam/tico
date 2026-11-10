@@ -488,7 +488,7 @@ answers and nullable media metadata. Downloads accept `?v=<n>` for an exact vers
 The version's author can edit its note or question through
 `PATCH /api/v2/files/{id}/versions/{n}`. File bytes remain immutable. Reviews use the existing
 ask/answer messages, so their text remains readable by older Computers.
-See [Files, versions and questions](tasks.md#files-versions-and-questions) for the CLI, MCP
+See [Tasks: Files](tasks.md#files) for the CLI, MCP
 and answer contracts.
 
 ### Approved versions
@@ -498,7 +498,7 @@ and answer contracts.
 approved. It prints `{approved, by, at, task, question}` and exits 0 when approved, 1 when not (the answer says
 `"approved": false`), 2 on bad input. A failed call also exits 1 or 2, with an error answer instead: read the answer,
 not only the code. A path is the bot's own file, matched by the sha256 of its bytes now. By default only a person's
-verdict counts (an answer to a [file review](tasks.md#reviewing-files)); `--by` names whose verdicts count instead. The
+verdict counts (an answer to a [file review](tasks.md#files)); `--by` names whose verdicts count instead. The
 newest matching verdict on that version decides (Request changes after Approve means not approved), a new version is
 never approved by an older one's review, and a deleted task's verdicts stop counting.
 

@@ -394,16 +394,51 @@ def test_never_or_no_answer_from_tico_keeps_the_draft(rig, hq, tmp_path, mode):
     assert hq.tickets[tid]["messages"] == [] and hq.seen == []
 
 
-def test_ask_first_keeps_the_draft_for_a_person_to_post_and_never_closes_by_signature(rig, hq, tmp_path):
+def test_ask_first_posts_only_on_an_ok_for_exactly_this_reply_and_never_closes_by_signature(
+    rig, hq, tmp_path, monkeypatch
+):
     rig.setting["mode"] = "ask_first"
+    posts, refuse = [], set()
+
+    def tico(path, body, key=None):
+        posts.append((path, body))
+        if path in refuse:
+            raise mail_policy.HubFailed("http_409", status=409)
+        return {"task_id": "T1", "requirement_id": "r1"} if path.endswith("/oks") else {}
+
+    monkeypatch.setattr(mail_policy, "HUB_POST", tico)
     tid = hq.file("The board will not load")
     reply = tmp_path / "reply.md"
     reply.write_text("Try the latest release.\n")
     code, text = rig.cli("reply", tid, str(reply))
-    assert code == 1 and "Ask first" in text and "a person posts it" in text and hq.seen == []
-    assert rig.cli("reply", tid, str(reply), "--approval", "a1")[0] == 2  # no approval to pass any more
+    assert code == 1 and "Ask first" in text and "hq-tickets ask" in text and hq.seen == [] and posts == []
+    assert rig.cli("reply", tid, str(reply), "--approval", "a1")[0] == 2
+
+    code, text = rig.cli("ask", tid, str(reply), "--task", "T1", "--to", "ana", "--version", "4")
+    assert code == 0 and "r1" in text and f"hq-tickets reply {tid} {reply} --ok r1" in text, text
+    assert posts[-1] == (
+        "tasks/T1/oks",
+        {
+            "to": "ana",
+            "line": f"Post this reply to {tid}?",
+            "subject": f"hq_reply:{tid}",
+            "content": "Try the latest release.\n",
+            "version": 4,
+        },
+    )
+    assert rig.cli("ask", tid, str(reply), "--task", "T1", "--to", "ana")[0] == 2 and hq.seen == []
+
+    refuse.add("oks/r1/use")  # not given yet, or for other text: Tico refuses and nothing is posted
+    code, text = rig.cli("reply", tid, str(reply), "--ok", "r1")
+    assert code == 1 and "Tico refused" in text and hq.seen == []
+    refuse.clear()
+    code, text = rig.cli("reply", tid, str(reply), "--ok", "r1")
+    assert code == 0 and "posted reply" in text
+    assert posts[-1] == ("oks/r1/use", {"subject": f"hq_reply:{tid}", "content": "Try the latest release.\n"})
+    assert len(hq.seen) == 1
+
     code, text = rig.cli("close-signature", "hm-a1b2c3d4e5f6", str(reply))
-    assert code == 1 and "keep the reply as a draft" in text and hq.seen == []
+    assert code == 1 and "keep the reply as a draft" in text and len(hq.seen) == 1
 
 
 def test_a_run_that_does_not_name_its_bot_keeps_the_draft(rig, hq, tmp_path):

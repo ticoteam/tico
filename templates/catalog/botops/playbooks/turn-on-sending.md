@@ -18,7 +18,7 @@ Done when: the sending policy reads back On their own or Ask first, or the refus
 Every send goes through Tico's send queue, which decides it under the bot's sending policy, set in Tico:
 
 1. **On their own**: the bot sends within the rules the human gave it, each send after a short undo window.
-2. **Ask first**: each send waits until a person approves it in Tico.
+2. **Ask first**: each send waits until a person OKs it in Tico.
 3. **Never**: nothing is sent; drafts only.
 
 Some sends always ask a person whatever the mode (a new correspondent, attachments, an outside Cc, legal or money
