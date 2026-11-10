@@ -133,3 +133,29 @@ def test_task_create_hands_the_spec_down_two_levels_below_the_task_it_describes(
     assert "Spec page: " in child["body"] and "Pick a range, then download." in child["body"]
     assert "Spec page: " in below["body"] and below["body"].startswith("Check it.")
     assert apart["body"] == "Other."
+
+
+def test_a_company_task_hidden_by_its_bots_access_gives_the_link_and_not_the_text(company, monkeypatch):
+    """A company task owned by a bot only some may read is hidden from everyone else (auth.task_row). A task filed
+    under it by someone who reads it, for a bot everyone reads, gets the spec's link but neither its title nor its
+    text."""
+    from backend.tests.helpers import engine as X
+    from backend.tests.helpers.api import restrict
+
+    with company.transaction() as c:
+        for slug in ("cpo", "ops"):
+            X.bot(c, slug)
+        everyone = {"everyone": True}
+        restrict(c, "cpo", see=everyone, read={"people": ["ana"]}, write={"people": ["ana"]})
+        top = H.task_create(c, "human:ana", "Acquire Initech", "Spec.", "bot:cpo", lint=False)
+        monkeypatch.setattr(VS, "_files", _Files())
+        monkeypatch.setattr(
+            VS,
+            "spec_page",
+            lambda c, task_id: {"id": "f1", "title": "Initech terms", "digest": "d"} if task_id == top["id"] else None,
+        )
+        child = H.task_create(
+            c, "human:ana", "Draft the letter", "Do the work.", "bot:ops", parent_id=top["id"], lint=False
+        )
+    assert "Spec page: " in child["body"]
+    assert "Pick a range" not in child["body"] and "Initech terms" not in child["body"]
