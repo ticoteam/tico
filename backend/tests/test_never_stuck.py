@@ -1102,3 +1102,45 @@ class _Here:
 
     def __exit__(self, *exc):
         return False
+
+
+def test_a_private_task_that_waits_on_someone_who_cannot_read_it_is_stuck_at_once_and_goes_to_a_person_who_can(
+    c, general, later
+):
+    """Codex review 5, after creation: a stage edited to ask Ben, or a private task Ben is taken off, waits on someone
+    who may not open it. That is stuck now, with no time to wait out: the next pass hands it to a person who reads it
+    (the ladder's own person), whose Needs you says whom to add under Who can see. Ben is told nothing: no wake, no
+    Needs you row, no title."""
+    stages = ({"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},)
+    payroll = X.pipeline(c, "payroll", "Payroll", stages, manager=MANAGER)
+    ben = "human:ben"
+    made = H.task_create(c, ANA, "Salary bands", "Only us.", ANA, pipeline="payroll", private=True, lint=False)
+    hers = made["id"]
+    assert later(seconds=10) == {}
+    # The pipeline is edited: Draft now asks Ben for an OK. Nothing tells the editor a private task is there.
+    X.requirement(c, payroll["stages"]["Draft"], "ok", person=ben, line="OK the bands", position=1)
+    assert later(seconds=10) == {"to_person": 1}
+    assert _visit(c, hers)["level"] == "person" and _visit(c, hers)["person_id"] == ANA
+    line = next(n["line"] for n in W.needs(c, ANA) if n.get("task_id") == hers)
+    assert line == "Stuck in Draft: add Ben under Who can see"
+    assert all(n.get("task_id") != hers for n in W.needs(c, ben))
+    assert X.wakes(c, hers, ben) == [] and H.task_readers(H.task(c, hers)) == []
+    assert later(minutes=10) == {}  # once
+    # A bot's private task Ben could read, until Ben is taken off it.
+    asks = (
+        {"name": "Check", "owner": BUILDER, "requirements": [{"kind": "owner_done"}, {"kind": "ok", "person": ben}]},
+    )
+    X.pipeline(c, "pay", "Pay", asks, manager=MANAGER)
+    made = H.task_create(c, ANA, "Bonus pool", "Only us.", BUILDER, pipeline="pay", private=True, readers=[ben])
+    shared = made["id"]
+    assert any(n.get("task_id") == shared for n in W.needs(c, ben))
+    later(seconds=10)
+    assert _visit(c, shared)["level"] == "owner"
+    H.set_task_readers(c, ANA, shared, remove=[ben])
+    assert all(n.get("task_id") != shared for n in W.needs(c, ben))
+    assert later(seconds=10) == {"to_person": 1} and _visit(c, shared)["person_id"] == ANA
+    line = next(n["line"] for n in W.needs(c, ANA) if n.get("task_id") == shared)
+    assert line == "Stuck in Check: add Ben under Who can see"
+    assert NS.rules_hold(c) == []
+    H.set_task_readers(c, ANA, shared, add=[ben])  # Ana shares it again: Ben's OK is his
+    assert any(n.get("task_id") == shared and n["kind"] == "ask" for n in W.needs(c, ben))
