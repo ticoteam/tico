@@ -115,12 +115,18 @@ def test_one_pass_reads_as_many_statements_over_a_thousand_idle_tasks_as_over_a_
 def test_one_pass_takes_about_twice_as_long_over_twice_the_tasks() -> None:
     """Speed: a pass's time grows with the open tasks, not with their square. Each task's runs are found from the task
     (task_wakes._runs_of), never by reading every run of its bot for each task: that took 4.6 s over 2,000 tasks and
-    148 s over 10,000. Now about 0.7 s and 1.3 s here over 2,000 and 4,000 (4.2 s over 10,000), 2% due for a try."""
+    148 s over 10,000. Now about 0.7 s and 1.3 s here over 2,000 and 4,000 (4.2 s over 10,000), 2% due for a try.
+    Timed in this process's CPU, not on the wall clock, so other load on the machine (a 16-way run) does not count:
+    linear is about 2x, a square 4x; under 3x passes."""
     small = perf.measure(50, profile=False, copies=39)
     big = perf.measure(50, profile=False, copies=79)
     assert (small["tasks"], big["tasks"]) == (2000, 4000)
     assert big["pass"]["woken"] > small["pass"]["woken"] > 0
-    assert big["seconds"] < 2.5 * small["seconds"], (small["seconds"], big["seconds"], big["top_statements"])
+    assert big["cpu_seconds"] < 3 * small["cpu_seconds"], (
+        small["cpu_seconds"],
+        big["cpu_seconds"],
+        big["top_statements"],
+    )
 
 
 def test_a_world_puts_the_environment_back() -> None:
