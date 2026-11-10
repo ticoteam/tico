@@ -1812,8 +1812,7 @@ class Store:
                     c.execute("CREATE INDEX IF NOT EXISTS tasks_lane_status_rank ON tasks(lane,status,rank,created_at)")
                     c.execute(
                         "CREATE INDEX IF NOT EXISTS tasks_active_lane_rank ON tasks("
-                        "lane,(rank IS NULL),rank,created_at,id) WHERE status IN "
-                        "('open','doing','waiting','review','ready','declined')"
+                        "lane,(rank IS NULL),rank,created_at,id) WHERE status='open'"
                     )
                     c.execute(
                         "CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
@@ -1910,7 +1909,7 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(47,?)", (H.now(),))
 
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=48").fetchone():
-                    H._apply(c, H.PIPELINES_SCHEMA)
+                    # Task types and steps: gone with the Pipelines v3 cut-over. The marker stays.
                     c.execute("INSERT INTO cloud_migrations VALUES(48,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=49").fetchone():
                     H._apply(c, H.CHAT_GOALS_SCHEMA)
@@ -1933,9 +1932,6 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=54").fetchone():
                     H._apply(c, H.TASK_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(54,?)", (H.now(),))
-                # What every bot may do with a type's tasks (hubdb.TYPE_BOTS). Checked on every start
-                # rather than numbered, so no migration number collides with another branch's.
-                H.add_column(c, "task_types", "bots", "TEXT")
                 # Sign out / Switch account / Use the shared key ride the sign-in relay (backend/model_login.py).
                 H.add_column(c, "model_logins", "kind", "TEXT NOT NULL DEFAULT 'sign_in'")
                 # The owner's "Turns at once" for a computer (NULL: automatic, its own capacity).
@@ -1946,7 +1942,8 @@ class Store:
                     H._apply(c, H.MEETING_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(55,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=56").fetchone():
-                    H._apply(c, H.NUMBERS_SCHEMA)
+                    # tasks.number and its index are in the tasks table the Pipelines v3 cut-over makes; the numbered
+                    # types and a task's place in a step went with it. The marker stays.
                     c.execute("INSERT INTO cloud_migrations VALUES(56,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=57").fetchone():
                     H.migrate_task_privacy(c)
@@ -1965,10 +1962,8 @@ class Store:
                     _task_relations.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=61").fetchone():
-                    # The scheduler's due-date reminder pass and its quiet-task resume read these indexes, not
-                    # every task row (H.TASKS_DUE_SQL, quiet_work.due).
+                    # The scheduler's due-date reminder pass reads this index, not every task row (H.TASKS_DUE_SQL).
                     c.execute(H.TASKS_DUE_INDEX)
-                    c.execute(H.TASKS_RESUME_INDEX)
                     c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=62").fetchone():
                     # A day of history must not authorize every older attempt first.
@@ -2253,13 +2248,6 @@ class Store:
                         "conversations(kind, COALESCE(last_message_at, created_at)) "
                         "WHERE closed_at IS NULL AND task_id IS NULL",
                     ),
-                    # Open approvals: a task's (auto_tasks.waiting on the claim path), a requester's
-                    # (status_counts, task_privacy), and the oldest first (expiry, Needs you).
-                    ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
-                    ("approvals_open_requester", "approvals(requested_by_id) WHERE decision IS NULL"),
-                    ("approvals_open_created", "approvals(created_at) WHERE decision IS NULL"),
-                    # A requester's consumed approvals, one lookup per stopped run (execution.retry_facts).
-                    ("approvals_requested_consumed", "approvals(requested_by_id, consumed_at)"),
                     # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
                     # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
                     ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
@@ -2348,8 +2336,6 @@ class Store:
                 from .entities import store as Directory
 
                 Directory.boot(c)
-                # Finished tasks still holding an earlier close time (H.clear_finished_close_times). Idempotent.
-                H.clear_finished_close_times(c)
                 # Teams, org groups and derived departments become groups, once (backend/groups.py). Idempotent,
                 # so no migration number to collide with another branch's.
                 from . import groups as Groups
@@ -2381,14 +2367,6 @@ class Store:
                     Redesign.repair_inbox_prompts(c)
                 except Exception:  # startup goes on
                     logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
-                # The waits 20261106112609_derived_waiting staged become question tasks, blockers or note lines, once:
-                # a no-op when nothing is staged (backend/question_tasks.py move_waits).
-                # The open asks 20261106131713_asks_to_question_tasks staged become question tasks or DMs first, so a
-                # moved wait finds the question task its ask became (backend/question_tasks.py move_asks).
-                from . import question_tasks as QuestionTasks
-
-                QuestionTasks.move_asks(c)
-                QuestionTasks.move_waits(c)
                 from . import releases as Releases
 
                 Releases.record_start(c, H.now())
@@ -2449,6 +2427,12 @@ class Store:
             from . import status_values as _status_values
 
             _status_values.enforce(c)
+            # The pipelines every company has (General), made here when missing, on every start
+            # (backend/pipeline_settings.py). After the constraints, so what it writes is held to them.
+            from . import pipeline_settings
+
+            pipeline_settings.ensure_presets(c)
+            c.commit()
         c.close()
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.

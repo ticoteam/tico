@@ -11,19 +11,20 @@ Who may act:
   task (the company's owner; a route knows).
 - An answer, a give, an undo and a thumbs: whoever the engine says the requirement is asked of. No more is checked
   here, so a bot or a person named on an OK answers it without being on the task.
+
+The engine's modules are loaded when a call runs, not when this module loads: hubdb imports this module, and the
+engine's modules reach back to hubdb and the store.
 """
 
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, NoReturn
 
-from . import answers as A
 from . import hubdb_core, task_effects
-from . import task_engine as E
-from . import task_requirements as R
-from . import waiting_on as W
 
 if TYPE_CHECKING:
     import sqlite3
+
+    from . import waiting_on as W
 
 Row = dict[str, Any]
 _core: Any = hubdb_core
@@ -51,6 +52,8 @@ def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id
 def can_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | None = None) -> bool:
     """Whether `actor` can work this task: its owner, its requester, their managers and delegates, a party to a task
     above it, the Task Manager, the manager and the owner of its pipeline, or a person who moves tasks."""
+    from . import task_engine as E
+
     H = _h()
     if actor == SYSTEM:
         return True
@@ -102,6 +105,10 @@ def task_done(
     engine) answers it, and the engine moves the task on once everything else is met: in the last stage, to Done.
     Otherwise it is a forward move with no reason, refused with what is missing while anything is. To go on anyway is
     `task_move(NEXT, why=...)`."""
+    from . import task_engine as E
+    from . import answers as A
+    from . import task_requirements as R
+
     _open(conn, actor, task_id, mover)
     row = E.task(conn, task_id)
     if not row:
@@ -132,6 +139,8 @@ def task_move(
 ) -> Row:
     """Move a task: forward, push past, back, done, close or reopen. `to` is a stage id or name, or NEXT, DONE, CLOSED
     or REOPEN. A bot does not reopen a task a person closed."""
+    from . import task_engine as E
+
     H = _h()
     row = _open(conn, actor, task_id, mover)
     closer = row.get("closed_by_id")
@@ -174,6 +183,8 @@ def task_reassign(
     """Give the task to another owner for this stage. Checked as any hand-over is: the actor reaches the new owner,
     the new owner takes tasks, the Task Manager stays in the department, and a bot's hand-over to a person passes the
     strategy rules."""
+    from . import task_engine as E
+
     H = _h()
     row = _open(conn, actor, task_id, mover)
     target: str | None = None
@@ -225,6 +236,8 @@ def task_ask(
     """Ask someone on the task: an answer (`kind` "answer", with `choices` where there are some) or an OK (`kind`
     "ok"). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
     carries `requirement_id`."""
+    from . import task_engine as E
+
     H = _h()
     _open(conn, actor, task_id, mover)
     target = H._reach(conn, actor, person)
@@ -246,6 +259,8 @@ def task_withdraw_ask(
     conn: "sqlite3.Connection", actor: str, requirement_id: str, why: str | None = None, *, mover: bool | None = None
 ) -> Row | None:
     """Take back an ask that was added to a task. The task moves on if that was all it waited for."""
+    from . import task_engine as E
+
     _open(conn, actor, _task_of_requirement(conn, actor, requirement_id), mover)
     with task_effects.because(actor):
         return E.withdraw_requirement(conn, requirement_id, actor, why)
@@ -263,6 +278,8 @@ def task_answer(
     """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; the choice or the
     text on a question; `done` on the owner's own work. If that was the last thing missing the task moves on. The
     result carries `answer_id`."""
+    from . import answers as A
+
     _open(conn, actor, task_id, work=False)
     with task_effects.because(actor):
         return A.answer(conn, task_id, requirement_id, actor, value, note, seen_version=seen_version)
@@ -270,6 +287,8 @@ def task_answer(
 
 def task_give(conn: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, person: str) -> Row:
     """Give an ask to another person: it gets their name and moves to their list."""
+    from . import answers as A
+
     H = _h()
     _open(conn, actor, task_id, work=False)
     return A.give_to(conn, task_id, requirement_id, actor, H.resolve_actor(conn, person) or person)
@@ -277,6 +296,8 @@ def task_give(conn: "sqlite3.Connection", actor: str, task_id: str, requirement_
 
 def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> Row:
     """Take an answer back: whoever gave it, or any person."""
+    from . import answers as A
+
     found = conn.execute(
         "SELECT v.task_id FROM answers a JOIN visits v ON v.id = a.visit_id WHERE a.id=?", (answer_id,)
     ).fetchone()
@@ -291,6 +312,8 @@ def task_thumbs(
     conn: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, up: bool, note: str | None = None
 ) -> Row:
     """Was this worth asking. A thumbs down says what was wrong, and sends an open ask back."""
+    from . import answers as A
+
     _open(conn, actor, task_id, work=False)
     if up:
         return A.thumbs_up(conn, task_id, requirement_id, actor)
@@ -309,12 +332,16 @@ def task_snooze(
     mover: bool | None = None,
 ) -> Row:
     """Set a task aside until a date, or with no end. A bot gives a reason."""
+    from . import task_engine as E
+
     _open(conn, actor, task_id, mover)
     return E.snooze(conn, task_id, actor, why, until, seen_version)
 
 
 def task_unsnooze(conn: "sqlite3.Connection", actor: str, task_id: str, why: str | None = None) -> Row:
     """End a task's snooze. Anyone who may read the task."""
+    from . import task_engine as E
+
     _open(conn, actor, task_id, work=False)
     return E.unsnooze(conn, task_id, actor, why)
 
@@ -323,6 +350,8 @@ def task_try_again(
     conn: "sqlite3.Connection", actor: str, task_id: str, why: str | None = None, *, mover: bool | None = None
 ) -> Row:
     """A person hands a task that reached them back to its owner, with the count at zero."""
+    from . import task_engine as E
+
     _open(conn, actor, task_id, mover)
     return E.try_again(conn, task_id, actor, why)
 
@@ -349,6 +378,8 @@ def attempt(conn: "sqlite3.Connection", call: Callable[..., Any], *args: Any, **
 
 
 # ----------------------------------------------------------------------------- reads
-def task_waits(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, list[W.Wait]]:
+def task_waits(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> "dict[str, list[W.Wait]]":
     """What each task waits on, headline first, by task id."""
+    from . import waiting_on as W
+
     return W.waiting_on_many(conn, task_ids)

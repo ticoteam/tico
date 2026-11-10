@@ -1571,19 +1571,6 @@ def _refuse_foreign(conn):
         )
 
 
-def _holds_table(conn):
-    """task_holds, empty, before any step runs: task reads join it (TASKS), and the numbered steps below and the code
-    after the migration files read tasks on a file migration 0075 has not reached yet. The legacy hold columns still
-    on such a file keep their names in TASKS (the joined fields come second, renamed); 0075 copies them into this
-    table and drops them."""
-    import importlib
-
-    holds = importlib.import_module("backend.migrations.0075_task_holds")
-    conn.execute(holds.TABLE)
-    for statement in holds.INDEXES:
-        conn.execute(statement)
-
-
 def migrate(conn, adopt_legacy=False):
     """Apply every migration the file has not seen, by `PRAGMA user_version`.
 
@@ -1602,7 +1589,6 @@ def migrate(conn, adopt_legacy=False):
         from .migrations import renames
 
         renames.apply_now(conn)
-    _holds_table(conn)
     from .flight import begin
 
     for i in range(version, len(MIGRATIONS)):
@@ -1638,10 +1624,6 @@ def migrate(conn, adopt_legacy=False):
     from .task_delete import ensure as ensure_task_trash
 
     ensure_task_trash(conn)
-    # Milestone waits: a task waits for a pull request to merge or a release to be published (backend/milestone_waits.py).
-    from .milestone_waits import ensure as ensure_milestone_waits
-
-    ensure_milestone_waits(conn)
     # Reconnect cards: a task waits for a person to fix a missing or refused account (backend/reconnects.py).
     from .reconnects import ensure as ensure_reconnects
 
@@ -1650,10 +1632,8 @@ def migrate(conn, adopt_legacy=False):
     from .lifecycle import ensure as ensure_seats
 
     ensure_seats(conn)
-    # What every bot may do with a type's tasks (TYPE_BOTS); NULL keeps them to the parties.
-    add_column(conn, "task_types", "bots", "TEXT")
-    # The tasks board columns. The cloud store backfills rank
-    # and lane once (its migration 29); here the columns simply exist.
+    # A task's lane and its place in its owner's queue. The cloud store backfills rank and lane once (its migration
+    # 29); here the columns simply exist.
     columns = {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
     if "lane" not in columns:
         conn.execute("ALTER TABLE tasks ADD COLUMN lane TEXT NOT NULL DEFAULT 'company'")
@@ -1665,15 +1645,6 @@ def migrate(conn, adopt_legacy=False):
     TR.migrate(conn)
     # Who is on a task, by role (task_roles).
     TRo.migrate(conn)
-    # Next-run tasks (`hub task create --next-run`): `next_run` marks a task that waits for its
-    # owner's next run instead of starting one; `carried_by` is the attempt that took it there.
-    if "next_run" not in columns:
-        conn.execute("ALTER TABLE tasks ADD COLUMN next_run INTEGER NOT NULL DEFAULT 0")
-    if "carried_by" not in columns:
-        conn.execute("ALTER TABLE tasks ADD COLUMN carried_by TEXT")
-    conn.execute("CREATE INDEX IF NOT EXISTS tasks_carried_by ON tasks(carried_by) WHERE carried_by IS NOT NULL")
-    # When a run that carried a next-run task without doing it picks it up again (backend/quiet_work.py).
-    add_column(conn, "tasks", "resume", "TEXT")
     # The due-date routine occurrence a task is for, "<automation_id>:<due_on>" (backend/automation_actions.py).
     add_column(conn, "tasks", "occurrence", "TEXT")
     # The step of the routine that opened it: one task per occurrence per producing step (task_create).
@@ -1728,20 +1699,9 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "tasks", "checkpoint_by_id", "TEXT")
     # Where the task stood by the others' changes when that checkpoint was left (wake_rules.state_of, token saving 3/9).
     add_column(conn, "tasks", "checkpoint_state", "TEXT")
-    add_column(conn, "tasks", "stale_asked_at", "TEXT")
     # Set once a turn in the task's own session took in another private task: that session may
     # carry it from then on, so no later turn's reply becomes the checkpoint (execution.complete).
     add_column(conn, "tasks", "checkpoint_blocked", "INTEGER NOT NULL DEFAULT 0")
-    # A review or QA child's verdict (approve|changes|pass|fail) and the pull request head it judged (record_verdict).
-    add_column(conn, "tasks", "verdict", "TEXT")
-    add_column(conn, "tasks", "verdict_head", "TEXT")
-    # An approval a person's own Assistant decided for them: whose assistant, and the person's words it acted on.
-    add_column(conn, "approvals", "decided_via", "TEXT")
-    add_column(conn, "approvals", "decided_for", "TEXT")
-    # When an approval's exact payload passed its checks and could be decided, and whose decision it is (the person it
-    # was sent to). Older rows read their request time and their message's recipient (approval_wait).
-    add_column(conn, "approvals", "ready_since", "TEXT")
-    add_column(conn, "approvals", "decision_owner", "TEXT")
     # The Tico account a person signed in with (backend/oidc.py person): the issuer and its subject id. An install
     # matches the account id before the email, so a changed address keeps the same person. NULL until their first
     # sign-in with an account; one account is one person.
@@ -1750,38 +1710,9 @@ def migrate(conn, adopt_legacy=False):
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS humans_idp ON humans(idp_issuer, idp_sub) WHERE idp_sub IS NOT NULL"
     )
-    # A type whose tasks change status only by moving between its steps (`_task_state`).
-    add_column(conn, "task_types", "steps_only", "INTEGER NOT NULL DEFAULT 0")
-    # The Product roadmap and Dev tickets types are found by their role, never by who manages them.
-    from .roadmap_flow import ensure as ensure_roadmap_types, migrate as migrate_roadmap_roles
-    from . import task_blocked, blocker_asks
-
-    task_blocked.ensure(conn)
-    blocker_asks.ensure(conn)
-    migrate_roadmap_roles(conn)
-
-    if "manager" not in {r[1] for r in conn.execute("PRAGMA table_info(task_types)")}:
-        add_column(conn, "task_types", "manager", "TEXT")
-        ensure_roadmap_types(conn)
-    elif (
-        conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='first_start_seeds'").fetchone()
-        and conn.execute("SELECT 1 FROM first_start_seeds WHERE name='roadmap_types'").fetchone()
-    ):
-        # Migration 20261108011313 (manager_since) added `manager` before this step ran and left this note in its place.
-        ensure_roadmap_types(conn)
-        conn.execute("DELETE FROM first_start_seeds WHERE name='roadmap_types'")
     from .roadmaps import migrate as migrate_roadmaps
 
     migrate_roadmaps(conn)
-    from .roadmap_flow import ready_step as roadmap_ready_step
-
-    roadmap_ready_step(conn)
-    # Won't do is no longer a board step (`_task_state`): move its tasks off, then delete it.
-    retire_held_steps(conn)
-    task_blocked.stamp_builds(conn)
-    task_blocked.backfill(conn)
-    task_blocked.forget_retired_resumes(conn)
-    task_blocked.leave_retired_blocked(conn)
     # A bot's unread backlog, read newest first a page at a time on every inbox read (inbox_pages).
     conn.execute(UNREAD_INDEX)
     # The keeper's meeting inputs, the few messages a room's meeting provenance is read from (live_privacy.Sources) on
@@ -1849,8 +1780,7 @@ def migrate(conn, adopt_legacy=False):
     conn.execute("CREATE INDEX IF NOT EXISTS tasks_lane_status_rank ON tasks(lane,status,rank,created_at)")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS tasks_active_lane_rank ON tasks("
-        "lane,(rank IS NULL),rank,created_at,id) WHERE status IN "
-        "('open','doing','waiting','review','ready','declined')"
+        "lane,(rank IS NULL),rank,created_at,id) WHERE status='open'"
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
@@ -1858,7 +1788,6 @@ def migrate(conn, adopt_legacy=False):
         "WHERE status IN ('done','closed')"
     )
     conn.execute(TASKS_DUE_INDEX)  # the scheduler's due-date reminder pass
-    conn.execute(TASKS_RESUME_INDEX)  # ...and its quiet tasks whose deferred time came (quiet_work.due)
     # A task's history and the Tasks page's stats read history_events through the indexes its migration made
     # (backend/migrations/0064_history_events.py).
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
@@ -1893,7 +1822,6 @@ def migrate(conn, adopt_legacy=False):
 
     bot_home_merge.run_once(conn)
     message_links.ensure(conn)
-    clear_finished_close_times(conn)
     return len(MIGRATIONS)
 
 
