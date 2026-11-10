@@ -26,6 +26,11 @@ declare const S: {v2: {needs: ({id: string} & Record<string, unknown>)[]; needsC
 declare let v2Get: (path: string) => Promise<unknown>;
 declare function v2NeedsMend(d: unknown): Promise<unknown>;
 declare function needsTake(d: unknown): void;
+type Order = (a: {id: string}, b: {id: string}) => number;
+declare const taskQueueOrder: Order, taskFinishedOrder: Order;
+declare function taskRowsPut(rows: {id: string}[], t: {id: string; [k: string]: unknown} | null, id: string, has: (t: {id: string}) => boolean, order?: Order): boolean;
+declare const THREADS: {rail: boolean | null; threads: {id: string; title?: string; [k: string]: unknown}[]; pinned: {id: string}[]};
+declare function threadsPut(view: unknown): void;
 
 const BOTS = [['ops', 'Ops'], ['pm', 'PM']].map(([name, display_name]) => ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}));
 // The server's tasks by id (as GET /api/v2/tasks/{id} and a `tasks` event's `task` carry them).
@@ -283,6 +288,24 @@ const holdNext = (match: Held['match']): Held => {
       Object.assign(S.v2, {needs: kept.needs, needsVersion: kept.version, needsNext: kept.next, needsCount: kept.count});
     }
   }), {version: 'p3', ids: ['c']});
+
+  // A list's order holds as rows come and change: queue order is by rank then age, Done most recent first, and the
+  // plain Threads list by title.
+  assert.deepEqual(await page.evaluate(() => {
+    const ids = (rows: {id: string}[]) => rows.map(r => r.id).join(' ');
+    const q = [{id: 'a', rank: 1, created_at: '1'}, {id: 'c', rank: 3, created_at: '1'}, {id: 'n', rank: null, created_at: '1'}];
+    taskRowsPut(q, {id: 'b', rank: 2, created_at: '2'}, 'b', () => true, taskQueueOrder);
+    const added = ids(q);
+    taskRowsPut(q, {id: 'a', rank: 4, created_at: '1'}, 'a', () => true, taskQueueOrder);
+    const done = [{id: 'x', done_at: '2026-11-09'}, {id: 'y', done_at: '2026-11-08'}];
+    taskRowsPut(done, {id: 'y', done_at: '2026-11-10'}, 'y', () => true, taskFinishedOrder);
+    const kept = {rail: THREADS.rail, threads: THREADS.threads, pinned: THREADS.pinned};
+    try {
+      Object.assign(THREADS, {rail: false, pinned: [], threads: [{id: 'th1', title: 'Alpha', audience: 'company', me: {member: true}}, {id: 'th2', title: 'Beta', audience: 'company', me: {member: true}}]});
+      threadsPut({id: 'th1', title: 'Zulu', audience: 'company', me: {member: true}});
+      return {added, ranked: ids(q), done: ids(done), threads: THREADS.threads.map(t => t.title).join(' ')};
+    } finally { Object.assign(THREADS, kept); }
+  }), {added: 'a b c n', ranked: 'b c a n', done: 'y x', threads: 'Beta Zulu'});
 
   assert.deepEqual(errors, []);
   await browser.close();

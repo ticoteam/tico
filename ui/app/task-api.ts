@@ -130,11 +130,30 @@ function taskListRow<T extends TaskLiveRow>(t: T): T {
   const full = t as T & {snooze?: unknown; snoozed?: boolean};
   return 'snooze' in full && full.snoozed === undefined ? {...t, snoozed: !!full.snooze} : t;
 }
-/** One task as the viewer reads it now, into `rows` by the list's rule `has`: in place, added first, or out when `has`
- * says no or the task is gone or unreadable (null). True when the rows moved. */
-function taskRowsPut<T extends TaskLiveRow>(rows: T[], given: T | null, id: string, has: (t: T) => boolean): boolean {
+/** A list's order, as the server reads it (backend/hubdb.py tasks `order`). */
+type TaskRowOrder = (a: TaskLiveRow, b: TaskLiveRow) => number;
+const taskRowField = (t: TaskLiveRow, k: string): unknown => (t as Record<string, unknown>)[k];
+/** `queue`: ranked first, by rank, then oldest first. */
+const taskQueueOrder: TaskRowOrder = (a, b) => {
+  const ra = taskRowField(a, 'rank'), rb = taskRowField(b, 'rank');
+  return (Number(ra == null) - Number(rb == null)) || (Number(ra ?? 0) - Number(rb ?? 0))
+    || String(taskRowField(a, 'created_at') ?? '').localeCompare(String(taskRowField(b, 'created_at') ?? '')) || String(a.id).localeCompare(String(b.id));
+};
+/** `finished`: the most recently done or closed first. */
+const taskFinishedOrder: TaskRowOrder = (a, b) => {
+  const at = (t: TaskLiveRow) => String(['done_at', 'closed_at', 'updated_at', 'created_at'].map(k => taskRowField(t, k)).find(v => v) ?? '');
+  return at(b).localeCompare(at(a)) || String(b.id).localeCompare(String(a.id));
+};
+/** One task as the viewer reads it now, into `rows` by the list's rule `has`: in place, added, or out when `has` says no
+ * or the task is gone or unreadable (null). With the list's `order`, an added or changed row goes where that order puts
+ * it; without, an added one goes first. True when the rows moved. */
+function taskRowsPut<T extends TaskLiveRow>(rows: T[], given: T | null, id: string, has: (t: T) => boolean, order?: TaskRowOrder): boolean {
   const t = given && taskListRow(given), i = rows.findIndex(x => String(x.id) === id), keep = !!t && has(t);
-  if (t && keep && i >= 0) rows[i] = t;
+  if (t && keep && order) {
+    if (i >= 0) rows.splice(i, 1);
+    const at = rows.findIndex(x => order(t, x) < 0);
+    rows.splice(at < 0 ? rows.length : at, 0, t);
+  } else if (t && keep && i >= 0) rows[i] = t;
   else if (t && keep) rows.unshift(t);
   else if (i >= 0) rows.splice(i, 1);
   else return false;
@@ -145,10 +164,10 @@ const taskOfEvent = <T extends TaskLiveRow>(d: LiveTaskEvent): T | null => d.gon
 const taskEventId = (d: LiveTaskEvent) => String(d.id ?? d.task_id ?? '');
 /** A burst of live task events onto `rows`: true when they moved, 'bulk' when one change named many tasks (the list then
  * catches up from its cursor; nothing is read for the others). */
-function taskRowsLive<T extends TaskLiveRow>(rows: T[], events: LiveTaskEvent[], has: (t: T) => boolean): boolean | 'bulk' {
+function taskRowsLive<T extends TaskLiveRow>(rows: T[], events: LiveTaskEvent[], has: (t: T) => boolean, order?: TaskRowOrder): boolean | 'bulk' {
   if (events.some(d => d.bulk)) return 'bulk';
   let moved = false;
-  for (const d of events) moved = taskRowsPut(rows, taskOfEvent<T>(d), taskEventId(d), has) || moved;
+  for (const d of events) moved = taskRowsPut(rows, taskOfEvent<T>(d), taskEventId(d), has, order) || moved;
   return moved;
 }
 // A read and the events that come while it is out. A read answers the list as it was when the server read it; an event
@@ -194,7 +213,7 @@ function taskFeedFailed(feed: TaskFeed, ticket: number): void {
  * asked once the answer is in: false drops it (the page was left). Answers the next cursor (`again` when a held event
  * was a bulk change: catch up once more), 'reset' when only a full read will do (no cursor, or too old), or null. */
 async function taskRowsCatchUp<T extends TaskLiveRow>(rows: T[], cursor: string, query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sort'>,
-  has: (t: T) => boolean, still: () => boolean, feed: TaskFeed): Promise<{cursor: string; moved: boolean; again?: boolean} | 'reset' | null> {
+  has: (t: T) => boolean, still: () => boolean, feed: TaskFeed, order?: TaskRowOrder): Promise<{cursor: string; moved: boolean; again?: boolean} | 'reset' | null> {
   if (!cursor) return 'reset';
   const ticket = taskFeedRead(feed);
   let out: TaskChanges;
@@ -205,8 +224,8 @@ async function taskRowsCatchUp<T extends TaskLiveRow>(rows: T[], cursor: string,
   if (!held) return null;
   let moved = false;
   for (const id of out.gone) moved = taskRowsPut(rows, null, id, has) || moved;
-  for (const t of out.tasks) moved = taskRowsPut(rows, t as unknown as T, String(t.id), has) || moved;
-  const after = taskRowsLive(rows, held, has);
+  for (const t of out.tasks) moved = taskRowsPut(rows, t as unknown as T, String(t.id), has, order) || moved;
+  const after = taskRowsLive(rows, held, has, order);
   return {cursor: out.cursor || cursor, moved: moved || after === true, ...(after === 'bulk' ? {again: true} : {})};
 }
 async function needsYou(): Promise<NeedsEntry[]> {

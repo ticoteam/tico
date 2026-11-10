@@ -196,6 +196,8 @@ function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
   if (state.pipeline) return {status: 'open', snoozed: 'hide', ...of};
   return null;
 }
+/** The view's order, as its read asks for it: Done and Closed most recent first, the rest in queue order. */
+const tasksOrder = (state: TasksPageState): TaskRowOrder => state.archive && state.archive !== 'snoozed' ? taskFinishedOrder : taskQueueOrder;
 /** Whether a task, as the viewer reads it now, belongs in the view: tasksQuery's filters, client-side. */
 function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
   if (state.pipeline && t.pipeline_id !== state.pipeline) return false;
@@ -244,7 +246,7 @@ async function tasksCatchUp(state: TasksPageState | null): Promise<void> {
   if (!query) { tasksNeedsLive(); return; }
   if (!state.cursor) { await tasksLoad(state); return; }
   try {
-    const out = await taskRowsCatchUp(state.tasks, state.cursor, query, t => tasksViewHas(state, t), () => TASKS_ST === state && !state.loading, state.feed);
+    const out = await taskRowsCatchUp(state.tasks, state.cursor, query, t => tasksViewHas(state, t), () => TASKS_ST === state && !state.loading, state.feed, tasksOrder(state));
     if (!out) return;
     if (out === 'reset') { await tasksLoad(state); return; }
     state.cursor = out.cursor;
@@ -259,7 +261,7 @@ function tasksTaskPut(state: TasksPageState, given: TaskAny | null, id: string |
   // You: Needs you says what is on it; a task's change only redraws the item that shows it.
   for (const it of state.needs) if (t && it.task && String(it.task.id) === key) { it.task = {...it.task, ...t} as typeof it.task; moved = true; }
   // A full task carries every list field.
-  if (state.pipeline || state.archive) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row)) || moved;
+  if (state.pipeline || state.archive) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row), tasksOrder(state)) || moved;
   if (moved && draw) tasksRender(state);
   return moved;
 }

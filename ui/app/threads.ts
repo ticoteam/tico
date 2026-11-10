@@ -304,7 +304,7 @@ const threadsEach = (fn: (t: ThreadRow) => ThreadRow | null | undefined) => {
   for (const key of ['pinned', 'threads'] as const) THREADS[key] = THREADS[key].map(t => fn(t) || t);
 };
 // One thread's row, updated in place from a thread view the server sent: archived leaves the rail, a pin moves it to
-// Pinned (or back), a new one the viewer is in joins its list by title.
+// Pinned (or back), a new one the viewer is in joins its list by title, and on the plain list a renamed one moves.
 // `recheck` (a members event): whether the viewer is still in it decides, not whether it is listed.
 function threadsPut(view: ThreadRow, {recheck = false} = {}) {
   if (!view?.id || view.parent_id) return;
@@ -327,6 +327,9 @@ function threadsPut(view: ThreadRow, {recheck = false} = {}) {
     THREADS[out] = THREADS[out].filter(x => x.id !== t.id);
     if (!THREADS[into].some(x => x.id === t.id)) THREADS[into] = [...THREADS[into], t].sort(threadsByTitle);
   } else if (!listed) THREADS.threads = [...THREADS.threads, view].sort(threadsByTitle);
+  // The plain list is by title: a renamed thread goes where its new title puts it. (The rail's order is the server's
+  // ranking, which a row alone cannot redo; its next read does.)
+  else if (!THREADS.rail) THREADS.threads = [...THREADS.threads].sort(threadsByTitle);
   threadsSideRender();
 }
 // Read up to `seq` here: the row's count clears at once, the server's answer follows on the stream.
