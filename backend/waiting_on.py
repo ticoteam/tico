@@ -265,7 +265,7 @@ def _filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[tuple[str, st
 
 
 def _seen(conn: "sqlite3.Connection") -> dict[str, str | None]:
-    """"Can this bot run" for every read in this snapshot: a page asks it of the same bots from several lists. A write
+    """ "Can this bot run" for every read in this snapshot: a page asks it of the same bots from several lists. A write
     discards it (read_cache)."""
     if read_cache.cache(conn) is None:
         return {}

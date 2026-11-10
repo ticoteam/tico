@@ -5669,10 +5669,7 @@ def relay_wake_url_off(api, args):
 
 
 ALERT_PREFERENCES = {
-    **{
-        k: {"type": "boolean"}
-        for k in ("legal_mail", "urgent_calls", "emergency_exception")
-    },
+    **{k: {"type": "boolean"} for k in ("legal_mail", "urgent_calls", "emergency_exception")},
     **{k: {"type": "string"} for k in ("timezone", "quiet_start", "quiet_end")},
     "monthly_cap": {"type": "integer", "minimum": 0, "maximum": 10000},
 }
