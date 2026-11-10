@@ -4,7 +4,7 @@ Tico connects the agents marked supported: a person adds one and it becomes a Ti
 under the line the person picks, or in the seat's place. Any other agent is a request. Requesting one adds a Recruiting
 seat for it (backend/lifecycle.py) that holds its place on the chart, and files the request with Tico's team through the
 support path (backend/support.py), so the team builds the connection. The first task a person gives the agent waits on
-the seat, as a task they own, until the agent connects. Canceling a request tells Tico, declines that task when the
+the seat, as a task they own, until the agent connects. Canceling a request tells Tico, closes that task when the
 person may update it, and closes the seat.
 
 A request moves its seat through request_state: `filing` while Tico is being told (set in the transaction that makes the
@@ -210,7 +210,7 @@ def _model_for(harness):
 def _first_task(c, who, text):
     """The seat's waiting task, made for real inside the reservation's transaction: an open task with the same first line
     is refused here, before Tico hears of the request. If Tico is not reached, the reservation is released and the task
-    declined with it."""
+    closed with it."""
     if not text:
         return ""
     try:
@@ -226,18 +226,12 @@ def _first_task(c, who, text):
 
 
 def _retire_task(c, actor, task_id, note):
-    """Decline a task the seat was waiting on, as `actor`, when the task's own rules let `actor` update it. Otherwise the
-    task stays with its owner: the seat lets go of it either way."""
+    """Close a task the seat was waiting on, as `actor`, when the engine lets `actor` close it. Otherwise the task
+    stays with its owner: the seat lets go of it either way."""
     task = H.task(c, task_id)
     if not task or task["status"] not in H.ACTIVE_STATUSES:
         return
-    c.execute("SAVEPOINT cloud_task")
-    try:
-        H.task_update(c, actor, task_id, status="declined", note=note)
-    except H.Refused:
-        c.execute("ROLLBACK TO cloud_task")
-    finally:
-        c.execute("RELEASE cloud_task")
+    H.attempt(c, H.task_close, actor, task_id, note)
 
 
 def _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, first_task):
@@ -301,7 +295,7 @@ def _reserve(store, auth, who, agent, key, digested, seat_id, reports_to, team, 
 
 def _release(c, actor, row):
     """Undo a reservation Tico never kept: the seat goes back as it was (a seat the request made is closed), its first task
-    is declined by `actor` if the task's rules let them, else it stays with its owner, and the key is free again."""
+    is closed by `actor` if the engine lets them, else it stays with its owner, and the key is free again."""
     seat = c.execute("SELECT * FROM seats WHERE id=?", (row["seat_id"],)).fetchone() if row["seat_id"] else None
     if seat is not None and seat["request_state"] == lifecycle.FILING:
         if seat["first_task"]:
@@ -431,7 +425,7 @@ def _busy(state):
 
 def _finish_cancel(c, who, row, name):
     """Inside the transaction after Tico was told: the seat is canceled and closed, and the first task is let go. It is
-    declined when the caller may update it, else it stays with its owner. Nothing here checks the caller's line again: the
+    closed when the caller may close it, else it stays with its owner. Nothing here checks the caller's line again: the
     seat has been `canceling` since before Tico was told, so it cannot have moved."""
     seat_id = row["id"]
     if row["first_task"]:

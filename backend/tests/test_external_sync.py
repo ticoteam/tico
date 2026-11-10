@@ -514,7 +514,7 @@ def test_a_message_goes_to_the_computer_while_the_app_delivers_and_to_the_sync_o
         assert not c.execute("SELECT 1 FROM messages WHERE id=? AND delivered_at IS NULL", (before["id"],)).fetchone()
 
 
-def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_reaches_needs_you(api):
+def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_is_a_task_for_its_person(api):
     from backend.tests.helpers.api import claim
 
     sync(api, designer(messages=[]), token="cara-test")
@@ -563,8 +563,7 @@ def test_what_the_app_shows_is_posted_once_without_echoes_and_a_question_reaches
     ]
     assert get(api, "runners/me/app-delivery", token=computer["token"])["bots"][0]["after"] == "k4"
     report(error={"code": "needs_human", "detail": "Grok asks to approve", "text": "Approve the purchase in Grok?"})
-    needs = get(api, "needs-you", token="cara-test")
-    assert any(i["kind"] == "question" and i["ask"]["body"] == "Approve the purchase in Grok?" for i in needs["items"])
+    assert len(asks_in_needs_you(api, "Approve the purchase in Grok?")) == 1
     other = mac(api, "cara", "Cara's other Mac")
     refused = api.post(
         "/api/v2/runners/me/app-delivery/grok-designer",
@@ -635,19 +634,20 @@ def turn(api, computer, text, reply):
 
 
 def asks_in_needs_you(api, body):
-    return [
-        i
-        for i in get(api, "needs-you", token="cara-test")["items"]
-        if i["kind"] == "question" and i["ask"]["body"] == body
-    ]
+    """The open tasks the Grok Bot filed for Cara with these words."""
+    with api.app.state.store.read() as c:
+        return c.execute(
+            "SELECT id FROM tasks WHERE owner_id='human:cara' AND requester_id=? AND body=? AND status='open'",
+            ("bot:" + bot_id(api, "grok-designer"), body),
+        ).fetchall()
 
 
-def test_a_question_the_app_needs_its_person_for_is_one_question_task_whichever_arrives_first(api):
+def test_a_question_the_app_needs_its_person_for_is_one_task_whichever_arrives_first(api):
     from backend.tests.helpers.api import claim
 
     computer, report = delivering(api)
     needs = lambda text: {"code": "needs_human", "detail": "the bot asked", "text": text}
-    # The turn's reply first, then the error report: the reply stays a chat line, the question is a question task.
+    # The turn's reply first, then the error report: the reply stays a chat line, the question is a task for Cara.
     turn(api, computer, "Send the invoice.", "Which account should I bill?")
     report(error=needs("Which account should I bill?"))
     # The error report first, then the turn's reply: the reply isn't posted again.

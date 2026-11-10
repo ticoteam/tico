@@ -188,7 +188,7 @@ def _other_takes_the_name_the_person_typed_and_refuses_an_empty_one(api, hq):
     assert "Acme Agent" in filed(hq)[0]["message"]
 
 
-def _canceling_tells_tico_and_declines_the_first_task(api, hq):
+def _canceling_tells_tico_and_closes_the_first_task(api, hq):
     seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
     task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
     [(hq_id, secret)] = [(tid, t["secret"]) for tid, t in hq.tickets.items()]
@@ -202,7 +202,7 @@ def _canceling_tells_tico_and_declines_the_first_task(api, hq):
     assert "Canceled" in message and "Devin" in message
     assert _open_ids(api) == [i for i in before if i != seat["id"]]
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == "declined"
+        assert H.task(c, task["id"])["status"] == "closed"
     # A repeat answers the same and tells Tico nothing more.
     again = ask(api, f"seats/{seat['id']}/cancel-request", {})
     assert again["request_state"] == "canceled" and len([r for r in hq.seen[mark:] if r.method == "POST"]) == 1
@@ -492,7 +492,7 @@ def _a_private_first_task_is_listed_only_to_the_people_who_can_read_it(api, hq):
     assert riley["tasks"] == [] and riley["agent"]["id"] == "devin"
 
 
-def _a_manager_who_cancels_does_not_decline_a_private_first_task_they_cannot_read(api, hq):
+def _a_manager_who_cancels_does_not_close_a_private_first_task_they_cannot_read(api, hq):
     riley = as_person(api, "riley")  # on the roster from the environment's people
     seat = ask(api, "cloud-agents/devin/request", {"first_task": "Draft the launch memo", "reports_to": "human:riley"})
     task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
@@ -612,7 +612,7 @@ def test_the_agent_catalog_and_its_requests_story(environment, hq, subtests):
         _the_request_serves_its_steps_and_the_agent_it_asked_for,
         _a_seat_asks_for_an_agent_and_keeps_its_role_and_a_second_request_is_refused,
         _other_takes_the_name_the_person_typed_and_refuses_an_empty_one,
-        _canceling_tells_tico_and_declines_the_first_task,
+        _canceling_tells_tico_and_closes_the_first_task,
         _a_seat_with_a_request_is_canceled_not_closed,
         _a_request_tico_accepted_is_kept_even_if_the_line_changed_meanwhile,
     ):
@@ -651,7 +651,7 @@ def test_refused_adds_requests_and_recoveries_story(environment, hq, subtests):
         _a_member_cannot_request_an_agent_for_a_seat_in_a_team_they_cannot_add_to,
         _a_token_is_not_a_person_and_cannot_request_add_or_cancel,
         _a_private_first_task_is_listed_only_to_the_people_who_can_read_it,
-        _a_manager_who_cancels_does_not_decline_a_private_first_task_they_cannot_read,
+        _a_manager_who_cancels_does_not_close_a_private_first_task_they_cannot_read,
         _a_person_cannot_place_a_request_under_someone_else_and_nothing_is_filed,
         _an_ordinary_seat_action_recovers_a_stale_filing_and_goes_ahead,
         _a_refused_retry_of_a_stale_seatless_request_still_releases_it,
@@ -745,7 +745,7 @@ def test_a_request_a_stopped_process_left_filing_is_released_when_the_store_star
     cloud_agents.release_abandoned(api.app.state.store)
     assert seats(api) == []
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == "declined"
+        assert H.task(c, task["id"])["status"] == "closed"
         assert c.execute("SELECT COUNT(*) FROM seat_requests").fetchone()[0] == 0
     again = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"}, headers=headers)
     assert again["id"] != seat["id"] and [s["id"] for s in seats(api)] == [again["id"]]

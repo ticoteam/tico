@@ -11,6 +11,7 @@ from datetime import date
 import pytest
 
 from backend import hubdb as H
+from backend import task_asks
 from backend.finance import actions as FA
 from backend.finance import budgeting
 from backend.finance import reads as FR
@@ -31,6 +32,7 @@ from backend.tests.helpers.finance_fixtures import (
     spend,
     store,
 )  # noqa: F401
+from backend.tests.helpers.finance_oks import give, send_back
 
 
 def _tree(c, parent_amount=10_000, kids=(("web", 6_000), ("sales", 4_000)), under=None):
@@ -88,7 +90,7 @@ def test_a_child_that_would_pass_its_parent_asks_the_parent_owner(books):
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
         grow = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_001})
         assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
-        H.approval_decide(c, "human:ben", grow.approval_id, "approved")
+        give(c, "human:ben", grow.approval_id)
         done = FA.approval_decided(c, grow.approval_id, AT)
         assert done is not None and done.status == "committed"
         web = SB.versions(c, [kids["web"]])[kids["web"]]
@@ -111,7 +113,7 @@ def test_approving_a_child_that_passes_its_parent_raises_the_parent_by_the_exces
         assert "Software web" in summary and "raise Software" in summary
         grow = act(c, OWNER, "budget_update", change)
         assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
-        H.approval_decide(c, "human:ben", grow.approval_id, "approved")
+        give(c, "human:ben", grow.approval_id)
         done = FA.approval_decided(c, grow.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_500)
@@ -123,7 +125,7 @@ def test_a_declined_raise_changes_neither_budget(books):
         pid, kids = _tree(c)
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
         grow = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_500})
-        H.approval_decide(c, "human:ben", grow.approval_id, "declined")
+        send_back(c, "human:ben", grow.approval_id)
         done = FA.approval_decided(c, grow.approval_id, AT)
         assert done is not None and done.status == "denied"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_000, 10_000)
@@ -137,7 +139,7 @@ def test_a_parent_raise_asks_the_parent_owner_over_the_asker_s_manager(books):
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:dan"}).status == "committed"
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:dan")
-        H.approval_decide(c, "human:dan", grow.approval_id, "approved")
+        give(c, "human:dan", grow.approval_id)
         done = FA.approval_decided(c, grow.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_500)
@@ -151,7 +153,7 @@ def test_a_requester_who_owns_the_parent_is_asked_their_manager_not_themselves(b
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:cara"}).status == "committed"
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
-        H.approval_decide(c, "human:ben", grow.approval_id, "approved")
+        give(c, "human:ben", grow.approval_id)
         done = FA.approval_decided(c, grow.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_500)
@@ -190,7 +192,7 @@ def test_a_new_child_that_passes_its_parent_asks_the_parent_owner_and_raises_it(
         }
         ask = act(c, OWNER, "budget_create", body)
         assert (ask.status, ask.approver) == ("needs_approval", "human:ben")
-        H.approval_decide(c, "human:ben", ask.approval_id, "approved")
+        give(c, "human:ben", ask.approval_id)
         done = FA.approval_decided(c, ask.approval_id, AT)
         assert done is not None and done.status == "committed"
         sales = str(done.result["budget_id"])
@@ -205,7 +207,7 @@ def test_a_raise_asked_for_one_total_is_judged_again_when_the_total_has_moved(bo
         assert grow.status == "needs_approval"
         # Sales come down while the approval waits, so web at 6,500 fits without a raise: nobody needs to decide it.
         assert act(c, OWNER, "budget_update", {"budget_id": kids["sales"], "amount": 3_000}).status == "committed"
-        H.approval_decide(c, "human:ben", grow.approval_id, "approved")
+        give(c, "human:ben", grow.approval_id)
         done = FA.approval_decided(c, grow.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_000)
@@ -219,12 +221,12 @@ def test_a_raise_that_no_longer_fits_is_asked_again_of_the_manager_not_the_paren
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:dan")
         assert act(c, OWNER, "budget_update", {"budget_id": kids["sales"], "amount": 3_000}).status == "committed"
-        H.approval_decide(c, "human:dan", grow.approval_id, "approved")
+        give(c, "human:dan", grow.approval_id)
         # No raise is needed now, so Dan's approval is void. The raise is still a raise in the current period, which
         # goes to the web budget's owner (§12), not to Cara's manager.
         again = FA.approval_decided(c, grow.approval_id, AT)
         assert (again.status, again.approver) == ("needs_approval", OWNER)
-        H.approval_decide(c, OWNER, again.approval_id, "approved")
+        give(c, OWNER, again.approval_id)
         done = FA.approval_decided(c, again.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_000)
@@ -239,13 +241,13 @@ def test_a_raise_that_grows_while_it_waits_is_asked_again_for_the_larger_raise(b
         assert (web.status, web.approver) == ("needs_approval", "human:dan")
         sales = act(c, OWNER, "budget_update", {"budget_id": kids["sales"], "amount": 4_300})
         assert (sales.status, sales.approver) == ("needs_approval", "human:dan")
-        H.approval_decide(c, "human:dan", sales.approval_id, "approved")
+        give(c, "human:dan", sales.approval_id)
         assert FA.approval_decided(c, sales.approval_id, AT).status == "committed"  # parent 10,300
-        H.approval_decide(c, "human:dan", web.approval_id, "approved")
+        give(c, "human:dan", web.approval_id)
         # Sales grew while this waited, so web at 6,500 now needs the parent at 10,800, not the 10,500 asked for.
         again = FA.approval_decided(c, web.approval_id, AT)
         assert (again.status, again.approver) == ("needs_approval", "human:dan")
-        H.approval_decide(c, "human:dan", again.approval_id, "approved")
+        give(c, "human:dan", again.approval_id)
         done = FA.approval_decided(c, again.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, kids["sales"]).amount, _latest(c, pid).amount) == (
@@ -262,7 +264,7 @@ def test_a_scoped_requesters_approval_never_carries_the_raise_amount(books):
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert grow.status == "needs_approval"
         # The raise is 10,500, and 10,500 less Cara's 6,500 would show sales' 4,000. Neither she nor Dan's view holds it.
-        payload = json.dumps(H.approval(c, grow.approval_id)["payload"])
+        payload = json.dumps(task_asks.grant(c, grow.approval_id)["content"])
         assert "raise_to" not in payload and "raise_check" not in payload
         assert "10500" not in payload and "105.00" not in payload
 
@@ -781,7 +783,7 @@ def test_a_rule_that_names_the_finance_approver_never_lets_them_approve_their_ow
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", OWNER)
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_000, 10_000)
-        H.approval_decide(c, OWNER, grow.approval_id, "approved")
+        give(c, OWNER, grow.approval_id)
         done = FA.approval_decided(c, grow.approval_id, AT)
         assert done is not None and done.status == "committed"
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_500)

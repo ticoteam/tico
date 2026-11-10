@@ -165,9 +165,9 @@ def test_every_failure_lets_the_text_through_with_only_the_patterns_warning(api,
     elif case == "shape":
         engine.answers = {"kind": {"type": "choice", "choice": "none", "confidence": 0.9}}
     elif case == "timeout":
-        from backend import idea_triage
+        from backend import screening
 
-        monkeypatch.setattr(idea_triage, "DEADLINE", 0.05)
+        monkeypatch.setattr(screening, "DEADLINE", 0.05)
         engine.delay = 0.3
     elif case == "budget":
         api.app.state.store.settings.decisions_daily_calls_bot = 0

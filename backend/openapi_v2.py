@@ -6463,7 +6463,6 @@ SCHEMAS.update(
                 "words": "s",
                 "right": "s",
                 "live": "b",
-                "approval_kind": "s",
                 "fields": items(obj({"name": "s", "type": "s", "required": "b", "words": "s"})),
             },
             required=[],

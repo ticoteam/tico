@@ -2468,7 +2468,6 @@ class AccessRules(Contract):
     bot_reports_direct: bool | None = None
     bots_go_ahead: bool | None = None
     support_access: bool | None = None
-    stale_review: bool | None = None
     topic_fresh: bool | None = None
     managers_manage_reports: bool | None = None
     org_rule_checks: bool | None = None
@@ -2865,7 +2864,7 @@ class SystemRoutineUpdate(Contract):
     at: str | None = Field(default=None, max_length=5)
 
 
-MaintenanceStepKey = Literal["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+MaintenanceStepKey = Literal["collect", "clean_up", "check_health", "learn", "suggest", "update", "dream"]
 
 
 class MaintenanceStepChange(Contract):

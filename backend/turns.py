@@ -151,18 +151,15 @@ SHELL_PROGRAMS = {
 HUB_PHRASES = {
     "task create": "Filing a task",
     "task close": "Closing a task",
-    "task bulk": "Changing tasks",
+    "task done": "Finishing a task",
+    "task move": "Moving a task",
+    "task reassign": "Handing a task over",
     "task list": "Listing tasks",
     "task show": "Reading a task",
     "task update": "Updating a task",
     "task comment": "Commenting on a task",
-    "task question": "Asking a teammate",
-    "needs you": "Reading the Needs you list",
-    "approval list": "Reading approvals",
-    "approval show": "Reading approvals",
-    "approval read back": "Preparing approvals for your yes",
-    "approval approve": "Approving",
-    "approval decline": "Declining approvals",
+    "task ask": "Asking a teammate",
+    "task answer": "Answering an ask",
     "message list": "Reading messages",
     "message send": "Sending a message",
     "conversation show": "Reading the chat",
@@ -207,7 +204,7 @@ HUB_PHRASES = {
 
 def hub_words(text):
     """A hub call's CLI words, lowercased and split on anything but letters and digits, from a shell summary
-    (`hub approval read-back`) or an MCP tool name (`mcp__hub__hub_approval_read_back`). None for any other tool."""
+    (`hub task show`) or an MCP tool name (`mcp__hub__hub_task_show`). None for any other tool."""
     words = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
     if words[:1] == ["mcp"]:
         words = words[1:]
