@@ -969,7 +969,7 @@ class SkillFile(unittest.TestCase):
         examples = re.findall(r"`(hub_[a-z_]+)`[^`]{0,40}`(\{[^`]*\})`", text)
         self.assertGreaterEqual(
             {name for name, _ in examples},
-            {"hub_message_mark_read", "hub_conversation_show", "hub_message_send", "hub_task_update"},
+            {"hub_message_mark_read", "hub_conversation_show", "hub_message_send", "hub_task_show", "hub_task_done"},
         )
         for name, example in examples:
             schema = hubtools.BY_NAME[name]["inputSchema"]
