@@ -789,8 +789,9 @@ class Scheduler:
             with SR.recording(self.store, "finance_upkeep", failures, "finance_approvals") as run:
                 from .finance import actions as finance
 
-                with self.store.transaction() as c:
-                    ended = finance.approvals_sweep(c, stamp(at))
+                # Money actions end here, as on the OK route: the commit reaches the disk before the pass goes on.
+                with self.store.transaction(durable=True) as c:
+                    ended = finance.ok_sweep(c, stamp(at))
                 run.did(
                     SR.words_of(ended, "approved action finished", "Nothing due", "approved actions finished"),
                     quiet=not ended,

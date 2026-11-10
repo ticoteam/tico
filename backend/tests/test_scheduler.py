@@ -29,6 +29,33 @@ def test_failed_computer_retirement_records_failure_and_runs_the_remaining_clean
     assert any(record.name == "tico.scheduler" and record.exc_info for record in caplog.records)
 
 
+def test_the_finance_sweep_commits_its_money_actions_durably(api, monkeypatch):
+    """The hourly Finance sweep ends actions whose OK was given, as the OK route does: its commit reaches the disk
+    before the pass goes on (store.transaction(durable=True))."""
+    from contextlib import contextmanager
+
+    from backend.finance import actions as finance
+
+    store = api.app.state.store
+    real = store.transaction
+    opened, seen = [], []
+
+    def sweep(c, at=None, most=200):
+        seen.append(opened[-1])
+        return []
+
+    @contextmanager
+    def transaction(durable=False):
+        opened.append(durable)
+        with real(durable) as c:
+            yield c
+
+    monkeypatch.setattr(finance, "ok_sweep", sweep)
+    monkeypatch.setattr(store, "transaction", transaction)
+    Scheduler(store, api.app.state.execution).tick()
+    assert seen == [True], "the sweep ran once, in a durable transaction"
+
+
 def test_saved_nightly_learnings_never_runs_beside_maintenance(api, monkeypatch):
     import json
     from backend import learnings, maintenance
