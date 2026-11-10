@@ -1593,7 +1593,13 @@ def create_app(settings=None):
         # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
         rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
         value.update(H.task_view(c, row["id"], viewer, rule) or {})
-        value["parent_id"] = TR.parent_of(c, row["id"])
+        # The task above it by id only to a reader of that task: anyone else sees "a private task" under relations.
+        parent = TR.parent_of(c, row["id"])
+        value["parent_id"] = (
+            parent
+            if parent and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({rule})", (parent,)).fetchone()
+            else None
+        )
         value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
         value["roles"] = TRo.roles_of(c, row["id"])
         from .roadmaps import stats, EMPTY_STATS
@@ -1665,10 +1671,13 @@ def create_app(settings=None):
                 ids,
             )
         }
+        # The task above each row, by id only where this reader reads it (the rows' own rule).
         parents = {
             r[0]: r[1]
             for r in c.execute(
-                f"SELECT from_task, to_task FROM task_relations WHERE kind='parent' AND from_task IN ({marks})", ids
+                f"SELECT r.from_task, r.to_task FROM task_relations r WHERE r.kind='parent' AND r.from_task IN ({marks}) "
+                f"AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=r.to_task AND ({visible_sql}))",
+                ids,
             )
         }
         relations = TR.grouped(c, ids, visible_sql)
