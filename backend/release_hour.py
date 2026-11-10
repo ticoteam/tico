@@ -52,6 +52,22 @@ def due(cfg, at):
     return best
 
 
+def following(cfg, at):
+    """The first release hour after `at` (`instant`), or None while the schedule is off."""
+    if not cfg["on"]:
+        return None
+    zone = RS.zone()
+    today = at.astimezone(zone).date()
+    points = (instant(today + timedelta(days=n), text, zone) for n in range(3) for text in cfg["times"])
+    return min((p for p in points if p > at), default=None)
+
+
+def next_wake(c, at: datetime):
+    """When a sleeping server must be up for the release hour: `at` while a due slot has not fired, else the next
+    hour (`following`), or None while the schedule is off."""
+    return at if unfired(c, at) else following(RS.load(c), at)
+
+
 def due_slot(cfg, at):
     """The due slot's instant (`due`), or None."""
     found = due(cfg, at)
