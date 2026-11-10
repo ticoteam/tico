@@ -80,7 +80,7 @@ credentials for another account, or another `--aws-region`, is refused before an
 before this takes the account it runs in once its tags check out). Without a saved install that records them, destroy
 fills nothing in by default: it deletes only with `--asset-prefix`, `--name` and `--aws-region` all given.
 
-Destroy deletes the instance and its data with it, and leaves your DNS records alone. With `--dns` (and `--domain`) it
+Destroy deletes the instance and its data with it, and leaves your DNS records alone. It refuses to terminate an instance that would take with it a volume someone attached without setup's tags (DeleteOnTermination on). With `--dns` (and `--domain`) it
 first deletes the domain's A and AAAA records in Route 53 too, but only those that still point at this server's
 addresses; a record someone has pointed elsewhere is left and named. If Route 53 can't be read, nothing at all is
 deleted, so running it again is safe.

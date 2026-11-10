@@ -1426,6 +1426,7 @@ def destroy(args, io: IO, deps: Deps) -> int:
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")
+    awsmod.refuse_foreign_volumes(ec2, found.get("instance", []), name, names)
     if not had_account and not (args.name and given_prefix and args.aws_region):
         # No saved install says which account, region, prefix and name are its own: never filled in by a default.
         raise MissingInput(
@@ -1454,7 +1455,9 @@ def destroy(args, io: IO, deps: Deps) -> int:
         client, zid, sets = records
         route53.delete(client, zid, sets, names)  # first: the name never points at an address AWS may give someone else
         io.say("  DNS records deleted.")
-    awsmod.destroy(ec2, iam, ssm, found, say=io.say, sleep=deps.sleep, dns_done=records is not None, names=names)
+    awsmod.destroy(
+        ec2, iam, ssm, found, say=io.say, sleep=deps.sleep, dns_done=records is not None, names=names, name=name
+    )
     return 0
 
 

@@ -1146,3 +1146,22 @@ def test_the_plan_bucket_setup_made_but_could_not_tag_is_finished_with_its_claim
         d.ensure_plan_bucket(s3, "us-east-1")  # no claim: never adopted
     d.ensure_plan_bucket(s3, "us-east-1", claims="tico-setup-plans-x@2026-11-10T00:00:00Z")
     assert aws.DEFAULT_NAMES.is_ours(s3.tagsets["tico-setup-plans-x"], "acme")
+
+
+def test_destroy_never_terminates_an_instance_that_would_take_a_volume_setup_did_not_make():
+    d, ec2, iam, ssm = two_installs()
+    attached = lambda dot: [{"InstanceId": "i-tico", "DeleteOnTermination": dot}]  # noqa: E731
+    ec2.volumes = [
+        {"VolumeId": "vol-root", "Tags": TICO_TAGS, "Attachments": attached(True)},
+        {"VolumeId": "vol-prod", "Tags": PRODUCTION, "Attachments": attached(True)},
+        {"VolumeId": "vol-kept", "Tags": PRODUCTION, "Attachments": attached(False)},  # survives termination
+    ]
+    argv = ["destroy", "--name", "hotmic", "--asset-prefix", "tico", "--aws-region", "us-east-1", "--yes"]
+    code, out = go(argv, deps=d)
+    assert code == 2 and "vol-prod" in out and "vol-kept" not in out and "vol-root" not in out, out
+    assert deleted(ec2, iam, ssm)["instances"] == []
+    with pytest.raises(MissingInput, match="vol-prod"):  # and again right before the terminate call itself
+        aws.destroy(ec2, iam, ssm, {"instance": ["i-tico"]}, say=print, name="hotmic")
+    assert deleted(ec2, iam, ssm)["instances"] == []
+    ec2.volumes[1]["Attachments"] = attached(False)
+    assert go(argv, deps=d)[0] == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-tico"]

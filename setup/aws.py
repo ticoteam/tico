@@ -844,6 +844,30 @@ def addresses(ec2, name: str, names: Names = DEFAULT_NAMES) -> set[str]:
     return out
 
 
+def foreign_volumes(ec2, instance_ids: list[str], name: str, names: Names = DEFAULT_NAMES) -> list[str]:
+    """The volumes that terminating these instances would delete (DeleteOnTermination) but that lack both tags: someone
+    attached them, so terminating would delete what setup did not make."""
+    if not instance_ids:
+        return []
+    r = ec2.describe_volumes(Filters=[{"Name": "attachment.instance-id", "Values": list(instance_ids)}])
+    return [
+        v["VolumeId"]
+        for v in r["Volumes"]
+        if any(a.get("InstanceId") in instance_ids and a.get("DeleteOnTermination") for a in v.get("Attachments", []))
+        and not names.is_ours(v.get("Tags"), name)
+    ]
+
+
+def refuse_foreign_volumes(ec2, instance_ids: list[str], name: str, names: Names = DEFAULT_NAMES) -> None:
+    vols = foreign_volumes(ec2, instance_ids, name, names)
+    if vols:
+        raise MissingInput(
+            f"Terminating {', '.join(instance_ids)} would also delete {', '.join(vols)}, which this setup did not make "
+            "(attached with DeleteOnTermination, without its tags); refusing. Detach it, or turn off its "
+            "DeleteOnTermination, then run destroy again."
+        )
+
+
 def destroy(
     ec2,
     iam,
@@ -853,8 +877,11 @@ def destroy(
     sleep: Callable[[float], None] = time.sleep,
     dns_done: bool = False,
     names: Names = DEFAULT_NAMES,
+    name: str = "",
 ) -> None:
     if found.get("instance"):
+        if name:  # read again right before the terminate call
+            refuse_foreign_volumes(ec2, found["instance"], name, names)
         ec2.terminate_instances(InstanceIds=found["instance"])
         say("  waiting for the instance to terminate ...")
         ec2.get_waiter("instance_terminated").wait(InstanceIds=found["instance"])

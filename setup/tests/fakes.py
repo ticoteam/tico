@@ -101,6 +101,7 @@ class FakeEC2:
 
     def __init__(self, extra_instances=(), extra_sgs=()):
         self.calls, self.instances, self.sgs, self.eips = [], list(extra_instances), list(extra_sgs), []
+        self.volumes = []  # {"VolumeId", "Tags", "Attachments": [{"InstanceId", "DeleteOnTermination"}]}
 
     def _rec(self, name, **kw):
         self.calls.append((name, kw))
@@ -116,6 +117,10 @@ class FakeEC2:
 
     def describe_addresses(self, Filters):
         return {"Addresses": self.eips}
+
+    def describe_volumes(self, Filters):
+        (ids,) = [f["Values"] for f in Filters if f["Name"] == "attachment.instance-id"]
+        return {"Volumes": [v for v in self.volumes if any(a["InstanceId"] in ids for a in v["Attachments"])]}
 
     def describe_vpcs(self, Filters):
         return {"Vpcs": [{"VpcId": "vpc-1"}]}
@@ -157,6 +162,9 @@ class FakeEC2:
             kw = {**kw, "UserData": gzip.decompress(self.raw_user_data).decode()}
         self._rec("run_instances", **kw)
         self.instances.append({"InstanceId": "i-1", "Tags": kw["TagSpecifications"][0]["Tags"]})
+        vol = [t["Tags"] for t in kw["TagSpecifications"] if t["ResourceType"] == "volume"]
+        attached = [{"InstanceId": "i-1", "DeleteOnTermination": True}]
+        self.volumes.append({"VolumeId": "vol-1", "Tags": vol[0] if vol else [], "Attachments": attached})
         return {"Instances": [{"InstanceId": "i-1"}]}
 
     def get_waiter(self, name):
