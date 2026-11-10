@@ -8,6 +8,7 @@ goes. It changes nothing in the engine."""
 import argparse
 import cProfile
 import datetime as dt
+import gc
 import io
 import pstats
 import random
@@ -150,14 +151,21 @@ def measure(
         Wd.METER.trace = []
         before = Wd.METER.count
         profiler = cProfile.Profile() if profile else None
-        started, cpu = time.perf_counter(), time.process_time()
-        if profiler:
-            profiler.enable()
-        with world.tx() as c:
-            done = NS.check(c)
-        if profiler:
-            profiler.disable()
-        seconds, cpu = time.perf_counter() - started, time.process_time() - cpu
+        # Python's collector is off for the pass: its sweeps grow with everything else alive in the process (a test
+        # run's other worlds), not with the pass, and made the same pass take 1x to 3x as long.
+        gc.collect()
+        gc.disable()
+        try:
+            started, cpu = time.perf_counter(), time.process_time()
+            if profiler:
+                profiler.enable()
+            with world.tx() as c:
+                done = NS.check(c)
+            if profiler:
+                profiler.disable()
+            seconds, cpu = time.perf_counter() - started, time.process_time() - cpu
+        finally:
+            gc.enable()
         statements = Wd.METER.count - before
         trace, Wd.METER.trace = Wd.METER.trace, None
         shapes = Counter(_shape(s) for s in trace)
