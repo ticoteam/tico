@@ -141,8 +141,8 @@ def test_one_assistant_turn_makes_every_write_the_person_could_make_with_no_card
     )
 
     # A turn sets a direct setting and a confirm setting.
-    token = turn(api, "Turn off the stale review and the Apollo rule")
-    set_setting(api, token, "team.rules.stale_review", False)
+    token = turn(api, "Turn off topic upkeep and the Apollo rule")
+    set_setting(api, token, "team.rules.topic_fresh", False)
     set_setting(api, token, "team.rules.botops_direct", False)
 
     # A turn updates an automation to disabled and to a schedule, then restores an earlier version of another.

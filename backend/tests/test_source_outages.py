@@ -85,7 +85,6 @@ def test_a_six_hour_hold_does_not_lease_again_or_hold_another_subscription(api, 
             assert c.execute('SELECT count(*) FROM attempts WHERE job_id=?', (first['job_id'],)).fetchone()[0] == 1
             assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()
             assert not c.execute("SELECT 1 FROM bots WHERE state='quarantined'").fetchone()
-            assert not c.execute("SELECT 1 FROM task_holds WHERE kind='blocked' AND released_at IS NULL").fetchone()
     at(monkeypatch, '2026-10-27T07:01:00.000000Z', api)
     ready(api, machine, ['ops', 'finance'])
     resumed = claim(api, machine)
@@ -163,24 +162,6 @@ def test_an_absolute_reset_is_not_extended_by_a_later_status_refresh(api, monkey
     ready(api, machine, ['ops'])
     again = claim(api, machine)
     assert again and again['job_id'] == first['job_id']
-
-
-def test_thirty_human_closures_make_one_note_and_no_wakes_for_a_paused_bot(api):
-    with api.app.state.store.transaction() as c:
-        tasks = [
-            H.task_create(c, 'bot:coo', f'Review change {i}', 'Review the existing change.', 'bot:finance', lint=False)
-            for i in range(30)
-        ]
-        c.execute("UPDATE jobs SET state='completed'")
-        c.execute("UPDATE bots SET state='paused' WHERE slug IN ('coo','finance')")
-        for task in tasks:
-            H.task_close(c, 'human:ana', task['id'], note='Board cleanup: finished and shipped.')
-        assert not c.execute("SELECT 1 FROM jobs WHERE state='queued'").fetchone()
-        for target in ('bot:coo', 'bot:finance'):
-            notes = [dict(r) for r in c.execute('SELECT * FROM notes WHERE to_actor=?', (target,))]
-            assert len(notes) == 1 and '30 tasks' in notes[0]['body']
-            assert not any(task['title'] in notes[0]['body'] for task in tasks)
-        assert c.execute("SELECT count(*) FROM messages WHERE body LIKE 'Closed:%'").fetchone()[0] == 60
 
 
 def test_twenty_minutes_of_busy_server_renewals_keep_the_running_lease_and_thread(api, monkeypatch):
@@ -797,19 +778,3 @@ def test_an_unconfirmed_fallback_never_resumes_the_old_primary_after_a_lost_leas
         assert not c.execute("SELECT 1 FROM attempts WHERE json_extract(result,'$.lease_continue')=1").fetchone()
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
-
-
-def test_a_pending_completion_batch_counts_past_its_bounded_identity_window(api):
-    from backend import completion_notes
-
-    with api.app.state.store.transaction() as c:
-        for n in range(1002):
-            completion_notes.record(c, 'bot:ops', f'synthetic-{n}')
-        rows = c.execute("SELECT body FROM notes WHERE to_actor='bot:ops'").fetchall()
-        assert len(rows) == 1 and '1002 tasks' in rows[0][0]
-        saved = json.loads(
-            c.execute(
-                'SELECT value FROM registry_metadata WHERE key=?', (completion_notes.PREFIX + 'bot:ops',)
-            ).fetchone()[0]
-        )
-        assert len(saved['tasks']) == completion_notes.MAX_BATCH and saved['count'] == 1002

@@ -83,7 +83,7 @@ def test_a_check_subtask_keeps_its_check_model_over_the_tasks_own_model(api):
             "body": "Read it.",
             "check_model": "grok",
             "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
