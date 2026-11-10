@@ -287,9 +287,6 @@ function ageShort(iso: string | null | undefined) {
   if (s < 86400 * 7) return `${Math.round(s / 86400)}d`;
   return new Date(t).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
 }
-// A row reads one short age: how long since the task last moved ("2h"), so a stale one stands out without a second
-// number on every row. The tooltip has when it was opened and last updated.
-const taskAge = (t: TaskRow | null | undefined) => ageShort(t?.updated_at || t?.created_at);
 function taskAgeTitle(t: TaskRow | null | undefined) {
   return [t?.created_at ? `Open ${fmt(t.created_at)}` : '',
     t?.updated_at || t?.created_at ? `Updated ${fmt(t.updated_at || t.created_at)}` : ''].filter(Boolean).join(' · ');

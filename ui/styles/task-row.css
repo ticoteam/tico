@@ -1,0 +1,34 @@
+/* ui/styles/task-row.css — a task row in every look (ui/app/task-row.ts, docs/pipelines-v3.md S1): one line, mark,
+   title, Late, buttons, avatar, age. */
+.tk-row{display:flex;align-items:center;gap:8px;min-height:34px;padding:4px 10px;border-radius:6px;cursor:pointer;color:var(--ink)}
+.tk-row:hover,.tk-row:focus-visible{background:var(--hover)}
+.tk-row .tk-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-row-dim{color:var(--muted)}
+.tk-after{display:flex;gap:6px;flex:none}
+.tk-who{flex:none;display:inline-flex;width:18px;justify-content:center}
+.tk-age{flex:none;min-width:34px;text-align:right;color:var(--muted);font-size:var(--t-xs);font-variant-numeric:tabular-nums}
+
+/* The mark: a spinner (a bot is working), an amber "!" (it needs a person), a red dot (it can't run), or an empty
+   space of the same width. */
+.tk-mark{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px}
+.tk-mark-working::before{content:"";width:10px;height:10px;border:2px solid var(--run-bg);border-top-color:var(--run);border-radius:50%;animation:tk-turn .9s linear infinite}
+.tk-mark-person{border-radius:50%;background:var(--wait);color:var(--bg);font-size:10px;font-weight:700;line-height:1}
+.tk-mark-cant::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--fail)}
+@keyframes tk-turn{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.tk-mark-working::before{animation:none}}
+
+.tk-late{flex:none;padding:0 6px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-2xs);line-height:16px}
+
+/* A task in a column: a small one-line box; the mark comes after the title. */
+.tk-card{display:flex;align-items:center;gap:6px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);cursor:pointer}
+.tk-card:hover,.tk-card:focus-visible{background:var(--hover)}
+.tk-card .tk-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tk-card .tk-who:empty{display:none}
+
+/* A group heading: small, upper case, dimmed, the count beside it. */
+.tk-group{display:flex;gap:6px;align-items:baseline;margin:14px 10px 4px;color:var(--muted);font-size:var(--t-2xs);letter-spacing:var(--track-caps);text-transform:uppercase}
+.tk-group .n{font-variant-numeric:tabular-nums}
+
+@media (max-width:640px){
+  .tk-row .tk-after,.tk-row .tk-who{display:none}
+}
