@@ -409,19 +409,6 @@ def refused(c, identity, exc, savepoint="domain_write"):
         # Not a mistake to count toward quarantine: what stays the owner's becomes their proposal instead.
         strategy_acts.settle(c, exc)
         return Problem(exc.rule, exc.detail, 409)
-    # Gate notifications survive the refused move, while its step and reviewer wake roll back.
-    if getattr(exc, "review_gate", None):
-        from . import review_gate
-
-        review_gate.notify(c, identity.actor, exc.review_gate)
-        # A refused review move is retried by Tico once what refused it clears (backend/move_retry.py).
-        from . import move_retry
-
-        move_retry.remember(c, identity.actor, exc.review_gate)
-    if notice := getattr(exc, "task_hold", None):
-        from .task_blocked import hold
-
-        hold(c, notice["task"], notice["reason"], notice["kind"])
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
@@ -439,14 +426,20 @@ def refused(c, identity, exc, savepoint="domain_write"):
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
-    # A stage's cap or On ice refuses the move (pipeline_engine._room): it is not allowed now, so 409.
-    if exc.rule in ("stage_full", "on_ice"):
+    # The engine's refusals (a rule that starts with `task_`) are 409: the task is not where the caller thought, or
+    # the move is not allowed now. What is missing, the commands allowed next and the task's version ride in `extra`
+    # (docs/dev/pipelines-v3-cutover.md, "HTTP").
+    if str(exc.rule).startswith("task_"):
         status = 409
+    elif exc.rule == "not-found":
+        status = 404
     elif exc.rule in ("identity", "label", "escape", "quarantined", "close"):
         status = 403
     else:
         status = 422
-    return Problem(exc.rule, exc.detail, status, retryable=getattr(exc, "retryable", False))
+    return Problem(
+        exc.rule, exc.detail, status, retryable=getattr(exc, "retryable", False), extra=getattr(exc, "extra", None)
+    )
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
@@ -1288,9 +1281,6 @@ class Store:
             from . import memory_history as _memory_history
 
             c.executescript(_memory_history.SCHEMA)
-            from . import stale_review as _stale_review
-
-            c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
 
             c.executescript(_stall_triage.SCHEMA)
@@ -1315,18 +1305,6 @@ class Store:
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
             _rules.seed_dev(c)
-            from . import check_pools as _check_pools
-
-            _check_pools.ensure(c)
-            _check_pools.seed(c)
-            from . import step_flow as _step_flow
-
-            _step_flow.ensure(c)
-            _step_flow.seed(c)
-            from . import pipeline_engine as _pipeline_engine
-
-            _pipeline_engine.boot(c)  # prefixes D and P, default Warn after, open stage visits
-            _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
 
             c.executescript(_owner_link.SCHEMA)
@@ -2090,10 +2068,6 @@ class Store:
                 from .worktree_waits import ensure as ensure_worktree_waits
 
                 ensure_worktree_waits(c)
-                # Milestone waits (backend/milestone_waits.py). Unversioned like the trash.
-                from .milestone_waits import ensure as ensure_milestone_waits
-
-                ensure_milestone_waits(c)
                 # Failed-run back-off and run budgets (backend/run_backoff.py, backend/turn_budgets.py). Unversioned
                 # like the trash: an older release never reads the tables.
                 from .run_backoff import ensure as ensure_run_backoff
@@ -2123,10 +2097,6 @@ class Store:
                 from .strategy import ensure as ensure_strategy
 
                 ensure_strategy(c)
-                # The built-in Marketing task type marketing ideas are filed as (backend/marketing_tasks.py).
-                from .marketing_tasks import ensure as ensure_marketing
-
-                ensure_marketing(c)
                 # Org rules and their due dates (backend/org_rules.py, backend/rule_due.py): sources, rules, holds, due
                 # dates and their status rows. Unversioned the same way: an older release never reads the tables.
                 from .org_rules import ensure as ensure_org_rules

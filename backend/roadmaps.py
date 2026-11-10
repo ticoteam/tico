@@ -25,11 +25,6 @@ def migrate(c):
     H.add_column(c, 'tasks', 'public_title', "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, 'tasks', 'public_summary', "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, 'tasks', 'size', 'REAL')
-    steps_fresh = 'public_name' not in {r[1] for r in c.execute('PRAGMA table_info(task_steps)')}
-    H.add_column(c, 'task_steps', 'public_name', "TEXT NOT NULL DEFAULT ''")
-    if steps_fresh:
-        c.execute('UPDATE task_steps SET public_name=name')
-    H.add_column(c, 'task_types', 'default_visibility', "TEXT NOT NULL DEFAULT 'private'")
     H.add_column(c, 'messages', 'public', 'INTEGER NOT NULL DEFAULT 0')
     H.add_column(c, 'messages', 'hidden_at', 'TEXT')
     c.execute(
@@ -43,7 +38,6 @@ def migrate(c):
     if c.execute(
         "INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_explicit_public_text','true')"
     ).rowcount:
-        c.execute("UPDATE task_types SET default_visibility='private' WHERE role='product-roadmap'")
         c.execute(
             "UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
             "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)"

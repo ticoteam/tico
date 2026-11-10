@@ -189,7 +189,7 @@ _MEETING_ACCESS = "OLD.review_state IS NOT NEW.review_state OR OLD.owner IS NOT 
 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
 # change (and on a delete), so a delta read says `gone` only to someone who could have seen it.
-_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers,OLD.type_id)"  # task_reads._could_read
+_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers,OLD.pipeline_id)"  # task_reads._could_read
 _MEDIA = ("width", "height", "thumb_blob_id", "poster_blob_id")
 _MEDIA_TASKS = (
     "SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
@@ -378,8 +378,8 @@ TRIGGERS = [
             "tasks",
             "update",
             "NEW.id",
-            # A pipeline move is a change of who reads the ticket too (a members-only pipeline's rule), so it keeps a snapshot.
-            ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers', 'type_id')} THEN {_WAS} END",
+            # A task's pipeline is part of who reads it (a private pipeline), so a change of it keeps a snapshot too.
+            ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers', 'pipeline_id')} THEN {_WAS} END",
         )
         + _needs(
             "task",

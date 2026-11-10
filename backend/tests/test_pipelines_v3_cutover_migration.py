@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 from backend import migrations
+from backend.tests.helpers.migrations import boot, snapshot
 
 CUTOVER = importlib.import_module("backend.migrations.20261110054000_pipelines_v3_cutover")
 V3 = importlib.import_module("backend.migrations.20261110010000_pipelines_v3")
@@ -140,3 +141,37 @@ def test_it_is_a_file_the_runner_knows_and_runs_last():
     versions = [m.version for m in migrations.files()]
     assert versions[-1] == "20261110054000_pipelines_v3_cutover"
     assert CUTOVER.FOREIGN_KEYS_OFF is True
+
+
+def test_a_new_database_starts_on_the_new_shape_and_a_second_start_changes_nothing(tmp_path):
+    """The whole start (Store.initialize), not the migration alone: nothing that runs after the migrations brings an
+    old table or column back, the constraints are the new ones, and General is there."""
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+    with sqlite3.connect(path) as c:
+        assert not _tables(c) & set(CUTOVER.OLD_TABLES)
+        assert not _columns(c) & set(CUTOVER.DEAD_COLUMNS)
+        assert {r[2] for r in c.execute("PRAGMA foreign_key_list(tasks)")} == {"pipelines", "stages"}
+        on_tasks = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE tbl_name='tasks' AND type='trigger'")}
+        assert {
+            "tasks_move_only",
+            "tasks_enter_only",
+            "tasks_body_work_revision",
+            "status_values_tasks_status_ins",
+            "status_values_tasks_status_upd",
+            "changes_tasks_insert",
+            "changes_tasks_update",
+            "changes_tasks_delete",
+            "read_deps_task_update",
+            "row_clock_parties_update",
+        } <= on_tasks
+        with pytest.raises(sqlite3.IntegrityError, match="tasks.status: invalid value|a new task starts open"):
+            c.execute("INSERT INTO tasks (id, status) VALUES ('t1', 'doing')")
+        assert c.execute("SELECT id FROM pipelines").fetchall() == [("general",)]
+        stages = c.execute("SELECT id, kind FROM stages ORDER BY position, id").fetchall()
+        assert set(stages) == {("general-todo", "work"), ("general-done", "done"), ("general-closed", "closed")}
+        assert c.execute("SELECT stage_id, kind FROM requirements").fetchall() == [("general-todo", "owner_done")]
+        assert c.execute("PRAGMA foreign_key_check").fetchall() == []
