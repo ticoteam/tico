@@ -273,14 +273,35 @@ def test_a_by_hand_stage_may_have_requirements_or_none(c):
     assert PS.check(c, record) == []
 
 
+def test_filing_into_a_pipeline_is_refused_until_it_is_built_and_a_stage_that_has_it_moves_tasks_in(c):
+    PS.ensure_presets(c)
+    record = _ops()
+    _stage(record).update(on_enter={"file_into": "general"}, requirements=[{"kind": "linked_done"}])
+    assert PS.check(c, record) == ["Filing into a pipeline comes with the Product pipeline (on Intake)."]
+    with _refused("task_settings", "Filing into a pipeline comes with the Product pipeline"):
+        PS.save(c, ANA, record)
+    # A stage saved with it before this refusal: a move into it goes through and files nothing.
+    saved = PS.save(c, ANA, _ops())
+    second = saved["stages"][1]["id"]
+    c.execute("UPDATE stages SET on_enter=? WHERE id=?", ('{"file_into": "general"}', second))
+    row = X.new_task(c, ANA, "Order the chairs", saved["id"])
+    X.say_done(c, row, ANA)
+    moved = E.move(c, row["id"], E.NEXT, ANA)
+    assert moved["stage_id"] == second
+    assert c.execute("SELECT COUNT(*) FROM links WHERE from_task_id=?", (row["id"],)).fetchone()[0] == 0
+
+
 def test_handoffs_that_form_a_loop_are_refused_across_pipelines(c):
     PS.ensure_presets(c)
     product = _ops(name="Product", prefix="P")
-    _stage(product).update(on_enter={"file_into": "general"}, requirements=[{"kind": "linked_done"}])
+    _stage(product).update(requirements=[{"kind": "linked_done"}])
     product = PS.save(c, ANA, product)
+    # Saved before filing was refused (R7): the handoff is in the table, and still counts toward a loop.
+    c.execute("UPDATE stages SET on_enter=? WHERE id=?", ('{"file_into": "general"}', product["stages"][0]["id"]))
     general = PS.read(c, "general")
     _stage(general).update(on_enter={"file_into": product["id"]}, requirements=[{"kind": "linked_done"}])
-    with _refused("task_settings", "would loop"):
+    assert any("would loop" in p for p in PS.check(c, general))
+    with _refused("task_settings"):
         PS.save(c, ANA, general)
     assert PS.read(c, "general")["stages"][0]["on_enter"] == {}
     _stage(general).update(on_enter={"file_into": "general"})

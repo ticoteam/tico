@@ -346,6 +346,9 @@ def _check_on_enter(conn: "sqlite3.Connection", record: Row, stage: Row, label: 
             f"On enter on {label} is nothing, file a linked task into a pipeline, or queue the PRs to merge."
         )
         return
+    # Filing a linked task is not built until phase 2 (stage_effects.enter): a stage that files would hold every task
+    # that enters it on a task nobody files.
+    problems.append(f"Filing into a pipeline comes with the Product pipeline (on {label}).")
     found = task_engine.pipeline(conn, target)
     if target != record["id"] and (not found or found.get("retired_at")):
         problems.append(f"{label} files into a pipeline that does not exist: {target}.")

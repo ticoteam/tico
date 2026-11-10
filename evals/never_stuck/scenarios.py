@@ -334,7 +334,7 @@ LATER: dict[int, tuple[str, str]] = {
     19: ("2 and 3", "only the General preset exists; Product and Engineering presets arrive with their phases"),
     20: ("2", "waking the Product Manager when Spec empties (C10) arrives with Product"),
     22: ("2", "factories and the Done count arrive with Product"),
-    26: ("2", "on-enter filing into a pipeline arrives with Product (stage_effects.enter raises for it)"),
+    26: ("2", "on-enter filing into a pipeline arrives with Product (pipeline_settings refuses it until then)"),
     27: ("2", "Jev and the production version check arrive with Product"),
     28: ("3", "GitHub: commits and review state"),
     29: ("3", "GitHub: PRs and Merge"),
@@ -890,9 +890,13 @@ def s25(r: Rig) -> None:
         }
 
     r.pipeline(record("Alpha", None))
-    r.pipeline(record("Beta", "alpha"))
-    out = r.refused(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, record("Alpha", "beta")), "task_settings", "the loop")
-    expect("would loop" in out.detail, out.detail)
+    r.pipeline(record("Beta", None))
+    # Filing into a pipeline is refused until Product (R7), so Beta's handoff is one saved before that: in the table.
+    r.raw(lambda c: c.execute("UPDATE stages SET on_enter=? WHERE pipeline_id='beta'", ('{"file_into": "alpha"}',)))
+    looped = record("Alpha", "beta")
+    r.refused(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, looped), "task_settings", "the loop")
+    problems = r.w.read(lambda c: PS.check(c, looped))
+    expect(any("would loop" in p for p in problems), f"the loop is not named: {problems}")
 
 
 @scenario(36, "A run is held or cut off")
@@ -1135,35 +1139,46 @@ def b_runs_outside_ladder(r: Rig) -> None:
     expect(len(runs) <= 7, f"{len(runs)} bot runs without a change before a person was asked: {runs}")
 
 
-@bug("file-into-not-run", "A pipeline saved with 'file into' raises on every move into that stage")
-def b_file_into(r: Rig) -> None:
+@extra(
+    "file-into-not-run", "'File into' is refused until Product, and a stage that has it takes a move without raising"
+)
+def c_file_into(r: Rig) -> None:
+    from backend import pipeline_settings as PS
     from backend import task_engine as E
 
-    r.pipeline(
-        {
-            "id": "handoff",
-            "name": "Handoff",
-            "goal": "Work handed to General.",
-            "prefix": "H",
-            "manager_id": MANAGER,
-            "stages": [
-                {"name": "Plan", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-                {
-                    "name": "Hand off",
-                    "owner": "assignee",
-                    "on_enter": {"file_into": GENERAL},
-                    "requirements": [{"kind": "linked_done"}],
-                },
-            ],
-        }
+    record: dict[str, Any] = {
+        "id": "handoff",
+        "name": "Handoff",
+        "goal": "Work handed to General.",
+        "prefix": "H",
+        "manager_id": MANAGER,
+        "stages": [
+            {"name": "Plan", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+            {
+                "name": "Hand off",
+                "owner": "assignee",
+                "on_enter": {"file_into": GENERAL},
+                "requirements": [{"kind": "linked_done"}],
+            },
+        ],
+    }
+    out = r.refused(E.SYSTEM, lambda c: PS.save(c, E.SYSTEM, record), "task_settings", "saving 'file into'")
+    expect("comes with the Product pipeline" in out.detail, out.detail)
+    record["stages"][1]["on_enter"] = {}
+    r.pipeline(record)
+    # Saved before the refusal: the stage has it in the table.
+    r.raw(
+        lambda c: c.execute("UPDATE stages SET on_enter=? WHERE id='handoff-hand-off'", ('{"file_into": "general"}',))
     )
     task = r.task(ANA, "Hand it over", "handoff", assignee=WRITER)
     version = r.row(task)["version"]
     try:
-        out = r.act(WRITER, lambda c: E.move(c, task, E.NEXT, WRITER, "Planned in the call", version))
+        moved = r.act(WRITER, lambda c: E.move(c, task, E.NEXT, WRITER, "Planned in the call", version))
     except NotImplementedError as error:
         raise ScenarioFailed(f"the move raised {error!r} instead of being refused or done") from error
-    expect(not isinstance(out, Refusal), f"refused: {out!r}")
+    expect(not isinstance(moved, Refusal), f"refused: {moved!r}")
+    expect(r.stage_of(task) == "Hand off", f"the task is in {r.stage_of(task)}")
+    r.check()
 
 
 # ----------------------------------------------------------------------------- extra checks

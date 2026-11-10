@@ -8,7 +8,6 @@ PRs leave the merge queue.
 Phase 1 has the undo for filed tasks. Filing into a pipeline arrives with Product, the PR queue with Engineering.
 """
 
-import json
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -17,22 +16,13 @@ if TYPE_CHECKING:
 Row = dict[str, Any]
 
 
-def _on_enter(stage: Row) -> Row:
-    value: Any = stage.get("on_enter") or {}
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except ValueError:
-            value = {}
-    return value or {}
-
-
 def enter(conn: "sqlite3.Connection", task: Row, by: str) -> None:
-    """Run the on-enter action of the stage `task` just entered. `task` is `task_engine.task()`'s shape."""
-    action = _on_enter(task.get("stage") or {})
-    if not action:
-        return
-    raise NotImplementedError(f"on-enter action {sorted(action)} arrives with a later phase")
+    """Run the on-enter action of the stage `task` just entered. `task` is `task_engine.task()`'s shape.
+
+    Filing into a pipeline arrives with Product and the PR queue with Engineering. Until then `pipeline_settings`
+    refuses to save either, and a stage that has one anyway (written before that refusal) does nothing on enter: the
+    move goes through, and a stage that files waits on its Linked work done, the owner's turn ("No task filed yet")."""
+    return None
 
 
 def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:

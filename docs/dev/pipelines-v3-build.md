@@ -436,7 +436,9 @@ No answer, give or thumb changes `tasks.version`. Giving the owner's own `done` 
 ## stage_effects.py, pipeline_settings.py
 
 ```python
-stage_effects.enter(conn, task, by) -> None        # file a linked task; add a queue_pr effect row
+stage_effects.enter(conn, task, by) -> None        # file a linked task; add a queue_pr effect row. Neither is built
+                                                   # yet: a stage that has one (saved before the refusal) does
+                                                   # nothing on enter, and never raises into the move
 stage_effects.undo(conn, task, by, note) -> None   # close tasks filed in the visit; add dequeue_pr rows
 stage_effects.filed_open(conn, visit_id) -> list[str]
 stage_effects.run(conn_factory) -> int             # the GitHub calls still owed (phase 3)
@@ -464,7 +466,8 @@ The record `read` gives and `save` takes. Keys are the column names. `settings_v
                                            "line"}]}]}
 ```
 
-- `on_enter` is `{}`, `{"file_into": "<pipeline id>"}` or `{"queue_prs": true}` (refused until phase 3).
+- `on_enter` is `{}`, `{"file_into": "<pipeline id>"}` (refused until phase 2: "Filing into a pipeline comes with the
+  Product pipeline") or `{"queue_prs": true}` (refused until phase 3).
 - A row with an id is changed in place; without one it is made: a stage as `<pipeline id>-<slug of its name>` (`-2`,
   `-3` on a clash), a requirement as `H.new_id()`. A stage left out is retired (refused while it holds open tasks), a
   requirement left out is withdrawn. A requirement's kind does not change in place. A requirement id is listed once in
