@@ -405,21 +405,21 @@ def marked(c, due_id, due_on):
 
 
 def on_task_status(c, actor, task, old, new):
-    """Every task status write (hubdb `_set_status`, in its transaction) of a routine's occurrence task: a move into done
-    or closed that completes it (`_completes`) marks its due date's occurrence Satisfied, whatever the status before
-    (the owner's done after the keeper's close counts); a move back into play takes the mark away. A decline of a
-    finished task leaves the mark, until the task comes back into play."""
+    """Every status change of a routine's occurrence task (the engine's effects call this on done, closed and reopened,
+    in the move's transaction, with the actor whose act caused it): a move into done or closed that completes it
+    (`_completes`) marks its due date's occurrence Satisfied, whatever the status before (the owner's done after a
+    close by Tico counts); a reopen takes the mark away."""
     if not task.get("occurrence") or not H._has_table(c, "rule_due_dates") or new == old:
         return
     if new in ("done", "closed"):
         on_due_task_completed(c, {**task, "status": new}, actor)
-    elif new in H.ACTIVE_STATUSES and old not in H.ACTIVE_STATUSES:  # back in play (from done, closed or declined)
+    elif new == "open":  # back in play, from done or closed
         on_due_task_reopened(c, task, actor)
 
 
 def _completes(task, actor):
-    """Completed (docs/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done,
-    the keeper's close (ask expiry, cleanup) and a decline (a cancel) never are."""
+    """Completed (docs/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done
+    and a close by Tico (cleanup, a task closed with the one above it) never are."""
     if not actor or actor == H.KEEPER:
         return False
     if task.get("status") == "done":

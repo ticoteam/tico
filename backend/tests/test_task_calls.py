@@ -176,6 +176,15 @@ def test_a_bot_asks_a_person_who_answers_and_the_bot_is_woken_with_the_answer(c)
     assert [w[1] for w in X.wakes(c, row["id"]) if ":answer:" in w[0]] == [BUILDER]
 
 
+def test_a_bots_open_ask_counts_as_waiting_on_a_person_until_it_is_answered(c):
+    row = _new(c)
+    before = H.status_counts(c, BUILDER)
+    asked = H.task_ask(c, BUILDER, row["id"], ANA, "Ship it on Monday or Friday?", seen_version=_version(c, row["id"]))
+    assert H.status_counts(c, BUILDER) == (before[0], before[1] + 1)
+    H.task_answer(c, ANA, row["id"], asked["requirement_id"], "Friday")
+    assert H.status_counts(c, BUILDER) == before
+
+
 def test_a_bots_ask_to_a_person_is_plain_words(c):
     row = _new(c)
     with _refused("lint"):

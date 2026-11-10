@@ -771,7 +771,7 @@ def test_a_turn_moving_its_own_task_does_not_start_its_automation_again(api):
     aid = make(
         api,
         [{"id": "work", "type": "bot_turn", "bot": "ops", "prompt": "Handle it"}],
-        trigger={"type": "event", "name": "task.state_changed"},
+        trigger={"type": "event", "name": "task.step_changed"},
     )
     post(api, f"automations/{aid}/run", {})
     finish(api, r)  # the turn ends, and the task its run started changes state
@@ -854,7 +854,7 @@ def test_a_schedule_absorbs_an_occurrence_while_its_last_task_is_open(api):
     turn_tasks = sql(api, "SELECT id FROM tasks WHERE owner_id='bot:ops' AND title='Test'")
     assert len(turn_tasks) == 1
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (turn_tasks[0]["id"],))
+        H.task_close(c, "human:ana", turn_tasks[0]["id"], "Finished with")
     assert queued(api, aid)
 
 
