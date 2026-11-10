@@ -291,7 +291,13 @@ def test_a_pending_key_becomes_connected_when_its_check_passes(api, private, cov
         "workspace": answer["workspace"],
     }
     assert answer["workspace"]["status"] == "connected" and answer["workspace"]["probe"] == {"mailbox": MAILBOX}
-    assert answer["workspace"]["scopes"] == [CALENDAR, CALENDAR + ".readonly", GMAIL, W.READ_ONLY_SCOPES["gmail"][0]]
+    assert answer["workspace"]["scopes"] == [
+        CALENDAR,
+        CALENDAR + ".readonly",
+        GMAIL,
+        W.READ_ONLY_SCOPES["gmail"][0],
+        W.MEET_SCOPE,
+    ]
     assert [row["status"] for row in rows(api)] == ["connected"]
     assert check(api, {"mailbox": "other@elsewhere.example"}, expected=422)["error"]["code"] == "mailbox"
 
@@ -301,13 +307,15 @@ def test_the_check_is_signed_for_the_mailbox_with_the_key(api, private, keys, co
     _, calls = google
     connected(api, private)
     exchanges = [data["assertion"] for url, data, _ in calls if url == W.TOKEN_URI]
-    assert len(exchanges) == 2
+    assert len(exchanges) == 3
     claims = [jwt.decode(assertion, keys[1], algorithms=["RS256"], audience=W.TOKEN_URI) for assertion in exchanges]
     assert {c["sub"] for c in claims} == {MAILBOX} and {c["iss"] for c in claims} == {SA}
-    # Each service asks for its write and read-only scope together, which proves the key was authorized for both.
+    # Each service asks for its write and read-only scope together, which proves the key was authorized for both;
+    # Meet's scope is asked for alone.
     assert {c["scope"] for c in claims} == {
         GMAIL + " " + GMAIL.replace("modify", "readonly"),
         CALENDAR + " " + CALENDAR + ".readonly",
+        W.MEET_SCOPE,
     }
     assert json.loads(rows(api)[0]["authorized_scopes"]) == W.scope_urls()
 

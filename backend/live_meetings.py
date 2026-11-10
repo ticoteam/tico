@@ -185,11 +185,19 @@ def _require_read(c, auth, who, rid):
     return row
 
 
-def _connector(c, auth, who, rid, *, states=None):
+def _connector(c, auth, who, rid, *, states=None, recorder=False):
+    """The meeting's connector, who controls its transcript. `recorder` also lets in the person whose Tico Recorder is a
+    live call's recording source (backend/calls.py, the call's `recorder_actor`): only the chunk and correction routes
+    pass it, so that person writes the transcript and controls nothing else."""
     human_only(who)
     auth.domain(who)
     row = _require_read(c, auth, who, rid)
-    if who.actor != row["owner_actor"]:
+    if who.actor != row["owner_actor"] and not (
+        recorder
+        and c.execute(
+            "SELECT 1 FROM calls WHERE live_meeting_id=? AND recorder_actor=? AND state='live'", (rid, who.actor)
+        ).fetchone()
+    ):
         raise Problem("forbidden", "Only the person who connected this meeting can control its transcript", 403)
     if states and row["state"] not in states:
         raise Problem("meeting_state", f"This operation requires a {' or '.join(states)} meeting", 409)
@@ -2056,7 +2064,7 @@ def install_live_meetings(app, store, auth, write):
         who = request.state.identity
 
         def work(c):
-            row = _connector(c, auth, who, rid)
+            row = _connector(c, auth, who, rid, recorder=True)
             accepted, added = append_chunks(c, rid, row, who.actor, [chunk.model_dump() for chunk in body.chunks])
             return {
                 "id": rid,
@@ -2075,7 +2083,7 @@ def install_live_meetings(app, store, auth, write):
         who = request.state.identity
 
         def work(c):
-            _connector(c, auth, who, rid, states=("live", "paused"))
+            _connector(c, auth, who, rid, states=("live", "paused"), recorder=True)
             current = c.execute("SELECT * FROM live_meeting_chunks WHERE meeting_id=? AND seq=?", (rid, seq)).fetchone()
             if not current:
                 raise Problem("not_found", f"Transcript sequence {seq} was not found", 404)

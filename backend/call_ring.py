@@ -1,3 +1,4 @@
+# pyright: strict
 """Ringing for calls in threads (backend/calls.py, docs/meet.md): who a new call rings, and the hooks that ring them.
 
 A call rings the thread's people (never its bots) other than the caller when the thread has at most RING_MAX people;
@@ -11,14 +12,17 @@ the rung people, and `payload` is {"title": the caller's name, "body": "# <threa
 """
 
 import logging
+from collections.abc import Callable, Iterable
+from typing import Any
 
 log = logging.getLogger("tico.calls")
 
 RING_MAX = 8  # a thread with more people than this rings nobody
-HOOKS = []
+Hook = Callable[[Any, str, list[str], dict[str, str]], None]
+HOOKS: list[Hook] = []
 
 
-def ring(app, call_id, actors, payload):
+def ring(app: Any, call_id: str, actors: Iterable[str], payload: dict[str, str]) -> None:
     """Run every hook for one call's ring. Nothing happens with no hook or nobody to ring."""
     actors = list(actors or ())
     if not actors:
@@ -26,7 +30,5 @@ def ring(app, call_id, actors, payload):
     for hook in list(HOOKS):
         try:
             hook(app, call_id, list(actors), dict(payload))
-        except Exception as exc:  # noqa: BLE001 - one hook failing must not stop the call or the other hooks
-            from .batch_work import report
-
-            report("call_ring", call_id, exc, logger="tico.calls")
+        except Exception:  # noqa: BLE001 - one hook failing must not stop the call or the other hooks
+            log.warning("A call ring hook failed for call %s", call_id, exc_info=True)

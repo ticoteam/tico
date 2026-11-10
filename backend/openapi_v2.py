@@ -36,8 +36,9 @@ TAGS = {
     "Changelog": "Product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
-    "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
-    "ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera.",
+    "Calls": "Calls in a thread (docs/meet.md): a Google Meet, or a Tico Meet call with audio and screen share, a live "
+    "transcript posted to the thread when it ends, and bots that listen. Joining a Tico Meet call hands back a token for "
+    "audio and screen share only, never a camera; joining a Google Meet hands back its link.",
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Pages": "HTML pages bots publish and keep current (docs/pages.md): a file with a cadence, a data date and a status line.",
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
@@ -9185,6 +9186,10 @@ SCHEMAS.update(
                     "description": "Its root is pinned for everyone "
                     "who reads it; `me.pinned` is whether it is pinned for the viewer",
                 },
+                "live_call": {
+                    "type": ["object", "null"],
+                    "description": "The thread's live call, {id, live_count}, or null",
+                },
             },
             required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq", "pinned_for_everyone"],
         ),
@@ -9716,7 +9721,8 @@ STABLE.extend(
         ),
     ]
 )
-# Tico Meet calls (docs/meet.md): a call belongs to a thread. Joining hands back a token for audio and screen share only.
+# Calls (docs/meet.md): a call belongs to a thread. Joining a Tico Meet call hands back a token for audio and screen share
+# only; joining a Google Meet hands back its link.
 STABLE.extend(
     [
         (
@@ -9732,8 +9738,17 @@ STABLE.extend(
             "post",
             "Calls",
             "startCall",
-            "Start a call in a thread you can write to",
+            "Start a call in a thread you can write to: provider auto (Google Meet when your Workspace mailbox has it, "
+            "else Tico Meet), google_meet or tico. A Google Meet start makes the space, posts the call's card and rings",
             "Call",
+        ),
+        (
+            "/api/v2/calls/ringing",
+            "get",
+            "Calls",
+            "listRingingCalls",
+            "The live calls ringing you now, in threads you can read",
+            "CallRinging",
         ),
         (
             "/api/v2/calls/{call_id}",
@@ -9748,7 +9763,8 @@ STABLE.extend(
             "post",
             "Calls",
             "joinCall",
-            "Join a call: its media URL and a token good for 5 minutes",
+            "Join a call. Tico Meet: its media URL and a token good for 5 minutes. Google Meet: the Meet link as you "
+            "open it, no token",
             "CallJoin",
         ),
         (
@@ -9756,7 +9772,7 @@ STABLE.extend(
             "post",
             "Calls",
             "refreshCallToken",
-            "A fresh token for a call you have joined",
+            "A fresh token for a Tico Meet call you have joined; 409 not_tico_meet for a Google Meet",
             "CallToken",
         ),
         ("/api/v2/calls/{call_id}/leave", "post", "Calls", "leaveCall", "Leave a call you joined", "Call"),
@@ -9785,27 +9801,74 @@ STABLE.extend(
             "Call",
         ),
         ("/api/v2/calls/{call_id}/bots/{bot}", "delete", "Calls", "detachCallBot", "Take a bot out of a call", "Call"),
+        (
+            "/api/v2/calls/{call_id}/recorder",
+            "post",
+            "Calls",
+            "claimCallRecorder",
+            "Make your Tico Recorder a live Google Meet call's recording source: the first claim wins",
+            "CallRecorderSource",
+        ),
+        (
+            "/api/v2/calls/{call_id}/recorder",
+            "delete",
+            "Calls",
+            "releaseCallRecorder",
+            "Stop your Recorder being the call's recording source",
+            "CallRecorderSource",
+        ),
+        (
+            "/api/v2/calls/{call_id}/presence",
+            "post",
+            "Calls",
+            "reportCallPresence",
+            "The recording source's Recorder reports the names in the Meet; kept only while Google gives no status",
+            "Call",
+        ),
     ]
 )
 SCHEMAS.update(
     {
-        "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n"}),
+        "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n", "in_call": "b"}),
+        "CallProvider": obj(
+            {
+                "provider": {"enum": ["tico", "google_meet"]},
+                "meet_uri": {"type": ["string", "null"], "description": "The Google Meet link Google gave"},
+                "join_url": {
+                    "type": ["string", "null"],
+                    "description": "The Meet link with authuser=<your Google address> when known; null for Tico Meet",
+                },
+                "live_count": {"type": "integer", "description": "People in the call now, as its status source says"},
+                "status_source": {"enum": ["google", "recorder", None], "description": "Where live status comes from"},
+                "seen_at": {"type": ["string", "null"], "description": "When anyone was first seen in the Meet"},
+                "duration_s": {"type": ["integer", "null"], "description": "An ended call's length"},
+                "ring": {"type": "boolean", "description": "The call rings you: rung, not joined, still live"},
+                "card_message_id": "n",
+                "transcript_message_id": "n",
+                "recorder": obj({"source": "n", "installed": "b"}),
+            }
+        ),
         "CallHold": obj(
             {"kind": {"enum": ["transcript", "action_items"]}, "reason": "s", "detail": "s", "created_at": "s"}
         ),
-        "CallSummary": obj(
-            {
-                "id": "s",
-                "thread_id": "s",
-                "title": "s",
-                "state": {"enum": ["live", "ended"]},
-                "connector": "s",
-                "started_at": "s",
-                "ended_at": "n",
-                "end_reason": "n",
-            }
-        ),
-        "Call": obj(
+        "CallSummary": {
+            "allOf": [
+                obj(
+                    {
+                        "id": "s",
+                        "thread_id": "s",
+                        "title": "s",
+                        "state": {"enum": ["live", "ended"]},
+                        "connector": "s",
+                        "started_at": "s",
+                        "ended_at": "n",
+                        "end_reason": "n",
+                    }
+                ),
+                ref("CallProvider"),
+            ]
+        },
+        "CallBase": obj(
             {
                 "id": "s",
                 "thread_id": "s",
@@ -9830,8 +9893,23 @@ SCHEMAS.update(
                 "on this call; off unless the call asked. Spoken replies are not sent yet",
             },
         ),
-        "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n", "available": "b"}),
-        "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
+        "Call": {"allOf": [ref("CallBase"), ref("CallProvider")]},
+        "CallList": obj(
+            {
+                "calls": items(ref("CallSummary")),
+                "next_before": "n",
+                "available": "b",
+                "providers": items({"enum": ["google_meet", "tico"]}),
+            }
+        ),
+        "CallRinging": obj({"calls": items(ref("Call"))}),
+        "CallRecorderSource": obj(
+            {"source": "b", "meeting_id": "s", "title": "s", "source_actor": "n", "has_transcript": "b"}
+        ),
+        "CallJoin": obj(
+            {"call": ref("Call"), "url": "n", "expires_in": "i", "token": "s"},
+            required=["call", "url"],
+        ),
         "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
     }
 )

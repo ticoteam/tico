@@ -298,9 +298,10 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
     rows = [r for r in rows if threads.thread_readable(c, v, r["id"])]
     summaries = threads.subtree_summaries(c, v, [r["id"] for r in rows[: limit + 1]])
     dms_with = threads.dm_with(c, v, rows[: limit + 1])
+    calls = threads.live_calls(c, [r["id"] for r in rows[: limit + 1]])
     found, budget = [], threads.MAX_PAGE_BYTES
     for r in rows:
-        item = threads.view(c, v, r, summary=summaries.get(r["id"]), dm=dms_with.get(r["id"]))
+        item = threads.view(c, v, r, summary=summaries.get(r["id"]), dm=dms_with.get(r["id"]), calls=calls)
         item["activity_seq"] = r["activity"] or 0
         budget -= len(json.dumps(item, default=str))
         if budget < 0 or len(found) >= limit:

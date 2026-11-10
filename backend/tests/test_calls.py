@@ -260,6 +260,7 @@ def test_a_thread_refusal_of_the_end_of_call_post_leaves_an_audit_row_and_a_hold
     meet.app.state.calls.ingest(call_id, "human:ana", PCM_EIGHT_SECONDS, 0)
     settle(meet)
     post(meet, f"calls/{call_id}/end", {}, token="ana-test")
+    refused[:] = [refs for refs in refused if not refs["call"].get("card")]  # the card at the start goes too
     assert len(refused) == 2  # the transcript, then the action items: each tried once
 
     holds = get(meet, f"calls/{call_id}")["holds"]
