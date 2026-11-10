@@ -115,6 +115,8 @@ from . import (
     task_actions_routes,
     task_moves_routes,
     task_pipelines_routes,
+    task_factories_routes,
+    preferences_routes,
     task_comments_routes,
     task_followers_routes,
     task_links_routes,
@@ -1055,15 +1057,13 @@ def create_app(settings=None):
                     raw = getattr(request, "_body", b"")
                     # A setting from the catalogue is refused here only when only the person may change it (class `person`,
                     # `require_direct_setting`).
-                    setting = (
-                        request.state.identity.via == "assistant"
-                        and assistant_mod.catalogue_setting(request.method, request.url.path, raw)
+                    setting = request.state.identity.via == "assistant" and assistant_mod.catalogue_setting(
+                        request.method, request.url.path, raw
                     )
                     # The owner's yes to a goal read-back in their own Assistant chat (backend/goal_read_back.py): the
                     # goal, measure and suggestion routes save exactly what it read back, or nothing (`not_agreed`).
-                    goal_yes = (
-                        goal_read_back.strategy_turn(request.state.identity)
-                        and goal_read_back.saving(request.method, request.url.path)
+                    goal_yes = goal_read_back.strategy_turn(request.state.identity) and goal_read_back.saving(
+                        request.method, request.url.path
                     )
                     # The owner's "no" to a suggestion in their chat (backend/goal_read_back.py `turns_down`): admitted on
                     # their cited turn, and not on the autonomous-action setting, which only gates the other writes.
@@ -1756,8 +1756,12 @@ def create_app(settings=None):
         offset=0,
         order="queue",
         visible_sql=None,
+        narrow=None,
         **more,
     ):
+        """A page of the tasks `who` may read. `narrow` is a further WHERE fragment over the task's own columns (a
+        list's pipeline, stage or pushed-past filter, task_list_routes.narrowing): it picks the rows only, while the
+        rows are still read with the reader's own visibility."""
         auth.domain(who)
         visible_sql = visible_sql or auth.task_sql(c, who)
         rows = H.tasks(
@@ -1770,7 +1774,7 @@ def create_app(settings=None):
             limit=limit + 1,
             offset=offset,
             order=order,
-            visible=visible_sql,
+            visible=f"({visible_sql}) AND ({narrow})" if narrow else visible_sql,
             **more,
         )
         page, has_more = rows[:limit], len(rows) > limit
@@ -3766,6 +3770,8 @@ def create_app(settings=None):
 
     task_actions_routes.register(app, auth, mutate, settings_admin)
     task_pipelines_routes.register(app, auth, mutate, store)
+    task_factories_routes.register(app, auth, mutate, store)
+    preferences_routes.register(app, auth, mutate, store)
 
     def readable_task(who, tid):
         """The task `who` may read, or None: what an ingest preflight outside the write judges."""

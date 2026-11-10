@@ -898,6 +898,30 @@ STABLE = [
         "Take a pipeline out of use once it holds no open task",
         None,
     ),
+    (
+        "/api/v2/pipelines/{pipeline_id}/log",
+        "get",
+        "Pipelines",
+        "getPipelineLog",
+        "The manager rail's Log: each push past, and each snooze a bot made with no end date, newest first",
+        "PipelineLog",
+    ),
+    (
+        "/api/v2/factories",
+        "get",
+        "Pipelines",
+        "listFactories",
+        "Company › Factories: each factory's Done count for the period, each pipeline's open count, handoffs and mark",
+        "FactoryMap",
+    ),
+    (
+        "/api/v2/factories",
+        "post",
+        "Pipelines",
+        "createFactory",
+        "Make a factory (the company's owner and Admins)",
+        None,
+    ),
     ("/api/v2/tasks/{tid}/files", "get", "Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList"),
     (
         "/api/v2/tasks/{tid}/files",
@@ -2474,9 +2498,13 @@ SCHEMAS = {
             "description": "On the task's own read: the pipeline it is in",
         },
         stage={
-            "type": "object",
-            "description": "On the task's own read: the stage it is in, {id, name, kind (work, done, closed), by_hand}",
+            "oneOf": [
+                obj({"id": "s", "name": "s", "kind": {"enum": ["work", "done", "closed"]}, "by_hand": "b"}),
+                {"type": "null"},
+            ],
+            "description": "On the task's own read: the stage it is in",
         },
+        pushed_past={"type": "boolean", "description": "On a list row: it entered its stage pushed past a requirement"},
         waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
         to_leave=items(ref("TaskRequirement"))
         | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},
@@ -2535,7 +2563,13 @@ SCHEMAS = {
             "since": "n",
             "until": "n",
             "ask": "b",
-        }
+        },
+        required=["state", "who", "line", "requirement_id", "since", "until", "ask"],
+        running={
+            "type": "boolean",
+            "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
+            "again",
+        },
     ),
     "TaskRequirement": obj(
         {
@@ -3021,6 +3055,39 @@ SCHEMAS = {
             "standing": {"enum": ["waiting", "ok", "sent_back", "withdrawn", "used"]},
         }
     ),
+    "PipelineLog": obj(
+        {
+            "log": items(obj({"at": "s", "text": "s", "task_id": "s", "by": "n", "why": "s"})),
+            "learned": items(obj({"at": "s", "text": "s"})),
+        }
+    ),
+    "FactoryMap": obj(
+        {
+            "factories": items(obj({"id": "s", "name": "s", "goal": "s", "manager_id": "n", "done": "i"})),
+            "pipelines": items(
+                obj(
+                    {
+                        "id": "s",
+                        "name": "s",
+                        "factory_id": "n",
+                        "open": "i",
+                        "files_into": items({"type": "string"}),
+                        "mark": {"enum": ["cant_run", "needs_person", None]},
+                    }
+                )
+            ),
+        }
+    ),
+    "SupportReportResult": obj(
+        {
+            "status": {"enum": ["sent", "pending"], "description": "sent: filed now; pending: a person OKs it first"},
+            "task_id": {"type": ["string", "null"], "description": "The task the report is on, or that holds its OK"},
+            "requirement_id": {"type": "string", "description": "pending: the OK a person gives on the task"},
+            "ticket": {"type": "object", "description": "sent: the ticket as filed"},
+            "filed_as": {"type": "string", "description": "sent: the person it was filed as"},
+        },
+        required=["status", "task_id"],
+    ),
     # A task's own model (backend/task_run_models.py `of`); null when its runs use the bot's task model.
     "TaskRunChoice": obj(
         {"model": "s", "harness": "s", "runtime": "s", "reasoning_effort": "s", "set_by": "n", "set_at": "n"}
@@ -3300,6 +3367,7 @@ SCHEMAS = {
             "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
             "snoozed": "b",
+            "pushed_past": "b",
         }
     ),
     "GranolaStatus": obj(
@@ -7059,7 +7127,7 @@ STABLE.append(
         'draftSupportReport',
         'Draft a report to Tico support, optionally on a task: filed at once when the team allows it, '
         'otherwise a person OKs its preview first',
-        None,
+        'SupportReportResult',
     )
 )
 
