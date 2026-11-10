@@ -13,7 +13,9 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.api import get, headers
 
-FORUM = "forum_post:note-1"
+# A reply to a Tico HQ ticket: a kind the generic routes take (task_asks.GENERIC). Ben, asked by default, manages the
+# bots made here (as_bot), so he may OK it.
+FORUM = "hq_reply:note-1"
 POST = {"text": "We ship on Friday."}
 
 
@@ -22,6 +24,7 @@ def as_bot(api, slug="ops"):
     token = slug + "-bot-test"
     with api.app.state.store.transaction() as c:
         X.bot(c, slug)
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot=?", (slug,))
         c.execute(
             "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) VALUES(?,?,?,?,?)",
             (slug, "hermes", "x-" + slug, H.now(), "human:ana"),
@@ -571,4 +574,49 @@ def test_an_ok_of_a_file_counts_only_while_its_giver_may_still_open_the_file(api
     assert not approved()
     subject, content = pinned(rid)
     assert use(api, rid, bot, content=content, subject=subject)[0] == 409
+    assert standing(api, rid) != K.USED
+
+
+# ----------------------------------------------------------------------------- review 2, finding 5: known kinds only
+def test_the_generic_routes_take_only_known_kinds_and_a_budget_raise_only_from_whom_may_give_it(api):
+    """A kind Tico has no rule for is refused when asked and when used. A budget raise is OK'd only by the person it
+    was asked of, while they are the bot's manager or the company's owner or an Admin: not by Cara, an ordinary
+    teammate it was asked of, nor by Ana, the owner, when it was asked of Ben and handed to her; and Ben's OK is
+    good only while he still manages the bot or is an Admin."""
+    bot = as_bot(api)
+    tid = bots_task(api, bot)
+    unknown = {
+        "to": "ben",
+        "line": "OK?",
+        "subject": "forum_post:note-1",
+        "content": POST,
+        "version": version(api, tid),
+    }
+    assert call(api, "POST", f"tasks/{tid}/oks", bot, unknown)[:2] == (422, "validation")
+    assert use(api, "nope", bot, POST, "forum_post:note-1")[:2] == (422, "validation")
+    raise_ = "budget_raise:launch"
+    money = {"project": "launch", "usd": "10.00"}
+    # Asked of Cara, who neither manages the bot nor runs the company.
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid, content=money, to="cara", subject=raise_)
+    status, code, detail, _ = give(api, tid, rid, token="cara-test")
+    assert (status, code) == (409, "task_requirement") and "manager" in detail, (status, code, detail)
+    assert standing(api, rid) == K.WAITING
+    # Asked of Ben and handed to Ana: the owner's click does not count, the ask was not hers.
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid, content=money, subject=raise_ + "-2")
+    with api.app.state.store.transaction() as c:
+        H.task_give(c, "human:ben", tid, rid, "human:ana", H.task(c, tid)["version"])
+    status, code, detail, _ = give(api, tid, rid, token="ana-test")
+    assert (status, code) == (409, "task_requirement") and "Ben" in detail, (status, code, detail)
+    # Ben's own OK, then he is neither an Admin nor the bot's manager: nothing goes.
+    from backend.tests.helpers.api import as_member
+
+    tid = bots_task(api, bot)
+    rid = ask(api, bot, tid, content=money, subject=raise_ + "-3")
+    assert give(api, tid, rid)[0] == 200
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:cara' WHERE bot='ops'")
+    as_member(api, "ben@acme.example")
+    assert use(api, rid, bot, money, raise_ + "-3")[:2] == (409, "task_ok_missing")
     assert standing(api, rid) != K.USED

@@ -188,10 +188,16 @@ def test_a_replayed_write_answers_as_the_first_did_and_acts_once(api):
 
 
 # ---------------------------------------------------------------------- OKs bound to what was shown
-FORUM = "forum_post:note-1"
+# A reply to a Tico HQ ticket: a kind the generic routes take (task_asks.GENERIC), OK'd by the person asked while they
+# are the asking bot's manager or an Admin. Ben manages the bot here.
+FORUM = "hq_reply:note-1"
 
 
 def ask_ok(api, bot, tid, content, to="ben"):
+    from backend.store import H
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot=?", (H.actor_id(H.bot_actor("ops")),))
     version = show(api, tid)["version"]
     r = api.post(
         f"/api/v2/tasks/{tid}/oks",

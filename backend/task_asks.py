@@ -124,6 +124,40 @@ def _file_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | N
     return module.may_ok(conn, person, grant)
 
 
+def _admin_or_manager(conn: "sqlite3.Connection", person: str, grant: Row) -> bool:
+    """Whether `person` is the company's owner or an Admin, or the manager of the bot that asked (its org chart's
+    reports_to): who answers for a bot's own work."""
+    from . import access
+
+    found: Row = _h().human(conn, person) or {}
+    email = str(found.get("email") or "").strip().lower()
+    if email and email in set(access.owner_and_admin_emails(conn)):
+        return True
+    asker = str(grant.get("asked_by_id") or "")
+    if not is_bot(asker):
+        return False
+    from . import ask_ingest
+
+    module: Any = ask_ingest  # its functions are typed loosely
+    return str(module.manager_of(conn, asker)[0] or "") == person
+
+
+def _named_and_answerable(what: str) -> Callable[..., str | None]:
+    """A rule for a bot's own spend or reply: only the person it was asked of (never whoever the ask was handed to),
+    and only while they are the company's owner or an Admin, or the asking bot's manager."""
+
+    def rule(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+        named = str(grant.get("asked_of_id") or "")
+        if not named or named != person:
+            who = _h().actor_name(conn, named) if named else "the person it was asked of"
+            return f"Only {who}, who it was asked of, may OK {what}"
+        if not _admin_or_manager(conn, person, grant):
+            return f"Only the company's owner, an Admin or the bot's manager may OK {what}"
+        return None
+
+    return rule
+
+
 def _file_may_see(conn: "sqlite3.Connection", auth: object, who: object, grant: Row) -> bool:
     from . import file_reviews
 
@@ -158,6 +192,19 @@ MAY_OK: dict[str, Callable[..., str | None]] = {
 }
 CHECKS_ITSELF = ("email_send", "letter")
 
+# The kinds a bot may ask for and use through the generic routes (POST /api/v2/tasks/{id}/oks, POST
+# /api/v2/oks/{id}/use), each with who may OK it. Nothing else: a kind not here is refused when asked, and an OK of a
+# kind with no rule is never good (fail closed).
+GENERIC: dict[str, Callable[..., str | None]] = {
+    # A bot's file, at the version pinned when asked (backend/file_reviews.py).
+    "file": _file_may_ok,
+    # A raise of a bot's own project budget (templates/catalog/video-producer).
+    "budget_raise": _named_and_answerable("a budget raise"),
+    # A reply to a Tico HQ support ticket (templates/catalog/support/software/hq-tickets).
+    "hq_reply": _named_and_answerable("this reply"),
+}
+MAY_OK.update({kind: rule for kind, rule in GENERIC.items() if kind not in MAY_OK})
+
 # Subjects whose module pins what is asked about before it is shown, called as fn(conn, by, subject, content, shows)
 # -> (subject, content, shows). A file ref that names no version, or a path, becomes the exact version and digest
 # there are when it is asked, so an OK never reaches a version nobody saw.
@@ -189,8 +236,8 @@ FILED_TITLES: dict[str, str] = {
 
 
 def generic(subject: str) -> bool:
-    """Whether a bot may ask for and use an OK of this subject through the generic routes: any kind but OWNED."""
-    return bool(kind_of(subject)) and ":" in str(subject) and kind_of(subject) not in OWNED
+    """Whether a bot may ask for and use an OK of this subject through the generic routes: a GENERIC kind only."""
+    return ":" in str(subject) and kind_of(subject) in GENERIC
 
 
 # Set while give_ok answers its own requirement, so the engine's refusal of a plain OK lets that one through.
@@ -422,6 +469,8 @@ def ask_ok(
     subject = str(subject or "").strip()
     if not kind_of(subject) or ":" not in subject:
         _refuse(conn, by, "validation", "Say what the OK is for, as kind:id")
+    if kind_of(subject) not in OWNED and kind_of(subject) not in GENERIC:
+        _refuse(conn, by, "validation", f"Tico has no OK of the kind {kind_of(subject)!r}")
     pin = FREEZE.get(kind_of(subject))
     if pin:
         subject, content, shows = pin(conn, by, subject, content, shows)
@@ -635,8 +684,10 @@ def _authority(conn: "sqlite3.Connection", person: str, row: Row) -> str | None:
     check = MAY_OK.get(kind)
     if check:
         return check(conn, person, row)
+    if kind not in OWNED:
+        return "Nobody may OK this kind of act"  # no rule says who may: fail closed
     named = str(row.get("asked_of_id") or "")
-    if kind in OWNED and kind not in CHECKS_ITSELF and named and named != person:
+    if kind not in CHECKS_ITSELF and named and named != person:
         return f"Only {H.actor_name(conn, named)}, who it was asked of, may OK this"
     return None
 
