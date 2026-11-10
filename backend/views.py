@@ -2096,7 +2096,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             }
         )
     # A person the reader may not see is named only to someone in the same conversation (teammate_access.Known).
-    known = teammate_access.Known(c, who, auth) if mentions else None
+    known = teammate_access.Known(c, who, auth)  # reads nothing until it is asked
     for m in mentions:
         if m.get("task_id") and m["task_id"] not in readable:
             continue
