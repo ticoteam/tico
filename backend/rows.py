@@ -1486,6 +1486,32 @@ class SnoozeRow(TypedDict):
     ended_by_id: str | None
 
 
+class OkGrantRow(TypedDict):
+    """An OK bound to exactly what was shown, used once (backend/task_asks.py). One per OK requirement."""
+
+    requirement_id: str
+    asked_by_id: str
+    subject: str
+    content_hash: str
+    content: str
+    filed: int
+    created_at: str
+    ok_at: str | None
+    ok_by_id: str | None
+    answer_id: str | None
+    used_at: str | None
+    used_by_id: str | None
+
+
+class OkShownRow(TypedDict):
+    """Who was shown which content of an OK, in their own session."""
+
+    requirement_id: str
+    person_id: str
+    content_hash: str
+    shown_at: str
+
+
 class LinkRow(TypedDict):
     """A task filed by another task, during one of its visits."""
 
