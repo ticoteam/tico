@@ -356,14 +356,17 @@ Later phases: the other requirement kinds; Product and Engineering.
 
 | Track | Owns |
 |---|---|
-| core | `hubdb.py`, `hubdb_core.py`, `task_calls.py`, the engine (`task_engine`, `task_effects`, `task_requirements`, `waiting_on`, `task_wakes`, `never_stuck`, `answers`, `pipeline_settings`, `stage_effects`), the cut-over migration and `migrations/__init__.py`, `status_values.py`, `task_delete.py`, `task_relations.py`, `rows.py`, `sql.py`, the refusal fields in `store.py`'s write replay, `conftest.py`, `tests/helpers/` |
-| routes | `app.py`, `models.py`, `openapi_v2.py`, `task_*_routes.py`, `answers_routes.py`, `views.py`, `contracts/`, the route tests |
-| upkeep | `scheduler.py`, `heartbeat.py`, `health.py`, `store.py` (after core's part), `execution.py`, `github.py`, `invariants.py`, `maintenance_steps/`, `system_routines.py`, `sleep_idle.py`, `worktrees.py`, `profiles.py`, `bot_rows.py`, `assigned_start.py`, and the deletion of the upkeep and mover modules |
+| core | `hubdb.py`, `hubdb_core.py`, `hubdb_text.py`, `task_calls.py`, the engine (`task_engine`, `task_effects`, `task_requirements`, `waiting_on`, `task_wakes`, `never_stuck`, `answers`, `pipeline_settings`, `stage_effects`), the cut-over migration and `migrations/__init__.py`, `status_values.py`, `task_delete.py`, `task_relations.py`, `rows.py`, `sql.py`, the start-up and refusal parts of `store.py`, `conftest.py`, `tests/helpers/` |
+| routes | `app.py`, `models.py`, `openapi_v2.py`, `task_*_routes.py`, `answers_routes.py`, `views.py`, `auth.py`, `task_reads.py`, `task_privacy.py`, `privacy_index.py`, `contracts/`, and the live changes: `events.py`, `read_deps.py`, `row_clock.py`, `provenance_clock.py`, `roster_clock.py` |
+| upkeep | `scheduler.py`, `heartbeat.py`, `health.py`, `maintenance_health.py`, `store.py` (after core's part), `execution.py`, `enqueue.py`, `run_view.py`, `run_triggers.py`, `wake_rules.py`, `delivery.py`, `github.py`, `invariants.py`, `maintenance_steps/`, `system_routines.py`, `sleep_idle.py`, `worktrees.py`, `worktree_waits.py`, `reconnects.py`, `profiles.py`, `bot_rows.py`, `assigned_start.py`, `completion_notes.py`, `chat_goals.py`, and the deletion of every module under "What is deleted" |
 | asks | `task_asks.py`, `email_sending.py`, `letters.py`, `company_page/`, `task_caps.py`, `webhooks.py`, `support.py`, `file_reviews.py`, `proposals.py`, `batch.py`, `media.py`, `bot_task_tabs.py`, `live_blocks.py`, `personal_alerts.py`, `reach.py`, `slack_gateway.py`, `strategy_merge.py`, `goal_asks.py`, `assistant.py`, `assistant_changes.py` |
-| callers | every other backend module, whether it calls the old funnel or only imports a deleted module (rules, `task_trigger_rules`, automations, strategy, roadmaps, meetings, recruiting, cloud_agents, learnings, bookkeeper, `pipeline_judges`, demo and the rest), each with its tests |
-| bots | `clients/`, `backend/mcp.py`, `skills/`, `templates/`, `backend/dream.py` (the whole file: callers hands it what it needs changed), `e2e/cli/`, `e2e/mcp/`, `test_botops_parity.py` |
+| callers | every other backend module, in five groups (rules and automations; strategy, goals, market and roadmaps; task management and settings; demo data; the rest), each with its tests |
+| bot tools | `clients/` but `agent_skill.py`, `backend/mcp.py`, `e2e/cli/`, `e2e/mcp/`, `test_botops_parity.py` |
+| bot words | `templates/`, `skills/`, `clients/agent_skill.py`, `backend/dream.py` |
 | screens | `ui/`, `backend/ui_bundle.py` |
 | last | `e2e/goldens`, `e2e/tests`, `docs/`, `evals/`, `scripts/` (a script that inserts tasks by hand makes them through `task_create`; one that builds an old release's database keeps that release's shape) |
 
-The order: core first. Routes, upkeep, asks and callers start when core is on the branch. Bots and screens start from
-this file, before core is done. Last runs when the rest is merged.
+A test file belongs to the track that owns the module it is named after.
+
+The order: core first. Bot tools and bot words start from this file. Routes, upkeep, asks and callers start when core
+is on the branch. Screens start when the routes are. Last runs when the rest is merged.
