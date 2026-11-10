@@ -1116,12 +1116,6 @@ class FactoryManagerRunRow(TypedDict):
     error: str | None
 
 
-class FirstStartSeedRow(TypedDict):
-    """One `first_start_seeds` row (SELECT *)."""
-
-    name: str
-
-
 # The Directory (backend/entities/): one row shape per table the Directory's tables migration makes.
 
 
@@ -1435,6 +1429,9 @@ class VisitRow(TypedDict):
     late_told_at: str | None
     late_person_at: str | None
     bot_snoozes: int
+    last_change_attempt: int | None
+    last_change_message: int | None
+    last_change_start: int | None
 
 
 class RequirementRow(TypedDict):
@@ -1501,6 +1498,15 @@ class OkGrantRow(TypedDict):
     answer_id: str | None
     used_at: str | None
     used_by_id: str | None
+    asked_of_id: str | None
+    revoked_at: str | None
+
+
+class RunStartRow(TypedDict):
+    """The order runs started in: every start takes the next id (migration 20261110100007_run_starts)."""
+
+    id: int
+    attempt_id: str
 
 
 class OkShownRow(TypedDict):
