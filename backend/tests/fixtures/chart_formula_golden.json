@@ -35,99 +35,99 @@
       "expected": {
         "employees": [
           {
-            "id": "product-team-manager",
-            "template": "product-team-manager",
-            "title": "Product Team Manager",
+            "id": "product-manager",
+            "template": "product-manager",
+            "title": "Product Manager",
             "department": "product",
             "reports_to": null,
             "team": "Product",
-            "reason": "Leads the product team and its owners.",
+            "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "creators-product-owner",
             "template": "segment-product-owner",
             "title": "Creators Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Creators segment's product and the “Live rooms” initiative (b1).",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "fans-product-owner",
             "template": "segment-product-owner",
             "title": "Fans Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Fans segment's product and the “Fan clubs” initiative (b2).",
             "start": true,
             "live": false
           },
           {
-            "id": "engineering-team-manager",
-            "template": "engineering-team-manager",
-            "title": "Engineering Team Manager",
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
             "department": "engineering",
             "reports_to": null,
             "team": "Engineering",
-            "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
+            "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "builder",
             "template": "builder",
             "title": "Builder",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Builds the product: writes the code for each change.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-1",
             "template": "pr-reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the first reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-2",
             "template": "pr-reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the second reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "qa-owner",
             "template": "qa-owner",
             "title": "QA Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "security-owner",
             "template": "security-owner",
             "title": "Security Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns security: keeping the product and its data safe.",
             "start": true,
@@ -138,22 +138,22 @@
             "template": "infrastructure-owner",
             "title": "Infrastructure Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns infrastructure: the servers and systems the product runs on.",
             "start": true,
             "live": false
           },
           {
-            "id": "release-owner",
+            "id": "release-manager",
             "template": "release-owner",
-            "title": "Release Owner",
+            "title": "Release Manager",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
-            "reason": "Owns releases: how each change is checked, shipped and rolled out.",
+            "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "growth-team-manager",
@@ -403,99 +403,99 @@
       "expected": {
         "employees": [
           {
-            "id": "product-team-manager",
-            "template": "product-team-manager",
-            "title": "Product Team Manager",
+            "id": "product-manager",
+            "template": "product-manager",
+            "title": "Product Manager",
             "department": "product",
             "reports_to": null,
             "team": "Product",
-            "reason": "Leads the product team and its owners.",
+            "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "families-product-owner",
             "template": "segment-product-owner",
             "title": "Families Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Families segment's product.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "cosmetic-patients-product-owner",
             "template": "segment-product-owner",
             "title": "Cosmetic patients Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Cosmetic patients segment's product and the “Offer clear aligner packages to adults” initiative (b2).",
             "start": true,
             "live": false
           },
           {
-            "id": "engineering-team-manager",
-            "template": "engineering-team-manager",
-            "title": "Engineering Team Manager",
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
             "department": "engineering",
             "reports_to": null,
             "team": "Engineering",
-            "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
+            "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "builder",
             "template": "builder",
             "title": "Builder",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Builds the product: writes the code for each change.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-1",
             "template": "pr-reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the first reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-2",
             "template": "pr-reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the second reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "qa-owner",
             "template": "qa-owner",
             "title": "QA Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "security-owner",
             "template": "security-owner",
             "title": "Security Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns security: keeping the product and its data safe.",
             "start": true,
@@ -506,22 +506,22 @@
             "template": "infrastructure-owner",
             "title": "Infrastructure Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns infrastructure: the servers and systems the product runs on.",
             "start": true,
             "live": false
           },
           {
-            "id": "release-owner",
+            "id": "release-manager",
             "template": "release-owner",
-            "title": "Release Owner",
+            "title": "Release Manager",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
-            "reason": "Owns releases: how each change is checked, shipped and rolled out.",
+            "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "growth-team-manager",
@@ -801,99 +801,99 @@
       "expected": {
         "employees": [
           {
-            "id": "product-team-manager",
-            "template": "product-team-manager",
-            "title": "Product Team Manager",
+            "id": "product-manager",
+            "template": "product-manager",
+            "title": "Product Manager",
             "department": "product",
             "reports_to": null,
             "team": "Product",
-            "reason": "Leads the product team and its owners.",
+            "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "startups-product-owner",
             "template": "segment-product-owner",
             "title": "Startups Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Startups segment's product and the “Startup retainers” initiative (b1).",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "small-businesses-product-owner",
             "template": "segment-product-owner",
             "title": "Small businesses Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Small businesses segment's product and the “Build a fixed-fee package for small” initiative (b2).",
             "start": true,
             "live": false
           },
           {
-            "id": "engineering-team-manager",
-            "template": "engineering-team-manager",
-            "title": "Engineering Team Manager",
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
             "department": "engineering",
             "reports_to": null,
             "team": "Engineering",
-            "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
+            "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "builder",
             "template": "builder",
             "title": "Builder",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Builds the product: writes the code for each change.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-1",
             "template": "pr-reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the first reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-2",
             "template": "pr-reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the second reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "qa-owner",
             "template": "qa-owner",
             "title": "QA Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "security-owner",
             "template": "security-owner",
             "title": "Security Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns security: keeping the product and its data safe.",
             "start": true,
@@ -904,22 +904,22 @@
             "template": "infrastructure-owner",
             "title": "Infrastructure Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns infrastructure: the servers and systems the product runs on.",
             "start": true,
             "live": false
           },
           {
-            "id": "release-owner",
+            "id": "release-manager",
             "template": "release-owner",
-            "title": "Release Owner",
+            "title": "Release Manager",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
-            "reason": "Owns releases: how each change is checked, shipped and rolled out.",
+            "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "growth-team-manager",
@@ -1169,88 +1169,88 @@
       "expected": {
         "employees": [
           {
-            "id": "product-team-manager",
-            "template": "product-team-manager",
-            "title": "Product Team Manager",
+            "id": "product-manager",
+            "template": "product-manager",
+            "title": "Product Manager",
             "department": "product",
             "reports_to": null,
             "team": "Product",
-            "reason": "Leads the product team and its owners.",
+            "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "customers-product-owner",
             "template": "segment-product-owner",
             "title": "Customers Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Customers segment's product.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
-            "id": "engineering-team-manager",
-            "template": "engineering-team-manager",
-            "title": "Engineering Team Manager",
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
             "department": "engineering",
             "reports_to": null,
             "team": "Engineering",
-            "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
+            "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "builder",
             "template": "builder",
             "title": "Builder",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Builds the product: writes the code for each change.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-1",
             "template": "pr-reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the first reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-2",
             "template": "pr-reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the second reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "qa-owner",
             "template": "qa-owner",
             "title": "QA Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "security-owner",
             "template": "security-owner",
             "title": "Security Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns security: keeping the product and its data safe.",
             "start": true,
@@ -1261,22 +1261,22 @@
             "template": "infrastructure-owner",
             "title": "Infrastructure Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns infrastructure: the servers and systems the product runs on.",
             "start": true,
             "live": false
           },
           {
-            "id": "release-owner",
+            "id": "release-manager",
             "template": "release-owner",
-            "title": "Release Owner",
+            "title": "Release Manager",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
-            "reason": "Owns releases: how each change is checked, shipped and rolled out.",
+            "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "growth-team-manager",
@@ -1494,88 +1494,88 @@
       "expected": {
         "employees": [
           {
-            "id": "product-team-manager",
-            "template": "product-team-manager",
-            "title": "Product Team Manager",
+            "id": "product-manager",
+            "template": "product-manager",
+            "title": "Product Manager",
             "department": "product",
             "reports_to": null,
             "team": "Product",
-            "reason": "Leads the product team and its owners.",
+            "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "fans-product-owner",
             "template": "segment-product-owner",
             "title": "Fans Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Fans segment's product and the “Fan clubs” initiative (b2).",
             "start": true,
             "live": false
           },
           {
-            "id": "engineering-team-manager",
-            "template": "engineering-team-manager",
-            "title": "Engineering Team Manager",
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
             "department": "engineering",
             "reports_to": null,
             "team": "Engineering",
-            "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
+            "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "builder",
             "template": "builder",
             "title": "Builder",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Builds the product: writes the code for each change.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-1",
             "template": "pr-reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the first reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-2",
             "template": "pr-reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the second reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "qa-owner",
             "template": "qa-owner",
             "title": "QA Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "security-owner",
             "template": "security-owner",
             "title": "Security Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns security: keeping the product and its data safe.",
             "start": true,
@@ -1586,22 +1586,22 @@
             "template": "infrastructure-owner",
             "title": "Infrastructure Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns infrastructure: the servers and systems the product runs on.",
             "start": true,
             "live": false
           },
           {
-            "id": "release-owner",
+            "id": "release-manager",
             "template": "release-owner",
-            "title": "Release Owner",
+            "title": "Release Manager",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
-            "reason": "Owns releases: how each change is checked, shipped and rolled out.",
+            "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "growth-team-manager",
@@ -1828,88 +1828,88 @@
       "expected": {
         "employees": [
           {
-            "id": "product-team-manager",
-            "template": "product-team-manager",
-            "title": "Product Team Manager",
+            "id": "product-manager",
+            "template": "product-manager",
+            "title": "Product Manager",
             "department": "product",
             "reports_to": null,
             "team": "Product",
-            "reason": "Leads the product team and its owners.",
+            "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "patients-product-owner",
             "template": "segment-product-owner",
             "title": "Patients Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Patients segment's product.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
-            "id": "engineering-team-manager",
-            "template": "engineering-team-manager",
-            "title": "Engineering Team Manager",
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
             "department": "engineering",
             "reports_to": null,
             "team": "Engineering",
-            "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
+            "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "builder",
             "template": "builder",
             "title": "Builder",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Builds the product: writes the code for each change.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-1",
             "template": "pr-reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the first reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-2",
             "template": "pr-reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the second reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "qa-owner",
             "template": "qa-owner",
             "title": "QA Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "security-owner",
             "template": "security-owner",
             "title": "Security Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns security: keeping the product and its data safe.",
             "start": true,
@@ -1920,22 +1920,22 @@
             "template": "infrastructure-owner",
             "title": "Infrastructure Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns infrastructure: the servers and systems the product runs on.",
             "start": true,
             "live": false
           },
           {
-            "id": "release-owner",
+            "id": "release-manager",
             "template": "release-owner",
-            "title": "Release Owner",
+            "title": "Release Manager",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
-            "reason": "Owns releases: how each change is checked, shipped and rolled out.",
+            "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "growth-team-manager",
@@ -2157,99 +2157,99 @@
       "expected": {
         "employees": [
           {
-            "id": "product-team-manager",
-            "template": "product-team-manager",
-            "title": "Product Team Manager",
+            "id": "product-manager",
+            "template": "product-manager",
+            "title": "Product Manager",
             "department": "product",
             "reports_to": null,
             "team": "Product",
-            "reason": "Leads the product team and its owners.",
+            "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "stra-e-h-ndler-product-owner",
             "template": "segment-product-owner",
             "title": "Straße Händler Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Straße Händler segment's product and the “Köln sales” initiative (b2).",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "segment-2-product-owner",
             "template": "segment-product-owner",
             "title": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 segment's product.",
             "start": true,
             "live": false
           },
           {
-            "id": "engineering-team-manager",
-            "template": "engineering-team-manager",
-            "title": "Engineering Team Manager",
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
             "department": "engineering",
             "reports_to": null,
             "team": "Engineering",
-            "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
+            "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "builder",
             "template": "builder",
             "title": "Builder",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Builds the product: writes the code for each change.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-1",
             "template": "pr-reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the first reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-2",
             "template": "pr-reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the second reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "qa-owner",
             "template": "qa-owner",
             "title": "QA Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "security-owner",
             "template": "security-owner",
             "title": "Security Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns security: keeping the product and its data safe.",
             "start": true,
@@ -2260,22 +2260,22 @@
             "template": "infrastructure-owner",
             "title": "Infrastructure Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns infrastructure: the servers and systems the product runs on.",
             "start": true,
             "live": false
           },
           {
-            "id": "release-owner",
+            "id": "release-manager",
             "template": "release-owner",
-            "title": "Release Owner",
+            "title": "Release Manager",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
-            "reason": "Owns releases: how each change is checked, shipped and rolled out.",
+            "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "growth-team-manager",
@@ -2478,88 +2478,88 @@
       "expected": {
         "employees": [
           {
-            "id": "product-team-manager",
-            "template": "product-team-manager",
-            "title": "Product Team Manager",
+            "id": "product-manager",
+            "template": "product-manager",
+            "title": "Product Manager",
             "department": "product",
             "reports_to": null,
             "team": "Product",
-            "reason": "Leads the product team and its owners.",
+            "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "creators-product-owner",
             "template": "segment-product-owner",
             "title": "Creators Product Owner",
             "department": "product",
-            "reports_to": "product-team-manager",
+            "reports_to": "product-manager",
             "team": "Product",
             "reason": "Owns the Creators segment's product.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
-            "id": "engineering-team-manager",
-            "template": "engineering-team-manager",
-            "title": "Engineering Team Manager",
+            "id": "engineering-manager",
+            "template": "engineering-manager",
+            "title": "Engineering Manager",
             "department": "engineering",
             "reports_to": null,
             "team": "Engineering",
-            "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases.",
+            "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "builder",
             "template": "builder",
             "title": "Builder",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Builds the product: writes the code for each change.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-1",
             "template": "pr-reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the first reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "reviewer-2",
             "template": "pr-reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Reviews each code change before it ships, as the second reviewer.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "qa-owner",
             "template": "qa-owner",
             "title": "QA Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
             "start": true,
-            "live": true
+            "live": false
           },
           {
             "id": "security-owner",
             "template": "security-owner",
             "title": "Security Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns security: keeping the product and its data safe.",
             "start": true,
@@ -2570,22 +2570,22 @@
             "template": "infrastructure-owner",
             "title": "Infrastructure Owner",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
             "reason": "Owns infrastructure: the servers and systems the product runs on.",
             "start": true,
             "live": false
           },
           {
-            "id": "release-owner",
+            "id": "release-manager",
             "template": "release-owner",
-            "title": "Release Owner",
+            "title": "Release Manager",
             "department": "engineering",
-            "reports_to": "engineering-team-manager",
+            "reports_to": "engineering-manager",
             "team": "Engineering",
-            "reason": "Owns releases: how each change is checked, shipped and rolled out.",
+            "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
             "start": true,
-            "live": false
+            "live": true
           },
           {
             "id": "growth-team-manager",

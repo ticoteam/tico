@@ -8,7 +8,7 @@ When to use: at the start of every new spec, before the solution is drafted. Use
 past its appetite.
 
 Steps:
-1. Confirm the problem was chosen by the Head of Product or the owner. If it was not, stop and ask who decided.
+1. Confirm the problem was chosen by the owner. If it was not, stop and ask who decided.
 2. Write the appetite in team-weeks: a small batch (one to two weeks for a designer and one or two engineers) or a big
    batch (a full six-week cycle). A problem that needs more than a big batch is two problems, or a bet for a later cycle.
 3. Fix the time and vary the scope. Sketch the smallest solution that solves the core problem inside the appetite.

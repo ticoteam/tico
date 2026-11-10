@@ -1,0 +1,106 @@
+"""The six bots a software company starts with are taught the Product and Engineering stages they own.
+
+A bot does what its template says. Before 0.6 the Builder was told to merge when the merge rules passed, the reviewer
+to write a "verdict" on the task, and the release bot was called a Release Owner that never touched a pull request; a
+bot following that text would merge by hand around the merge queue or never attach the page its stage needs. So each
+template names its stages and the commands that leave them, the Builder and both GitHub-writing bots are denied
+`gh pr merge`, and the Release Manager (and only it) may push a fix to a pull request's branch."""
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+import yaml
+
+from backend import pipeline_seats
+
+CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
+SIX = sorted(set(pipeline_seats.TEMPLATES.values()))
+OLD_WORDS = re.compile(r"\b(verdicts?|merge rules|QA pass|board|ticket)\b", re.IGNORECASE)
+
+
+def texts(template):
+    folder = CATALOG / template
+    for path in sorted(folder.rglob("*")):
+        if path.is_file() and path.suffix in (".md", ".yaml") and "software" not in path.relative_to(folder).parts:
+            if path.name != "state.md" and "examples" not in path.parts:
+                yield path, path.read_text()
+
+
+def agent(template):
+    return " ".join((CATALOG / template / "AGENT.md").read_text().split())
+
+
+def settings(template):
+    return json.loads((CATALOG / template / ".claude" / "settings.json").read_text())["permissions"]
+
+
+def card(template):
+    return yaml.safe_load((CATALOG / template / "card.yaml").read_text())
+
+
+def test_the_six_seats_have_templates():
+    assert len(SIX) == 5 and set(SIX) <= {p.name for p in CATALOG.iterdir()}
+
+
+@pytest.mark.parametrize("template", SIX)
+def test_no_pipeline_template_teaches_the_old_words(template):
+    assert (CATALOG / template / "AGENT.md").exists()
+    found = [
+        f"{path.relative_to(CATALOG)}: {m.group(0)}" for path, text in texts(template) for m in OLD_WORDS.finditer(text)
+    ]
+    assert not found, found
+
+
+@pytest.mark.parametrize(
+    "template, stages, commands",
+    [
+        ("builder", ["On deck", "Build", "Fixes 1", "Fixes 2"], ["tico task link", "tico task attach", "--req"]),
+        (
+            "pr-reviewer",
+            ["Review 1 or Review 2", "New commits since the review"],
+            ["headRefOid", "tico file publish", "tico task attach", "--req"],
+        ),
+        (
+            "product-manager",
+            ["Ideas", "Spec", "In development", "Validate"],
+            ["tico task attach", "--pipeline engineering"],
+        ),
+        ("engineering-manager", ["Stuck", "On ice", "Changed after OK", "Merged anyway"], ["tico task reassign"]),
+        ("release-owner", ["Merge", "Release"], ["tico task queue", '"Fixes 2"', "--force-with-lease"]),
+    ],
+)
+def test_each_template_names_its_stages_and_how_to_leave_them(template, stages, commands):
+    text = agent(template)
+    for stage in stages:
+        assert f"**{stage}" in text, (template, stage)
+    for command in commands:
+        assert command in text, (template, command)
+
+
+@pytest.mark.parametrize("template", ["builder", "pr-reviewer", "release-owner"])
+def test_no_github_bot_may_merge(template):
+    rules = settings(template)
+    assert "Bash(gh pr merge *)" in rules["deny"]
+    assert not any("gh pr merge" in rule for rule in rules["allow"])
+
+
+def test_only_the_release_manager_may_push_a_rebased_branch():
+    rules = settings("release-owner")
+    lease = "Bash(git push --" + "force-with-lease *)"
+    assert lease in rules["allow"]
+    assert "Bash(gh pr checkout *)" in rules["allow"]
+    # A bare force push stays denied, and the lease is not swallowed by a wider deny.
+    assert "Bash(git push --" + "force *)" in rules["deny"]
+    assert not any(rule.startswith("Bash(git push --" + "force*") for rule in rules["deny"])
+    for template in ("builder", "pr-reviewer"):
+        assert lease not in settings(template)["allow"], template
+
+
+def test_the_release_manager_is_named_once():
+    assert card("release-owner")["name"] == "Release Manager"
+    named = [
+        p.name for p in CATALOG.iterdir() if (p / "card.yaml").exists() and card(p.name)["name"] == "Release Manager"
+    ]
+    assert named == ["release-owner"]

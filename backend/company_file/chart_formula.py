@@ -369,7 +369,7 @@ def _slots(
             boss = spec.get("reports_to")
             if per is None:
                 if spec.get("unless") == "segment" and segments:
-                    continue  # the Product Owner that stands in when no segment is picked
+                    continue  # a seat that stands in only when no segment is picked
                 key = spec.get("key", "")
                 slots.append(
                     _Slot(

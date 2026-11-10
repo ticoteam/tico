@@ -8,7 +8,6 @@
       "Bash(gh pr create *)",
       "Bash(gh pr edit *)",
       "Bash(gh pr ready *)",
-      "Bash(gh pr merge *)",
       "Bash(gh pr comment *)",
       "Bash(gh pr view *)",
       "Bash(gh pr diff *)",
@@ -18,6 +17,7 @@
       "Bash(gh search prs *)"
     ],
     "deny": [
+      "Bash(gh pr merge *)",
       "Bash(gh pr review *)",
       "Bash(gh pr close *)",
       "Bash(gh pr reopen *)",

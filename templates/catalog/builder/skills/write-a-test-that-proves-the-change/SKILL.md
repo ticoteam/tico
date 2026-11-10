@@ -4,7 +4,7 @@ description: Write the test for a task first, see it fail on the old code for th
 ---
 # Write a test that proves the change
 
-When to use: before any code change for a task, and at any fix where a comment or a failed QA test shows a
+When to use: before any code change for a task, and at any fix where a comment or a failed test shows a
 behaviour that no test covers.
 
 Steps:

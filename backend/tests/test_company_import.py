@@ -1530,7 +1530,8 @@ def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environ
 
 
 # ------------------------------------------------------------------ the default chart, on every way a company starts
-LIVE_DEFAULT = ("product-owner", "qa-owner")
+# The six roles the Product and Engineering pipelines name (D2); QA Owner is a seat that starts open (D4).
+LIVE_DEFAULT = ("product-manager", "engineering-manager", "builder", "reviewer-1", "reviewer-2", "release-manager")
 
 
 def default_chart_text():
@@ -1573,11 +1574,39 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     ids = bot_ids(api)
     assert set(LIVE_DEFAULT) <= set(ids)
     seats = {r["title"]: r for r in rows(api, "SELECT id,title,filled_by,closed_at FROM seats")}
-    assert seats["Product Team Manager"]["closed_at"] is None and seats["QA Owner"]["filled_by"] == ids["qa-owner"]
+    assert seats["QA Owner"]["closed_at"] is None and not seats["QA Owner"]["filled_by"]
+    assert seats["Release Manager"]["filled_by"] == ids["release-manager"]
+    assert not {"Product Team Manager", "Engineering Team Manager", "Product Owner", "Release Owner"} & set(seats)
     before = (len(rows(api, "SELECT id FROM seats")), len(ids))
     again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text
     assert (len(rows(api, "SELECT id FROM seats")), len(bot_ids(api))) == before
+
+
+def _reviewer_models(api, enabled):
+    done = api.put("/api/v2/providers", json={"enabled": enabled}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    return {slug: stored_config(api, slug).get("model") for slug in ("reviewer-1", "reviewer-2")}
+
+
+def test_reviewer_2_runs_codex_when_the_company_has_it(environment):
+    """D12: the second review is a different model's. With OpenAI enabled, Reviewer 2 runs Codex."""
+    from backend import providers as P
+
+    models = _reviewer_models(environment(), ["anthropic", "openai"])
+    assert models["reviewer-2"] == P.recommended("openai")["id"]
+    assert models["reviewer-1"] != models["reviewer-2"]
+
+
+def test_reviewer_2_runs_another_claude_model_when_the_company_has_no_codex(environment):
+    from backend import providers as P
+
+    models = _reviewer_models(environment(), ["anthropic"])
+    assert models["reviewer-1"] == P.recommended("anthropic")["id"]
+    assert P.MODEL_BY_ID[models["reviewer-2"]]["provider"] == "anthropic"
+    assert models["reviewer-2"] != models["reviewer-1"]
 
 
 def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its_pipelines_and_its_bots(tmp_path):

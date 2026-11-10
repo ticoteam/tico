@@ -12,7 +12,7 @@ finished. Budget 25 minutes. The outcome is five recorded answers, a first real 
     tico doc search "spec"
     tico task list
 
-Look for existing specs and the Head of Product's decision log, and check whether GitHub is readable.
+Look for existing specs and the owner's decision log, and check whether GitHub is readable.
 Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
@@ -28,7 +28,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 2. Where do specs live, and is there a format engineers like? I write where people will read it.
 3. Who are the engineering and design owners I ask, and how fast can they answer? Open questions go to named humans with dates.
 4. What must be true before anything ships here? Becomes the launch readiness checklist.
-5. When should the weekly review land? (Default: Tuesdays at 10:00, to you and the Head of Product.) Sets the routine.
+5. When should the weekly review land? (Default: Tuesdays at 10:00, to you.) Sets the routine.
 
 ## 4. Record
 

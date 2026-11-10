@@ -52,7 +52,7 @@ onboarding:
     why: "Sets the sources. I never ask for a login."
   - ask: "Which goal or KPI does this segment's product outcome serve, and what is its target? (Default: the goal `tico goal list` names for it, or none, said plainly.)"
     why: "Each reading is compared with this target."
-  - ask: "Who reads the weekly review, and who should I ask when my manager cannot answer? (Default: my manager, the Product Team Manager once one is hired, else the owner; Mondays at 08:00.)"
+  - ask: "Who reads the weekly review, and who should I ask when my manager cannot answer? (Default: my manager, the Product Manager, else the owner; Mondays at 08:00.)"
     why: "Sets the routine's recipients and the human escalation path."
 first_routine:
   title: "Weekly segment product review"

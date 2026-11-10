@@ -1,5 +1,5 @@
 name: release-owner                      # the slug: it matches the repository bot-release-owner and the label owner:release-owner
-display_name: "Release Owner"
+display_name: "Release Manager"
 labels: [owner:release-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
@@ -38,8 +38,8 @@ tools:
   - service: github
     identity: "the product repositories the owner lists for this bot"
     can: [read]
-    note: "reads merge timings, workflow runs, check results and releases; never reruns, cancels, triggers or edits a workflow, never deploys, rolls back or merges"
-# Tagging an approved release (playbooks/rollout.md, step 1) needs write access on each repository, granted by the owner with
+    note: "reads pull requests, the merge queue, workflow runs and releases; pushes fix commits to a pull request's branch in Merge once the owner grants write; never merges, reruns, cancels, triggers or edits a workflow, never deploys or rolls back"
+# Pushing a fix to a pull request's branch in Merge, and tagging an approved release (playbooks/rollout.md, step 1), need write access on each repository, granted by the owner with
 # `tico bot repos release-owner --chosen <owner>/<repo>:write`. This file never grants it. The token can trigger workflows, so the only
 # things between this bot and a rerun or a deploy are this entry, the write grant and .claude/settings.json, which denies every
 # run, workflow, cache, credential, api, merge, release and tag command the agent could type.

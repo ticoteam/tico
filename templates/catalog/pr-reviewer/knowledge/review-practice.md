@@ -1,6 +1,6 @@
 # Review practice
 
-Standing reference for code review: size, comments, what blocks a merge, verdicts and the failure modes of review itself. The
+Standing reference for code review: size, comments, what blocks a merge, the head commit and the failure modes of review itself. The
 team's own standard is in `standards.md` and its repeated mistakes in `patterns.md`. This file holds general practice and the
 sources behind it. Where the two disagree, the team's written standard wins, and the disagreement goes in `decisions.md`.
 
@@ -32,9 +32,9 @@ sources behind it. Where the two disagree, the team's written standard wins, and
 - Approve once the change improves the code's health, even if it is not perfect. Waiting for a perfect change delays the author
   and the codebase (Google Engineering Practices reviewer guide, read as a snippet from a secondary summary).
 
-## Verdicts and the head commit
+## A review and the head commit
 
-- A verdict belongs to one commit. A push after the review, or a merge into the base branch, makes the verdict stale. Record the
+- A review belongs to one commit. A push after the review, or a merge into the base branch, makes the review stale. Record the
   commit you read, and re-read when the head moves.
 - A check that never ran is "not checked", not green. A skipped build, or a status API that returned an error, is not a pass.
 - Do not say "ready to merge" while blocking items or failing checks remain.
@@ -50,7 +50,7 @@ sources behind it. Where the two disagree, the team's written standard wins, and
 
 ## Cross-change risk
 
-- Two open pull requests that touch the same data, route or config can each pass when reviewed alone. Before a verdict on a risky
+- Two open pull requests that touch the same data, route or config can each pass when reviewed alone. Before you review a risky
   change, list the other open changes on the same files.
 - Read the base branch's commits since the branch point for the same area. A change can be correct against the old base and wrong
   against the new one.
