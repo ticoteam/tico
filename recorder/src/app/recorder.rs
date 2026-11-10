@@ -1517,6 +1517,14 @@ impl Recorder {
             match reply.kind.as_str() {
                 "call" => {
                     if let Some((destination, call)) = self.claiming.take() {
+                        // Tico did not take back a source this Recorder gave up: the release queue keeps trying.
+                        if reply
+                            .result
+                            .as_ref()
+                            .is_ok_and(|answer| answer["release_pending"] == true)
+                        {
+                            self.release_call(&destination, &call, None);
+                        }
                         self.accept_claim(&destination, &call, calls::claim_outcome(reply.result));
                     }
                     continue;

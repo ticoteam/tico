@@ -31,6 +31,8 @@ fn picker_search_runs_blocking_http_outside_the_tauri_runtime() {
                 Err(e) => panic!("{e}"),
             }
         };
+        // An accepted stream keeps the listener's non-blocking mode on macOS: reads would not wait.
+        stream.set_nonblocking(false).unwrap();
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();
@@ -1666,6 +1668,8 @@ const CALL: &str = "6f1c1a52-6a4e-4c39-9d43-6a1f0e3c2b10";
 struct FakeTico {
     url: String,
     seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// Each request with its body: "METHOD path body".
+    bodies: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 impl FakeTico {
@@ -1676,8 +1680,9 @@ impl FakeTico {
         let url = format!("http://{}", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
         let seen = Arc::new(Mutex::new(vec![]));
+        let bodies = Arc::new(Mutex::new(vec![]));
         let stop = Arc::new(AtomicBool::new(false));
-        let (log, stopped) = (seen.clone(), stop.clone());
+        let (log, stopped, sent) = (seen.clone(), stop.clone(), bodies.clone());
         std::thread::spawn(move || {
             while !stopped.load(Ordering::Relaxed) {
                 let mut stream = match listener.accept() {
@@ -1715,6 +1720,10 @@ impl FakeTico {
                     .unwrap_or(0);
                 let mut body = vec![0; length];
                 let _ = stream.read_exact(&mut body);
+                sent.lock().unwrap().push(format!(
+                    "{method} {path} {}",
+                    String::from_utf8_lossy(&body)
+                ));
                 log.lock().unwrap().push(format!("{method} {path}"));
                 let (status, reply) = answer(&method, &path);
                 let reply = reply.to_string();
@@ -1725,7 +1734,12 @@ impl FakeTico {
                 );
             }
         });
-        Self { url, seen, stop }
+        Self {
+            url,
+            seen,
+            bodies,
+            stop,
+        }
     }
     fn seen(&self) -> Vec<String> {
         self.seen.lock().unwrap().clone()
@@ -2032,4 +2046,50 @@ fn every_release_reaches_tico_and_a_refused_one_is_tried_again() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(both(&tico), "{:?}", tico.seen());
+}
+
+#[test]
+fn a_release_sends_an_empty_json_body() {
+    let tico = FakeTico::start(|_, _| (200, json!({})));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    app.release_call("acme", CALL, None);
+    settle(&mut app, |_| {
+        tico.asked(&format!("DELETE {}", claim_path())) == 1
+    });
+    assert_eq!(
+        tico.bodies.lock().unwrap().as_slice(),
+        [format!("DELETE {} {{}}", claim_path())]
+    );
+}
+
+#[test]
+fn tico_saying_the_call_has_transcript_wins_and_a_refused_release_is_queued() {
+    static RELEASES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let tico = FakeTico::start(|method, path| {
+        if path == claim_path() && method == "POST" {
+            return (
+                200,
+                json!({"source":true,"meeting_id":"live-1","title":"Pricing call","has_transcript":true}),
+            );
+        }
+        // Tico takes the source back only on the fourth try: after the claim's own three.
+        if method == "DELETE" && RELEASES.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 3 {
+            return (503, json!({"error":{"code":"unavailable"}}));
+        }
+        // The meeting itself reads as empty: Tico's word is taken over it.
+        (200, json!({"id":"live-1","state":"live","seq":0}))
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    app.link(&call_link(&tico));
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while tico.asked(&format!("DELETE {}", claim_path())) < 4 && Instant::now() < deadline {
+        app.tick();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(tico.asked(&format!("DELETE {}", claim_path())), 4);
+    assert_eq!(tico.asked("GET /api/v2/live-meetings/live-1"), 0);
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.store.list().unwrap().is_empty(), "nothing recorded");
 }
