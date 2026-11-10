@@ -4199,9 +4199,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
                 conn,
                 actor,
                 "label",
-                f"approval {approval_id} does not cover this change: a publish approval is used once, must be "
-                f"approved, and must match `hub task publication-preview {row['id']}` with a --label for each "
-                f"label the task keeps; request a new one, or ask a person on the {teams} teams",
+                f"{approval_id} is no OK of exactly this change; a person on the {teams} teams changes it",
                 task=row["id"],
             )
         return True
@@ -4210,9 +4208,7 @@ def _label_writer(conn, actor, row, labels, approval_id=None):
         public,
         teams,
         (
-            f"it needs an approved publish approval: get the payload with `hub task publication-preview {row['id']}` and "
-            f"a --label for each label the task keeps, request the approval, then retry with its id (--approval-id), or "
-            f"ask a person on the {teams} teams"
+            f"the public roadmap is not open to bots yet: a person on the {teams} teams changes it"
             if settings["bot_public_approval"]
             else f"a person on the {teams} teams changes it"
         ),
@@ -4262,9 +4258,8 @@ def _create_labels(conn, actor, keys):
         public,
         teams,
         (
-            f"it needs an approved publish approval, which is for a task that exists: create the task without "
-            f"{'it' if len(public) == 1 else 'them'}, then add {'it' if len(public) == 1 else 'them'} on the task with the "
-            f"approval (`hub task publication-preview <id>`, then --approval-id), or ask a person on the {teams} teams"
+            f"the public roadmap is not open to bots yet: create the task without {'it' if len(public) == 1 else 'them'}, "
+            f"and a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
             if settings["bot_public_approval"]
             else f"a person on the {teams} teams adds {'it' if len(public) == 1 else 'them'}"
         ),
