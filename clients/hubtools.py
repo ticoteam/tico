@@ -12926,13 +12926,11 @@ ASSISTANT_WRITES = {
     "hub_task_update",
     "hub_task_done",
     "hub_task_move",
-    "hub_task_queue",
     "hub_task_reassign",
     "hub_task_comment",
     "hub_task_label",
     "hub_task_close",
     "hub_task_link",
-    "hub_task_unlink",
     "hub_task_answer",
     "hub_task_give",
     "hub_update_mark_read",
@@ -13125,6 +13123,8 @@ AUDIENCE = {
         for name in ("hub_sql", "hub_classify", "hub_decision_ask", "hub_decision_outcome", "hub_market_ask")
     },
 }
+# Writes the Assistant may make for its person: queue again (the Merge stage) and take a link off a task.
+ASSISTANT_WRITES.update(("hub_task_queue", "hub_task_unlink"))
 
 
 def kind_of(me):
