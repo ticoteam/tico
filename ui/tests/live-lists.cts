@@ -4,6 +4,8 @@
 // belongs leaves, and the 2-minute refresh catches up with a changed_after delta from the list's cursor.
 //  - a bot's page: its Open rows and its filter tabs (Assigned to others), decided by each tab's rows client-side;
 //  - a person's page: the tasks they own, open and finished (a snoozed one is off it);
+//  - My dashboard: My tasks from the reader's task events, Needs you from the list the app holds, Unread threads from
+//    read and activity events; the place is not read again for any of them.
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -17,6 +19,7 @@ type Task = ReturnType<typeof task>;
 declare const LIVE_SOON: Map<string, unknown>;
 declare function liveEmit(topic: string, data: unknown): void;
 declare function refresh(force: boolean): Promise<void>;
+declare const S: {v2: {needs: unknown[]; needsCount?: number}};
 
 const BOTS = [['ops', 'Ops'], ['pm', 'PM']].map(([name, display_name]) => ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}));
 // The server's tasks by id (as GET /api/v2/tasks/{id} and a `tasks` event's `task` carry them).
@@ -28,6 +31,16 @@ put(task('t3', 'Pick the release day', 'spec', {owner_id: 'bot:pm', requester_id
 // What backend/events.py _tasks sends for one task: its id, the change's kind(s) and the task as the viewer reads it, or
 // `gone` when it was deleted.
 const event = (x: Task, kind = 'update') => ({id: x.id, kind, kinds: [kind], task: put(x)});
+// My dashboard as backend/cards.py draws it for Ana: My tasks (all of hers shown), Needs attention, Unread threads.
+const dashCard = (template: string, heading: string, data: unknown, settings = {}) => ({id: null, item: null, size: 'medium', made_by: null,
+  card: {id: null, template, title: '', heading, name: heading, settings: {team: '', ...settings}, team_name: '', hidden: false, made_by: null, data}});
+const HOME_PLACE = {place: 'person:ana', kind: 'person', saved: false, can_edit: true, pins: [
+  dashCard('my_tasks', 'My tasks', {count: 2, tasks: [{id: 't10', title: 'Sign the lease', status: 'open', due_at: '2026-11-20', updated_at: '2026-11-09T10:00:00Z'},
+    {id: 't11', title: 'Plan the offsite', status: 'open', due_at: null, updated_at: '2026-11-09T09:00:00Z'}]}, {count: 5}),
+  dashCard('needs_attention', 'Needs attention', {count: 0, items: []}),
+  dashCard('unread_threads', 'Unread threads', {count: 2, threads: [{id: 'th1', title: 'Launch', unread: 1, activity: true, updated_at: '2026-11-09T10:00:00Z', audience: 'everyone'},
+    {id: 'th2', title: 'Hiring', unread: 2, activity: true, updated_at: '2026-11-09T09:00:00Z', audience: 'everyone'}]}, {count: 5}),
+]};
 const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', kinds: ['delete'], gone: true}; };
 
 (async () => {
@@ -36,7 +49,7 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
   // Every list read the page makes, by kind; a delta (changed_after) is counted apart with its cursor.
-  const reads = {tasks: 0, tabs: 0, changed: [] as string[]};
+  const reads = {tasks: 0, tabs: 0, places: 0, changed: [] as string[], streams: [] as string[]};
   let delta: {tasks: Task[]; gone: string[]} = {tasks: [], gone: []};
   await page.route('**/*', (route: Route) => {
     const url = new URL(route.request().url()), p = url.pathname, q = url.searchParams;
@@ -52,7 +65,8 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam'}]});
     if (p === '/api/v2/status') return json({bots: BOTS.map(b => ({bot: b.name, state: 'idle'}))});
     if (p === '/api/v2/needs-you') return json({items: [], count: 0, version: 'v0'});
-    if (p === '/api/v2/events') return;                                                  // held open: events come by liveEmit
+    if (p === '/api/v2/events') { reads.streams.push(url.search); return; }               // held open: events come by liveEmit
+    if (decodeURIComponent(p) === '/api/v2/places/person:me') { reads.places++; return json(HOME_PLACE); }
     if (p === '/api/v2/tasks' && q.get('changed_after')) {                               // backend/task_list_routes.py
       reads.changed.push(q.get('changed_after')!);
       const out = {tasks: delta.tasks.map(x => brief(put(x))), gone: delta.gone, cursor: '30.a', next_offset: null};
@@ -138,6 +152,35 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
   await page.waitForFunction(() => !document.querySelector('#person-tasks')?.textContent?.includes('Order the badges'));
   assert.deepEqual(reads.changed, ['12.a']);
   assert.equal(reads.tasks, personListed, 'the refresh reads no whole task list');
+
+  // ---- My dashboard
+  await page.evaluate(() => { location.hash = '#/home'; });
+  const pin = (name: string) => page.locator('.dash-pin', {has: page.locator('h2', {hasText: name})});
+  await pin('My tasks').locator('li', {hasText: 'Sign the lease'}).waitFor({timeout: t(8000)});
+  const placed = reads.places;
+  // The stream sends Ana's own tasks here (live.ts liveTaskScope).
+  for (let i = 0; i < 50 && !/party=human%3Aana/.test(reads.streams.at(-1) || ''); i++) await page.waitForTimeout(100);
+  assert.match(reads.streams.at(-1) || '', /party=human%3Aana/);
+  await emit('tasks', ...Array.from({length: 20}, (_, i) => event(task('t10', `Sign the lease ${i + 1}`, 'spec', {owner_id: 'human:ana', due_at: '2026-11-20', version: 4 + i}))));
+  await pin('My tasks').locator('li', {hasText: 'Sign the lease 20'}).waitFor();
+  // Done: off it, one fewer. New and hers, due sooner: first, one more. Sam's: not on it.
+  await emit('tasks', event(task('t11', 'Plan the offsite', 'done', {owner_id: 'human:ana'})),
+    event(task('t12', 'Renew the domain', 'spec', {owner_id: 'human:ana', due_at: '2026-11-15'}), 'insert'),
+    event(task('t13', 'Pack the boxes', 'spec', {owner_id: 'human:sam'}), 'insert'));
+  await pin('My tasks').locator('li', {hasText: 'Renew the domain'}).waitFor();
+  assert.deepEqual(await pin('My tasks').locator('li a').allTextContents(), ['Renew the domain', 'Sign the lease 20']);
+  assert.equal((await pin('My tasks').locator('.dash-big strong').textContent())?.trim(), '2');
+  // Needs you as the app holds it.
+  await page.evaluate(() => { S.v2.needs = [{id: 'n1', kind: 'task', task_id: 'n1', line: 'Approve the budget'}]; S.v2.needsCount = 1; liveEmit('needs-list', S.v2.needs); });
+  await pin('Needs attention').locator('li', {hasText: 'Approve the budget'}).waitFor();
+  assert.equal((await pin('Needs attention').locator('.dash-big strong').textContent())?.trim(), '1');
+  // A new unread message on Hiring counts on its row (now first); Ana's read of Launch takes it off.
+  await emit('threads', {kind: 'activity', thread_id: 'th2', root_id: 'th2', message_id: 'm9', unread: true, unread_count: 1, counters: {last_seq: 9, last_unread_seq: 9}},
+    {kind: 'read', thread_id: 'th1', root_id: 'th1', read: {last_read_seq: 7}});
+  await page.waitForFunction(() => !document.querySelector('.dash-grid')?.textContent?.includes('Launch'));
+  assert.match(await pin('Unread threads').locator('li').first().textContent() || '', /Hiring[\s\S]*3 new/);
+  await settled();
+  assert.equal(reads.places, placed, 'no read of the place follows an event');
 
   assert.deepEqual(errors, []);
   await browser.close();
