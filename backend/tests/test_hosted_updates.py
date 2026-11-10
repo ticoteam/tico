@@ -264,3 +264,47 @@ def test_a_0_5_server_with_tasks_is_not_offered_0_6_and_says_why(api, hosted, mo
     # A patch of 0.5 is offered as always.
     offer.update(latest="0.5.217")
     assert api.get("/api/v2/config", headers=headers()).json()["update"]["available"] is True
+
+
+def test_an_update_key_cannot_move_a_0_5_server_with_tasks_to_0_6(api, hosted, monkeypatch):  # noqa: F811
+    from backend.tests.helpers.api import post
+
+    monkeypatch.setenv("TICO_VERSION", "0.5.216")
+    _one_task(api)
+    key = {"Authorization": "Bearer " + post(api, "service-keys", {"label": "Release bot", "scope": "update"})["key"]}
+    r = api.post("/api/v2/system/update", json={"version": "v0.6.0"}, headers=key)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "fresh_start", r.text
+    assert hosted.updater.started == []
+    assert api.post("/api/v2/system/update", json={"version": "0.5.217"}, headers=key).status_code == 200
+    assert hosted.updater.started == ["0.5.217"]
+
+
+def test_a_0_5_server_with_no_tasks_is_offered_0_6_and_every_0_5_patch(api, hosted, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("TICO_VERSION", "0.5.216")
+    _no_tasks(hosted.store)
+    offer = {"current": "0.5.216", "latest": "0.6.0", "available": True, "managed": False, "message": None}
+    monkeypatch.setattr(releases, "notice", lambda: dict(offer))
+    update = api.get("/api/v2/config", headers=headers()).json()["update"]
+    assert update["available"] is True and update["held"] == ""
+    offer.update(latest="0.5.217")
+    assert api.get("/api/v2/config", headers=headers()).json()["update"]["available"] is True
+    assert api.post("/api/v2/system/update", json={"version": "0.6.0"}, headers=headers()).status_code == 200
+    assert hosted.updater.started == ["0.6.0"]
+
+
+def test_a_0_6_server_with_tasks_is_offered_and_takes_a_later_0_6(api, hosted, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("TICO_VERSION", "0.6.0")
+    _one_task(api)
+    offer = {"current": "0.6.0", "latest": "0.6.1", "available": True, "managed": False, "message": None}
+    monkeypatch.setattr(releases, "notice", lambda: dict(offer))
+    update = api.get("/api/v2/config", headers=headers()).json()["update"]
+    assert update["available"] is True and update["held"] == ""
+    assert api.post("/api/v2/system/update", json={"version": "0.6.1"}, headers=headers()).status_code == 200
+    assert hosted.updater.started == ["0.6.1"]
+
+
+def test_support_can_pull_a_0_6_server_with_tasks_to_a_later_0_6(api, hosted, monkeypatch):  # noqa: F811
+    monkeypatch.setenv("TICO_VERSION", "0.6.0")
+    _one_task(api)
+    hosted.hq.target = {"version": "0.6.1", "request_id": "hu_" + "e" * 16}
+    assert hosted.tick(T0) == "updating" and hosted.updater.started == ["0.6.1"]
