@@ -463,6 +463,11 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     # like any other.
     if H.person_sent({"sender_id": found[3], "refs": refs}):
         return True
+    if found[3] == H.KEEPER and refs.get("command") and refs.get("goal_action") == "clear":
+        # The server's "/goal clear" (chat_goals.clear_task_goal) does no work on the task: it stops the harness
+        # pursuing a task goal that ended, so it reaches the old owner's session even when the task is no longer
+        # theirs. Only the server's own: refs a bot sends are not trusted to skip the hold.
+        return True
     parts = str(found[0] or "").split(":")
     task = E.task(conn, parts[0]) if found[0] else None
     if task is None:
