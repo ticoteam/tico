@@ -353,29 +353,51 @@ def last_run(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | 
     return {"state": found[0], "finished_at": found[1]} if found else None
 
 
-def _marks(task: Row) -> tuple[int, int]:
-    """Where the task's visit last changed, by order: the newest attempts row and the newest messages row there were
-    then (`visits.last_change_attempt`, `last_change_message`, written by triggers whenever `last_change_at` is). A run
-    or a wake with a larger rowid came after the change, whatever the clock said when it was written."""
+def _marks(task: Row) -> tuple[int, int, int]:
+    """Where the task's visit last changed, by order: the newest attempts row, the newest messages row and the newest
+    start (`run_starts`) there were then (`visits.last_change_attempt`, `last_change_message`, `last_change_start`,
+    written by triggers whenever `last_change_at` is). A run or a wake with a larger rowid came after the change, and a
+    run with a larger start started after it, whatever the clock said when it was written."""
     visit: Row = task.get("visit") or {}
-    return int(visit.get("last_change_attempt") or 0), int(visit.get("last_change_message") or 0)
+    return (
+        int(visit.get("last_change_attempt") or 0),
+        int(visit.get("last_change_message") or 0),
+        int(visit.get("last_change_start") or 0),
+    )
+
+
+def started(conn: "sqlite3.Connection", attempt: str) -> None:
+    """A run started: it takes the next start in order (`run_starts`), in the transaction that marks it started. The
+    run counts for the change that was current then (`runs_since`), whenever its lease was written."""
+    conn.execute("INSERT OR IGNORE INTO run_starts (attempt_id) VALUES (?)", (attempt,))
+
+
+# A run started since the change: its start is newer than the visit's (`run_starts`), or, for a run that started with
+# no start row (before there were any, or written straight into attempts), its attempt row is newer. Bound: the start
+# mark, the start mark, the attempt mark.
+_STARTED_SINCE = (
+    "a.started_at IS NOT NULL AND (a.rowid IN (SELECT r.rowid FROM run_starts s JOIN attempts r ON r.id = s.attempt_id "
+    "WHERE s.id > ?) OR (a.rowid > ? AND NOT EXISTS (SELECT 1 FROM run_starts s WHERE s.attempt_id = a.id)))"
+)
 
 
 def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False, besides: str | None = None) -> int:
     """How many bot runs started on this task since its visit last changed, whoever ran: the count the never-stuck
     ladder holds to 7. Only a run that started counts (`started_at`): a lease that failed before it began ran nothing.
-    With `starting`, a lease still live that has not started yet counts too: it is about to. "Since" is by order, not
-    by the clock: a run whose attempt row came after the change. A run belongs to the change it was claimed after.
+    With `starting`, every lease still live that has not started yet counts too, whenever it was claimed: if it starts,
+    it starts after this change. "Since" is by order, not by the clock: a run belongs to the change that was current
+    when it started (`started`), so a lease claimed before a change and started after it is the new change's.
     `besides` leaves one run out: the one asking whether it may start."""
-    started, args = "a.started_at IS NOT NULL", list[object]([_marks(task)[0]])
+    attempt_mark, _, start_mark = _marks(task)
+    counted, args = f"({_STARTED_SINCE})", list[object]([start_mark, attempt_mark])
     if starting:
-        started = "(a.started_at IS NOT NULL OR (a.state = 'leased' AND a.lease_until > ?))"
+        counted = f"({counted} OR (a.state = 'leased' AND a.started_at IS NULL AND a.lease_until > ?))"
         args.append(_h().now())
     if besides:
-        started += " AND a.id <> ?"
+        counted += " AND a.id <> ?"
         args.append(besides)
     found = conn.execute(
-        f"SELECT COUNT(*) {_RUNS}WHERE a.rowid > ? AND {started} AND {_ON_TASK}", (*args, *_on_task(conn, task))
+        f"SELECT COUNT(*) {_RUNS}WHERE {counted} AND {_ON_TASK}", (*args, *_on_task(conn, task))
     ).fetchone()
     return int(found[0]) if found else 0
 

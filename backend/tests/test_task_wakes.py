@@ -206,6 +206,35 @@ def test_a_run_whose_task_changed_between_its_claim_and_its_start_never_starts(a
             assert not c.execute("SELECT 1 FROM jobs WHERE state='queued' AND bot_id='ops'").fetchone(), change
 
 
+def test_a_run_claimed_before_a_change_and_started_after_it_counts_for_the_change_it_started_in(api):
+    """The claim leased the run; then the task changed (a requirement came); then its computer started it. That start
+    is one of the 7 the new change allows, by the order the starts came in, not by when the lease was written: six more
+    runs and the visit has used all 7, and an eighth never starts."""
+    from backend import task_engine as E
+    from backend.tests.helpers.api import assign, claim, post, ready, runner
+
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    token = machine["token"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Draft it."})["id"]
+    aid = claim(api, machine)["id"]
+    with api.app.state.store.transaction() as c:
+        E.changed(c, tid, ANA)  # after the claim, before the start
+    post(api, f"attempts/{aid}/started", {"thread_id": "t-" + aid}, token)
+    post(api, f"attempts/{aid}/complete", {"outcome": "completed", "last_seq": 0}, token)
+    with api.app.state.store.transaction() as c:
+        row = E.task(c, tid)
+        assert task_wakes.runs_since(c, row) == 1  # it started after the change: it is this change's
+        computer = c.execute("SELECT runner_id FROM attempts WHERE id=?", (aid,)).fetchone()[0]
+        for n in range(task_wakes.RUNS - 1):
+            task_wakes.add(c, row, "bot:ops", row["visit"], "Carry on.", wake_key=f"{tid}:more:{n}")
+            X.ran(c, tid, "bot:ops", runner=computer)
+        assert task_wakes.runs_since(c, E.task(c, tid)) == task_wakes.RUNS
+        eighth = task_wakes.add(c, row, "bot:ops", row["visit"], "Carry on.", wake_key=f"{tid}:more:eighth")
+        assert eighth and not task_wakes.may_start(c, eighth)  # an eighth run never starts
+
+
 def test_a_live_run_on_one_task_never_hides_a_lost_wake_on_another_in_the_same_conversation(c, general):
     """Two open tasks share a conversation. The builder's live run on the footer task is not a run on the launch note:
     the note's wake that never ran is lost, and the never-stuck check wakes the builder for it again."""

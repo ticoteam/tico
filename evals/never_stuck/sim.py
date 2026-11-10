@@ -346,6 +346,7 @@ class Computer:
                 "UPDATE attempts SET state='running', started_at=?, lease_until=? WHERE id=?",
                 (now, run.lease, run.attempt),
             )
+            task_wakes.started(c, run.attempt)
             c.execute("UPDATE jobs SET state='running' WHERE id=?", (run.job,))
 
         sim.write(start)

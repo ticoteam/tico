@@ -45,8 +45,11 @@ def place(c, slug):
     c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
 
 
-def ran(c, task_id, actor, state="completed", at=None):
-    """The bot's queued wakes for a task have had their run: each job gets one run that ended in `state` at `at`."""
+def ran(c, task_id, actor, state="completed", at=None, runner="r1"):
+    """The bot's queued wakes for a task have had their run: each job gets one run that ended in `state` at `at`, each
+    started in order (task_wakes.started), on the computer `runner`."""
+    from backend import task_wakes
+
     at = at or H.now()
     rows = c.execute(
         "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id = j.message_id "
@@ -57,9 +60,10 @@ def ran(c, task_id, actor, state="completed", at=None):
         run = H.new_id()
         c.execute(
             "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, "
-            "created_at, started_at, finished_at, message_id, task_id) VALUES (?,?,?,'r1',1,?,?,?,?,?,?,?,?)",
-            (run, job_id, H.actor_id(actor), run, state, at, at, at, at, message_id, task_id),
+            "created_at, started_at, finished_at, message_id, task_id) VALUES (?,?,?,?,1,?,?,?,?,?,?,?,?)",
+            (run, job_id, H.actor_id(actor), runner, run, state, at, at, at, at, message_id, task_id),
         )
+        task_wakes.started(c, run)
         c.execute(
             "UPDATE jobs SET state=?, attempt_id=? WHERE id=?",
             ("completed" if state == "completed" else "uncertain", run, job_id),

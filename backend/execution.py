@@ -5850,6 +5850,9 @@ class Execution:
         if not reserved["reserved"]:
             raise Problem("start_wait", reserved.get("waiting", "Start reservation expired or stopped"), 409)
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
+        from . import task_wakes
+
+        task_wakes.started(c, aid)  # charged to the task's change current now, not the one it was claimed in
         from .performance import stamp_attempt
 
         stamp_attempt(c, aid, row["runner_id"], "start", body.load_snapshot)
