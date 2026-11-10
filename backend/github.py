@@ -166,6 +166,7 @@ def fire_once(detail, item):
 def flush_wakes(c):
     """Send each due PR burst independently; keep a failed or blocked notice for retry. A burst is up to three
     messages: its grouped items, its review notes, and one `pr_checks_done` per head that finished."""
+    from . import task_engine as E
     from .repositories import metadata
 
     sent = []
@@ -177,27 +178,26 @@ def flush_wakes(c):
             task = H.task(c, row["key"].split(":", 1)[1])
             live = bool(task and task["status"] == "open")
             if live:
+                # Through the engine: one keyed wake per part of the burst, a run only on the owner bot's turn.
+                at = H.now()
                 if burst.get("items"):
-                    H._wake(
+                    E.tell_owner(
                         c,
-                        task,
-                        task["owner_id"],
+                        task["id"],
                         "\n".join(burst["items"]),
-                        {"wake_batch": burst["batch"]} if burst.get("batch") else None,
+                        f"github:{at}:items",
+                        refs={"wake_batch": burst["batch"]} if burst.get("batch") else None,
                         trigger="pr_checks",
                     )
-                if burst.get("notes"):
-                    H._wake(
-                        c, task, task["owner_id"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks"
-                    )
+                if burst.get("notes"):  # reviews that are not a person's: a note for the next run
+                    E.tell_owner(c, task["id"], "\n".join(burst["notes"]), f"github:{at}:notes", wake=False)
                 for done in burst.get("done", []):
-                    H._wake(
+                    E.tell_owner(
                         c,
-                        task,
-                        task["owner_id"],
+                        task["id"],
                         done["item"],
-                        {
-                            "wake": "pr_checks_done",
+                        f"github:checks:{done['head']}:{done['result']}:{at}",
+                        refs={
                             "pr_head": done["head"],
                             "pr_result": done["result"],
                             **({"pr_armed": True} if done.get("armed") else {}),

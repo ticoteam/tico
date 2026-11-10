@@ -185,15 +185,18 @@ def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(ap
         assert G.flush_wakes(c) == [task["id"]]  # the next flush, not three minutes on
         G.pr_signal(c, "pull_request_review_comment", failing)  # the same comment: nothing new
         assert G.flush_wakes(c) == []
-        G.queue_wake(c, H.task(c, task["id"]), "The release you armed a wait for is out.")
-        assert G.flush_wakes(c) == [task["id"]]  # an awaited result goes at once too
-    [ci] = [j for j in jobs(api) if j["wake_class"] == "review"]
+    [ci] = [j for j in jobs(api) if j["wake_class"] == "review" and j["state"] == "queued"]
     assert ci["held"] == 1  # a person's review comment nobody waits on is batched
     tick(api, H.now())
     [ci] = [j for j in jobs(api) if j["id"] == ci["id"]]
     assert H.parse_ts(ci["hold_until"]) <= H.parse_ts(H.shift(H.now(), seconds=window))
-    [armed] = [j for j in jobs(api) if j["body"].startswith("The release you armed")]
-    assert (armed["state"], armed["held"]) == ("queued", 0)
+    with api.app.state.store.transaction() as c:
+        G.queue_wake(c, H.task(c, task["id"]), "The release you armed a wait for is out.")
+        assert G.flush_wakes(c) == [task["id"]]  # an awaited result goes at once too
+    # It takes the held review wake with it (one turn per task) and is not held for it.
+    [armed] = [j for j in jobs(api) if "The release you armed" in j["body"]]
+    assert (armed["state"], armed["held"]) == ("queued", 0) and "review comment" in armed["body"]
+    assert [j["state"] for j in jobs(api) if j["id"] == ci["id"]] == ["canceled"]
 
 
 @pytest.mark.parametrize("name", ["token_saver", "performance"])

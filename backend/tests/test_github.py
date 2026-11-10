@@ -358,15 +358,17 @@ def test_grouped_wakes_retry_bad_rows_and_send_open_tasks(api, monkeypatch):
                 c, "github-task-wake:" + task["id"], {"due": H.shift(H.now(), seconds=-1), "items": ["Checks failed"]}
             )
         H.task_done(c, "human:ana", tasks[2]["id"], "Finished.")
-    wake = H._wake
+    from backend import task_engine as E
 
-    def broken(c, task, *args, **kwargs):
-        if task["id"] == tasks[0]["id"]:
-            H.event(c, H.KEEPER, "wake.partial", task["id"])
+    tell = E.tell_owner
+
+    def broken(c, task_id, *args, **kwargs):
+        if task_id == tasks[0]["id"]:
+            H.event(c, H.KEEPER, "wake.partial", task_id)
             raise RuntimeError("bad conversation")
-        return wake(c, task, *args, **kwargs)
+        return tell(c, task_id, *args, **kwargs)
 
-    monkeypatch.setattr(H, "_wake", broken)
+    monkeypatch.setattr(E, "tell_owner", broken)
     with store.transaction() as c:
         assert G.flush_wakes(c) == [tasks[1]["id"]]
     with store.read() as c:
@@ -374,7 +376,7 @@ def test_grouped_wakes_retry_bad_rows_and_send_open_tasks(api, monkeypatch):
             "github-task-wake:" + tasks[0]["id"]
         ]
         assert not c.execute("SELECT 1 FROM events WHERE action='wake.partial'").fetchone()
-    monkeypatch.setattr(H, "_wake", wake)
+    monkeypatch.setattr(E, "tell_owner", tell)
     with store.transaction() as c:
         assert G.flush_wakes(c) == [tasks[0]["id"]]
 
@@ -1277,6 +1279,38 @@ def test_draft_failures_stay_visible_until_the_branch_pr_is_linked(api, monkeypa
     assert _prs(api, task['id'])[8]['state'] == 'draft' and 'pr_error' not in _worktree_detail(api, tree)
 
 
+def test_a_burst_wakes_only_a_bot_whose_turn_it_is_and_never_messages_a_person(api):
+    """GitHub news goes through the engine's keyed wake: the bot owner on its turn gets one run; a bot whose task
+    waits on a person gets the news as a note and no run; a person who owns the task is told nothing (it is in
+    their Needs you)."""
+    mine = post(api, 'tasks', {'owner': 'cpo', 'title': 'Repair checks', 'body': 'x', 'links': [PR]})
+    asked = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ask first', 'body': 'x', 'links': [PR]})
+    post(api, f"tasks/{asked['id']}/asks", {'to': 'ana', 'line': 'Which plan?', 'version': asked['version']})
+    theirs = post(api, 'tasks', {'owner': 'ana', 'title': 'Read the PR', 'body': 'x', 'links': [PR]})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
+        before = c.execute('SELECT max(rowid) FROM messages').fetchone()[0]
+    hook(
+        api,
+        'pull_request_review_comment',
+        {'action': 'created', 'pull_request': {'html_url': PR}, 'comment': {'id': 1, 'user': {'login': 'sam'}}},
+    )
+    with api.app.state.store.transaction() as c:
+        assert set(G.flush_wakes(c)) >= {mine['id'], asked['id']}
+        rows = c.execute(
+            "SELECT m.recipient_id, c.task_id, m.wake_key, json_extract(m.refs,'$.quiet'), "
+            "(SELECT j.state FROM jobs j WHERE j.message_id=m.id) FROM messages m "
+            'JOIN conversations c ON c.id=m.conversation_id WHERE m.rowid>? ORDER BY m.rowid',
+            (before,),
+        ).fetchall()
+    by_task = {row[1]: row for row in rows}
+    assert theirs['id'] not in by_task  # a person gets no message
+    assert by_task[mine['id']][0] == 'bot:cpo' and by_task[mine['id']][4] == 'queued'
+    assert by_task[mine['id']][2].startswith(f"{mine['id']}:")  # keyed: the engine holds its run to the turn
+    assert by_task[asked['id']][3] == 1 and by_task[asked['id']][4] is None  # a note, no run
+    assert len(rows) == 2
+
+
 def _queue(api, task_id, action, reason=None, head='a' * 40, **over):
     """A merge-queue webhook for the task's PR at `head`. GitHub's dequeue `reason` rides on the top-level payload."""
     body = pr_event(action, head={'sha': head}, **over)
@@ -1327,7 +1361,7 @@ def test_a_merge_queue_removal_wakes_the_owner_once_when_github_still_has_the_pr
     G.refresh_queue_removals(service)
     assert _burst(api, task['id']) == [item] and _sent(api) == [task['id']]
     with api.app.state.store.transaction() as c:
-        assert c.execute('SELECT body FROM messages ORDER BY rowid DESC LIMIT 1').fetchone()[0] == item
+        assert item in c.execute('SELECT body FROM messages ORDER BY rowid DESC LIMIT 1').fetchone()[0]
         pr = H.task_links(c, task['id'])[0]
         queue = H._json(pr['detail'], {})['merge_queue']
         assert queue['state'] == 'dequeued' and 'verify' not in queue

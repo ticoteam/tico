@@ -138,6 +138,8 @@ def add(
     if parts:
         own["parts"] = parts  # what was folded into it, each with its key and its words (`cancel`)
     theirs: Row = {name: value for name, value in (refs or {}).items() if name not in ENGINE_REFS}
+    if not theirs.get("wake_batch"):
+        carried.pop("wake_batch", None)  # a wake that is not batchable is not held for what it folded (wake_presets)
     stamped: Row = RT.stamp({**carried, **theirs, **own}, trigger or "task_turn", source)
     message = H._write_message(
         conn,
