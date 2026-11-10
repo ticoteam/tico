@@ -10,7 +10,6 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -71,10 +70,7 @@ class Scenario:
     about: str
     steps: Callable
     checks: list = field(default_factory=list)
-    bots: dict = field(default_factory=dict)  # extra org bots ({slug: (role, harness)}), e.g. the migration fixture's
-    first_tick: bool = (
-        True  # the owner's built-ins made on the first automations tick; False when the scenario cuts over
-    )
+    bots: dict = field(default_factory=dict)  # extra org bots ({slug: (role, harness)}), e.g. BotOps or the Librarian
 
 
 @dataclass
@@ -152,10 +148,9 @@ class Org(World):
     Omar and Priya, people, under her; Engineering Lead under her too (so Omar is a peer of the lead); two builders
     under the lead; and the Release Manager under Dana. Emails are @acme.example."""
 
-    def __init__(self, extra_bots=None, first_tick=True):
-        """`extra_bots` adds bots to the org (the migration fixture's Inbox Manager, Health Monitor, Librarian...), as
-        {slug: (role, harness)} in the World's format. `first_tick` runs what a live server's first automations tick
-        does once Dana owns the install (redesign_migration.catch_up: her built-ins)."""
+    def __init__(self, extra_bots=None):
+        """`extra_bots` adds bots to the org (BotOps, Health, the Librarian...), as {slug: (role, harness)} in the
+        World's format."""
         bots = {
             LEAD_ID: ("lead", "claude"),
             OPENAI_ID: ("builder", "gpt"),
@@ -163,10 +158,8 @@ class Org(World):
             RELEASE_ID: ("release", "claude"),
             **(extra_bots or {}),
         }
-        board = SimpleNamespace(name="Redesign scenarios", steps=[SimpleNamespace(name="Work", status="open")])
-        super().__init__(board, bots)
+        super().__init__(bots)
         self.log = []
-        self.first_tick = first_tick
 
     def __enter__(self):
         super().__enter__()
@@ -225,10 +218,11 @@ class Org(World):
             c.execute(
                 "UPDATE runners SET owner_id=? WHERE owner_id<>?", (DANA_ID, DANA_ID)
             )  # the runner the mail publish checks
-        if self.first_tick:  # startup's cutover ran before Dana was the owner: the first tick makes her built-ins
-            from backend import redesign_migration
+        # Startup made the built-in automations before Dana was the owner: what a live server's first automations
+        # tick does once she owns the install makes hers (redesign_migration.catch_up).
+        from backend import redesign_migration
 
-            redesign_migration.catch_up(self.store)
+        redesign_migration.catch_up(self.store)
         return self
 
     def configure(self):
@@ -465,14 +459,23 @@ def audit_of(org, obj=None, limit=None, before=None, who=DANA):
     return org.api("get", "/api/v2/audit" + ("?" + "&".join(query) if query else ""), who=who, wave=W2)
 
 
-def decide(org, approval_id, decision, who=DANA):
-    """A person decides a bot's proposal. `decision` is "approved" or "declined" (the approval model's words)."""
-    return org.api("post", f"/api/v2/approvals/{approval_id}", {"decision": decision}, who=who, wave=W2)
+def give_ok(org, requirement_id, who=DANA):
+    """A person OKs a bot's ask from its preview, as Tico shows it (backend/task_moves_routes.py): GET
+    /api/v2/oks/{id} records what they were shown and answers its `shown_hash` and task; POST
+    /api/v2/tasks/{task}/asks/{id}/ok sends that hash back. Answers the OK's reply, or the preview's when it refused."""
+    shown = org.api("get", f"/api/v2/oks/{requirement_id}", who=who, wave=W2)
+    if shown.status != 200 or not isinstance(shown.body, dict):
+        return shown
+    task = shown.body.get("task_id")
+    payload = {"shown_hash": shown.body.get("shown_hash")}
+    return org.api("post", f"/api/v2/tasks/{task}/asks/{requirement_id}/ok", payload, who=who, wave=W2)
 
 
 def hub_notices(org, slug, who=DANA):
-    """The hub's notices to a bot (CONTRACT §5 BotOps note, §1 run guard): messages from `keeper` of kind `notice`, read
-    as the owner reads a bot's rooms: GET /api/v2/conversations?bot=<slug>, then each room's messages."""
+    """The hub's notices to a bot (CONTRACT §5 BotOps note, §1 run guard): messages the hub itself sends, of kind
+    `notice`, read as the owner reads a bot's rooms: GET /api/v2/conversations?bot=<slug>, then each room's messages."""
+    from backend.task_asks import SYSTEM  # the hub's own sender id
+
     rooms = org.api("get", f"/api/v2/conversations?bot={slug}", who=who, wave=W2)
     if rooms.status != 200:
         raise Unmet(W2, f"{slug}'s conversations: {rooms.status} {rooms.excerpt()}")
@@ -482,15 +485,15 @@ def hub_notices(org, slug, who=DANA):
         found += [
             m
             for m in (page.body.get("messages") or [])
-            if isinstance(page.body, dict) and m.get("sender_id") == "keeper" and m.get("kind") == "notice"
+            if isinstance(page.body, dict) and m.get("sender_id") == SYSTEM and m.get("kind") == "notice"
         ]
     return found
 
 
-def approval_id_of(reply):
-    """The approval a bot's proposal filed (CONTRACT §1: {"approval": "<id>", ...}), or None."""
+def ok_asked(reply):
+    """The OK a bot's change asked for: its requirement id (a cap PUT answers it as `approval`), or None."""
     data = reply.body if isinstance(reply.body, dict) else {}
-    value = data.get("approval")
+    value = data.get("requirement_id") or data.get("approval")
     return value.get("id") if isinstance(value, dict) else value
 
 
@@ -520,11 +523,12 @@ def edit_auto(org, facts, key, who, **payload):
 
 
 def close_task(org, facts, key, who):
-    """The sender closes its own task (status closed) as `who`."""
+    """The sender closes its own task as `who`: a move to closed (POST /tasks/{id}/move), with a reason a bot must give."""
     tid = task_id_of(got(facts, key))
     task = org.api("get", f"/api/v2/tasks/{tid}", who=who, wave=W2)
     version = (task.body.get("task") or task.body).get("version")
-    return org.api("post", f"/api/v2/tasks/{tid}", {"version": version, "status": "closed"}, who=who, wave=W2)
+    payload = {"to": "closed", "why": "No longer needed.", "version": version}
+    return org.api("post", f"/api/v2/tasks/{tid}/move", payload, who=who, wave=W2)
 
 
 def comment(org, facts, key, who, text):
@@ -556,7 +560,7 @@ def run_scenario(scenario):
     """Run one scenario on a fresh org: its results, the API calls it made, and the seconds it took."""
     started = time.perf_counter()
     results, error = [], None
-    with Org(extra_bots=scenario.bots, first_tick=scenario.first_tick) as org:
+    with Org(extra_bots=scenario.bots) as org:
         facts = {}
         try:
             scenario.steps(org, facts)

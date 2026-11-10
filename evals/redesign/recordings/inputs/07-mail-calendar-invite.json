@@ -19,7 +19,10 @@
     "labels": [
       "INBOX",
       "CATEGORY_UPDATES"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "updates",
+    "known_sender": true
   },
   "note": "A calendar invite from a teammate: no decision asked, so reply or watch rather than escalate."
 }

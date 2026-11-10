@@ -27,10 +27,11 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "botops"))
 import score  # (the BotOps scorers)
 
-# A replayed task has settled when it reaches one of these and its bot is not running.
-SETTLED = ("waiting", "review", "ready", "done", "closed", "declined")
-# A card a person owns is finished once it reaches one of these.
-SETTLED_ASK = ("done", "closed", "declined")
+# A task is finished in one of these. A replayed task has also settled when its turn is a person's (the bot asked
+# someone and stopped), once its bot is not running.
+SETTLED = ("done", "closed")
+# What a person answers on a task: a question the bot asked them, or an OK (an ask, or the stage's own).
+ASKS = ("answer", "ok")
 # Lower is better for each; minutes are reported but too noisy to decide a verdict.
 NUMBERS = ("person_steps", "jargon", "duplicates", "sent_elsewhere", "runs")
 # Common shapes of what a case may never hold once signed: provider keys, bearer tokens, a password, a password in a
@@ -89,57 +90,44 @@ def _person(actor):
 
 
 def questions(detail, bot):
-    """The bot's questions to a person in one task's messages, each with whether it is still open, oldest first.
-    A structured question (a card's, or one with options) is open until it has an answer; a plain one until an answer
-    replies to it or the person writes on the task after it, which is what the server counts as answering it."""
-    found, replied = [], set()
-    messages = {m["id"]: m for m in (detail.get("messages") or []) + (detail.get("comments") or [])}.values()
-    for m in sorted(messages, key=lambda m: m["created_at"]):
-        if m.get("kind") == "answer":
-            replied.add(m.get("in_reply_to"))
-        elif _person(m["sender_id"]):
-            for q in found:
-                if q["to"] == m["sender_id"] and not q["ask"]:
-                    q["open"] = False
-        if m.get("kind") == "ask" and m["sender_id"] == "bot:" + bot and m.get("deleted_at") is None:
-            to = (m.get("ask") or {}).get("who") or m.get("recipient_id")
-            if _person(to):
-                found.append(
-                    {
-                        "id": m["id"],
-                        "task": detail["task"]["id"],
-                        "to": to,
-                        "ask": m.get("ask"),
-                        "created_at": m["created_at"],
-                        "open": not m.get("answers"),
-                    }
-                )
-    for q in found:
-        q["open"] = q["open"] and q["id"] not in replied
+    """What waits on a person on one task: each question or OK of its stage that a person answers (the bot's asks
+    and the stage's own OKs), with whether it is still open, in the task's order. Read from the task's `to_leave`
+    (docs/pipelines-v3.md: requirements and asks)."""
     task = detail.get("task") or {}
-    if task.get("questions") and task.get("requester_id") == "bot:" + bot and _person(task.get("owner_id")):
-        # A question task: the question rides on the task the person owns, open until they close it.
-        found.append(
-            {
-                "id": task["id"],
-                "task": task["id"],
-                "to": task["owner_id"],
-                "ask": {"questions": task["questions"], "target": {"task": task["id"]}},
-                "created_at": task.get("asked_at") or task["created_at"],
-                "open": task.get("status") not in SETTLED_ASK,
-            }
-        )
-    return found
-
-
-def cards(card_details, bot):
-    """The child tasks that put a question to a person: owned by the person, or holding the bot's question to one
-    (a question card is owned by the bot that asked and waits on the person). Each is one step for the person."""
+    # An answered ask names who answered it; an open one, who it waits on.
+    who = lambda r: r.get("who") or (r.get("answer") or {}).get("by")  # noqa: E731
     return [
-        d
-        for d in card_details
-        if _person(d["task"].get("owner_id")) or _person(d["task"].get("waiting_on")) or questions(d, bot)
+        {
+            "id": r["requirement_id"],
+            "task": task.get("id"),
+            "to": who(r),
+            "kind": r["kind"],
+            "choices": r.get("choices") or [],
+            "by_bot": r.get("asked_by") == "bot:" + bot,
+            "open": not r.get("met"),
+        }
+        for r in task.get("to_leave") or []
+        if r.get("kind") in ASKS and _person(who(r))
     ]
+
+
+def filed(child_details, bot):
+    """The tasks filed under this one that put work to a person: owned by a person, or holding an ask of the bot's to
+    one. Each is one step for the person."""
+    return [
+        d for d in child_details if _person(d["task"].get("owner_id")) or any(q["by_bot"] for q in questions(d, bot))
+    ]
+
+
+def turn_of(detail):
+    """Whose turn the task is (docs/pipelines-v3.md "turn"): the person it waits on, or None."""
+    turn = (detail.get("task") or {}).get("turn") or {}
+    return turn.get("who") if turn.get("state") == "person" else None
+
+
+def settled(outcome):
+    """A replay can stop here once its bot is quiet: the task is finished, or it is a person's turn."""
+    return outcome["status"] in SETTLED or bool(outcome.get("turn"))
 
 
 def bot_runs(detail, bot):
@@ -157,11 +145,11 @@ def attached(files, bot):
     ]
 
 
-def side(detail, files, bot, card_details=()):
+def side(detail, files, bot, child_details=()):
     """One side's outcome, cut at the bot's first run: what the bot and people said after it, the files the bot
-    attached, its runs and minutes, and the person's steps (their messages after the cut plus each question card
-    the bot filed for them). `card_details` are the child tasks' details. Capture and the replay both read a task
-    through this, so both are counted alike."""
+    attached, its runs and minutes, and the person's steps (their messages after the cut, each ask of the bot's to a
+    person on the task, and each task filed for a person under it). `child_details` are the filed tasks' details.
+    Capture and the replay both read a task through this, so both are counted alike."""
     runs = bot_runs(detail, bot)
     start = when(runs[0]["started_at"]) if runs else None
     seen, transcript = set(), []
@@ -182,20 +170,20 @@ def side(detail, files, bot, card_details=()):
     minutes = (
         sum((when(r["finished_at"]) - when(r["started_at"])).total_seconds() for r in runs if r.get("finished_at")) / 60
     )
-    asked = cards(card_details, bot)
-    open_questions = [q for d in (detail, *asked) for q in questions(d, bot) if q["open"]]
+    under = filed(child_details, bot)
+    open_questions = [q for d in (detail, *under) for q in questions(d, bot) if q["open"]]
+    asks = [q for q in questions(detail, bot) if q["by_bot"]]
     return {
         "status": detail["task"]["status"],
+        "turn": turn_of(detail),
         "transcript": transcript,
         "files": attached(files, bot),
         "runs": len(runs),
         "minutes": round(minutes, 1),
-        "person_steps": sum(1 for who, _ in transcript if who == "person") + len(asked),
-        "open_questions": sorted(open_questions, key=lambda q: q["created_at"]),
-        "open_cards": [
-            d["task"]["id"]
-            for d in asked
-            if _person(d["task"].get("owner_id")) and d["task"].get("status") not in SETTLED_ASK
+        "person_steps": sum(1 for who, _ in transcript if who == "person") + len(asks) + len(under),
+        "open_questions": open_questions,
+        "open_filed": [
+            d["task"]["id"] for d in under if _person(d["task"].get("owner_id")) and d["task"].get("status") == "open"
         ],
         "running": not runs or any(not r.get("finished_at") for r in runs),
     }
@@ -220,7 +208,7 @@ def as_started(detail, start):
     }
 
 
-def split(detail, files, instructions, bot=None, card_details=()):
+def split(detail, files, instructions, bot=None, child_details=()):
     """A draft case from a task's detail (GET tasks/{id}), its files (GET tasks/{id}/files) and its bot's
     instructions snapshot (GET bots/{bot}/instructions). The opening state is the task as it was and everything a
     person wrote or attached before the bot's first run; the original outcome is what followed."""
@@ -252,7 +240,7 @@ def split(detail, files, instructions, bot=None, card_details=()):
     snapshot = instructions.get("content") or ""
     exact = bool(instructions.get("updated_at")) and when(instructions["updated_at"]) <= start
     status = task["status"]
-    original = side(detail, files, bot, card_details)
+    original = side(detail, files, bot, child_details)
     return {
         "id": re.sub(r"[^a-z0-9]+", "-", task["title"].lower()).strip("-")[:50] + "-" + task["id"][:8],
         "title": task["title"],
@@ -265,13 +253,7 @@ def split(detail, files, instructions, bot=None, card_details=()):
         "conversation": opening,
         "files": opened,
         "person": [],
-        "done": [
-            {
-                "status": ["done", "review", "ready", "closed"]
-                if status in ("done", "review", "ready", "closed")
-                else [status]
-            }
-        ],
+        "done": [{"status": [status]}],
         "limits": {},
         "original": {k: original[k] for k in ("status", "transcript", "files", "runs", "minutes", "person_steps")},
     }
