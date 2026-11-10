@@ -325,7 +325,8 @@ let NEEDS_MEND = Promise.resolve(false);
 let NEEDS_PENDING: {d: NeedsChange; at: number}[] = [], NEEDS_ARRIVED = 0;
 const v2NeedsChanged = (d: unknown) => {
   NEEDS_PENDING.push({d: d as NeedsChange, at: ++NEEDS_ARRIVED});
-  return (NEEDS_MEND = NEEDS_MEND.catch(() => false).then(v2NeedsDrain));
+  NEEDS_MEND = NEEDS_MEND.catch(() => false).then(v2NeedsDrain);
+  return NEEDS_MEND;
 };
 // One whole read at a time, and only as many as are needed: the events a read covers are dropped, not mended or read
 // again. A read covers every event that came before it was sent, and every event up to the last one naming the version
