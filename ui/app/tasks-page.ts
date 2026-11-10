@@ -25,6 +25,10 @@ interface TasksPageState {
   loading: boolean;
   failed: string;
   seq: number;
+  /** Where the list's catch-up resumes (GET /v2/tasks?changed_after); '' until a full read gave one. */
+  cursor: string;
+  /** A live change came while a read was on its way: catch up once it lands. */
+  behind: boolean;
   abort: AbortController;
   /** The popover menu's anchor and the filter whose values it shows (task-list-menus.ts). */
   menuAnchor?: HTMLElement | null | undefined;
@@ -62,10 +66,10 @@ function tasksURLWrite(state: TasksPageState) {
 }
 
 // openId opens one task in full over the page: the #/task/<id> address.
-function pageTasks(_forced?: string, openId = '') {
+function pageTasks(openId = '') {
   tasksLeave();
   const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
-    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, failed: '', seq: 0, abort: new AbortController()};
+    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, failed: '', seq: 0, cursor: '', behind: false, abort: new AbortController()};
   TASKS_ST = state;
   const main = $('#main');
   main.classList.add('tasks-layout');
@@ -179,23 +183,39 @@ function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, '
 }
 
 // ---- reads
+// A list fed by the live stream applies each event's task in place and never reads the whole list because an event came
+// (Chris, Nov 3: whole-list reads per event cost 1.5 GB/h). Full reads: the page's first, a change of view, pull to
+// refresh, and the stream's `reset`. Otherwise the 2-minute refresh, a tab back from sleep, a bulk change and this
+// tab's own writes catch up with a changed_after delta from the cursor the last read gave.
+/** The view's server filters: the archive's, or the pipeline's open tasks; You is Needs you's. */
+function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
+  if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide'};
+  if (state.pipeline) return {status: 'open', snoozed: 'hide', pipeline: state.pipeline};
+  return null;
+}
+/** Whether a task, as the viewer reads it now, belongs in the view: tasksQuery's filters, client-side. */
+function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
+  if (state.archive === 'snoozed') return t.status === 'open' && !!t.snoozed;
+  if (state.archive) return t.status === state.archive;
+  return !!state.pipeline && t.status === 'open' && !t.snoozed && t.pipeline_id === state.pipeline;
+}
 /** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
-    the pipeline's open tasks. A read that a newer one overtook is dropped. */
+ * the pipeline's open tasks. */
 async function tasksLoad(state: TasksPageState): Promise<void> {
   const seq = ++state.seq;
+  state.behind = false;
   try {
+    const query = tasksQuery(state);
     const [pipelines, rows] = await Promise.all([
       tasksPipelinesRead().catch(() => state.pipelines),
-      state.archive ? taskBriefs({status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide',
-        sort: state.archive === 'snoozed' ? 'queue' : 'finished', limit: 200})
-        : state.pipeline ? taskBriefs({status: 'open', snoozed: 'hide', limit: 500})
+      query ? taskBriefsPage({...query, sort: state.archive && state.archive !== 'snoozed' ? 'finished' : 'queue', limit: state.archive ? 200 : 500})
         : needsYou(),
     ]);
     if (TASKS_ST !== state || seq !== state.seq) return;
     state.pipelines = pipelines;
     if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
-    if (!state.archive && !state.pipeline) state.needs = rows as NeedsEntry[];
-    else state.tasks = (rows as TaskBriefV3[]).filter(t => !state.pipeline || t.pipeline_id === state.pipeline);
+    if (Array.isArray(rows)) { state.needs = rows; state.cursor = ''; }
+    else { state.tasks = rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline); state.cursor = rows.cursor; }
     state.failed = '';
   } catch (e) {
     if (TASKS_ST !== state || seq !== state.seq) return;
@@ -203,12 +223,61 @@ async function tasksLoad(state: TasksPageState): Promise<void> {
   }
   state.loading = false;
   tasksRender(state);
+  if (state.behind) void tasksCatchUp(state);
 }
-/** A task or Needs you changed (refresh.ts): the view reads again, at most every few seconds. */
-function tasksLive() {
+/** Catch up from the cursor: the changed rows that still match go in, the rest come out. A full read only when the
+ * server says the cursor is too old (`reset`). You follows Needs you's own version (hub-v2.ts), already mended. */
+async function tasksCatchUp(state: TasksPageState | null): Promise<void> {
+  if (!state || TASKS_ST !== state) return;
+  if (state.loading) { state.behind = true; return; }
+  const query = tasksQuery(state);
+  if (!query) { tasksNeedsLive(); return; }
+  if (!state.cursor) { await tasksLoad(state); return; }
+  const seq = state.seq;
+  try {
+    const out = await taskChanges(query, state.cursor);
+    if (TASKS_ST !== state || seq !== state.seq) return;
+    if (out.reset) { await tasksLoad(state); return; }
+    state.cursor = out.cursor || state.cursor;
+    const gone = new Set(out.gone);
+    state.tasks = state.tasks.filter(t => !gone.has(String(t.id)));
+    for (const t of out.tasks) tasksTaskPut(state, t, null, false);
+    tasksRender(state);
+  } catch { /* the next refresh tries again */ }
+}
+/** One task as the viewer reads it now (an event's, a delta's, a write's reply): in place, added, or out of the view. */
+function tasksTaskPut(state: TasksPageState, t: TaskAny | null, id: string | null = null, draw = true): boolean {
+  const key = String(t?.id ?? id ?? '');
+  let moved = false;
+  // You: Needs you says what is on it; a task's change only redraws the item that shows it.
+  for (const it of state.needs) if (t && it.task && String(it.task.id) === key) { it.task = {...it.task, ...t} as typeof it.task; moved = true; }
+  if (state.pipeline || state.archive) {
+    const row = t as TaskBriefV3 | null;   // a full task carries every list field
+    const i = state.tasks.findIndex(x => String(x.id) === key), keep = !!row && tasksViewHas(state, row);
+    if (row && keep && i >= 0) state.tasks[i] = row;
+    else if (row && keep) state.tasks.unshift(row);
+    else if (i >= 0) state.tasks.splice(i, 1);
+    moved ||= keep || i >= 0;
+  }
+  if (moved && draw) tasksRender(state);
+  return moved;
+}
+/** Live task events (refresh.ts liveTasksApply): each carries the task as this viewer reads it, or says it is gone. */
+function tasksLiveApply(events: LiveTaskEvent[]): void {
   const state = TASKS_ST;
   if (!state || !isTasksRoute(S.route)) return;
-  liveThrottle('tasks-page', () => { if (TASKS_ST === state) void tasksLoad(state); }, 3000);
+  if (state.loading) { state.behind = true; return; }
+  if (events.some(d => d.bulk)) { void tasksCatchUp(state); return; }
+  let moved = false;
+  for (const d of events) moved = tasksTaskPut(state, d.gone ? null : (d.task as TaskAny | null | undefined) ?? null, String(d.id ?? ''), false) || moved;
+  if (moved) tasksRender(state);
+}
+/** Needs you changed (mended from the ids the event named, hub-v2.ts): You draws it; nothing is read. */
+function tasksNeedsLive(): void {
+  const state = TASKS_ST;
+  if (!state || !isTasksRoute(S.route) || state.pipeline || state.archive || state.loading) return;
+  state.needs = [...(S.v2.needs || [])] as NeedsEntry[];
+  tasksRender(state);
 }
 
 // ---- drawing
@@ -489,7 +558,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
         ...(pick.value ? {pipeline: pick.value} : {}), ...(parent ? {parent: parent.id} : {}),
         ...(labels.length ? {labels} : {}), ...(parent?.private ? {private: true} : {})});
       d.close();
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       await v2Refresh();
       if (made?.id) taskModalOpen(made.id);
     } catch (e) { msg.textContent = errorMessage(e, ''); msg.hidden = false; btn.disabled = false; }

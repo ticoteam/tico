@@ -2166,8 +2166,8 @@ def _rule_audience(c, auto, do, args, values):
 
 def _warned_args(c, auto, gate, do, args, key, values):
     """A warned step's arguments: the warning line on the argument its reader gets (`key`, from `_rule_key`): a post
-    of the turn's output posts that output with the line first; an assign with no note of its own puts the line
-    before the note the task already has, which stays whole."""
+    of the turn's output posts that output with the line first. An assign with no note of its own keeps its arguments:
+    its line goes before the note the task already has (`_warned_run`), not on the hand-off's why."""
     from . import org_rule_check
 
     if not (gate and gate.get("warn") and key):
@@ -2176,12 +2176,31 @@ def _warned_args(c, auto, gate, do, args, key, values):
     if not said and do == "post_update":
         said = A._turn_output(values).get("text")
     if not said and do == "assign":
-        try:
-            note = A.task_of(c, auto, values).get("note") or ""
-        except ValueError:
-            note = ""
-        return {**args, key: org_rule_check.warned_note(gate, note)}
+        return args
     return {**args, key: org_rule_check.warned_text(gate, str(said or "")).rstrip()}
+
+
+def _warned_run(c, auto, run_id, gate, do, args, values, step=None):
+    """A step's write (`A.run`) with its warning line: an assign that says nothing of its own puts the line before the
+    task's note, which stays whole, in one savepoint with the hand-off, so a refused hand-off leaves the note as it
+    was. Any other step carries its line in its arguments (`_warned_args`)."""
+    from . import org_rule_check
+
+    if not (gate and gate.get("warn") and do == "assign" and not any(args.get(k) for k in RULE_CHECKED["assign"])):
+        return A.run(c, auto, run_id, do, args, values, step=step)
+    c.execute("SAVEPOINT warned_hand_off")
+    try:
+        task = A.task_of(c, auto, values)
+        if task:
+            note = org_rule_check.warned_note(gate, task.get("note") or "")
+            H.task_update(c, A._actor(c, auto), task["id"], note=note, seen_version=task["version"])
+        result = A.run(c, auto, run_id, do, args, values, step=step)
+    except (H.Refused, Problem, ValueError) as exc:
+        result = A._fail(getattr(exc, "detail", None) or exc)
+    if isinstance(result, dict) and result.get("ok") is False:
+        c.execute("ROLLBACK TO warned_hand_off")
+    c.execute("RELEASE warned_hand_off")
+    return result
 
 
 class TaskMoved(Exception):
@@ -2211,7 +2230,7 @@ def replay_step(c, bot, hold, replay, ingest, gate=None):
     )
     chain, via = CHAIN.set(tuple(auto["chain"])), H.VIA.set("automation:" + row["id"])
     try:
-        return A.run(c, auto, replay["run"], replay["do"], args, replay["values"], step=replay.get("step"))
+        return _warned_run(c, auto, replay["run"], gate, replay["do"], args, replay["values"], step=replay.get("step"))
     finally:
         H.VIA.reset(via)
         CHAIN.reset(chain)
@@ -2458,6 +2477,7 @@ class HubServices:
             if gate and gate.get("held"):
                 return {"ok": False, "detail": "held by a rule", "held": gate["held"]["id"]}
             args = _warned_args(c, self.auto, gate, do, args, key, values)
+            return _warned_run(c, self.auto, self.run_id, gate, do, args, values, step=step)
         return A.run(c, self.auto, self.run_id, do, args, values, step=step)
 
     def _screened_task(self, found, bot, args, values):

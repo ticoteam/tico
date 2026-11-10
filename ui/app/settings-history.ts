@@ -127,9 +127,9 @@ function settingsLogWho(actor: string, names: Record<string, string>, item: Part
   // A row the server made names what made it (rowSource): a built-in or an automation, else "Automatic".
   const src = rowSource(item, actor);
   if (SOURCE_LINES.has(src.kind)) return src.kind === 'automation' && src.link
-    ? `<a class="chip" href="${esc(src.link)}">${esc(src.name)}</a>` : `<span class="chip">${esc(src.name || KEEPER_LABEL)}</span>`;
+    ? `<a class="chip" href="${esc(src.link)}">${esc(src.name)}</a>` : `<span class="chip">${esc(src.name || AUTOMATIC_LABEL)}</span>`;
   const slug = actorSlug(actor);
-  return slug ? empChip(slug) : `<span class="chip">${esc(names[actor] || actorLabel(actor) || KEEPER_LABEL)}</span>`;
+  return slug ? empChip(slug) : `<span class="chip">${esc(names[actor] || actorLabel(actor) || AUTOMATIC_LABEL)}</span>`;
 }
 function settingsLogRowsHTML(items: HistoryLogItem[], names: Record<string, string>) {
   return items.map(item => {

@@ -1,6 +1,6 @@
 /* ui/styles/decide.css — the ask screen (ui/app/decide.ts, docs/pipelines-v3.md S3): "2 of 7" and 👍 👎 ‹ › ✕ on top,
    the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, the
-   buttons at the bottom while the thing scrolls. Also the question card's rules (ui/app/question-card.ts).
+   buttons at the bottom while the thing scrolls.
    The cascade runs in the order index.html links these files; keep rules in order. */
 .dc-dialog{width:min(1040px,calc(100vw - 32px));max-width:none;height:min(760px,calc(100dvh - 48px));max-height:none;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:hidden}
 .dc-dialog::backdrop{background:rgba(0,0,0,.5)}
@@ -53,69 +53,5 @@
   .dc-q{font-size:var(--t-lg)}
 }
 
-/* the question card's options (ui/app/question-card.ts): two pictures side by side, else numbered tiles */
-.dc-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.dc-opt,.dc-tile{display:flex;flex-direction:column;align-items:stretch;padding:0;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;text-align:left;overflow:hidden;cursor:pointer;
-  transition:border-color var(--dur-fast) var(--ease),box-shadow var(--dur-fast) var(--ease)}
-.dc-opt:hover,.dc-tile:hover{border-color:var(--muted)}
-.dc-opt.sel{border-color:var(--ink);box-shadow:0 0 0 2px var(--ink)}
-.dc-pic{display:block;min-height:120px;background:var(--surface2)}
-.dc-pic.ready{min-height:0;background:none}
-.dc-pic img{display:block;width:100%;height:auto;max-height:45vh;object-fit:contain;opacity:0;transition:opacity var(--dur) var(--ease)}
-.dc-pic.ready img{opacity:1}
-.dc-glyph{display:grid;place-items:center;color:var(--muted);font:600 var(--t-sm) var(--mono)}
-.dc-l{display:block;padding:8px 10px;font-weight:600;font-size:var(--t-md);overflow-wrap:anywhere;letter-spacing:var(--track-snug)}
-.dc-desc{display:block;padding:0 10px 8px;color:var(--muted);font-size:var(--t-sm)}
-.dc-tiles{display:flex;flex-direction:column;gap:8px}
-.dc-tile .dc-tl{display:flex;align-items:baseline;gap:10px;padding:12px 14px}
-.dc-tile .dc-tl .dc-l{padding:0}
-.dc-tile .dc-tl b{color:var(--muted);font-weight:600}
-.dc-tile .dc-desc{padding:0 14px 12px 34px;margin-top:-6px}
-.dc-descs{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:var(--t-md)}
-.dc-descs .dc-desc{display:inline;padding:0 0 0 6px}
 
-/* the question card (ui/app/question-card.ts), the same in Decide and the task page's Needs you box: several picks
-   are checkboxes, every pick and button has its "what happens" line, the fallback is a small line at the foot */
-.qc-why{color:var(--ink)}
-.qc-picks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.qc-pick{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);cursor:pointer}
-.qc-pick:has(input:checked){border-color:var(--ink)}
-.qc-pick input{flex:none;margin:3px 0 0;width:18px;height:18px;accent-color:var(--ink)}
-.qc-pick .dc-pic{flex:none;width:64px;min-height:48px;border-radius:8px;overflow:hidden}
-.qc-pick .dc-pic img{max-height:64px;object-fit:cover}
-.qc-changed{margin:0 0 6px;font-size:var(--t-base)}
-.qc-pl{display:flex;flex-direction:column;gap:2px;min-width:0}
-.qc-l{font-weight:600;font-size:var(--t-md);overflow-wrap:anywhere;letter-spacing:var(--track-snug)}
-.qc-l b{color:var(--muted);font-weight:600}
-.qc-rec{color:var(--ink);font-weight:500;font-size:var(--t-sm)}
-.qc-then{display:block;color:var(--muted);font-size:var(--t-sm);font-weight:400;overflow-wrap:anywhere}
-.dc-tile .qc-then{padding:0 14px 12px 34px;margin-top:-6px}
-.dc-opt .qc-then{padding:0 10px 8px}
-.dc-actions .qc-btn,.qc-actions .qc-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:auto;min-height:52px;padding:6px 10px;white-space:normal;text-align:center}
-.qc-btn .qc-then{color:inherit;opacity:.8;font-size:var(--t-xs);line-height:var(--lh-tight)}
-.qc-fallback{margin:0;color:var(--muted);font-size:var(--t-xs);font-weight:400}
-/* a review's files (question-card.js): pictures large, two to a row, one alone the full width */
-.qc-review .vcards{margin:0}
-.qc-review .vcard[data-kind="image"],.qc-rpick .vcard[data-kind="image"]{--vcard-cap:min(45vh,420px);width:calc((100% - 10px) / 2)}
-.qc-review .vcard[data-kind="image"]:only-child,.qc-rpick .vcard[data-kind="image"]{width:100%}
-.qc-rpicks{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:10px}
-.qc-rpick{display:flex;flex-direction:column;gap:8px;min-width:0}
-.qc-rpick .vcards{margin:0}
-.qc-rpick .qc-btn,.qc-changes{display:flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:6px 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:600 var(--t-md) var(--sans);cursor:pointer}
-.qc-rpick .qc-btn:hover,.qc-changes:hover{border-color:var(--muted)}
-.qc-rpick .qc-btn b{color:var(--muted)}
-.qc-changes{width:100%}
-.qc-rchips{display:flex;flex-wrap:wrap;gap:6px}
-.qc-spend{margin:0;font-size:var(--t-sm);color:var(--muted)}
-.qcard{display:flex;flex-direction:column;gap:10px}
-.qcard .dc-q{font-size:var(--t-lg)}
-.qc-head{font-size:var(--t-sm)}
-.qc-sub{color:var(--muted)}
-.qc-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.qc-actions:empty{display:none}
-.qc-actions .qc-btn{border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:600 var(--t-md) var(--sans);cursor:pointer}
-.qc-actions .qc-btn.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
-.qc-actions .qc-btn:disabled{opacity:.5;cursor:default}
-.qc-note{width:100%;box-sizing:border-box;resize:vertical;font:inherit}
-.qc-foot{display:flex;flex-direction:column;gap:8px}
 

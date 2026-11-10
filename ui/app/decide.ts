@@ -106,7 +106,7 @@ function needsBadgePaint() {
 /** Needs you changed: the badge, the Tasks page and a bot's rail draw again. */
 function needsListsRedraw() {
   needsBadgePaint();
-  if (typeof TASKS_ST !== 'undefined' && TASKS_ST) tasksLive();
+  if (typeof TASKS_ST !== 'undefined' && TASKS_ST) tasksNeedsLive();
   if (typeof BOT !== 'undefined' && BOT && $('#t-needs') && typeof botNeedsPaint === 'function') botNeedsPaint(BOT.slug);
 }
 
