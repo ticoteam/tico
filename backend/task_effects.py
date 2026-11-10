@@ -82,16 +82,20 @@ def _publish(conn: "sqlite3.Connection", name: str, row: Row, actor: str, change
 
 
 def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None) -> None:
-    """A bot that asked for a task hears once how it ended. Not when it ended it itself, owns it, or filed it from a
-    task of its own (the engine tells that task's owner when everything it filed has ended)."""
+    """A bot that asked for a task hears once how it ended. Not when it ended it itself or owns it. Not when it filed
+    it from a task it still owns in the stage it filed it from: the engine tells that task's owner when everything it
+    filed there has ended. A task filed from a stage its parent has since left is told here, or nobody would."""
     H = _h()
     requester = after.get("requester_id")
     if not H.is_bot(requester) or requester in (actor, after.get("owner_id")):
         return
     filed = conn.execute(
-        "SELECT t.owner_id FROM links l JOIN tasks t ON t.id = l.from_task_id WHERE l.to_task_id=?", (after["id"],)
+        "SELECT t.owner_id, t.status, l.visit_id, "
+        "(SELECT v.id FROM visits v WHERE v.task_id = t.id AND v.left_at IS NULL) "
+        "FROM links l JOIN tasks t ON t.id = l.from_task_id WHERE l.to_task_id=?",
+        (after["id"],),
     ).fetchone()
-    if filed and filed[0] == requester:
+    if filed and filed[0] == requester and filed[1] == "open" and filed[2] and filed[2] == filed[3]:
         return
     visit: Row = after.get("visit") or {}
     wake_key = f"{after['id']}:{visit.get('id')}:result"
@@ -122,6 +126,9 @@ def moved(
     if before.get("stage_id") != after.get("stage_id"):
         change: Row = {"field": "stage", "from": before.get("stage_id"), "to": after.get("stage_id"), "move": kind}
         _publish(conn, "task.step_changed", after, actor, change, revision)
+    if before.get("owner_id") != after.get("owner_id"):
+        # The next stage has another owner: what follows the owner follows it here as on a reassignment.
+        _owner_changed(conn, before, after, actor, revision)
     if old == new:
         return
     from . import delivery, reconnects, rule_due, run_triggers
@@ -150,18 +157,14 @@ def moved(
         H.stop_ended_work(conn, actor, after["id"], "closed")
 
 
-def reassigned(
-    conn: "sqlite3.Connection", before: Row, after: Row, by: str, why: str | None = None, revision: str | None = None
-) -> None:
-    """A task has a new owner. What follows the owner: the new owner's private default, the sessions and worktree, the
-    per-task model, the followers, the old owner's goal on the task, its place in the new owner's queue."""
+def _owner_changed(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, revision: str | None) -> None:
+    """What follows a task's owner, whichever way it changed (a reassignment, or a move into a stage someone else
+    owns): the new owner's private default, the sessions and worktree, the per-task model, the followers, the old
+    owner's goal on the task, its place in the new owner's queue, and the `task.assigned` event."""
     H = _h()
-    actor = cause(by)
     task_id = after["id"]
     old, new = before.get("owner_id"), after.get("owner_id")
-    if old == new:
-        return
-    from . import reconnects, run_triggers, task_followers, task_run_models
+    from . import reconnects, task_followers, task_run_models
 
     made_private = bool(new and H.private_tasks_default(conn, new) and not H.task_private(conn, before))
     if made_private:
@@ -186,8 +189,6 @@ def reassigned(
 
             goals: Any = chat_goals
             goals.clear_task_goal(conn, room)
-    runs: Any = run_triggers
-    runs.turn_result(conn, actor, before, "overridden", H.event)
     models: Any = task_run_models
     models.moved(conn, actor, task_id)
     followers: Any = task_followers
@@ -197,5 +198,22 @@ def reassigned(
     reconnects_.moved(conn, task_id, "owner", old, new)
     change: Row = {"field": "owner", "from": old, "to": new}
     _publish(conn, "task.assigned", after, actor, change, revision)
-    H.event(conn, actor, "task.update", task_id, {"owner": new, "note": why})
+
+
+def reassigned(
+    conn: "sqlite3.Connection", before: Row, after: Row, by: str, why: str | None = None, revision: str | None = None
+) -> None:
+    """A task was given to another owner in its stage. Someone handing a bot's work to someone else is what became of
+    the run that made it; then everything that follows the owner (`_owner_changed`)."""
+    H = _h()
+    actor = cause(by)
+    old, new = before.get("owner_id"), after.get("owner_id")
+    if old == new:
+        return
+    from . import run_triggers
+
+    runs: Any = run_triggers
+    runs.turn_result(conn, actor, before, "overridden", H.event)
+    _owner_changed(conn, before, after, actor, revision)
+    H.event(conn, actor, "task.update", after["id"], {"owner": new, "note": why})
     H.recount(conn, [new, old, after.get("requester_id")])

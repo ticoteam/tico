@@ -1,7 +1,8 @@
 """Pipelines v3 cut-over (docs/dev/pipelines-v3-cutover.md): the old task engine's tables and columns go.
 
-No task is carried over. A database that still has tasks was made by Tico 0.5, and this release does not open it: the
-migration stops with nothing changed, so that database still runs on 0.5. Every company starts on a new database.
+No task is carried over. A database that still has tasks was made by Tico 0.5, and this release does not open it:
+`migrations.preflight` refuses it before anything is written, so that database still runs on 0.5, and this migration
+refuses it too. Every company starts on a new database.
 
 On a database with no tasks (a new one, where the numbered steps have just made the old shape):
 
@@ -12,7 +13,7 @@ On a database with no tasks (a new one, where the numbered steps have just made 
    start.
 2. `tasks_move_only` holds for every task: its status, stage, owner and pipeline change only while the engine's guard is
    open. `tasks_enter_only` is its twin for a new row: it starts open, in no pipeline and no stage, and
-   `task_engine.enter` places it.
+   `task_engine.enter` places it. `tasks_never_replaced` refuses an insert over a task that exists.
 3. The old engine's tables are dropped (OLD_TABLES), children before parents.
 4. The trash is emptied: a deleted task there has the old shape and could not be restored.
 
@@ -47,7 +48,8 @@ DEAD_COLUMNS = (
 
 TASKS = (
     "CREATE TABLE tasks ("
-    "id TEXT PRIMARY KEY, title TEXT, body TEXT, requester_id TEXT, owner_id TEXT, status TEXT, "
+    "id TEXT PRIMARY KEY, title TEXT, body TEXT, requester_id TEXT, owner_id TEXT, "
+    "status TEXT NOT NULL DEFAULT 'open', "
     "due_at TEXT, conversation_id TEXT, created_at TEXT, updated_at TEXT, done_at TEXT, closed_at TEXT, "
     "closed_by_id TEXT, note TEXT, goal_id TEXT, labels TEXT NOT NULL DEFAULT '[]', number INTEGER, "
     "private INTEGER NOT NULL DEFAULT 1 CHECK (private IN (0,1)), live_meeting_id TEXT, readers TEXT, "
@@ -80,6 +82,14 @@ ENTER_ONLY = (
     "CREATE TRIGGER tasks_enter_only BEFORE INSERT ON tasks "
     "WHEN NEW.pipeline_id IS NOT NULL OR NEW.stage_id IS NOT NULL OR NEW.status IS NOT 'open' "
     "BEGIN SELECT RAISE(ABORT, 'tasks: a new task starts open, in no stage; enter() places it'); END"
+)
+
+# A task is never replaced: INSERT OR REPLACE would take an entered task's row away and leave its visit behind.
+NEVER_REPLACED = (
+    "CREATE TRIGGER tasks_never_replaced BEFORE INSERT ON tasks "
+    "WHEN EXISTS (SELECT 1 FROM tasks WHERE id = NEW.id) "
+    "OR (NEW.number IS NOT NULL AND EXISTS (SELECT 1 FROM tasks WHERE number = NEW.number)) "
+    "BEGIN SELECT RAISE(ABORT, 'tasks: a task is never replaced'); END"
 )
 
 # Children before parents. Each belonged to a module of the old engine; a table that is not there is skipped.
@@ -143,5 +153,10 @@ def up(conn):
         conn.execute(statement)
     conn.execute(MOVE_ONLY)
     conn.execute(ENTER_ONLY)
+    conn.execute(NEVER_REPLACED)
     for table in OLD_TABLES:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
+    # A factory's "output stage" named a stage of the old engine. The migration that added the column is retired
+    # (migrations.SUPERSEDED), so a new database never has it; a database that ran it loses it here.
+    if "factories" in tables and "output_stage_id" in {r[1] for r in conn.execute("PRAGMA table_info(factories)")}:
+        conn.execute("ALTER TABLE factories DROP COLUMN output_stage_id")

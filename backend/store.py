@@ -2397,12 +2397,6 @@ class Store:
             from . import status_values as _status_values
 
             _status_values.enforce(c)
-            # The pipelines every company has (General), made here when missing, on every start
-            # (backend/pipeline_settings.py). After the constraints, so what it writes is held to them.
-            from . import pipeline_settings
-
-            pipeline_settings.ensure_presets(c)
-            c.commit()
         c.close()
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.
@@ -2738,6 +2732,13 @@ class Store:
                         "code": refusal.code,
                         "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
                         "status": refusal.status,
+                        # What is missing and the commands allowed next ride with a refusal (Problem.extra). A private
+                        # task's are its own words, so its receipt keeps only the version.
+                        "extra": (
+                            {k: v for k, v in refusal.extra.items() if k == "version"}
+                            if getattr(exc, "private", False)
+                            else dict(refusal.extra)
+                        ),
                     }
                 }
             if not is_poll(operation, result):

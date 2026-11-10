@@ -67,6 +67,13 @@ LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
 # - resend_system_asks imported ask_routing; 20261106131713_asks_to_question_tasks moved every open ask.
 # - blocked_reason_recompute (task_holds) and factory_output_stage (pipeline_setup) worked on the old task engine's
 #   tables, which the Pipelines v3 cut-over deletes.
+# The Pipelines v3 cut-over. A database that has tasks and has not had it was made by Tico 0.5: this release does not
+# open it (preflight), so nothing in it is changed and it still runs on 0.5.
+CUTOVER = "20261110054000_pipelines_v3_cutover"
+OLD_TASKS = (
+    "This database has tasks from Tico 0.5. Tico 0.6 does not carry tasks over: every company starts on a new "
+    "database. Nothing was changed. Run Tico 0.5 on this database, or set up a new company on 0.6."
+)
 SUPERSEDED = {
     "20261105034511_resend_system_asks",
     "20261107140000_blocked_reason_recompute",
@@ -179,8 +186,9 @@ def preflight(path, *, adopt_legacy=False, directory=None):
         if not tables:
             return
         version = conn.execute("PRAGMA user_version").fetchone()[0]
+        known = files(directory)
         if "schema_migrations" in tables:
-            _verify(conn.execute("SELECT version, checksum FROM schema_migrations").fetchall(), files(directory))
+            _verify(conn.execute("SELECT version, checksum FROM schema_migrations").fetchall(), known)
         if version > NEWEST_USER_VERSION:
             raise MigrationError(
                 f"This database is at schema version {version}, newer than this code "
@@ -197,6 +205,13 @@ def preflight(path, *, adopt_legacy=False, directory=None):
                 f"upgrades. Start it once with Tico v0.5.x (the release that writes version {MIN_BRIDGE_USER_VERSION}), "
                 "then upgrade to this release."
             )
+        if "tasks" in tables and any(migration.version == CUTOVER for migration in known):
+            cut = (
+                "schema_migrations" in tables
+                and conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (CUTOVER,)).fetchone()
+            )
+            if not cut and conn.execute("SELECT 1 FROM tasks LIMIT 1").fetchone():
+                raise MigrationError(OLD_TASKS)
 
 
 def _record_legacy(conn):

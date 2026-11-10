@@ -16,9 +16,10 @@ The engine's modules are loaded when a call runs, not when this module loads: hu
 engine's modules reach back to hubdb and the store.
 """
 
+import functools
 from collections.abc import Callable, Iterable
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any, NoReturn
+from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
 
 from . import hubdb_core, task_effects
 
@@ -47,6 +48,59 @@ def _h() -> Any:
 def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id: str | None = None) -> NoReturn:
     _h().refuse(conn, by, rule, detail, task=task_id)
     raise AssertionError("refuse() always raises")  # pragma: no cover
+
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def _task_of(conn: "sqlite3.Connection", of: str, ident: str) -> str | None:
+    """The task a call is about, from what it names: the task, an ask on it, or an answer on it."""
+    if of == "task":
+        return ident
+    table = "requirements" if of == "requirement" else "answers"
+    found = conn.execute(f"SELECT v.task_id FROM {table} x JOIN visits v ON v.id = x.visit_id WHERE x.id=?", (ident,))
+    row = found.fetchone()
+    return str(row[0]) if row else None
+
+
+def _task_write(
+    of: str = "task",
+) -> Callable[
+    [Callable[Concatenate["sqlite3.Connection", str, str, P], T]],
+    Callable[Concatenate["sqlite3.Connection", str, str, P], T],
+]:
+    """Around every call that writes: a private task's refusal is recorded without its words (the audit says only
+    that a private write was refused, as for any private task write), the refusal is counted against this task, and
+    the task trigger rules the write queues are judged once it is complete. `of` says what the third argument names."""
+
+    def wrap(
+        fn: Callable[Concatenate["sqlite3.Connection", str, str, P], T],
+    ) -> Callable[Concatenate["sqlite3.Connection", str, str, P], T]:
+        @functools.wraps(fn)
+        def run(conn: "sqlite3.Connection", actor: str, ident: str, *args: P.args, **kwargs: P.kwargs) -> T:
+            from . import task_trigger_rules
+
+            H = _h()
+            triggers: Any = task_trigger_rules
+            task_id = _task_of(conn, of, ident)
+            row: Row | None = H.task(conn, task_id) if task_id else None
+            private = bool(row and H.task_private(conn, row))
+            token = H.PRIVATE_WRITE.set(H.PRIVATE_WRITE.get() or private)
+            about = H.REFUSAL_TASK.set((row or {}).get("id") or H.REFUSAL_TASK.get())
+            try:
+                with triggers.pending(conn):
+                    return fn(conn, actor, ident, *args, **kwargs)
+            except H.Refused as exc:
+                exc.private = H.PRIVATE_WRITE.get()
+                raise
+            finally:
+                H.REFUSAL_TASK.reset(about)
+                H.PRIVATE_WRITE.reset(token)
+
+        return run
+
+    return wrap
 
 
 # ----------------------------------------------------------------------------- who may
@@ -92,6 +146,7 @@ def _open(conn: "sqlite3.Connection", actor: str, task_id: str, mover: bool | No
 
 
 # ----------------------------------------------------------------------------- moves
+@_task_write()
 def task_done(
     conn: "sqlite3.Connection",
     actor: str,
@@ -128,6 +183,7 @@ def task_done(
         return E.move(conn, task_id, NEXT, actor, None, seen_version)
 
 
+@_task_write()
 def task_move(
     conn: "sqlite3.Connection",
     actor: str,
@@ -157,6 +213,7 @@ def task_move(
         return E.move(conn, task_id, str(to), actor, why, seen_version)
 
 
+@_task_write()
 def task_close(
     conn: "sqlite3.Connection",
     actor: str,
@@ -171,6 +228,7 @@ def task_close(
     return task_move(conn, actor, task_id, CLOSED, note or None, seen_version, mover=mover)
 
 
+@_task_write()
 def task_reassign(
     conn: "sqlite3.Connection",
     actor: str,
@@ -221,6 +279,20 @@ def task_reassign(
 
 
 # ----------------------------------------------------------------------------- asks and answers
+def _bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str) -> None:
+    """Whoever an ask names must be able to read the task. On a private task that is only someone who already reads
+    it, or one person its owning bot brings in by asking them (hubdb.task_reach_refusal has the rule): they become a
+    reader of this task and nothing else. Anyone else is refused, so nobody is asked about a task they cannot open."""
+    H = _h()
+    if H.task_private_readable(conn, who, row):
+        return
+    why = H.task_reach_refusal(conn, actor, row, who)
+    if why:
+        _refuse(conn, actor, "private", str(why), row["id"])
+    H.task_reach(conn, actor, row, who)
+
+
+@_task_write()
 def task_ask(
     conn: "sqlite3.Connection",
     actor: str,
@@ -240,8 +312,9 @@ def task_ask(
     from . import task_engine as E
 
     H = _h()
-    _open(conn, actor, task_id, mover)
+    row = _open(conn, actor, task_id, mover)
     target = H._reach(conn, actor, person)
+    _bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
         # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
         H.require_person_ask(conn, actor, target, line, "ask")
@@ -259,6 +332,7 @@ def _task_of_requirement(conn: "sqlite3.Connection", actor: str, requirement_id:
     return str(found[0])
 
 
+@_task_write("requirement")
 def task_withdraw_ask(
     conn: "sqlite3.Connection", actor: str, requirement_id: str, why: str | None = None, *, mover: bool | None = None
 ) -> Row | None:
@@ -270,6 +344,7 @@ def task_withdraw_ask(
         return E.withdraw_requirement(conn, requirement_id, actor, why)
 
 
+@_task_write()
 def task_answer(
     conn: "sqlite3.Connection",
     actor: str,
@@ -289,6 +364,7 @@ def task_answer(
         return A.answer(conn, task_id, requirement_id, actor, value, note, seen_version=seen_version)
 
 
+@_task_write()
 def task_give(
     conn: "sqlite3.Connection",
     actor: str,
@@ -301,13 +377,15 @@ def task_give(
     from . import answers as A
 
     H = _h()
-    _open(conn, actor, task_id, work=False)
+    row = _open(conn, actor, task_id, work=False)
+    _bring_in(conn, actor, row, H.resolve_actor(conn, person) or person)
     with task_effects.because(actor):
         return A.give_to(
             conn, task_id, requirement_id, actor, H.resolve_actor(conn, person) or person, seen_version=seen_version
         )
 
 
+@_task_write("answer")
 def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> Row:
     """Take an answer back: whoever gave it, or any person."""
     from . import answers as A
@@ -322,6 +400,7 @@ def task_answer_undo(conn: "sqlite3.Connection", actor: str, answer_id: str) -> 
         return A.undo(conn, answer_id, actor)
 
 
+@_task_write()
 def task_thumbs(
     conn: "sqlite3.Connection", actor: str, task_id: str, requirement_id: str, up: bool, note: str | None = None
 ) -> Row:
@@ -335,6 +414,7 @@ def task_thumbs(
 
 
 # ----------------------------------------------------------------------------- snooze
+@_task_write()
 def task_snooze(
     conn: "sqlite3.Connection",
     actor: str,
@@ -352,6 +432,7 @@ def task_snooze(
     return E.snooze(conn, task_id, actor, why, until, seen_version)
 
 
+@_task_write()
 def task_unsnooze(conn: "sqlite3.Connection", actor: str, task_id: str, why: str | None = None) -> Row:
     """End a task's snooze. Anyone who may read the task."""
     from . import task_engine as E
@@ -360,6 +441,7 @@ def task_unsnooze(conn: "sqlite3.Connection", actor: str, task_id: str, why: str
     return E.unsnooze(conn, task_id, actor, why)
 
 
+@_task_write()
 def task_try_again(
     conn: "sqlite3.Connection", actor: str, task_id: str, why: str | None = None, *, mover: bool | None = None
 ) -> Row:
@@ -372,23 +454,18 @@ def task_try_again(
 
 # ----------------------------------------------------------------------------- for code that acts for nobody
 def attempt(conn: "sqlite3.Connection", call: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-    """Run one task call that may be refused, for code nobody is waiting on. A refusal undoes that call alone and
-    returns None; whatever the caller wrote before stands. Any other error is raised."""
+    """Run one task call that may be refused, for code nobody is waiting on. A refusal undoes that call alone, with
+    the task trigger events it queued, and returns None; whatever the caller wrote before stands. Any other error is
+    raised, undone the same way."""
+    from . import task_trigger_rules
+
     H = _h()
-    name = f"task_attempt_{H.new_id().replace('-', '')}"
-    conn.execute(f"SAVEPOINT {name}")
+    triggers: Any = task_trigger_rules
     try:
-        out = call(conn, *args, **kwargs)
+        with triggers.savepoint(conn):
+            return call(conn, *args, **kwargs)
     except H.Refused:
-        conn.execute(f"ROLLBACK TO {name}")
-        conn.execute(f"RELEASE {name}")
         return None
-    except BaseException:
-        conn.execute(f"ROLLBACK TO {name}")
-        conn.execute(f"RELEASE {name}")
-        raise
-    conn.execute(f"RELEASE {name}")
-    return out
 
 
 # ----------------------------------------------------------------------------- reads
@@ -432,15 +509,30 @@ def _may(
             out += ["ok", "no"]
     if kind == "answer" and not standing.met and asked:
         out.append("answer")
-    if kind in ("ok", "answer") and not standing.met and asked and human:
+    # Give: whoever it waits on, the owner, or any person (answers.give_to); the owner's own work is given by the owner
+    # or a person, which reassigns the task.
+    if kind in ("ok", "answer") and standing.state == R.WAITING and (human or asked or viewer == owner):
+        out.append("give")
+    if kind == "owner_done" and not standing.met and (human or viewer == owner):
         out.append("give")
     if answer and (human or answer["by_id"] == viewer):
         out.append("undo")
     if requirement.get("visit_id") and (works or viewer == requirement.get("added_by_id")):
         out.append("withdraw")
-    if requirement.get("by_bot") and human:
+    # A thumb rates a bot's ask: one a bot added, or a stage's on a task a bot owns (answers.ask_of).
+    if kind in ("ok", "answer") and human and (requirement.get("by_bot") or is_bot(owner)):
         out.append("thumbs")
     return out
+
+
+def _readable(conn: "sqlite3.Connection", viewer: str | None, task_id: object) -> bool:
+    """Whether `viewer` may read another task this one names. With no viewer nothing is hidden (the caller is the
+    engine's own code)."""
+    H = _h()
+    if viewer is None:
+        return True
+    other: Row | None = H.task(conn, str(task_id)) if task_id else None
+    return bool(other) and bool(H.task_private_readable(conn, viewer, other))
 
 
 def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = None) -> Row | None:
@@ -461,6 +553,17 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
     live = row["status"] == "open" and bool(visit)
     standings = R.standings(conn, row) if live else []
     waits = [asdict(wait) for wait in W.of(conn, row, standings=standings)] if live else []
+    # A task this one filed may be private to people who can read this one: its title is not theirs to see, here or
+    # in the line that says what this task waits on.
+    filed_ids = (
+        [str(found[0]) for found in conn.execute("SELECT to_task_id FROM links WHERE visit_id=?", (visit["id"],))]
+        if live
+        else []
+    )
+    hidden = [other for other in filed_ids if not _readable(conn, viewer, other)]
+    for wait in waits:
+        if wait["state"] == W.TASKS and wait["who"] in hidden:
+            wait["line"] = "A sub-task"
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
@@ -474,7 +577,9 @@ def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = Non
                 "kind": requirement["kind"],
                 "line": R.name_of(requirement),
                 "met": standing.met,
-                "standing": standing.line,
+                "standing": "A sub-task is not finished"
+                if hidden and requirement["kind"] == "linked_done" and not standing.met
+                else standing.line,
                 "who": None if standing.met else standing.on,
                 "asked_by": requirement.get("added_by_id") if requirement.get("visit_id") else None,
                 "choices": requirement.get("choices"),

@@ -1741,6 +1741,20 @@ def migrate(conn, adopt_legacy=False):
 
     bot_home_merge.run_once(conn)
     message_links.ensure(conn)
+    # The pipelines every company has (General), made when missing on every start, and given their manager once that
+    # bot exists (backend/pipeline_settings.py). Here, so a hub opened without the cloud store has them too.
+    from . import pipeline_settings
+
+    if conn.in_transaction:
+        pipeline_settings.ensure_presets(conn)
+    else:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            pipeline_settings.ensure_presets(conn)
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
     return len(MIGRATIONS)
 
 
@@ -5574,68 +5588,68 @@ def task_create(
                 f"{', '.join(MOVER_TEAMS)} teams, not by {actor_name(conn, actor)}",
             )
         number = _number_free(conn, actor, number)
-    ts = now()
-    dedicated = False
-    # A bot's task always gets its own room: its comments, notices and replies stay out of the chat
-    # the bot's main session reads. The chat it was started from gets one "Started task" line.
-    # `own_room=False` (the Assistant, whose turns act for the person of the room) keeps the old way.
-    started_in = conversation(conn, conversation_id) if conversation_id and is_bot(target) and own_room else None
-    if conversation_id and not private and (not is_bot(target) or not own_room):
-        conv = conversation(conn, conversation_id)
-        if not conv:
-            refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
-    else:
-        if conversation_id and not private and not started_in:
-            refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
-        # The person of the chat it came from follows it into its room, where its replies reach them.
-        watcher = (
-            _room_person(conn, started_in, {"requester_id": requester, "owner_id": target})
-            if started_in and not private
-            else None
-        )
-        conv = open_conversation(
-            conn,
-            actor,
-            list(dict.fromkeys([actor, requester, target, *([watcher] if is_human(watcher) else [])])),
-            kind="task",
-            subject=title,
-            scope="task",
-            allow_planned=allow_planned,
-            announce=False,
-        )
-        dedicated = True
-    row = {
-        "id": new_id(),
-        "title": title,
-        "body": body,
-        "requester_id": requester,
-        "owner_id": target,
-        "status": "open",
-        "due_at": due,
-        "conversation_id": conv["id"],
-        "created_at": ts,
-        "updated_at": ts,
-        "done_at": None,
-        "closed_at": None,
-        "closed_by_id": None,
-        "note": "",
-        "lane": lane,
-        "rank": _queue_end(conn, target, top),
-        "goal_id": goal_id or None,
-        "number": number,
-        "private": int(private),
-        "occurrence": occurrence or None,
-        "occurrence_step": occurrence_step or None,
-        "rule_due_id": (rule_due_id or None) if occurrence else None,
-    }
     from contextlib import ExitStack
 
     from . import task_trigger_rules
 
-    # One step: if anything below is refused, the row, its thread links and the triggers it queued go with it.
+    # One step: if anything below is refused, the task's thread, its row and the triggers it queued go with it.
     with ExitStack() as undo:
         if conn.in_transaction:
             undo.enter_context(task_trigger_rules.savepoint(conn))
+        ts = now()
+        dedicated = False
+        # A bot's task always gets its own room: its comments, notices and replies stay out of the chat
+        # the bot's main session reads. The chat it was started from gets one "Started task" line.
+        # `own_room=False` (the Assistant, whose turns act for the person of the room) keeps the old way.
+        started_in = conversation(conn, conversation_id) if conversation_id and is_bot(target) and own_room else None
+        if conversation_id and not private and (not is_bot(target) or not own_room):
+            conv = conversation(conn, conversation_id)
+            if not conv:
+                refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
+        else:
+            if conversation_id and not private and not started_in:
+                refuse(conn, actor, "not-found", f"no conversation {conversation_id}")
+            # The person of the chat it came from follows it into its room, where its replies reach them.
+            watcher = (
+                _room_person(conn, started_in, {"requester_id": requester, "owner_id": target})
+                if started_in and not private
+                else None
+            )
+            conv = open_conversation(
+                conn,
+                actor,
+                list(dict.fromkeys([actor, requester, target, *([watcher] if is_human(watcher) else [])])),
+                kind="task",
+                subject=title,
+                scope="task",
+                allow_planned=allow_planned,
+                announce=False,
+            )
+            dedicated = True
+        row = {
+            "id": new_id(),
+            "title": title,
+            "body": body,
+            "requester_id": requester,
+            "owner_id": target,
+            "status": "open",
+            "due_at": due,
+            "conversation_id": conv["id"],
+            "created_at": ts,
+            "updated_at": ts,
+            "done_at": None,
+            "closed_at": None,
+            "closed_by_id": None,
+            "note": "",
+            "lane": lane,
+            "rank": _queue_end(conn, target, top),
+            "goal_id": goal_id or None,
+            "number": number,
+            "private": int(private),
+            "occurrence": occurrence or None,
+            "occurrence_step": occurrence_step or None,
+            "rule_due_id": (rule_due_id or None) if occurrence else None,
+        }
         conn.execute(
             "INSERT INTO tasks (id, title, body, requester_id, owner_id, status, due_at, "
             "conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, lane, rank, "
@@ -6152,13 +6166,18 @@ def task_update(
         if note is not None and note != row.get("note") and not quiet and status is None:
             _mirror_task_note(conn, actor, after, note)
         recount(conn, [after["owner_id"], after["requester_id"]])
-    # The moves, for the callers that still say them as fields. Each is the engine's, checked there.
+    # The moves, for the callers that still say them as fields. Each is the engine's, checked there. The version the
+    # engine is given is the task's own after the field edits above, but only where the caller gave one or may leave it
+    # out: a bot that sent none is refused there, as on any move.
+    versionless = is_bot(actor) and seen_version is None
+
+    def fresh():
+        return None if versionless else (task(conn, task_id) or row).get("version")
+
     if owner is not None:
-        after = task_calls.task_reassign(
-            conn, actor, task_id, owner, note or None, (task(conn, task_id) or row).get("version"), mover=mover
-        )
+        after = task_calls.task_reassign(conn, actor, task_id, owner, note or None, fresh(), mover=mover)
     if status is not None:
-        seen = (task(conn, task_id) or row).get("version")
+        seen = fresh()
         current = (task(conn, task_id) or row)["status"]
         if status == "done":
             after = task_calls.task_done(conn, actor, task_id, note or "", seen, mover=mover)

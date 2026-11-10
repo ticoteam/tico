@@ -1086,7 +1086,6 @@ class FactoryRow(TypedDict):
     retired_at: str | None
     goal: str | None
     manager_id: str | None
-    output_stage_id: str | None
 
 
 class FactoryManagerActionRow(TypedDict):

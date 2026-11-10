@@ -617,10 +617,30 @@ def restore_tasks(c, ids, actor=None):
     for e, snap in snapshots:
         was = snap["rows"]["tasks"][0]
         task_engine.restore(c, e["task_id"], actor, {k: was.get(k) for k in PLACED})
+    _mirror_parents(c, [e["task_id"] for e in entries])
     H.recount(c, [t for e in entries for t in (e["owner"], e["requester"])])
     # A task restorer may not read its meetings, so skipped links must not reveal their count.
     skipped.pop("meeting_task_links", None)
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
+
+
+def _mirror_parents(c, ids):
+    """A task's parent is kept twice: the engine's link (what it waits on) and the `parent` relation (the tree, and who
+    may read what). A link outlives a deleted task; a relation to a task that is gone does not come back with a
+    restore. So after a restore, every link with both ends here has its relation again, whichever end came back
+    last."""
+    for tid in ids:
+        for parent, child, at in c.execute(
+            "SELECT l.from_task_id, l.to_task_id, l.created_at FROM links l "
+            "JOIN tasks p ON p.id = l.from_task_id JOIN tasks k ON k.id = l.to_task_id "
+            "WHERE l.from_task_id=? OR l.to_task_id=?",
+            (tid, tid),
+        ).fetchall():
+            if not c.execute("SELECT 1 FROM task_relations WHERE from_task=? AND kind='parent'", (child,)).fetchone():
+                c.execute(
+                    "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'parent',NULL,?)",
+                    (child, parent, at),
+                )
 
 
 def _files_left(c, tid):

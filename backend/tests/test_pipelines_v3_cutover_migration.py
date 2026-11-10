@@ -175,3 +175,32 @@ def test_a_new_database_starts_on_the_new_shape_and_a_second_start_changes_nothi
         assert set(stages) == {("general-todo", "work"), ("general-done", "done"), ("general-closed", "closed")}
         assert c.execute("SELECT stage_id, kind FROM requirements").fetchall() == [("general-todo", "owner_done")]
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_a_tico_05_database_with_tasks_is_refused_before_anything_is_written(tmp_path):
+    """The start itself (preflight), not only the migration: an older database with pending migrations before the
+    cut-over would otherwise have those applied before the cut-over refused it."""
+    path = tmp_path / "hub.sqlite"
+    with sqlite3.connect(path) as c:
+        c.executescript(OLD)
+        c.execute("PRAGMA user_version=71")
+        c.execute(migrations.TABLE)
+        c.execute("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Old', 'doing')")
+    before = path.read_bytes()
+    with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):
+        migrations.preflight(path)
+    with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):
+        boot(path)
+    assert path.read_bytes() == before
+    with sqlite3.connect(path) as c:
+        c.execute("DELETE FROM tasks")
+    migrations.preflight(path)  # with no task there is nothing to lose: it may start
+
+
+def test_a_database_on_this_release_with_tasks_starts(tmp_path):
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    with sqlite3.connect(path) as c:
+        c.execute("INSERT INTO tasks (id, title, status) VALUES ('t1', 'New', 'open')")
+    migrations.preflight(path)
+    boot(path)

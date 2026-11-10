@@ -327,3 +327,81 @@ def test_a_deleted_task_keeps_no_stage_and_a_restored_one_comes_back_as_it_stood
     assert [r["kind"] for r in H.task_view(c, row["id"], ANA)["to_leave"]] == (["owner_done"] if not ended else [])
     # An open task is its owner's turn again: one new wake. One that ended wakes nobody.
     assert len(X.wakes(c, row["id"], BUILDER)) == woken + (1 if ended is None else 0)
+
+
+# ----------------------------------------------------------------------------- privacy
+def test_a_private_sub_tasks_title_is_not_shown_to_someone_who_reads_only_its_parent(c):
+    parent = _new(c, by=BEN, owner=BUILDER, title="Plan the offsite")
+    child = _new(c, by=BUILDER, owner=HELPER, title="Salary numbers for the offsite", parent_id=parent["id"])
+    c.execute("UPDATE tasks SET private=1 WHERE id=?", (child["id"],))
+    c.execute("UPDATE requirements SET kind='linked_done' WHERE stage_id='general-todo'")
+    text = json.dumps(H.task_view(c, parent["id"], BEN))
+    assert "Salary" not in text and "A sub-task" in text
+    assert "Salary" in json.dumps(H.task_view(c, parent["id"]))  # the engine's own read hides nothing
+
+
+def test_an_ask_names_only_someone_who_can_read_the_task(c):
+    row = _new(c, by=BEN, owner=BUILDER, private=True)
+    with _refused("private"):
+        H.task_ask(c, BUILDER, row["id"], "human:cara", "Which vendor do we keep?", seen_version=_version(c, row["id"]))
+    assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1
+    H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
+
+
+def test_a_refused_write_on_a_private_task_is_recorded_without_its_words(c):
+    row = _new(c, by=BEN, owner=BUILDER, private=True)
+    H.task_ask(c, BUILDER, row["id"], BEN, "Do we drop the Acme contract?", seen_version=_version(c, row["id"]))
+    with _refused("task_not_met") as refusal:
+        H.task_move(c, BUILDER, row["id"], H.TASK_NEXT, None, _version(c, row["id"]))
+    assert refusal.value.private is True
+    recorded = c.execute("SELECT detail FROM refusals WHERE rule='task_not_met' ORDER BY created_at DESC").fetchone()[0]
+    assert "Acme" not in recorded and "Private task write refused" in recorded
+
+
+# ----------------------------------------------------------------------------- versions, owners, the trash
+def test_a_bot_that_sends_no_version_is_refused_the_old_way_of_saying_done_too(c):
+    row = _new(c)
+    with _refused("task_changed"):
+        H.task_update(c, BUILDER, row["id"], status="done", note="Sent.")
+    assert H.task(c, row["id"])["status"] == "open"
+    assert H.task_update(c, ANA, row["id"], status="done", note="Sent.")["status"] == "done"  # a person may
+
+
+def test_a_move_into_a_stage_someone_else_owns_does_what_a_reassignment_does(c):
+    stages = (
+        {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+        {"name": "Check", "owner": HELPER, "requirements": [{"kind": "owner_done"}]},
+    )
+    X.pipeline(c, "notes", "Notes", stages, manager=MANAGER)
+    row = _new(c, pipeline="notes")
+    wake = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (row["id"] + ":%",)).fetchone()[0]
+    c.execute(
+        "INSERT INTO task_delegations (task_id, delegate, requested_by, message_id, expires_at) VALUES (?,?,?,?,?)",
+        (row["id"], MANAGER, ANA, wake, "2099-01-01T00:00:00Z"),
+    )
+    rank = H.task(c, row["id"])["rank"]
+    out = H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
+    assert (out["stage"]["name"], out["owner_id"]) == ("Check", HELPER)
+    assert c.execute("SELECT COUNT(*) FROM task_delegations WHERE task_id=?", (row["id"],)).fetchone()[0] == 0
+    assert H.task(c, row["id"])["rank"] != rank or rank is None  # at the end of the new owner's queue
+
+
+def test_a_child_restored_before_its_parent_is_under_it_again_once_both_are_back(c):
+    parent = _new(c)
+    child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=parent["id"])
+    X.settled(c)
+    for tid in (child["id"], parent["id"]):
+        assert task_delete.delete_tasks(c, [tid], apply=True, keep_work=True)["applied"]
+    for tid in (child["id"], parent["id"]):
+        assert task_delete.restore_tasks(c, [tid], ANA)["restored"] == [tid]
+    assert H.TR.parent_of(c, child["id"]) == parent["id"]
+    assert H.task_view(c, child["id"], ANA)["filed_by"] == parent["id"]
+
+
+def test_a_task_is_never_replaced_by_an_insert(c):
+    import sqlite3
+
+    row = _new(c)
+    with pytest.raises(sqlite3.IntegrityError, match="never replaced"):
+        c.execute("INSERT OR REPLACE INTO tasks (id, status, owner_id) VALUES (?, 'open', ?)", (row["id"], HELPER))
+    assert E.task(c, row["id"])["owner_id"] == BUILDER
