@@ -8,7 +8,7 @@
 // under her). Task reads follow the org chart, not co-ownership (docs/tasks.md "Managers acting on tasks").
 // Expected: Dana sees all three (she is above the bots and a party to P1); Omar sees T1 and P1; Priya sees T1 and P2
 // (a manager reads a bot report's private tasks, but nothing else private); Gina sees T1 and P2 (a reader). A private
-// task a teammate may not read is refused by the hub, and the page does not open it. Runs on a desktop only. task-list.js and task-modal.js do branch on the phone (the sheet is a modal there),
+// task a teammate may not read is refused by the hub, and the page does not open it. Runs on a desktop only. The tasks page and task-modal.ts do branch on the phone (the sheet is a modal there),
 // but the asserts are about the hub's answers to each teammate, which no width changes, and e2e-core opens the sheet on both.
 import type * as E2E from './support/e2e.cts';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -39,14 +39,15 @@ journey('e2e-roles', async ({hub, browser, phone}) => {
   const P2 = idOf(await must(hub, 'release-manager', 'POST', 'tasks', {title: TITLES.P2, body: 'Bots, a manager and a reader.',
     owner: 'builder-claude', private: true}, 'the bot-only private task'));
   await must(hub, 'builder-claude', 'POST', 'tasks', {title: 'Gina checks the cut', body: 'Gina is brought in here.',
-    owner: 'gina', private: true, relations: [{task: P2, kind: 'parent'}]}, 'builder-claude brings Gina in');
+    owner: 'gina', private: true, parent: P2}, 'builder-claude brings Gina in');
   const ids: Record<string, string> = {T1, P1, P2};
 
   for (const who of Object.keys(SEES)) {
-    const page = await open(browser, hub, who, {phone, hash: '#/tasks?view=list'});
-    await page.locator('.tl-row', {hasText: TITLES.T1!}).first().waitFor({timeout: t(20000)});
+    // The General pipeline lists every open task the teammate may read (each is filed there: none names a pipeline).
+    const page = await open(browser, hub, who, {phone, hash: '#/tasks?pipeline=general'});
+    await page.locator('#task-body [data-task]', {hasText: TITLES.T1!}).first().waitFor({timeout: t(20000)});
     for (const key of ['T1', 'P1', 'P2']) {
-      const shown = await page.locator('.tl-row', {hasText: TITLES[key]!}).count();
+      const shown = await page.locator('#task-body [data-task]', {hasText: TITLES[key]!}).count();
       assert.equal(shown > 0, SEES[who]![key], `${where}: ${who} ${SEES[who]![key] ? 'sees' : 'does not see'} ${key}`);
     }
     assertClean(page, `${where}: ${who} list`);

@@ -125,16 +125,17 @@ def test_the_pricing_decision_waits_for_ana(ana):
     waiting = [
         item
         for item in ana.get("/api/v2/needs-you").json()["items"]
-        if item["title"] == "Raise Home Pro from $449 to $479 for December?"
+        if item["task"]["title"] == "Raise Home Pro from $449 to $479 for December?"
     ]
     assert [item["kind"] for item in waiting] == ["task"]
 
 
 def test_tasks_are_open_done_or_closed_and_show_asks_snoozes_and_sub_tasks(ana):
     """As Tasks reads them: what is open, then the latest finished (the weeks before hold hundreds more done). Every
-    task is in General, and the open ones show what they wait on: a person asked on the task, a snooze."""
+    task is in General, and the open ones show what they wait on: a person asked on the task, a snooze (a snoozed task
+    is off the list until asked for)."""
     tasks = [
-        *ana.get("/api/v2/tasks?status=open&limit=200").json()["tasks"],
+        *ana.get("/api/v2/tasks?status=open&snoozed=all&limit=200").json()["tasks"],
         *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"],
     ]
     assert {task["status"] for task in tasks} == {"open", "done", "closed"}
@@ -237,7 +238,7 @@ def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
     rows = listing["threads"] + listing["dms"] + listing["attention"]
     unread = {row["title"] for row in rows if row.get("kind") == "task" and (row.get("me") or {}).get("unread")}
     assert unread <= set(D.KEEP_UNREAD), sorted(unread - set(D.KEEP_UNREAD))
-    owed = {item["title"] for item in ana.get("/api/v2/needs-you").json()["items"]}
+    owed = {item["task"]["title"] for item in ana.get("/api/v2/needs-you").json()["items"]}
     assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= owed
 
 
@@ -248,7 +249,7 @@ def test_the_price_decision_is_due_tomorrow_with_a_short_reason(ana):
         if task["title"] == "Raise Home Pro from $449 to $479 for December?"
     ]
     full = ana.get(f"/api/v2/tasks/{price['id']}").json()["task"]
-    assert full["due"] and 1 <= len([part for part in full["body"].split("\n\n") if part.strip()]) <= 3
+    assert full["due_at"] and 1 <= len([part for part in full["body"].split("\n\n") if part.strip()]) <= 3
 
 
 def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):

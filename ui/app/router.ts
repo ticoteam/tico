@@ -48,7 +48,7 @@ function route(hash: string = location.hash): void {
   if (!isStrategyRoute(S.route)) window.strategyStop?.();
   if (!isLensesRoute(S.route)) window.lensesStop?.();
   if (!isAutomationsRoute(S.route)) automationsStop();
-  taskChatStop(); $('#task-modal')?.close();
+  taskChatStop(); taskModalRouteClose();
   if (!S.route.startsWith(DOCS)) DOC_LOAD++;
   // Leaving Mail abandons its fetches, its debounced search (which would set the hash back) and
   // its accumulated page, so returning re-reads the server instead of drawing a stale list.
