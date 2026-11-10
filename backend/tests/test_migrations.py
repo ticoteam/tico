@@ -503,6 +503,39 @@ def test_failed_migration_rolls_back_its_ddl_and_row_then_runs_once_fixed(tmp_pa
         conn.close()
 
 
+@pytest.mark.parametrize("kind", ["sql", "py"])
+def test_a_retired_migration_is_recorded_and_never_imported_or_run(tmp_path, monkeypatch, kind):
+    """A file in SUPERSEDED may import a module that is gone: it is recorded with its checksum and not loaded."""
+    directory = tmp_path / "migrations"
+    directory.mkdir()
+    (directory / "0001_base.sql").write_text("CREATE TABLE base(x);\n")
+    body = {
+        "sql": "CREATE TABLE never(x);\n",
+        "py": "from backend import a_module_that_is_gone\n\ndef up(conn):\n    pass\n",
+    }
+    retired = directory / f"20261104235959_retired.{kind}"
+    retired.write_text(body[kind])
+    monkeypatch.setattr(migrations, "SUPERSEDED", {"20261104235959_retired"})
+    conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
+    try:
+        migrations.apply(conn, directory)
+        assert _tables(conn) == {"schema_migrations", "base"}
+        assert _versions(conn) == ["0001_base", "20261104235959_retired"]
+        recorded = conn.execute("SELECT checksum FROM schema_migrations WHERE version='20261104235959_retired'")
+        assert recorded.fetchone()[0] == hashlib.sha256(retired.read_bytes()).hexdigest()
+    finally:
+        conn.close()
+
+
+def test_every_retired_migration_is_a_file_and_no_other_imports_a_module_that_is_gone():
+    """Each name in SUPERSEDED is a shipped file, and every other .py migration still loads."""
+    known = {m.version: m for m in migrations.files()}
+    assert set(known) >= migrations.SUPERSEDED
+    for migration in known.values():
+        if migration.kind == "py" and migration.version not in migrations.SUPERSEDED:
+            migrations._module(migration)
+
+
 @pytest.mark.parametrize("name", ["0001_audit_log.sql", "20261104235959_probe.sql"])
 def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch, name):
     directory = tmp_path / "migrations"

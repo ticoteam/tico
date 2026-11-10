@@ -62,9 +62,16 @@ TABLE = (
 NAME = re.compile(r"(\d{4}|\d{14})_[a-z0-9_]+\.(sql|py)")
 LEGACY_USER = re.compile(r"legacy_user_version_(\d+)")
 LEGACY_CLOUD = re.compile(r"legacy_cloud_(\d+)")
-# A shipped file whose work a later file does now. Its up() is not run: it imports ask_routing, which step 6c removed,
-# and 20261106131713_asks_to_question_tasks moves every open ask, system asks included. Its row and checksum stay.
-SUPERSEDED = {"20261105034511_resend_system_asks"}
+# A shipped file whose work no longer applies. It is recorded as applied, with its checksum, and never imported or
+# run: each imports a module that is gone.
+# - resend_system_asks imported ask_routing; 20261106131713_asks_to_question_tasks moved every open ask.
+# - blocked_reason_recompute (task_holds) and factory_output_stage (pipeline_setup) worked on the old task engine's
+#   tables, which the Pipelines v3 cut-over deletes.
+SUPERSEDED = {
+    "20261105034511_resend_system_asks",
+    "20261107140000_blocked_reason_recompute",
+    "20261107210000_factory_output_stage",
+}
 # A shipped file from before the directory rename reads the market graph's old names (0030_growth_segments reads
 # market_entities and market_edges). A replay of it on a file the rename already moved, as when a database without
 # schema_migrations is adopted, sees those names as temporary views over the new tables for that one run.
@@ -228,7 +235,8 @@ def _old_name_views(conn, migration):
 
 def _run(conn, migration):
     """One migration in one transaction with its row, so a failure rolls back both. `conn` must be in autocommit."""
-    module = _module(migration) if migration.kind == "py" else None
+    superseded = migration.version in SUPERSEDED
+    module = _module(migration) if migration.kind == "py" and not superseded else None
     keys_off = bool(module and getattr(module, "FOREIGN_KEYS_OFF", False))
     prior = conn.execute("PRAGMA foreign_keys").fetchone()[0]
     if keys_off:
@@ -239,14 +247,13 @@ def _run(conn, migration):
         try:
             before = _broken_references(conn) if keys_off else None
             if module:
-                if migration.version not in SUPERSEDED:
-                    views = _old_name_views(conn, migration)
-                    try:
-                        module.up(conn)
-                    finally:
-                        for name in views:
-                            conn.execute(f"DROP VIEW IF EXISTS temp.{name}")
-            else:
+                views = _old_name_views(conn, migration)
+                try:
+                    module.up(conn)
+                finally:
+                    for name in views:
+                        conn.execute(f"DROP VIEW IF EXISTS temp.{name}")
+            elif not superseded:
                 for statement in statements(migration.path.read_text(encoding="utf-8")):
                     conn.execute(statement)
             if keys_off:
