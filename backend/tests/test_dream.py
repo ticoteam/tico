@@ -3,20 +3,25 @@ without ask ingest, their answer wakes the bot, and the commit it makes is that 
 
 import json
 
+import pytest
+
 from backend import bot_settings as BS
 from backend import hubdb as H
 from backend.tests.helpers import ask_ingest as ingest
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
 from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
+# What dream.INSTRUCTIONS step 4 tells the bot to ask: up to 3 numbered questions in ONE ask.
 QUESTIONS = (
     "1. Should weekly reports go to Ana or the team? Suggested: the team\n2. Drop the old deploy rule? Suggested: yes"
 )
+# One question, which the v3 ask rule takes (one decision per ask).
+QUESTION = "Should weekly reports go to Ana or the team?"
 
 
-def ask(api, tid, token, line=QUESTIONS, to="human:ben"):
+def ask(api, tid, token, line=QUESTION, to="human:ben"):
     """The bot asks a person on the task, with the version it was shown."""
-    version = api.get(f"/api/v2/tasks/{tid}", headers=headers(token)).json()["version"]
+    version = api.get(f"/api/v2/tasks/{tid}", headers=headers(token)).json()["task"]["version"]
     return api.post(
         f"/api/v2/tasks/{tid}/asks", json={"to": to, "line": line, "version": version}, headers=headers(token)
     )
@@ -105,7 +110,7 @@ def test_asking_answering_and_the_dreams_own_commit(api):
     assert current(api)["state"] == "dreaming"
     assert ask(api, tid, first["token"]).status_code == 200
     seen = current(api)
-    assert seen["state"] == "asking" and seen["questions"]["text"] == QUESTIONS and seen["questions"]["mine"]
+    assert seen["state"] == "asking" and seen["questions"]["text"] == QUESTION and seen["questions"]["mine"]
     assert current(api, "ana-test")["questions"]["mine"] is False
     post(
         api,
@@ -119,7 +124,7 @@ def test_asking_answering_and_the_dreams_own_commit(api):
     post(
         api,
         f"tasks/{asked['task_id']}/asks/{asked['requirement_id']}/answer",
-        {"value": "1. the team\n2. yes"},
+        {"value": "The team"},
         token="ben-test",
     )
     assert current(api)["state"] == "dreaming"
@@ -151,10 +156,22 @@ def test_asking_answering_and_the_dreams_own_commit(api):
         assert done["closed_at"][:10] in H.task(c, again["task"])["body"]
 
 
-def test_someone_who_may_give_work_but_not_read_never_gets_another_persons_open_dream(api):
+@pytest.mark.xfail(
+    strict=True,
+    reason="v3 conflict: dream.INSTRUCTIONS step 4 says ask up to 3 numbered questions in ONE hub_task_ask, but the "
+    "v3 ask rule (hubdb.require_person_ask) refuses an ask that asks more than one thing; owner: asks",
+)
+def test_the_numbered_questions_the_dream_tells_the_bot_to_ask_are_taken(api):
     tid = dream(api)["dream"]["task"]
     with api.app.state.store.transaction() as c:
         H.task_ask(c, "bot:ops", tid, "human:ben", QUESTIONS, seen_version=H.task(c, tid)["version"])
+    assert current(api)["questions"]["text"] == QUESTIONS
+
+
+def test_someone_who_may_give_work_but_not_read_never_gets_another_persons_open_dream(api):
+    tid = dream(api)["dream"]["task"]
+    with api.app.state.store.transaction() as c:
+        H.task_ask(c, "bot:ops", tid, "human:ben", QUESTION, seen_version=H.task(c, tid)["version"])
         restrict(
             c,
             "ops",

@@ -505,7 +505,7 @@ def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq):  # no
     for payload, why in [
         ({"message": REPORT, "content_sha256": "0" * 64}, "doesn't match"),
         ({"message": REPORT, "content_sha256": "ABC"}, "64 lower-case hex"),
-        ({"message": REPORT}, "does not match its hash"),
+        ({"message": REPORT}, "needs content_sha256"),
         ({"message": " padded ", "content_sha256": sha(" padded ")}, "blank space"),
         ({"message": "x" * 4001, "content_sha256": sha("x" * 4001)}, "4000"),
         ({"message": REPORT, "content_sha256": sha(REPORT), "diagnostics": "abc"}, "not diagnostics"),
@@ -565,6 +565,93 @@ def test_an_okd_report_is_claimed_before_it_leaves_and_a_retry_sends_the_same_re
     assert again.status_code == 200 and again.json()["again"] and len(hq.seen) == 3
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
+
+
+def _rule(api, on):
+    assert api.put("/api/v2/access/rules", json={"bot_reports_direct": on}, headers=signed_in()).status_code == 200
+
+
+def test_an_okd_report_not_yet_delivered_is_sent_once_when_the_bot_then_sends_it_under_the_rule(environment, hq):  # noqa: F811
+    """A person OK'd a bot's report (their click claimed it) and Maintenance has not delivered it yet. The team rule
+    is turned on and the bot sends the same report: one report, one send, whichever path gets there first."""
+    api = environment()
+    drafts_only(api)
+    bot = as_bot(api)
+    rid = draft(api, bot).json()["id"]
+    assert decide(api, rid)[1].status_code == 200 and consumed(api, rid)
+    _rule(api, True)
+    r = draft(api, bot)
+    assert r.status_code == 200 and r.json()["status"] == "sent", r.text
+    assert len(hq.tickets) == 1 and {q.headers.get("idempotency-key") for q in hq.seen} == {"tico-support:" + rid}
+    again = send(api, bot, rid)  # Maintenance's delivery, later: the ticket it already has
+    assert again.status_code == 200 and again.json()["again"] and len(hq.tickets) == 1
+    with api.app.state.store.read() as c:
+        assert support.claimed(c) == []
+    # The other order: sent under the rule first, then a person's claimed OK of the same report is that one send.
+    _rule(api, False)
+    other = draft(api, bot, message=REPORT + " Again.").json()["id"]
+    assert decide(api, other)[1].status_code == 200
+    _rule(api, True)
+    with api.app.state.store.read() as c:
+        assert [r["requirement_id"] for r in support.claimed(c)] == [other]
+    sent = draft(api, bot, message=REPORT + " Again.")
+    assert sent.json()["status"] == "sent" and len(hq.tickets) == 2
+    with api.app.state.store.read() as c:
+        assert support.claimed(c) == []
+    assert send(api, bot, other).json()["again"] and len(hq.tickets) == 2
+
+
+def test_a_claimed_report_that_no_longer_matches_its_hash_is_refused_once_and_said_on_its_task(environment, hq):  # noqa: F811
+    from backend import health, task_asks
+    from backend.store import H
+
+    api = environment()
+    drafts_only(api)
+    bot = as_bot(api)
+    rid = draft(api, bot).json()["id"]
+    assert decide(api, rid)[1].status_code == 200
+    with api.app.state.store.transaction() as c:  # the stored report changed after it was OK'd
+        c.execute(
+            "UPDATE ok_grants SET content=json_set(content, '$.message', 'Something else') WHERE requirement_id=?",
+            (rid,),
+        )
+    r = send(api, bot, rid)
+    assert r.status_code == 409 and "no longer matches its hash" in r.text and hq.seen == []
+    with api.app.state.store.read() as c:
+        assert support.claimed(c) == []  # out of the queue: Maintenance does not try it again
+        assert (
+            c.execute("SELECT count(*) FROM events WHERE action='ok.not_done' AND target=?", (rid,)).fetchone()[0] == 1
+        )
+        task_id = task_asks.task_of(c, rid)
+        why = [e for e in H.task_history(c, task_id) if "no longer matches its hash" in (e.get("note") or "")] or [
+            v for v in c.execute("SELECT why FROM visits WHERE task_id=? AND how='closed'", (task_id,))
+        ]
+        assert why, "the task says why it was not sent"
+        assert health._claimed_oks_check(c)["counts"] == {"claimed_not_delivered": 0, "claimed_refused": 1}
+    assert send(api, bot, rid).status_code == 409
+    with api.app.state.store.read() as c:  # refused once: a second try records nothing new
+        assert (
+            c.execute("SELECT count(*) FROM events WHERE action='ok.not_done' AND target=?", (rid,)).fetchone()[0] == 1
+        )
+
+
+def test_a_refusal_while_drafting_a_report_comes_back_as_a_clean_refusal(environment, hq, monkeypatch):  # noqa: F811
+    """A rule that refuses the ask (the task engine's, here faked) is the caller's 409 with its words, never an
+    uncaught error: the MCP and CLI sweeps call this route with whatever they generate."""
+    from backend.store import H
+
+    api = environment()
+    drafts_only(api)
+    headers = as_bot(api)
+
+    def refuses(c, by, payload, **_):
+        raise H.Refused("task_requirement", "Nobody answers their own ask: ask someone else")
+
+    monkeypatch.setattr(support, "ask_report", refuses)
+    r = draft(api, headers)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"] == "task_requirement", r.text  # a bot's agent reads the flat shape
+    assert "Nobody answers their own ask" in r.json()["detail"], r.text
 
 
 def test_the_person_only_routes_still_refuse_a_bot(environment, hq):  # noqa: F811  (the fixture)

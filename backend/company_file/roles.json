@@ -4540,7 +4540,7 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Makes one video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next starts. Nothing is published until the owner approves the exact final file.",
+   "summary": "Makes one video at a time from an approved brief: script, storyboard, shots, cut and final, each stage OK'd in Tico before the next starts. Nothing is published until the owner OKs the exact final file.",
    "when": "A team that wants product explainers, demos, ads or social videos made and checked, and has no one with the hours to make them.",
    "tags": [
     "video",

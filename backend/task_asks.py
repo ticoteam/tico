@@ -499,6 +499,11 @@ def ask_ok(
         if not before:
             continue
         state = _state(conn, before)[0]
+        if state == SENT_BACK and before["asked_by_id"] == by:
+            # Asked again after a send back: the new ask replaces the old one, which would otherwise hold its task in
+            # the stage (C15). The send back stays in the task's history.
+            withdraw(conn, before["requirement_id"], "Asked again")
+            continue
         if state not in (WAITING, OK):
             continue
         if before["content_hash"] == digest and before["asked_by_id"] == by:
@@ -714,7 +719,7 @@ def give_ok(
         _refuse(conn, person, "task_requirement", refused, task_id)
     token = _GIVING.set(requirement_id)
     try:
-        answered: Row = H.task_answer(conn, person, task_id, requirement_id, "ok")
+        answered: Row = H.task_answer(conn, person, task_id, requirement_id, "ok", own_click=True)
     finally:
         _GIVING.reset(token)
     conn.execute(
@@ -851,6 +856,10 @@ def not_done(conn: "sqlite3.Connection", requirement_id: str, why: str) -> None:
     H.event(conn, SYSTEM, "ok.not_done", requirement_id, {"subject": row["subject"], "why": why[:300], "task": task_id})
     if row.get("filed") and task_id and _task_status(conn, task_id) == "open":
         H.attempt(conn, H.task_close, SYSTEM, task_id, why)
+    elif task_id:
+        # Its task goes on: its history says why the act did not happen, to the OK's parties only (the event names the
+        # requirement: private_history drops the words for anyone else). Nobody is sent a message about it.
+        H._task_event(conn, task_id, SYSTEM, "ok_not_done", None, None, why[:300], data={"requirement": requirement_id})
 
 
 def settle(conn: "sqlite3.Connection", requirement_id: str, note: str) -> None:

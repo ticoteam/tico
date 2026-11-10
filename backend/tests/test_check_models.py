@@ -22,7 +22,7 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
             "body": "https://github.com/ticoteam/tico/pull/700",
             "check_model": "grok",
             "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -44,14 +44,8 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
         GROK,
         during=lambda: post(
             api,
-            "tasks/" + sub["id"],
-            {
-                "status": "done",
-                "note": "Verdict: OK to merge; one nit on naming.",
-                "verdict": "approve",
-                "verdict_head": "a" * 40,
-                "version": check["task"]["version"],
-            },
+            "tasks/" + sub["id"] + "/done",
+            {"note": "Verdict: OK to merge; one nit on naming.", "version": check["task"]["version"]},
             check["token"],
         ),
     )
@@ -61,8 +55,15 @@ def test_a_review_subtask_runs_on_grok_in_its_own_session_and_its_verdict_wakes_
     back = claim(api, machine)
     assert back["task"]["id"] == parent["id"]
     assert back["config"]["runtime"] == "claude" and "check" not in back["task"]
-    assert "Review done (ran on grok-4.6): Review PR 700 with another model" in back["message"]["body"]
-    assert "Verdict: OK to merge" in back["message"]["body"]
+    # The engine wakes the parent's owner once with how the sub-task ended (docs/pipelines-v3.md "A task waits a day on
+    # a sub-task"); the review's note is on the sub-task itself. v3 has no verdict fields.
+    assert "The tasks this one filed have ended: Review PR 700 with another model: Done" in back["message"]["body"]
+    with api.app.state.store.read() as c:
+        said = c.execute(
+            "SELECT a.notes FROM answers a JOIN visits v ON v.id = a.visit_id WHERE v.task_id=? AND a.answer='done'",
+            (sub["id"],),
+        ).fetchone()
+    assert said and said[0].startswith("Verdict: OK to merge"), said
 
 
 def test_a_parents_turn_after_the_check_keeps_the_bots_own_session(api):
@@ -75,7 +76,7 @@ def test_a_parents_turn_after_the_check_keeps_the_bots_own_session(api):
             "title": "Check the migration with Grok",
             "body": "Read the migration plan.",
             "check_model": "grok:grok-4.6",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -92,7 +93,7 @@ def test_a_parents_turn_after_the_check_keeps_the_bots_own_session(api):
     [
         ({"check_model": "cursor"}, 422, "enabled"),  # the company has not enabled that provider
         ({"check_model": "grok", "owner": "coo"}, 422, "subtask it owns"),  # another bot's subtask
-        ({"check_model": "grok", "relations": []}, 422, "under a task you own"),
+        ({"check_model": "grok", "parent": None}, 422, "under a task you own"),
     ],
 )
 def test_a_check_model_names_only_what_the_company_enabled_for_the_bots_own_subtask(api, body, status, words):
@@ -101,7 +102,7 @@ def test_a_check_model_names_only_what_the_company_enabled_for_the_bots_own_subt
         "owner": "ops",
         "title": "Review the change",
         "body": "Read it.",
-        "relations": [{"task": parent["id"], "kind": "parent"}],
+        "parent": parent["id"],
         **body,
     }
     refused = post(api, "tasks", ask, turn["token"], expected=status)
@@ -120,7 +121,7 @@ def test_a_person_cannot_file_one_and_a_signed_out_runtime_is_refused_and_not_ha
             "title": "Review it",
             "body": "Read it.",
             "check_model": "grok",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         expected=422,
     )
@@ -133,7 +134,7 @@ def test_a_person_cannot_file_one_and_a_signed_out_runtime_is_refused_and_not_ha
             "title": "Review it on Grok",
             "body": "Read it.",
             "check_model": "grok",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
         expected=409,
@@ -148,7 +149,7 @@ def test_a_person_cannot_file_one_and_a_signed_out_runtime_is_refused_and_not_ha
             "title": "Review it on Grok",
             "body": "Read it.",
             "check_model": "grok",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -170,7 +171,7 @@ def check_filed(api, title="Review PR 701 on Grok"):
             "body": "Read it.",
             "check_model": "grok",
             "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -239,11 +240,11 @@ def test_a_check_handed_to_another_bot_is_that_bots_ordinary_task(api):
             "title": "Review it on Grok",
             "body": "Read it.",
             "check_model": "grok",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
-    post(api, "tasks/" + sub["id"], {"owner": "coo", "version": sub["version"]}, turn["token"])
+    post(api, "tasks/" + sub["id"] + "/owner", {"owner": "coo", "version": sub["version"]}, turn["token"])
     with api.app.state.store.read() as c:
         assert H.check_model(c, sub["id"], "coo") is None and H.check_model(c, sub["id"], "ops") is None
         assert H.check_model(c, sub["id"])["model"] == "grok-4.6", "the record itself stays"
@@ -259,7 +260,7 @@ def test_work_under_a_check_continues_the_checks_session_not_the_parents(api):
             "owner": "ops",
             "title": "Read the migration file",
             "body": "Line by line.",
-            "relations": [{"task": sub["id"], "kind": "parent"}],
+            "parent": sub["id"],
         },
     )
     with api.app.state.store.read() as c:
@@ -273,8 +274,7 @@ def test_a_check_handed_to_another_bot_mid_turn_still_completes_as_the_check(api
     check = claim(api, machine)
     assert check["task"]["id"] == sub["id"]
     post(api, f"attempts/{check['id']}/started", {"thread_id": "grok-handoff"}, machine["token"])
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:coo' WHERE id=?", (sub["id"],))
+    post(api, "tasks/" + sub["id"] + "/owner", {"owner": "coo", "why": "Coo takes the review."})
     post(
         api,
         f"attempts/{check['id']}/complete",
@@ -322,7 +322,7 @@ def codex_check(api):
             "body": "Read it.",
             "check_model": "codex",
             "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -521,7 +521,7 @@ def test_a_check_skips_a_next_model_its_computer_cannot_run(api):
             "body": "Read it.",
             "check_model": "codex",
             "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         turn["token"],
     )
@@ -619,7 +619,15 @@ def test_a_check_its_limit_held_twelve_hours_is_one_setup_finding_until_a_turn_g
     assert check_held(api, check) == []
 
 
-@pytest.mark.parametrize("status", ["declined", "closed", "done"])
+def by_hand(c, task_id, **fields):
+    """A task row changed outside the engine, as an older hub's could be: the guard opened by hand for the one
+    statement, as task_engine._write does."""
+    c.execute("UPDATE task_move_guards SET open=1, task_id=? WHERE id=1", (task_id,))
+    c.execute(f"UPDATE tasks SET {', '.join(f'{k}=?' for k in fields)} WHERE id=?", (*fields.values(), task_id))
+    c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
+
+
+@pytest.mark.parametrize("status", ["closed", "done"])  # declined is Closed in v3
 def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeypatch, status):
     machine, sub, check = limited_check(api)
     execution = api.app.state.execution
@@ -627,7 +635,7 @@ def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeyp
     with api.app.state.store.transaction() as c:
         assert check["job_id"] not in execution.hold_unrunnable(c), "an open check keeps its turn"
         # The task left the board while held, or before this server started: the next tick lets the turn go.
-        c.execute("UPDATE tasks SET status=? WHERE id=?", (status, sub["id"]))
+        by_hand(c, sub["id"], status=status)
         assert check["job_id"] in execution.hold_unrunnable(c)
         assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "canceled"
         event = c.execute(
@@ -641,10 +649,10 @@ def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeyp
     assert claim(api, machine)["job_id"] == person, "only the person's message is handed out"
 
 
-def test_a_declined_checks_notice_is_canceled_on_claim_without_waiting_for_the_tick(api, monkeypatch):
+def test_a_closed_checks_notice_is_canceled_on_claim_without_waiting_for_the_tick(api, monkeypatch):
     machine, sub, check = limited_check(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (sub["id"],))
+        by_hand(c, sub["id"], status="closed")
     later(api, monkeypatch, machine, H.shift(H.now(), minutes=31))
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
@@ -654,7 +662,7 @@ def test_a_declined_checks_notice_is_canceled_on_claim_without_waiting_for_the_t
 def test_a_held_check_handed_to_another_bot_is_its_ordinary_task_when_it_closes(api):
     machine, sub, check = limited_check(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:finance',status='done' WHERE id=?", (sub["id"],))
+        by_hand(c, sub["id"], owner_id="bot:finance", status="done")
     follow_up = queue_on(api, sub, "bot:ops", to="bot:finance")
     with api.app.state.store.transaction() as c:
         assert api.app.state.execution.hold_unrunnable(c) == []

@@ -210,12 +210,6 @@ def create_app(settings=None):
                     sample_company.load_on_start(onboarding, c)
             except Exception as exc:
                 telemetry.capture("sample_company", exc)
-        # The active Assistant gets its daily sweep if it has never had it (backend/onboarding.py): once, never back.
-        try:
-            with store.transaction() as c:
-                onboarding.ensure_builtin_routines(c)
-        except Exception as exc:
-            telemetry.capture("builtin_routines", exc)
         # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
         try:
             from .finance import actions as finance
@@ -224,14 +218,8 @@ def create_app(settings=None):
                 finance.ensure_setup(c, settings.owner_email)
         except Exception as exc:
             telemetry.capture("finance_setup", exc)
-        # The Bookkeeper once Finance is set up (backend/bookkeeper.py): built if missing, its rights, one view ask.
-        try:
-            from . import bookkeeper
-
-            with store.transaction() as c:
-                bookkeeper.ensure(c, onboarding, auth)
-        except Exception as exc:
-            telemetry.capture("bookkeeper", exc)
+        # The Assistant's routines it never had, the Bookkeeper once Finance is set up and the rest of what completes a
+        # company run with the start jobs, below (Onboarding.complete_company).
         # Physical mail filed before bills and tax letters were private: those tasks go private, once.
         try:
             app.state.postal_mail.backfill_private()
@@ -3959,7 +3947,7 @@ def create_app(settings=None):
         BotOps themselves (not through BotOps or the Assistant). Otherwise any bot that owns a person's task could
         reassign it to BotOps and borrow their rights for its next run."""
         moved = c.execute(
-            "SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner' "
+            "SELECT new, actor_id AS actor, via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='reassign' "
             "ORDER BY created_at DESC, rowid DESC "
             "LIMIT 1",
             (task["id"],),

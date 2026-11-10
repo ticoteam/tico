@@ -31,7 +31,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from .. import health, hosted_updates, invariants, maintenance_limits, replication
+from .. import health, hosted_updates, invariants, maintenance_limits, providers, replication
 from .. import maintenance_health as MH
 from .. import run_triggers as RT
 from ..store import H
@@ -278,6 +278,8 @@ def _page_findings(c, ctx, notes):
         if check.get("status") not in ("warn", "bad") or base in PAGE_LEFT_OUT:
             continue
         summary = str(check.get("summary", ""))
+        if base == "models" and not providers.configured(providers.load(c, ctx["settings"])):
+            continue  # no AI provider chosen: setup asks the owner, and BotOps itself cannot run until there is one
         if base == "never_stuck":
             # Its `no_one` count (private tasks no one who reads them can move) is the owner's and Admins' on Health
             # only: a BotOps task is read more widely, and no bot can move such a task. Only a rule break files, in

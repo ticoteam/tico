@@ -238,7 +238,7 @@ def cannot_run(conn: "sqlite3.Connection", actor: str | None, seen: dict[str, st
 def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     from . import bot_settings, cloud_access, company_pause, gateway_connection, harnesses, reconnects, run_backoff
 
-    row = conn.execute("SELECT state FROM bots WHERE id=?", (bot,)).fetchone()
+    row = _read(conn, _BOT_STATE, (bot,))
     if not row:
         return REMOVED
     state = row[0] or "active"
@@ -248,7 +248,7 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
         return COMPANY_PAUSED
     # These modules are untyped: what they return is Any here.
     cloud: Any = cloud_access
-    config: Row = cast("Any", bot_settings).read(conn, bot) or {}
+    config: Row = cast("Any", bot_settings).read_in_snapshot(conn, bot) or {}
     access = cloud.access(conn)
     if cloud.locked(conn, access):
         return CLOUD_LOCKED
@@ -257,9 +257,7 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     kinds: Any = harnesses
     if kinds.resolve_harness(config) not in kinds.EXTERNAL_HARNESSES:
         # A computer that is offline is not a cause: a cloud computer sleeps until work is queued for it.
-        placed = conn.execute(
-            "SELECT r.revoked_at FROM assignments a JOIN runners r ON r.id = a.runner_id WHERE a.bot=?", (bot,)
-        ).fetchone()
+        placed = _read(conn, _PLACED, (bot,))
         if not placed or placed[0]:
             return NO_COMPUTER
     held: Row = cast("Any", run_backoff).get(conn, bot) or {}
@@ -268,6 +266,44 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     if cast("Any", reconnects).bot_open(conn, bot, "login:"):
         return LOGIN  # its computer's sign-in was refused: a person reconnects it (backend/reconnects.py)
     return None
+
+
+# `_cause`'s reads of one bot, kept for the snapshot (`_read`); `prime_bots` reads them for many bots at once.
+_BOT_STATE = "SELECT state FROM bots WHERE id=?"
+_PLACED = "SELECT r.revoked_at FROM assignments a JOIN runners r ON r.id = a.runner_id WHERE a.bot=?"
+
+
+def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> None:
+    """Read what `cannot_run` asks of each of these bots (its state, its settings, its computer, its sign-in cards) in
+    a few statements for all of them, and keep it in the snapshot's read cache: a pass over many tasks then asks
+    "can this bot run" for each bot without reading it again. Nothing without a read cache."""
+    from . import bot_settings, read_cache, reconnects
+
+    RC: Any = read_cache
+    H = _h()
+    bots = sorted({str(H.actor_id(a)) for a in actors if H.is_bot(a)})
+    if not bots or RC.cache(conn) is None:
+        return
+    listed = (json.dumps(bots),)
+    states = {
+        str(r[0]): r
+        for r in conn.execute("SELECT id, state FROM bots WHERE id IN (SELECT value FROM json_each(?))", listed)
+    }
+    RC.prime(conn, _BOT_STATE, {(b,): ((states[b][1],) if b in states else None) for b in bots})
+    settings = {
+        str(r["bot_id"]): r
+        for r in conn.execute("SELECT * FROM bot_settings WHERE bot_id IN (SELECT value FROM json_each(?))", listed)
+    }
+    RC.prime(conn, cast("Any", bot_settings).ROW_SQL_ONE, {(b,): settings.get(b) for b in bots})
+    placed: dict[str, Any] = {}
+    for r in conn.execute(
+        "SELECT a.bot, r.revoked_at FROM assignments a JOIN runners r ON r.id = a.runner_id "
+        "WHERE a.bot IN (SELECT value FROM json_each(?))",
+        listed,
+    ):
+        placed.setdefault(str(r[0]), (r[1],))
+    RC.prime(conn, _PLACED, {(b,): placed.get(b) for b in bots})
+    cast("Any", reconnects).prime_open(conn, bots, "login:")
 
 
 # A bot that can run may still be held on one task: its turn asked for a worktree it has no room for (D12). The wait

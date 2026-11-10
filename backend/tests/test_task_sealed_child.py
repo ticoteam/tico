@@ -135,23 +135,27 @@ def test_done_wakes_the_parents_owner_and_no_words_reach_its_requester(api):
     current = get(api, "tasks/" + child["id"], finance)["task"]
     post(
         api,
-        "tasks/" + child["id"],
-        {"version": current["version"], "status": "done", "note": "Fixed: checked the setting first, test added."},
+        "tasks/" + child["id"] + "/done",
+        {"version": current["version"], "note": "Fixed: checked the setting first, test added."},
         finance,
     )
     with api.app.state.store.read() as c:
         jobs = {
             bot: [
-                json.loads(r[1] or "{}") | {"body": r[0]}
+                json.loads(r[1] or "{}") | {"body": r[0], "key": r[2] or ""}
                 for r in c.execute(
-                    "SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?", (bot,)
+                    "SELECT m.body,m.refs,m.wake_key FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?",
+                    (bot,),
                 )
             ]
             for bot in ("ops", "cpo")
         }
         assert not H.subtask_flows_up(c, H.task(c, child["id"]), H.task(c, row["id"]))
+    # The engine wakes the filing task's owner once when the last task it filed ends, saying how it ended.
     assert any(
-        r.get("wake") == "subtask_finished" and r["task"] == row["id"] and r.get("trigger_source") == child["id"]
+        r["task"] == row["id"]
+        and r["key"].endswith(":filed:" + child["id"])
+        and r["body"].startswith("The tasks this one filed have ended: Fix the upload refusal order: Done")
         for r in jobs["ops"]
     ), jobs["ops"]
     assert not any("checked the setting first" in r["body"] for r in jobs["cpo"]), jobs["cpo"]
@@ -186,7 +190,9 @@ def test_a_person_above_the_parent_is_named_only_to_a_filer_that_reads_that_task
     ), words
     assert "Cara" not in words and words in dry_run(api, body, attempt["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (above["id"],))
+        H.task_reassign(
+            c, "bot:cpo", above["id"], "bot:ops", None, H.task(c, above["id"])["version"]
+        )  # cpo hands the task above to ops
     words = refused(api, body, attempt["token"])
     assert words == f"Cara is on a private task above this one: {ROUTE}", words
     assert words in dry_run(api, body, attempt["token"])

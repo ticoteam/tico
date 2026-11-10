@@ -14,11 +14,14 @@ On a database with no tasks (a new one, where the numbered steps have just made 
 2. `tasks_move_only` holds for every task: its status, stage, owner and pipeline change only while the engine's guard is
    open. `tasks_enter_only` is its twin for a new row: it starts open, in no pipeline and no stage, and
    `task_engine.enter` places it. `tasks_never_replaced` refuses an insert over a task that exists.
-3. The old engine's tables are dropped (OLD_TABLES), children before parents.
+3. The old engine's tables are dropped (OLD_TABLES), children before parents. A trigger or view on another table that
+   names one of them or a dead column goes too (migrations.schema_errors finds them).
 4. The trash is emptied: a deleted task there has the old shape and could not be restored.
 
 Foreign keys are off for the run (the runner checks none is left broken).
 """
+
+from backend import migrations
 
 FOREIGN_KEYS_OFF = True
 
@@ -129,6 +132,24 @@ def _tables(conn):
     return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+def _gone(error):
+    """Whether a schema error names a dead column of tasks or an old table."""
+    kind, _, name = error.partition(": ")
+    name = name.rsplit(".", 1)[-1].strip('"')
+    return (kind == "no such column" and name in DEAD_COLUMNS) or (kind == "no such table" and name in OLD_TABLES)
+
+
+def _drop_what_names_the_old_engine(conn):
+    """A trigger or view on another table that reads a dead column of tasks or an old table (Tico 0.5's change feed:
+    changes_attempts_carried on attempts reads tasks.carried_by) did not go with them. Left, it fails every write to
+    its table, and every later ALTER TABLE that re-checks the schema. Each one goes; the start-up code makes again the
+    ones that still mean something. One that names something else not there yet (on a new file, a table the module
+    code makes after the migrations) is not this migration's to drop."""
+    for kind, name, error in migrations.schema_errors(conn):
+        if _gone(error):
+            conn.execute(f'DROP {kind.upper()} IF EXISTS "{name}"')
+
+
 def up(conn):
     tables = _tables(conn)
     if "tasks" not in tables:
@@ -156,6 +177,7 @@ def up(conn):
     conn.execute(NEVER_REPLACED)
     for table in OLD_TABLES:
         conn.execute(f"DROP TABLE IF EXISTS {table}")
+    _drop_what_names_the_old_engine(conn)
     # A factory's "output stage" named a stage of the old engine. The migration that added the column is retired
     # (migrations.SUPERSEDED), so a new database never has it; a database that ran it loses it here.
     if "factories" in tables and "output_stage_id" in {r[1] for r in conn.execute("PRAGMA table_info(factories)")}:

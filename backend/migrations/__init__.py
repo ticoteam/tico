@@ -37,9 +37,11 @@ before its first migration.
 import hashlib
 import importlib.util
 import re
+import shutil
 import sqlite3
+import tempfile
 from collections import Counter
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from .. import hubdb as H
@@ -178,12 +180,39 @@ def _verify(recorded, known):
             )
 
 
+@contextmanager
+def _read_only(path):
+    """A connection that reads the database as it is, with what its write-ahead log holds, and changes no byte of it,
+    of its -wal or of its -shm, and makes no file next to it. A read-write connection would merge the log into the
+    file when it closes; a plain read-only one still writes the -shm index and makes a missing -wal and -shm.
+    - No log (a clean stop): the file alone is the database, read as immutable (no locks, no -shm, no -wal).
+    - A log and its index (a running server, or one that stopped without closing): the index is opened read-only, and
+      SQLite reads the log itself where the index cannot be trusted.
+    - A log without its index (copied without it): the file and its log are read from a copy, since SQLite reads a log
+      only through an index it can write."""
+    wal, shm = Path(f"{path}-wal"), Path(f"{path}-shm")
+    uri = path.resolve().as_uri()
+    if not wal.is_file() or wal.stat().st_size == 0:
+        with closing(sqlite3.connect(f"{uri}?mode=ro&immutable=1", uri=True)) as conn:
+            yield conn
+    elif shm.is_file():
+        with closing(sqlite3.connect(f"{uri}?mode=ro&readonly_shm=1", uri=True)) as conn:
+            yield conn
+    else:
+        with tempfile.TemporaryDirectory() as scratch:
+            copy = Path(scratch) / path.name
+            shutil.copyfile(path, copy)
+            shutil.copyfile(wal, f"{copy}-wal")
+            with closing(sqlite3.connect(copy)) as conn:
+                yield conn
+
+
 def preflight(path, *, adopt_legacy=False, directory=None):
     """Refuse a database this code must not open, before anything writes to it. A missing or empty file is new."""
     path = Path(path)
     if not path.is_file() or path.stat().st_size == 0:
         return
-    with closing(sqlite3.connect(str(path))) as conn:
+    with _read_only(path) as conn:
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not tables:
             return
@@ -224,6 +253,38 @@ def refuse_old_tasks(conn):
     )
     if not cut and conn.execute("SELECT 1 FROM tasks LIMIT 1").fetchone():
         raise MigrationError(OLD_TASKS)
+
+
+SCHEMA_ERROR = re.compile(r"error in (trigger|view|index) (.+?)(?: after rename)?: (.+)")
+PROBE = "schema_probe"
+
+
+def schema_errors(conn):
+    """Each trigger, view and index in `main` that names a table or column that is not there, as (type, name, error),
+    for example ("trigger", "changes_attempts_carried", "no such column: carried_by"). Nothing is changed.
+
+    SQLite checks a trigger's or view's names only when it runs, or when an ALTER TABLE ... RENAME or DROP COLUMN
+    re-checks the whole schema, which then fails on the first broken one. So that re-check is what finds them: a column
+    rename on a probe table, inside a savepoint that is rolled back, taking each object it names out of the way until
+    it passes."""
+    found = []
+    conn.execute("SAVEPOINT schema_errors")
+    try:
+        conn.execute(f"CREATE TABLE main.{PROBE}(a)")
+        while True:
+            try:
+                conn.execute(f"ALTER TABLE main.{PROBE} RENAME COLUMN a TO b")
+                break
+            except sqlite3.OperationalError as exc:
+                match = SCHEMA_ERROR.fullmatch(str(exc))
+                if not match or (match.group(1), match.group(2)) in {(kind, name) for kind, name, _ in found}:
+                    raise
+                found.append((match.group(1), match.group(2), match.group(3)))
+                conn.execute(f'DROP {match.group(1).upper()} main."{match.group(2)}"')
+    finally:
+        conn.execute("ROLLBACK TO schema_errors")
+        conn.execute("RELEASE schema_errors")
+    return found
 
 
 def _record_legacy(conn):

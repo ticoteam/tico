@@ -400,16 +400,21 @@ def task_answer(
     value: str,
     note: str | None = None,
     seen_version: int | str | None = None,
+    *,
+    own_click: bool = False,
 ) -> Row:
     """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; the choice or the
     text on a question; `done` on the owner's own work. If that was the last thing missing the task moves on. The
-    result carries `answer_id`."""
+    result carries `answer_id`. `own_click` says the request is the person's own click in their own session
+    (task_asks.own_click): only that OKs an OK the person asked themself."""
     from . import answers as A
 
     row = _open(conn, actor, task_id, work=False)
     _owners_done_is_work(conn, actor, row, requirement_id)
     with task_effects.because(actor):
-        return A.answer(conn, task_id, requirement_id, actor, value, note, seen_version=seen_version)
+        return A.answer(
+            conn, task_id, requirement_id, actor, value, note, seen_version=seen_version, own_click=own_click
+        )
 
 
 @_task_write()
@@ -647,6 +652,63 @@ def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
     return standing.line
 
 
+def _answer_view(conn: "sqlite3.Connection", task_id: str, answer: Row, private: bool) -> Row:
+    """One answer as the task shows it. `via` is who gave it for the person, when that was the Assistant or BotOps
+    acting with the person's rights (H.VIA, kept on the answer's history row): "assistant" or "botops", else None."""
+    found = conn.execute(
+        "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='answer' "
+        "AND json_extract(data, '$.answer_id')=? LIMIT 1",
+        (task_id, answer["id"]),
+    ).fetchone()
+    return {
+        "id": answer["id"],
+        "value": answer["answer"],
+        "note": None if private else answer.get("notes"),
+        "by": answer["by_id"],
+        "via": (found[0] if found else None) or None,
+        "at": answer["created_at"],
+    }
+
+
+def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: str | None) -> list[Row]:
+    """A bot's asks on this visit that were answered (an OK given, a question answered) before its next ask replaced
+    them (C15, task_engine._replace_open): what was decided, so it stays on the task, met, with its answer. Nothing
+    can be done about one any more (`may` is empty)."""
+    from . import task_asks
+    from . import task_requirements as R
+
+    out: list[Row] = []
+    for (requirement_id,) in conn.execute(
+        "SELECT r.id FROM requirements r WHERE r.visit_id=? AND r.by_bot=1 AND r.withdrawn_at IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM history_events e WHERE e.subject_type='task' AND e.subject_id=? "
+        "AND e.kind='requirement_withdrawn' AND e.old=r.id AND e.note='Asked again') ORDER BY r.created_at, r.id",
+        (visit_id, task_id),
+    ).fetchall():
+        requirement = R.get(conn, str(requirement_id)) or {}
+        answer = R.newest_answers(conn, visit_id).get(str(requirement_id))
+        if not answer or (requirement.get("kind") == "ok" and answer["answer"] != "ok"):
+            continue  # it was still open when it was replaced: nothing was decided
+        private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
+        out.append(
+            {
+                "requirement_id": requirement["id"],
+                "kind": requirement["kind"],
+                "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
+                "met": True,
+                "replaced": True,
+                "standing": "OK'd" if requirement["kind"] == "ok" else str(answer["answer"]),
+                "who": None,
+                "asked_by": None if private else requirement.get("added_by_id"),
+                "choices": None if private else requirement.get("choices"),
+                "shows": [] if private else requirement.get("shows") or [],
+                **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
+                "answer": _answer_view(conn, task_id, answer, private),
+                "may": [],
+            }
+        )
+    return out
+
+
 def task_view(
     conn: "sqlite3.Connection", task_id: str, viewer: str | None = None, visible_sql: str | None = None
 ) -> Row | None:
@@ -702,18 +764,12 @@ def task_view(
                 # What it shows is where its words come from: a reader who may not open one of those pages reads
                 # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
                 **({"source": requirement["shows"]} if requirement.get("shows") and not private else {}),
-                "answer": {
-                    "id": answer["id"],
-                    "value": answer["answer"],
-                    "note": None if private else answer.get("notes"),
-                    "by": answer["by_id"],
-                    "at": answer["created_at"],
-                }
-                if answer
-                else None,
+                "answer": _answer_view(conn, task_id, answer, private) if answer else None,
                 "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
             }
         )
+    if live:
+        to_leave.extend(_decided(conn, task_id, visit["id"], viewer))
     following = E.next_stage(conn, row) if live else None
     ready = bool(waits) and all(wait["state"] == W.ROOM for wait in waits)
     held = E.shut_out(conn, row, following) if following and ready else None
