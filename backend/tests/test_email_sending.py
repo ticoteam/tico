@@ -14,7 +14,6 @@ from backend.tests.helpers.api import headers, post as api_post, runner, setup_a
 from backend.tests.helpers.email_sending import (
     BOX,
     CONTACT,
-    approved,
     autonomous,
     claim,
     inbox,
@@ -24,6 +23,21 @@ from backend.tests.helpers.email_sending import (
     post,
     queue,
 )
+
+
+def approved(api, queued, token="ana-test", expected=200):
+    """The person opens the frozen email in Tico and clicks OK on its preview (backend/task_asks.py)."""
+    preview = api.get("/api/v2/email/sends/" + queued["id"], headers=headers(token))
+    assert preview.status_code == 200
+    with api.app.state.store.read() as c:
+        task = task_asks.task_of(c, queued["approval_id"])
+    return post(
+        api,
+        f"tasks/{task}/asks/{queued['approval_id']}/ok",
+        {"shown_hash": preview.json()["shown_hash"]},
+        token=token,
+        expected=expected,
+    )
 
 
 def test_resolution_default_opt_in_and_unbreakable_restrictions(inbox):
