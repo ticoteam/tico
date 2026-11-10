@@ -48,9 +48,9 @@ CURRENT_SQL = (
 )
 
 
-def current(c, settings, bot, suspect=None, default=None, loads=None):
-    """`suspect`: the suspect tasks of this bot's queue, read with the others' (`_prime`). `default`: the company's limit
-    default, shared by a pass over many bots so its budget and spend reads are made once (usage_limits.Default)."""
+def current(c, settings, bot, default=None, loads=None):
+    """`default`: the company's limit default, shared by a pass over many bots so its budget and spend reads are made
+    once (usage_limits.Default)."""
     from .read_cache import one
 
     row = one(c, CURRENT_SQL, (bot,))
@@ -60,7 +60,7 @@ def current(c, settings, bot, suspect=None, default=None, loads=None):
     why, created, _, job = cast(
         tuple[Any, Any, Any, Any],
         E.bot_claimable(
-            c, settings, row['runner_id'], bot, default, oldest=True, with_job=True, suspect=suspect, loads=loads
+            c, settings, row['runner_id'], bot, default, oldest=True, with_job=True, loads=loads
         ),
     )
     # A job held for a card On ice (D69) waits on purpose until a person moves the card out: never an aged refusal.
@@ -152,13 +152,12 @@ def observe(c, settings, at=None):
 
 
 def _prime(c, bots):
-    """What `current` reads for each of these bots, one query a table (read_cache): its assignment, and the suspect
-    tasks of every queue (execution._queue_suspects), which are returned. None outside a snapshot: then each bot's
-    check reads its own, as before."""
-    from .read_cache import cache, prime, rows
+    """What `current` reads for each of these bots, one query (read_cache): its assignment. Nothing outside a snapshot:
+    then each bot's check reads its own."""
+    from .read_cache import cache, prime
 
     if cache(c) is None or not bots:
-        return None
+        return
     found = {}
     for part in H.chunks(bots):
         found.update(
@@ -170,7 +169,6 @@ def _prime(c, bots):
             )
         )
     prime(c, CURRENT_SQL, {(bot,): found.get(bot) for bot in bots})
-    return E._queue_suspects(c, [job for bot in bots if bot in found for job in rows(c, E.queued_jobs_sql(), (bot,))])
 
 
 def aged(c, settings, loads=None):
@@ -184,10 +182,10 @@ def aged(c, settings, loads=None):
         and previous['since'] <= H.shift(at, hours=-12)
         and previous.get('observed_at', '') >= H.shift(at, seconds=-MAX_GAP_SECONDS)
     ]
-    suspect = _prime(c, due)  # Health asks every refused queue on each poll
+    _prime(c, due)  # Health asks every refused queue on each poll
     default = usage_limits.company(c)  # one pass: every bot's limit check shares its budget and spend reads
     for bot in due:
         previous = previous_of[bot]
-        value = current(c, settings, bot, suspect, default, loads)
+        value = current(c, settings, bot, default, loads)
         if value and value['job'] == previous['job'] and value['reason'] == previous['reason']:
             yield {**value, 'refused_since': previous['since']}
