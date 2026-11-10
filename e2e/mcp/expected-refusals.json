@@ -241,6 +241,7 @@
  "hub_task_manager_set": "usage",
  "hub_task_model": "usage",
  "hub_task_move": "usage",
+ "hub_task_publication_preview": "404 not_found",
  "hub_task_readers_add": "422 private",
  "hub_task_readers_remove": "422 private",
  "hub_task_reassign": "usage",
