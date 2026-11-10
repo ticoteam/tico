@@ -892,7 +892,7 @@ impl Recorder {
         let (destination, call) = (destination.to_owned(), call.to_owned());
         self.claiming = Some((destination.clone(), call.clone()));
         self.job_for("call", None, move || {
-            connect(&config, &destination)?.claim_call(&call)
+            connect(&config, &destination)?.claim_fresh_call(&call)
         });
     }
     /// Acts on Tico's answer to a claim. The source records into the call's live meeting, named as the call, and

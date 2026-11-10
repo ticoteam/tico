@@ -1979,3 +1979,26 @@ fn stopping_a_call_by_hand_gives_the_source_back_and_skips_finish() {
         "no live meeting is made for a call"
     );
 }
+
+#[test]
+fn a_call_whose_meeting_already_has_transcript_is_given_back_and_not_recorded() {
+    // An earlier source recorded and gave the call back: its lines hold sequences a new recording would reuse.
+    let tico = FakeTico::start(|method, path| {
+        if path == "/api/v2/live-meetings/live-1" {
+            (200, json!({"id":"live-1","state":"live","seq":3}))
+        } else {
+            source_answer(method, path, "live")
+        }
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    app.link(&call_link(&tico));
+    settle(&mut app, |_| {
+        tico.asked(&format!("DELETE {}", claim_path())) == 1
+    });
+    settle(&mut app, |app| app.destination == "acme");
+    assert_eq!(tico.asked(&format!("DELETE {}", claim_path())), 1);
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.status_view()["recording"].is_null());
+    assert!(app.store.list().unwrap().is_empty(), "nothing recorded");
+}

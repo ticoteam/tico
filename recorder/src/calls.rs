@@ -105,6 +105,22 @@ impl Tico {
             &format!("recorder:call:{call}:claim:{}", uuid::Uuid::new_v4()),
         )
     }
+    /// Claims the source, and gives it straight back when the call's meeting already holds transcript from an
+    /// earlier source: a new recording numbers its lines from the start, which that meeting refuses, so this
+    /// Recorder then records nothing. Answers the claim as Tico gave it, `source` false in that case.
+    pub fn claim_fresh_call(&self, call: &str) -> Result<Value> {
+        let mut reply = self.claim_call(call)?;
+        if reply["source"] == true
+            && let Some(meeting) = reply["meeting_id"].as_str()
+            // Best effort: a meeting this Recorder cannot read yet is recorded as a fresh one.
+            && let Ok(view) = self.call(&format!("/api/v2/live-meetings/{meeting}"), None, "")
+            && view["seq"].as_i64().unwrap_or(0) > 0
+        {
+            self.release_call(call)?;
+            reply["source"] = json!(false);
+        }
+        Ok(reply)
+    }
     /// Gives the source back. A call Tico no longer has (or a Tico without calls) has nothing to give back.
     pub fn release_call(&self, call: &str) -> Result<()> {
         match self.delete(
