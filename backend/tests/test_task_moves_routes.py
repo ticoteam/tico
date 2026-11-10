@@ -273,6 +273,6 @@ def test_an_ok_is_only_the_asked_persons_own_click_on_exactly_what_they_were_sho
     assert no(api, f"oks/{rid}/use", changed, bot, 409)["code"] == "task_ok_changed"
     used = api.post(f"/api/v2/oks/{rid}/use", json=use, headers=headers(bot))
     assert used.status_code == 200, used.text
-    assert no(api, f"oks/{rid}/use", use, bot, 409)["code"] == "consumed"
+    assert no(api, f"oks/{rid}/use", use, bot, 422)["code"] == "consumed"
     assert get(api, f"oks/{rid}", token="ben-test")["standing"] == "used"
     assert api.get("/api/v2/oks/nope", headers=headers("ben-test")).status_code == 404
