@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .aws import DEFAULT_NAMES, Names
 from .dns import Record, Zone
 
 
@@ -20,7 +21,7 @@ def find_zone(client, zone: Zone) -> tuple[str, str]:
     return cands[0]["Id"].split("/")[-1], "not-authoritative"
 
 
-def upsert(client, zone_id: str, records: list[Record]) -> None:
+def upsert(client, zone_id: str, records: list[Record], names: Names = DEFAULT_NAMES) -> None:
     changes = [
         {
             "Action": "UPSERT",
@@ -33,7 +34,9 @@ def upsert(client, zone_id: str, records: list[Record]) -> None:
         }
         for r in records
     ]
-    client.change_resource_record_sets(HostedZoneId=zone_id, ChangeBatch={"Comment": "tico setup", "Changes": changes})
+    client.change_resource_record_sets(
+        HostedZoneId=zone_id, ChangeBatch={"Comment": names.dns_comment, "Changes": changes}
+    )
 
 
 def pointing_at(client, zone_id: str, name: str, addresses: set[str]) -> tuple[list[dict], list[dict]]:
@@ -50,9 +53,9 @@ def pointing_at(client, zone_id: str, name: str, addresses: set[str]) -> tuple[l
     return ours, other
 
 
-def delete(client, zone_id: str, record_sets: list[dict]) -> None:
+def delete(client, zone_id: str, record_sets: list[dict], names: Names = DEFAULT_NAMES) -> None:
     """Deletes exactly these record sets: Route 53 refuses the batch if any has changed since it was read."""
     changes = [{"Action": "DELETE", "ResourceRecordSet": rs} for rs in record_sets]
     client.change_resource_record_sets(
-        HostedZoneId=zone_id, ChangeBatch={"Comment": "tico setup destroy", "Changes": changes}
+        HostedZoneId=zone_id, ChangeBatch={"Comment": f"{names.dns_comment} destroy", "Changes": changes}
     )

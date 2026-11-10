@@ -10,6 +10,7 @@ import urllib.parse
 from dataclasses import asdict, dataclass, field, fields
 
 from . import contract, envfile
+from .aws import DEFAULT_PREFIX
 from .ui import IO, MissingInput
 
 DOMAIN_RE = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
@@ -131,7 +132,10 @@ class Settings:
     aws_instance_type: str = "t4g.small"
     aws_os: str = "ubuntu"
     aws_instance_id: str = ""
-    aws_name: str = ""  # --name: the resources are tico-<name>; blank derives it from the domain
+    aws_name: str = ""  # --name: the resources are <asset_prefix>-<name>; blank derives it from the domain
+    asset_prefix: str = (
+        DEFAULT_PREFIX  # --asset-prefix: the first word of every AWS name; saved the first time, then fixed
+    )
     aws_permissions_boundary: str = ""
     plan_bucket: str = ""  # --plan-bucket: the starter plan goes to the server by this S3 bucket, not in the env
     plan_bucket_region: str = ""

@@ -1,9 +1,17 @@
 """The words in every AWS name, tag and path setup makes. Without --asset-prefix they are today's `tico` names, and an
-existing install must keep finding its own resources by them, so these pin each one."""
+existing install must keep finding its own resources by them, so these pin each one. With --asset-prefix hub no AWS
+name, tag, path, policy or bucket says tico; names on the server itself (/opt/tico, TICO_* settings) stay."""
 
+import gzip
 import json
+import re
 
-from setup import aws, backup, route53, signin
+import pytest
+
+from backend import company_file as C
+from backend.tests.helpers.company_file import chart
+from setup import aws, backup, dns, remote, route53, runner_setup, signin, state
+from setup.ui import MissingInput
 from setup.tests import fakes
 from setup.tests.fakes import FakeRoute53, aws_clients
 from setup.tests.helpers.plan_bucket import ClientError
@@ -50,7 +58,16 @@ class IAM(fakes.FakeIAM):
 
     def __init__(self, role_tags=None):
         super().__init__(role_tags)
-        self.users = {}
+        self.users, self.roles = {}, {}
+
+    def create_role(self, **kw):
+        self._rec("create_role", **kw)
+        self.roles[kw["RoleName"]] = kw["Tags"]
+
+    def list_role_tags(self, RoleName):
+        if RoleName not in self.roles:
+            return super().list_role_tags(RoleName)
+        return {"Tags": self.roles[RoleName]}
 
     def get_user(self, UserName):
         if UserName not in self.users:
@@ -225,3 +242,407 @@ def test_the_default_runner_names_are_todays():
         "ManagedBy=tico-setup, tico-setup-name=runner-build-1",
     ):
         assert want in out
+
+
+# --- the two bugs fixed with the flag -------------------------------------------------------------------------------
+
+
+def test_the_plan_names_the_backup_user_from_name_as_setup_creates_it():
+    code, out = go(["--dry-run", "--target", "aws", "--front-door", "caddy", "--name", "acme", *BASE])
+    assert code == 0, out
+    assert "IAM user tico-backup-acme allowed" in out and "tico-backup-tico-example-com allowed" not in out
+
+
+def test_backup_storage_takes_name_and_otherwise_the_saved_one():
+    s3, iam = S3(), IAM()
+    d = fakes.deps()
+    d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
+    d.aws_s3 = lambda region, profile: s3
+    argv = ["backup-storage", "--domain", "tico.example.com", "--aws-region", "us-west-2"]
+    assert go([*argv, "--name", "acme"], deps=d)[0] == 0
+    state.save("tico.example.com", {"aws_name": "saved-name"})
+    assert go(argv, deps=d)[0] == 0
+    assert [c["UserName"] for c in iam.called("create_user")] == ["tico-backup-acme", "tico-backup-saved-name"]
+    code, out = go([*argv, "--name", "Not_A_Name"], deps=d)
+    assert code == 2 and "--name is 1 to 40" in out
+
+
+# --- --asset-prefix hub -------------------------------------------------------------------------------------------
+
+HUB = aws.Names("hub")
+TICO_TAGS = [{"Key": "ManagedBy", "Value": "tico-setup"}, {"Key": "tico-setup-name", "Value": "hotmic"}]
+HUB_TAGS = [{"Key": "ManagedBy", "Value": "hub-setup"}, {"Key": "hub-setup-name", "Value": "hotmic"}]
+
+
+def test_the_prefix_is_checked_and_a_saved_one_wins():
+    assert aws.asset_prefix(None, {}) == "tico" and aws.asset_prefix("hub", {}) == "hub"
+    assert aws.asset_prefix(None, {"domain": "x"}) == "tico"  # saved before the flag existed: tico names
+    assert aws.asset_prefix(None, {"asset_prefix": "hub"}) == aws.asset_prefix("hub", {"asset_prefix": "hub"}) == "hub"
+    with pytest.raises(MissingInput, match="named with --asset-prefix hub, and it cannot change"):
+        aws.asset_prefix("tico", {"asset_prefix": "hub"})
+    with pytest.raises(MissingInput, match="named with --asset-prefix tico"):
+        aws.asset_prefix("hub", {"domain": "x"})
+    for ok in ("a", "hub", "acme-2", "abcdefghij"):
+        assert aws.asset_prefix(ok, {}) == ok
+    for bad in ("Hub", "2hub", "hub-", "-hub", "hub_x", "abcdefghijk", "h.b"):
+        with pytest.raises(MissingInput, match="1 to 10 lowercase"):
+            aws.asset_prefix(bad, {})
+
+
+def test_hub_server_names_tags_and_policies():
+    p = aws.plan_aws(
+        domain="hub.hotmicapp.com",
+        front_door="caddy",
+        region="us-west-2",
+        name="hotmic",
+        plan_bucket="hub-setup-plans-abc",
+        prefix="hub",
+    )
+    d, ec2, iam, ssm = deployed(p)
+    named = HUB_TAGS + [{"Key": "Name", "Value": "hub-hotmic"}]
+    (sg,) = ec2.called("create_security_group")
+    assert (sg["GroupName"], sg["Description"], sg["TagSpecifications"][0]["Tags"]) == ("hub-hotmic", "Server", named)
+    assert ec2.called("allocate_address")[0]["TagSpecifications"][0]["Tags"] == named
+    (run,) = ec2.called("run_instances")
+    assert [t["Tags"] for t in run["TagSpecifications"]] == [named, named, named]
+    assert run["IamInstanceProfile"] == {"Name": "hub-hotmic"}
+    assert iam.called("create_role")[0]["RoleName"] == "hub-hotmic"
+    (inline,) = iam.called("put_role_policy")
+    assert inline["PolicyName"] == "hub-env"
+    assert [s["Resource"] for s in json.loads(inline["PolicyDocument"])["Statement"]] == [
+        f"arn:aws:ssm:us-west-2:{ACCOUNT}:parameter/hub/hotmic/env",
+        "arn:aws:s3:::hub-setup-plans-abc/plans/hotmic/*",
+    ]
+    assert iam.called("create_instance_profile") == [{"InstanceProfileName": "hub-hotmic", "Tags": HUB_TAGS}]
+    assert ssm.called("put_parameter")[0]["Name"] == d.param_name == "/hub/hotmic/env"
+    assert ssm.called("add_tags_to_resource")[0]["Tags"] == HUB_TAGS
+    text = "\n".join(p.lines())
+    assert "Security group hub-hotmic:" in text and "IAM role hub-hotmic " in text
+    assert "SSM SecureString /hub/hotmic/env" in text and "ManagedBy=hub-setup, hub-setup-name=hotmic" in text
+    assert "tico" not in text.lower()
+    # The boot script reads the prefixed parameter, which is the one the role may read.
+    script = remote.bootstrap_script(
+        os_family="ubuntu",
+        domain="hub.hotmicapp.com",
+        front_door="caddy",
+        compose=None,
+        compose_url="https://example.invalid/compose.yaml",
+        env_param=(d.param_name, "us-west-2"),
+    )
+    assert "aws ssm get-parameter --region us-west-2 --name /hub/hotmic/env " in script
+    runner = runner_setup.bootstrap_script(os_family="ubuntu", tag="latest", env_param=(d.param_name, "us-west-2"))
+    assert "--name /hub/hotmic/env " in runner
+
+
+class FilteredEC2(fakes.FakeEC2):
+    """Answers describe_* by the tag filters it is given, as EC2 does, and records them."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.filters = []
+
+    def _match(self, rows, Filters):
+        self.filters.append(Filters)
+        want = {f["Name"][4:]: f["Values"] for f in Filters if f["Name"].startswith("tag:")}
+        return [
+            r
+            for r in rows
+            if all({t["Key"]: t["Value"] for t in r.get("Tags", [])}.get(k) in v for k, v in want.items())
+        ]
+
+    def describe_instances(self, Filters):
+        return {"Reservations": [{"Instances": self._match(self.instances, Filters)}]}
+
+    def describe_security_groups(self, Filters):
+        return {"SecurityGroups": self._match(self.sgs, Filters)}
+
+    def describe_addresses(self, Filters):
+        return {"Addresses": self._match(self.eips, Filters)}
+
+
+def test_hub_discover_and_destroy_find_only_hub_tagged_resources():
+    ec2 = FilteredEC2(
+        extra_instances=[{"InstanceId": "i-tico", "Tags": TICO_TAGS}, {"InstanceId": "i-hub", "Tags": HUB_TAGS}],
+        extra_sgs=[{"GroupId": "sg-tico", "Tags": TICO_TAGS}, {"GroupId": "sg-hub", "Tags": HUB_TAGS}],
+    )
+    ec2.eips = [
+        {"AllocationId": "eip-tico", "PublicIp": "198.51.100.1", "Tags": TICO_TAGS},
+        {"AllocationId": "eip-hub", "PublicIp": "203.0.113.9", "Tags": HUB_TAGS},
+    ]
+    asked = []
+
+    class Iam(fakes.FakeIAM):
+        def list_role_tags(self, RoleName):
+            asked.append(RoleName)
+            return {"Tags": HUB_TAGS}
+
+    class Ssm(fakes.FakeSSM):
+        def list_tags_for_resource(self, **kw):
+            asked.append(kw["ResourceId"])
+            return {"TagList": HUB_TAGS}
+
+    iam, ssm = Iam(), Ssm()
+    found = aws.discover(ec2, iam, ssm, "hotmic", HUB)
+    assert found == {
+        "instance": ["i-hub"],
+        "elastic-ip": ["eip-hub"],
+        "security-group": ["sg-hub"],
+        "iam-role": ["hub-hotmic"],
+        "ssm-parameter": ["/hub/hotmic/env"],
+    }
+    assert asked == ["hub-hotmic", "/hub/hotmic/env"]
+    assert aws.addresses(ec2, "hotmic", HUB) == {"203.0.113.9"}
+    assert all(
+        {"Name": "tag:ManagedBy", "Values": ["hub-setup"]} in f
+        and {"Name": "tag:hub-setup-name", "Values": ["hotmic"]} in f
+        for f in ec2.filters
+    )
+    assert "tico" not in json.dumps(ec2.filters)
+    aws.destroy(ec2, iam, ssm, found, say=lambda m: None, sleep=lambda s: None, names=HUB)
+    assert iam.called("delete_role_policy") == [{"RoleName": "hub-hotmic", "PolicyName": "hub-env"}]
+    assert ec2.called("terminate_instances") == [{"InstanceIds": ["i-hub"]}]
+    # The default never sees the hub install, and a re-run with hub never reuses the tico one.
+    assert aws.discover(ec2, fakes.FakeIAM(), fakes.FakeSSM(), "hotmic")["instance"] == ["i-tico"]
+    p = aws.plan_aws(domain="hub.hotmicapp.com", front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
+    d = aws.Deployer(p, ec2, fakes.FakeIAM(), fakes.FakeSSM(), ACCOUNT, say=lambda m: None, sleep=lambda s: None)
+    assert d.find_instance()["InstanceId"] == "i-hub" and d.ensure_sg() == "sg-hub" and d.ensure_eip()[0] == "eip-hub"
+
+
+def test_hub_backup_names():
+    s3, iam, values = created_backup({"names": HUB})
+    bucket = f"hub-backup-tico-example-com-{ACCOUNT}"  # the domain's slug, as given
+    assert s3.called("create_bucket")[0]["Bucket"] == bucket
+    rules = s3.called("put_bucket_lifecycle_configuration")[0]["LifecycleConfiguration"]["Rules"]
+    assert [(r["ID"], r["Filter"]) for r in rules] == [
+        ("hub-backups", {"Prefix": ""}),
+        ("litestream", {"Prefix": "hub/000"}),
+    ]
+    (pol,) = iam.called("put_user_policy")
+    assert (pol["UserName"], pol["PolicyName"]) == ("hub-backup-acme", "hub-backup")
+    resources = {s["Resource"] for s in json.loads(pol["PolicyDocument"])["Statement"]}
+    assert resources == {f"arn:aws:s3:::{bucket}", f"arn:aws:s3:::{bucket}/*"}
+    assert values["TICO_BACKUP_URL"] == f"s3://{bucket}/hub"
+    assert (
+        iam.called("create_user")[0]["Tags"]
+        == s3.called("put_bucket_tagging")[0]["Tagging"]["TagSet"]
+        == [
+            {"Key": "ManagedBy", "Value": "hub-setup"},
+            {"Key": "hub-setup-name", "Value": "acme"},
+        ]
+    )
+    lines = "\n".join(backup.aws_plan_lines("hub.hotmicapp.com", "us-west-2", "hotmic", HUB, ACCOUNT))
+    assert f"S3 bucket hub-backup-hub-hotmicapp-com-{ACCOUNT} in us-west-2" in lines
+    assert (
+        "IAM user hub-backup-hotmic allowed" in lines and f"to s3://hub-backup-hub-hotmicapp-com-{ACCOUNT}/hub" in lines
+    )
+    assert "tico" not in lines.lower()
+
+
+def test_hub_route53_comments_and_sign_in_client_name():
+    r53 = FakeRoute53("hotmicapp.com")
+    route53.upsert(r53, "Z1", [dns.Record("A", "hub.hotmicapp.com", "203.0.113.9")], HUB)
+    route53.delete(r53, "Z1", [{"Name": "hub.hotmicapp.com.", "Type": "A"}], HUB)
+    comments = [c["ChangeBatch"]["Comment"] for c in r53.called("change_resource_record_sets")]
+    assert comments == ["hub setup", "hub setup destroy"]
+    assert "Application type: Web application. Name it hub." in signin.steps(signin.PROVIDERS["google"], "hub")
+    assert signin.steps(signin.PROVIDERS["microsoft"], "hub")[0].startswith("Register an application named hub;")
+    assert signin.steps(signin.PROVIDERS["google"]) == signin.PROVIDERS["google"].steps
+
+
+# --- a whole hub install, its re-runs, runner, doctor, backup-storage and destroy, against fake AWS ------------------
+
+DOMAIN, ZONE, HOTMIC_ACCOUNT = "hub.hotmicapp.com", "hotmicapp.com", "803561570732"
+
+
+class Spy:
+    """Passes every call through to the fake, keeping its arguments: what would have been sent to AWS."""
+
+    def __init__(self, inner, log):
+        self._inner, self._log = inner, log
+
+    def __getattr__(self, name):
+        attr = getattr(self._inner, name)
+        if name == "exceptions" or not callable(attr):
+            return attr
+
+        def call(*a, **kw):
+            self._log.append((name, kw))
+            return attr(*a, **kw)
+
+        return call
+
+
+def hub_world():
+    ec2, iam, ssm, _ = aws_clients(ec2=FilteredEC2(), iam=IAM())
+    s3, r53, log = S3(), FakeRoute53(ZONE), []
+    r = fakes.FakeResolver({(DOMAIN, dns.A): ["203.0.113.9"]}, {ZONE: fakes.R53_NS})
+    d = fakes.deps()
+    d.resolver, d.public_resolvers = r, (lambda: [("Google", r)])
+    d.aws_clients = lambda region, profile: (Spy(ec2, log), Spy(iam, log), Spy(ssm, log), HOTMIC_ACCOUNT)
+    d.aws_s3 = lambda region, profile: Spy(s3, log)
+    d.route53_client = lambda profile: Spy(r53, log)
+    return d, ec2, iam, ssm, s3, log
+
+
+def hub_args(tmp_path, *extra):
+    path = tmp_path / "plan.yaml"
+    draft = chart(5)
+    draft["company"]["name"] = "HotMic"
+    path.write_text(C.to_yaml(draft))
+    return [
+        "--non-interactive",
+        "--yes",
+        "--cloud",
+        "aws",
+        "--aws-region",
+        "us-west-2",
+        "--domain",
+        DOMAIN,
+        "--front-door",
+        "caddy",
+        "--auth",
+        "google",
+        "--client-id",
+        "cid.apps.googleusercontent.com",
+        "--owner-email",
+        "me@hotmicapp.com",
+        "--company-file",
+        str(path),
+        *extra,
+    ]
+
+
+def strings(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield from strings(k)
+            yield from strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from strings(v)
+    elif isinstance(value, bytes):
+        yield (gzip.decompress(value) if value[:2] == b"\x1f\x8b" else value).decode()
+    elif isinstance(value, str):
+        yield value
+
+
+# What runs or is written on the server itself, sent inside three AWS arguments: the boot script (run_instances
+# UserData), a re-run's script (ssm send_command) and the .env (the parameter's Value). Its paths, log, settings and
+# release names say tico by design (they are not AWS names), so exactly these are taken out before looking for tico.
+ON_SERVER = {("run_instances", "UserData"), ("send_command", "Parameters"), ("put_parameter", "Value")}
+ON_SERVER_TICO = re.compile(
+    r"/opt/tico|/run/tico/|/var/log/tico-setup\.log|tico-setup:|TICO_[A-Z0-9_]+|github\.com/ticoteam/tico/"
+    r"|tico-bundle-|tico-hosted-assets-v1|\bTico\b|Written by `tico setup`"
+)
+
+
+def test_a_hub_install_sends_no_tico_in_any_aws_name_tag_path_policy_or_bucket(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    code, out = go(argv, deps=d)
+    assert code == 0, out
+    assert state.load(DOMAIN)[0]["asset_prefix"] == "hub"
+    code, out = go(argv[: argv.index("--asset-prefix")], deps=d)  # the re-run, without the flag
+    assert code == 0 and "already exists; reusing it" in out, out
+    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    assert code == 0 and "Tagged hub-setup-name=hotmic in us-west-2:" in out, out
+    assert "IAM user (hub-backup-hotmic)" in out
+    sent = {name for name, _ in log}
+    for want in (
+        "create_security_group",
+        "allocate_address",
+        "run_instances",
+        "create_role",
+        "put_role_policy",
+        "create_instance_profile",
+        "put_parameter",
+        "add_tags_to_resource",
+        "create_bucket",
+        "put_bucket_lifecycle_configuration",
+        "put_bucket_policy",
+        "create_user",
+        "put_user_policy",
+        "put_object",
+        "change_resource_record_sets",
+        "send_command",
+        "terminate_instances",
+        "delete_role_policy",
+    ):
+        assert want in sent  # the sweep covers every kind of asset
+    on_server = []
+    for name, kw in log:
+        for key, value in kw.items():
+            for s in strings(value):
+                if (name, key) in ON_SERVER:
+                    on_server.append(s)
+                    s = ON_SERVER_TICO.sub("", s)
+                assert "tico" not in s.lower(), (name, key, s[:300])
+    user_data = "\n".join(on_server)
+    assert "--name /hub/hotmic/env " in user_data and "/tico/hotmic" not in user_data
+    assert f"TICO_BACKUP_URL=s3://hub-backup-hub-hotmicapp-com-{HOTMIC_ACCOUNT}/hub" in user_data
+    assert re.search(r"TICO_COMPANY_FILE_S3=s3://hub-setup-plans-[0-9a-f]{32}/plans/hotmic/[0-9a-f]{64}", user_data)
+
+
+def test_later_runs_read_the_saved_prefix_and_refuse_another(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    before = len(log)
+    for argv in (
+        hub_args(tmp_path, "--asset-prefix", "tico"),
+        ["doctor", "--domain", DOMAIN, "--asset-prefix", "tico"],
+        ["destroy", "--domain", DOMAIN, "--asset-prefix", "tico", "--yes"],
+        ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2", "--asset-prefix", "other"],
+        ["runner", "--cloud", "aws", "--server-url", f"https://{DOMAIN}", "--label", "b1", "--asset-prefix", "tico"],
+    ):
+        code, out = go([*argv, "--non-interactive"] if argv[0] in ("doctor", "runner") else argv, deps=d)
+        assert code == 2 and "named with --asset-prefix hub, and it cannot change" in out, (argv, out)
+    assert len(log) == before  # refused before any AWS call
+    # backup-storage, from the same computer: the saved prefix and name.
+    assert go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"], deps=d)[0] == 0
+    assert iam.called("create_user")[-1]["UserName"] == "hub-backup-hotmic"
+    # The runner of that server: its plan uses the saved prefix.
+    code, out = go(
+        [
+            "runner",
+            "--dry-run",
+            "--non-interactive",
+            "--cloud",
+            "aws",
+            "--server-url",
+            f"https://{DOMAIN}",
+            "--label",
+            "b1",
+        ],
+        deps=d,
+    )
+    assert code == 0, out
+    assert "Security group hub-runner-b1:" in out and "SSM SecureString /hub/runner-b1/env" in out
+    assert "ManagedBy=hub-setup, hub-setup-name=runner-b1" in out and "tico-runner" not in out
+
+
+def test_a_first_hub_run_that_fails_at_backup_keeps_the_prefix_for_its_retry(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+
+    def refused(**kw):
+        raise ClientError("AccessDenied")
+
+    d.aws_s3 = lambda region, profile: type("S3", (S3,), {"put_bucket_policy": staticmethod(refused)})()
+    code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)
+    assert code == 1 and "Could not create the backup storage" in out
+    assert "backup-storage --domain hub.hotmicapp.com --aws-region us-west-2 --name hotmic --asset-prefix hub" in out
+    assert state.load(DOMAIN)[0]["asset_prefix"] == "hub"
+
+
+def test_a_hub_runner_saves_its_prefix_and_keeps_it(monkeypatch):
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://other.example"]
+    argv += ["--label", "b1", "--aws-region", "us-west-2"]
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    assert go([*argv, "--asset-prefix", "hub"], deps=d)[0] == 0
+    assert state.load_runners()[0]["asset_prefix"] == "hub"
+    assert ssm.called("put_parameter")[0]["Name"] == "/hub/runner-b1/env"
+    assert iam.called("create_role")[0]["RoleName"] == "hub-runner-b1"
+    code, out = go([*argv, "--asset-prefix", "tico"], deps=d)
+    assert code == 2 and "named with --asset-prefix hub" in out
+    assert go(argv, deps=d)[0] == 0 and ssm.called("put_parameter")[-1]["Name"] == "/hub/runner-b1/env"

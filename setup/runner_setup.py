@@ -6,6 +6,7 @@ import json
 import os
 import shlex
 import urllib.error
+import urllib.parse
 import uuid
 import urllib.request
 
@@ -163,7 +164,16 @@ def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
         name=s.aws_name or f"runner-{awsmod.slug(label)}",
         role="runner",
         boundary=s.aws_permissions_boundary,
+        prefix=s.asset_prefix,
     )
+
+
+def runner_prefix(s: Settings, label: str, given: str | None) -> str:
+    """The runner's own saved one, else the server's it joins (set up from this computer), else --asset-prefix or tico."""
+    name = _aws_plan(s, label).name
+    mine = next((r for r in state.load_runners() if r.get("target") == "aws" and r.get("name") == name), None)
+    host = urllib.parse.urlsplit(s.server_url).hostname or ""
+    return awsmod.asset_prefix(given, mine or (state.load(host)[0] if host else {}))
 
 
 def run_runner(args, io: IO, deps: Deps) -> int:
@@ -221,6 +231,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
             default="ubuntu",
         )
         a.get("aws_profile", "AWS profile (blank for the default credentials)", flag="--aws-profile", required=False)
+        s.asset_prefix = runner_prefix(s, label, getattr(args, "asset_prefix", None))
     io.say("\nPlan")
     for line in plan_lines(s, label):
         io.say(line)
@@ -311,6 +322,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
                 "aws_profile": s.aws_profile,
                 "instance_id": iid,
                 "name": plan.name,
+                "asset_prefix": s.asset_prefix,
             },
         )
         if existing:
@@ -344,6 +356,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
                 "aws_profile": s.aws_profile,
                 "instance_id": iid,
                 "name": plan.name,
+                "asset_prefix": s.asset_prefix,
             },
         )
     else:

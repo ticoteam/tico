@@ -257,7 +257,7 @@ def gather_identity(io: IO, args, s: Settings, dry: bool) -> None:
         need_client = not (getattr(args, "client_id", None) or s.client_id)
         if need_client and io.interactive and not dry:
             io.say(f"\nCreate a {p.label} OAuth client for Tico (about two minutes):")
-            for i, step in enumerate(p.steps, 1):
+            for i, step in enumerate(signin.steps(p, s.asset_prefix), 1):
                 io.say(f"  {i}. {step}")
             io.say(f"\n  Redirect URI to paste, exactly:  {uri}\n")
             if p.console_url:
@@ -395,6 +395,7 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
                 account_id=account,
                 name=s.aws_name or awsmod.slug(s.domain),
                 say=io.say,
+                names=awsmod.Names(s.asset_prefix),
             )
         else:
             account_id = s.cf_account_id
@@ -411,7 +412,10 @@ def provision_backup(io: IO, s: Settings, deps: Deps, cf: Cloudflare | None) -> 
             f"\nCould not create the backup storage: {envfile.scrub(str(e), s.secrets())}\n"
             "Fix that and re-run `tico setup` (finished steps are skipped), or use `--backup local` to continue without off-server backups.\n"
             "On a server with no AWS credentials (the usual case), create the bucket from your laptop instead:\n"
-            f"  python3 -m setup backup-storage --domain {s.domain} --aws-region {s.aws_region or '<region>'}\n"
+            f"  python3 -m setup backup-storage --domain {s.domain} --aws-region {s.aws_region or '<region>'}"
+            + (f" --name {s.aws_name}" if s.aws_name else "")
+            + (f" --asset-prefix {s.asset_prefix}" if s.asset_prefix != awsmod.DEFAULT_PREFIX else "")
+            + "\n"
             "then re-run here with the backup answer `existing`."
         )
         return False
@@ -434,6 +438,7 @@ def aws_plan(s: Settings) -> awsmod.AwsPlan:
         name=s.aws_name,
         boundary=s.aws_permissions_boundary,
         plan_bucket=s.plan_bucket if s.company_file_data else "",
+        prefix=s.asset_prefix,
     )
 
 
@@ -544,7 +549,11 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
                 add(line)
     if s.backup == "aws":
         add("Backups: create the backup storage on AWS")
-        L += [f"       - {x}" for x in bk.aws_plan_lines(s.domain, s.aws_region)]
+        names = awsmod.Names(s.asset_prefix)
+        L += [
+            f"       - {x}"
+            for x in bk.aws_plan_lines(s.domain, s.aws_region, s.aws_name or awsmod.slug(s.domain), names)
+        ]
     elif s.backup == "r2":
         add("Backups: create the backup storage on Cloudflare R2")
         L += [f"       - {x}" for x in bk.r2_plan_lines(s.domain)]
@@ -644,7 +653,7 @@ def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> boo
         return False
     if not io.confirm(f"  Create the record in Route 53 zone {zone.name}?", True):
         return False
-    route53.upsert(client, zid, records)
+    route53.upsert(client, zid, records, awsmod.Names(s.asset_prefix))
     io.say("  Route 53 records upserted.")
     return True
 
@@ -676,10 +685,13 @@ def run(args, io: IO, deps: Deps) -> int:
     if saved:
         io.say(f"Resuming from the last run for {domain_hint} (secrets kept in {state.home() / domain_hint}).")
     gather(io, args, s, dry)
+    # By the domain gather settled, also when it was asked rather than given: a re-run never needs the flag again.
+    kept = saved or state.load(s.domain)[0]
+    s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), kept)
     hosted.gather(args, s, dry)
     if s.target == "aws" and s.company_file_data and not s.plan_bucket and not s.hosted:
         # Saved before any cloud writes, so retries use the same bucket and chart. No credentials in its name.
-        s.plan_bucket = "tico-setup-plans-" + secrets.token_hex(16)
+        s.plan_bucket = awsmod.Names(s.asset_prefix).plan_bucket(secrets.token_hex(16))
         s.plan_bucket_region = s.aws_region
         s.plan_bucket_managed = True
     st.gather_runtime(args, s)
@@ -771,6 +783,9 @@ def run(args, io: IO, deps: Deps) -> int:
     cf = deps.cloudflare(s.cf_token) if s.cf_token else None
     if cf and s.runner() and not s.runner_given:
         runner_record_free(s, cf)
+    if not kept and s.asset_prefix != awsmod.DEFAULT_PREFIX:
+        # Before the first AWS write: a retry after a failure from here on keeps the prefix without the flag.
+        state.save(s.domain, s.public())
     if not provision_backup(io, s, deps, cf):
         return 1
     if s.front_door == "cloudflared":
@@ -1234,6 +1249,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
     if not saved:
         raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
     s = st.from_saved(saved, env_text)
+    awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)  # refuses a different one; doctor names nothing
     tunnel_id = s.tunnel_id or tunnel_id_from_token(s.tunnel_token)
     records = dnsmod.plan_records(domain, s.front_door, ipv4=s.server_ip, tunnel_id=tunnel_id, runner_host=s.runner())
     runner = None
@@ -1293,25 +1309,27 @@ def destroy(args, io: IO, deps: Deps) -> int:
     name = args.name or saved.get("aws_name") or (awsmod.slug(args.domain) if args.domain else "")
     if not name:
         raise MissingInput("Pass --domain or --name")
+    names = awsmod.Names(awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved))
     region = args.aws_region or saved.get("aws_region") or os.environ.get("AWS_REGION") or "us-east-1"
     ec2, iam, ssm, _ = deps.aws_clients(region, args.aws_profile or saved.get("aws_profile", ""))
-    found = awsmod.discover(ec2, iam, ssm, name)
+    found = awsmod.discover(ec2, iam, ssm, name, names)
     if not found:
-        io.say(f"Nothing tagged {awsmod.MANAGED_TAG[0]}={awsmod.MANAGED_TAG[1]}, {awsmod.NAME_TAG}={name} in {region}.")
+        io.say(f"Nothing tagged {names.managed_tag[0]}={names.managed_tag[1]}, {names.name_tag}={name} in {region}.")
         return 0
-    io.say(f"Tagged {awsmod.NAME_TAG}={name} in {region}:")
+    io.say(f"Tagged {names.name_tag}={name} in {region}:")
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")
     records = None
     if getattr(args, "dns", False):
-        records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name))
+        records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name, names))
         if records is None:
             io.say("Nothing was deleted: run it again, or without --dns and remove the DNS record yourself.")
             return 1
     io.say("The server's data (the tico-data volume) is deleted with the instance. Back it up first if you need it.")
     io.say(
-        f"The backup bucket and its IAM user (tico-backup-{name}) are left alone: they hold the copy you would restore from."
+        f"The backup bucket and its IAM user ({names.backup_user(name)}) are left alone: they hold the copy you would "
+        "restore from."
     )
     if args.dry_run:
         io.say("Dry run: nothing was deleted.")
@@ -1321,9 +1339,9 @@ def destroy(args, io: IO, deps: Deps) -> int:
         return 1
     if records and records[2]:
         client, zid, sets = records
-        route53.delete(client, zid, sets)  # first: the name never points at an address AWS may give someone else
+        route53.delete(client, zid, sets, names)  # first: the name never points at an address AWS may give someone else
         io.say("  DNS records deleted.")
-    awsmod.destroy(ec2, iam, ssm, found, say=io.say, sleep=deps.sleep, dns_done=records is not None)
+    awsmod.destroy(ec2, iam, ssm, found, say=io.say, sleep=deps.sleep, dns_done=records is not None, names=names)
     return 0
 
 

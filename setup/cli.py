@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import backup as bk, settings as st
+from . import backup as bk, settings as st, state
 from .ui import IO, MissingInput
 from .runner_setup import run_runner
 from . import aws as awsmod, hosted, support
@@ -111,8 +111,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--plan-bucket-region", metavar="REGION", help="the --plan-bucket's region (default --aws-region)")
     p.add_argument(
         "--name",
-        help="AWS: the server's name: its resources are tico-<name>, tagged tico-setup-name=<name>, and its "
-        "settings are in /tico/<name>/env (default: derived from --domain); destroy: the tico-setup-name tag value",
+        help="AWS: the server's name: its resources are <prefix>-<name>, tagged <prefix>-setup-name=<name>, and its "
+        "settings are in /<prefix>/<name>/env (default: derived from --domain); destroy: the <prefix>-setup-name tag "
+        "value. <prefix> is --asset-prefix, tico by default",
+    )
+    p.add_argument(
+        "--asset-prefix",
+        metavar="PREFIX",
+        help="AWS: the word every AWS name, tag and path setup makes starts with, in place of tico (1 to 10 lowercase "
+        "letters, digits and dashes, starting with a letter). Saved with the install the first time; later runs, "
+        "runner, doctor, destroy and backup-storage read it from there and refuse a different one. Names on the server "
+        "itself (/opt/tico, containers) stay",
     )
     p.add_argument(
         "--dns",
@@ -223,6 +232,13 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     """A server should not hold credentials that can create buckets and IAM users, so this runs where they are."""
     if not args.domain or not args.aws_region:
         raise MissingInput("backup-storage needs --domain and --aws-region")
+    saved, _ = state.load(args.domain.lower())
+    names = awsmod.Names(awsmod.asset_prefix(args.asset_prefix, saved))
+    name = (args.name or saved.get("aws_name") or awsmod.slug(args.domain)).strip().lower()
+    if not awsmod.NAME_RE.fullmatch(name):
+        raise MissingInput(
+            "--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit"
+        )
     _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
     values = bk.create_s3(
         deps.aws_s3(args.aws_region, args.aws_profile),
@@ -230,8 +246,9 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
         domain=args.domain,
         region=args.aws_region,
         account_id=account,
-        name=awsmod.slug(args.domain),
+        name=name,
         say=io.say,
+        names=names,
     )
     io.say("\nOn the server, before the installer (the key is shown once; keep it out of shell history and chat):")
     io.say(f"  export LITESTREAM_ACCESS_KEY_ID={values['LITESTREAM_ACCESS_KEY_ID']}")
