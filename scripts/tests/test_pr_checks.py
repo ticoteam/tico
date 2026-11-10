@@ -911,7 +911,7 @@ def test_the_main_cache_warm_up_saves_the_keys_pr_checks_restore():
             assert len(setup) == 1 and steps[setup[0]].get("id") == "python" and setup[0] < at[0], name
             install = [i for i, step in enumerate(steps) if "scripts/ci_install.sh" in str(step.get("run", ""))]
             assert install and at[0] < install[0], name
-    assert sum(venv in str(job) for job in pr["jobs"].values()) == 5  # plan, tests, factory-sim, static, caddy-linux
+    assert sum(venv in str(job) for job in pr["jobs"].values()) == 4  # plan, tests, static, caddy-linux
     for ident, uses, args, runner, lookup in warmed:
         assert runner in ("ubuntu-24.04", "macos-latest"), ident
         assert any((uses, args) == (r[1], r[2]) and runner == r[3] for r in restored), ident
@@ -1060,10 +1060,9 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "github.event_name == 'merge_group' || (github.event_name == 'pull_request' && "
         "!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)"
     )
-    for name in ("tests", "factory-sim", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
+    for name in ("tests", "rust-lint", "desktop-app", "recorder", "caddy-linux"):
         assert ready in jobs[name]["if"], name
     for name, output in (
-        ("factory-sim", "factory"),
         ("rust-lint", "rust_lint"),
         ("desktop-app", "desktop"),
         ("recorder", "recorder"),
@@ -1079,7 +1078,6 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
         "plan",
         "static",
         "tests",
-        "factory-sim",
         "checks",
         "rust-lint",
         "desktop-app",
@@ -1097,14 +1095,14 @@ def test_a_draft_runs_no_release_command_test_and_marking_it_ready_runs_them():
     )
 
 
-def test_a_draft_or_a_fork_runs_no_test_or_sim_leg():
+def test_a_draft_or_a_fork_runs_no_test_leg():
     jobs = workflow_jobs()["jobs"]
     assert jobs["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
-    for name in ("tests", "factory-sim"):
-        assert jobs[name]["needs"] == "plan", name  # a draft has no plan, so the leg is skipped with it
-        # A fork's pull request is not this repository's head, so it runs no leg here; a maintainer queues it instead.
-        assert "!github.event.pull_request.draft" in jobs[name]["if"], name
-        assert "github.event.pull_request.head.repo.full_name == github.repository" in jobs[name]["if"], name
+    tests = jobs["tests"]
+    assert tests["needs"] == "plan"  # a draft has no plan, so the leg is skipped with it
+    # A fork's pull request is not this repository's head, so it runs no leg here; a maintainer queues it instead.
+    assert "!github.event.pull_request.draft" in tests["if"]
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in tests["if"]
 
 
 def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_request_runs_the_checks():
@@ -1137,21 +1135,20 @@ def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_r
             assert "!github.event.pull_request.draft" in condition, f"{path.name}:{name}"
 
 
-def test_a_failed_suite_or_sim_leg_cancels_its_run_and_checks_still_reports():
+def test_a_failed_suite_leg_cancels_its_run_and_checks_still_reports():
     jobs = workflow_jobs()["jobs"]
-    for name in ("tests", "factory-sim"):
-        job = jobs[name]
-        assert job["permissions"] == {"contents": "read", "actions": "write"}, name
-        cancel = job["steps"][-1]
-        # It names what failed first (every leg then ends "cancelled"), and the cancel is its last line.
-        lines = cancel["run"].strip().splitlines()
-        assert cancel["if"] == "failure()" and lines[-1] == 'gh run cancel "$GITHUB_RUN_ID"', name
-        assert any(line.startswith('echo "::error title=') for line in lines), name
-        env = {k: v for k, v in cancel["env"].items() if k not in ("SUITE", "SHARD")}
-        assert env == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}, name
-    # Only the two heavy legs and the plan (which cancels superseded queue groups) may cancel; every other job keeps the
+    job = jobs["tests"]
+    assert job["permissions"] == {"contents": "read", "actions": "write"}
+    cancel = job["steps"][-1]
+    # It names what failed first (every leg then ends "cancelled"), and the cancel is its last line.
+    lines = cancel["run"].strip().splitlines()
+    assert cancel["if"] == "failure()" and lines[-1] == 'gh run cancel "$GITHUB_RUN_ID"'
+    assert any(line.startswith('echo "::error title=') for line in lines)
+    env = {k: v for k, v in cancel["env"].items() if k != "SUITE"}
+    assert env == {"GH_TOKEN": "${{ github.token }}", "GH_REPO": "${{ github.repository }}"}
+    # Only the tests leg and the plan (which cancels superseded queue groups) may cancel; every other job keeps the
     # workflow's read-only token.
-    assert {name for name, job in jobs.items() if "permissions" in job} == {"tests", "factory-sim", "plan"}
+    assert {name for name, job in jobs.items() if "permissions" in job} == {"tests", "plan"}
     # The required gate still runs after a cancel, and a cancelled timing receipt never waits for a runner.
     assert "always()" in jobs["checks"]["if"] and "tests" in jobs["checks"]["needs"]
     assert "!cancelled()" in jobs["timings"]["if"]
@@ -1214,105 +1211,7 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
     assert exit_code({**passing, "tests": "skipped", "recorder": "skipped", "caddy-linux": "skipped"}) == 0
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
-    assert exit_code({**passing, "factory-sim": "failure"}) == 1
-    assert exit_code({**passing, "factory-sim": "skipped"}) == 0
     assert exit_code({**passing, "plan": "skipped"}) == 0
-
-
-def measured(code=(), data=(), folders=()):
-    return {"code": list(code), "data": list(data), "folders": list(folders)}
-
-
-def test_a_change_the_recorded_sim_run_reads_selects_the_factory_sim():
-    recorded = measured(code=["backend/wake_rules.py"], data=["backend/data/rules.json"], folders=["backend/workers/"])
-    assert "runs or reads" in checks.factory_reason(["backend/wake_rules.py"], call_path=recorded)
-    assert "runs or reads" in checks.factory_reason(["backend/data/rules.json"], call_path=recorded)
-    assert "lists backend/workers/" in checks.factory_reason(["backend/workers/new_job.py"], call_path=recorded)
-    assert "catalog template" in checks.factory_reason(["templates/catalog/new-role/AGENT.md"], call_path=recorded)
-
-
-def test_changes_the_sim_never_reads_do_not_select_it():
-    # A listing sees only the entries directly in its folder: a change below one of them moves nothing it lists.
-    recorded = measured(code=["backend/wake_rules.py"], folders=["backend/workers/"])
-    for name in [
-        "ui/app/chat.ts",
-        "docs/releasing.md",
-        "backend/tests/test_auth.py",
-        "scripts/remote.py",
-        "backend/workers/sub/job.py",
-    ]:
-        assert checks.factory_reason([name], call_path=recorded) is None, name
-
-
-def test_the_sim_pins_its_own_code_its_workflow_job_and_the_pinned_backend_requirements():
-    recorded = measured()
-    assert "sim's own code" in checks.factory_reason(["evals/factory/sim.py"], call_path=recorded)
-    assert "defines the sim's job" in checks.factory_reason([checks.PR_WORKFLOW], call_path=recorded)
-    assert "pins" in checks.factory_reason(["backend/requirements-dev.txt"], call_path=recorded)
-    assert "pins" in checks.factory_reason(["backend/requirements.txt"], call_path=recorded)
-
-
-def test_an_empty_or_unmeasured_change_runs_the_sim(tmp_path):
-    assert "empty" in checks.factory_reason([], call_path=measured())
-    assert "missing" in checks.factory_reason(["docs/releasing.md"], root=tmp_path)
-
-
-def test_a_factory_plan_packs_the_sim_for_a_queue_group_or_a_pull_request_only_when_it_runs(monkeypatch):
-    monkeypatch.setattr(checks, "factory_call_path", lambda root=checks.ROOT: measured(code=["backend/wake_rules.py"]))
-    shards = checks.factory_shards()
-    # One VM per group: a ready pull request's sim is packed as the queue's is, never run as one 1/1 VM.
-    for event in ("merge_group", "pull_request"):
-        plan = checks.factory_plan(event, ["backend/wake_rules.py"])
-        assert plan["run"] is True and plan["shards"] == shards, event
-    unrelated = checks.factory_plan("merge_group", ["ui/app/chat.ts"])
-    assert unrelated["run"] is False and unrelated["shards"] == ["1/1"]
-    assert checks.factory_plan("pull_request", ["ui/app/chat.ts"])["shards"] == ["1/1"]
-
-
-def test_the_factory_shards_cover_every_scenario_once_in_about_five_minutes_a_vm():
-    from evals.factory import run as factory
-    from evals.factory.scenarios import SCENARIOS
-
-    timings = factory.timings()
-    assert set(timings) == {s.name for s in SCENARIOS}, "timings.json needs a time for every scenario"
-    shards = checks.factory_shards()
-    count = len(shards)
-    assert shards == [f"{index}/{count}" for index in range(1, count + 1)]
-    pairs = [(name, 1) for name in sorted(timings)]
-    groups = [factory.pack(pairs, count, timings)[index] for index in range(count)]
-    assert sorted(pair for group in groups for pair in group) == sorted(pairs)
-    slowest_vm = max(sum(timings[name] for name, _ in group) for group in groups) / factory.REMOTE_CPUS
-    assert slowest_vm <= checks.FACTORY_LEG_SECONDS + max(timings.values()) / factory.REMOTE_CPUS, slowest_vm
-
-
-def test_the_factory_sim_runs_in_the_queue_and_on_a_ready_pull_request_on_the_plans_shards():
-    jobs = workflow_jobs()["jobs"]
-    assert {"factory", "factory_shards"} <= set(jobs["plan"]["outputs"])
-    job = jobs["factory-sim"]
-    assert job["needs"] == "plan"
-    assert "needs.plan.outputs.factory == 'true'" in job["if"]
-    assert "github.event_name == 'merge_group'" in job["if"] and "github.event_name == 'pull_request'" in job["if"]
-    assert job["strategy"]["matrix"]["shard"] == "${{ fromJSON(needs.plan.outputs.factory_shards) }}"
-    assert job["runs-on"] == "ubuntu-24.04"
-    [sim] = [step["run"] for step in job["steps"] if "evals.factory.run" in step.get("run", "")]
-    assert '--seeds 1 --shard "$SHARD" -j 4' in sim
-
-
-def test_the_recorded_call_path_matches_the_repository_and_decides_what_the_queue_runs():
-    recorded = checks.factory_call_path()
-    # The two data entries that are not files: the sim opens VERSION, which this repository does not have, and a
-    # directory of registry fixtures. Neither is a file a change can add without also changing what the sim reads.
-    not_files = {"VERSION", "backend/tests/fixtures/registry"}
-    assert all((checks.ROOT / name).is_file() for name in recorded["code"])
-    assert all((checks.ROOT / name).is_file() or name in not_files for name in recorded["data"])
-    assert all((checks.ROOT / name).is_dir() for name in recorded["folders"])
-    assert not [name for name in recorded["code"] if name.startswith("ui/")]
-    assert "ui/index.html" in recorded["data"] and "backend/wake_rules.py" in recorded["code"]
-    assert "templates/catalog/" in recorded["folders"]
-    assert checks.factory_reason(["backend/wake_rules.py"]) is not None
-    assert checks.factory_reason(["ui/app/chat.ts"]) is None
-    assert checks.factory_reason(["docs/releasing.md"]) is None
-    assert checks.factory_reason(["scripts/tests/test_pr_checks.py"]) is None
 
 
 def test_a_deleted_file_runs_the_tests_that_name_or_read_its_old_path(tmp_path, mapped):
@@ -1570,12 +1469,6 @@ def test_a_ui_change_selects_test_icon_font_through_the_module_that_globs_the_ui
     assert "backend/tests/test_icon_font.py" not in unrelated["python"]
 
 
-def test_a_verdict_moves_change_runs_the_factory_sim_that_the_queue_did_not_run_for_2841():
-    # #2841 changed backend/verdict_moves.py and merged through the queue, which had no factory rule then: the sim went
-    # red on main at 21:26Z (verdict_past_open_sibling). The recorded call path reaches the file, so the sim runs.
-    assert checks.factory_reason(["backend/verdict_moves.py"]) is not None
-
-
 def test_a_template_edit_runs_the_hub_command_test_in_the_contract_job_that_2866_broke(mapped):
     # #2866 added librarian commands with no recorded refusal. test_e2e_cli walks templates/ and skills/ and runs in the
     # contract job, which any change under those folders selects.
@@ -1700,35 +1593,22 @@ def test_a_vm_planned_past_the_target_gets_a_warning():
     assert checks.overrun_warnings([1000.0], checks.SETUP_SECONDS["browser"], checks.JOB_SECONDS, "browser")
 
 
-def test_the_factory_legs_hold_about_two_minutes_of_work_per_vcpu_each():
-    # The sim's work is fixed by its scenarios, not by the selection: enough legs that each takes about
-    # FACTORY_LEG_SECONDS of scenario time per vCPU (five legs for the recorded scenario time).
-    from evals.factory import run as factory
-
-    timings = factory.timings()
-    pairs = [(name, 1) for name in sorted(timings)]
-    total = sum(timings[name] for name, _ in pairs)
-    legs = max(1, min(len(pairs), math.ceil(total / (factory.REMOTE_CPUS * checks.FACTORY_LEG_SECONDS))))
-    assert len(checks.factory_shards()) == legs == 5
-    assert legs == 1 or total / legs / factory.REMOTE_CPUS <= checks.FACTORY_LEG_SECONDS
-
-
 def test_size_groups_plans_at_the_target_and_only_stretches_toward_an_explicit_cap():
     counts = Counter({f"backend/tests/test_{i}.py": 1 for i in range(346)})
     timings = {name: 6720 / 346 for name in counts}
     # The planner's cap is its target, so a ceiling never stretches a VM: the job count is reported, not forced down.
     assert checks.MAX_JOB_SECONDS == checks.JOB_SECONDS
-    sized = checks.size_groups(counts, timings, fixed=2, shards=2, ceiling=8)
-    assert sized["target"] == checks.JOB_SECONDS and sized["tests"] == len(sized["split"]) + 4
+    sized = checks.size_groups(counts, timings, fixed=2, ceiling=8)
+    assert sized["target"] == checks.JOB_SECONDS and sized["tests"] == len(sized["split"]) + 2
     # A call that names a higher cap still raises the target toward it until the count fits the ceiling.
-    stretched = checks.size_groups(counts, timings, fixed=2, shards=2, ceiling=10, cap=480)
-    assert checks.JOB_SECONDS < stretched["target"] <= 480 and stretched["tests"] <= 10
+    stretched = checks.size_groups(counts, timings, fixed=2, ceiling=8, cap=480)
+    assert checks.JOB_SECONDS < stretched["target"] <= 480 and stretched["tests"] <= 8
     # Already under the ceiling, the target stays at the usual one.
-    small = checks.size_groups(Counter({"a.py": 1}), {"a.py": 100}, fixed=1, shards=0, ceiling=8)
+    small = checks.size_groups(Counter({"a.py": 1}), {"a.py": 100}, fixed=1, ceiling=8)
     assert small["target"] == checks.JOB_SECONDS and small["tests"] == 2
     # Past the cap the plan keeps the cap's VMs and reports the count it has.
     big = Counter({f"t{i}.py": 1 for i in range(1000)})
-    capped = checks.size_groups(big, {name: 100 for name in big}, shards=2, ceiling=8)
+    capped = checks.size_groups(big, {name: 100 for name in big}, ceiling=8)
     assert capped["target"] == checks.MAX_JOB_SECONDS and capped["tests"] > 8
 
 
@@ -1745,13 +1625,12 @@ def test_a_full_queue_group_packs_at_the_target_and_a_narrowed_one_stays_under_t
         timings,
         browser=browser,
         fixed=1,
-        shards=2,
         ceiling=checks.CEILING["merge_group"],
         cap=checks.QUEUE_MAX_JOB_SECONDS,
     )
     assert queue["target"] == checks.JOB_SECONDS and len(queue["split"]) == 36
     assert max(queue["loads"]) / checks.WORKERS + checks.SETUP_SECONDS["python"] <= checks.JOB_SECONDS + 30
-    assert queue["tests"] == 36 + checks.job_count(1600, "browser") + 1 + 2
+    assert queue["tests"] == 36 + checks.job_count(1600, "browser") + 1
     # A small group stays at the usual target in one VM: 20 files of 90 s is one VM.
     small = Counter({f"t{i}.py": 1 for i in range(20)})
     sized = checks.size_groups(
@@ -1942,7 +1821,6 @@ def branch(tmp_path, monkeypatch):
 
     monkeypatch.setattr(checks, "selection", select)
     monkeypatch.setattr(checks, "browser_scripts", lambda args, root=None: list(args))
-    monkeypatch.setattr(checks, "factory_reason", lambda changed, call_path=None, root=None: None)
     monkeypatch.delenv("TICO_HEAVY_REMOTE", raising=False)
     commands = []
     answers = {}
@@ -2116,11 +1994,10 @@ def test_an_inherited_pytest_addopts_never_reaches_the_selected_run(branch, monk
 
 def test_what_ci_alone_runs_is_named_and_the_receipt_still_passes(branch, monkeypatch, capsys):
     branch.seen["plan"] = {**LOCAL_PLAN, "conformance": True, "rust": ["runner-rs"], "browser": []}
-    monkeypatch.setattr(checks, "factory_reason", lambda changed, call_path=None, root=None: "the sim runs app.py")
     assert branch.run() == 0
     assert len(branch.commands) == 1  # no browser scripts were selected
     line = receipt_line(capsys.readouterr().out)
-    assert "conformance" in line and "factory simulation" in line
+    assert "conformance" in line
     assert gate(line, branch.head) == "passed"
 
 
@@ -2400,21 +2277,6 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     assert narrowed == [("merge_group", "graph")]
 
 
-def test_a_light_pull_request_runs_the_sim_only_for_its_own_inputs(monkeypatch):
-    monkeypatch.setattr(checks, "factory_shards", lambda: ["1/2", "2/2"])
-    # backend/app.py is on the sim's recorded call path, so the full plan runs it; the light one leaves it to the queue.
-    assert checks.factory_plan("pull_request", ["backend/app.py"])["run"]
-    assert not checks.factory_plan("pull_request", ["backend/app.py"], own_inputs=True)["run"]
-    for name in (
-        "evals/factory/run.py",
-        checks.PR_WORKFLOW,
-        "templates/catalog/x/role.yaml",
-        "backend/requirements.txt",
-    ):
-        assert checks.factory_plan("pull_request", [name], own_inputs=True)["run"], name
-    assert checks.factory_plan("pull_request", [], own_inputs=True)["run"]  # an unreadable diff runs it
-
-
 def test_both_tiers_plan_light_and_the_required_check_keeps_its_contract():
     jobs = workflow_jobs()["jobs"]
     step = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
@@ -2580,7 +2442,6 @@ def test_no_planned_test_job_runs_past_the_target_for_a_full_or_narrowed_selecti
     monkeypatch.setattr(checks, "script_changes", lambda base, head, changed, root=None: [])
     monkeypatch.setattr(checks, "changed_files", lambda base, head="HEAD", only=None: [] if only else ["backend/x.py"])
     monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
-    monkeypatch.setattr(checks, "factory_plan", lambda event, changed, own_inputs=False: {"run": False, "shards": []})
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     timings = tmp_path / "durations.json"
@@ -2624,23 +2485,6 @@ def test_no_planned_test_job_runs_past_the_target_for_a_full_or_narrowed_selecti
     assert max(browser_loads) / checks.WORKERS + checks.SETUP_SECONDS["browser"] <= checks.JOB_SECONDS + margin
     assert plan["job_target_seconds"] == checks.JOB_SECONDS
     assert all(seconds <= checks.JOB_SECONDS + margin for seconds in [s / checks.WORKERS + 150 for s in python_loads])
-
-
-def test_release_factory_legs_plan_under_the_target_with_setup_on_top():
-    # Release validation runs seeds 1-3 in twelve legs (ci.yml: --shard K/12). Each leg's planned tests, its setup on top
-    # (about 40 s of checkout and install), stay under the 330 s target, and a leg is never more than one scenario over.
-    from evals.factory import run as factory
-    from scripts import pr_checks as checks
-
-    seconds = factory.timings()
-    pairs = [(name, seed) for seed in (1, 2, 3) for name in sorted(seconds)]
-    legs = 12
-    groups = [factory.pack(pairs, legs, seconds)[index] for index in range(legs)]
-    assert sorted(pair for group in groups for pair in group) == sorted(pairs)
-    setup = 40
-    for group in groups:
-        planned = sum(seconds[name] for name, _ in group) / factory.REMOTE_CPUS
-        assert planned + setup <= checks.JOB_SECONDS + max(seconds.values()) / factory.REMOTE_CPUS
 
 
 def test_a_contracts_lane_whose_measured_files_overrun_is_split_and_warned(tmp_path, monkeypatch, capsys):

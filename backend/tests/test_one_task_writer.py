@@ -30,7 +30,6 @@ REFUSED_ON_PURPOSE = {"evals/never_stuck/scenarios.py": 1}
 OLD_WRITERS = {
     "backend/hubdb.py": 1,
     "backend/shared_bots.py": 1,
-    "evals/factory/cases/source_outages.py": 1,
 }
 
 
