@@ -289,6 +289,15 @@ HUB_TAGS = [{"Key": "ManagedBy", "Value": "hub-setup"}, {"Key": "hub-setup-name"
 INSTALL = "0123456789abcdef"
 HUB_ID, TICO_ID = aws.Names("hub", INSTALL), aws.Names("tico", INSTALL)  # a new install's: tags carry its id
 HUB_OURS = HUB_ID.tags("hotmic")
+# What a strict install recorded making (its journal, saved as aws_ids), for the hub resources of two_installs.
+HUB_IDS = {
+    "instance": "i-hub",
+    "eip": "eip-hub",
+    "sg": "sg-hub",
+    "role": "AROAhub-hotmic",
+    "profile": "AIPAhub-hotmic",
+    "param": "/hub/hotmic/env",
+}
 
 
 def test_the_prefix_is_checked_and_a_saved_one_wins():
@@ -892,7 +901,7 @@ def test_an_instance_profile_setup_did_not_make_is_refused_and_never_deleted(tmp
             sleep=lambda s: None,
             names=HUB_ID,
             name="hotmic",
-            ids={},
+            ids={"role": "AROAhub-hotmic"},
         )
         assert not iam.called("delete_instance_profile") and not iam.called("remove_role_from_instance_profile")
         assert "left alone: IAM instance profile hub-hotmic was not made by this install" in "\n".join(out)
@@ -901,7 +910,7 @@ def test_an_instance_profile_setup_did_not_make_is_refused_and_never_deleted(tmp
 def test_a_profile_setup_made_without_its_role_gets_it_on_a_rerun():
     iam = IAM()
     iam.profiles["hub-hotmic"] = {"Tags": HUB_OURS, "Roles": []}  # an earlier run stopped between the two calls
-    dep = strict_dep(hub_plan(domain=DOMAIN), fakes.FakeEC2(), iam, fakes.FakeSSM())
+    dep = strict_dep(hub_plan(domain=DOMAIN), fakes.FakeEC2(), iam, fakes.FakeSSM(), ids={"profile": "AIPAhub-hotmic"})
     assert dep.ensure_role() == "hub-hotmic"
     assert iam.called("add_role_to_instance_profile") == [
         {"InstanceProfileName": "hub-hotmic", "RoleName": "hub-hotmic"}
@@ -1135,7 +1144,7 @@ def test_a_boto3_too_old_to_tag_a_bucket_at_creation_stops_before_making_one():
 def saved_install(domain="x.example.com", prefix="hub", **extra):
     """A whole install saved with an install id, as a new install saves it."""
     rec = {"domain": domain, "target": "aws", "aws_name": "hotmic", "aws_region": "us-east-1", "asset_prefix": prefix}
-    state.save(domain, {**rec, "aws_account_id": ACCOUNT, "install_id": INSTALL, **extra})
+    state.save(domain, {**rec, "aws_account_id": ACCOUNT, "install_id": INSTALL, "aws_ids": HUB_IDS, **extra})
     return ["destroy", "--domain", domain, "--yes"]
 
 
@@ -1159,7 +1168,9 @@ def test_destroy_never_terminates_an_instance_that_would_take_something_setup_di
             assert code == 2 and prod in out and "root" not in out.split("would also delete")[-1], out
             assert deleted(ec2, iam, ssm)["instances"] == []
             with pytest.raises(MissingInput, match=prod):  # and again right before the terminate call itself
-                owned.destroy(ec2, iam, ssm, {"instance": ["i-hub"]}, print, None, names=HUB_ID, name="hotmic", ids={})
+                owned.destroy(
+                    ec2, iam, ssm, {"instance": ["i-hub"]}, print, None, names=HUB_ID, name="hotmic", ids=HUB_IDS
+                )
         else:
             assert code == 0 and deleted(ec2, iam, ssm)["instances"] == ["i-hub"], out
             ec2.calls.clear()
@@ -1171,14 +1182,14 @@ def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never
     for replacement in ({"RoleId": "AROAOTHER", "Tags": HUB_OURS}, {"RoleId": "AROAOTHER", "Tags": PRODUCTION}):
         iam = IAM()
         iam.roles["hub-hotmic"] = {"RoleId": "AROAFIRST", "Tags": HUB_OURS}
-        dep = strict_dep(p, fakes.FakeEC2(), iam, fakes.FakeSSM())
+        dep = strict_dep(p, fakes.FakeEC2(), iam, fakes.FakeSSM(), ids={"role": "AROAFIRST"})
         dep.preflight()  # proven: setup's role
         iam.roles["hub-hotmic"] = replacement  # deleted and made again by someone else
         with pytest.raises((MissingInput, SystemExit), match="hub-hotmic"):
             dep.ensure_role()
         assert not iam.called("attach_role_policy") and not iam.called("put_role_policy")
     ssm = fakes.FakeSSM(param_tags=HUB_OURS)  # an existing parameter is overwritten, never re-tagged
-    strict_dep(p, fakes.FakeEC2(), IAM(), ssm).put_env("A=1")
+    strict_dep(p, fakes.FakeEC2(), IAM(), ssm, ids={"param": "/hub/hotmic/env"}).put_env("A=1")
     assert ssm.called("put_parameter")[0]["Overwrite"] and not ssm.called("add_tags_to_resource")
     s3, iam = S3(), IAM()
     real_get = iam.get_user
@@ -1199,6 +1210,7 @@ def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never
             account_id=ACCOUNT,
             name="acme",
             names=HUB,
+            ids={"backup_user": "AIDAFIRST"},
         )
     assert not iam.called("put_user_policy") and not iam.called("create_access_key")
 
@@ -1307,7 +1319,7 @@ def test_a_role_without_a_profile_or_beside_someone_elses_is_modelled_and_handle
     ours = HUB_ID.tags("hotmic")
     iam = fakes.FakeIAM(role_tags=ours, profile_tags=None)  # setup's role; its profile was never made
     assert owned.instance_profile(iam, "hub-hotmic") is None
-    kw = dict(say=print, sleep=lambda s: None, names=HUB_ID, name="hotmic", ids={})
+    kw = dict(say=print, sleep=lambda s: None, names=HUB_ID, name="hotmic", ids={"role": "AROAhub-hotmic"})
     owned.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, **kw)
     assert iam.called("delete_role") == [{"RoleName": "hub-hotmic"}] and not iam.called("delete_instance_profile")
     with pytest.raises(fakes._Exc.NoSuchEntityException):
@@ -1315,7 +1327,7 @@ def test_a_role_without_a_profile_or_beside_someone_elses_is_modelled_and_handle
     iam = fakes.FakeIAM(role_tags=ours, profile_tags=PRODUCTION)  # someone else's profile of that name
     owned.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, **kw)
     assert not iam.called("delete_role") and not iam.called("delete_instance_profile")
-    dep = strict_dep(hub_plan(domain=DOMAIN), ec2, iam, ssm)
+    dep = strict_dep(hub_plan(domain=DOMAIN), ec2, iam, ssm, ids={"role": "AROAhub-hotmic"})
     with pytest.raises(MissingInput, match="IAM instance profile hub-hotmic"):
         dep.preflight()
 
@@ -1483,16 +1495,19 @@ def test_destroy_reads_each_resource_again_right_before_deleting_it():
         "iam-role": ["hub-hotmic"],
         "ssm-parameter": ["/hub/hotmic/env"],
     }
+    # The install recorded another allocation: it is not this install's, and nothing is deleted.
+    with pytest.raises(MissingInput, match="Elastic IP eip-hub carries this install's tags.*nothing was deleted"):
+        owned.destroy(ec2, iam, ssm, found, print, None, names=HUB_ID, name="hotmic", ids={**HUB_IDS, "eip": "eip-o"})
+    assert not any(deleted(ec2, iam, ssm).values())
     ssm.params["/hub/hotmic/env"] = PRODUCTION  # replaced since it was listed
     ec2.sgs[1]["Tags"] = HUB_TAGS  # retagged without the install id
     out = []
-    ids = {"eip": "eip-other"}  # the install recorded another allocation
-    owned.destroy(ec2, iam, ssm, found, say=out.append, sleep=lambda s: None, names=HUB_ID, name="hotmic", ids=ids)
+    owned.destroy(ec2, iam, ssm, found, say=out.append, sleep=lambda s: None, names=HUB_ID, name="hotmic", ids=HUB_IDS)
     gone = deleted(ec2, iam, ssm)
-    assert gone["params"] == gone["sgs"] == gone["eips"] == [] and gone["instances"] == ["i-hub"]
+    assert gone["params"] == gone["sgs"] == [] and gone["instances"] == ["i-hub"] and gone["eips"] == ["eip-hub"]
     assert gone["roles"] == ["hub-hotmic"]
     said = "\n".join(out)
-    for what in ("SSM parameter /hub/hotmic/env", "security group sg-hub", "Elastic IP eip-hub"):
+    for what in ("SSM parameter /hub/hotmic/env", "security group sg-hub"):
         assert f"left alone: {what}" in said, said
     # A role replaced (same tags, another RoleId) after the first delete step keeps its policies.
     d, ec2, iam, ssm = id_install()
@@ -1504,8 +1519,9 @@ def test_destroy_reads_each_resource_again_right_before_deleting_it():
 
     iam.detach_role_policy = replaced
     out = []
-    ids = {"role": "AROAhub-hotmic"}
-    owned.destroy(ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, out.append, None, names=HUB_ID, name="hotmic", ids=ids)
+    owned.destroy(
+        ec2, iam, ssm, {"iam-role": ["hub-hotmic"]}, out.append, None, names=HUB_ID, name="hotmic", ids=HUB_IDS
+    )
     assert not iam.called("delete_role_policy") and not iam.called("delete_role")
     assert "left alone: IAM role hub-hotmic" in "\n".join(out)
 
@@ -1580,7 +1596,7 @@ def test_a_security_group_left_without_its_ingress_gets_it_on_the_retry():
     p = hub_plan(domain=DOMAIN, region="us-east-1")
     ec2 = fakes.FakeEC2()
     ec2.sgs = [{"GroupId": "sg-hub", "Tags": HUB_OURS}]
-    dep = strict_dep(p, ec2, IAM(), fakes.FakeSSM())
+    dep = strict_dep(p, ec2, IAM(), fakes.FakeSSM(), ids={"sg": "sg-hub"})
     assert dep.ensure_sg() == "sg-hub"
     (call,) = ec2.called("authorize_security_group_ingress")
     assert call["GroupId"] == "sg-hub" and {(r["FromPort"], r["IpProtocol"]) for r in call["IpPermissions"]} == {
@@ -1678,3 +1694,77 @@ def test_a_hub_install_in_us_east_1_stopped_anywhere_finishes_on_a_plain_retry_a
     assert gone["eips"] and gone["sgs"] and gone["profiles"] == ["hub-hotmic"]
     assert not r53.records  # the A record setup made is gone
     assert not s3.called("delete_bucket")  # the backup copy stays
+
+
+# --- Codex's fourth review -----------------------------------------------------------------------------------------
+
+
+def test_lost_cut_short_or_edited_state_never_adopts_or_deletes_what_carries_the_install_tags(tmp_path, monkeypatch):
+    # Review 4, findings 1 and 3: missing recorded ids passed, and discovery recorded the live resource's id; destroy
+    # without saved proof deleted by the prefix and name tags. Only what the install recorded making is its own.
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    d, ec2, iam, ssm, s3, log = hub_world()
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    assert go(argv, deps=d)[0] == 0
+    good = state.load(DOMAIN)[0]
+    kinds = ("instance", "eip", "sg", "role", "profile", "param", "plan_bucket", "backup_bucket", "backup_user")
+    assert set(kinds) <= set(good["aws_ids"]) and not good["aws_ids"].get("intents")
+
+    def writes():
+        return [n for n, _ in log if not n.startswith(READS)]
+
+    destroy = ["destroy", "--domain", DOMAIN, "--dns", "--yes"]
+    for kind in kinds:  # cut short: each recorded id lost in turn
+        state.save(DOMAIN, {**good, "aws_ids": {k: v for k, v in good["aws_ids"].items() if k != kind}})
+        (state.home() / DOMAIN / "backup.json").unlink(missing_ok=True)  # the other record of the storage
+        before = len(writes())
+        # A re-run leaves the backup storage as it is; backup-storage is what writes to it.
+        rerun = (
+            argv
+            if kind not in ("backup_bucket", "backup_user")
+            else ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"]
+        )
+        code, out = go(rerun, deps=d)
+        assert code == 2 and "never recorded making it" in out and "Check it by hand" in out, (kind, out)
+        if kind not in ("plan_bucket", "backup_bucket", "backup_user"):  # destroy leaves the buckets and user alone
+            code, out = go(destroy, deps=d)
+            assert code == 2 and "nothing was deleted" in out, (kind, out)
+        assert len(writes()) == before, (kind, writes()[before:])
+    # Edited: another domain's state given this install's id, without its ids.
+    other = {k: v for k, v in good.items() if k not in ("aws_ids", "dns_records", "dns_zone_id")}
+    state.save("hub2.hotmicapp.com", {**other, "domain": "hub2.hotmicapp.com"})
+    before = len(writes())
+    code, out = go(["destroy", "--domain", "hub2.hotmicapp.com", "--yes"], deps=d)
+    assert code == 2 and "nothing was deleted" in out, out
+    # Lost or corrupt: no install id to prove anything with.
+    (state.home() / DOMAIN / "state.json").write_text("{not json")
+    code, out = go(argv, deps=d)
+    assert code == 2 and "state.json cannot be read" in out, out
+    assert (state.home() / DOMAIN / "state.json").read_text() == "{not json"
+    (state.home() / DOMAIN / "state.json").unlink()  # lost: a new install's id proves nothing of the old one's
+    code, out = go(argv, deps=d)
+    assert code == 2 and "was not made by this setup" in out, out
+    (state.home() / DOMAIN / "state.json").write_text("{not json")
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--name", "hotmic", "--yes"], deps=d)
+    assert code == 2 and "Check by hand" in out, out
+    assert len(writes()) == before, writes()[before:]
+    # A runner whose saved record lost its ids, and backup storage whose record lost the user's.
+    rargv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://other.example"]
+    rargv += ["--label", "b1", "--aws-region", "us-west-2", "--asset-prefix", "hub"]
+    assert go(rargv, deps=d)[0] == 0
+    (rec,) = state.load_runners()
+    state.save_runner(
+        runner_setup.runner_key(
+            Settings(**{k: rec[k] for k in ("server_url", "aws_region")}, asset_prefix="hub"), "runner-b1"
+        ),
+        {**rec, "aws_ids": {}},
+    )
+    bs = ["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2", "--asset-prefix", "hub"]
+    assert go(bs, deps=d)[0] == 0
+    state.save_backup("laptop.example.com", {**state.load_backup("laptop.example.com"), "aws_ids": {}})
+    before = len(writes())
+    for again in (rargv, bs[:-2]):
+        code, out = go(again, deps=d)
+        assert code == 2 and "never recorded making it" in out, (again, out)
+    assert len(writes()) == before, writes()[before:]

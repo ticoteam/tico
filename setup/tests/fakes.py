@@ -175,7 +175,13 @@ class FakeEC2:
 
             kw = {**kw, "UserData": gzip.decompress(self.raw_user_data).decode()}
         self._rec("run_instances", **kw)
+        token = kw.get("ClientToken")
+        again = [i for i in self.instances if token and i.get("ClientToken") == token]
+        if again:  # as EC2 does: a repeated ClientToken answers with the instance it already launched
+            return {"Instances": [{"InstanceId": again[0]["InstanceId"]}]}
         self.instances.append({"InstanceId": "i-1", "Tags": kw["TagSpecifications"][0]["Tags"]})
+        if token:
+            self.instances[-1]["ClientToken"] = token
         vol = [t["Tags"] for t in kw["TagSpecifications"] if t["ResourceType"] == "volume"]
         attached = [{"InstanceId": "i-1", "DeleteOnTermination": True}]
         self.volumes.append({"VolumeId": "vol-1", "Tags": vol[0] if vol else [], "Attachments": attached})

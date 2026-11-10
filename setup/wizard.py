@@ -1007,6 +1007,13 @@ def _strict_start(args, s: Settings, saved: dict, dry: bool) -> None:
     """Strict mode (owned.py), once the domain is known: the saved install's prefix, name and region, and its id; a new
     install gets its id here."""
     s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)
+    kept = state.home() / s.domain / "state.json"
+    if not saved and kept.exists():  # unreadable: never replaced by a new install's, whose id would prove nothing
+        raise MissingInput(
+            f"{kept} cannot be read, so setup cannot tell which AWS resources are this install's; refusing to change "
+            f"anything. Fix or restore that file (or move it aside once you have checked by hand what "
+            f"{s.asset_prefix}-* resources exist in EC2, IAM, SSM, S3 and Route 53) and run setup again."
+        )
     if saved and not saved.get("install_id"):
         raise MissingInput(
             f"The saved state for {s.domain} has no install id, so setup cannot prove which AWS resources under "
@@ -1034,7 +1041,10 @@ def _strict_preflight(io: IO, args, s: Settings, deps: Deps, zone, records, kept
         clients = deps.aws_clients(s.aws_region, s.aws_profile)
         owned.check_account(s.aws_account_id, clients[3], s.domain)
         plan = aws_plan(s)
-        deployer(s, plan, clients, io, deps).preflight()
+        managed = plan.plan_bucket and s.plan_bucket_managed
+        deployer(s, plan, clients, io, deps).preflight(
+            deps.aws_s3(s.plan_bucket_region or s.aws_region, s.aws_profile) if managed else None
+        )
         ours = awsmod.addresses(clients[0], plan.name, plan.names)
         s.aws_account_id = clients[3]
         _save(s)
@@ -1565,6 +1575,7 @@ def _destroy_strict(args, io: IO, deps: Deps, saved: dict) -> int:
         for i in ids:
             io.say(f"  {kind}: {i}")
     owned.refuse_foreign_attached(ec2, found.get("instance", []), name, names)
+    owned.refuse_unrecorded(ec2, iam, found, names, name, saved.get("aws_ids") or {})  # before DNS, too
     records = None
     if getattr(args, "dns", False):
         records = _dns_to_delete(io, args, saved, deps, awsmod.addresses(ec2, name, names))

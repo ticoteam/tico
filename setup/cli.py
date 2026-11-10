@@ -293,6 +293,14 @@ def _backup_storage_strict(args, io: IO, deps: Deps, domain: str, saved: dict, m
     record = {**mine, "asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region}
     record["aws_account_id"], record["install_id"] = account, install_id
     ids = record.setdefault("aws_ids", {})
+    # The server install's journal holds what its own run made of the storage (its bucket and backup user).
+    theirs = saved.get("aws_ids") or {}
+    for kind in ("backup_bucket", "backup_user"):
+        if theirs.get(kind) and not ids.get(kind):
+            ids[kind] = theirs[kind]
+        intent = (theirs.get("intents") or {}).get(kind)
+        if intent and not ids.get(kind):
+            ids.setdefault("intents", {})[kind] = intent
     state.save_backup(domain, record)
     return owned.create_s3(
         deps.aws_s3(args.aws_region, args.aws_profile),
