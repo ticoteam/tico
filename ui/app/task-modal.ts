@@ -31,6 +31,8 @@ interface ModalDialog extends TfDialog {
   taskOpening?: {pending?: boolean};
   /** Closed by a change of page (taskModalRouteClose): a task the new page opens is not cancelled by this close. */
   routeClose?: boolean;
+  /** The task's own address (#/task/<id>) when it opened by it; closing leaves that address. */
+  address?: string;
   liveTask?: ModalTask | null;
   returnContext?: {route: string; task: string; opener: HTMLElement | SVGElement | null} | null;
   drawSeq?: number;
@@ -110,6 +112,9 @@ function taskModal(): ModalDialog {
     // route), and the next task's address opening now is not undone by the old one's queued close.
     if (!routed) TASK_MODAL_LOAD++;
     document.body.classList.remove('task-modal-open');
+    // A task opened by its address (#/task/<id>) leaves it when it closes, so the address opens it again.
+    const address = d.address; d.address = '';
+    if (!routed && TASKS_ST && address && location.hash === address) tasksURLWrite(TASKS_ST);
     const back = d.returnContext; d.returnContext = null;
     if (!back) return;
     if (history.state?.taskModal && location.hash === back.route && !TASK_MODAL_BACK) { TASK_MODAL_BACK = true; history.back(); }
@@ -202,6 +207,8 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   taskPropFocus(d); taskLiveFocusRestore(d); taskFormRestore(d, keptForm);
   if (!d.open) {
     const was = document.activeElement as HTMLElement | SVGElement | null;
+    const address = '#/task/' + encodeURIComponent(String(task.id));
+    d.address = location.hash === address ? address : '';
     if (!TASKS_ST) {
       // Outside Tasks, Back dismisses the detail without rebuilding the bot's chat, tab or scroll position.
       d.returnContext = {route: location.hash, task: String(task.id), opener: was};

@@ -450,7 +450,9 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       items.push({text: 'Move on', run: () => taskMoveOn(d, more, save)});
     }
     if (r.edit) items.push({text: 'Reassign…', run: () => setTimeout(() => ($('[data-prop="owner"]', d) as HTMLElement | null)?.click())});
-    if (!r.live && r.reopen) items.push({text: 'Reopen', run: () => save('stage', {move: 'reopen'})});
+    // A reopen says why (docs/pipelines-v3.md C24): the menu takes the note, and Enter reopens it.
+    if (!r.live && r.reopen) items.push({text: 'Reopen…', run: () => setTimeout(() => propMenu(d, more, {label: 'Reopen', entry: 'Why reopen it',
+      none: 'Say why, then Enter', onEntry: v => void save('stage', {move: 'reopen', why: v})}))});
     if (task.status === 'open' && (r.mover || r.party)) items.push({text: 'Close', danger: true, run: () => save('stage', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
     if (r.mover || task.requester_id === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
