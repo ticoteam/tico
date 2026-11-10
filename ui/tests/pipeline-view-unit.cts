@@ -15,11 +15,9 @@ const vm: typeof import('node:vm') = require('node:vm');
 const {transformSync} = require('esbuild') as typeof import('esbuild');
 
 const APP = path.join(__dirname, '..', 'app');
-const hooks: Record<string, {html: (rec: unknown, tasks: unknown[], opts: unknown) => string}> = {};
 const ctx = vm.createContext({
   esc: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[c]!),
   TASKS: '#/tasks',
-  TASK_PAGE_HOOKS: hooks,
   document: {addEventListener() {}},
   localStorage: {getItem: () => null, setItem() {}},
   actorFace: (who: string) => `<i data-face="${who}"></i>`,
@@ -46,8 +44,9 @@ const task = (id: string, title: string, stageId: string, extra: Record<string, 
 const TASKS = [task('t1', 'Saved carts', 'ideas'), task('t2', 'Refund flow', 'spec', {turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana'}}),
   task('t3', 'Carrier contract', 'spec'), task('t4', 'Other pipeline', 'spec', {pipeline_id: 'eng'}), task('t5', 'Shipped', 'dev', {status: 'done'})];
 const opts = (extra: Record<string, unknown> = {}) => ({layout: 'columns', phone: false, q: '', filters: {}, ...extra});
-const view = hooks['pipeline'];
-assert.ok(view, 'the view sets its hook on the page');
+// task-row.ts declares the page's hooks; task-pipelines.ts sets its own as it loads.
+const view = vm.runInContext('TASK_PAGE_HOOKS.pipeline', ctx) as {html: (rec: unknown, tasks: unknown[], opts: unknown) => string} | undefined;
+if (!view) throw new Error('the view sets its hook on the page');
 
 // ---- columns, list and phone
 {
