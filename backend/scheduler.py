@@ -423,6 +423,7 @@ class Scheduler:
         self.onboarding, self.auth = onboarding, auth  # the Bookkeeper is built the tick Finance is set up
         self.swept = None
         self.asks_checked = None
+        self.never_stuck_read = None
         self.goals_checked = None
         self.gateway_checked = None
         self.tools_checked = None
@@ -628,6 +629,20 @@ class Scheduler:
 
                 screening.sweep(self.store, stamp(at))  # a screened item waits at most an hour
                 run.did(SR.words_of(off, "webhook turned off", "Done", "webhooks turned off"), quiet=not off)
+        if self.never_stuck_read is None or at - self.never_stuck_read >= timedelta(hours=1):
+            # The never-stuck check's rules over every open task, and where the ladder has them, for Health (S15).
+            # The check itself runs every beat (step_never_stuck); this reading is the hourly proof that it holds.
+            self.never_stuck_read = at
+            with SR.recording(self.store, "never_stuck_reading", failures) as run:
+                from . import health
+
+                reading = health.record_never_stuck(self.store)
+                run.did(
+                    "All rules hold"
+                    if not reading["broken"]
+                    else SR.count_words(reading["broken"], "rule break", "rule breaks"),
+                    quiet=not reading["broken"],
+                )
         if self.goals_checked is None or at - self.goals_checked >= timedelta(hours=1):
             # Data goes stale as time passes, so every goal's automatic colour is worked out again once an
             # hour, whether or not a reading arrived (a person's colour is only ever suggested over).

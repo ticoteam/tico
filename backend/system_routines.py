@@ -185,6 +185,10 @@ ACTIONS = {
         ("email", "digest", "unread", "thread", "notify"),
     ),
     "drop_unreadable": ("drop queued work its bot can no longer read", ("queue", "drop")),
+    "read_never_stuck": (
+        "check that every open task waits on something and count where the ladder has them, for Health",
+        ("tasks", "never stuck", "health", "stuck"),
+    ),
     "start_deferred": ("start deferred runs that are due", ("deferred", "runs")),
     "end_go_live": ("end a go-live waiting for a computer that never reports", ("go-live", "computer", "expire")),
     "goal_colours": ("work out every goal's colour again", ("goal", "colour", "color")),
@@ -453,6 +457,17 @@ JOBS = [
         then=("check_rules_digest", "wake_rules_digest"),
         department=FINANCE,
         applies=_bookkeeper,
+    ),
+    Job(
+        "never_stuck_reading",
+        "Tasks reading",
+        "Checks the rules that hold at all times over every open task (each waits on something, each bot's turn has a "
+        "run, a wake or a next try) and counts the tasks on a retry, with a manager, with a person or unable to run, "
+        "for Health. Plain code: no model, no wake.",
+        HOUSEKEEPING,
+        "Hourly",
+        3600,
+        then=("read_never_stuck",),
     ),
     Job(
         "thread_retention",

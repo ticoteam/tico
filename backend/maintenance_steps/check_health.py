@@ -70,6 +70,7 @@ TAGS = {
     "models": "urgent",
     "gateway": "urgent",
     "hook_relay": "urgent",
+    "never_stuck": "urgent",  # a rule that holds at all times is broken (never_stuck.rules_hold): an engine bug
     # noisy (the default for anything else): a state that can be a blip, a slow or idle computer, a usage limit, a version
     "runner_outdated": "noisy",
     "limited_no_fallback": "noisy",
@@ -99,7 +100,6 @@ TAGS = {
     "performance": "noisy",
     "disk": "noisy",
     "turns": "noisy",
-    "stalled_tasks": "noisy",  # main's "Tasks not progressing" (hubdb.stalled_tasks): a task that may move on its own
 }
 # Health page checks this step files another way, so the page reader leaves them out: `invariant:<id>` rows are the
 # production checks, which the invariant reader files as `inv:<id>`.
