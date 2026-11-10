@@ -651,7 +651,17 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"ticket": {"id": "sup_1"}, "approval": body.get("approval"), "again": False})
         if any(
             part in self.path
-            for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings", "/waits", "/snooze")
+            for part in (
+                "/requesters",
+                "/publication-preview",
+                "/moderate",
+                "/roadmaps/settings",
+                "/waits",
+                "/snooze",
+                "/comments",
+                "/api/v2/webhooks",
+                "/api/v2/release/now",
+            )
         ):
             return self.reply(200, {"ok": True})
         self.reply(422, {"error": {"code": "refused", "detail": "rule 2: not on the roster"}})
@@ -807,6 +817,47 @@ class AgainstAStub(unittest.TestCase):
         self.assertEqual((code, out["ticket"]["id"]), (0, "sup_1"))
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
         self.assertEqual(posted, {"approval": "r-1"})
+
+    def test_a_public_reply_names_the_ok_a_person_gave_and_the_old_approval_flag_is_gone(self):
+        def last(path):
+            return [b for m, p, _, b in Stub.seen if m == "POST" and p == path][-1]
+
+        code, out = run_hub("task", "comment", "T1", "Fixed in 1.2", "--public", "--ok", "r-7", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(last("/api/v2/tasks/T1/comments")["approval_id"], "r-7")
+        code, out = run_hub("task", "comment-edit", "T1", "m-1", "Fixed in 1.2.1", "--ok", "r-8", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(last("/api/v2/tasks/T1/comments/m-1"), {"text": "Fixed in 1.2.1", "approval_id": "r-8"})
+        for argv in (["comment", "T1", "x"], ["comment-edit", "T1", "m-1", "x"]):
+            with self.assertRaises(SystemExit):
+                hubcli.parser().parse_args(["task", *argv, "--approval-id", "a-1"])
+
+    def test_a_webhook_filters_by_pipeline_and_task_types_are_gone(self):
+        from clients import hubtools
+
+        argv = ("webhook", "create", "--name", "Ops", "--url", "https://hooks.example.test/x", "--pipelines", "General")
+        code, out = run_hub(*argv, env=self.env)
+        self.assertEqual(code, 0, out)
+        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/webhooks"][-1]
+        self.assertEqual(posted["filter"], {"pipelines": ["General"]})
+        with self.assertRaises(SystemExit):
+            hubcli.parser().parse_args(["webhook", "update", "w-1", "--task-types", "Bug"])
+        self.assertIn(
+            "pipelines", hubtools.BY_NAME["hub_webhook_create"]["inputSchema"]["properties"]["filter"]["properties"]
+        )
+
+    def test_settings_ask_is_gone_and_release_now_keeps_its_route(self):
+        from clients import hubtools
+
+        with self.assertRaises(SystemExit):
+            hubcli.parser().parse_args(["settings", "ask", "team.rules.admin_sql", "on"])
+        self.assertNotIn("hub_settings_ask", hubtools.BY_NAME)
+        code, out = run_hub("release", "now", "--note", "hotfix", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual([b for m, p, _, b in Stub.seen if p == "/api/v2/release/now"], [{"note": "hotfix"}])
+        for name in ("hub_release_now", "hub_release_schedule"):
+            self.assertNotIn("Pending Release", hubtools.BY_NAME[name]["description"])
+            self.assertNotIn("ticket", hubtools.BY_NAME[name]["description"])
 
     def test_task_snooze_sends_its_date_why_and_version(self):
         def last(method, path):

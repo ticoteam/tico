@@ -140,7 +140,8 @@ class Materialize(unittest.TestCase):
         first = self.make()
         (first / "state.md").write_text("# State\n\nThe renamed bot's memory.\n")
         second = self.make(folder="bot-coo-0a1b2c3d")
-        self.assertEqual(second, self.workspace / "bot-coo-0a1b2c3d")
+        # macOS gives tmp as /var, a link to /private/var: the bot folder comes back resolved.
+        self.assertEqual(second, (self.workspace / "bot-coo-0a1b2c3d").resolve())
         self.assertTrue((second / "AGENT.md").is_file())
         self.assertIn("The renamed bot's memory.", (first / "state.md").read_text())
         # A recorded value that is not one plain folder name is never a path.

@@ -873,15 +873,15 @@ def run(args, who=None):
             body.update(_delivery(args))
             if getattr(args, "public", None):
                 body["public"] = True
-            if getattr(args, "approval_id", None):
-                body["approval_id"] = args.approval_id
+            if getattr(args, "ok", None):
+                body["approval_id"] = args.ok
             links = s3links.apply(client, body, ("text",))
             result = s3links.annotate(post(f"tasks/{args.id}/comments", body, delegate=asked), links)
             return {**result, "visuals_local": local} if local and isinstance(result, dict) else result
         if sub == "comment-edit":
             body = {"text": args.text}
-            if getattr(args, "approval_id", None):
-                body["approval_id"] = args.approval_id
+            if getattr(args, "ok", None):
+                body["approval_id"] = args.ok
             links = s3links.apply(client, body, ("text",))
             return s3links.annotate(post(f"tasks/{args.id}/comments/{args.comment_id}", body), links)
         if sub == "comment-delete":
