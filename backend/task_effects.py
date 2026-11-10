@@ -82,21 +82,20 @@ def _publish(conn: "sqlite3.Connection", name: str, row: Row, actor: str, change
 
 
 def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None) -> None:
-    """A bot that asked for a task hears once how it ended. Not when it ended it itself or owns it. Not when it filed
-    it from a task it still owns in the stage it filed it from: the engine tells that task's owner when everything it
-    filed there has ended. A task filed from a stage its parent has since left is told here, or nobody would."""
+    """A bot that asked for a task hears once how it ended. Not when it ended it itself or owns it. Not when the engine
+    already told it, on the task that filed this one, that what it filed there has ended (task_engine._ended, which
+    runs before this): only a wake it wrote counts, so a parent that is closing, is snoozed, or has left the stage the
+    task was filed from takes nothing away."""
     H = _h()
     requester = after.get("requester_id")
     if not H.is_bot(requester) or requester in (actor, after.get("owner_id")):
         return
-    filed = conn.execute(
-        "SELECT t.owner_id, t.status, l.visit_id, "
-        "(SELECT v.id FROM visits v WHERE v.task_id = t.id AND v.left_at IS NULL) "
-        "FROM links l JOIN tasks t ON t.id = l.from_task_id WHERE l.to_task_id=?",
-        (after["id"],),
-    ).fetchone()
-    if filed and filed[0] == requester and filed[1] == "open" and filed[2] and filed[2] == filed[3]:
-        return
+    link = conn.execute("SELECT from_task_id, visit_id FROM links WHERE to_task_id=?", (after["id"],)).fetchone()
+    if link and link[1]:
+        # The key task_engine._ended gives its wake on the filing task.
+        told = f"{link[0]}:{link[1]}:filed:{after['id']}"
+        if conn.execute("SELECT 1 FROM messages WHERE wake_key=? AND recipient_id=?", (told, requester)).fetchone():
+            return
     visit: Row = after.get("visit") or {}
     wake_key = f"{after['id']}:{visit.get('id')}:result"
     if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (wake_key,)).fetchone():

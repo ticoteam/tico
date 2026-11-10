@@ -239,6 +239,30 @@ def test_a_bot_cannot_close_what_a_person_asked_for_and_a_person_closes_it_with_
     assert ("task.close", row["id"]) in _events(c, row["id"])
 
 
+def _told(c, child_id, parent_id):
+    """What the bot that filed `child_id` heard of how it ended: its result, or the engine's wake on the parent."""
+    rows = c.execute(
+        "SELECT recipient_id, wake_key FROM messages WHERE wake_key LIKE ? OR wake_key LIKE ?",
+        (f"{child_id}:%:result", f"{parent_id}:%:filed:{child_id}"),
+    ).fetchall()
+    return [(r[0], "filed" if ":filed:" in r[1] else "result") for r in rows]
+
+
+@pytest.mark.parametrize("how", ["parent_closed", "parent_snoozed", "parent_told"])
+def test_a_bot_that_filed_a_sub_task_hears_once_how_it_ended(c, how):
+    parent = _new(c)
+    child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=parent["id"])
+    if how == "parent_closed":
+        H.task_close(c, ANA, parent["id"], "The launch is off.")  # its sub-task closes with it
+    else:
+        if how == "parent_snoozed":
+            H.task_snooze(c, BUILDER, parent["id"], "Waiting on the numbers.", None, _version(c, parent["id"]))
+        H.task_done(c, HELPER, child["id"], "Here they are.", _version(c, child["id"]))
+    assert H.task(c, child["id"])["status"] in ("done", "closed")
+    # Once: the result, or the engine's wake on the parent when it gave one.
+    assert _told(c, child["id"], parent["id"]) == [(BUILDER, "filed" if how == "parent_told" else "result")]
+
+
 def test_a_person_reopens_with_a_reason_and_a_bot_does_not_reopen_what_a_person_closed(c):
     row = _new(c)
     H.task_close(c, ANA, row["id"], "Not now.")
