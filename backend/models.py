@@ -3256,8 +3256,6 @@ class InboundTask(Contract):
     owner: ID | None = None  # human:<id>, bot:<slug> or a person's email
     title: str | None = Field(default=None, min_length=1, max_length=300)
     body: Text | None = None
-    type: ID | None = None
-    step: str | None = Field(default=None, max_length=200)
     labels: list[str] | None = Field(default=None, max_length=20)
     links: list[str] = Field(default_factory=list, max_length=20)
     due: str | None = None
