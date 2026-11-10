@@ -446,6 +446,9 @@ def prime(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> dict[str, Row]
             read_cache.prime(conn, one_sql, {(task_id,): found.get(task_id) for task_id in unread})
     rows = [row for row in (E.task(conn, task_id) for task_id in ids) if row]
     R.prime(conn, rows)
+    task_wakes.prime_holds(conn, ids)  # each task's worktree wait, for a bot's turn that may be Paused on it
+    # "Can this bot run" for each bot whose turn a task may be: its owner, or its pipeline's manager.
+    task_wakes.prime_bots(conn, [a for row in rows for a in (row.get("owner_id"), (row.get("pipeline") or {}).get("manager_id"))])
     visits = sorted({str(row["visit"]["id"]) for row in rows if row.get("visit")})
     unread = [visit_id for visit_id in visits if ("filed_open", visit_id) not in values]
     for visit_id, filed in _filed_open_of(conn, unread).items():
