@@ -279,17 +279,48 @@ def task_reassign(
 
 
 # ----------------------------------------------------------------------------- asks and answers
-def _bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str) -> None:
+def bring_in(conn: "sqlite3.Connection", actor: str, row: Row, who: str, *, by: str | None = None) -> None:
     """Whoever an ask names must be able to read the task. On a private task that is only someone who already reads
     it, or one person its owning bot brings in by asking them (hubdb.task_reach_refusal has the rule): they become a
-    reader of this task and nothing else. Anyone else is refused, so nobody is asked about a task they cannot open."""
+    reader of this task and nothing else. Anyone else is refused, so nobody is asked about a task they cannot open.
+    `by` is who made the change that asks them, when it is not `actor` (a move: the owner brings them in, the mover is
+    refused)."""
     H = _h()
     if H.task_private_readable(conn, who, row):
         return
     why = H.task_reach_refusal(conn, actor, row, who)
-    if why:
+    if why and by is None:
         _refuse(conn, actor, "private", str(why), row["id"])
+    if why:
+        stage: Row = row.get("stage") or {}
+        _refuse(
+            conn,
+            str(by),
+            "task_requirement",
+            f"{H.actor_name(conn, who)} is asked in {stage.get('name') or 'this stage'} and cannot read this task. "
+            f"{why}.",
+            row["id"],
+        )
     H.task_reach(conn, actor, row, who)
+
+
+def bring_in_asked(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """A private task that just entered a stage or changed owner: everyone its open visit asks is brought in to read
+    it, by its owner, as an ask brings them in (`bring_in`). Before anyone is woken, so the one asked can open what
+    they are woken for. Refused, as `by`, when one cannot be."""
+    from . import task_engine as E
+    from . import task_requirements as R
+
+    H = _h()
+    row = E.task(conn, task_id)
+    if not row or not row.get("visit") or not H.task_private(conn, row):
+        return
+    owner = row.get("owner_id")
+    for requirement in R.for_visit(conn, row["visit"]):
+        who = R.person_of(conn, requirement, row["visit"]["id"]) if requirement["kind"] in ("ok", "answer") else None
+        if who:
+            bring_in(conn, str(owner) if is_bot(owner) else by, row, who, by=by)
+            row = E.task(conn, task_id) or row
 
 
 @_task_write()
@@ -314,7 +345,7 @@ def task_ask(
     H = _h()
     row = _open(conn, actor, task_id, mover)
     target = H._reach(conn, actor, person)
-    _bring_in(conn, actor, row, target)
+    bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
         # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
         H.require_person_ask(conn, actor, target, line, "ask")
@@ -378,7 +409,7 @@ def task_give(
 
     H = _h()
     row = _open(conn, actor, task_id, work=False)
-    _bring_in(conn, actor, row, H.resolve_actor(conn, person) or person)
+    bring_in(conn, actor, row, H.resolve_actor(conn, person) or person)
     with task_effects.because(actor):
         return A.give_to(
             conn, task_id, requirement_id, actor, H.resolve_actor(conn, person) or person, seen_version=seen_version

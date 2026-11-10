@@ -445,6 +445,69 @@ def test_a_move_into_a_stage_someone_else_owns_does_what_a_reassignment_does(c):
     assert H.task(c, row["id"])["rank"] != rank or rank is None  # at the end of the new owner's queue
 
 
+COUNSEL = "bot:counsel"
+
+
+def _private_owner(c, approver):
+    """A pipeline whose Check stage is owned by a bot that keeps its tasks private and asks `approver` for an OK."""
+    from backend import bot_settings as BS
+
+    X.bot(c, "counsel")
+    BS.write(c, "counsel", {"name": "counsel", "runtime": "fake", "status": "active", "private_tasks_default": True})
+    stages = (
+        {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "ok", "person": approver, "line": "OK it"}]},
+        {"name": "Check", "owner": COUNSEL, "requirements": [{"kind": "ok", "person": approver, "line": "OK it"}]},
+    )
+    X.pipeline(c, "terms", "Terms", stages, manager=MANAGER)
+
+
+def _published(monkeypatch):
+    """(event, whether the task was private when it went out) for each event a move publishes."""
+    from backend import task_effects
+
+    out, real = [], task_effects._publish
+
+    def publish(conn, name, row, *rest):
+        out.append((name, H.task_private(conn, H.task(conn, row["id"]))))
+        return real(conn, name, row, *rest)
+
+    monkeypatch.setattr(task_effects, "_publish", publish)
+    return out
+
+
+@pytest.mark.parametrize("how", ["move", "reassign"])
+def test_a_task_that_goes_private_with_its_new_owner_is_private_before_anyone_hears(c, monkeypatch, how):
+    _private_owner(c, BEN)
+    row = _new(c, by=HELPER, pipeline="terms")  # a bot's task for a bot: nobody else reads it once it is private
+    published = _published(monkeypatch)
+    before = {w[0] for w in X.wakes(c, row["id"])}
+    if how == "move":
+        out = H.task_move(c, BUILDER, row["id"], "Check", "Drafted; Ben checks it there.", _version(c, row["id"]))
+    else:
+        out = H.task_reassign(c, BUILDER, row["id"], COUNSEL, "Counsel drafts this.", _version(c, row["id"]))
+    assert out["owner_id"] == COUNSEL and H.task_private(c, H.task(c, row["id"]))
+    assert published and all(private for _, private in published), published
+    # Whom the stage asks reads it: brought in, as an ask on a private task brings them in.
+    assert H.task_private_readable(c, BEN, H.task(c, row["id"]))
+    task = H.task(c, row["id"])
+    for key, who in X.wakes(c, row["id"]):
+        assert key in before or H.task_private_readable(c, who, task), (key, who)
+
+
+def test_a_stage_that_asks_a_bot_who_cannot_read_the_private_task_refuses_the_move(c):
+    _private_owner(c, "bot:reviewer")
+    X.bot(c, "reviewer")
+    row = _new(c, by=HELPER, pipeline="terms")
+    woken = X.wakes(c, row["id"])
+    assert H.attempt(c, H.task_move, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"])) is None
+    after = H.task(c, row["id"])
+    assert (after["stage_id"], after["owner_id"], H.task_private(c, after)) == (row["stage_id"], BUILDER, False)
+    assert X.wakes(c, row["id"]) == woken
+    with _refused("task_requirement") as refusal:
+        H.task_move(c, BUILDER, row["id"], "Check", "Drafted.", _version(c, row["id"]))
+    assert "cannot read this task" in refusal.value.detail
+
+
 def test_a_child_restored_before_its_parent_is_under_it_again_once_both_are_back(c):
     parent = _new(c)
     child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=parent["id"])

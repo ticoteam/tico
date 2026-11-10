@@ -2,8 +2,8 @@
 """What a move and a reassignment do beyond the task's own row (docs/dev/pipelines-v3-cutover.md, "What a move still
 does").
 
-The engine calls `moved` at the end of every move and `reassigned` at the end of every reassignment, inside the
-caller's transaction. Nothing outside the engine calls them, so no caller can skip one: a routine's day is marked, the
+The engine calls `owner_moved` first on a move that gives the task another owner, before it wakes anyone, `moved` at
+the end of every move and `reassigned` at the end of every reassignment, inside the caller's transaction. Nothing outside the engine calls them, so no caller can skip one: a routine's day is marked, the
 webhooks and automations hear, work on a closed task stops, whoever moves the task.
 
 The engine writes the history row, cancels and writes the wakes, closes sub-tasks and tells the task that filed this
@@ -126,8 +126,8 @@ def moved(
         change: Row = {"field": "stage", "from": before.get("stage_id"), "to": after.get("stage_id"), "move": kind}
         _publish(conn, "task.step_changed", after, actor, change, revision)
     if before.get("owner_id") != after.get("owner_id"):
-        # The next stage has another owner: what follows the owner follows it here as on a reassignment.
-        _owner_changed(conn, before, after, actor, revision)
+        # The next stage has another owner. What follows the owner already happened (`owner_moved`).
+        _publish_owner(conn, before, after, actor, revision)
     if old == new:
         return
     from . import delivery, reconnects, rule_due, run_triggers
@@ -156,10 +156,19 @@ def moved(
         H.stop_ended_work(conn, actor, after["id"], "closed")
 
 
-def _owner_changed(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, revision: str | None) -> None:
+def owner_moved(conn: "sqlite3.Connection", before: Row, after: Row, by: str) -> None:
+    """A move gave the task another owner (a stage someone else owns, or a new task's first stage): what follows the
+    owner (`_follow_owner`). The engine runs it first, before it wakes anyone or anything hears of the move, so a task
+    the new owner keeps private is private by then. `moved` publishes `task.assigned` at the end."""
+    if before.get("owner_id") != after.get("owner_id"):
+        _follow_owner(conn, before, after, cause(by))
+
+
+def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str) -> None:
     """What follows a task's owner, whichever way it changed (a reassignment, or a move into a stage someone else
     owns): the new owner's private default, the sessions and worktree, the per-task model, the followers, the old
-    owner's goal on the task, its place in the new owner's queue, and the `task.assigned` event."""
+    owner's goal on the task and its place in the new owner's queue. Before anything about the change is published or
+    woken."""
     H = _h()
     task_id = after["id"]
     old, new = before.get("owner_id"), after.get("owner_id")
@@ -195,7 +204,10 @@ def _owner_changed(conn: "sqlite3.Connection", before: Row, after: Row, actor: s
     conn.execute("UPDATE tasks SET rank=? WHERE id=?", (H._queue_end(conn, new) if new else None, task_id))
     reconnects_: Any = reconnects
     reconnects_.moved(conn, task_id, "owner", old, new)
-    change: Row = {"field": "owner", "from": old, "to": new}
+
+
+def _publish_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, revision: str | None) -> None:
+    change: Row = {"field": "owner", "from": before.get("owner_id"), "to": after.get("owner_id")}
     _publish(conn, "task.assigned", after, actor, change, revision)
 
 
@@ -203,16 +215,19 @@ def reassigned(
     conn: "sqlite3.Connection", before: Row, after: Row, by: str, why: str | None = None, revision: str | None = None
 ) -> None:
     """A task was given to another owner in its stage. Someone handing a bot's work to someone else is what became of
-    the run that made it; then everything that follows the owner (`_owner_changed`)."""
+    the run that made it; then everything that follows the owner (`_follow_owner`), and whoever the task asks is
+    brought in to read it if it is private now (task_calls.bring_in_asked); then `task.assigned` is published."""
     H = _h()
     actor = cause(by)
     old, new = before.get("owner_id"), after.get("owner_id")
     if old == new:
         return
-    from . import run_triggers
+    from . import run_triggers, task_calls
 
     runs: Any = run_triggers
     runs.turn_result(conn, actor, before, "overridden", H.event)
-    _owner_changed(conn, before, after, actor, revision)
+    _follow_owner(conn, before, after, actor)
+    task_calls.bring_in_asked(conn, after["id"], by)
+    _publish_owner(conn, before, after, actor, revision)
     H.event(conn, actor, "task.update", after["id"], {"owner": new, "note": why})
     H.recount(conn, [new, old, after.get("requester_id")])

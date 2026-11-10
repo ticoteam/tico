@@ -399,6 +399,7 @@ def enter(
             (H.new_id(), parent, task_id, _part(above, "visit").get("id"), link, ts),
         )
     _event(conn, task_id, by, "move", None, first["id"], None, {"move": "new", "owner": owner, "parent": parent})
+    _owned(conn, row, _task(conn, task_id), by)
     entered = _task(conn, task_id)
     stage_effects.enter(conn, entered, by)
     _wake_turn(conn, entered, refs=wake, trigger=trigger, source=source)
@@ -634,6 +635,7 @@ def move(
             **({"pushed_past": pushed} if pushed else {}),
         },
     )
+    _owned(conn, row, _task(conn, task_id), by)
     moved = _task(conn, task_id)
     if target["kind"] == "work":
         stage_effects.enter(conn, moved, by)
@@ -646,6 +648,17 @@ def move(
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, kind, by, why, revision)
     return _task(conn, task_id)
+
+
+def _owned(conn: "sqlite3.Connection", before: Row, after: Row, by: str) -> None:
+    """Who has the task now comes first, before anyone is woken or anything hears of the move: what follows a new
+    owner, its private default among it (task_effects.owner_moved), then, on a private task in a work stage, everyone
+    the stage asks is brought in to read it (task_calls.bring_in_asked). The caller reads the task again after."""
+    from . import task_calls
+
+    task_effects.owner_moved(conn, before, after, by)
+    if after["stage"]["kind"] == "work":
+        task_calls.bring_in_asked(conn, after["id"], by)
 
 
 def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -> None:
