@@ -23,6 +23,8 @@ interface TasksPageState {
   tasks: TaskBriefV3[];
   pipelines: PipelineRec[];
   loading: boolean;
+  /** What is drawn while the view's read is out is its last read (S.lastRead.tasks), so no skeleton. */
+  kept: boolean;
   failed: string;
   /** The view's reads against its live events (task-api.ts TaskFeed): a read that lands late undoes no newer event. */
   feed: TaskFeed;
@@ -70,7 +72,8 @@ function tasksURLWrite(state: TasksPageState) {
 function pageTasks(openId = '') {
   tasksLeave();
   const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
-    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, failed: '', feed: taskFeedNew(), cursor: '', behind: false, abort: new AbortController()};
+    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, abort: new AbortController()};
+  tasksKept(state);
   TASKS_ST = state;
   const main = $('#main');
   main.classList.add('tasks-layout');
@@ -179,8 +182,18 @@ function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, '
   tasksURLWrite(state);
   state.tasks = [];
   state.loading = true;
+  tasksKept(state);
   tasksRender(state);
   void tasksLoad(state);
+}
+// A view seen before draws its last read at once while the new one is out; the app's own Needs you list wins for You.
+const tasksViewKey = (state: Pick<TasksPageState, 'pipeline' | 'archive'>) => state.pipeline + '|' + state.archive;
+function tasksKept(state: TasksPageState) {
+  const kept = S.lastRead.tasks;
+  state.kept = kept?.view === tasksViewKey(state);
+  if (!kept || !state.kept) return;
+  state.tasks = kept.tasks.slice();
+  if (!S.v2.needs) state.needs = kept.needs.slice();
 }
 
 // ---- reads
@@ -218,6 +231,9 @@ async function tasksLoad(state: TasksPageState): Promise<void> {
       query ? taskBriefsPage({...query, sort: state.archive && state.archive !== 'snoozed' ? 'finished' : 'queue', limit: state.archive ? 200 : 500})
         : needsYou(),
     ]);
+    // Kept for the next visit even when the page was left before it landed.
+    S.lastRead.tasks = {view: tasksViewKey(state), needs: Array.isArray(rows) ? rows : [],
+      tasks: Array.isArray(rows) ? [] : rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline)};
     if (TASKS_ST !== state) return;
     held = taskFeedLanded(state.feed, ticket, Array.isArray(rows) ? '' : rows.cursor);
     if (!held) return;
@@ -330,7 +346,7 @@ function tasksRender(state: TasksPageState | null) {
   body.dataset.view = state.archive ? 'archive' : state.pipeline ? 'pipeline' : 'you';
   const p = state.archive ? null : tasksPipeline(state), hooks = TASK_PAGE_HOOKS.pipeline;
   if (p && hooks?.rail) { const rail = $('#task-rail'); rail.hidden = false; hooks.rail(rail, p); } else tasksRailOff();
-  if (p && hooks && !state.failed && !(state.loading && !state.tasks.length)) {
+  if (p && hooks && !state.failed && !(state.loading && !state.kept && !state.tasks.length)) {
     // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound to.
     const html = hooks.html(p, state.tasks, {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches});
     if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
@@ -338,7 +354,7 @@ function tasksRender(state: TasksPageState | null) {
     return;
   }
   const html = state.failed ? `<p class="err" role="alert">${esc(state.failed)} <button type="button" class="linkish" data-reload>Try again</button></p>`
-    : state.loading && !state.needs.length && !state.tasks.length ? skelRows(6)
+    : state.loading && !state.kept && !state.needs.length && !state.tasks.length ? skelRows(6)
     : state.archive ? tasksArchiveHTML(state)
     : state.pipeline ? tasksPipelineHTML(state)
     : tasksYouHTML(state);

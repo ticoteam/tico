@@ -949,7 +949,7 @@ function meetMadeTasks(state: MeetState, rec: MeetRec): MeetTaskRow[] {
   if (rec.sent?.task || work) {
     const st = rec.outcome?.status;
     add({id: rec.sent?.task || '', title: bot ? `Review by ${botDisplayName(bot)}` : 'Review', status: work ? '' : st,
-         who: work, spin: work === 'Sending' || ['open', 'doing', 'review', 'ready'].includes(String(st)),
+         who: work, spin: work === 'Sending' || st === 'open',
          line: rec.outcome?.task_id ? meetOneLine(plainMd(rec.outcome.summary || '')) : ''});
   }
   for (const t of rec.outcome?.tasks || []) add({id: t.id, title: t.title, status: t.status});

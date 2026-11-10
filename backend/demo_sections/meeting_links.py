@@ -31,15 +31,17 @@ def seed(b):
             f'tasks/{task_id}',
             {'version': task['version'], 'due': b.ago(days=1).isoformat().replace('+00:00', 'Z')},
         )
-        # The shared task's owner asks Ana on the task, so it is in her Needs you and its Tasks badge.
+        # Eli, who handed the shared task to its bot, asks Ana on it, so it is in her Needs you and its Tasks badge. A
+        # person asks: the bots' messages already seeded today use up Everyone's 3 a day to Ana (Rules › Internal), and
+        # a bot's ask counts against that line like its messages do (reach.check), so the bot's ask would be refused.
         b.at(hours=1)
         b.write(
             lambda c: H.task_ask(
                 c,
-                H.task(c, task_id)['owner_id'],
+                H.task(c, task_id)['requester_id'],
                 task_id,
                 'human:ana',
-                "Can we use the meeting's agreed follow-up for the launch? If you agree, I'll add it to the plan.",
+                "Can we use the meeting's agreed follow-up for the launch? If you agree, Firmware adds it to the plan.",
                 kind='ok',
                 seen_version=version(c, task_id),
             )

@@ -3213,14 +3213,21 @@ def install_views(app, store, auth, mutate, task_view):
             read = CL.read_ids(c, who.actor)
             products = [{**row, "unread": row["id"] not in read} for row in CL.products(c, store.settings)]
             entries = []
-            # Newest readable bot-owned done tasks with a long enough note. Filter with task_sql in one pass
-            # (not auth.task per candidate); 120 is the activity cap beside product updates.
+            # Newest readable bot-owned done tasks with a long enough note: what the owner said when it said done (its
+            # standing answer to the stage's "owner says done"), else the task's last note. Filter with task_sql in
+            # one pass (not auth.task per candidate); 120 is the activity cap beside product updates.
+            said = (
+                "COALESCE((SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id "
+                "JOIN requirements r ON r.id=a.requirement_id WHERE v.task_id=tasks.id AND r.kind='owner_done' "
+                "AND a.answer='done' AND a.undone_at IS NULL AND length(a.notes)>=20 "
+                "ORDER BY a.created_at DESC LIMIT 1), note)"
+            )
             activity = (
                 [
                     dict(r)
                     for r in c.execute(
-                        "SELECT id,title,owner_id,note,done_at,updated_at FROM tasks WHERE status='done' AND substr(owner_id,1,4)='bot:' "
-                        f"AND length(note)>=20 AND ({auth.task_sql(c, who)}) "
+                        f"SELECT id,title,owner_id,{said} AS note,done_at,updated_at FROM tasks WHERE status='done' "
+                        f"AND substr(owner_id,1,4)='bot:' AND length({said})>=20 AND ({auth.task_sql(c, who)}) "
                         "ORDER BY COALESCE(NULLIF(done_at,''),updated_at) DESC LIMIT 120"
                     )
                 ]

@@ -29,6 +29,10 @@ interface ModalTask extends TaskRow {
 // counters, the rail, the page cards' slot (ui/app/pages.ts) and the live edit (ui/app/task-live.ts).
 interface ModalDialog extends TfDialog {
   taskOpening?: {pending?: boolean};
+  /** Closed by a change of page (taskModalRouteClose): a task the new page opens is not cancelled by this close. */
+  routeClose?: boolean;
+  /** The task's own address (#/task/<id>) when it opened by it; closing leaves that address. */
+  address?: string;
   liveTask?: ModalTask | null;
   returnContext?: {route: string; task: string; opener: HTMLElement | SVGElement | null} | null;
   drawSeq?: number;
@@ -102,9 +106,15 @@ function taskModal(): ModalDialog {
   d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
   taskDialogWire(d);
   d.addEventListener('close', () => {
+    const routed = d.routeClose; d.routeClose = false;
     if (d.open || d.taskOpening?.pending) return;
-    TASK_MODAL_LOAD++;
+    // A close by hand cancels an opening still on its way; a change of page cancels its own (taskModalOpen checks the
+    // route), and the next task's address opening now is not undone by the old one's queued close.
+    if (!routed) TASK_MODAL_LOAD++;
     document.body.classList.remove('task-modal-open');
+    // A task opened by its address (#/task/<id>) leaves it when it closes, so the address opens it again.
+    const address = d.address; d.address = '';
+    if (!routed && TASKS_ST && address && location.hash === address) tasksURLWrite(TASKS_ST);
     const back = d.returnContext; d.returnContext = null;
     if (!back) return;
     if (history.state?.taskModal && location.hash === back.route && !TASK_MODAL_BACK) { TASK_MODAL_BACK = true; history.back(); }
@@ -113,6 +123,13 @@ function taskModal(): ModalDialog {
   });
   document.body.appendChild(d);
   return d;
+}
+// The router's close of the task window when the page changes (ui/app/router.ts).
+function taskModalRouteClose() {
+  const d: ModalDialog | null = $('#task-modal');
+  if (!d?.open) return;
+  d.routeClose = true;
+  d.close();
 }
 let TASK_MODAL_BACK = false;
 let TASK_MODAL_LOAD = 0;
@@ -190,6 +207,8 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   taskPropFocus(d); taskLiveFocusRestore(d); taskFormRestore(d, keptForm);
   if (!d.open) {
     const was = document.activeElement as HTMLElement | SVGElement | null;
+    const address = '#/task/' + encodeURIComponent(String(task.id));
+    d.address = location.hash === address ? address : '';
     if (!TASKS_ST) {
       // Outside Tasks, Back dismisses the detail without rebuilding the bot's chat, tab or scroll position.
       d.returnContext = {route: location.hash, task: String(task.id), opener: was};
@@ -598,7 +617,12 @@ const commentAuthor = (a: string | null | undefined, via?: string | null, src: {
 };
 // A stage's name by its id, from the pipelines the Tasks page has read; else the id.
 const taskStageWord = (id: string | null | undefined) => ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).flatMap(p => p.stages).find(st => st.id === id)?.name || String(id || '');
-const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEvent) => string> = {stage: id => `moved it to ${taskStageWord(id)}`, status: s => `moved it to ${taskStatusLabel({status: s ?? null})}`, owner: v => `handed it to ${actorLabel(v)}`,
+// The pipelines' stage names a task's history names its moves by, read once when it has a move and the Tasks page has not read them.
+const taskStagesFor = async (data: ModalDetail | null | undefined) => {
+  if (!TASK_PIPELINES && data?.events?.some(e => e.field === 'move')) await tasksPipelinesRead().catch(() => []);
+};
+// A move (backend/task_engine.py) names the stage it went to; a reassign who has it now.
+const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEvent) => string> = {move: id => `moved it to ${taskStageWord(id)}`, reassign: v => `handed it to ${actorLabel(v)}`, status: s => `moved it to ${taskStatusLabel({status: s ?? null})}`, owner: v => `handed it to ${actorLabel(v)}`,
   lane: v => `moved it to the ${v === 'company' ? 'team' : v} lane`, labels: v => { try { const l = JSON.parse(v || '[]'); return l.length ? `set the tags: ${l.join(', ')}` : 'removed the tags'; } catch { return 'changed the tags'; } },
   blocked_by: v => v ? 'marked it blocked' : 'cleared the block', parent_id: v => v ? 'filed it under a parent task' : 'took it out of its parent',
   subtask: v => v ? 'added a subtask' : 'moved a subtask out', blocks: v => v ? 'made it block another task' : 'stopped it blocking a task',
@@ -610,7 +634,7 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
 function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '') {
   if (x.kind === 'event') {
-    if (x.field === 'status' && x.old == null) return '';           // created: the header says so
+    if ((x.field === 'status' || (x.field === 'move' && !x.note)) && x.old == null) return '';   // created: the header says so
     // The type and first step a task is filed with are part of its creation too, not moves.
     if ((x.field === 'type' || x.field === 'step') && x.old == null
       && all?.some(y => y.kind === 'event' && y.field === 'status' && y.old == null && Math.abs(Date.parse(y.ts) - Date.parse(x.ts)) < 2000)) return '';
@@ -947,6 +971,7 @@ async function taskChatRead(state: TaskChatState) {
   state.reading = true;
   try {
     const data = await get<ModalDetail>(state.path);
+    await taskStagesFor(data);
     if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
     if (taskChatCurrent(state) && !state.sending) taskCommentsRender(state, data);
   } catch (e) {
@@ -970,7 +995,7 @@ async function taskChatLoad(id: string | number, dialog: ModalDialog, data: Moda
     path: `/v2/tasks/${encodeURIComponent(id)}`, id, poll: 0, sending: false, reading: false};
   liveTasksSync();
   if (data?.task?.conversation_id) state.cid = data.task.conversation_id;
-  if (data) taskCommentsRender(state, data); else await taskChatRead(state);
+  if (data) { await taskStagesFor(data); taskCommentsRender(state, data); } else await taskChatRead(state);
   if (!taskChatCurrent(state) || state.stopped) return;
   taskJumpPending(state);
   // Without live events, the poll they replaced.

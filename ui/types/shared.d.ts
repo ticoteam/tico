@@ -409,6 +409,8 @@ interface LastRead {
   hours?: BotHours | null;
   /** The Dashboard's places, keyed by the place's key. */
   places?: Record<string, DashView>;
+  /** The Tasks page's last read, of the view it names (tasks-page.ts tasksLoad). */
+  tasks?: {view: string; needs: NeedsEntry[]; tasks: TaskBriefV3[]} | null;
   [page: string]: unknown;
 }
 

@@ -492,7 +492,16 @@ async function pageBot(slug: string, tab: string | undefined) {
   $('#pane-tasks').querySelectorAll('.rail-fold>summary').forEach((sum: Element) => sum.addEventListener('mousedown', ev => ev.preventDefault()));
   $('#pane-tasks').addEventListener('click', (ev: MouseEvent) => {
     const tabButton = eventElement(ev)?.closest<HTMLElement>('[data-bot-task-tab]');
-    if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); }
+    if (tabButton) { BOT_TASK_TAB.set(slug, tabButton.dataset.botTaskTab); botTaskTabShow(slug, tabButton.dataset.botTaskTab, true); return; }
+    // A task row opens: in Needs you, its card over the rail; else the task.
+    const task = eventElement(ev)?.closest<HTMLElement>('.tpane [data-task]')?.dataset.task;
+    if (!task) return;
+    const need = eventElement(ev)?.closest('#t-needs') ? botNeeds(slug).find(it => botNeedTaskId(it) === task) : null;
+    if (!need || !decideOpen(String(need.id))) taskModalOpen(task);
+  });
+  $('#pane-tasks').addEventListener('keydown', (ev: KeyboardEvent) => {
+    const row = eventElement(ev)?.closest<HTMLElement>('.tpane [data-task]');
+    if ((ev.key === 'Enter' || ev.key === ' ') && row && row === eventElement(ev)) { ev.preventDefault(); row.click(); }
   });
   $('#pane-tasks .bot-task-tabs').addEventListener('keydown', (ev: KeyboardEvent) => botTaskTabKey(slug, ev));
   $('#pane-tasks .bot-task-tabs').addEventListener('wheel', botTaskTabWheel, {passive: false});
