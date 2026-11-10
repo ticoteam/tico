@@ -1,6 +1,7 @@
-/* ui/app/pipeline-editor.ts — The pipeline editor (docs/pipelines-v3.md S11): a pipeline's Goal, Manager, Factory, Prefix
-   and Private, then its stages, one panel each, closed until clicked. A stage has Purpose, Owner, how tasks leave, a Limit,
-   an Expected time, and the requirements to leave it. Done and Closed are not listed: every pipeline ends in them.
+/* ui/app/pipeline-editor.ts — The pipeline editor (docs/pipelines-v3.md S11): a pipeline's Goal, Manager, Factory and
+   Prefix (no Private: pipeline_settings refuses a private pipeline until one is defined), then its stages, one panel
+   each, closed until clicked. A stage has Purpose, Owner, how tasks leave, a Limit, an Expected time, and the
+   requirements to leave it. Done and Closed are not listed: every pipeline ends in them.
    It opens from a stage's header (that stage open) or the page's edit button, for whoever may change the pipeline.
    The whole record is read (GET /api/v2/pipelines/{id}) and saved at once (POST, with the settings_version it was read
    at). When someone else saved first, the editor says what they changed and lets the person load theirs or save theirs
@@ -125,8 +126,7 @@ function peBodyHTML(state: PeState): string {
   const fields = peF('Goal', `<input data-pe-pf="goal" maxlength="300" value="${esc(d.goal)}" autocomplete="off">`)
     + peF('Manager', `<select data-pe-pf="manager_id">${peChoice(peBots(), d.manager_id, 'Not set')}</select>`)
     + (state.factories ? peF('Factory', `<select data-pe-pf="factory_id">${peChoice(factories, d.factory_id, 'None')}</select>`) : '')
-    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" autocomplete="off">`)
-    + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-pf="private"${d.private ? ' checked' : ''}> Private</label>`;
+    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" autocomplete="off">`);
   const stages = d.stages.map((s, i) => peStageHTML(state, s, i, d.stages.length)).join('');
   return `${peClashHTML(state)}<div class="pe-fields">${fields}</div><div class="pe-stages">${stages}</div>`
     + `<p class="err" role="alert" data-pe-error${state.error ? '' : ' hidden'}>${esc(state.error)}</p>`
@@ -154,7 +154,6 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
   if (pf) {
     if (pf === 'goal') d.goal = value;
     else if (pf === 'prefix') d.prefix = value.trim() || null;
-    else if (pf === 'private') d.private = checked;
     else if (pf === 'manager_id') d.manager_id = value || null;
     else if (pf === 'factory_id') d.factory_id = value || null;
     return;
