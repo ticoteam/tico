@@ -221,7 +221,7 @@ def _task_readable(c, actor, task_id, cache):
 
 def view_for(c, actor, type_, subject, data, cache):
     """`data` as this person may have it, or None when none of it is theirs. The event's own rules, one per group:
-    a task by the task's privacy, a Needs-you item by who it is for, a bot by who may
+    a task by the task's privacy, a bot by who may
     read it; Health and inbound mail are for owners and admins; the rest is company-wide."""
     if _left(c, actor, cache):
         return None
@@ -232,8 +232,6 @@ def view_for(c, actor, type_, subject, data, cache):
     # custom event about one.
     if H.task(c, subject) and not _task_readable(c, actor, subject, cache):
         return None
-    if group == "needs_you":
-        return data if data.get("to") == actor else None
     if group == "bot":
         auth, who = _state["auth"], _identity(c, actor, cache)
         if auth and who:
