@@ -358,10 +358,46 @@ class Deployer:
                 "The starter plan and install settings exceed AWS Parameter Store's 8 KB limit. "
                 + starter.IMPORT_IN_APP
             )
-        self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
+        tags = self.param_tags()
+        if tags is not None and not self.n.is_ours(tags, self.p.name):
+            raise not_ours("SSM parameter", self.param_name, self.n, self.p.name)
+        if tags is None:  # created, never overwritten: one made meanwhile by someone else fails here
+            self.ssm.put_parameter(
+                Name=self.param_name,
+                Value=env_text,
+                Type="SecureString",
+                Overwrite=False,
+                Tags=self.n.tags(self.p.name),
+                **tier,
+            )
+        else:
+            self.ssm.put_parameter(Name=self.param_name, Value=env_text, Type="SecureString", Overwrite=True, **tier)
         self.ssm.add_tags_to_resource(
             ResourceType="Parameter", ResourceId=self.param_name, Tags=self.n.tags(self.p.name)
         )
+
+    def param_tags(self) -> list[dict] | None:
+        """The settings parameter's tags; None when there is no such parameter."""
+        try:
+            return self.ssm.list_tags_for_resource(ResourceType="Parameter", ResourceId=self.param_name)["TagList"]
+        except self.ssm.exceptions.InvalidResourceId:
+            return None
+
+    def role_tags(self) -> list[dict] | None:
+        try:
+            return self.iam.list_role_tags(RoleName=self.n.resource(self.p.name))["Tags"]
+        except self.iam.exceptions.NoSuchEntityException:
+            return None
+
+    def preflight(self) -> None:
+        """Reads only, before setup's first write: every fixed name this install takes is free or already its own.
+        Something else of that name is refused here, so nothing is created, changed or tagged first."""
+        tags = self.param_tags()
+        if tags is not None and not self.n.is_ours(tags, self.p.name):
+            raise not_ours("SSM parameter", self.param_name, self.n, self.p.name)
+        tags = self.role_tags()
+        if tags is not None and not self.n.is_ours(tags, self.p.name):
+            raise not_ours("IAM role", self.n.resource(self.p.name), self.n, self.p.name)
 
     def ensure_plan_bucket(self, s3, region: str) -> None:
         """Configure only setup's dedicated bucket, in the installer's account. Never adopt an unrelated bucket.

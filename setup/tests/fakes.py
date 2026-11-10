@@ -87,6 +87,9 @@ class _Exc:
     class InvocationDoesNotExist(Exception):
         pass
 
+    class ParameterAlreadyExists(Exception):
+        pass
+
 
 class FakeWaiter:
     def wait(self, **kw):
@@ -194,8 +197,9 @@ class FakeSSM:
     exceptions = _Exc
 
     def __init__(self, param_tags=None, ready=True):
+        # param_tags: every parameter exists with these tags (None: none exists until put); params: the ones put here.
         self.calls, self.param_tags, self.ready = [], param_tags, ready
-        self.commands = []
+        self.commands, self.params = [], {}
 
     def called(self, name):
         return [kw for n, kw in self.calls if n == name]
@@ -205,14 +209,21 @@ class FakeSSM:
 
     def put_parameter(self, **kw):
         self.calls.append(("put_parameter", kw))
+        if kw["Name"] in self.params and not kw.get("Overwrite"):
+            raise _Exc.ParameterAlreadyExists()
+        self.params[kw["Name"]] = kw.get("Tags") or self.params.get(kw["Name"], [])
 
     def add_tags_to_resource(self, **kw):
         self.calls.append(("add_tags_to_resource", kw))
+        self.params[kw["ResourceId"]] = kw["Tags"]
 
     def delete_parameter(self, **kw):
         self.calls.append(("delete_parameter", kw))
+        self.params.pop(kw["Name"], None)
 
     def list_tags_for_resource(self, **kw):
+        if kw.get("ResourceId") in self.params:
+            return {"TagList": self.params[kw["ResourceId"]]}
         if self.param_tags is None:
             raise _Exc.InvalidResourceId()
         return {"TagList": self.param_tags}

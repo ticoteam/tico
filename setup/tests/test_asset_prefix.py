@@ -443,15 +443,8 @@ def two_installs():
     iam = IAM()
     iam.roles = {"tico-hotmic": TICO_TAGS, "hub-hotmic": HUB_TAGS}
 
-    class Ssm(fakes.FakeSSM):
-        params = {"/tico/hotmic/env": TICO_TAGS, "/hub/hotmic/env": HUB_TAGS}
-
-        def list_tags_for_resource(self, **kw):
-            if kw["ResourceId"] not in self.params:
-                raise self.exceptions.InvalidResourceId()
-            return {"TagList": self.params[kw["ResourceId"]]}
-
-    ssm = Ssm()
+    ssm = fakes.FakeSSM()
+    ssm.params = {"/tico/hotmic/env": TICO_TAGS, "/hub/hotmic/env": HUB_TAGS}
     d = fakes.deps()
     d.aws_clients = lambda region, profile: (ec2, iam, ssm, ACCOUNT)
     return d, ec2, iam, ssm
@@ -827,3 +820,34 @@ def test_a_name_other_than_the_domains_saved_one_is_refused_before_any_aws_call(
     assert code == 2 and "old.example.com is set up with --name old-example-com" in out, out
     code, out = go(["destroy", "--domain", "old.example.com", "--name", "old-example-com", "--yes"], deps=d)
     assert code == 0 and "Nothing tagged" in out, out
+
+
+READS = ("describe_", "list_", "get_", "head_")
+
+
+def test_an_ssm_parameter_setup_did_not_make_is_refused_before_any_write(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    ssm.params["/hub/hotmic/env"] = []  # someone else's, untagged
+    code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)
+    assert code == 2 and "SSM parameter /hub/hotmic/env already exists and was not made by this setup" in out, out
+    assert "Pick another --name or --asset-prefix." in out
+    assert [n for n, _ in log if not n.startswith(READS)] == []
+    # The deployer on its own never overwrites or tags it either.
+    p = aws.plan_aws(domain=DOMAIN, front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
+    dep = aws.Deployer(p, ec2, iam, ssm, ACCOUNT, say=lambda m: None, sleep=lambda s: None)
+    with pytest.raises(MissingInput, match="SSM parameter /hub/hotmic/env"):
+        dep.put_env("X=1\n")
+    assert not ssm.called("put_parameter") and not ssm.called("add_tags_to_resource")
+    # A missing one is created without overwrite, tagged in the same call.
+    del ssm.params["/hub/hotmic/env"]
+    dep.put_env("X=1\n")
+    (put,) = ssm.called("put_parameter")
+    assert put["Overwrite"] is False and put["Tags"] == HUB_TAGS
+
+
+def test_an_iam_role_setup_did_not_make_is_refused_before_any_write(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    iam.roles["hub-hotmic"] = [{"Key": "team", "Value": "production"}]
+    code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)
+    assert code == 2 and "IAM role hub-hotmic already exists and was not made by this setup" in out, out
+    assert [n for n, _ in log if not n.startswith(READS)] == []

@@ -788,6 +788,10 @@ def run(args, io: IO, deps: Deps) -> int:
     if not kept and s.asset_prefix != awsmod.DEFAULT_PREFIX:
         # Before the first AWS write: a retry after a failure from here on keeps the prefix without the flag.
         state.save(s.domain, s.public())
+    if s.target == "aws":
+        # Before the first write, backup storage included: a name something else holds stops the run here.
+        ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
+        awsmod.Deployer(aws_plan(s), ec2, iam, ssm, account, say=io.say, sleep=deps.sleep).preflight()
     if not provision_backup(io, s, deps, cf):
         return 1
     if s.front_door == "cloudflared":

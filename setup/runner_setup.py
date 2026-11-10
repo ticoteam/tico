@@ -340,6 +340,7 @@ def run_runner(args, io: IO, deps: Deps) -> int:
         plan = _aws_plan(s, label)
         ec2, iam, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
         d = awsmod.Deployer(plan, ec2, iam, ssm, account, say=io.say, sleep=deps.sleep)
+        d.preflight()
         existing = d.find_instance()
         if existing:
             io.say(f"  {existing['InstanceId']} already exists for this name; not creating a second one.")
