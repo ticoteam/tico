@@ -1802,3 +1802,30 @@ def test_an_elastic_ip_is_attached_only_after_a_fresh_read_and_never_forced():
         with pytest.raises(MissingInput, match="Elastic IP eip-hub"):
             strict_dep(p, ec2, fakes.FakeIAM(), fakes.FakeSSM(), ids=ids).associate("eip-hub", "i-hub")
         assert not ec2.called("associate_address")
+
+
+def test_backup_storage_holds_to_the_server_installs_record_of_its_user(tmp_path):
+    # Review 4, finding 4: backup-storage checked only backup.json. Without it, a user deleted and made again with the
+    # same tags got the policy and a key; and the two records may disagree.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    made = state.load(DOMAIN)[0]["aws_ids"]["backup_user"]
+    user = iam.users["hub-backup-hotmic"]
+    iam.users["hub-backup-hotmic"] = {**user, "UserId": "AIDAREMADE"}  # deleted and made again, same tags
+    bs = ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"]
+    keys = len(iam.called("create_access_key"))
+    code, out = go(bs, deps=d)
+    assert code == 2 and "IAM user hub-backup-hotmic" in out, out
+    assert len(iam.called("create_access_key")) == keys and len(iam.called("put_user_policy")) == 1
+    iam.users["hub-backup-hotmic"] = user
+    state.save_backup(DOMAIN, {**state.load_backup(DOMAIN), "aws_ids": {"backup_user": "AIDAOTHER"}})
+    before = len(log)
+    code, out = go(bs, deps=d)
+    assert code == 2 and f"backup.json has backup_user AIDAOTHER, the server install's state.json {made}" in out, out
+    assert len(log) == before
+    # Agreeing records: storage made here is recorded in both.
+    state.save_backup(DOMAIN, {**state.load_backup(DOMAIN), "aws_ids": {}})
+    assert go(bs, deps=d)[0] == 0
+    assert (
+        state.load_backup(DOMAIN)["aws_ids"]["backup_user"] == made == state.load(DOMAIN)[0]["aws_ids"]["backup_user"]
+    )

@@ -293,15 +293,32 @@ def _backup_storage_strict(args, io: IO, deps: Deps, domain: str, saved: dict, m
     record = {**mine, "asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region}
     record["aws_account_id"], record["install_id"] = account, install_id
     ids = record.setdefault("aws_ids", {})
-    # The server install's journal holds what its own run made of the storage (its bucket and backup user).
+    # The server install's journal holds what its own run made of the storage (its bucket and backup user): both
+    # records must agree, and what either recorded is what this run holds to.
     theirs = saved.get("aws_ids") or {}
-    for kind in ("backup_bucket", "backup_user"):
+    kinds = ("backup_bucket", "backup_user")
+    for kind in kinds:
+        if ids.get(kind) and theirs.get(kind) and ids[kind] != theirs[kind]:
+            raise MissingInput(
+                f"The two records of {domain}'s backup storage disagree: backup.json has {kind} {ids[kind]}, the server "
+                f"install's state.json {theirs[kind]}. Refusing to change anything; check by hand in S3 and IAM which "
+                "one is this install's, and fix the other record."
+            )
         if theirs.get(kind) and not ids.get(kind):
             ids[kind] = theirs[kind]
         intent = (theirs.get("intents") or {}).get(kind)
         if intent and not ids.get(kind):
             ids.setdefault("intents", {})[kind] = intent
     state.save_backup(domain, record)
+
+    def save() -> None:
+        state.save_backup(domain, record)
+        server = state.load(domain)[0]
+        if saved and server.get("install_id") == install_id:  # the server install's record says the same
+            journal = dict(server.get("aws_ids") or {})
+            journal.update({k: ids[k] for k in kinds if ids.get(k)})
+            state.save(domain, {**server, "aws_ids": journal})
+
     return owned.create_s3(
         deps.aws_s3(args.aws_region, args.aws_profile),
         iam,
@@ -312,7 +329,7 @@ def _backup_storage_strict(args, io: IO, deps: Deps, domain: str, saved: dict, m
         say=io.say,
         names=names,
         ids=ids,
-        save=lambda: state.save_backup(domain, record),
+        save=save,
     )
 
 
