@@ -270,7 +270,8 @@ def session(conn, turn_id, session):
 
 def turn_result(conn, actor, row, outcome, event, to=None):
     """Write the one `turn.outcome` event for the run that delivered `row`'s result (the task as it was before this
-    change, or as it is when it just reached Done), when `actor` is neither its owner bot nor Tico. An open task counts
+    change, or as it is when it just reached Done), when `actor` is neither its owner bot nor Tico: the owner bot's run,
+    else the latest run of the bot that worked it before (a person's OK in a stage another bot owns). An open task counts
     only for `overridden` (given to someone else). `event` is H.event (this module is below hubdb). Returns the event
     row, or None when there is no result, no run, or the run already has its outcome."""
     from .hubdb_core import KEEPER
@@ -294,10 +295,13 @@ def turn_result(conn, actor, row, outcome, event, to=None):
         if status in RESULT_STATES
         else None
     )
+    # The run that produced the result: the owner bot's latest, else (a stage that gave the task to another bot, which
+    # never ran on it) the latest of the bot that did the work before. Never a run of the bot that acts now.
+    by = str(actor)[4:] if str(actor).startswith("bot:") else ""
     turn = conn.execute(
-        "SELECT id FROM attempts WHERE bot_id=? AND task_id=? AND (job_id IS NULL OR trigger IS NOT NULL) "
-        "AND (? IS NULL OR created_at<=?) ORDER BY created_at DESC LIMIT 1",
-        (owner[4:], row["id"], reached, reached),
+        "SELECT id FROM attempts WHERE task_id=? AND bot_id<>? AND (job_id IS NULL OR trigger IS NOT NULL) "
+        "AND (? IS NULL OR created_at<=?) ORDER BY bot_id=? DESC, created_at DESC LIMIT 1",
+        (row["id"], by, reached, reached, owner[4:]),
     ).fetchone()
     if (
         not turn
