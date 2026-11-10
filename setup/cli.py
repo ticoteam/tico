@@ -119,9 +119,9 @@ def parser() -> argparse.ArgumentParser:
         "--asset-prefix",
         metavar="PREFIX",
         help="AWS: the word every AWS name, tag and path setup makes starts with, in place of tico (1 to 10 lowercase "
-        "letters, digits and dashes, starting with a letter). Saved with the install the first time; later runs, "
-        "runner, doctor, destroy and backup-storage read it from there and refuse a different one. Names on the server "
-        "itself (/opt/tico, containers) stay",
+        "letters, digits and dashes, starting with a letter). Saved with the install the first time; every later command "
+        "that changes it (runs, runner, destroy, backup-storage, owner-link) must name it again and is refused without "
+        "it or with another; doctor reads it. Names on the server itself (/opt/tico, containers) stay",
     )
     p.add_argument(
         "--confirm-dns",
@@ -242,7 +242,7 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     domain = args.domain.lower()
     saved = state.record(state.load(domain)[0])
     mine = state.record(state.load_backup(domain))  # an earlier strict-mode backup-storage for this domain
-    prefix = awsmod.asset_prefix(args.asset_prefix, saved or mine)
+    prefix = awsmod.asset_prefix(args.asset_prefix, saved or mine, what=domain)
     owned.check_mode(
         domain, getattr(args, "name", None) or awsmod.saved_name(saved) or awsmod.slug(domain), prefix, saved
     )

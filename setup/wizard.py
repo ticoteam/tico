@@ -1457,7 +1457,10 @@ def finish(io: IO, s: Settings, deps: Deps, records, runner: remote.Shell | None
         if s.auth == st.OWNER_LINK:
             io.say(
                 f"\nDone. The owner's sign-in link is in {hosted.link_file(s.domain)} (0600): send it to {s.owner_email}. "
-                "It works once, for a week; `python3 -m setup owner-link --domain " + s.domain + "` makes a new one."
+                "It works once, for a week; `python3 -m setup owner-link --domain "
+                + s.domain
+                + (f" --asset-prefix {s.asset_prefix}" if owned.strict(s.asset_prefix) else "")
+                + "` makes a new one."
             )
         elif s.hosted:
             io.say(
@@ -1519,7 +1522,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
     saved, env_text = state.load(domain)
     if not saved:
         raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
-    prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)  # refuses a different one
+    prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved, read_only=True)  # refuses a different one
     if owned.strict(prefix):
         owned.check_mode(domain, awsmod.saved_name(saved), prefix, saved)
     s = st.from_saved(saved, env_text)

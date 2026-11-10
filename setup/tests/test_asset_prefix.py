@@ -323,15 +323,26 @@ def test_hub_backup_storage_takes_name_and_otherwise_the_saved_one(monkeypatch):
     d.aws_s3 = lambda region, profile: s3
     argv = ["backup-storage", "--domain", "tico.example.com", "--aws-region", "us-west-2"]
     assert go([*argv, "--name", "acme", "--asset-prefix", "hub"], deps=d)[0] == 0
-    assert go(argv, deps=d)[0] == 0  # its own saved name and prefix
+    code, out = go(argv, deps=d)  # a hub install named again without its prefix: refused before any AWS call
+    assert code == 2 and "Run the command again with --asset-prefix hub" in out, out
+    assert go([*argv, "--asset-prefix", "hub"], deps=d)[0] == 0  # its own saved name
     assert state.load_backup("tico.example.com")["name"] == "acme"
     other = {"domain": "other.example.com", "aws_name": "saved-name", "asset_prefix": "hub", "install_id": INSTALL}
     state.save("other.example.com", {**other, "target": "aws", "aws_region": "us-west-2"})
-    assert go(["backup-storage", "--domain", "other.example.com", "--aws-region", "us-west-2"], deps=d)[0] == 0
+    other_argv = [
+        "backup-storage",
+        "--domain",
+        "other.example.com",
+        "--aws-region",
+        "us-west-2",
+        "--asset-prefix",
+        "hub",
+    ]
+    assert go(other_argv, deps=d)[0] == 0
     assert [c["UserName"] for c in iam.called("create_user")] == ["hub-backup-acme", "hub-backup-saved-name"]
-    code, out = go([*argv, "--name", "other"], deps=d)
+    code, out = go([*argv, "--asset-prefix", "hub", "--name", "other"], deps=d)
     assert code == 2 and "tico.example.com is set up with --name acme" in out
-    code, out = go([*argv, "--name", "Not_A_Name"], deps=d)
+    code, out = go([*argv, "--asset-prefix", "hub", "--name", "Not_A_Name"], deps=d)
     assert code == 2 and "--name is 1 to 40" in out
 
 
@@ -359,9 +370,16 @@ HUB_IDS = {
 def test_the_prefix_is_checked_and_a_saved_one_wins():
     assert aws.asset_prefix(None, {}) == "tico" and aws.asset_prefix("hub", {}) == "hub"
     assert aws.asset_prefix(None, {"domain": "x"}) == "tico"  # saved before the flag existed: tico names
-    assert aws.asset_prefix(None, {"asset_prefix": "hub"}) == aws.asset_prefix("hub", {"asset_prefix": "hub"}) == "hub"
-    with pytest.raises(MissingInput, match="named with --asset-prefix hub, and it cannot change"):
-        aws.asset_prefix("tico", {"asset_prefix": "hub"})
+    assert aws.asset_prefix("hub", {"asset_prefix": "hub"}) == "hub"
+    # A strict install's prefix must be named again by every command that changes it; only doctor reads it saved.
+    assert aws.asset_prefix(None, {"asset_prefix": "hub"}, read_only=True) == "hub"
+    for given in (None, "tico", "other"):
+        with pytest.raises(
+            MissingInput, match="set up with --asset-prefix hub, and every command .* --asset-prefix hub"
+        ):
+            aws.asset_prefix(given, {"asset_prefix": "hub"})
+    with pytest.raises(MissingInput, match="set up with --asset-prefix hub"):
+        aws.asset_prefix("tico", {"asset_prefix": "hub"}, read_only=True)  # a different one: refused even there
     with pytest.raises(MissingInput, match="named with --asset-prefix tico"):
         aws.asset_prefix("hub", {"domain": "x"})
     for ok in ("a", "hub", "acme-2", "abcdefghij"):
@@ -598,7 +616,11 @@ def deleted(ec2, iam, ssm):
     [
         (["--name", "hotmic", "--asset-prefix", "tico", "--aws-region", "us-east-1"], "tico", "hub"),
         (["--name", "hotmic", "--asset-prefix", "hub", "--aws-region", "us-east-1"], "hub", "tico"),
-        (["--domain", "hub.hotmicapp.com"], "hub", "tico"),  # the saved install's prefix, account and region
+        (
+            ["--domain", "hub.hotmicapp.com", "--asset-prefix", "hub"],
+            "hub",
+            "tico",
+        ),  # the saved install's account, region
         # saved before the flag (and the account) existed: named in full
         (
             ["--domain", "old.example.com", "--name", "hotmic", "--asset-prefix", "tico", "--aws-region", "us-east-1"],
@@ -761,9 +783,9 @@ def test_a_hub_install_sends_no_tico_in_any_aws_name_tag_path_policy_or_bucket(t
     code, out = go(argv, deps=d)
     assert code == 0, out
     assert state.load(DOMAIN)[0]["asset_prefix"] == "hub"
-    code, out = go(argv[: argv.index("--asset-prefix")], deps=d)  # the re-run, without the flag
+    code, out = go(argv, deps=d)  # the re-run, naming its prefix again
     assert code == 0 and "already exists; reusing it" in out, out
-    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes", "--asset-prefix", "hub"], deps=d)
     assert code == 0 and "Tagged hub-setup-name=hotmic in us-west-2:" in out, out
     assert "IAM user (hub-backup-hotmic)" in out
     sent = {name for name, _ in log}
@@ -814,10 +836,13 @@ def test_later_runs_read_the_saved_prefix_and_refuse_another(tmp_path):
         ["runner", "--cloud", "aws", "--server-url", f"https://{DOMAIN}", "--label", "b1", "--asset-prefix", "tico"],
     ):
         code, out = go([*argv, "--non-interactive"] if argv[0] in ("doctor", "runner") else argv, deps=d)
-        assert code == 2 and "named with --asset-prefix hub, and it cannot change" in out, (argv, out)
+        assert code == 2 and "set up with --asset-prefix hub" in out, (argv, out)
+        assert "Run the command again with --asset-prefix hub" in out, (argv, out)
     assert len(log) == before  # refused before any AWS call
-    # backup-storage, from the same computer: the saved prefix and name.
-    assert go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"], deps=d)[0] == 0
+    # backup-storage, from the same computer: the saved name.
+    assert (
+        go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2", "--asset-prefix", "hub"], deps=d)[0] == 0
+    )
     assert iam.called("create_user")[-1]["UserName"] == "hub-backup-hotmic"
     # The runner of that server: its plan uses the saved prefix.
     code, out = go(
@@ -831,6 +856,8 @@ def test_later_runs_read_the_saved_prefix_and_refuse_another(tmp_path):
             f"https://{DOMAIN}",
             "--label",
             "b1",
+            "--asset-prefix",
+            "hub",
         ],
         deps=d,
     )
@@ -862,9 +889,11 @@ def test_a_hub_runner_saves_its_prefix_and_keeps_it(monkeypatch):
     assert state.load_runners()[0]["asset_prefix"] == "hub"
     assert ssm.called("put_parameter")[0]["Name"] == "/hub/runner-b1/env"
     assert iam.called("create_role")[0]["RoleName"] == "hub-runner-b1"
-    code, out = go([*argv, "--asset-prefix", "tico"], deps=d)
-    assert code == 2 and "named with --asset-prefix hub" in out
-    assert go(argv, deps=d)[0] == 0 and ssm.called("put_parameter")[-1]["Name"] == "/hub/runner-b1/env"
+    for other in (["--asset-prefix", "tico"], []):
+        code, out = go([*argv, *other], deps=d)
+        assert code == 2 and "set up with --asset-prefix hub" in out, out
+    assert go([*argv, "--asset-prefix", "hub"], deps=d)[0] == 0
+    assert ssm.called("put_parameter")[-1]["Name"] == "/hub/runner-b1/env"
 
 
 # --- never touch what this setup did not make ---------------------------------------------------------------------
@@ -910,7 +939,7 @@ def test_a_runner_takes_its_own_servers_prefix_not_another_servers_runner_of_the
     state.save(DOMAIN, {"domain": DOMAIN, "aws_name": "hotmic", "asset_prefix": "hub"})
     d, ec2, iam, ssm, s3, log = hub_world()
     argv = ["runner", "--non-interactive", "--cloud", "aws", "--server-url", f"https://{DOMAIN}", "--label", "b1"]
-    argv += ["--aws-region", "us-west-2"]
+    argv += ["--aws-region", "us-west-2", "--asset-prefix", "hub"]
     code, out = go([*argv, "--dry-run"], deps=d)
     assert code == 0 and "Security group hub-runner-b1:" in out, out
     assert go([*argv, "--yes"], deps=d)[0] == 0
@@ -1106,7 +1135,9 @@ def test_a_hub_runner_that_fails_at_launch_keeps_its_prefix_for_the_retry(monkey
     io = fakes.CaptureIO()
     assert not runner_setup.doctor_runners(io, d, "https://other.example") and "not launched yet" in io.text
     del ec2.run_instances  # the capacity is back
-    assert go(argv, deps=d)[0] == 0
+    code, out = go(argv, deps=d)  # the retry without the flag: refused, nothing sent
+    assert code == 2 and "Run the command again with --asset-prefix hub" in out, out
+    assert go([*argv, "--asset-prefix", "hub"], deps=d)[0] == 0
     assert {c["Name"] for c in ssm.called("put_parameter")} == {"/hub/runner-b1/env"}
     assert state.load_runners()[0]["instance_id"] == "i-1"
 
@@ -1129,11 +1160,12 @@ def test_backup_storage_saves_its_prefix_before_provisioning_and_keeps_it():
     assert made[0].called("create_bucket")[0]["Bucket"].startswith("hub-backup-laptop-example-com-")
     d.aws_s3 = lambda region, profile: made[0]
     del made[0].put_bucket_policy
-    code, out = go(argv, deps=d)  # the retry, without the flag
+    for other in ([], ["--asset-prefix", "tico"]):  # the retry must name its prefix again
+        code, out = go([*argv, *other], deps=d)
+        assert code == 2 and "Run the command again with --asset-prefix hub" in out, out
+    code, out = go([*argv, "--asset-prefix", "hub"], deps=d)
     assert code == 0 and "s3://hub-backup-laptop-example-com-" in out, out
     assert [c["UserName"] for c in iam.called("create_user")] == ["hub-backup-laptop-example-com"]
-    code, out = go([*argv, "--asset-prefix", "tico"], deps=d)
-    assert code == 2 and "named with --asset-prefix hub" in out
     assert state.load("laptop.example.com") == ({}, "")  # no server state is made or changed for it
     assert state.known_domains() == []
 
@@ -1147,7 +1179,7 @@ def test_a_prompted_domain_restores_its_whole_saved_install(tmp_path):
     d, ec2, iam, ssm, s3, log = hub_world()
     assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
     io = StopAtPlan(interactive=True, answers=["", DOMAIN])  # the target's default, then the domain
-    code, out = go([], deps=d, io=io)
+    code, out = go(["--asset-prefix", "hub"], deps=d, io=io)
     assert code == 1 and "Stopped; nothing was changed." in out, out
     assert f"Resuming from the last run for {DOMAIN}" in out
     assert "Security group hub-hotmic:" in out and "SSM SecureString /hub/hotmic/env" in out, out
@@ -1165,15 +1197,17 @@ def test_an_install_keeps_its_aws_account_and_region_and_destroy_never_guesses_t
     # Another account (the same tags could be another install there) or another region: refused before any call.
     d.aws_clients = lambda region, profile: (Spy(ec2, log), Spy(iam, log), Spy(ssm, log), "999999999999")
     log.clear()
-    code, out = go(hub_args(tmp_path), deps=d)
+    code, out = go(hub_args(tmp_path, "--asset-prefix", "hub"), deps=d)
     assert code == 2 and f"set up in AWS account {HOTMIC_ACCOUNT}" in out, out
-    code, out = go(["destroy", "--domain", DOMAIN, "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--yes"], deps=d)
     assert code == 2 and f"set up in AWS account {HOTMIC_ACCOUNT}" in out, out
     assert not [c for c, _ in log if not c.startswith(READS)]
     d.aws_clients = lambda region, profile: (Spy(ec2, log), Spy(iam, log), Spy(ssm, log), HOTMIC_ACCOUNT)
-    code, out = go([*hub_args(tmp_path), "--aws-region", "us-east-1"], deps=d)
+    code, out = go([*hub_args(tmp_path, "--asset-prefix", "hub"), "--aws-region", "us-east-1"], deps=d)
     assert code == 2 and "in us-west-2" in out and "cannot change" in out, out
-    code, out = go(["destroy", "--domain", DOMAIN, "--aws-region", "us-east-1", "--yes"], deps=d)
+    code, out = go(
+        ["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--aws-region", "us-east-1", "--yes"], deps=d
+    )
     assert code == 2 and "in us-west-2" in out, out
     assert not [c for c, _ in log if not c.startswith(READS)]
 
@@ -1196,7 +1230,7 @@ def test_an_install_saved_before_the_account_was_adopts_it_once_after_the_tag_pr
     saved = state.load(DOMAIN)[0]
     del saved["aws_account_id"]
     state.save(DOMAIN, saved)
-    assert go(hub_args(tmp_path), deps=d)[0] == 0
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub"), deps=d)[0] == 0
     assert state.load(DOMAIN)[0]["aws_account_id"] == HOTMIC_ACCOUNT
 
 
@@ -1216,7 +1250,7 @@ def test_a_runner_and_backup_storage_keep_their_aws_account(monkeypatch):
     assert code == 2 and f"set up in AWS account {HOTMIC_ACCOUNT}" in out, out
     code, out = go(bs, deps=d)
     assert code == 2 and f"set up in AWS account {HOTMIC_ACCOUNT}" in out, out
-    code, out = go(["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-east-1"], deps=d)
+    code, out = go([*bs[:4], "us-east-1", "--asset-prefix", "hub"], deps=d)
     assert code == 2 and "set up in us-west-2" in out, out
     assert not [c for c, _ in log if not c.startswith(READS)]
 
@@ -1273,7 +1307,7 @@ def saved_install(domain="x.example.com", prefix="hub", **extra):
     """A whole install saved with an install id, as a new install saves it."""
     rec = {"domain": domain, "target": "aws", "aws_name": "hotmic", "aws_region": "us-east-1", "asset_prefix": prefix}
     state.save(domain, {**rec, "aws_account_id": ACCOUNT, "install_id": INSTALL, "aws_ids": HUB_IDS, **extra})
-    return ["destroy", "--domain", domain, "--yes"]
+    return ["destroy", "--domain", domain, "--yes", *(["--asset-prefix", prefix] if prefix != "tico" else [])]
 
 
 @pytest.mark.parametrize("kind", ["volume", "network interface"])
@@ -1368,7 +1402,7 @@ def test_a_matching_record_setup_did_not_make_is_left_alone_and_never_deleted(tm
     assert code == 0, out
     assert r53.records == [manual] and not r53.called("change_resource_record_sets")  # TTL kept, nothing written
     assert state.load(DOMAIN)[0].get("dns_records", []) == []
-    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--dns", "--yes"], deps=d)
     assert code == 0 and f"Left alone: A {DOMAIN} -> 203.0.113.9 is not the record this install made" in out, out
     assert r53.records == [manual] and not r53.called("change_resource_record_sets")
 
@@ -1459,7 +1493,7 @@ def test_two_installs_sharing_a_prefix_and_name_never_touch_each_others_resource
     assert not [n for n in writes if n in ("put_parameter", "put_role_policy", "attach_role_policy", "run_instances")]
     assert first["install_id"] and state.load(other)[0]["install_id"] != first["install_id"]
     # The first install's re-run still owns everything it made.
-    code, out = go(hub_args(tmp_path), deps=d)
+    code, out = go(hub_args(tmp_path, "--asset-prefix", "hub"), deps=d)
     assert code == 0 and "already exists; reusing it" in out, out
 
 
@@ -1546,7 +1580,7 @@ def test_a_create_whose_answer_was_lost_is_known_for_its_own_on_the_retry_and_de
     assert code == 0, out
     saved = state.load(DOMAIN)[0]
     assert saved["dns_records"] == [made] and saved.get("dns_pending", []) == []
-    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--dns", "--yes"], deps=d)
     assert code == 0 and "DNS records deleted." in out and r53.records == [], out
 
 
@@ -1671,13 +1705,15 @@ def test_backup_storage_checks_the_server_installs_account_and_region_too():
     d = fakes.deps()
     d.aws_clients = lambda region, profile: (None, iam, None, "999999999999")
     d.aws_s3 = lambda region, profile: s3
-    code, out = go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-east-1"], deps=d)
+    code, out = go(["backup-storage", "--domain", DOMAIN, "--asset-prefix", "hub", "--aws-region", "us-east-1"], deps=d)
     assert code == 2 and f"set up in AWS account {ACCOUNT}" in out, out
-    code, out = go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"], deps=d)
+    code, out = go(["backup-storage", "--domain", DOMAIN, "--asset-prefix", "hub", "--aws-region", "us-west-2"], deps=d)
     assert code == 2 and "set up in us-east-1" in out, out
     assert not iam.calls and not s3.calls and state.load_backup(DOMAIN) == {}
     d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
-    assert go(["backup-storage", "--domain", DOMAIN, "--aws-region", "us-east-1"], deps=d)[0] == 0
+    assert (
+        go(["backup-storage", "--domain", DOMAIN, "--asset-prefix", "hub", "--aws-region", "us-east-1"], deps=d)[0] == 0
+    )
     assert state.load_backup(DOMAIN)["install_id"] == INSTALL
 
 
@@ -1796,7 +1832,7 @@ def test_a_hub_install_in_us_east_1_stopped_anywhere_finishes_on_a_plain_retry_a
     saved = state.load(DOMAIN)[0]
     assert saved["aws_region"] == "us-east-1" and saved["aws_account_id"] == HOTMIC_ACCOUNT and saved["dns_records"]
     assert len([i for i in ec2.instances if i.get("State", {}).get("Name") != "terminated"]) == 1
-    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--dns", "--yes"], deps=d)
     assert code == 0 and "  left alone: " not in out and "Left alone" not in out, out
     gone = deleted(ec2, iam, ssm)
     assert len(gone["instances"]) == 1 and gone["roles"] == ["hub-hotmic"] and gone["params"] == ["/hub/hotmic/env"]
@@ -1832,7 +1868,7 @@ def test_lost_cut_short_or_edited_state_never_adopts_or_deletes_what_carries_the
     def writes():
         return [n for n, _ in log if not n.startswith(READS)]
 
-    destroy = ["destroy", "--domain", DOMAIN, "--dns", "--yes"]
+    destroy = ["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--dns", "--yes"]
     for kind in kinds:  # cut short: each recorded id lost in turn
         state.save(DOMAIN, {**good, "aws_ids": {k: v for k, v in good["aws_ids"].items() if k != kind}})
         (state.home() / DOMAIN / "backup.json").unlink(missing_ok=True)  # the other record of the storage
@@ -1841,7 +1877,7 @@ def test_lost_cut_short_or_edited_state_never_adopts_or_deletes_what_carries_the
         rerun = (
             argv
             if kind not in ("backup_bucket", "backup_user")
-            else ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"]
+            else ["backup-storage", "--domain", DOMAIN, "--asset-prefix", "hub", "--aws-region", "us-west-2"]
         )
         code, out = go(rerun, deps=d)
         assert code == 2 and "never recorded making it" in out and "Check it by hand" in out, (kind, out)
@@ -1853,7 +1889,7 @@ def test_lost_cut_short_or_edited_state_never_adopts_or_deletes_what_carries_the
     other = {k: v for k, v in good.items() if k not in ("aws_ids", "dns_records", "dns_zone_id")}
     state.save("hub2.hotmicapp.com", {**other, "domain": "hub2.hotmicapp.com"})
     before = len(writes())
-    code, out = go(["destroy", "--domain", "hub2.hotmicapp.com", "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", "hub2.hotmicapp.com", "--asset-prefix", "hub", "--yes"], deps=d)
     assert code == 2 and "nothing was deleted" in out, out
     # Lost or corrupt: no install id to prove anything with.
     (state.home() / DOMAIN / "state.json").write_text("{not json")
@@ -1888,7 +1924,7 @@ def test_lost_cut_short_or_edited_state_never_adopts_or_deletes_what_carries_the
     assert go(bs, deps=d)[0] == 0
     state.save_backup("laptop.example.com", {**state.load_backup("laptop.example.com"), "aws_ids": {}})
     before = len(writes())
-    for again in (rargv, bs[:-2]):
+    for again in (rargv, bs):
         code, out = go(again, deps=d)
         assert code == 2 and "never recorded making it" in out, (again, out)
     assert len(writes()) == before, writes()[before:]
@@ -1933,7 +1969,7 @@ def test_backup_storage_holds_to_the_server_installs_record_of_its_user(tmp_path
     made = state.load(DOMAIN)[0]["aws_ids"]["backup_user"]
     user = iam.users["hub-backup-hotmic"]
     iam.users["hub-backup-hotmic"] = {**user, "UserId": "AIDAREMADE"}  # deleted and made again, same tags
-    bs = ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"]
+    bs = ["backup-storage", "--domain", DOMAIN, "--asset-prefix", "hub", "--aws-region", "us-west-2"]
     keys = len(iam.called("create_access_key"))
     code, out = go(bs, deps=d)
     assert code == 2 and "IAM user hub-backup-hotmic" in out, out
@@ -2237,11 +2273,11 @@ def test_destroy_dns_deletes_the_recorded_records_after_the_server_is_already_go
     r53 = d.route53_client("")._inner
     assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
     assert len(r53.records) == 1 and state.load(DOMAIN)[0]["dns_records"]
-    code, out = go(["destroy", "--domain", DOMAIN, "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--yes"], deps=d)
     assert code == 0 and len(r53.records) == 1, out
     ec2.instances, ec2.sgs, ec2.eips, ssm.params = [], [], [], {}  # all of it gone now
     iam.roles, iam.profiles = {}, {}
-    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--dns", "--yes"], deps=d)
     assert code == 0 and "DNS records deleted." in out and r53.records == [], out
 
 
@@ -2267,9 +2303,9 @@ def test_a_strict_install_stays_strict_when_its_state_is_lost_or_corrupt_or_the_
             hub_args(tmp_path, "--name", "hotmic"),  # the flag left out
             hub_args(tmp_path),
             hub_args(tmp_path, "--asset-prefix", "tico", "--name", "hotmic"),
-            ["destroy", "--domain", DOMAIN, "--yes"],
-            ["destroy", "--domain", DOMAIN, "--name", "hotmic", "--yes"],
-            ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"],
+            ["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--yes"],
+            ["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--name", "hotmic", "--yes"],
+            ["backup-storage", "--domain", DOMAIN, "--asset-prefix", "hub", "--aws-region", "us-west-2"],
         ):
             code, out = go(argv, deps=d)
             assert code != 0 and "made with --asset-prefix hub" in out, (argv, out)
@@ -2286,7 +2322,9 @@ def test_a_strict_install_stays_strict_when_its_state_is_lost_or_corrupt_or_the_
     code, out = go(other, deps=d)
     assert code != 0 and "made with --asset-prefix hub" in out, out
     assert all(kw["Name"].startswith("/hub/") for kw in ssm.called("put_parameter"))
-    assert go(hub_args(tmp_path, "--name", "hotmic"), deps=d)[0] == 0  # its state intact: strict without the flag
+    code, out = go(hub_args(tmp_path, "--name", "hotmic"), deps=d)  # its state intact: the flag must be named again
+    assert code == 2 and "Run the command again with --asset-prefix hub" in out, out
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
 
 
 def test_state_is_bound_to_its_install_and_a_remote_shell_proves_its_server_first(tmp_path):
@@ -2302,14 +2340,18 @@ def test_state_is_bound_to_its_install_and_a_remote_shell_proves_its_server_firs
     before = len(writes())
     again = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
     again[again.index(DOMAIN)] = copy
-    for argv in (again, ["destroy", "--domain", copy, "--yes"], ["doctor", "--domain", copy, "--non-interactive"]):
+    destroy = ["destroy", "--domain", copy, "--asset-prefix", "hub", "--yes"]
+    for argv in (again, destroy, ["doctor", "--domain", copy, "--non-interactive"]):
         code, out = go(argv, deps=d)
         assert code != 0 and f"saved for {DOMAIN}" in out, (argv, out)
     assert len(writes()) == before
     ec2.instances.append({"InstanceId": "i-prod", "Tags": PRODUCTION, "State": {"Name": "running"}})
     for edit in ({"aws_instance_id": "i-prod"}, {"aws_account_id": "999999999999"}):
         state.save(DOMAIN, {**good, "auth": "owner-link", **edit})
-        for argv in (["owner-link", "--domain", DOMAIN], ["doctor", "--domain", DOMAIN, "--non-interactive"]):
+        for argv in (
+            ["owner-link", "--domain", DOMAIN, "--asset-prefix", "hub"],
+            ["doctor", "--domain", DOMAIN, "--non-interactive"],
+        ):
             code, out = go(argv, deps=d)
             assert code != 0 and not ssm.called("send_command")[len(ssm.called("send_command")) :], out
             assert "refusing" in out, (edit, argv, out)
@@ -2362,7 +2404,7 @@ def test_a_route53_create_that_may_have_landed_stays_pending_and_is_never_adopte
     code, out = go(argv, deps=d)
     assert code == 2 and f"A {DOMAIN} -> 203.0.113.9" in out and f"--confirm-dns {DOMAIN}" in out, out
     assert not r53.called("change_resource_record_sets")[1:] and state.load(DOMAIN)[0]["dns_pending"] == [pending]
-    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes", "--dry-run"], deps=d)
+    code, out = go(["destroy", "--domain", DOMAIN, "--asset-prefix", "hub", "--dns", "--yes", "--dry-run"], deps=d)
     assert "not confirmed" in out, out  # destroy never deletes a pending record set either
     code, out = go([*argv, "--confirm-dns", DOMAIN], deps=d)
     assert code == 0, out
@@ -2924,3 +2966,36 @@ def test_a_plan_upload_retry_never_replaces_its_recorded_version_or_adopts_an_ob
         with pytest.raises(MissingInput, match="did not record writing it"):  # nor on a re-run
             strict_dep(p, None, None, None, ids=ids).put_plan(s3, key, "ours")
         assert d.delete_plan(s3, key) == "NotWrittenByThisInstall" and ("hub-plans-x", key) in s3.objects
+
+
+def test_every_command_that_changes_a_strict_install_must_name_its_prefix_again(tmp_path, monkeypatch):
+    # Codex review 6, case 12: a saved hub install re-run without --asset-prefix went on under the saved prefix, so a
+    # command typed for a default install could act on the hub one. Each command that can change its AWS resources now
+    # refuses before opening any AWS client, without the flag or with another, and names the exact flag; doctor reads.
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    state.save(DOMAIN, {**state.load(DOMAIN)[0], "auth": "owner-link"})
+    runner = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", f"https://{DOMAIN}"]
+    runner += ["--label", "b1", "--aws-region", "us-west-2"]
+    commands = [
+        hub_args(tmp_path, "--name", "hotmic"),
+        ["destroy", "--domain", DOMAIN, "--dns", "--yes"],
+        ["backup-storage", "--domain", DOMAIN, "--aws-region", "us-west-2"],
+        runner,
+        ["owner-link", "--domain", DOMAIN],
+    ]
+    clients = d.aws_clients
+    opened = []
+    d.aws_clients = lambda region, profile: opened.append(region) or clients(region, profile)
+    d.aws_s3 = lambda region, profile: opened.append(region) or S3()
+    before = len(log)
+    for argv in commands:
+        for flag in ([], ["--asset-prefix", "tico"], ["--asset-prefix", "other"]):
+            code, out = go([*argv, *flag], deps=d)
+            assert code == 2 and f"{DOMAIN} was set up with --asset-prefix hub" in out, (argv, flag, out)
+            assert "Run the command again with --asset-prefix hub." in out, (argv, flag, out)
+    assert (len(log), opened) == (before, [])  # refused before any AWS client or call
+    code, out = go(["doctor", "--domain", DOMAIN, "--non-interactive"], deps=d)  # reads only: the saved prefix
+    assert "--asset-prefix" not in out, out

@@ -158,9 +158,11 @@ def new_install_id() -> str:
     return secrets.token_hex(8)
 
 
-def asset_prefix(given: str | None, saved: dict | None) -> str:
+def asset_prefix(given: str | None, saved: dict | None, read_only: bool = False, what: str = "") -> str:
     """--asset-prefix on the first run, then the one saved with the install: its resources are found by their names, so
-    a different one later is refused rather than applied. Saved state from before the flag means tico."""
+    a different one later is refused rather than applied. Saved state from before the flag means tico. An install saved
+    under another prefix than tico (strict mode) is acted on only when the command names that prefix again: a command
+    that changes AWS resources without it is refused before any AWS call (`read_only`: doctor, which changes none)."""
     given = (given or "").strip()
     if given and not PREFIX_RE.fullmatch(given):
         raise MissingInput(
@@ -175,6 +177,13 @@ def asset_prefix(given: str | None, saved: dict | None) -> str:
     if not saved:
         return given or DEFAULT_PREFIX
     kept = saved.get("asset_prefix") or DEFAULT_PREFIX
+    if kept != DEFAULT_PREFIX and given != kept and (given or not read_only):
+        what = what or saved.get("domain") or saved.get("server_url") or "This install"
+        raise MissingInput(
+            f"{what} was set up with --asset-prefix {kept}, and every command that changes its AWS resources must name "
+            f"it; refusing to go on {'under --asset-prefix ' + given if given else 'without it'}, and nothing was "
+            f"changed. Run the command again with --asset-prefix {kept}."
+        )
     if given and given != kept:
         raise MissingInput(
             f"This install's AWS resources are named with --asset-prefix {kept}, and it cannot change on a later run. "

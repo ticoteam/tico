@@ -42,8 +42,9 @@ token) limited to the backup bucket, in `LITESTREAM_ACCESS_KEY_ID` and `LITESTRE
 lowercase letters, digits and dashes, starting with a letter; not the starts AWS keeps: `aws`, `ssm`, `sthree`, `sg`, `sg-`,
 two dashes in a row). With `--asset-prefix hub --name acme`: tags
 `ManagedBy=hub-setup` and `hub-setup-name=acme`, resources `hub-acme`, settings `/hub/acme/env`, backup bucket
-`hub-backup-<domain>-<install id>` with user `hub-backup-acme`, starter plan bucket `hub-setup-plans-<install id>`. It is saved with the install the first time; later runs,
-`runner`, `doctor`, `destroy` and `backup-storage` read it and refuse a different one. Names on the server itself
+`hub-backup-<domain>-<install id>` with user `hub-backup-acme`, starter plan bucket `hub-setup-plans-<install id>`. It is saved with the install the first time; every later
+command that changes the install (runs, `runner`, `destroy`, `backup-storage`, `owner-link`) must name it again, and is
+refused before any AWS call without it or with a different one. `doctor` reads it. Names on the server itself
 (`/opt/tico`, the containers, `TICO_*` settings) stay.
 
 Setup never changes, reuses or deletes an AWS resource without both of its tags for this prefix and name: before its

@@ -15,7 +15,7 @@ import os
 import secrets
 import shlex
 
-from . import contract, envfile, owned, remote, settings as st, state
+from . import aws as awsmod, contract, envfile, owned, remote, settings as st, state
 from .settings import Settings
 from .ui import IO, MissingInput
 
@@ -236,6 +236,7 @@ def rotate(args, io: IO, deps) -> int:
     if not saved:
         raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
     if owned.strict(saved.get("asset_prefix", "")):  # bound to its domain and install, as every strict command
+        awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)  # named again: it changes the server
         owned.check_mode(domain, saved.get("aws_name", ""), saved["asset_prefix"], saved)
     s = st.from_saved(saved, env_text)
     if s.auth != st.OWNER_LINK and not (s.hosted and s.auth == "oidc"):
