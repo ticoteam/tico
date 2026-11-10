@@ -5127,3 +5127,129 @@ fn every_tico_call_names_this_recorder_version_and_install() {
         assert!(head.contains("authorization: bearer synthetic-token"));
     }
 }
+
+/// A live meeting's delivery as Finish leaves it: the pending import Tico made, not yet approved.
+fn pending_live(store: &Store, id: &str, source: &str) {
+    store
+        .update_context(id, |c| {
+            c.live_id = "live-fixture".into();
+            c.live_destination = "synthetic".into();
+            c.live_state = "ended".into();
+            Ok(())
+        })
+        .unwrap();
+    store
+        .delivery(
+            id,
+            &Delivery {
+                destination_id: "synthetic".into(),
+                meeting_id: "filed-fixture".into(),
+                status: "partial".into(),
+                error: String::new(),
+                receipt: json!({"source":source}),
+            },
+        )
+        .unwrap();
+}
+
+#[test]
+fn send_keeps_the_live_meetings_team_or_private_choice_through_a_lost_reply_and_a_restart() {
+    for source in ["live", "legacy-live"] {
+        for team in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Store::open(dir.path()).unwrap();
+            let record = transcript(&store, "Synthetic visibility choice");
+            pending_live(&store, &record.id, source);
+            let who = json!({"actor":"human:test"});
+            let (tico, seen, worker) = server(vec![
+                Some(who.clone()),
+                // The pending import's own default is not the choice: the live meeting is asked.
+                Some(
+                    json!({"id":"live-fixture","visibility":if team { "team" } else { "private" }}),
+                ),
+                // The approval's reply is lost.
+                None,
+                Some(who.clone()),
+                Some(json!({"id":"filed-fixture","review_state":"live"})),
+                Some(who),
+            ]);
+            assert!(tico.send(&store, &record.id, false).is_err());
+            let reopened = Store::open(dir.path()).unwrap();
+            assert_eq!(
+                tico.send(&reopened, &record.id, false).unwrap(),
+                "filed-fixture"
+            );
+            // Sent again: nothing is approved again or asked of the live meeting.
+            tico.send(&reopened, &record.id, false).unwrap();
+            worker.join().unwrap();
+            let calls = seen.lock().unwrap();
+            assert_eq!(calls.len(), 6, "{calls:?}");
+            assert_eq!(
+                calls[1].0,
+                "GET /api/v2/live-meetings/live-fixture HTTP/1.1"
+            );
+            assert!(
+                calls[2]
+                    .0
+                    .starts_with("POST /api/v2/meetings/filed-fixture/review ")
+            );
+            assert_eq!(
+                calls[2].1,
+                json!({"action":"approve","private":!team}),
+                "{source}"
+            );
+            // The retry after a restart approves the same body under the same key, without asking again.
+            assert_eq!(calls[2], calls[4]);
+            assert!(!calls[2].2.is_empty());
+            let delivery = &reopened.get(&record.id).unwrap().deliveries[0];
+            assert_eq!(delivery.status, "sent");
+            assert_eq!(delivery.receipt["approved"], true);
+            assert_eq!(delivery.receipt["audience"], if team { "team" } else { "" });
+        }
+    }
+}
+
+#[test]
+fn send_approves_nothing_when_the_live_meetings_choice_is_unknown_or_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let unknown = transcript(&store, "Synthetic unknown visibility");
+    pending_live(&store, &unknown.id, "live");
+    let missing = transcript(&store, "Synthetic missing live meeting");
+    pending_live(&store, &missing.id, "live");
+    store
+        .update_context(&missing.id, |c| {
+            c.live_id.clear();
+            Ok(())
+        })
+        .unwrap();
+    let who = json!({"actor":"human:test"});
+    let (tico, seen, worker) = server(vec![
+        Some(who.clone()),
+        Some(json!({"id":"live-fixture"})),
+        Some(who),
+    ]);
+    let error = tico.send(&store, &unknown.id, false).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("nothing was approved"),
+        "{error:#}"
+    );
+    let error = tico.send(&store, &missing.id, false).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("nothing was approved"),
+        "{error:#}"
+    );
+    worker.join().unwrap();
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|call| call.0.starts_with("GET "))
+    );
+    for id in [&unknown.id, &missing.id] {
+        assert_ne!(
+            store.get(id).unwrap().deliveries[0].receipt["approved"],
+            true
+        );
+    }
+}

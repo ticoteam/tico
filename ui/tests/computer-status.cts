@@ -10,7 +10,7 @@ declare function cloudMachineComputerHTML(machine: unknown): string;
 
 interface Machine {
   last_seen_at: string;
-  cloud_machine: {state: string};
+  cloud_machine: {state: string; restarting?: boolean};
   turn_counts?: Record<string, number>;
   revoked_at?: string;
 }
@@ -36,15 +36,18 @@ interface Machine {
         const asleep = machineNowWords(machine);
         machine.cloud_machine.state = 'starting';
         const offline = machineNowWords(machine);
+        machine.cloud_machine.restarting = true;
+        const restarting = machineNowWords(machine);
         machine.revoked_at = new Date().toISOString();
         const revoked = machineNowWords(machine);
         // The hub's employee payload reconciles a stale lifecycle state with live runner contact.
         document.querySelector('#status')!.innerHTML = cloudMachineComputerHTML({cloud_machine: {
           mode: 'cloud', placement: 'own', state: 'running', size: 'default', machine_size: 'default'
         }});
-        return {live, busy, asleep, offline, revoked};
+        return {live, busy, asleep, offline, restarting, revoked};
       });
-      assert.deepEqual(status, {live: 'idle', busy: '1 running', asleep: 'asleep', offline: 'offline', revoked: 'revoked'});
+      assert.deepEqual(status, {live: 'idle', busy: '1 running', asleep: 'asleep', offline: 'offline',
+        restarting: 'Restarting', revoked: 'revoked'});
       assert.match(await page.locator('#status').innerText(), /Own cloud machine · Running · Default/);
       await page.close();
     }

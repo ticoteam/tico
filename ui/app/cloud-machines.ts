@@ -20,6 +20,7 @@ interface CloudMachineRow {
   machine_size?: string | null;
   state?: string;
   problem?: string | null;
+  restarting?: boolean;
   runner_id?: string | null;
   cost_month_usd?: number;
   starts_month?: number;

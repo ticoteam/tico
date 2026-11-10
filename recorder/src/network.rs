@@ -636,6 +636,49 @@ impl Tico {
     pub fn send(&self, store: &Store, id: &str, push_items: bool) -> Result<String> {
         self.send_to(store, id, push_items, "")
     }
+    /// The audience a live meeting's Send keeps when none was chosen: what it was filed for once
+    /// approved; before that, the live meeting's Team or Private choice as Tico has it now (it may
+    /// have changed there), never the pending import's default. The choice is kept in the receipt
+    /// before approving, so a retry after a lost reply or a restart approves the same body. A
+    /// missing live meeting or an unknown choice approves nothing.
+    fn live_audience(
+        &self,
+        store: &Store,
+        id: &str,
+        context: &MeetingContext,
+        delivery: &mut Delivery,
+    ) -> Result<String> {
+        if delivery.receipt["approved"] == true {
+            return Ok(delivery.receipt["audience"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned());
+        }
+        if let Some(kept) = delivery.receipt["live_audience"].as_str() {
+            return Ok(kept.to_owned());
+        }
+        ensure!(
+            !context.live_id.is_empty(),
+            "The original live meeting is missing; nothing was approved"
+        );
+        let meeting = self.call(
+            &format!("/api/v2/live-meetings/{}", context.live_id),
+            None,
+            "",
+        )?;
+        let audience = match meeting["visibility"].as_str() {
+            Some("team") => "team",
+            Some("private") => "",
+            _ => anyhow::bail!(
+                "Tico did not say whether the live meeting is Team or Private; nothing was approved"
+            ),
+        };
+        store.update_delivery(id, delivery, |current| {
+            current.receipt["live_audience"] = json!(audience);
+            Ok(())
+        })?;
+        Ok(audience.to_owned())
+    }
     /// Files the meeting. `audience` is `team` (everyone in the org reads it), `participants` (only
     /// the recorder and the people added to or joined from its live share; owners too are held to
     /// it) or empty (private to the recorder, as before). A Tico too old to know `participants`
@@ -724,6 +767,15 @@ impl Tico {
         let result = (|| -> Result<String> {
             let live_source = ["live", "legacy-live"]
                 .contains(&delivery.receipt["source"].as_str().unwrap_or(""));
+            // Send with no audience chosen (the bridge's send_meeting, the command line) keeps the live
+            // meeting's own Team or Private choice; Finish's Save names one.
+            let kept;
+            let audience = if live_source && audience.is_empty() {
+                kept = self.live_audience(store, id, &context, &mut delivery)?;
+                kept.as_str()
+            } else {
+                audience
+            };
             let chosen = delivery.receipt["audience"].as_str().unwrap_or("") == audience;
             if !live_source && (delivery.meeting_id.is_empty() || !chosen) {
                 let reply = self

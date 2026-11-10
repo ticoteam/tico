@@ -560,6 +560,7 @@ async function settingsTurnsAtOnceSave(input: HTMLInputElement): Promise<void> {
 // What a computer is doing now: "1 running · 55 queued", idle, asleep (a cloud computer stopped to save), or offline.
 function machineNowWords(machine: DeviceMachine) {
   if (machine.revoked_at) return 'revoked';
+  if (machine.cloud_machine?.restarting) return 'Restarting';
   const counts = machine.turn_counts || {};
   const parts = [['running', 'running'], ['starting', 'starting'], ['queued', 'queued'], ['waiting', 'waiting']]
     .filter(([key]) => Number(counts[String(key)]) > 0).map(([key, word]) => `${counts[String(key)]} ${word}`);
