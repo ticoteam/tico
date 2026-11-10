@@ -146,6 +146,34 @@ def test_a_quiet_message_whose_job_was_queued_is_held_like_any_other(c, general)
     assert not task_wakes.may_start(c, quiet) and _state(c, quiet) == "canceled"  # an eighth run never starts
 
 
+def test_a_persons_own_message_on_a_snoozed_task_starts_a_run(c, general, monkeypatch):
+    """A person wrote on a snoozed task and the keeper carries it to the bot: their words get an answer, at the claim's
+    first check (execution.job_refusal) as in may_start."""
+    from backend import execution
+    from backend import task_engine as E
+    from backend.enqueue import enqueue
+
+    monkeypatch.setattr(execution, "job_message_readable", lambda conn, bot, message: True)
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    E.snooze(c, row["id"], ANA)
+    said, carrier = H.new_id(), H.new_id()
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'say','Is the note ready?','{}',?)",
+        (said, row["conversation_id"], ANA, BUILDER, H.now()),
+    )
+    refs = H._dump({"carries": said, "wake": "thread", "reason": "mention", "from": ANA})
+    c.execute(
+        "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, created_at) "
+        "VALUES (?,?,?,?,'notice','Is the note ready?',?,?)",
+        (carrier, row["conversation_id"], H.KEEPER, BUILDER, refs, H.now()),
+    )
+    enqueue(c, {"id": carrier, "sender_id": H.KEEPER, "recipient_id": BUILDER, "refs": refs, "created_at": H.now()})
+    job = dict(c.execute("SELECT * FROM jobs WHERE id=?", (carrier,)).fetchone())
+    assert task_wakes.may_start(c, carrier)
+    assert execution.job_refusal(c, job, {}, set(), set(), False, False) is None
+
+
 def _start(company, c, message_id):
     """The claim's preparation of a queued job (execution.Execution.start_claimed), as `claim` calls it in its write."""
     from backend.execution import Execution

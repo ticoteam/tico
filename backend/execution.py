@@ -2779,8 +2779,10 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
             return why  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
     task_id = work_task_id(message, conversation)
-    if task_id and message.get("sender_id") == H.KEEPER and task_snoozed(c, task_id):
-        return "task_wait"  # Tico wakes no bot about a snoozed task (docs/pipelines-v3.md, rule 7); a person still can
+    if task_id and message.get("sender_id") == H.KEEPER and not H.person_sent(message) and task_snoozed(c, task_id):
+        # Tico wakes no bot about a snoozed task (docs/pipelines-v3.md, rule 7); a person still can, through the
+        # keeper's carrier of their own message too (task_wakes.may_start).
+        return "task_wait"
     refs = message.get("refs") or {}
     if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
         return "make_page_upgrade"
