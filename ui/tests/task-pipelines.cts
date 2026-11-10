@@ -267,12 +267,13 @@ declare function settingsShow(tab: string): void;
     assert.match(await sent.first().innerText(), /approved by Lead \(met\) at Review/);
     // Only the Product board's In development column is headed by the pipeline it sends to, with its count: the stage
     // a spawn link leaves on any other board keeps its own name.
-    assert.equal(await page.locator('#task-body section[data-col="copy"] h2').innerText(), 'Copy review');
+    assert.equal((await page.locator('#task-body section[data-col="copy"] h2').textContent())?.trim(), 'Copy review');
     await page.locator('#task-scope').click();
     await page.locator('#task-filter-pop [data-task-type="product-roadmap"]').click();
     await page.waitForFunction(() => location.hash.includes('type=product-roadmap'));
     await page.locator('#task-body section[data-col="in-dev"] h2', {hasText: 'In Engineering'}).waitFor();
-    assert.equal(await page.locator('#task-body section[data-col="in-dev"] h2').innerText(), 'In Engineering · 2');
+    assert.equal((await page.locator('#task-body section[data-col="in-dev"] h2').textContent())?.trim(), 'In Engineering');
+    assert.equal((await page.locator('#task-body section[data-col="in-dev"] .cnt').innerText()).trim(), '· 2', 'the header count is the cards in that column');
     await page.locator('#task-scope').click();
     await page.locator('#task-filter-pop [data-task-type="marketing"]').click();
     await page.waitForFunction(() => location.hash.includes('type=marketing'));
