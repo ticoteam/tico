@@ -74,6 +74,22 @@ class Retries(unittest.TestCase):
         self.assertFalse(caught.exception.retryable)
         self.assertEqual((caught.exception.code, caught.exception.detail), ("not_found", "No such attempt"))
 
+    def test_a_task_refusal_keeps_its_detail_what_is_missing_and_the_commands_allowed_next(self):
+        refusal = {
+            "error": "task_not_met",
+            "detail": "Not moved. Not met: Owner says done.",
+            "missing": ["Owner says done"],
+            "next": ['hub task close T1 -m "why" --version 3'],
+            "version": 3,
+        }
+        client = self.client([(409, refusal)])
+        with self.assertRaises(APIError) as caught:
+            client.post("tasks/T1/move", {"to": "next", "version": 3})
+        self.assertEqual(len(client.opener.calls), 1, "a refusal is not retried")
+        failure = caught.exception
+        self.assertEqual((failure.code, failure.detail, failure.status), ("task_not_met", refusal["detail"], 409))
+        self.assertEqual(failure.extra, {k: refusal[k] for k in ("missing", "next", "version")})
+
 
 def test_live_mail_waits_for_metadata_batches_without_changing_other_routes():
     assert gmail_read_timeout("GET", "/api/v2/mail/messages?mailbox=ana%40acme.example", 15) == 90

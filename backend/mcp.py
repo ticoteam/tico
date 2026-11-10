@@ -84,10 +84,12 @@ def response_content(response):
 class ApiProblem(Exception):
     """What an internal request's error body says, in the shape `hub` prints."""
 
-    def __init__(self, code, detail, status, retryable=False, operation_id=None):
+    def __init__(self, code, detail, status, retryable=False, operation_id=None, extra=None):
         super().__init__(detail)
         self.code, self.detail, self.status = code, detail, status
         self.retryable, self.operation_id = retryable, operation_id
+        # What the error put beside code and detail: a task refusal's `missing`, `next` and `version`.
+        self.extra = extra or {}
 
 
 class InProcessApi:
@@ -202,8 +204,16 @@ class InProcessApi:
 
 
 def problem(payload, status, key):
-    """An error response's body as an ApiProblem."""
+    """An error response's body as an ApiProblem: `{"error": {code, detail, ...}}`, or a flat refusal whose `error` is
+    the code and whose other fields (`detail`, a task refusal's `missing`, `next`, `version`) sit beside it, as
+    `clients/tico.py` reads them."""
     error = payload.get("error", {}) if isinstance(payload, dict) else {}
+    if isinstance(error, str):
+        error = {
+            "code": error,
+            "detail": payload.get("detail") or payload.get("message") or "",
+            **{k: v for k, v in payload.items() if k not in ("error", "message", "detail")},
+        }
     if not isinstance(error, dict):
         error = {}
     return ApiProblem(
@@ -212,6 +222,7 @@ def problem(payload, status, key):
         status,
         status == 429 or status >= 500,
         key,
+        {k: v for k, v in error.items() if k not in ("code", "detail", "retryable")},
     )
 
 
@@ -311,14 +322,23 @@ def record_call(app, request, message, reply, seconds):
         pass
 
 
+GENERAL = "general"  # the pipeline a task goes to when none is named (backend/pipeline_settings.py PRESETS)
+
+
 def task_dry_run(c, auth, who, body):
     """The checks `task_create` would refuse on, without writing or counting a refusal."""
     from . import hubdb as H
 
+    from . import pipeline_settings
+
     problems, warnings = [], []
     title, text = str(body.title or "").strip(), str(body.body or "")
-    typ = H.type_get(c, body.type or H.GENERAL_TYPE)
-    general = bool(typ) and typ["id"] == H.GENERAL_TYPE  # the lints shape asks, not a custom type's tickets
+    pipeline_id = getattr(body, "pipeline", None) or GENERAL
+    pipeline = pipeline_settings.read(c, pipeline_id)
+    general = pipeline_id == GENERAL  # the lints shape asks in General, not another pipeline's tasks
+    # The task that files it (`parent`); other relations are notes and never a parent.
+    named_parent = getattr(body, "parent", None)
+    related_refs = [r.task for r in getattr(body, "relations", None) or [] if r.kind != "parent"]
     target = H.resolve_actor(c, body.owner)
     if target and H.is_bot(target) and not auth.bot_access(c, who, H.actor_id(target))["see"]:
         target = None  # a bot the caller cannot see is not one they can name
@@ -327,9 +347,8 @@ def task_dry_run(c, auth, who, body):
     else:
         from . import reach
 
-        parents = [r.task for r in body.relations if r.kind == "parent"]
         try:
-            parent = auth.resolve_task(c, who, parents[0]) if parents else None
+            parent = auth.resolve_task(c, who, named_parent) if named_parent else None
         except Problem:  # an unknown parent is the create's own refusal, not reach's
             parent = None
         parent_id = parent
@@ -366,9 +385,8 @@ def task_dry_run(c, auth, who, body):
             problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
         dup = H._one(
             c,
-            "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? "
-            f"AND status IN ({','.join('?' * len(H.ACTIVE_STATUSES))})",
-            (who.actor, target, title, *H.ACTIVE_STATUSES),
+            "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status='open'",
+            (who.actor, target, title),
         )
         if (
             dup
@@ -381,9 +399,10 @@ def task_dry_run(c, auth, who, body):
         from . import task_privacy as privacy
 
         try:
-            parents = [r.task for r in body.relations if r.kind == "parent"]
-            parent = H.task(c, auth.task(c, who, auth.resolve_task(c, who, parents[0]))["id"]) if parents else None
-            related = [auth.resolve_task(c, who, r.task) for r in body.relations if r.kind != "parent"]
+            parent = (
+                H.task(c, auth.task(c, who, auth.resolve_task(c, who, named_parent))["id"]) if named_parent else None
+            )
+            related = [auth.resolve_task(c, who, ref) for ref in related_refs]
             privacy.require_create(
                 c,
                 who,
@@ -416,14 +435,6 @@ def task_dry_run(c, auth, who, body):
                 problems += [f"{p} is not a bot or a person on the roster" for p in people if not H.resolve_actor(c, p)]
         except ValueError as exc:
             problems.append(str(exc))
-    if not typ:
-        problems.append("No such task type")
-    elif body.step:
-        step = next((s for s in typ["steps"] if s["id"] == body.step or s["name"] == body.step), None)
-        if not step:
-            problems.append("No such step in this task type")
-        elif step["status"] == "ready" and H.is_bot(who.actor):
-            problems.append("Ready to ship is set when the pull request merges, not by the bot")
-        elif step["status"] == "waiting" and who.actor == target and H.is_bot(target):
-            problems.append("A self-requested task needs something to wait on first")
+    if not pipeline or pipeline.get("retired_at"):
+        problems.append(f"No pipeline {pipeline_id}")
     return {"ok": not problems, "owner": target, "problems": problems, **({"warnings": warnings} if warnings else {})}
