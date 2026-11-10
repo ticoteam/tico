@@ -155,7 +155,7 @@ def plan_lines(s: Settings, label: str) -> list[str]:
 
 
 def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
-    return awsmod.plan_aws(
+    p = awsmod.plan_aws(
         domain=s.server_url,
         front_door="none",
         region=s.aws_region,
@@ -166,6 +166,9 @@ def _aws_plan(s: Settings, label: str) -> awsmod.AwsPlan:
         boundary=s.aws_permissions_boundary,
         prefix=s.asset_prefix,
     )
+    p.server_id = awsmod.server_identity(s.asset_prefix, s.server_url, s.aws_region)
+    p.legacy_ok = bool(own_record(s, p.name))
+    return p
 
 
 def runner_key(s: Settings, name: str) -> str:
@@ -176,15 +179,14 @@ def runner_key(s: Settings, name: str) -> str:
 
 def runner_prefix(s: Settings, label: str, given: str | None) -> str:
     """The runner's own saved one, else the server's it joins (set up from this computer), else --asset-prefix or tico.
-    Only this server's runner counts as its own: a runner of the same name and region kept for another server is
-    refused when the names would be the same AWS resources."""
-    name = _aws_plan(s, label).name
-    same = [
-        r
-        for r in state.load_runners()
-        if r.get("target") == "aws" and r.get("name") == name and r.get("aws_region") == s.aws_region
-    ]
-    mine = next((r for r in same if r.get("server_url") == s.server_url), None)
+    Only this server's runner counts as its own: a runner of the same name kept for another server, in any region (its
+    IAM role and profile are global), is refused when the names would be the same AWS resources."""
+    name = s.aws_name or f"runner-{awsmod.slug(label)}"
+    same = [r for r in state.load_runners() if r.get("target") == "aws" and r.get("name") == name]
+    mine = next(
+        (r for r in same if r.get("server_url") == s.server_url and r.get("aws_region") == s.aws_region),
+        next((r for r in same if r.get("server_url") == s.server_url), None),
+    )
     host = urllib.parse.urlsplit(s.server_url).hostname or ""
     prefix = awsmod.asset_prefix(given, mine or (state.load(host)[0] if host else {}))
     other = next(
@@ -197,7 +199,8 @@ def runner_prefix(s: Settings, label: str, given: str | None) -> str:
     )
     if other:
         raise MissingInput(
-            f"{awsmod.Names(prefix).resource(name)} in {s.aws_region} is already the runner of {other['server_url']}, "
+            f"{awsmod.Names(prefix).resource(name)} is already the runner of {other['server_url']} "
+            f"({other.get('aws_region', '')}), "
             "set up from this computer; refusing to reuse or change it. Pick another --name or --label."
         )
     return prefix

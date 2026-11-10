@@ -796,7 +796,7 @@ def test_a_runner_takes_its_own_servers_prefix_not_another_servers_runner_of_the
     before = len(log)
     argv[argv.index(f"https://{DOMAIN}")] = "https://c.example.com"
     code, out = go([*argv, "--yes"], deps=d)
-    assert code == 2 and "tico-runner-b1 in us-west-2 is already the runner of https://a.example" in out, out
+    assert code == 2 and "tico-runner-b1 is already the runner of https://a.example (us-west-2)" in out, out
     assert len(log) == before
 
 
@@ -1252,3 +1252,32 @@ def test_replace_dns_covers_only_the_requested_hostname_not_the_runner_one():
     assert found == [theirs] and wizard.replaceable(s) == {DOMAIN}
     with pytest.raises(MissingInput, match="--replace-dns covers only the server's own hostname"):
         wizard.refuse_dns(s, found)
+
+
+def test_another_servers_runner_role_in_another_region_is_never_reused(monkeypatch):
+    monkeypatch.setenv("TICO_ENROLL_CODE", "one-time-code")
+    monkeypatch.setattr(runner_setup, "_verify", lambda *a: 0)
+    d, ec2, iam, ssm, s3, log = hub_world()
+    # Made from another computer for https://a.example in us-east-2: IAM roles and profiles are global.
+    theirs = aws.Names().tags("runner-b1") + [
+        {"Key": "tico-setup-server", "Value": aws.server_identity("tico", "https://a.example", "us-east-2")}
+    ]
+    iam.roles["tico-runner-b1"] = {"RoleId": "AROATHEIRS", "Tags": theirs}
+    iam.profiles["tico-runner-b1"] = {"Tags": theirs, "Roles": ["tico-runner-b1"]}
+    argv = ["runner", "--non-interactive", "--yes", "--cloud", "aws", "--server-url", "https://c.example.com"]
+    code, out = go([*argv, "--label", "b1", "--aws-region", "us-west-2"], deps=d)
+    assert code == 2 and "IAM role tico-runner-b1" in out, out
+    assert not iam.called("put_role_policy") and not ssm.called("put_parameter") and not ec2.called("run_instances")
+    # From this computer too, the saved record of a.example's runner in another region refuses it before any AWS call.
+    rec = {"server_url": "https://a.example", "label": "b1", "target": "aws", "aws_region": "us-east-2"}
+    state.save_runner("a", {**rec, "name": "runner-b1", "instance_id": "i-a"})
+    before = len(log)
+    code, out = go([*argv, "--label", "b1", "--aws-region", "us-west-2"], deps=d)
+    assert code == 2 and "already the runner of https://a.example (us-east-2)" in out and len(log) == before, out
+    # Its own runner, made here, carries the identity on the role, profile and parameter.
+    code, out = go([*argv, "--label", "b2", "--aws-region", "us-west-2"], deps=d)
+    assert code == 0, out
+    mine = {"Key": "tico-setup-server", "Value": aws.server_identity("tico", "https://c.example.com", "us-west-2")}
+    assert mine in iam.called("create_role")[0]["Tags"] and mine in iam.profiles["tico-runner-b2"]["Tags"]
+    assert mine in ssm.called("put_parameter")[0]["Tags"]
+
