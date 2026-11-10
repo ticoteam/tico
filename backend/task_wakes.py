@@ -751,6 +751,11 @@ def _listed(*columns: str) -> str:
 _ON_COLUMNS = ("t", "lo", "hi", "t2", "alone", "conv")
 
 
+def _visit_id(row: Row) -> object:
+    visit: Row | None = row.get("visit")
+    return visit.get("id") if visit else None
+
+
 def prime(conn: "sqlite3.Connection", tasks: "Collection[Row]", bots: dict[str, set[str]]) -> None:
     """Read together what `queued`, `inbox`, `lost`, `last_run`, `runs_since` and `task_cause` read for each of `tasks`
     (`task_engine.task()` rows) and each of its bots (`bots`: task id -> actors), and keep it in the snapshot's read cache, where those
@@ -773,7 +778,7 @@ def prime(conn: "sqlite3.Connection", tasks: "Collection[Row]", bots: dict[str, 
     ).fetchall()
     RC.prime(conn, _SHARING, {(rows[t].get("conversation_id") or "", t): (n,) for t, n in shares})
     on = {t: _on_task(conn, row) for t, row in rows.items()}  # from the counts just kept
-    visits = {t: f"{t}:{(row.get('visit') or {}).get('id')}" for t, row in rows.items()}
+    visits = {t: f"{t}:{_visit_id(row)}" for t, row in rows.items()}
 
     queued = {
         (str(found[0]), str(found[1]))
