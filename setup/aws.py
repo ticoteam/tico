@@ -318,7 +318,9 @@ def make_clients(region: str, profile: str = ""):
     except ImportError:
         raise SystemExit("The AWS target needs boto3: pip install boto3") from None
     s = boto3.Session(region_name=region, profile_name=profile or None)
-    return s.client("ec2"), s.client("iam"), s.client("ssm"), s.client("sts").get_caller_identity()["Account"]
+    ec2 = s.client("ec2")
+    ec2.setup_session = s  # strict mode builds its single-attempt EC2 client from it (owned.single_attempt)
+    return ec2, s.client("iam"), s.client("ssm"), s.client("sts").get_caller_identity()["Account"]
 
 
 def make_s3(region: str, profile: str = ""):
@@ -575,8 +577,11 @@ class Deployer:
                 "unreachable from the internet and Let's Encrypt could not issue a certificate. Add such a route to a "
                 "subnet's route table (or create a public subnet), or use --front-door cloudflared, which needs no inbound access."
             )
+        return self.order_subnets(ok)[0]["SubnetId"]
+
+    def order_subnets(self, ok: list[dict]) -> list[dict]:
         ok.sort(key=lambda s: not s.get("DefaultForAz"))
-        return ok[0]["SubnetId"]
+        return ok
 
     def launch(self, user_data: str, profile: str, sg: str, subnet: str = "") -> str:
         parameter = AMI_PARAMS[self.p.os_family]

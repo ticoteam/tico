@@ -113,6 +113,11 @@ leaves a few gaps a read cannot close:
 - What is this install's is known only from its saved state on this computer (`~/.config/tico-setup`). If it is lost,
   cannot be read or was edited, setup stops: check by hand in the AWS console which resources the install made before
   restoring the state or deleting anything.
+- Destroy records each delete before sending it, and the record stays if that call fails (an Elastic IP release
+  refused, say): a later run that finds the resource gone takes it as deleted by setup, so after a failed destroy check
+  in the AWS console what is left before running setup again.
+- Give each install under another `--asset-prefix` its own `TICO_SETUP_HOME`: the saved state and the markers that keep
+  an install in its mode live there, and one install's marker for a `--name` can refuse another install's commands.
 
 Destroy deletes the instance and its data with it, and leaves your DNS records alone. With `--dns` (and `--domain`) it
 first deletes the domain's A and AAAA records in Route 53 too, but only a record set exactly equal to one this install

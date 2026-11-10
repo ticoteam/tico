@@ -2821,6 +2821,7 @@ def test_an_elastic_ip_intent_whose_call_provably_made_nothing_is_closed_and_any
     unsent = type("ParamValidationError", (Exception,), {})("bad parameter")
     refused = ClientError("AddressLimitExceeded")
     refused.response["ResponseMetadata"] = {"HTTPStatusCode": 400, "RetryAttempts": 0}
+    refused.operation_name = "AllocateAddress"  # as botocore's ClientError names the call it answers
     for err in (unsent, refused):
         ec2, ids = AllocatingEC2(), {}
         real = ec2.allocate_address

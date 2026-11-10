@@ -873,34 +873,107 @@ class StrictDeployer(Deployer):
                 "If it lists an address, run setup again: it is found and kept. If it lists none, remove \"eip\" "
                 f'under "intents" under "aws_ids" in {self.record}, then run setup again.'
             )
+        ec2 = single_attempt(self.ec2)
         self.j.intend("eip", name=name)
         try:
-            a = self.ec2.allocate_address(
+            a = ec2.allocate_address(
                 Domain="vpc",
                 TagSpecifications=[{"ResourceType": "elastic-ip", "Tags": self.n.tags(self.p.name, name)}],
             )
         except Exception as e:
-            if made_nothing(e):  # provably no address: the intent is closed, and a re-run simply allocates
+            if made_nothing(e, "AllocateAddress"):  # provably no address: the intent is closed; a re-run allocates
                 self.ids["intents"].pop("eip", None)
                 self.save()
             raise
         self.j.made("eip", a["AllocationId"])
         return a["AllocationId"], a["PublicIp"]
 
-    def launch(self, user_data: str, profile: str, sg: str, subnet: str = "") -> str:
+    def order_subnets(self, ok: list[dict]) -> list[dict]:
+        """By zone, then id, whatever order EC2 lists them in: the same account picks the same subnet each run."""
+        ok.sort(key=lambda s: (not s.get("DefaultForAz"), s.get("AvailabilityZone", ""), s.get("SubnetId", "")))
+        return ok
+
+    def subnet_row(self, subnet: str) -> dict | None:
+        try:
+            rows = self.ec2.describe_subnets(SubnetIds=[subnet])["Subnets"]
+        except Exception as e:
+            if error_code(e) not in ("InvalidSubnetID.NotFound", "InvalidSubnetID.Malformed"):
+                raise
+            rows = []
+        return next((r for r in rows if r.get("SubnetId") == subnet), None)
+
+    def any_subnet(self) -> str:
+        """A server that takes no inbound traffic still gets a named subnet (where EC2 would put it: the default VPC,
+        a default subnet first), so its zone is chosen here, journalled, and the same on a re-run."""
+        vpcs = self.ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])["Vpcs"]
+        rows = []
+        if vpcs:
+            rows = self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpcs[0]["VpcId"]]}])["Subnets"]
+        if not rows:
+            raise SystemExit("This region has no default VPC subnet. Pick another region (--aws-region) or create one.")
+        return self.order_subnets(rows)[0]["SubnetId"]
+
+    def launch_request(self, profile: str, sg: str, subnet: str) -> dict:
+        """What RunInstances is asked for that is chosen at run time, journalled with its ClientToken before the call.
+        EC2 answers a repeated token with the server it launched only for the same request in the same zone, so a re-run
+        after a lost answer sends exactly this again, never one read or chosen afresh."""
+        intent = (self.ids.get("intents") or {}).get("instance")
+        tag = f"{self.n.install_tag}={self.n.install_id}"
+        check = (
+            f"Check the EC2 console (Instances, tag {tag}) after a few minutes: if it lists a server, run setup again "
+            f'and it is found and kept; if it lists none, remove "instance" under "intents" under "aws_ids" in '
+            f"{self.record}, then run setup again."
+        )
+        if intent is not None:
+            req = intent.get("request")
+            if not req:
+                raise MissingInput(
+                    "Setup's last run asked EC2 to launch this install's server but never heard back, and saved no "
+                    "record of exactly what it asked for; refusing to launch again, which could make a second server. "
+                    + check
+                )
+            row = self.subnet_row(req["SubnetId"])
+            if row is None or row.get("AvailabilityZone", "") != req.get("AvailabilityZone", ""):
+                raise MissingInput(
+                    f"Setup's last run asked EC2 to launch this install's server in subnet {req['SubnetId']} "
+                    f"({req.get('AvailabilityZone') or 'its zone'}) but never heard back, and that subnet no longer "
+                    "exists; refusing to launch in another, which could make a second server. " + check
+                )
+            return req
         parameter = AMI_PARAMS[self.p.os_family]
-        if self.p.instance_type.startswith('m8i-'):
-            parameter = parameter.replace('arm64', 'amd64' if self.p.os_family == 'ubuntu' else 'x86_64')
-        ami = self.ssm.get_parameter(Name=parameter)["Parameter"]["Value"]
+        if self.p.instance_type.startswith("m8i-"):
+            parameter = parameter.replace("arm64", "amd64" if self.p.os_family == "ubuntu" else "x86_64")
+        subnet = subnet or self.any_subnet()
+        row = self.subnet_row(subnet)
+        if row is None:
+            raise SystemExit(f"Subnet {subnet} is not known to EC2; run setup again.")
+        req = {
+            "ImageId": self.ssm.get_parameter(Name=parameter)["Parameter"]["Value"],
+            "InstanceType": self.p.instance_type,
+            "SubnetId": subnet,
+            "AvailabilityZone": row.get("AvailabilityZone", ""),
+            "SecurityGroupIds": [sg],
+            "IamInstanceProfile": {"Name": profile},
+        }
+        # The token stays with the install for its life (instance_token): a launch call repeated for any reason is
+        # answered with the same server. Only this install's own destroy closes it (recorded_row).
+        token = self.ids.get("instance_token") or self.j.token("instance")
+        self.ids["instance_token"] = token
+        self.j.intend("instance", name=self.n.resource(self.p.name), token=token, request=req)
+        return req
+
+    def launch(self, user_data: str, profile: str, sg: str, subnet: str = "") -> str:
+        req = self.launch_request(profile, sg, subnet)
         n = self.n.resource(self.p.name)
         args = dict(
-            ImageId=ami,
-            InstanceType=self.p.instance_type,
+            ImageId=req["ImageId"],
+            InstanceType=req["InstanceType"],
             MinCount=1,
             MaxCount=1,
             UserData=fit_user_data(user_data),
-            IamInstanceProfile={"Name": profile},
-            SecurityGroupIds=[sg],
+            IamInstanceProfile=req["IamInstanceProfile"],
+            SecurityGroupIds=req["SecurityGroupIds"],
+            SubnetId=req["SubnetId"],
             MetadataOptions={"HttpTokens": "required", "HttpPutResponseHopLimit": 1, "HttpEndpoint": "enabled"},
             BlockDeviceMappings=[
                 {
@@ -918,16 +991,9 @@ class StrictDeployer(Deployer):
                 for rt in ("instance", "volume", "network-interface")
             ],
         )
-        if subnet:
-            args["SubnetId"] = subnet
-        # Journalled before the call, and sent again on a retry: EC2 answers a repeated ClientToken with the instance it
-        # already launched, so a lost answer never makes a second server.
-        # The token stays with the install for its life (instance_token): a launch call repeated for any reason is
-        # answered with the same server. Only this install's own destroy closes it (recorded_row).
-        token = self.ids.get("instance_token") or self.j.token("instance")
-        self.ids["instance_token"] = token
-        self.j.intend("instance", name=n, token=token)
-        args["ClientToken"] = token
+        # Journalled before the call (launch_request), and sent again on a retry: EC2 answers a repeated ClientToken,
+        # with the same request in the same zone, with the instance it already launched.
+        args["ClientToken"] = self.ids["intents"]["instance"]["token"]
         for attempt in range(8):  # a new instance profile takes a few seconds to be usable
             try:
                 iid = self.ec2.run_instances(**args)["Instances"][0]["InstanceId"]
@@ -1035,17 +1101,49 @@ def close_deleted(ids: dict, kind: str, extra: tuple[str, ...] = ()) -> bool:
     return True
 
 
-def made_nothing(e: Exception) -> bool:
-    """A create call that provably made nothing: botocore stopped it before any request left, or AWS answered its one
-    and only attempt (no retries) with a 4xx. Anything else (no answer, a 5xx, an answer after retries, an interrupted
-    process) may have made the resource."""
+# Codes EC2 answers only to a request it refused outright (malformed, unauthorized, over a limit): nothing was made.
+REFUSED_UNMADE = frozenset(
+    {
+        "AddressLimitExceeded",
+        "AuthFailure",
+        "Blocked",
+        "InvalidParameter",
+        "InvalidParameterCombination",
+        "InvalidParameterValue",
+        "MissingParameter",
+        "OptInRequired",
+        "UnauthorizedOperation",
+        "UnknownParameter",
+        "UnsupportedOperation",
+    }
+)
+
+
+def single_attempt(ec2):
+    """The EC2 client for a create whose error decides that nothing was made: botocore's automatic retries off, so the
+    error is the first attempt's own (a retry's error says nothing of what the first did). A client setup did not build
+    (a test's fake) is used as it is."""
+    session = getattr(ec2, "setup_session", None)
+    if session is None:
+        return ec2
+    from botocore.config import Config
+
+    return session.client("ec2", config=Config(retries={"max_attempts": 1, "mode": "standard"}))
+
+
+def made_nothing(e: Exception, operation: str) -> bool:
+    """A create call that provably made nothing: botocore stopped it before any request left, or EC2 answered that very
+    operation's one and only attempt with a code that refuses the request outright (REFUSED_UNMADE). Anything else (no
+    answer, a 5xx, another 4xx, an answer after retries, another service's error such as a credential refresh's, an
+    interrupted process) may have made the resource."""
     if type(e).__name__ in ("ParamValidationError", "NoCredentialsError", "PartialCredentialsError", "NoRegionError"):
         return True
     meta = getattr(e, "response", None)
     info = meta.get("ResponseMetadata") if isinstance(meta, dict) else None
-    if not isinstance(info, dict) or info.get("RetryAttempts") != 0 or not info.get("HTTPStatusCode"):
+    if getattr(e, "operation_name", None) != operation or not isinstance(info, dict):
         return False
-    return 400 <= int(info["HTTPStatusCode"]) < 500 and bool(error_code(e))
+    status = int(info.get("HTTPStatusCode") or 0)
+    return info.get("RetryAttempts") == 0 and 400 <= status < 500 and error_code(e) in REFUSED_UNMADE
 
 
 NOT_FOUND = {
