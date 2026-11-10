@@ -1033,6 +1033,20 @@ def create_s3(
         j.adopt("backup_user", user_id, "IAM user", user)
     made(j, "backup_bucket", s3, owned, region, proof, pick)
     say(f"  created bucket {bucket}" if proof == "absent" else f"  bucket {bucket} exists; keeping it")
+
+    def prove_bucket() -> None:
+        # S3 bucket settings have no conditional writes: the bucket is read again (its tags, in this account, and the
+        # name this install recorded making) right before each one, so one replaced after an earlier write gets no more.
+        try:
+            tags = bucket_tags(s3, owned)
+        except Exception as e:
+            if error_code(e) not in ("404", "NoSuchBucket", "NotFound"):
+                raise
+            tags = []
+        if not (names.is_ours(tags, name) and recorded(j.ids, "backup_bucket", bucket)):
+            raise not_ours("S3 bucket", bucket, names, name, pick)
+
+    prove_bucket()
     s3.put_public_access_block(
         **owned,
         PublicAccessBlockConfiguration={
@@ -1042,13 +1056,16 @@ def create_s3(
             "RestrictPublicBuckets": True,
         },
     )
+    prove_bucket()
     s3.put_bucket_versioning(**owned, VersioningConfiguration={"Status": "Enabled"})
+    prove_bucket()
     s3.put_bucket_encryption(
         **owned,
         ServerSideEncryptionConfiguration={
             "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
         },
     )
+    prove_bucket()
     s3.put_bucket_lifecycle_configuration(
         **owned,
         LifecycleConfiguration={
@@ -1071,6 +1088,7 @@ def create_s3(
             ]
         },
     )
+    prove_bucket()
     s3.put_bucket_policy(
         **owned,
         Policy=json.dumps(

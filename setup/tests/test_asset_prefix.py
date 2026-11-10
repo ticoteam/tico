@@ -2332,3 +2332,44 @@ def test_a_route53_create_that_may_have_landed_stays_pending_and_is_never_adopte
     code, out = go(argv, deps=d)
     assert code == 0 and len(r53.records) == 1, out
     assert state.load(DOMAIN)[0].get("dns_pending", []) == []
+
+
+BACKUP_WRITES = (
+    "put_public_access_block",
+    "put_bucket_versioning",
+    "put_bucket_encryption",
+    "put_bucket_lifecycle_configuration",
+    "put_bucket_policy",
+)
+
+
+@pytest.mark.parametrize("write", BACKUP_WRITES[:-1])
+def test_the_backup_bucket_is_proved_again_right_before_each_of_its_writes(write):
+    # Codex review 5, case 6: the backup bucket was proved once, then all five settings were written. A bucket replaced
+    # (deleted and made again by someone else, in this account) after any one of them gets none of the later ones.
+    s3, iam, ids = S3(), IAM(), {}
+    real = getattr(s3, write)
+
+    def replaced(**kw):
+        real(**kw)
+        s3.tagsets[kw["Bucket"]] = PRODUCTION
+
+    setattr(s3, write, replaced)
+    with pytest.raises(MissingInput, match="S3 bucket hub-backup-"):
+        owned.create_s3(
+            s3, iam, domain=DOMAIN, region="us-west-2", account_id=ACCOUNT, name="hotmic", names=HUB_ID, ids=ids
+        )
+    later = BACKUP_WRITES[BACKUP_WRITES.index(write) + 1 :]
+    assert not any(s3.called(w) for w in later), [w for w in later if s3.called(w)]
+    assert not iam.called("create_user") and not iam.called("create_access_key")
+    # Each tag read before a write names this account as the bucket's owner.
+    reads = s3.called("get_bucket_tagging")
+    assert reads and all(r["ExpectedBucketOwner"] == ACCOUNT for r in reads)
+    # A bucket with this install's tags that it never recorded making gets no write either.
+    s3, iam = S3(), IAM()
+    s3.tagsets[HUB_ID.backup_bucket(DOMAIN, ACCOUNT)] = HUB_ID.tags("hotmic")
+    with pytest.raises(MissingInput, match="never recorded making it"):
+        owned.create_s3(
+            s3, iam, domain=DOMAIN, region="us-west-2", account_id=ACCOUNT, name="hotmic", names=HUB_ID, ids={}
+        )
+    assert not any(s3.called(w) for w in BACKUP_WRITES)
