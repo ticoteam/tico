@@ -564,9 +564,6 @@ class Scheduler:
         except Exception as exc:
             cfgs = None
             failures.append({"system_routines": type(exc).__name__})
-        from . import task_rules
-
-        task_rules.tick(self.store, at, failures)
         # Reader notices a restart or the issuer's limit left waiting; the mail goes on a thread of its own. Its own
         # guard, so a failed edition start (the Heartbeat's Company page editions step) never holds the notices back.
         try:
@@ -625,6 +622,10 @@ class Scheduler:
                 from . import support_triage
 
                 support_triage.sweep(self.store, stamp(at))  # a support ticket waits here at most an hour
+                from . import org_rule_check
+
+                with self.store.transaction() as c:
+                    org_rule_check.expire_unreviewed(c, H.now())  # a held write nobody decided is kept, unsent
                 from . import screening
 
                 screening.sweep(self.store, stamp(at))  # a screened item waits at most an hour

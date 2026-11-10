@@ -244,7 +244,8 @@ ACTIONS = {
         ("finance", "events", "usage", "holds", "period", "ok"),
     ),
     "deadline_sweeps": (
-        "turn off failing webhooks, retire replaced computers, hand on support tickets and screened items",
+        "turn off failing webhooks, retire replaced computers, hand on support tickets and screened items, keep "
+        "unsent the held writes nobody decided",
         ("webhooks", "computers", "support", "screening", "deadline"),
     ),
     "start_strategy_note": (
@@ -665,8 +666,8 @@ JOBS = [
     Job(
         "hourly_deadlines",
         "Hourly deadlines",
-        "Turns off a webhook that failed for five days, retires replaced computers, and hands a person a support ticket "
-        "or screened item that waited an hour.",
+        "Turns off a webhook that failed for five days, retires replaced computers, hands a person a support ticket "
+        "or screened item that waited an hour, and keeps unsent a held write nobody decided in time.",
         HOUSEKEEPING,
         "Hourly",
         3600,
@@ -1442,21 +1443,12 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
             item["fallback"] = answered["fallback"] if answered else None
             item["spent_this_month_usd"] = spent_this_month(c, job.labels, now)
         rows.append(item)
-    rows.extend(task_rules.listing(c, settings, who, auth, now))
     from . import task_settings
 
     rows = [task_settings.describe_job(row) for row in rows]
     return {
         "jobs": rows,
         "departments": list(chart.values()),
-        "task_rule_departments": task_rules.departments(settings),
-        "task_rule_department": task_rules.department_of(c, settings, who.actor) if who else None,
-        "can_create_task_rule": bool(
-            who
-            and auth
-            and (task_rules.department_of(c, settings, who.actor) or auth.bot_admin(who))
-            and not who.support
-        ),
         "now": _stamp(now),
     }
 

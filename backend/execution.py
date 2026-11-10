@@ -369,11 +369,8 @@ def reply_source(c, message):
 
 
 def work_task_id(message, conversation=None):
-    """The work attached to a turn; parked urgent notices retain their task refs only as news.
-
-    Privacy, operator scope and interrupted-work SQL continue to use the message's actual task.
-    """
-    return None if wake_rule_engine.notice_only(message) else H.message_task_id(message, conversation)
+    """The work attached to a turn: the message's task."""
+    return H.message_task_id(message, conversation)
 
 
 def job_lane(c, bot, config, message, conversation, lanes, roots=False):
@@ -2764,11 +2761,9 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         if why := turn_budgets.refusal(c, job["bot_id"], message) or run_backoff.job_refusal(c, job["bot_id"], message):
             return why  # over its run budget or waiting out failed runs: except for a person's message
     conversation = H.conversation(c, message["conversation_id"])
-    if wake_rule_engine.notice_only(message):
-        notice_task_id = H.message_task_id(message, conversation)
-        if notice_task_id and task_snoozed(c, notice_task_id):
-            return "task_wait"  # nothing wakes a bot about a snoozed task (docs/pipelines-v3.md, rule 7)
     task_id = work_task_id(message, conversation)
+    if task_id and message.get("sender_id") == H.KEEPER and task_snoozed(c, task_id):
+        return "task_wait"  # Tico wakes no bot about a snoozed task (docs/pipelines-v3.md, rule 7); a person still can
     refs = message.get("refs") or {}
     if "make_page" in refs and (not runner or MAKE_PAGE not in capability_set(runner["capabilities"])):
         return "make_page_upgrade"
@@ -6041,7 +6036,6 @@ class Execution:
         if "make_page" in (origin.get("refs") or {}):
             return {"messages": []}
         origin_task = work_task_id(origin, H.conversation(c, origin["conversation_id"]))
-        origin_notice = wake_rule_engine.notice_only(origin)
         capabilities = c.execute(
             "SELECT capabilities FROM runners_with_state WHERE id=?", (attempt["runner_id"],)
         ).fetchone()
@@ -6090,8 +6084,6 @@ class Execution:
             # never hide this lane's follow-ups.
             if taken >= 10:
                 break
-            if origin_notice and row["kind"] != "notice":
-                continue  # a notice result cannot answer a separate question; give it its own turn
             if i % PRIME_QUEUED == 0 and len(candidates) > 1 and c.total_changes == read_at:
                 # Every poll of a running turn checks the whole backlog queued for its bot: a dozen reads per
                 # message, a few times a second, unless the next ones are read together. Rows read before a write
@@ -8366,8 +8358,6 @@ class Execution:
                     )
                     continue
                 delivery_task = task
-                if wake_rule_engine.notice_only(msg):
-                    delivery_task = H.task(c, H.message_task_id(msg, conv) or "")
                 if delivery_task and delivery_task['status'] in ('done', 'closed'):
                     note = (
                         f"Dismissed automatically: the task \"{delivery_task['title']}\" was already {delivery_task['status']} "

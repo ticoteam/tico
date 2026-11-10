@@ -1293,9 +1293,6 @@ class Store:
 
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
-            from . import task_rules as _task_rules
-
-            c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
 
             _teammate_access.ensure(c)  # people's and groups' See/Read/Write (docs/permissions.md)
