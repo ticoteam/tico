@@ -283,7 +283,7 @@ def s_hold_release(org, items, judge):
 
 # ---------------------------------------------------------------------------------------------- 8 fail open
 def s_fail_open(org, items, judge):
-    from backend import idea_triage
+    from backend import screening
     from backend.store import H
 
     doors = X.Doors(org, judge)
@@ -322,13 +322,13 @@ def s_fail_open(org, items, judge):
         lambda: setattr(settings, "decisions_daily_calls_bot", 0),
         lambda: setattr(settings, "decisions_daily_calls_bot", 5_000),
     )
-    deadline = idea_triage.DEADLINE
+    deadline = screening.DEADLINE
 
     def slow():
-        idea_triage.DEADLINE, judge.delay = 0.05, 0.4
+        screening.DEADLINE, judge.delay = 0.05, 0.4
 
     def fast():
-        idea_triage.DEADLINE, judge.delay = deadline, 0
+        screening.DEADLINE, judge.delay = deadline, 0
 
     case("timeout", slow, fast)
     case("unreadable answer", lambda: setattr(judge, "unreadable", True), lambda: setattr(judge, "unreadable", False))

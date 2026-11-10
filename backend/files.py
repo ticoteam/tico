@@ -277,7 +277,7 @@ def file_visible(c, auth, who, row, cache):
             return False
     if who.role == "bot" and H.actor_id(who.actor) != row["bot_id"] and not row["scope"].startswith("task:"):
         return False
-    # A bot-wide file is its bot's: one cache serves files of many bots (a card's latest pages).
+    # A bot-wide file is its bot's: one cache serves files of many bots (a task's latest pages).
     key = ("bot", row["bot_id"]) if row["scope"] == "bot" else row["scope"]
     if key not in cache:
         kind, _, ident = row["scope"].partition(":")
