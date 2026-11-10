@@ -43,7 +43,8 @@ Cancel keeps the current access. Sign-in switches show **Saved** on success; a r
   **Left**) brings them back (their old tokens stay revoked).
 - **Remove** (under **Left**, owner only) deletes someone added by mistake for good, with their unused tokens, sent invites
   and allow-list address. Only a left human with no history can be removed: nothing they did (an event, a message, a task, an
-  approval, a used token) or that names them anywhere else, and not synced from a directory. A seat that reports to them is
+  answer, a used token) or that names them anywhere else, and not synced from a directory. A seat that reports to them
+  is
   not history: Remove moves those seats to their manager, or to the owner removing them, and each move is logged. Anyone else stays as left (`Has history; stays as left`). The audit event `person.removed`
   keeps their name and email.
 - **Bot limit per member**: 25 active bots by default. A team still on the old default of 5 is moved to 25 once on upgrade;
@@ -75,7 +76,7 @@ owner owns was placed on the old owner's computer, reassign it in Settings > Com
 ## Change the owner's sign-in email
 
 The owner can move to another sign-in address (a new Google account, say) and stay the same person: every task,
-comment, approval, thread, bot and role stays theirs. It is not a transfer, and no second person is made.
+comment, answer, thread, bot and role stays theirs. It is not a transfer, and no second person is made.
 
 **First, set up the new address in Cloudflare Access.** Tico doesn't sign anyone in itself: Cloudflare Access (or
 Cognito, or your OIDC provider) checks who you are, then tells Tico your address. Add the new address, or its Google

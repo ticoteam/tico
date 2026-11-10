@@ -33,7 +33,6 @@ returning its secret again; the retry cache stores only metadata. There is no Se
 | `key` | Your own id for this piece of work, 1 to 200 characters. Required. The pair (this service key, `key`) is one task. |
 | `owner` | `human:<id>`, `bot:<slug>`, or the email of a person on the roster. |
 | `title`, `body` | The task's title and description. |
-| `type`, `step` | A task type and one of its steps, by id or name ([Tasks](tasks.md)). |
 | `labels` | The task's labels; they replace the ones it has. |
 | `links` | Links to attach, such as the report's page. Added, never removed. |
 | `due` | ISO 8601 with a timezone. |
@@ -49,13 +48,13 @@ call wins. No `Idempotency-Key` header is needed.
   later calls leave it alone.
 - `"close": true` closes the task, with `note`. On a closed task it does nothing. For a `key` that never had a task it
   files nothing.
-- A call without `close` on a closed task reopens it, at its type's first open step or the `step` you send, and applies
-  the rest.
+- A call without `close` on a closed task reopens it in the stage it was last in, and applies the rest.
+- The task is filed in General ([Pipelines and stages](tasks.md#pipelines-and-stages)).
 
 The answer is `{"task": {...}, "created": true|false, "changed": true|false}`, with only `{"id": "..."}` acknowledging the task, or
 `"task": null` for a close that filed nothing. A new task gets the checks any new task gets: one for a person must read
 as a request (a title that starts with a verb, the ask first, under 120 words; see [How Tico works](how-it-works.md)),
-and a bot must be active. A refusal is `422` with a code naming what to fix: `owner`, `type`, `step`, `date`,
+and a bot must be active. A refusal is `422` with a code naming what to fix: `owner`, `date`,
 `validation` or `lint`. An unknown or revoked key is `401`.
 
 ```sh

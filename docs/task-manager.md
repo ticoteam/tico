@@ -8,6 +8,12 @@ history and `turn-on` wakes it again.
 
 It tidies tasks, never the work. It does not touch bots, credentials, computers, sends or spending.
 
+## What it manages
+
+The Task Manager is the manager of the [General pipeline](tasks.md#pipelines-and-stages). The never-stuck check hands
+it a General task whose owner bot tried three times, a General task that is Late, and one with no assignee. It decides:
+reassign, move back, move on, snooze or close. The owner stays the owner.
+
 ## What it checks
 
 Once an hour on weekdays, 08:00 to 18:00 in the team's time zone, the server looks for these in plain code
@@ -15,17 +21,12 @@ Once an hour on weekdays, 08:00 to 18:00 in the team's time zone, the server loo
 
 | Item | What it means |
 |---|---|
-| Stalled task | Nothing has moved it for an hour and it waits on nothing. |
-| Overdue ask | A question to a person is past its deadline, or has gone a business day unanswered. |
-| Review or QA ticket without a PR | A review or QA child of a ticket has no linked pull request, or a second one is open for the same parent and step. |
-| Merged or shipped, step unmoved | A ticket's pull request merged or its release shipped, but the ticket did not move. |
-| Blocked by its own subtasks | A task waits only on its own stalled subtasks. |
-| Held bot | A bot is held by back-off or a turn budget. Skipped on an install without the hold columns. |
+| Paused task | It is a bot's turn but that bot can't run, for a cause of its own (not one that stops the whole company). |
+| Held bot | A bot is held by back-off or a turn budget. |
 | Owner review waiting | A bot's interrupted runs have waited more than an hour for its owner. |
 | Duplicate titles | Two open tasks share a title, requester and owner. |
 
-A stalled task in a pipeline whose manager is an active bot is that manager's to tidy, so it is left out. A pipeline
-with no manager, or whose manager is missing, paused or archived, or whose manager seat is still open, is covered.
+A task in a pipeline whose manager is another active bot is that manager's, so it is left out.
 
 A task belongs to its owner's department, one of the nine on the org chart (a group inside it counts as it). A task
 whose owner is in none, such as BotOps or the Assistant, is listed under **Company**. Each department lists at most 30
@@ -48,18 +49,18 @@ or write it: it meets the same privacy fence as any other bot.
 The wake is the routine's own (`trigger=schedule`, `refs.wake=task_manager_report`).
 
 The bot acts, it does not ask: it fixes the obvious, low-risk items with the suggested command and notes what it did on
-the check task. For anything it is unsure of it leaves one line for the department in **Needs you**, never one per item.
+the check task. What it can't fix it leaves: the person who can fix it already has it in **Needs you**.
 
 ## What it may do
 
 Narrow rights on tasks only, through the ordinary permission system:
 
-- close a task with a note, and set its status, step and wait;
+- move and close a task, with a note;
 - relate and unrelate tasks, and comment;
 - reassign a task within the owner's department (anywhere else is refused);
 - file a subtask for BotOps when the fix is in the setup.
 
-It cannot change a task's lane, number, labels or type, and it is never a task mover.
+It cannot change a task's number or labels, and it is never a task mover.
 
 ## Switches and commands
 

@@ -190,10 +190,10 @@ else sees who to ask.
 
 A bot asking from a task (its turn works on one) puts the card in the task's thread instead, for the person who wrote to it
 there, else the first of its operator and the company owner who can read the task (none: the ask is refused), and the
-task waits on the card ([Reconnect cards](tasks.md#reconnect-cards)):
+task is Paused on the card until it is saved (the person sees it in [Needs you](tasks.md#needs-you)):
 saving it wakes the task once with "<label> is saved. Continue." in place of the "Saved" message. BotOps asking on its own
 task does the same, for the person it acts for. Asking again on the same task returns the open card; another task's open
-card for the same variable stays (saving either saves both); canceling the card ends the task's wait and tells the bot.
+card for the same variable stays (saving either saves both); canceling the card ends the pause and tells the bot.
 When the task finishes, changes hands, or is made private from the card's person, its card says Not needed and its
 request is canceled; a person who cannot read the task cannot open its request either.
 
@@ -240,7 +240,8 @@ breaks the `op://` form; reference it by its item id.
   draft fails lint for this reason. A bot that needs one opens a card in the thread; BotOps stores what a human
   pastes and removes it from the thread.
 - A missing credential is not yours to work around: open the card (`hub credential request`); on a task it goes in the
-  task's thread and the task waits for it, so stop there. The bot's Tools list shows every declared Credential as present or missing.
+  task's thread and the task is Paused until it is saved, so stop there. The bot's Tools list shows every declared
+  Credential as present or missing.
 - Saving a credential is not permission to use it. Only a `tools:` entry and a grant connects a bot to a credential. Changing `tools:` is a task for the owner.
 - A granted value exists only for that run; do not copy it anywhere that outlives the run.
 - Each bot can have only one active granted Credential for a variable. Revoke its previous grant before replacing it.

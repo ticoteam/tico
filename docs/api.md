@@ -91,13 +91,12 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
 
-`GET /api/v2/needs-you` returns `plate_count` in every response: count-only (`count=1`), unchanged,
-selected ids, full list and pages. It counts unique task, question, waiting, approval, ask and stale
-items on the signed-in person across all boards, excluding tasks in `folded_task_ids`.
-Thread and update attention are excluded. `count` retains the broader attention total used by the
-desktop poll. Both counts describe the whole list, including unread pages. Live `needs` events also
-carry `plate_count`; a client subtracts any plate items it still holds that were just answered locally.
-Use `ids=` to mend changed rows after a live event, and `limit`/`cursor` to load more rows as needed.
+`GET /api/v2/needs-you` is one list for the signed-in person, oldest first: every ask with their name, every task they
+own, every Paused cause they can fix, and every @ of them by a person until they reply. Each item has `kind` (`task`,
+`ask`, `paused`, `mention`), `id`, `line`, `since` and the brief `task`; an ask also has its requirement as `ask`.
+`count` is the length of the list, the one number on the Tasks badge (`count=1` returns only that). `version` changes
+whenever an item or its place does: `version=<the one held>` answers `unchanged`, and `ids=` sends only those items
+with their places (`positions`), to mend a held copy after a live `needs` event. `limit` and `cursor` page it.
 
 ## Stable and internal
 
@@ -206,21 +205,21 @@ keep the `labels` entry in the task's history (`history_events`). See [Tags and 
 
 ## Task pipelines
 
-`/api/v2/task-types` exposes task types and their ordered steps. Movers create and edit definitions;
-unused types can be deleted, and steps with tasks cannot be removed. Task creation and updates
-accept `type` and `step`. Answers add `type_id`, `step_id`, `type` and `step` while preserving the
-existing status contract. See [Task types and steps](tasks.md) for mapping and update examples.
+Every task sits in a pipeline, at one stage. `GET /api/v2/pipelines` lists them, `GET /api/v2/pipelines/{id}` reads one
+with its stages and requirements, and `POST /api/v2/pipelines/{id}` saves its settings (`POST .../retire` retires it).
+A task is made with `POST /api/v2/tasks` (`pipeline` is optional; General when left out) and moved only through its own
+routes: `done`, `move`, `owner`, `snooze`, `unsnooze`, `try-again` and `asks`, each with the `version` it was shown. A
+refusal is a 409 that says what is missing and what may be done next. The routes and the task as JSON are in
+[Tasks](tasks.md#api).
 
-A `numbered` type gives each of its tasks the team's next `number`, which never changes; a mover may
-pass an imported ticket's own `number` (`422 duplicate` when it is taken), and `#18945` (`%2318945`
-in a URL) works wherever a task id does. `step_rank` is a task's place within its step.
-`GET /api/v2/tasks` takes `type`, `step` and `number` filters and `sort=step` for a board in column
-order. A client that polls asks `updated_since=<ISO 8601 with a timezone>` for only the tasks
-changed after that instant (closing, reopening, comments, questions, links and attachments count;
-what only shows in `children_summary` or `pr_state`, such as a subtask moving or a pull request's
-checks and reviews, does not), and `brief=true` to leave out bodies and acceptance criteria.
+A mover may pass an imported task's own `number` (`422 duplicate` when it is taken), and `#18945` (`%2318945` in a URL)
+works wherever a task id does. `GET /api/v2/tasks` takes `owner`, `requester`, `status` (`open`, `done`, `closed`),
+`label`, `number` and `sort` (`queue` or `finished`). A client that polls asks `updated_since=<ISO 8601 with a
+timezone>`
+for only the tasks changed after that instant, and `brief=true` to leave out bodies and acceptance criteria.
 `ids=<id>,<id>,...` (up to 100 ids, short ids or numbers) reads several tasks in one call instead of one
-`GET /api/v2/tasks/{id}` each; the answer adds `missing`, the ids that are unknown or not yours to read.
+`GET /api/v2/tasks/{id}` each; the answer adds `missing`, the ids that are unknown or not yours to read. A snoozed task
+is left out unless asked for by id, by number or with `snoozed`.
 
 ## Task comments
 
@@ -300,8 +299,9 @@ story, with the CLI, is on [Webhooks](webhooks.md).
 
 ## Outgoing webhooks
 
-Tico posts an event to an address you choose when something happens: a task is made, finishes or is blocked; an approval is
-asked or decided; a bot is held or fails; a release is published; and more. Add them in Tools → Add tool → Outgoing webhook, or use
+Tico posts an event to an address you choose when something happens: a task is made, moves to a new stage, is done
+or closed; a bot is held or fails; a message is held by a rule; and more. Add them in Tools → Add tool → Outgoing
+webhook, or use
 the API, `hub webhook` or the `hub_webhook_*` tools ([Webhooks](webhooks.md#outgoing)).
 
 ```
