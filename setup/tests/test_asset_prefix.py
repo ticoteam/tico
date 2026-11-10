@@ -287,6 +287,27 @@ def test_the_prefix_is_checked_and_a_saved_one_wins():
     for bad in ("Hub", "2hub", "hub-", "-hub", "hub_x", "abcdefghijk", "h.b"):
         with pytest.raises(MissingInput, match="1 to 10 lowercase"):
             aws.asset_prefix(bad, {})
+    for reserved in ("aws", "awsx", "ssm-a", "sthree", "sg", "xn--a", "a--b"):
+        with pytest.raises(MissingInput, match="would make names AWS refuses"):
+            aws.asset_prefix(reserved, {})
+    assert aws.asset_prefix("sgx", {}) == "sgx" and aws.asset_prefix("my-co", {}) == "my-co"
+
+
+@pytest.mark.parametrize("prefix", ["a", "hub", "abcdefghij", "z-9"])
+def test_the_longest_names_fit_every_aws_limit(prefix):
+    n, name, domain = aws.Names(prefix), "n" * 39 + "9", "x" * 60 + ".example.com"
+    bucket_re = re.compile(r"(?!xn--|sthree-)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]")  # this setup never uses dots
+    for b in (n.backup_bucket(domain, ACCOUNT), n.plan_bucket("f" * 32)):
+        assert bucket_re.fullmatch(b) and "--" not in b, b
+    iam_re = re.compile(r"[\w+=,.@-]{1,64}")
+    for iam_name in (n.resource(name), n.backup_user(name), n.role_policy, n.backup_policy):
+        assert iam_re.fullmatch(iam_name), iam_name
+    assert n.backup_user(name) == f"{prefix}-backup-{name}"  # fits without the [:64] cut
+    sg = n.resource(name)
+    assert len(sg) <= 255 and not sg.startswith("sg-")
+    param = n.param(name)
+    assert re.fullmatch(r"(/[a-zA-Z0-9_.-]+){3}", param) and not re.match(r"/(aws|ssm)", param, re.I)
+    assert len(param) <= 1011 and param.count("/") <= 15
 
 
 def test_hub_server_names_tags_and_policies():
@@ -406,6 +427,72 @@ def test_hub_discover_and_destroy_find_only_hub_tagged_resources():
     p = aws.plan_aws(domain="hub.hotmicapp.com", front_door="caddy", region="us-west-2", name="hotmic", prefix="hub")
     d = aws.Deployer(p, ec2, fakes.FakeIAM(), fakes.FakeSSM(), ACCOUNT, say=lambda m: None, sleep=lambda s: None)
     assert d.find_instance()["InstanceId"] == "i-hub" and d.ensure_sg() == "sg-hub" and d.ensure_eip()[0] == "eip-hub"
+
+
+def two_installs():
+    """A tico and a hub install with the same --name in one account, as AWS would hold them."""
+    ec2 = FilteredEC2(
+        extra_instances=[{"InstanceId": "i-tico", "Tags": TICO_TAGS}, {"InstanceId": "i-hub", "Tags": HUB_TAGS}],
+        extra_sgs=[{"GroupId": "sg-tico", "Tags": TICO_TAGS}, {"GroupId": "sg-hub", "Tags": HUB_TAGS}],
+    )
+    ec2.eips = [
+        {"AllocationId": "eip-tico", "PublicIp": "198.51.100.1", "Tags": TICO_TAGS},
+        {"AllocationId": "eip-hub", "PublicIp": "203.0.113.9", "Tags": HUB_TAGS},
+    ]
+    iam = IAM()
+    iam.roles = {"tico-hotmic": TICO_TAGS, "hub-hotmic": HUB_TAGS}
+
+    class Ssm(fakes.FakeSSM):
+        params = {"/tico/hotmic/env": TICO_TAGS, "/hub/hotmic/env": HUB_TAGS}
+
+        def list_tags_for_resource(self, **kw):
+            if kw["ResourceId"] not in self.params:
+                raise self.exceptions.InvalidResourceId()
+            return {"TagList": self.params[kw["ResourceId"]]}
+
+    ssm = Ssm()
+    d = fakes.deps()
+    d.aws_clients = lambda region, profile: (ec2, iam, ssm, ACCOUNT)
+    return d, ec2, iam, ssm
+
+
+def deleted(ec2, iam, ssm):
+    return {
+        "instances": [i for kw in ec2.called("terminate_instances") for i in kw["InstanceIds"]],
+        "eips": [kw["AllocationId"] for kw in ec2.called("release_address")],
+        "sgs": [kw["GroupId"] for kw in ec2.called("delete_security_group")],
+        "roles": [kw["RoleName"] for kw in iam.called("delete_role")],
+        "profiles": [kw["InstanceProfileName"] for kw in iam.called("delete_instance_profile")],
+        "policies": [(kw["RoleName"], kw["PolicyName"]) for kw in iam.called("delete_role_policy")],
+        "params": [kw["Name"] for kw in ssm.called("delete_parameter")],
+    }
+
+
+@pytest.mark.parametrize(
+    ("argv", "prefix", "other"),
+    [
+        (["--name", "hotmic"], "tico", "hub"),  # no saved install, no flag: today's tico names
+        (["--name", "hotmic", "--asset-prefix", "hub"], "hub", "tico"),
+        (["--domain", "hub.hotmicapp.com"], "hub", "tico"),  # the saved install's prefix
+        (["--domain", "old.example.com"], "tico", "hub"),  # saved before the flag existed
+    ],
+)
+def test_destroy_deletes_only_the_install_of_its_own_prefix(argv, prefix, other):
+    state.save("hub.hotmicapp.com", {"domain": "hub.hotmicapp.com", "aws_name": "hotmic", "asset_prefix": "hub"})
+    state.save("old.example.com", {"domain": "old.example.com", "aws_name": "hotmic"})
+    d, ec2, iam, ssm = two_installs()
+    code, out = go(["destroy", *argv, "--yes"], deps=d)
+    assert code == 0 and f"Tagged {prefix}-setup-name=hotmic in us-east-1:" in out, out
+    assert deleted(ec2, iam, ssm) == {
+        "instances": [f"i-{prefix}"],
+        "eips": [f"eip-{prefix}"],
+        "sgs": [f"sg-{prefix}"],
+        "roles": [f"{prefix}-hotmic"],
+        "profiles": [f"{prefix}-hotmic"],
+        "policies": [(f"{prefix}-hotmic", f"{prefix}-env")],
+        "params": [f"/{prefix}/hotmic/env"],
+    }
+    assert other not in json.dumps(ec2.filters)
 
 
 def test_hub_backup_names():
