@@ -137,8 +137,16 @@ const holdNext = (match: Held['match']): Held => {
   await emit('tasks', gone('t1'), event(task('t3', 'Pick the release day', 'spec', {owner_id: 'human:ana', requester_id: 'bot:ops'})));
   await page.waitForFunction(() => !document.querySelector('#t-open')?.textContent?.includes('Draft the release notes')
     && !document.querySelector('#t-c3')?.textContent?.includes('Pick the release day'));
-  // Needs you changing draws the tab from the list the app holds; nothing is read for it.
-  await page.evaluate(() => { for (let i = 0; i < 5; i++) botNeedsChanged('ops'); });
+  // Needs you changing draws the tab from the list the app holds; nothing is read for it. An ask of the bot's comes: on
+  // the tab, its count one more. Answered: off it again.
+  const ask = brief(put(task('t30', 'Approve the launch copy', 'spec', {owner_id: 'bot:ops'})));
+  await page.evaluate(it => { S.v2.needs = [it]; S.v2.needsCount = 1; botNeedsChanged('ops'); },
+    {id: 'ask1', kind: 'ask', task_id: 't30', line: 'OK the launch copy?', since: '2026-11-09T10:00:00Z', task: ask, ask: {asked_by: 'bot:ops', kind: 'ok', may: []}});
+  await page.locator('#t-needs', {hasText: 'Approve the launch copy'}).waitFor({state: 'attached'});
+  assert.equal((await text('#cnt-needs')).trim(), '1');
+  await page.evaluate(() => { S.v2.needs = []; S.v2.needsCount = 0; botNeedsChanged('ops'); });
+  await page.waitForFunction(() => !document.querySelector('#t-needs')?.textContent?.includes('Approve the launch copy'));
+  assert.equal((await text('#cnt-needs')).trim(), '0');
   await settled();
   assert.equal(reads.tasks, listed, 'no task list read follows a task event');
   assert.equal(reads.tabs, tabbed, 'no filter read follows a task or Needs you event');

@@ -414,13 +414,17 @@ document.addEventListener('click', async ev => {
   else toast('Could not load more. Try again.', true);
 });
 // Needs you: the tasks the tab counts, and what else of this bot's is in the person's Needs you (a stuck stretch, an ask
-// on a task the tab does not hold), each once.
+// on a task the tab does not hold), each once. Needs you is the list the app holds now, not as it was when the tab was
+// read: an ask answered leaves at once, a new one shows. A task the tab held because it was in Needs you then, and no
+// longer is, leaves too, when the whole list is here to say so.
 function botNeedsPaint(slug: string): Set<string> {
   const host = $('#bot-needs'), filtered = BOT_TASK_FILTERED.get(slug), counted = filtered?.tabs.needs;
-  // Extra rows and their overlap count belong to the same completed filter read.
-  const extras = counted && filtered?.extras ? filtered.extras : botNeeds(slug);
-  const tasks: TaskAny[] = counted && filtered ? counted.ids.map(id => filtered.tasks.get(String(id))).filter((t): t is TaskAny => !!t) : [];
-  const held = new Set([...tasks.map(t => String(t.id)), ...(counted?.matched_ids || [])]);
+  const extras = botNeeds(slug), now = new Set(extras.map(botNeedTaskId).filter(Boolean));
+  const left = new Set(counted && filtered && needsAll() ? filtered.extras.map(botNeedTaskId).filter(id => id && !now.has(id)) : []);
+  const tasks: TaskAny[] = counted && filtered ? counted.ids.filter(id => !left.has(String(id))).map(id => filtered.tasks.get(String(id)))
+    .filter((t): t is TaskAny => !!t) : [];
+  const gone = new Set([...(counted?.ids || []), ...(counted?.matched_ids || [])].map(String).filter(id => left.has(id)));
+  const held = new Set([...tasks.map(t => String(t.id)), ...(counted?.matched_ids || []).filter(id => !left.has(String(id)))]);
   const rest = new Map<string, TaskAny>();
   for (const it of extras) {
     const id = botNeedTaskId(it);
@@ -428,7 +432,7 @@ function botNeedsPaint(slug: string): Set<string> {
   }
   const items = [...tasks, ...rest.values()];
   if (!host || BOT?.slug !== slug) return new Set();
-  botTaskCount('cnt-needs', counted ? Number(counted.count) + rest.size : Math.max(items.length, needsMeCount(slug)));
+  botTaskCount('cnt-needs', counted ? Math.max(0, Number(counted.count) - gone.size) + rest.size : Math.max(items.length, needsMeCount(slug)));
   const list = $('#t-needs');
   const more = (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
   list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(botTaskRowHTML).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
