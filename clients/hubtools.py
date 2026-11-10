@@ -8684,7 +8684,7 @@ def task_manager_run(api, args):
     return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 
-MAINTENANCE_STEPS = ["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+MAINTENANCE_STEPS = ["collect", "clean_up", "check_health", "learn", "suggest", "update", "dream"]
 
 
 @tool(
@@ -8701,7 +8701,7 @@ def maintenance_status(api, args):
     "hub_maintenance_set",
     "Maintenance: set the schedule (hourly, 2h, 3h, 6h, 12h or daily), pause or resume it, or set the "
     "monthly judge spend cap in dollars. With `step`, change that step: `enabled` on or off, `frequency` (run = every run, "
-    "day, week, or custom with `custom_every` and `custom_unit`) and `max_bots` for find_stuck and dream. "
+    "day, week, or custom with `custom_every` and `custom_unit`) and `max_bots` for dream. "
     "The owner or an admin.",
     {
         "schedule": {"type": "string", "enum": ["hourly", "2h", "3h", "6h", "12h", "daily"]},

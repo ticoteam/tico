@@ -5010,7 +5010,7 @@ def parser():
     maintenance.add_parser(
         "status", help="schedule, pause, monthly judge cap, and each step's switch, frequency and last run"
     ).set_defaults(fn="maintenance")
-    STEPS = ["collect", "clean_up", "check_health", "find_stuck", "learn", "suggest", "update", "dream"]
+    STEPS = ["collect", "clean_up", "check_health", "learn", "suggest", "update", "dream"]
     s = maintenance.add_parser(
         "set", help="change the schedule, the pause, the monthly judge cap, or a step's switch and limits"
     )
@@ -5028,7 +5028,7 @@ def parser():
     )
     s.add_argument("--every", dest="custom_every", type=int, help="custom: every N")
     s.add_argument("--unit", dest="custom_unit", choices=["hours", "days"], help="custom: hours or days")
-    s.add_argument("--max-bots", dest="max_bots", type=int, help="find_stuck and dream: most bots per run")
+    s.add_argument("--max-bots", dest="max_bots", type=int, help="dream: most bots per run")
     s.set_defaults(fn="maintenance set")
     s = maintenance.add_parser("run", help="run now: all steps, or one with --step (the owner or an admin)")
     s.add_argument("--step", choices=STEPS)
