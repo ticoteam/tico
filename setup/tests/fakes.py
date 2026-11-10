@@ -347,10 +347,25 @@ class FakeRoute53:
         }
 
     def change_resource_record_sets(self, HostedZoneId, ChangeBatch):
+        """As Route 53 does: the whole batch or nothing. CREATE of an existing set, DELETE of a missing or changed one
+        (the keys given must match), and a CNAME sharing its name with another type are refused."""
         self.calls.append(("change_resource_record_sets", {"HostedZoneId": HostedZoneId, "ChangeBatch": ChangeBatch}))
+        key = lambda r: (r["Name"].rstrip(".").lower(), r["Type"])  # noqa: E731
+        after = list(self.records)
         for c in ChangeBatch["Changes"]:
-            rs = c["ResourceRecordSet"]
-            key = (rs["Name"].rstrip("."), rs["Type"])
-            self.records = [r for r in self.records if (r["Name"].rstrip("."), r["Type"]) != key]
-            if c["Action"] == "UPSERT":
-                self.records.append(rs)
+            rs, at = c["ResourceRecordSet"], [r for r in after if key(r) == key(c["ResourceRecordSet"])]
+            if c["Action"] == "CREATE" and at:
+                raise InvalidChangeBatch(f"Tried to create resource record set {key(rs)} but it already exists")
+            if c["Action"] == "DELETE" and (not at or any(at[0].get(k) != v for k, v in rs.items() if k != "Name")):
+                raise InvalidChangeBatch(f"Tried to delete resource record set {key(rs)} but it was not found")
+            after = [r for r in after if key(r) != key(rs)]
+            if c["Action"] in ("CREATE", "UPSERT"):
+                after.append(rs)
+        for r in after:
+            if r["Type"] == "CNAME" and any(o is not r and key(o)[0] == key(r)[0] for o in after):
+                raise InvalidChangeBatch(f"RRSet of type CNAME with DNS name {key(r)[0]} is not permitted")
+        self.records = after
+
+
+class InvalidChangeBatch(Exception):
+    pass

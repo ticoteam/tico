@@ -50,7 +50,9 @@ Setup never changes, reuses or deletes an AWS resource without both of its tags 
 first write it reads the names it will take (settings parameter, role, instance profile, backup bucket and user), and
 one that something else holds stops the run with its name; pick another `--name` or `--asset-prefix`. Likewise an
 existing Route 53 record for the domain that points elsewhere is left alone and named, unless this install wrote it
-or you pass `--replace-dns`.
+or you pass `--replace-dns` (which covers the domain's own record only, never a runner hostname beside it). Setup only
+creates a record where none is; it replaces one in a single batch that fails if the record changed since it was read.
+A record that already points at the server is left as it is and does not become setup's.
 
 A self-install's `--company-file` goes through a private, encrypted bucket setup creates in your AWS account, with
 public access blocked and a one-day expiry rule. Setup keeps its bucket name and chart for retries. The server role
@@ -82,7 +84,7 @@ fills nothing in by default: it deletes only with `--asset-prefix`, `--name` and
 
 Destroy deletes the instance and its data with it, and leaves your DNS records alone. It refuses to terminate an instance that would take with it a volume someone attached without setup's tags (DeleteOnTermination on). With `--dns` (and `--domain`) it
 first deletes the domain's A and AAAA records in Route 53 too, but only those that still point at this server's
-addresses; a record someone has pointed elsewhere is left and named. If Route 53 can't be read, nothing at all is
+addresses and that setup made; a record someone has pointed elsewhere, or made by hand, is left and named. If Route 53 can't be read, nothing at all is
 deleted, so running it again is safe.
 
 ### A Linux runner computer from your laptop

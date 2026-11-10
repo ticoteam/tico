@@ -10,7 +10,8 @@ import pytest
 
 from backend import company_file as C
 from backend.tests.helpers.company_file import chart
-from setup import aws, backup, dns, remote, route53, runner_setup, signin, state
+from setup import aws, backup, dns, remote, route53, runner_setup, signin, state, wizard
+from setup.settings import Settings
 from setup.ui import MissingInput
 from setup.tests import fakes
 from setup.tests.fakes import FakeRoute53, aws_clients
@@ -1195,3 +1196,59 @@ def test_a_role_or_backup_user_replaced_between_the_proof_and_the_write_is_never
             say=print,
         )
     assert not iam.called("put_user_policy") and not iam.called("create_access_key")
+
+
+def test_a_record_made_between_the_read_and_the_write_is_never_overwritten():
+    r53 = FakeRoute53(ZONE)
+    want = [dns.Record("A", DOMAIN, "203.0.113.9")]
+    changes, created, found = route53.plan(r53, "Z1", want, set())
+    assert found == [] and created == {DOMAIN} and [c["Action"] for c in changes] == ["CREATE"]
+    production = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 60, "ResourceRecords": [{"Value": "198.51.100.50"}]}
+    r53.records = [production]  # someone else's, made in that instant
+    with pytest.raises(fakes.InvalidChangeBatch):
+        route53.apply(r53, "Z1", changes, HUB)
+    assert r53.records == [production]
+
+
+def test_replace_dns_turns_a_cname_into_the_servers_address_in_one_batch(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    r53 = d.route53_client("")._inner
+    r53.records = [{"Name": f"{DOMAIN}.", "Type": "CNAME", "TTL": 60, "ResourceRecords": [{"Value": "app.example."}]}]
+    code, out = go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic", "--replace-dns"), deps=d)
+    assert code == 0, out
+    assert [(r["Type"], r["ResourceRecords"]) for r in r53.records] == [("A", [{"Value": "203.0.113.9"}])]
+    (batch,) = r53.called("change_resource_record_sets")
+    assert [c["Action"] for c in batch["ChangeBatch"]["Changes"]] == ["DELETE", "CREATE"]
+
+
+def test_a_matching_record_setup_did_not_make_is_left_alone_and_never_deleted(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    r53 = d.route53_client("")._inner
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic")
+    r53.fail = True  # the first run cannot reach Route 53, so the person adds the record by hand
+    assert go(argv, deps=d)[0] == 0 and state.load(DOMAIN)[0]["dns_owned"] == ""
+    manual = {"Name": f"{DOMAIN}.", "Type": "A", "TTL": 3600, "ResourceRecords": [{"Value": "203.0.113.9"}]}
+    r53.fail, r53.records = False, [dict(manual)]
+    code, out = go(argv, deps=d)
+    assert code == 0, out
+    assert r53.records == [manual] and not r53.called("change_resource_record_sets")  # TTL kept, nothing written
+    assert state.load(DOMAIN)[0]["dns_owned"] == ""
+    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    assert code == 0 and f"Left alone: A {DOMAIN} -> 203.0.113.9 was not made by this setup" in out, out
+    assert r53.records == [manual] and not r53.called("change_resource_record_sets")
+
+
+def test_replace_dns_covers_only_the_requested_hostname_not_the_runner_one():
+    r53 = FakeRoute53(ZONE)
+    runner = f"runner.{DOMAIN}"
+    theirs = {"Name": f"{runner}.", "Type": "CNAME", "TTL": 60, "ResourceRecords": [{"Value": "other.example."}]}
+    r53.records = [
+        {"Name": f"{DOMAIN}.", "Type": "CNAME", "TTL": 60, "ResourceRecords": [{"Value": "old.example."}]},
+        theirs,
+    ]
+    s = Settings(domain=DOMAIN, replace_dns=True)
+    records = dns.plan_records(DOMAIN, "cloudflared", tunnel_id="t1", runner_host=runner)
+    changes, created, found = route53.plan(r53, "Z1", records, wizard.replaceable(s))
+    assert found == [theirs] and wizard.replaceable(s) == {DOMAIN}
+    with pytest.raises(MissingInput, match="--replace-dns covers only the server's own hostname"):
+        wizard.refuse_dns(s, found)

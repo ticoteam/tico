@@ -677,37 +677,49 @@ def _route53(io: IO, s: Settings, deps: Deps, zone: dnsmod.Zone, records) -> boo
         return False
     if not io.confirm(f"  Create the record in Route 53 zone {zone.name}?", True):
         return False
-    refuse_dns(s, route53.conflicts(client, zid, records, set()))
-    route53.upsert(client, zid, records, awsmod.Names(s.asset_prefix))
-    io.say("  Route 53 records upserted.")
-    s.dns_owned = ",".join(sorted(set(filter(None, s.dns_owned.split(","))) | {r.name.lower() for r in records}))
+    ours = {r.value for r in records} | {s.server_ip} - {""}
+    changes, created, found = route53.plan(client, zid, records, replaceable(s), ours)
+    refuse_dns(s, found)
+    route53.apply(client, zid, changes, awsmod.Names(s.asset_prefix))
+    io.say("  Route 53 records written." if changes else "  Route 53 records already point here; left as they are.")
+    s.dns_owned = ",".join(sorted(set(filter(None, s.dns_owned.split(","))) | created))
     saved = state.load(s.domain)[0]
     if saved:  # at once: a re-run of this install may update what it wrote, also if this run stops later
         state.save(s.domain, {**saved, "dns_owned": s.dns_owned})
     return True
 
 
+def replaceable(s: Settings) -> set[str]:
+    """The names whose Route 53 records may be replaced: the ones this install made, and under --replace-dns the
+    requested hostname only (never a runner hostname beside it)."""
+    return set(filter(None, s.dns_owned.split(","))) | ({s.dns().lower()} if s.replace_dns else set())
+
+
 def refuse_dns(s: Settings, found: list[dict]) -> None:
     """A Route 53 record setup did not make is never replaced, unless this install wrote it or --replace-dns says so."""
-    owned = set(filter(None, s.dns_owned.split(",")))
-    found = [rs for rs in found if rs["Name"].rstrip(".").lower() not in owned]
-    if found and not s.replace_dns:
+    found = [rs for rs in found if rs["Name"].rstrip(".").lower() not in replaceable(s)]
+    if found:
+        here = any(rs["Name"].rstrip(".").lower() == s.dns().lower() for rs in found)
         raise MissingInput(
             "Route 53 already has "
             + "; ".join(route53.describe(rs) for rs in found)
-            + ", which this setup did not make; refusing to replace it. Pass --replace-dns to point it at this server, "
-            "or set up another --domain."
+            + ", which this setup did not make; refusing to replace it. "
+            + (
+                "Pass --replace-dns to point it at this server, or set up another --domain."
+                if here
+                else "--replace-dns covers only the server's own hostname; remove that record or pick another name."
+            )
         )
 
 
 def dns_preflight(s: Settings, deps: Deps, zone: dnsmod.Zone | None, records, ours: set[str]) -> None:
     """Reads only, before the first write: the hostname's Route 53 records are free, this install's, or replaceable."""
-    if not zone or zone.provider.key != "route53" or s.replace_dns:
+    if not zone or zone.provider.key != "route53":
         return
     client, zid, status, problem = _r53_zone(s, deps, zone)
     if problem or status != "authoritative":
         return  # setup writes nothing there: ensure_dns says to add the record by hand
-    refuse_dns(s, route53.conflicts(client, zid, records, ours))
+    refuse_dns(s, route53.plan(client, zid, records, replaceable(s), ours, preflight=True)[2])
 
 
 def _r53_client(profile: str):
@@ -1493,10 +1505,17 @@ def _dns_to_delete(io: IO, args, saved: dict, deps: Deps, ours: set[str]):
     except Exception as e:
         io.say(f"Could not read Route 53 ({type(e).__name__}).")
         return None
+    if "dns_owned" in saved and domain not in set(filter(None, str(saved["dns_owned"]).split(","))):
+        # The saved install records which names setup made; this is not one of them. (State from before setup kept
+        # that list has no such key: there, records pointing only at this server's tagged addresses go.)
+        for rs in sets:
+            io.say(f"  Left alone: {route53.describe(rs)} was not made by this setup; delete it yourself if unused.")
+        sets, other = [], other + sets
     for rs in sets:
         io.say(f"  dns: {rs['Type']} {domain} -> {', '.join(v['Value'] for v in rs['ResourceRecords'])}")
     for rs in other:
-        io.say(f"  Left alone: {rs['Type']} {domain} no longer points only at this server.")
+        if "AliasTarget" in rs or not {v["Value"] for v in rs.get("ResourceRecords", [])} <= ours:  # else said above
+            io.say(f"  Left alone: {rs['Type']} {domain} no longer points only at this server.")
     if not sets and not other:
         io.say(f"  No A or AAAA record for {domain} in Route 53.")
     return client, zid, sets
