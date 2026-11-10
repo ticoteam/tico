@@ -197,6 +197,29 @@ def test_a_tico_05_database_with_tasks_is_refused_before_anything_is_written(tmp
     migrations.preflight(path)  # with no task there is nothing to lose: it may start
 
 
+V3_FEEDBACK = "20261110020000_feedback_ask_subject"  # a migration before the cut-over that a 0.5 database has not had
+
+
+def test_a_tico_05_database_is_refused_by_every_connection_before_any_migration_runs(tmp_path):
+    """Not only the store's start: a bare connection (hubdb.migrate, which every hubdb.connect runs) refuses it too,
+    before it runs a migration the database has not had, so nothing is written."""
+    from backend.store import H
+
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    old = sqlite3.connect(":memory:", isolation_level=None)
+    with sqlite3.connect(path) as made:
+        made.backup(old)
+    old.row_factory = sqlite3.Row
+    old.execute("DELETE FROM schema_migrations WHERE version IN (?, ?)", (migrations.CUTOVER, V3_FEEDBACK))
+    old.execute("INSERT INTO tasks (id, title, status) VALUES ('t1', 'Old', 'open')")
+    before = old.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall()
+    with pytest.raises(migrations.MigrationError, match="tasks from Tico 0.5"):
+        H.migrate(old)
+    assert old.execute("SELECT version, checksum FROM schema_migrations ORDER BY version").fetchall() == before
+    old.close()
+
+
 def test_a_database_on_this_release_with_tasks_starts(tmp_path):
     path = tmp_path / "hub.sqlite"
     boot(path)

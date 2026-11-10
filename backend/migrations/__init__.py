@@ -30,7 +30,8 @@ step (`CLOUD_VERSION`) neither list grows: every persistent change is a file her
 `preflight` runs before anything writes to a database. It refuses a file newer than this code, a recorded migration this
 code does not know or whose file has changed, and a file below `MIN_BRIDGE_USER_VERSION`, which a release that writes that
 version must open first. `Store.initialize(adopt_legacy=True)`, the legacy import (manage.migrate_legacy), skips only that
-last refusal.
+last refusal. A database made by Tico 0.5 (`refuse_old_tasks`) is also refused by `hubdb.migrate`, on every connection,
+before its first migration.
 """
 
 import hashlib
@@ -205,13 +206,23 @@ def preflight(path, *, adopt_legacy=False, directory=None):
                 f"upgrades. Start it once with Tico v0.5.x (the release that writes version {MIN_BRIDGE_USER_VERSION}), "
                 "then upgrade to this release."
             )
-        if "tasks" in tables and any(migration.version == CUTOVER for migration in known):
-            cut = (
-                "schema_migrations" in tables
-                and conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (CUTOVER,)).fetchone()
-            )
-            if not cut and conn.execute("SELECT 1 FROM tasks LIMIT 1").fetchone():
-                raise MigrationError(OLD_TASKS)
+        if any(migration.version == CUTOVER for migration in known):
+            refuse_old_tasks(conn)
+
+
+def refuse_old_tasks(conn):
+    """Refuse a database made by Tico 0.5: it has tasks and has not had the cut-over. `preflight` runs this on a file
+    before the store starts, and `hubdb.migrate` on every connection before its first migration, so a 0.5 database is
+    never written to, whichever way it is opened."""
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if "tasks" not in tables:
+        return
+    cut = (
+        "schema_migrations" in tables
+        and conn.execute("SELECT 1 FROM schema_migrations WHERE version=?", (CUTOVER,)).fetchone()
+    )
+    if not cut and conn.execute("SELECT 1 FROM tasks LIMIT 1").fetchone():
+        raise MigrationError(OLD_TASKS)
 
 
 def _record_legacy(conn):
