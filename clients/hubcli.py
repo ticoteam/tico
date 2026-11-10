@@ -83,7 +83,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub task ask <id> --withdraw [--requirement R] [-m "why"]   take your open ask back
     hub task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
                                            a bot named on an OK or a question answers it (no needs a note)
-    hub task give <id> <requirement> <person> --version N   hand what you are asked to another person
+    hub task give <id> <requirement> --to <person> --version N   hand what you are asked to another person
     hub task file --parent <id> [--pipeline general] [--owner X] "title" [--body "..."]
                                            a task this one waits on; yours unless --owner
     hub task snooze <id> [--until DATE] -m "why" --version N
@@ -2085,7 +2085,8 @@ def parser():
     s = task.add_parser("give", help="give what you are asked on a task to another person")
     s.add_argument("id")
     s.add_argument("requirement", help="the requirement's id, from hub task show")
-    s.add_argument("to", help="the person it goes to: their id")
+    s.add_argument("to_person", nargs="?", metavar="PERSON", help=argparse.SUPPRESS)  # the older form of --to
+    s.add_argument("--to", help="the person it goes to: their id (required)")
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")

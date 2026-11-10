@@ -828,13 +828,16 @@ def run(args, who=None):
             "reassign",
             "ask",
             "answer",
-            "give",
             "file",
             "snooze",
             "unsnooze",
             "update",
         ):
             # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
+            return unwrap(via_tool(client, args))
+        if sub == "give":  # `--to <person>`, or the person as a third word
+            args.to = args.to or args.to_person
+            del args.to_person
             return unwrap(via_tool(client, args))
         if sub == "label":
             split = lambda values: [x.strip() for one in values or [] for x in one.split(",") if x.strip()]

@@ -1446,6 +1446,8 @@ def task_answer(api, args):
     writes=True,
 )
 def task_give(api, args):
+    if not args.get("to"):
+        raise ValueError("Say who it goes to: --to <person>")
     body = {"to": args["to"], "version": _seen(args)}
     path = f"tasks/{args['id']}/asks/{quote(args['requirement'], safe='')}/give"
     return _asked(api, args).post(path, body, key=_key(args))

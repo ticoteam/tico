@@ -113,7 +113,7 @@ COMMANDS = [
         ("POST", "tasks/T1/asks/r9/answer", {"value": "no", "version": 3, "note": "Wrong totals"}),
     ),
     (
-        ["task", "give", "T1", "r9", "ben", "--version", "3"],
+        ["task", "give", "T1", "r9", "--to", "ben", "--version", "3"],
         ("hub_task_give", {"id": "T1", "requirement": "r9", "to": "ben", "version": 3}),
         ("POST", "tasks/T1/asks/r9/give", {"to": "ben", "version": 3}),
     ),
@@ -217,6 +217,21 @@ def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeyp
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
     assert remotecli.main(hubcli.parser().parse_args(["task", "relate", "T1", "T2", "--kind", "blocks"])) == 1
     assert json.loads(capsys.readouterr().out)["detail"] == hubtools.BLOCKING_GONE and cli.writes() == []
+
+
+def test_give_takes_the_person_as_to_or_as_a_third_word_and_needs_one(monkeypatch, capsys):
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    sent = []
+    for words in (["--to", "ben"], ["ben"]):
+        cli = Recorder()
+        monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+        remotecli.run(hubcli.parser().parse_args(["task", "give", "T1", "r9", *words, "--version", "3"]))
+        sent.append(cli.writes())
+    assert sent[0] == sent[1] == [("POST", "tasks/T1/asks/r9/give", {"to": "ben", "version": 3})]
+    cli = Recorder()
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
+    assert remotecli.main(hubcli.parser().parse_args(["task", "give", "T1", "r9", "--version", "3"])) == 1
+    assert json.loads(capsys.readouterr().out)["detail"] == "Say who it goes to: --to <person>" and not cli.writes()
 
 
 def test_label_reads_the_labels_but_sends_the_version_the_bot_was_shown():
