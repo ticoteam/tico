@@ -47,7 +47,8 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   Messages and task comments have a place through their thread (a task comment's is its task's conversation). Mail and
   drafts have none, so a `where` rule never meets them.
 - Fails open: checks Off, no engine, Decide's monthly cap, the day's call cap, the deadline, an error or a malformed
-  answer let the output through with a `rules.unchecked` event. Events never carry the text.
+  answer let the output through with a `rules.unchecked` event. Events never carry the text. Any other failure of the
+  check (a fault here, not the judge) is a 503 and the write is not made.
 - Bounded: at most `rule_check_concurrency` calls run at once in this process (`call_slots.Calls`); with every slot in
   use the output goes through unchecked at once (`busy`), never waiting for one. After BREAKER_FAILURES timeouts or
   errors in a row no call is made for BREAKER_SECONDS (`breaker`), then one call probes. Each level has its own
@@ -148,6 +149,7 @@ AUDIENCE = {}
 # The request path of the write being checked (app.mutate sets it): kept on a hold, so Send anyway runs that path's
 # privacy guard again as the bot (task_privacy.guard_write).
 PATH = contextvars.ContextVar("org_rule_path", default="")
+CHECK_FAILED = "The rule check could not run, so nothing was written. Try again."
 SUMMARY_RULES, SUMMARY_CHARS, SUMMARY_NAMES = 3, 200, 10  # a hold summary's rule previews, their length, its names
 
 
@@ -479,9 +481,10 @@ def check_as(
     """Check one output held as `principal` (a person or a bot). `sender` is who made it and `via` the route
     (`checked_as` reads both from an identity). `place`: the write's place, or a function of (c, principal,
     recipients) that reads it inside the check's read (`place_for`). Returns the verdict `apply` reads, or None when
-    nothing is checked (no rule matches, checks are off, no principal). Never raises: a failure is a verdict marked
-    unchecked. `skip`: (rule id, version) pairs already decided (Send anyway asks only the rules changed or added
-    since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
+    nothing is checked (no rule matches, checks are off, no principal). Only the judge being out (a timeout, an error
+    or a malformed answer from it, the breaker, no engine, the budget) is a verdict marked unchecked; any other
+    failure raises a 503 `Problem` (`CHECK_FAILED`), so the write fails. `skip`: (rule id, version) pairs already
+    decided (Send anyway asks only the rules changed or added since its hold); the verdict's `matched` is every pair that matched, to check again inside the write. `origin`:
     where an outside message came from (`inbound`), kept on the verdict and its hold."""
     author = principal
     if not author:
@@ -600,11 +603,11 @@ def check_as(
         if broken is None:
             return {**verdict, "outcome": "unchecked", "error": error or "shape", "call": call["id"]}
         return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "call": call["id"]}
-    except Exception as exc:  # noqa: BLE001 - the check never stops the write
-        LOG.warning("Rule check failed: %s", type(exc).__name__)
-        if verdict is not None:
-            return {**verdict, "outcome": "unchecked", "error": "error"}
-        return None
+    except Exception as exc:
+        # Only the judge being out fails open (`_ask` turns its failures into error codes: a timeout, an error, a
+        # malformed answer, the breaker). Anything else is a fault here: the write fails, never goes unchecked.
+        LOG.exception("Rule check failed")
+        raise Problem("rule_check", CHECK_FAILED, 503, retryable=True) from exc
 
 
 def structured_check(c, author, operation, *, targets=(), contacts=()):

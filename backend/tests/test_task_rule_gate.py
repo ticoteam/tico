@@ -138,6 +138,45 @@ def test_a_check_that_cannot_run_writes_nothing(ruled, monkeypatch):
     assert row(api, task["id"])["status"] != "done"
 
 
+def done_by_ops(api, task, note, expected=200):
+    r = api.post(
+        f"/api/v2/tasks/{task['id']}/done",
+        json={"version": task["version"], "note": note},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def reasons(api):
+    found = sql(api, "SELECT detail FROM events WHERE action='rules.unchecked' ORDER BY rowid")
+    return [json.loads(e["detail"])["reason"] for e in found]
+
+
+def test_a_fault_in_the_rule_lookup_is_a_503_and_writes_nothing(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api)
+    from backend import org_rule_check as K
+
+    def broken(*a, **k):
+        raise ValueError("bad rule row")
+
+    task = task_for_ops(api)
+    monkeypatch.setattr(K.R, "matching", broken)
+    done_by_ops(api, task, "Our favorite color is red.", 503)
+    assert row(api, task["id"])["status"] != "done" and judge.calls == []
+
+
+def test_the_judge_being_out_lets_the_write_go_with_an_unchecked_event(ruled):
+    api, judge = ruled
+    color_rule(api)
+    judge.fail = RuntimeError("provider down")
+    task = task_for_ops(api)
+    got = done_by_ops(api, task, "Our favorite color is red.")
+    assert "held" not in got and row(api, task["id"])["status"] == "done"
+    assert reasons(api) == ["error"]
+
+
 def test_a_held_hand_off_of_a_private_task_keeps_its_text_off_the_hold(ruled):
     api, _ = ruled
     color_rule(api, if_broken="escalate", reviewer="ben")
