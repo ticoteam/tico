@@ -13,7 +13,7 @@ Steps:
 3. If the user must do something, say what, in one step: where to click or which setting to change. If nothing is needed,
    say so only when a user might expect to do something.
 4. If the change is breaking, put the instruction first and the reason second. Give the date it takes effect if one applies.
-5. Remove internal words: ticket numbers, service names, library names, "refactor", "migration", a developer's name. Keep the
+5. Remove internal words: issue numbers, service names, library names, "refactor", "migration", a developer's name. Keep the
    product's own feature names exactly as the product shows them.
 6. Read it as a user who has never seen the code. If they would ask "so what?" or "where?", add the one missing clause.
 7. Keep it short: one or two sentences for a fix, a short paragraph for a feature with a setting to find.
