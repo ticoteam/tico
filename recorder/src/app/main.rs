@@ -117,7 +117,7 @@ commands! {
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
     close_meeting() => |app| app.close();
-    stop_recording() => |app| app.stop();
+    stop_recording() => |app| app.stop_by_hand();
     rename(title: String) => |app| app.rename(&title);
     finish_live() => |app| app.finish_live();
     control_live(action: String) => |app| app.control_live(&action);

@@ -4,6 +4,7 @@ use super::recorder::*;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tico_recorder_native::{
+    calls::Claim,
     settings::{self, AppLock, Destination},
     store::{self, Store},
     workspace::{Item, Turn},
@@ -1655,4 +1656,326 @@ fn screen_controls_honor_local_pause_and_pending_discard() {
         );
         assert!(super::screen::require_live(&app.context).is_err());
     }
+}
+
+// ---- Calls: `tico-recorder://record` from a Google Meet started in a Tico thread ----
+
+const CALL: &str = "6f1c1a52-6a4e-4c39-9d43-6a1f0e3c2b10";
+
+/// A local Tico for the call tests: answers each request with `answer(method, path)` and keeps what was asked.
+struct FakeTico {
+    url: String,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl FakeTico {
+    fn start(answer: fn(&str, &str) -> (u16, Value)) -> Self {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let seen = Arc::new(Mutex::new(vec![]));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (log, stopped) = (seen.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                let mut stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(_) => {
+                        std::thread::sleep(Duration::from_millis(5));
+                        continue;
+                    }
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut head = vec![];
+                while !head.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    if stream.read_exact(&mut byte).is_err() {
+                        break;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).to_string();
+                let mut words = head.split_whitespace();
+                let (method, path) = (
+                    words.next().unwrap_or_default().to_owned(),
+                    words.next().unwrap_or_default().to_owned(),
+                );
+                let length = head
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse::<usize>().unwrap_or(0))
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; length];
+                let _ = stream.read_exact(&mut body);
+                log.lock().unwrap().push(format!("{method} {path}"));
+                let (status, reply) = answer(&method, &path);
+                let reply = reply.to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        Self { url, seen, stop }
+    }
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+    fn asked(&self, request: &str) -> usize {
+        self.seen().iter().filter(|seen| *seen == request).count()
+    }
+}
+impl Drop for FakeTico {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+fn local_tico(
+    config: &settings::Settings,
+    id: &str,
+) -> anyhow::Result<tico_recorder_native::network::Tico> {
+    let destination = config
+        .destinations
+        .iter()
+        .find(|row| row.id == id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Choose a Tico connection"))?;
+    tico_recorder_native::network::Tico::new(destination, "synthetic-token".into())
+}
+fn silent_capture(
+    store: &Store,
+    id: &str,
+    _: Option<String>,
+    _: bool,
+) -> anyhow::Result<tico_recorder_native::engine::RecordingHandle> {
+    use tico_recorder_native::capture::{AudioSink, CaptureStream, Source};
+    struct Quiet;
+    impl CaptureStream for Quiet {
+        fn stop(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+    tico_recorder_native::engine::RecordingHandle::with_sources(store.clone(), id.into(), || {
+        let (sink, consumer) = AudioSink::channel();
+        Ok((
+            vec![Source {
+                channel: tico_recorder_native::audio::Channel::Microphone,
+                name: "silent".into(),
+                sample_rate: 16000,
+                started: Instant::now(),
+                health: sink.health.clone(),
+                consumer,
+                stream: Box::new(Quiet),
+                live_input: None,
+            }],
+            String::new(),
+        ))
+    })
+}
+/// A Recorder signed in to `tico` as `acme`, recording silently.
+fn call_app(directory: &std::path::Path, tico: &FakeTico) -> Recorder {
+    let mut app = app(Store::open(directory).unwrap(), directory);
+    app.tico_for = local_tico;
+    app.start_capture = silent_capture;
+    app.config.destinations = vec![Destination {
+        id: "acme".into(),
+        name: "Acme".into(),
+        base_url: tico.url.clone(),
+        actor: "human:1".into(),
+    }];
+    app
+}
+fn call_link(tico: &FakeTico) -> String {
+    format!("tico-recorder://record?server={}&call={CALL}", tico.url)
+}
+fn claim_path() -> String {
+    format!("/api/v2/calls/{CALL}/recorder")
+}
+/// The source's claim answer, the call's live meeting `live-1` as `state`, and `{}` for the rest.
+fn source_answer(method: &str, path: &str, state: &str) -> (u16, Value) {
+    if path == claim_path() && method == "POST" {
+        (
+            200,
+            json!({"source":true,"meeting_id":"live-1","title":"Pricing call","source_actor":"human:1"}),
+        )
+    } else if path == "/api/v2/live-meetings/live-1" {
+        (
+            200,
+            json!({"id":"live-1","state":state,"visibility":"private","imported_meeting_id":null}),
+        )
+    } else {
+        (200, json!({}))
+    }
+}
+
+#[test]
+fn a_call_link_signs_in_to_its_org_first_and_records_nothing_when_another_recorder_is_the_source() {
+    let tico = FakeTico::start(|method, path| {
+        if path == claim_path() && method == "POST" {
+            (
+                200,
+                json!({"source":false,"meeting_id":"live-1","title":"Pricing call","source_actor":"human:2"}),
+            )
+        } else {
+            (200, json!({}))
+        }
+    });
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    let signed_in = app.config.destinations.clone();
+    app.config.destinations.clear();
+    app.link(&call_link(&tico));
+    // Not signed in to that org: its sign-in is asked for first, and nothing is claimed yet.
+    assert_eq!(app.connect.as_deref(), Some(tico.url.as_str()));
+    assert!(tico.seen().is_empty());
+    // Once signed in, the call goes on.
+    app.config.destinations = signed_in;
+    app.connect = None;
+    app.continue_call();
+    settle(&mut app, |_| {
+        tico.asked(&format!("POST {}", claim_path())) == 1
+    });
+    settle(&mut app, |app| app.destination == "acme");
+    assert_eq!(tico.asked(&format!("POST {}", claim_path())), 1);
+    assert_eq!(app.destination, "acme");
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(full_view(&mut app)["status"]["recording"].is_null());
+    assert!(app.store.list().unwrap().is_empty(), "nothing recorded");
+    // A dismissed sign-in drops the waiting call.
+    app.config.destinations.clear();
+    app.link(&call_link(&tico));
+    app.dismiss_connect();
+    app.config.destinations = vec![connection("acme", "x")];
+    app.continue_call();
+    assert_eq!(tico.asked(&format!("POST {}", claim_path())), 1);
+}
+
+#[test]
+fn an_older_tico_without_calls_only_shows_its_org() {
+    // FastAPI's own 404, with no Tico error code.
+    let tico = FakeTico::start(|_, _| (404, json!({"detail":"Not Found"})));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    app.config
+        .destinations
+        .push(connection("other", "other.example.com"));
+    app.destination = "other".into();
+    app.link(&call_link(&tico));
+    settle(&mut app, |app| app.destination == "acme");
+    assert_eq!(app.destination, "acme");
+    assert!(app.error.is_empty(), "{}", app.error);
+    assert!(app.store.list().unwrap().is_empty());
+}
+
+#[test]
+fn the_source_records_into_the_calls_live_meeting_and_stops_by_itself_when_the_call_ends() {
+    let tico = FakeTico::start(|method, path| source_answer(method, path, "ended"));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    // Hidden, as during a call: the Recorder reads the call's meeting itself.
+    app.set_visible(false);
+    app.accept_claim(
+        "acme",
+        CALL,
+        Claim::Source {
+            meeting_id: "live-1".into(),
+            title: "Pricing call".into(),
+        },
+    );
+    let id = app.meeting.clone().expect("the call's recording is open");
+    let context = app.store.context(&id).unwrap();
+    assert_eq!(
+        (
+            context.live_destination.as_str(),
+            context.live_id.as_str(),
+            context.call_id.as_str()
+        ),
+        ("acme", "live-1", CALL)
+    );
+    assert_eq!(app.store.get(&id).unwrap().title, "Pricing call");
+    assert_eq!(full_view(&mut app)["meeting"]["data"]["call"], true);
+    // Tico says the call's meeting ended: the recording stops by itself and is kept as in Tico.
+    settle(&mut app, |app| app.status_view()["recording"].is_null());
+    assert!(
+        app.status_view()["recording"].is_null(),
+        "stopped by itself"
+    );
+    assert!(tico.asked("GET /api/v2/live-meetings/live-1") >= 1);
+    let record = app.store.get(&id).unwrap();
+    assert!(
+        sent_to(&record.deliveries, "acme"),
+        "{:?}",
+        record.deliveries
+    );
+    let view = full_view(&mut app);
+    let meeting = &view["meeting"]["data"];
+    assert_eq!(meeting["sent"], true);
+    assert_eq!(meeting["can_finish"], false);
+    assert_eq!(row(&view, "Pricing call")["can_send"], false);
+    // It is never filed as a meeting of its own, and no live meeting was made for it.
+    app.save(&id, "acme", "team", "Pricing call", false);
+    app.send_meeting(&id, "acme");
+    settle(&mut app, |app| !app.busy);
+    let seen = tico.seen();
+    assert!(
+        !seen
+            .iter()
+            .any(|row| row.starts_with("POST /api/v2/live-meetings ")
+                || row == "POST /api/v2/live-meetings"
+                || row.contains("/api/v2/meetings/import")
+                || row.contains("/finalize")
+                || row.contains("/control")),
+        "{seen:?}"
+    );
+    assert_eq!(tico.asked(&format!("DELETE {}", claim_path())), 0);
+}
+
+#[test]
+fn stopping_a_call_by_hand_gives_the_source_back_and_skips_finish() {
+    let tico = FakeTico::start(|method, path| source_answer(method, path, "live"));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    app.link(&call_link(&tico));
+    settle(&mut app, |app| !app.status_view()["recording"].is_null());
+    let id = app.status_view()["recording"]["id"]
+        .as_str()
+        .expect("the source records")
+        .to_owned();
+    // A second link for the call being recorded changes nothing.
+    app.link(&call_link(&tico));
+    settle(&mut app, |_| false);
+    assert_eq!(tico.asked(&format!("POST {}", claim_path())), 1);
+    assert_eq!(app.store.list().unwrap().len(), 1);
+    assert_eq!(app.status_view()["recording"]["id"], id.as_str());
+    app.stop_by_hand();
+    settle(&mut app, |_| {
+        tico.asked(&format!("DELETE {}", claim_path())) == 1
+    });
+    assert_eq!(tico.asked(&format!("DELETE {}", claim_path())), 1);
+    settle(&mut app, |app| app.status_view()["recording"].is_null());
+    assert!(app.status_view()["recording"].is_null());
+    let record = app.store.get(&id).unwrap();
+    assert!(sent_to(&record.deliveries, "acme"));
+    // Nothing more goes to the call's meeting from here.
+    assert_eq!(app.store.context(&id).unwrap().live_state, "ended");
+    let view = full_view(&mut app);
+    assert_eq!(view["meeting"]["data"]["call"], true);
+    assert_eq!(view["meeting"]["data"]["can_finish"], false);
+    assert_eq!(row(&view, "Pricing call")["can_send"], false);
+    assert!(
+        !tico
+            .seen()
+            .iter()
+            .any(|row| row == "POST /api/v2/live-meetings"),
+        "no live meeting is made for a call"
+    );
 }

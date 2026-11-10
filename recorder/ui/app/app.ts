@@ -341,8 +341,8 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     }
     if (m.sent) html += badge(`${icon('check', 12)}In Tico`, '');
     else if (sending) html += `<button class="btn small" disabled><span class="spin"></span>${esc(sending.label)}</button>`;
-    // While recording, Stop finishes; Finish stays for a stopped meeting not yet saved.
-    else if (st.recording?.id !== m.id) html += `<button class="btn" data-act="finish-open" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>Finish</button>`;
+    // While recording, Stop finishes; Finish stays for a stopped meeting not yet saved. Tico files a call's.
+    else if (st.recording?.id !== m.id && !m.call) html += `<button class="btn" data-act="finish-open" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>Finish</button>`;
     html += `<button class="icon-btn ${S.ui.pop?.kind === 'more' ? 'on' : ''}" data-act="pop" data-pop="more" title="More" aria-label="More">${icon('more')}${m.audio.attention ? '<span class="dot"></span>' : ''}</button>`;
     return html;
   }
@@ -436,7 +436,7 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     const org = row.org ? { ...row.org, ...(orgById(row.org.id) || {}) } : null;
     const menu = S.ui.pop?.anchorId === row.id ? 'menu-open' : '';
     const sub = [isNaN(date) ? '' : timeOf(date), length(row.duration_ms), org ? org.name : 'This Mac only'].filter(Boolean).map(esc).join(' · ');
-    const save = row.local && row.can_send ? `<button class="btn small" data-act="finish-open" data-id="${id}">Save to Tico</button>` : '';
+    const save = row.local && row.can_send && !row.call ? `<button class="btn small" data-act="finish-open" data-id="${id}">Save to Tico</button>` : '';
     const trash = row.recording ? '' : `<button class="icon-btn trash hover-only" data-act="ask-delete" data-id="${id}" title="Delete" aria-label="Delete ${esc(row.title)}">${icon('trash', 15)}</button>`;
     return `<div class="row ${menu}" data-act="open" data-id="${id}" role="button" tabindex="0" aria-label="${esc(row.title)}">
       ${org ? orgTile(org, 's32') : macTile()}
@@ -1097,15 +1097,15 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
   function finishSource(id: string) {
     if (S.meeting?.id === id) {
       const m = S.meeting!;
-      return { id, title: m.title, live_org: m.live_org, team: m.people.team, live: !!m.live && !m.kept_local, targets: m.targets, paused: m.paused_warning, blocked: m.send_blocked, sent: m.sent, connected: m.connected };
+      return { id, title: m.title, live_org: m.live_org, team: m.people.team, live: !!m.live && !m.kept_local, targets: m.targets, paused: m.paused_warning, blocked: m.send_blocked, sent: m.sent, connected: m.connected, call: !!m.call };
     }
     const row = S.library?.rows.find((r) => r.id === id);
     if (!row) return null;
-    return { id, title: row.title, live_org: row.live_org, team: true, live: !!row.live_org, targets: row.targets, paused: row.paused_warning, blocked: null, sent: row.sent, connected: S.library!.connected };
+    return { id, title: row.title, live_org: row.live_org, team: true, live: !!row.live_org, targets: row.targets, paused: row.paused_warning, blocked: null, sent: row.sent, connected: S.library!.connected, call: !!row.call };
   }
   function openFinish(id: string) {
     const src = finishSource(id);
-    if (!src) return;
+    if (!src || src.call) return;
     S.ui.pop = null;
     S.ui.share = null;
     const choices = src.targets.filter((t) => !t.already);
@@ -1157,6 +1157,8 @@ type Toggle = (key: string, checked: boolean, disabled?: boolean) => string;
     if (!id) return;
     const src = finishSource(id);
     const m = S.meeting?.id === id ? S.meeting : null;
+    // A call's recording stops only: Tico files the call's transcript.
+    if (src?.call) { await act('stop_recording'); return; }
     const done = !src || src.sent || m?.kept_local || m?.discarded;
     const live = src && !done && src.live && src.live_org && src.targets.some((t) => t.id === src.live_org && !t.already);
     if (live && m?.live_state !== 'paused' && !src.paused && !S.status.busy) {

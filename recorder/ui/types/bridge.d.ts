@@ -132,6 +132,8 @@ export interface LibraryRow {
   org: { id: string; name: string; url: string } | null;
   live_org: string | null;
   targets: Target[];
+  /** A Tico call's recording: Tico files it when the call ends, so it is never saved from here. */
+  call?: boolean;
 }
 export interface Library {
   rows: LibraryRow[];
@@ -374,6 +376,8 @@ export interface Meeting {
   discarded: boolean;
   discard_pending: boolean;
   can_finish: boolean;
+  /** A Tico call's recording: Tico files it when the call ends, so Stop has no Finish. */
+  call?: boolean;
   place: string;
   sync_error: string;
   setup: string[];

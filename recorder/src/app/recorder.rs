@@ -13,6 +13,7 @@ use std::{
 use tico_recorder_native::{
     assist,
     audio::Channel,
+    calls::{self, Claim},
     capture,
     desktop::{self, DesktopOrg},
     engine::RecordingHandle,
@@ -62,7 +63,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 11] = [
+const BACKGROUND: [&str; 15] = [
     "live",
     "calendar",
     "autodraft",
@@ -74,7 +75,17 @@ const BACKGROUND: [&str; 11] = [
     "more-links",
     "items",
     "presence",
+    "call",
+    "call-state",
+    "call-release",
+    "call-presence",
 ];
+/// A call's live meeting is read this often while the window's own sync does not read it, to notice the call end.
+const CALL_READ_EVERY: Duration = Duration::from_secs(5);
+/// Who is in the Meet window goes to the call this often.
+const CALL_PRESENCE_EVERY: Duration = Duration::from_secs(10);
+/// How long giving a call back waits for the last words to be transcribed and shared.
+const CALL_LAST_WORDS: Duration = Duration::from_secs(120);
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
 pub const DRAFT_INTERVAL: Duration = Duration::from_secs(10);
@@ -101,6 +112,32 @@ pub struct Block {
 pub fn synthetic_input() -> bool {
     std::env::var_os("TICO_RECORDER_SYNTHETIC_INPUT").is_some()
         && std::env::var_os("TICO_RECORDER_DATA_DIR").is_some()
+}
+/// Capture for a new recording: the microphone and, when chosen, the meeting audio (a test tone with
+/// `synthetic_input`).
+fn start_capture(
+    store: &Store,
+    id: &str,
+    microphone: Option<String>,
+    meeting_audio: bool,
+) -> anyhow::Result<RecordingHandle> {
+    if synthetic_input() {
+        RecordingHandle::with_sources(store.clone(), id.to_owned(), || {
+            Ok((
+                vec![capture::start_synthetic(Channel::Microphone)],
+                String::new(),
+            ))
+        })
+    } else {
+        RecordingHandle::start(store.clone(), id.to_owned(), microphone, meeting_audio)
+    }
+}
+/// A new recording's name when nothing gives one.
+fn default_title() -> String {
+    format!(
+        "Meeting {}",
+        chrono::Local::now().format("%b %-d, %-I:%M %p")
+    )
 }
 /// Consecutive lines from one speaker are one block; each line is a paragraph, and a long line
 /// breaks into paragraphs at sentence ends.
@@ -400,6 +437,21 @@ pub struct Recorder {
     pub visible: bool,
     /// When the default Tico was last asked what speech it can handle, and which Tico it was.
     services_at: Option<(Instant, String)>,
+    /// A call link waiting for sign-in to its org: (org address, call id).
+    pending_call: Option<(String, String)>,
+    /// The call being claimed now: (connection id, call id).
+    claiming: Option<(String, String)>,
+    /// When the call recording's live meeting was last read here, and its Meet names last sent.
+    call_read_at: Instant,
+    call_presence_at: Instant,
+    /// A call whose Tico refused its Meet names (an older Tico): they are not sent again.
+    call_presence_off: String,
+    /// The call recording's live meeting as `watch_call` last read it.
+    call_view: Value,
+    /// Connects to a saved Tico (`Tico::saved`); tests point it at a local server.
+    pub tico_for: fn(&Settings, &str) -> anyhow::Result<Tico>,
+    /// Starts capture for a new recording (`start_capture`); tests use silent sources.
+    pub start_capture: fn(&Store, &str, Option<String>, bool) -> anyhow::Result<RecordingHandle>,
 }
 
 impl Recorder {
@@ -520,6 +572,14 @@ impl Recorder {
             notice_dismissed: String::new(),
             visible: true,
             services_at: None,
+            pending_call: None,
+            claiming: None,
+            call_read_at: Instant::now(),
+            call_presence_at: Instant::now(),
+            call_presence_off: String::new(),
+            call_view: Value::Null,
+            tico_for: Tico::saved,
+            start_capture,
         };
         if !demo {
             app.job("devices", || Ok(json!(capture::sources()?)));
@@ -682,49 +742,51 @@ impl Recorder {
             .as_ref()
             .and_then(|row| row["title"].as_str())
             .map(str::to_owned)
-            .unwrap_or_else(|| {
-                format!(
-                    "Meeting {}",
-                    chrono::Local::now().format("%b %-d, %-I:%M %p")
-                )
-            });
-        match self.store.create(&title) {
+            .unwrap_or_else(default_title);
+        self.begin_recording(&title, |store, id| match event {
+            Some(event) => store.update_context(id, |context| {
+                context.calendar = event;
+                Ok(())
+            }),
+            None => Ok(()),
+        })
+        .map(|(id, _)| id)
+    }
+    /// Creates a recording named `title`, lets `setup` prepare its context, then starts capture and opens it.
+    /// Answers its id and whether capture started.
+    fn begin_recording(
+        &mut self,
+        title: &str,
+        setup: impl FnOnce(&Store, &str) -> anyhow::Result<()>,
+    ) -> Option<(String, bool)> {
+        match self.store.create(title) {
             Ok(record) => {
-                if let Some(event) = event {
-                    let result = self.store.update_context(&record.id, |context| {
-                        context.calendar = event;
-                        Ok(())
-                    });
-                    self.report(result);
-                }
+                let result = setup(&self.store, &record.id);
+                self.report(result);
                 let mic = if self.config.microphone.is_empty() {
                     None
                 } else {
                     Some(self.config.microphone.clone())
                 };
-                let started = if synthetic_input() {
-                    RecordingHandle::with_sources(self.store.clone(), record.id.clone(), || {
-                        Ok((
-                            vec![capture::start_synthetic(Channel::Microphone)],
-                            String::new(),
-                        ))
-                    })
-                } else {
-                    RecordingHandle::start(
-                        self.store.clone(),
-                        record.id.clone(),
-                        mic,
-                        self.config.meeting_audio,
-                    )
-                };
-                match started {
-                    Ok(handle) => self.active = Some((record.id.clone(), handle)),
-                    Err(error) => self.error = error.to_string(),
+                let started = match (self.start_capture)(
+                    &self.store,
+                    &record.id,
+                    mic,
+                    self.config.meeting_audio,
+                ) {
+                    Ok(handle) => {
+                        self.active = Some((record.id.clone(), handle));
+                        true
+                    }
+                    Err(error) => {
+                        self.error = error.to_string();
+                        false
+                    }
                 };
                 self.recorded_here.insert(record.id.clone());
                 let _ = self.open(&record.id);
                 self.reload();
-                Some(record.id)
+                Some((record.id, started))
             }
             Err(error) => {
                 self.error = error.to_string();
@@ -739,6 +801,231 @@ impl Recorder {
         }
         if let Some((_, handle)) = &self.active {
             handle.stop();
+        }
+    }
+    /// Stop, pressed in the window. A call's recording is kept as in Tico, where the call's transcript is filed (so
+    /// there is no Finish), and gives the call's source back while the call is live.
+    pub fn stop_by_hand(&mut self) {
+        if let Some((id, context)) = self.call_recording() {
+            let result = calls::mark_sent(
+                &self.store,
+                &id,
+                &context.live_destination,
+                &context.call_id,
+                "",
+            );
+            self.report(result);
+            if context.live_state != "ended" {
+                self.release_call(&context.live_destination, &context.call_id, Some(id));
+            }
+            self.reload();
+        }
+        self.stop();
+    }
+
+    // ---- Calls: a Google Meet started from a Tico thread ----
+
+    /// The recording in progress when it is a call's, with its context.
+    fn call_recording(&self) -> Option<(String, Context)> {
+        let (id, _) = self.active.as_ref()?;
+        let context = self.store.context(id).ok()?;
+        (!context.call_id.is_empty()).then(|| (id.clone(), context))
+    }
+    /// The saved connection for an org address.
+    fn connection_for(&self, address: &str) -> Option<String> {
+        self.config
+            .destinations
+            .iter()
+            .find(|row| desktop::matches(address, row))
+            .map(|row| row.id.clone())
+    }
+    /// Shows that Tico for what comes next, unless the open meeting lives in another one.
+    fn choose_connection(&mut self, id: &str) {
+        if self.context.live_destination.is_empty() {
+            if self.destination != id {
+                self.reset_saved();
+            }
+            self.destination = id.into();
+            self.choosing_org = false;
+            self.roster_for.clear();
+        }
+    }
+    /// A `tico-recorder://record` link: claims the call's recording source on its org, after signing in to that
+    /// org when the Recorder has no sign-in for it. A second link for the call being recorded or claimed, or any
+    /// link while a claim is under way, changes nothing.
+    pub fn record_call(&mut self, address: &str, call: &str) {
+        if self.claiming.is_some()
+            || self
+                .call_recording()
+                .is_some_and(|(_, context)| context.call_id == call)
+        {
+            return;
+        }
+        match self.connection_for(address) {
+            Some(destination) => self.claim_call(&destination, call),
+            None => {
+                self.pending_call = Some((address.to_owned(), call.to_owned()));
+                if !self.signing_in {
+                    self.connect = Some(address.to_owned());
+                }
+            }
+        }
+    }
+    /// After a sign-in: a call link that waited for it goes on when that org is signed in now.
+    pub fn continue_call(&mut self) {
+        if let Some((address, call)) = self.pending_call.take()
+            && let Some(destination) = self.connection_for(&address)
+        {
+            self.claim_call(&destination, &call);
+        }
+    }
+    fn claim_call(&mut self, destination: &str, call: &str) {
+        if self.updating {
+            self.error = UPDATING.into();
+            return;
+        }
+        if self.active.is_some() {
+            self.error = "Stop the recording in progress first".into();
+            return;
+        }
+        let (config, connect) = (self.config.clone(), self.tico_for);
+        let (destination, call) = (destination.to_owned(), call.to_owned());
+        self.claiming = Some((destination.clone(), call.clone()));
+        self.job_for("call", None, move || {
+            connect(&config, &destination)?.claim_call(&call)
+        });
+    }
+    /// Acts on Tico's answer to a claim. The source records into the call's live meeting, named as the call, and
+    /// shares there as any live meeting does; otherwise the Recorder only shows that org (it is in front already).
+    pub fn accept_claim(&mut self, destination: &str, call: &str, claim: Claim) {
+        match claim {
+            Claim::Source { meeting_id, title } => {
+                if self.active.is_some() || self.updating {
+                    // A recording started meanwhile: someone else's Recorder can record the call.
+                    self.release_call(destination, call, None);
+                    return;
+                }
+                let title = if title.is_empty() {
+                    default_title()
+                } else {
+                    title.chars().take(200).collect()
+                };
+                let (live_destination, call_id) = (destination.to_owned(), call.to_owned());
+                let begun = self.begin_recording(&title, move |store, id| {
+                    store.update_context(id, |context| {
+                        context.live_destination = live_destination;
+                        context.live_id = meeting_id;
+                        context.live_state = "live".into();
+                        context.call_id = call_id;
+                        Ok(())
+                    })
+                });
+                match begun {
+                    // Read the call's meeting at once: a call that ended meanwhile stops the recording now.
+                    Some((_, true)) => self.call_read_at = Instant::now() - CALL_READ_EVERY,
+                    // No capture: a local recording without audio, not the call's.
+                    Some((id, false)) => {
+                        let result = self.store.update_context(&id, |context| {
+                            context.live_destination.clear();
+                            context.live_id.clear();
+                            context.live_state.clear();
+                            context.call_id.clear();
+                            Ok(())
+                        });
+                        self.report(result);
+                        if self.meeting.as_deref() == Some(id.as_str()) {
+                            self.context = self.store.context(&id).unwrap_or_default();
+                        }
+                        self.release_call(destination, call, None);
+                        self.reload();
+                    }
+                    None => self.release_call(destination, call, None),
+                }
+            }
+            Claim::NotSource | Claim::NoCalls => self.choose_connection(destination),
+            Claim::Failed(error) => self.error = error,
+        }
+    }
+    /// Gives the call's source back, in the background. With the recording `id`, it first waits for that
+    /// recording's last audio and words and shares them, then ends its meeting here so nothing more goes there.
+    fn release_call(&mut self, destination: &str, call: &str, id: Option<String>) {
+        let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());
+        let (destination, call) = (destination.to_owned(), call.to_owned());
+        self.job_for("call-release", None, move || {
+            let tico = connect(&config, &destination)?;
+            if let Some(id) = &id {
+                wait_stopped(&store, id)?;
+                let deadline = Instant::now() + CALL_LAST_WORDS;
+                while Instant::now() < deadline
+                    && store
+                        .get(id)?
+                        .chunks
+                        .iter()
+                        .any(|chunk| ["pending", "running"].contains(&chunk.status.as_str()))
+                {
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+                if let Err(error) = tico.push_live(&store, id) {
+                    eprintln!("Call's last words not shared: {error:#}");
+                }
+                store.update_context(id, |context| {
+                    context.live_state = "ended".into();
+                    Ok(())
+                })?;
+            }
+            tico.release_call(&call)?;
+            Ok(json!({}))
+        });
+    }
+    /// The call recording in progress: it stops by itself once its call's live meeting has ended in Tico and is
+    /// kept as in Tico there (no Finish). Until then it reads that meeting every few seconds when the window's own
+    /// sync does not, and tells the call who is in the Meet window.
+    fn watch_call(&mut self) {
+        let Some((id, context)) = self.call_recording() else {
+            return;
+        };
+        if context.live_state == "ended" {
+            let filed = [&self.live, &self.call_view]
+                .into_iter()
+                .find(|view| view["id"] == context.live_id.as_str())
+                .and_then(|view| view["imported_meeting_id"].as_str())
+                .unwrap_or_default()
+                .to_owned();
+            let result = calls::mark_sent(
+                &self.store,
+                &id,
+                &context.live_destination,
+                &context.call_id,
+                &filed,
+            );
+            self.report(result);
+            self.stop();
+            self.reload();
+            return;
+        }
+        let window_syncs = self.visible && self.meeting.as_deref() == Some(id.as_str());
+        if !window_syncs
+            && self.call_read_at.elapsed() >= CALL_READ_EVERY
+            && !self.background.contains("call-state")
+        {
+            self.call_read_at = Instant::now();
+            let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());
+            let (destination, record) = (context.live_destination.clone(), id.clone());
+            self.job_for("call-state", None, move || {
+                connect(&config, &destination)?.read_live(&store, &record)
+            });
+        }
+        if context.call_id != self.call_presence_off
+            && self.call_presence_at.elapsed() >= CALL_PRESENCE_EVERY
+            && !self.background.contains("call-presence")
+            && let Some(names) = tico_recorder_native::speaker_names::present(&id)
+        {
+            self.call_presence_at = Instant::now();
+            let (config, connect) = (self.config.clone(), self.tico_for);
+            let (destination, call) = (context.live_destination, context.call_id);
+            self.job_for("call-presence", None, move || {
+                connect(&config, &destination)?.call_presence(&call, &names)
+            });
         }
     }
     /// Used on quit: stop and wait for the final audio to be saved.
@@ -1177,6 +1464,39 @@ impl Recorder {
                 self.busy = false;
             }
             let here = reply.meeting == self.meeting;
+            match reply.kind.as_str() {
+                "call" => {
+                    if let Some((destination, call)) = self.claiming.take() {
+                        self.accept_claim(&destination, &call, calls::claim_outcome(reply.result));
+                    }
+                    continue;
+                }
+                "call-state" => {
+                    if let Ok(view) = reply.result {
+                        self.call_view = view;
+                    }
+                    continue;
+                }
+                "call-presence" => {
+                    // A Tico without calls has nowhere to put the names; anything else is tried again later.
+                    if let Err(error) = reply.result
+                        && calls::claim_outcome(Err(error)) == Claim::NoCalls
+                    {
+                        self.call_presence_off = self
+                            .call_recording()
+                            .map(|(_, context)| context.call_id)
+                            .unwrap_or_default();
+                    }
+                    continue;
+                }
+                "call-release" => {
+                    if let Err(error) = reply.result {
+                        eprintln!("Call source not given back: {error}");
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             if reply.kind == "more-links" {
                 if here
                     && let Ok(value) = reply.result
@@ -1225,6 +1545,7 @@ impl Recorder {
                 self.reset_saved();
                 self.keep_destination();
                 self.services_at = None;
+                self.continue_call();
             }
             if reply.kind == "send" {
                 *self
@@ -1492,6 +1813,7 @@ impl Recorder {
         }
         self.sync_presence();
         self.sync_saved();
+        self.watch_call();
         self.watch_inputs();
         let outside = self.outside_state();
         if outside != self.outside {
@@ -2352,8 +2674,17 @@ impl Recorder {
         }
         self.send_meeting_to(id, destination, paused_confirmed, audience);
     }
+    /// A call's recording: Tico files the call's transcript, so it is never saved, sent or kept from here.
+    fn is_call(&self, id: &str) -> bool {
+        self.store
+            .context(id)
+            .is_ok_and(|context| !context.call_id.is_empty())
+    }
     /// Keeps the recording here and removes its live share and pending meeting from Tico.
     pub fn keep_local(&mut self, id: &str) {
+        if self.is_call(id) {
+            return;
+        }
         self.screen.stop_meeting(id);
         if self.active.as_ref().is_some_and(|(active, _)| active == id) {
             self.stop();
@@ -2398,6 +2729,9 @@ impl Recorder {
     ) {
         if self.updating {
             self.error = UPDATING.into();
+            return;
+        }
+        if self.is_call(id) {
             return;
         }
         self.screen.stop_meeting(id);
@@ -2532,8 +2866,13 @@ impl Recorder {
                 .iter()
                 .any(tico_recorder_native::live::saved_in_tico)
         });
-        let discard_live = !context.live_id.is_empty() && !context.live_removed && !filed;
+        // A call's live meeting is the call's, not this recording's: deleting here leaves it, and gives the source back.
+        let call = !context.call_id.is_empty();
+        let discard_live = !call && !context.live_id.is_empty() && !context.live_removed && !filed;
         let recording_here = self.active.as_ref().is_some_and(|(active, _)| active == id);
+        if call && recording_here && context.live_state != "ended" {
+            self.release_call(&context.live_destination, &context.call_id, None);
+        }
         if discard_live || recording_here {
             let capture = if recording_here {
                 self.active.take().map(|(_, handle)| {
@@ -2796,27 +3135,17 @@ impl Recorder {
     }
     /// A link macOS delivered to the app: `connect` asks to sign in to that Tico; `open` (Record in the Tico desktop
     /// app) chooses that Tico for what comes next when the Recorder is signed in to it, and asks to sign in when not.
-    /// Neither starts a recording.
+    /// Neither starts a recording. `record` (a call started in Tico) records the call when this Recorder is its source
+    /// (`record_call`).
     #[cfg(any(target_os = "macos", target_os = "ios", test))]
     pub fn link(&mut self, link: &str) {
+        if let Some((address, call)) = calls::record_link(link) {
+            self.record_call(&address, &call);
+            return;
+        }
         if let Some(address) = link_address(link, "open") {
-            let connected = self
-                .config
-                .destinations
-                .iter()
-                .find(|row| desktop::matches(&address, row))
-                .map(|row| row.id.clone());
-            match connected {
-                Some(id) => {
-                    if self.context.live_destination.is_empty() {
-                        if self.destination != id {
-                            self.reset_saved();
-                        }
-                        self.destination = id;
-                        self.choosing_org = false;
-                        self.roster_for.clear();
-                    }
-                }
+            match self.connection_for(&address) {
+                Some(id) => self.choose_connection(&id),
                 None if !self.signing_in => self.connect = Some(address),
                 None => {}
             }
@@ -2834,6 +3163,7 @@ impl Recorder {
     }
     pub fn dismiss_connect(&mut self) {
         self.connect = None;
+        self.pending_call = None;
     }
     pub fn dismiss_error(&mut self) {
         self.screen.dismiss();
@@ -2990,7 +3320,8 @@ impl Recorder {
                     "status": status.map(|(label, tone)| json!({"label":label,"tone":tone})),
                     "sync_error": sync_error,
                     "sent": sent,
-                    "can_send": (!context.live_discarded || context.live_removed) && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy,
+                    "can_send": (!context.live_discarded || context.live_removed) && !self.config.destinations.is_empty() && !sent && !recording && record.chunks > 0 && !self.busy && context.call_id.is_empty(),
+                    "call": !context.call_id.is_empty(),
                     "local": org.is_none(),
                     "org": org,
                     "live_org": (!context.live_removed).then_some(&context.live_destination).filter(|id| !id.is_empty()),
@@ -3141,6 +3472,7 @@ impl Recorder {
         let recording_here = self.active.as_ref().is_some_and(|(id, _)| id == &record.id);
         let live = !self.context.live_id.is_empty();
         let ended = self.context.live_state == "ended";
+        let call = !self.context.call_id.is_empty();
         let team = self.live["visibility"] == "team";
         let has_text = record
             .chunks
@@ -3182,11 +3514,13 @@ impl Recorder {
             "paused_warning": !self.context.paused_windows.is_empty(),
             "live_state": self.context.live_state,
             "can_control": live && !ended && !self.context.live_discarded,
-            "can_discard": live && !ended && record.state != "recording" && record.deliveries.is_empty(),
+            "can_discard": live && !ended && record.state != "recording" && record.deliveries.is_empty() && !call,
             "discarded": self.context.live_discarded,
             "discard_pending": self.context.live_discarded && !ended,
             "can_finish": live && self.context.live_state != "paused" && !self.context.live_discarded && record.state != "recording" && record.deliveries.is_empty()
-                && (!ended || has_text),
+                && (!ended || has_text) && !call,
+            // A call's recording: Tico files it when the call ends, so there is no Finish.
+            "call": call,
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },
             "sync_error": if sync_error.is_empty() { String::new() } else {
                 sync_error
