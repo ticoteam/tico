@@ -9864,12 +9864,8 @@ def task_origin(conn, row):
 # ----------------------------------------------------------------------------- the task calls
 # Done, move, close, reassign, asks, answers and snooze (backend/task_calls.py), under the names every caller uses:
 # H.task_move(...). Imported last: task_calls reads hubdb when a call runs, not when it loads.
+from . import task_calls as _task_calls  # noqa: E402
 from .task_calls import (  # noqa: E402
-    CLOSED as TASK_CLOSED,
-    DONE as TASK_DONE,
-    NEXT as TASK_NEXT,
-    REOPEN as TASK_REOPEN,
-    can_work as task_can_work,
     attempt as attempt,
     task_answer as task_answer,
     task_answer_undo as task_answer_undo,
@@ -9886,3 +9882,11 @@ from .task_calls import (  # noqa: E402
     task_waits as task_waits,
     task_withdraw_ask as task_withdraw_ask,
 )
+
+TASK_NEXT, TASK_DONE, TASK_CLOSED, TASK_REOPEN = (
+    _task_calls.NEXT,
+    _task_calls.DONE,
+    _task_calls.CLOSED,
+    _task_calls.REOPEN,
+)
+task_can_work = _task_calls.can_work
