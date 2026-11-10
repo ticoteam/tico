@@ -699,11 +699,7 @@ def request_text(
         f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status='open' ORDER BY updated_at DESC LIMIT 12",
         (actor,),
     ).fetchall()
-    asked = c.execute(
-        f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id LIKE 'human:%' "
-        "AND status='open' ORDER BY updated_at DESC LIMIT 8",
-        (actor,),
-    ).fetchall()
+    asked = waiting_on_others(c, actor, shared, people_only=True)
     goals = c.execute(
         "SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
         "ORDER BY rank LIMIT 5",
@@ -730,7 +726,7 @@ def request_text(
             "Open:",
             line(open_, lambda r: r["title"]),
             "Waiting on a person:",
-            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
+            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['who'])})"),
             "Your goals:",
             line(goals, lambda r: r["title"]),
             "Your goal KPIs (Tico puts these on the KPI slide):",
@@ -765,7 +761,7 @@ def request_text(
             "Open:",
             line(open_, lambda r: r["title"]),
             "Waiting on a person:",
-            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
+            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['who'])})"),
             "Your goals:",
             line(goals, lambda r: r["title"]),
         ]
@@ -846,6 +842,37 @@ def shared_tasks_sql(hidden, prefix=""):
     return rule
 
 
+WAITING_MAX = 8  # tasks a request or a draft lists as waiting on someone else
+WAITING_SCAN = 50  # newest open tasks whose waits are read for that list
+
+
+def waiting_on_others(c, actor, shared, *, people_only=False):
+    """The shared open tasks `actor` owns or asked for that wait on someone else, newest first: [{title, who}], `who`
+    being whom the first such wait names (backend/waiting_on.py; one read for all the tasks). `people_only` keeps only
+    waits on a person (an ask, a task that fell to one); otherwise a bot with the turn counts too, paused or not."""
+    rows = c.execute(
+        f"SELECT id, title FROM tasks WHERE (owner_id=? OR requester_id=?) AND {shared} AND status='open' "
+        "ORDER BY updated_at DESC LIMIT ?",
+        (actor, actor, WAITING_SCAN),
+    ).fetchall()
+    waits = H.task_waits(c, [r["id"] for r in rows])
+    out = []
+    for row in rows:
+        who = next(
+            (
+                w.who
+                for w in waits.get(row["id"]) or []
+                if w.who
+                and w.who != actor
+                and (w.state == "person" or (not people_only and w.state in ("bot", "paused")))
+            ),
+            None,
+        )
+        if who:
+            out.append({"title": row["title"], "who": who})
+    return out[:WAITING_MAX]
+
+
 def _shared_message(c, message, shared):
     """The title of the task a person's message is on, when every task it names (its refs, the message it
     answers, the run it came from: `task_privacy.message_tasks`) passes the shared rule; else None."""
@@ -896,11 +923,7 @@ def draft_facts(c, author, kind, day):
         f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status='open' ORDER BY updated_at DESC LIMIT 12",
         (author,),
     ).fetchall()
-    asked = c.execute(
-        f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id<>? AND status='open' "
-        "ORDER BY updated_at DESC LIMIT 8",
-        (author, author),
-    ).fetchall()
+    asked = waiting_on_others(c, author, shared)
     goals = c.execute(
         "SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN "
         "('done','dropped')) ORDER BY rank LIMIT 5",
@@ -957,9 +980,7 @@ def draft_facts(c, author, kind, day):
         "Waiting on someone else:",
         line(
             asked,
-            lambda r: (
-                f"{r['title']} ({_label(c, r['owner_id'] if is_person(r['owner_id']) else H.actor_id(r['owner_id']))})"
-            ),
+            lambda r: f"{r['title']} ({_label(c, r['who'] if is_person(r['who']) else H.actor_id(r['who']))})",
         ),
         "Their goals:",
         line(goals, lambda r: r["title"]),
