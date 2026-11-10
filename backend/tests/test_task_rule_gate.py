@@ -525,3 +525,59 @@ def test_a_warned_strategy_bot_decision_carries_the_line_on_what_it_writes(ruled
     assert made["rule_warning"] and len(made["done"]) == 1, made
     body = sql(api, "SELECT body FROM tasks WHERE id=?", (made["done"][0]["task_id"],))[0]["body"]
     assert body.startswith("Warning:"), body
+
+
+def batch_with_an_ask(api):
+    """Ana's batch holding one question bot:finance asked her on its task."""
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)
+        asked = H.task_ask(c, "bot:finance", made["id"], "human:ana", "Which color?", seen_version=made["version"])
+    return made["id"], asked["requirement_id"], post(api, "batch", {})["id"]
+
+
+def test_an_answer_in_a_batch_that_breaks_a_rule_is_held_and_not_applied(ruled):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    tid, rid, bid = batch_with_an_ask(api)
+    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "answer", "text": "Our favorite color is red."})
+    done = post(api, f"batch/{bid}/commit", {})
+    assert any("was held" in e for e in done["errors"]), done
+    with api.app.state.store.read() as c:
+        view = H.task_view(c, tid, "human:ana")
+    assert next(r for r in view["to_leave"] if r["requirement_id"] == rid)["answer"] is None
+    assert "favorite color" not in str(sql(api, "SELECT body FROM messages WHERE body LIKE '%favorite%'"))
+
+
+def test_a_warned_answer_in_a_batch_carries_the_line(ruled):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
+    tid, rid, bid = batch_with_an_ask(api)
+    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "answer", "text": "Our favorite color is red."})
+    done = post(api, f"batch/{bid}/commit", {})
+    assert not done["errors"], done
+    with api.app.state.store.read() as c:
+        view = H.task_view(c, tid, "human:ana")
+    answer = next(r for r in view["to_leave"] if r["requirement_id"] == rid)["answer"]
+    assert str(answer["value"]).startswith("Warning:"), answer
+
+
+def test_a_bulk_close_whose_why_breaks_a_rule_is_held_and_closes_nothing(ruled):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}})
+    tasks = [task_for_ops(api, "Write the launch note"), task_for_ops(api, "Plan the launch")]
+    bulk = {"filter": {"ids": [t["id"] for t in tasks]}, "action": "close", "why": "Our favorite color is red."}
+    assert post(api, "task-bulk", {**bulk, "dry_run": True})["changed"] == 2  # a dry run writes nothing: not checked
+    got = post(api, "task-bulk", bulk)
+    assert got["held"] and "changed" not in got, got
+    assert [row(api, t["id"])["status"] for t in tasks] == ["open", "open"]
+
+
+def test_a_warned_bulk_why_carries_the_line_on_each_task(ruled):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
+    tasks = [task_for_ops(api, "Write the launch note"), task_for_ops(api, "Plan the launch")]
+    bulk = {"filter": {"ids": [t["id"] for t in tasks]}, "action": "close", "why": "Our favorite color is red."}
+    got = post(api, "task-bulk", bulk)
+    assert got["changed"] == 2 and got["rule_warning"], got
+    for t in tasks:
+        assert str(get(api, f"tasks/{t['id']}")).count("Warning:") >= 1, t["id"]

@@ -7,6 +7,7 @@ from fastapi import Request
 import json
 from . import task_privacy as privacy
 from .store import refused
+from . import org_rule_check, task_rule_gate
 
 
 def register(app, auth, mover, mutate, store, task_filters, task_idents, task_view):
@@ -109,16 +110,37 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
         if caller.role == "bot" or getattr(caller, "via", "") or caller.task_actor:
             raise Problem("forbidden", "Only a person, signed in as themselves, changes many tasks at once", 403)
         auth.domain(caller)
+        # The why goes on every task the filter selects: checked once against the company's rules
+        # (backend/task_rule_gate.py) for all their people and a new owner, outside the write, applied inside it. Held,
+        # no task changes; warned, each task's why carries the line. A dry run writes nothing, so it is not checked.
+        rules = request.app.state.task_rules
+        said = [("Why", body.why or "")]
+
+        def reach(c):
+            out = [rules.rule_target(c, caller, body.owner)] if body.action == "owner" and body.owner else []
+            for tid in bulk_select(c, caller, body.filter):
+                row = H.task(c, tid)
+                out += [row["owner_id"], row["requester_id"]]
+            return [a for a in dict.fromkeys(out) if a]
+
+        verdict = None if body.dry_run else rules.check_words(caller, "task_bulk", said, reach)
 
         def work(c):
+            gate = rules.apply_words(c, caller, verdict, said, reach)
+            if task_rule_gate.held(gate):
+                return org_rule_check.answer(gate)
+            if gate and gate.get("warn"):
+                checked = body.model_copy(update={"why": task_rule_gate.warn_on(gate, body.why)})
+            else:
+                checked = body
             # Every task this call skips keeps its refusal on record, and the call counts once toward quarantine.
             token = H.BULK_CALL.set(H.new_id())
             try:
-                return bulk_work(c)
+                return {**bulk_work(c, checked), **org_rule_check.answer(gate)}
             finally:
                 H.BULK_CALL.reset(token)
 
-        def bulk_work(c):
+        def bulk_work(c, body):
             # Chosen under the write lock, so each task is judged as it is now.
             ids = bulk_select(c, caller, body.filter)
             changed, unchanged, skipped = [], [], []

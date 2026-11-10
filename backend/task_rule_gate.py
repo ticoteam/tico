@@ -43,6 +43,8 @@ org_rule_check.OPERATIONS.setdefault("task_ok_ask", "an ask for an OK")
 org_rule_check.OPERATIONS.setdefault("task_ok_use", "an OK used")
 org_rule_check.OPERATIONS.setdefault("strategy_merge", "an ask merged for a person")
 org_rule_check.OPERATIONS.setdefault("strategy_decision", "a decision made alone")
+org_rule_check.OPERATIONS.setdefault("batch_note", "a note to a bot on its item")
+org_rule_check.OPERATIONS.setdefault("task_bulk", "a change to many tasks")
 
 
 def said_text(row, said, hands_over=False, hide_task=False):
