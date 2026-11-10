@@ -1315,12 +1315,13 @@ class Calls:
             if person.get("hidden") or person.get("directory_left"):
                 continue
             actor = "human:" + str(person["id"])
-            names.setdefault(_spoken(person.get("name")), set()).add(actor)
+            if _spoken(person.get("name")):
+                names.setdefault(_spoken(person.get("name")), set()).add(actor)
             if person.get("email"):
                 emails[str(person["email"]).strip().lower()] = actor
         found = set()
         for one in people:
-            named = names.get(_spoken(one.get("name"))) or set()
+            named = names.get(_spoken(one.get("name"))) or set() if _spoken(one.get("name")) else set()
             actor = next(iter(named)) if len(named) == 1 else emails.get(str(one.get("email") or "").lower())
             if actor and readable(c, actor, row["thread_id"]):
                 found.add(actor)
