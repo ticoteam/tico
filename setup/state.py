@@ -50,6 +50,18 @@ def load(domain: str) -> tuple[dict, str]:
     return s, e
 
 
+def save_backup(domain: str, data: dict) -> None:
+    """What `setup backup-storage` made for a domain (its prefix and name), apart from any server state for it."""
+    write_private(_dir(domain) / "backup.json", json.dumps(data, indent=2, sort_keys=True))
+
+
+def load_backup(domain: str) -> dict:
+    try:
+        return json.loads((_dir(domain) / "backup.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
 def known_domains() -> list[str]:
     try:
         return sorted(p.name for p in home().iterdir() if (p / "state.json").exists())

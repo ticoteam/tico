@@ -722,7 +722,8 @@ def run(args, io: IO, deps: Deps) -> int:
     gather(io, args, s, dry)
     # By the domain gather settled, also when it was asked rather than given: a re-run never needs the flag again.
     kept = saved or state.load(s.domain)[0]
-    s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), kept)
+    # Without a server install, the prefix `setup backup-storage` made the domain's bucket with.
+    s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), kept or state.load_backup(s.domain))
     hosted.gather(args, s, dry)
     if s.target == "aws" and s.company_file_data and not s.plan_bucket and not s.hosted:
         # Saved before any cloud writes, so retries use the same bucket and chart. No credentials in its name.

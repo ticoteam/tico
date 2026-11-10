@@ -260,10 +260,13 @@ def test_backup_storage_takes_name_and_otherwise_the_saved_one():
     d.aws_s3 = lambda region, profile: s3
     argv = ["backup-storage", "--domain", "tico.example.com", "--aws-region", "us-west-2"]
     assert go([*argv, "--name", "acme"], deps=d)[0] == 0
-    state.save("tico.example.com", {"aws_name": "saved-name"})
-    d.aws_s3 = lambda region, profile: S3()  # the acme bucket is acme's: another name never takes it
-    assert go(argv, deps=d)[0] == 0
+    assert go(argv, deps=d)[0] == 0  # its own saved name
+    assert state.load_backup("tico.example.com")["name"] == "acme"
+    state.save("other.example.com", {"domain": "other.example.com", "aws_name": "saved-name", "asset_prefix": "tico"})
+    assert go(["backup-storage", "--domain", "other.example.com", "--aws-region", "us-west-2"], deps=d)[0] == 0
     assert [c["UserName"] for c in iam.called("create_user")] == ["tico-backup-acme", "tico-backup-saved-name"]
+    code, out = go([*argv, "--name", "other"], deps=d)
+    assert code == 2 and "tico.example.com is set up with --name acme" in out
     code, out = go([*argv, "--name", "Not_A_Name"], deps=d)
     assert code == 2 and "--name is 1 to 40" in out
 
@@ -948,3 +951,30 @@ def test_a_hub_runner_that_fails_at_launch_keeps_its_prefix_for_the_retry(monkey
     assert go(argv, deps=d)[0] == 0
     assert {c["Name"] for c in ssm.called("put_parameter")} == {"/hub/runner-b1/env"}
     assert state.load_runners()[0]["instance_id"] == "i-1"
+
+
+def test_backup_storage_saves_its_prefix_before_provisioning_and_keeps_it():
+    iam, made = IAM(), []
+
+    def failing_s3(region, profile):
+        s3 = S3()
+        s3.put_bucket_policy = lambda **kw: (_ for _ in ()).throw(ClientError("AccessDenied"))
+        made.append(s3)
+        return s3
+
+    d = fakes.deps()
+    d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
+    d.aws_s3 = failing_s3
+    argv = ["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2"]
+    with pytest.raises(ClientError):
+        go([*argv, "--asset-prefix", "hub"], deps=d)
+    assert made[0].called("create_bucket")[0]["Bucket"].startswith("hub-backup-laptop-example-com-")
+    d.aws_s3 = lambda region, profile: made[0]
+    del made[0].put_bucket_policy
+    code, out = go(argv, deps=d)  # the retry, without the flag
+    assert code == 0 and "s3://hub-backup-laptop-example-com-" in out, out
+    assert [c["UserName"] for c in iam.called("create_user")] == ["hub-backup-laptop-example-com"]
+    code, out = go([*argv, "--asset-prefix", "tico"], deps=d)
+    assert code == 2 and "named with --asset-prefix hub" in out
+    assert state.load("laptop.example.com") == ({}, "")  # no server state is made or changed for it
+    assert state.known_domains() == []
