@@ -325,7 +325,7 @@ function qcardHold(it: QcItem): void { QC_HELD.set(String(it.id), it); }
 function qcardReleaseHeld(): void { QC_HELD.clear(); }
 function qcardItem(t: QcTaskRef): QcFound | null {
   const id = String(t?.id);
-  const fresh: QcItem | null | undefined = [...(S.v2?.needs || []), needsOneHeld(t?.id)].find(x => x && String(x.id) === id && ['question', 'waiting', 'task'].includes(x.kind));
+  const fresh: QcItem | null | undefined = (S.v2?.needs || []).find(x => x && String(x.id) === id && ['question', 'waiting', 'task'].includes(x.kind));
   const it = fresh || QC_HELD.get(id);
   if (!it) return null;
   const q = qcardQuestion(it);

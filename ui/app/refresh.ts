@@ -33,7 +33,6 @@ async function refresh(force = false): Promise<void> {
   if (S.me?.cloud) void updUnreadRefresh();
   renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
   tipRefresh();
-  taskBuilderNoticesRefresh();
   botAlertDraw();
   if (BOT) botScreenRefresh(BOT.slug);   // the Screen row and header button follow the computer (online, screen offered)
   if (BOT && $('#bot-onboard-host') && ($('#bot-onboard') ? '1' : '') !== (frNeedsSetup(botRow(BOT.slug)) ? '1' : '')) frBotRefresh(BOT.slug);   // the mark clears when the bot says it is set up
@@ -109,7 +108,6 @@ function liveWire(): void {
     liveSoon('bots', () => {
       renderTree(); renderHeartbeat(); pausedRender(); botAvatarsSync(); goalsFollowRoster();
       tipRefresh();
-      taskBuilderNoticesRefresh();
       botAlertDraw();
       overviewRefresh();                // the campus desks too, not only at the next refresh (no read: the model is local)
     }, 200);

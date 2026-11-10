@@ -86,11 +86,6 @@ interface NeedsChange extends NeedsRead {
   changed?: (string | number)[] | null;
   removed?: (string | number)[] | null;
 }
-/** An item past the pages held, read alone. */
-interface NeedsOne {
-  read?: Promise<NeedsItem | null>;
-  it: NeedsItem | null;
-}
 
 // ----------------------------------------------------------------- hub v2 (docs/history/hub-v2.md)
 // Every bot is hosted by the keeper (`host: keeper`, the only host there is), so the record is hub.db, not GitHub:
@@ -274,32 +269,13 @@ const NEEDS_PAGE = 50, NEEDS_PAGE_MAX = 200;
 // Where the next page starts in the list at `version`: the server's cursor (backend/views.py needs_cursor).
 const needsCursor = (version: string, n: number) => `${version}.${n}`;
 const needsAll = () => !S.v2.needsNext;
-// An item past the pages held, read alone (`ids=`) for a task's question box; forgotten whenever the list moves.
-const NEEDS_ONE = new Map<string, NeedsOne>();     // id -> {read, it}
-function v2NeedsOne(id: unknown) {
-  const key = String(id);
-  if (!NEEDS_ONE.has(key)) {
-    const one: NeedsOne = {it: null};
-    one.read = v2Get<NeedsRead>(`/v2/needs-you?ids=${encodeURIComponent(key)}`).then(r => (one.it = (r?.items || [])[0] || null));
-    NEEDS_ONE.set(key, one);
-  }
-  return NEEDS_ONE.get(key)!.read!;
-}
-const needsOneHeld = (id: unknown) => NEEDS_ONE.get(String(id))?.it || null;
-// The first list held: a page drawn before it (a task opened from a link) fills its question box then. A read that
-// fails holds no list, so the wait goes on to the next one that answers.
-let needsFirstDone: (() => void) | null = null;
-const NEEDS_FIRST = new Promise<void>(done => { needsFirstDone = done; });
-const needsFirstIn = () => !needsFirstDone;
 function needsTake(needs: NeedsRead) {
-  NEEDS_ONE.clear();
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
   S.v2.needsPlateCount = needs.plate_count ?? null;
   S.v2.needsByKind = needs.by_kind || null;
   S.v2.needsFoldedIds = needs.folded_task_ids || null;
   needsListsRedraw();
-  if (needsFirstDone) { const done = needsFirstDone; needsFirstDone = null; done(); }
 }
 // Reads are ordered by their request sequence; only paging and live mends invalidate reads already on their way.
 let NEEDS_READ = 0, NEEDS_KEPT = 0, NEEDS_REVISION = 0;
@@ -371,7 +347,6 @@ async function v2NeedsMend(d: NeedsChange) {
     }
   }
   if (all ? items.length !== d.count : items.length > d.count) return whole();
-  NEEDS_ONE.clear();
   S.v2.needs = items; S.v2.needsVersion = d.version; S.v2.needsCount = d.count;
   S.v2.needsPlateCount = plateCount ?? null;
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);

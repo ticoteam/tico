@@ -303,9 +303,7 @@ function botNeedsPaint(slug: string): Set<string> {
   if (!host || BOT?.slug !== slug) return new Set();
   botTaskCount('cnt-needs', counted ? Number(counted.count) + rest.size : Math.max(items.length, needsMeCount(slug)));
   const list = $('#t-needs');
-  // Some of this bot's items may be on Needs you pages not read yet.
-  const more = needsMoreButton()
-    + (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
+  const more = (counted?.next ? '<button type="button" class="ghost bot-done-more" data-bot-filter-more="needs">Show more</button>' : '');
   list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(botTaskRowHTML).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
   return new Set(items.map(t => String(t.id)));
 }
