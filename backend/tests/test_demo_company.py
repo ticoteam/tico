@@ -131,16 +131,18 @@ def test_the_pricing_decision_waits_for_ana(ana):
 
 
 def test_tasks_are_open_done_or_closed_and_show_asks_snoozes_and_sub_tasks(ana):
-    """As Tasks reads them: what is open, then the latest finished (the weeks before hold hundreds more done). Every
-    task is in General, and the open ones show what they wait on: a person asked on the task, a snooze (a snoozed task
+    """As Tasks reads them: what is open, then the latest finished (the weeks before hold hundreds more done). Most
+    are in General, a few in Product and Engineering (demo_sections/software.py), and the open ones show what they wait on: a person asked on the task, a snooze (a snoozed task
     is off the list until asked for)."""
     tasks = [
         *ana.get("/api/v2/tasks?status=open&snoozed=all&limit=200").json()["tasks"],
         *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"],
     ]
     assert {task["status"] for task in tasks} == {"open", "done", "closed"}
-    assert {task["pipeline_id"] for task in tasks} == {"general"}
+    assert {task["pipeline_id"] for task in tasks} == {"general", "product", "engineering"}
     by_title = {task["title"]: task for task in tasks}
+    stages = {title: by_title[title]["stage_id"] for title in ("Share a show with a link", "Faster scene upload")}
+    assert stages == {"Share a show with a link": "product-spec", "Faster scene upload": "engineering-on-deck"}
     beta = by_title["Ship the calibration screen to every owner"]
     assert (beta["turn"]["state"], beta["turn"]["who"]) == ("person", "human:eli")
     assert by_title["Fix the Linux-only test that flakes"]["snoozed"]
