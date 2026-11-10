@@ -253,8 +253,8 @@ async function tasksCatchUp(state: TasksPageState | null): Promise<void> {
   } catch { /* the next refresh tries again */ }
 }
 /** One task as the viewer reads it now (an event's, a delta's, a write's reply): in place, added, or out of the view. */
-function tasksTaskPut(state: TasksPageState, t: TaskAny | null, id: string | null = null, draw = true): boolean {
-  const key = String(t?.id ?? id ?? '');
+function tasksTaskPut(state: TasksPageState, given: TaskAny | null, id: string | null = null, draw = true): boolean {
+  const t = given && taskListRow(given), key = String(t?.id ?? id ?? '');
   let moved = false;
   // You: Needs you says what is on it; a task's change only redraws the item that shows it.
   for (const it of state.needs) if (t && it.task && String(it.task.id) === key) { it.task = {...it.task, ...t} as typeof it.task; moved = true; }

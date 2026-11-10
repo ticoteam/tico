@@ -154,6 +154,7 @@ export interface WindowMarks {
   leavingLive?: TaskLive | undefined;
 }
 declare var TASKS_ST: Globals['TASKS_ST'];
+declare function tasksTaskPut(state: unknown, t: unknown): boolean;
 declare function tasksLiveApply(events: {id: string; task: unknown}[]): void;
 
 const NOW = Date.now();
@@ -384,6 +385,12 @@ async function archive(browser: Browser) {
   };
   await page.locator('#task-archive').click();
   await shows('snoozed', {status: 'open', snoozed: 'only'}, ['Renew the domain']);
+  // A write's reply is the full task, `snooze` without `snoozed`: the snoozed task stays in Snoozed.
+  await page.evaluate(() => {
+    const t = TASKS_ST.tasks.find(x => x.id === 't-5')!, {snoozed: _, ...full} = {...t, title: 'Renew the domain name', snooze: {by: 'human:ana', until: null, why: null}};
+    tasksTaskPut(TASKS_ST, full);
+  });
+  assert.deepEqual(await rowTitles(page), ['Renew the domain name']);
   await page.locator('#task-archives [data-archive="done"]').click();
   await shows('done', {status: 'done', sort: 'finished'}, ['Ship the receipt email']);
   await page.locator('#task-archives [data-archive="closed"]').click();

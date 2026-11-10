@@ -124,10 +124,16 @@ async function taskChanges(query: Omit<TaskBriefQuery, 'limit' | 'offset' | 'sor
 // person's page and My dashboard share these.
 /** A row a live list holds: a list row, or a task as an event or a write carries it. */
 type TaskLiveRow = {id: string};
+/** A task as a write's reply carries it (Task), in a list row's terms (TaskBrief): a full task says `snooze`, not
+ * always `snoozed`. */
+function taskListRow<T extends TaskLiveRow>(t: T): T {
+  const full = t as T & {snooze?: unknown; snoozed?: boolean};
+  return 'snooze' in full && full.snoozed === undefined ? {...t, snoozed: !!full.snooze} : t;
+}
 /** One task as the viewer reads it now, into `rows` by the list's rule `has`: in place, added first, or out when `has`
  * says no or the task is gone or unreadable (null). True when the rows moved. */
-function taskRowsPut<T extends TaskLiveRow>(rows: T[], t: T | null, id: string, has: (t: T) => boolean): boolean {
-  const i = rows.findIndex(x => String(x.id) === id), keep = !!t && has(t);
+function taskRowsPut<T extends TaskLiveRow>(rows: T[], given: T | null, id: string, has: (t: T) => boolean): boolean {
+  const t = given && taskListRow(given), i = rows.findIndex(x => String(x.id) === id), keep = !!t && has(t);
   if (t && keep && i >= 0) rows[i] = t;
   else if (t && keep) rows.unshift(t);
   else if (i >= 0) rows.splice(i, 1);
