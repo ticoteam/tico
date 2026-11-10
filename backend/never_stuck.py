@@ -26,6 +26,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
 from collections.abc import Callable, Iterable
+from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 from . import batch_work, hubdb_core, task_wakes
@@ -41,6 +42,7 @@ Row = dict[str, Any]
 # hubdb_core is untyped: its actor helpers get their types here.
 _core: Any = hubdb_core
 is_bot: Callable[[object], bool] = _core.is_bot
+is_human: Callable[[object], bool] = _core.is_human
 _batch: Any = batch_work
 storage_error: Callable[[BaseException], bool] = _batch.storage_error
 SYSTEM: str = E.SYSTEM
@@ -431,6 +433,9 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
     stage = row["stage"]
     minutes = int(stage.get("expected_minutes") or 0)
     visit = row["visit"]
+    if is_human(row.get("owner_id")):
+        _late_by_due(conn, row, at, done)
+        return
     if not minutes or (visit.get("late_told_at") and visit.get("late_person_at")):
         return
     if stage.get("expected_bots_only") and not is_bot(row.get("owner_id")):
@@ -477,6 +482,23 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             # Still there at 3 times the expected time: one person's list, once. Already a person's turn, or paused
             # with its cause in a person's list: nothing.
             _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
+
+
+def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int]) -> None:
+    """A person's own task is never chased (C6): it is Late only once its due date has passed, whatever the stage
+    expects, and that is the label alone. Nobody is woken and nothing moves to anyone's list."""
+    H = _h()
+    visit = row["visit"]
+    if visit.get("late_told_at") or not row.get("due_at"):
+        return
+    due, now = H.parse_ts(row["due_at"]), H.parse_ts(at)
+    if due and len(str(row["due_at"])) == 10:
+        due = due.replace(tzinfo=timezone.utc) + timedelta(days=1)  # a due date with no time: Late once the day is over
+    if not due or not now or now < due:
+        return
+    conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
+    _event(conn, row["id"], "late", None, None, {"due_at": row.get("due_at")})
+    done["late"] += 1
 
 
 def _looks(conn: "sqlite3.Connection", row: Row, waits: list[W.Wait], manager: str | None, head: str | None) -> bool:

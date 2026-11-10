@@ -308,6 +308,24 @@ def test_a_late_task_that_waits_on_a_person_gets_one_look_from_the_manager_bot(c
     assert later(days=30) == {} and _visit(c, mine)["late_told_at"] is None  # the day is for bots only
 
 
+def test_a_persons_task_is_late_only_past_its_due_date_and_nobody_is_chased(c, general, later):
+    # A stage that expects everyone, people too, to take a minute: a person's own task still goes by its due date (C6).
+    stage = {"name": "Do", "owner": ANA, "expected_minutes": 1, "requirements": [{"kind": "owner_done"}]}
+    X.pipeline(c, "ops", "Operations", (stage,), manager=MANAGER)
+    due = (START + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    mine = X.new_task(c, ANA, "Renew the lease", "ops", assignee=ANA)["id"]
+    c.execute("UPDATE tasks SET due_at=? WHERE id=?", (due, mine))
+    undated = X.new_task(c, ANA, "Call the bank", "ops", assignee=ANA)["id"]
+    assert later(minutes=2) == {} and _visit(c, mine)["late_told_at"] is None
+    assert later(days=29, hours=23) == {}
+    assert later(hours=1) == {"late": 1}  # past its due date: the label only
+    assert _visit(c, mine)["late_told_at"] and _ladder(c, mine) == ("owner", 0)
+    assert X.wakes(c, mine, MANAGER) == [] and _queued(c, mine) == []  # nobody is woken about a person's task
+    assert later(days=30) == {}  # once
+    assert _visit(c, undated)["late_told_at"] is None  # no due date: never Late
+    assert _states(c, mine) == [("person", ANA)]
+
+
 def test_a_late_look_whose_wake_was_lost_is_written_again_once(c, general, later):
     """Being told Late is not the look: when the manager bot's wake for it goes missing, the next pass writes it again,
     with the same words, once, on the same budget and only to a manager bot that reads the task."""
@@ -843,7 +861,7 @@ def test_a_private_task_never_gains_a_reader_and_goes_to_a_person_who_reads_it_n
     X.pipeline(c, "ops", "Ops", stages, manager=MANAGER)
     hers = _private(c, "Sort the March invoices", ANA, "ops")
     assert H.task(c, hers)["owner_id"] == ANA
-    assert later(minutes=61) == {"late": 1}  # late, and the manager bot that cannot read it is not sent to look
+    assert later(minutes=61) == {}  # her own task is never chased (no due date: never Late); no bot looks
     assert later(hours=3) == {}  # her own turn already: nothing is added
     assert H.task_readers(H.task(c, hers)) == [] and X.wakes(c, hers, MANAGER) == []
     X.pipeline(c, "intake", "Intake", ({"name": "Triage", "requirements": [{"kind": "owner_done"}]},), manager=MANAGER)
