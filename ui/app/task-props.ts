@@ -177,7 +177,7 @@ async function taskReaders(d: TaskDialog, task: PropTask, body: PropPatch): Prom
     await post(`/v2/tasks/${encodeURIComponent(task.id)}/readers`, body);
     if (d.propsErrs?.id === String(task.id)) d.propsErrs.map.delete('readers');
     const data = await get<{task?: PropTask}>(`/v2/tasks/${encodeURIComponent(task.id)}`);
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
+    if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     if (d.open && String(d.dataset.task) === String(task.id) && data.task) taskModalShow(data.task, d);
   } catch (e) {
     if (d.propsErrs?.id !== String(task.id)) d.propsErrs = {id: String(task.id), map: new Map()};
@@ -457,7 +457,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
       if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;
       try { await post(`/v2/tasks/${encodeURIComponent(task.id)}/delete`, {}); } catch (e) { toast(errorCode(e) === 'has_work' ? "This task has work on it, such as a bot's turn, an answer, a bot's file or a subtask, so it can't be deleted. Close it instead." : errorMessage(e, ''), true); return; }
       d.close(); toast('Deleted');
-      if (TASKS_ST) void tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
     }});
     propMenu(d, more, {label: 'Task', items: items.map(it => ({...it, html: `<span>${esc(it.text)}</span>`})), onPick: it => it.run()});
   };

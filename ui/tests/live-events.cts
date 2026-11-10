@@ -3,9 +3,10 @@
 //  - the Assistant's chat follows its conversation on the page's one stream and reads its snapshot once per change, not
 //    on a timer;
 //  - the Needs-you count beside a bot follows the `needs` topic: the event names what changed, and only that is read;
-//  - a pipeline on the Tasks page reads its list again after a task changed or was created elsewhere (tasks-page.ts
-//    tasksLive); a bot's page is sent only its tasks', a page with no task on it (the Assistant's) none;
-//  - each reconnect resumes from the last change number.
+//  - a pipeline on the Tasks page puts each event's task in place (changed, new, moved out of the view) and reads no
+//    list for it; a bot's page is sent only its tasks', a page with no task on it (the Assistant's) none;
+//  - each reconnect resumes from the last change number;
+//  - the 2-minute refresh catches the list up with a changed_after delta from its cursor.
 const {chromium}: typeof import('playwright') = require('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs: typeof import('node:fs') = require('node:fs');
@@ -21,13 +22,14 @@ declare const S: {route: string; v2: {needs: {id: string; kind: string; line?: s
 declare const LIVE: {es: {url: string} | null; after: string | null; taskKey: unknown};
 declare const V2C: {rendered: boolean; liveOff: boolean; reading: boolean; readAgain: boolean};
 declare const LIVE_SOON: Map<string, unknown>;
-declare const TASKS_ST: {loading: boolean};
+declare const TASKS_ST: {loading: boolean; cursor: string};
 declare const BOT: {slug: string} | null;
 declare const THV_VIEWS: Iterable<{host: Element; state: string}>;
 declare let TASK_CHAT: {id: string} | null;
 declare let v2Get: () => Promise<unknown>;
 declare function v2NeedsMend(x: unknown): Promise<unknown>;
 declare function needsMeCount(bot: string): number;
+declare function refresh(force: boolean): Promise<void>;
 declare function liveUrl(): string;
 declare function liveTaskKey(scope: unknown): unknown;
 declare function liveTaskScope(): unknown;
@@ -52,7 +54,7 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
     };
   });
   const made = new Map<string, number>();   // per document: event streams that reached the route
-  const errors: string[] = [], streams: {url: URL; route: Route; document: string}[] = [], reads: {snapshot: number; tasks: number; needs: string[]} = {snapshot: 0, tasks: 0, needs: []};
+  const errors: string[] = [], streams: {url: URL; route: Route; document: string}[] = [], reads: {snapshot: number; tasks: number; changed: (string | null)[]; needs: string[]} = {snapshot: 0, tasks: 0, changed: [], needs: []};
   page.on('pageerror', e => errors.push(e.message));
   const threads = threadsFake({bot: 'ops'});
   let snapshot = {messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes', created_at: now}], execution: null};
@@ -78,7 +80,11 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
     if (answer !== undefined) return json(answer);
     if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
     if (p === '/api/v2/conversations/c-ops/snapshot') { reads.snapshot++; return json(snapshot); }
-    if (p === '/api/v2/tasks') { reads.tasks++; return json({tasks: [...SERVER.values()].map(brief)}); }
+    if (p === '/api/v2/tasks' && url.searchParams.get('changed_after')) {   // backend/task_list_routes.py: a delta from the cursor
+      reads.changed.push(url.searchParams.get('changed_after'));
+      return json({tasks: [brief(task('t3', 'Send the release mail', 'spec', {owner_id: 'bot:ops'}))], gone: ['t1'], cursor: '21.a', next_offset: null});
+    }
+    if (p === '/api/v2/tasks') { reads.tasks++; return json({tasks: [...SERVER.values()].map(brief), next_offset: null, cursor: '12.a'}); }
     if (p === '/api/v2/pipelines') return json({pipelines: PIPELINES});
     if (p === '/api/v2/needs-you') {
       reads.needs.push(url.search);
@@ -151,7 +157,7 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
   });
   assert.deepEqual(mended, {ids: ['a', 'b'], line: 'A2', next: 'p2.2', count: 5, ops: 3});
 
-  // A pipeline on the Tasks page: a task changed elsewhere, then one created, each read again once the burst is over.
+  // A pipeline on the Tasks page: each event's task goes in place (changed, new, moved out); no list read follows one.
   await page.evaluate(() => { location.hash = '#/tasks?pipeline=product'; });
   await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && document.querySelector('#task-body')?.textContent?.includes('Draft the release notes'), null, {timeout: t(8000)})
     .catch(async e => { throw new Error(e.message + ' ' + JSON.stringify(errors) + (await page.evaluate(() => document.querySelector<HTMLElement>('#main')?.innerText.slice(0, 400)))); });
@@ -182,7 +188,18 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
   const fourth = await send(() => true, changed(14, task('t2', 'Check the release links', 'spec', {owner_id: 'bot:ops'}), 'insert'));
   assert.equal(fourth.searchParams.get('after'), '13');
   await page.locator('#task-body', {hasText: 'Check the release links'}).waitFor();
-  assert.ok(reads.tasks - listed <= 2, `two task events read the list ${reads.tasks - listed} times`);
+  // Done: no longer an open task of the pipeline, so its row leaves.
+  await send(() => true, changed(15, task('t2', 'Check the release links', 'done', {owner_id: 'bot:ops', version: 4}), 'update'));
+  await page.waitForFunction(() => !document.querySelector('#task-body')?.textContent?.includes('Check the release links'));
+  await page.waitForFunction(() => !LIVE_SOON.has('tasks'));
+  assert.equal(reads.tasks, listed, 'no list read follows a task event');
+  // The 2-minute refresh catches up from the list's cursor: what changed comes in, what left goes, the cursor moves.
+  await page.evaluate(() => refresh(false));
+  await page.locator('#task-body', {hasText: 'Send the release mail'}).waitFor();
+  await page.waitForFunction(() => !document.querySelector('#task-body')?.textContent?.includes('Draft the final release notes'));
+  assert.deepEqual(reads.changed, ['12.a']);
+  assert.equal(reads.tasks, listed, 'the catch-up is a delta, not a full read');
+  assert.equal(await page.evaluate(() => TASKS_ST.cursor), '21.a');
 
   // An already-open status tooltip follows wait start and clear, including a first turn with no stored row. Each width
   // opens the bot page fresh. The server's changes for this page, in order (`changes`), and what it sends a stream that

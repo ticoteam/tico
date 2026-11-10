@@ -2,7 +2,7 @@
 // team's bots create and change tasks every few seconds. When each change made a tab read whole task lists, a few
 // open tabs kept the server at 100% CPU. This sends 50 task events over about three seconds and caps the requests
 // the page makes in reply:
-//  - a pipeline on the Tasks page reads its list again at most every few seconds (tasks-page.ts tasksLive);
+//  - a pipeline on the Tasks page puts each event's task in place and reads nothing;
 //  - a bot's page reads its task lists at most once for the burst;
 //  - a hidden tab reads nothing.
 // The stream is a stand-in EventSource the test drives, so the events land spread out as they do on a real team,
@@ -80,7 +80,7 @@ const SERVER = new Map([['t1', task('t1', 'Draft the release notes', 'spec', {ow
   };
   // EVENTS task events, one every 60 ms: a third new tasks, the rest changes to the bot's own task, each in the shape
   // backend/events.py _tasks sends ({id, kind, kinds, task}). Returns what the page asked for while they arrived and
-  // for a few seconds after (the Tasks page's next read may wait out its throttle).
+  // for a second after.
   let seq = 10;
   const burst = async () => {
     const before = requests.length;
@@ -95,17 +95,18 @@ const SERVER = new Map([['t1', task('t1', 'Draft the release notes', 'spec', {ow
         [seq, d, kind] as [number, {id: string}, string]);
       await page.waitForTimeout(60);
     }
-    await page.waitForTimeout(t(4000));
+    await page.waitForTimeout(t(1000));
     return requests.slice(before);
   };
 
-  // A pipeline on the Tasks page: the burst costs a read or two of the list, never one per event.
+  // A pipeline on the Tasks page: the burst reads nothing; the rows come from the events.
   await page.goto('https://tico-ui.test/#/tasks?pipeline=product');
   await page.waitForFunction(() => (window as unknown as PageWin).__liveStream && TASKS_ST && !TASKS_ST.loading
     && document.querySelector('#task-body')?.textContent?.includes('Draft the release notes'), null, {timeout: t(8000)});
   await settle();
   const board = await burst();
-  assert.ok(board.length <= CEILING, `the board made ${board.length} requests for ${EVENTS} task events: ${board.slice(0, 8).join(' ')}`);
+  assert.deepEqual(board.filter(r => r.startsWith('/api/v2/tasks') || r.startsWith('/api/v2/needs-you')), [], `the Tasks page read lists for ${EVENTS} task events`);
+  assert.ok(board.length <= CEILING, `the Tasks page made ${board.length} requests for ${EVENTS} task events: ${board.slice(0, 8).join(' ')}`);
   await page.locator('#task-body', {hasText: `Check release link ${EVENTS - 2}`}).waitFor();
 
   // A bot's page in a hidden tab reads nothing while hidden.

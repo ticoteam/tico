@@ -487,7 +487,7 @@ async function taskLiveSave(d: TaskDialog, live: TaskLive) {
           taskPropsMsgPaint(d);
         }
         if (d.taskLive === live && Number(reply.task.version) >= Number(d.liveTask?.version || 0)) d.liveTask = reply.task;
-        tasksLive();     // the Tasks page behind reads its view again
+        if (TASKS_ST) tasksTaskPut(TASKS_ST, reply.task);     // the Tasks page behind takes the saved task
         return reply.task;
       };
       return d.saveQueue = (d.saveQueue || Promise.resolve()).then(run, run);

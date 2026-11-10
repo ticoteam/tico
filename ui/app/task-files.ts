@@ -204,7 +204,7 @@ async function tfAdd(d: TfDialog, files: File[]): Promise<void> {
   if (!added) return;
   if (added === files.length) toast(`Added ${plural(added, 'file')}`);
   if (d.open && d.taskOpening === opening && String(d.dataset.task) === id) await tfLoad(d, id);
-  if (TASKS_ST) void tasksLoad(TASKS_ST);
+  if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
 // Taking a file off a task: its owner, its requester, or someone who may move tasks (the server's rule).
 function tfCanRemove(d: TfDialog): boolean {
@@ -229,7 +229,7 @@ async function tfRemove(d: TfDialog, fid: string, button: HTMLButtonElement): Pr
   tfClose(d);
   await tfLoad(d, id);
   if (TASK_CHAT?.dialog === d) { TASK_CHAT.rendered = ''; void taskChatRead(TASK_CHAT); }
-  if (TASKS_ST) void tasksLoad(TASKS_ST);
+  if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
 // Files dragged onto a task or the new-task form land there; the zone lights up while they hover.
 function fileDropTarget(zone: HTMLElement, take: (files: File[]) => void): void {
