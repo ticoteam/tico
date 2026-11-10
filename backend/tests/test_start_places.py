@@ -612,6 +612,14 @@ def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, all
             assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0]
         return
     assert response.status_code == 409 and response.json()['error']['code'] == 'start_wait'
+    # The refusal's own write is kept, before any start-place: the grant let go and the wait on record, and it is a
+    # wait, not a refusal of this turn for good.
+    from backend import execution
+
+    with api.app.state.store.read() as c:
+        kept = c.execute('SELECT start_until, wait_reason FROM start_places WHERE attempt_id=?', (aid,)).fetchone()
+        assert kept[0] is None and kept[1] == 'computer busy: memory'
+        assert not execution.start_refused(c, aid)
     place = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
     assert not place['reserved'] and place['waiting'].startswith('computer busy: memory')
     with api.app.state.store.read() as c:

@@ -1,5 +1,6 @@
 """Isolate one row of background work without losing the rest of its transaction."""
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -63,10 +64,16 @@ def report(kind, row_id, exc, logger="tico.scheduler"):
 
 
 @contextmanager
-def isolated(c, kind, row_id, failures=None):
+def isolated(c, kind, row_id, failures=None, private=False):
+    """One row's work in its own savepoint: its error rolls back only that row, is logged, goes on `failures` and on a
+    `background:<kind>:<row>` service_health row until the row next succeeds. service_health is readable by everyone
+    (sql.py), so `private` work (a row that is a task: its id or title must reach only who reads it) keeps the row id
+    and the error's words out of it: the service names a digest of the row, and the detail holds the error type only.
+    The server log still names the row."""
     health_available = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='service_health'").fetchone()
     c.execute("SAVEPOINT background_row")
-    service = f"background:{kind}:{row_id}"
+    shown = hashlib.sha256(str(row_id).encode()).hexdigest()[:16] if private else row_id
+    service = f"background:{kind}:{shown}"
     fatal = False
     try:
         yield
@@ -83,22 +90,23 @@ def isolated(c, kind, row_id, failures=None):
                 c.execute("DELETE FROM service_health WHERE service=?", (service,))
             return
         if failures is not None:
-            failures.append({kind: row_id, "error": type(exc).__name__})
+            failures.append({kind: type(exc).__name__} if private else {kind: row_id, "error": type(exc).__name__})
         report(kind, row_id, exc)
+        words = type(exc).__name__ if private else str(exc)[:300]
+        detail = {"kind": kind, "error": words} if private else {"kind": kind, "row": row_id, "error": words}
+        action = "Check the server log." if private else "Check this row's settings and the server log."
         if health_available:
             c.execute(
                 "INSERT INTO service_health VALUES(?,NULL,?,?) "
                 "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
                 (
                     service,
-                    f"{kind}: {str(exc)[:300]}",
+                    f"{kind}: {words}",
                     json.dumps(
                         {
-                            "kind": kind,
-                            "row": row_id,
-                            "error": str(exc)[:300],
+                            **detail,
                             "failed_at": datetime.now(timezone.utc).isoformat(),
-                            "action": "Check this row's settings and the server log.",
+                            "action": action,
                         }
                     ),
                 ),

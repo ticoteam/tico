@@ -67,8 +67,10 @@ def hq(api, monkeypatch):
     return fake
 
 
-def system_jobs(api, **on):
-    """Every controlled system job off except the ones named (`key=(preset, "HH:MM")`), Maintenance paused."""
+def system_jobs(api, release=None, **on):
+    """Every controlled system job off except the ones named (`key=(preset, "HH:MM")`), Maintenance paused, the
+    release schedule off unless `release` names its times."""
+    from backend import release_schedule_routes as RS
     from backend import system_routines as SR
 
     config = {key: {"on": False} for key in SR.CONTROLS}
@@ -77,6 +79,7 @@ def system_jobs(api, **on):
         for key, value in (
             (SR.CONFIG_KEY, config),
             (maintenance.REGISTRY_KEY, {"paused": True}),
+            (RS.KEY, {"on": bool(release), "times": list(release or [])}),
         ):
             c.execute(
                 "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -299,6 +302,33 @@ def test_a_daily_system_job_sets_the_wake_time_and_an_interval_job_does_not(api,
         )
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
+
+
+def test_a_sleeping_company_wakes_for_its_release_hour_and_stays_up_for_one_not_yet_fired(api, hq):
+    from datetime import datetime
+
+    from backend import release_hour, release_schedule_routes as RS
+
+    zone = RS.zone()
+    noon = datetime(2026, 10, 26, 12, 0, tzinfo=zone)
+    hq.clock[0] = noon.timestamp()
+    system_jobs(api, release=["03:30"])
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
+        assert sleep_idle.wake_time(c, hq.clock[0]) == datetime(2026, 10, 27, 3, 30, tzinfo=zone).timestamp()
+
+    system_jobs(api, release=["11:30"])  # half an hour ago, inside the grace, not fired: due now
+    with api.app.state.store.read() as c:
+        assert sleep_idle.busy(c, hq.clock[0]) == "routine_due"
+    with api.app.state.store.transaction() as c:
+        assert release_hour.tick(c, noon) is not None
+    with api.app.state.store.read() as c:  # fired: tomorrow's is the next
+        assert sleep_idle.busy(c, hq.clock[0]) == ""
+        assert sleep_idle.wake_time(c, hq.clock[0]) == datetime(2026, 10, 27, 11, 30, tzinfo=zone).timestamp()
+
+    system_jobs(api)  # the schedule off: nothing to wake for
+    with api.app.state.store.read() as c:
+        assert sleep_idle.wake_time(c, hq.clock[0]) is None
 
 
 def maintenance_bucket(api, at, schedule=None):

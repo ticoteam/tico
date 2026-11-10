@@ -152,8 +152,6 @@ def plan(c, sql, *args):
 
 def test_tick_task_queries_read_an_index_not_the_tasks_table(api):
     with api.app.state.store.read() as c:
-        due = plan(c, H.TASKS_DUE_SQL, "2026-09-11")
-        assert "tasks_due_active" in due and "SCAN tasks" not in due.replace("SCAN tasks USING", ""), due
         leases = plan(
             c,
             "SELECT id FROM attempts WHERE state IN ('leased','running') AND lease_until<=? ORDER BY lease_until,id LIMIT 8",

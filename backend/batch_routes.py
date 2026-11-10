@@ -2,7 +2,7 @@
 
 import json
 from fastapi import Request
-from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, views
+from . import batch, models as M, outcome_stats, rooms, task_privacy as privacy, task_rule_gate, views
 from .store import H, Problem
 
 
@@ -189,10 +189,44 @@ def register(app, auth, mutate, send, store, task_view):
         who = request.state.identity
         views.human_only(who)
 
+        # The person's words in the batch (a note, an answer, an instruction, a rule) are checked like the same words
+        # on the task or in a message (backend/task_rule_gate.py): outside the write, applied inside it. A held one is
+        # not applied; the commit's errors name it.
+        rules = request.app.state.task_rules
+        with store.read() as c:
+            said = batch.said(c, who, bid)
+        checks = {}
+        for at, task_id, to, operation, text in said:
+            words = [("Said", text)]
+
+            def reach(c, to=to):
+                return [to] if to else []
+
+            verdict = (
+                rules.check(who, task_id, operation, words, also=reach)
+                if task_id
+                else rules.check_words(who, operation, words, reach)
+            )
+            checks[at] = (task_id, operation, words, reach, verdict)
+
+        def gate(c, key, i, r):
+            if (key, i) not in checks:
+                return r, None
+            task_id, operation, words, reach, verdict = checks[(key, i)]
+            if task_id:
+                found = rules.apply(c, who, task_id, verdict, words, None, also=reach)
+            else:
+                found = rules.apply_words(c, who, verdict, words, reach)
+            if task_rule_gate.held(found):
+                return r, found["held"]["text"]
+            if found and found.get("warn"):
+                r = {**r, "text": task_rule_gate.warn_on(found, r["text"])}
+            return r, None
+
         def work(c):
             # A bound OK is never given here (batch._apply_decide refuses it): each is the person's own click on its
             # own preview, so nothing a commit applies has a step to run after it.
-            out = batch.commit(c, who, bid, batch_send)
+            out = batch.commit(c, who, bid, batch_send, rules=gate)
             rows, notes, _ = batch.candidates(c, who.actor, privacy.actor(who))
             line = batch.lineup(c, who.actor, notes + rows)
             return {**out, "lineup": line, "up_next": batch.up_next(line, out["scope"])}

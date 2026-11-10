@@ -138,6 +138,8 @@ def add(
     if parts:
         own["parts"] = parts  # what was folded into it, each with its key and its words (`cancel`)
     theirs: Row = {name: value for name, value in (refs or {}).items() if name not in ENGINE_REFS}
+    if not theirs.get("wake_batch"):
+        carried.pop("wake_batch", None)  # a wake that is not batchable is not held for what it folded (wake_presets)
     stamped: Row = RT.stamp({**carried, **theirs, **own}, trigger or "task_turn", source)
     message = H._write_message(
         conn,
@@ -204,6 +206,7 @@ STATE_CAUSES = {"paused": "is paused", "quarantined": "is quarantined", "planned
 REMOVED = "was removed"
 NO_COMPUTER = "has no computer"
 RUNS_FAILING = "keeps failing its runs"
+LOGIN = "has a login to reconnect"
 COMPANY_PAUSED = "The company is paused"
 CLOUD_LOCKED = "Tico Cloud is locked"
 OUT_OF_CREDIT = "Tico Cloud is out of credit"
@@ -233,7 +236,7 @@ def cannot_run(conn: "sqlite3.Connection", actor: str | None, seen: dict[str, st
 
 
 def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
-    from . import bot_settings, cloud_access, company_pause, gateway_connection, harnesses, run_backoff
+    from . import bot_settings, cloud_access, company_pause, gateway_connection, harnesses, reconnects, run_backoff
 
     row = conn.execute("SELECT state FROM bots WHERE id=?", (bot,)).fetchone()
     if not row:
@@ -262,6 +265,8 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     held: Row = cast("Any", run_backoff).get(conn, bot) or {}
     if held.get("held_at"):
         return RUNS_FAILING  # held until a person releases it (backend/run_backoff.py)
+    if cast("Any", reconnects).bot_open(conn, bot, "login:"):
+        return LOGIN  # its computer's sign-in was refused: a person reconnects it (backend/reconnects.py)
     return None
 
 
@@ -389,11 +394,15 @@ def started(conn: "sqlite3.Connection", attempt: str) -> None:
 
 
 # A run started since the change: its start is newer than the visit's (`run_starts`), or, for a run that started with
-# no start row (before there were any, or written straight into attempts), its attempt row is newer. Bound: the start
-# mark, the start mark, the attempt mark.
+# no start row (before there were any, or written straight into attempts), its attempt row is newer. Each run's start
+# is looked up for that run (run_starts.attempt_id is unique), never gathered into a list of every start since the
+# mark. The runs read are bounded by attempt row: none older than the attempt mark or the oldest run that started
+# since the start mark, whichever is older (one number, not a list). Bound: the attempt mark, the start mark, the
+# attempt mark, then the start mark and the attempt mark.
 _STARTED_SINCE = (
-    "a.started_at IS NOT NULL AND (a.rowid IN (SELECT r.rowid FROM run_starts s JOIN attempts r ON r.id = s.attempt_id "
-    "WHERE s.id > ?) OR (a.rowid > ? AND NOT EXISTS (SELECT 1 FROM run_starts s WHERE s.attempt_id = a.id)))"
+    "a.rowid > MIN(?, COALESCE((SELECT MIN(r.rowid) - 1 FROM run_starts s JOIN attempts r ON r.id = s.attempt_id "
+    "WHERE s.id > ?), ?)) AND a.started_at IS NOT NULL AND "
+    "COALESCE((SELECT s.id > ? FROM run_starts s WHERE s.attempt_id = a.id), a.rowid > ?)"
 )
 
 
@@ -405,7 +414,10 @@ def runs_since(conn: "sqlite3.Connection", task: Row, *, starting: bool = False,
     when it started (`started`), so a lease claimed before a change and started after it is the new change's.
     `besides` leaves one run out: the one asking whether it may start."""
     attempt_mark, _, start_mark = _marks(task)
-    counted, args = f"({_STARTED_SINCE})", list[object]([start_mark, attempt_mark])
+    counted, args = (
+        f"({_STARTED_SINCE})",
+        list[object]([attempt_mark, start_mark, attempt_mark, start_mark, attempt_mark]),
+    )
     if starting:
         counted = f"({counted} OR (a.state = 'leased' AND a.started_at IS NULL AND a.lease_until > ?))"
         args.append(_h().now())
@@ -471,10 +483,11 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
 
 
 def message_task(conn: "sqlite3.Connection", message_id: str | None, carried: bool = True) -> str | None:
-    """The task a run on this message is about: the task its wake key names, else the one its refs or its conversation
-    name, else, for the keeper's carrier of another message (threads._carrier: `refs.carries`, no task of its own), the
-    task of the message it carries. The claim (`may_start`, the attempt's `task_id`), the start and the count of runs
-    all read the task this way, so a carrier is held and counted as the message it carries."""
+    """The task a run on this message is about: the task its wake key names, else the one its refs name, else, for the
+    keeper's carrier of another message (threads._carrier: `refs.carries`, no task of its own), the task of the message
+    it carries, else the task its conversation is. The carried message comes before the conversation: a carrier in task
+    A's chat of a post about task B is B's run. The claim (`may_start`, the attempt's `task_id`), the start and the
+    count of runs all read the task this way, so a carrier is held and counted as the message it carries."""
     H = _h()
     found = conn.execute(
         "SELECT m.wake_key, m.refs, m.sender_id, c.task_id FROM messages m "
@@ -486,12 +499,11 @@ def message_task(conn: "sqlite3.Connection", message_id: str | None, carried: bo
     if found[0]:
         return str(found[0]).split(":", 1)[0]
     refs: Row = H._json(found[1], {}) or {}
-    named = H.message_task_id({"refs": refs}, {"task_id": found[3]})
-    if named:
-        return str(named)
-    if carried and found[2] == H.KEEPER and refs.get("carries"):
-        return message_task(conn, str(refs["carries"]), carried=False)
-    return None
+    named = H.message_task_id({"refs": refs})
+    if not named and carried and found[2] == H.KEEPER and refs.get("carries"):
+        named = message_task(conn, str(refs["carries"]), carried=False)
+    named = named or H.message_task_id({}, {"task_id": found[3]})
+    return str(named) if named else None
 
 
 def _may_start(conn: "sqlite3.Connection", task: Row, bot: str, kind: str, attempt: str | None) -> bool:
@@ -515,14 +527,14 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visi
     """The wake about this task that `actor` was owed and never got: its newest one in this visit since the visit last
     changed (by order; with `whole_visit`, in the whole visit), when it queued a run and that run never started (its
     job is gone, or ended with no run of it started), and no run of this bot on the task started on a wake written
-    after it. `id`, `body`. None when nothing was lost."""
+    after it. `id`, `body`, and `refs`: what woke it, which a wake written again keeps. None when nothing was lost."""
     H = _h()
     if not H.is_bot(actor):
         return None
     visit: Row = task.get("visit") or {}
     found = conn.execute(
         "SELECT m.id, m.body, m.rowid, json_extract(m.refs, '$.job'), "
-        "(SELECT j.state FROM jobs j WHERE j.id = m.id) FROM messages m "
+        "(SELECT j.state FROM jobs j WHERE j.id = m.id), m.refs FROM messages m "
         f"WHERE {_KEY} AND m.rowid > ? AND +m.recipient_id=? "
         "AND COALESCE(json_extract(m.refs, '$.quiet'), 0) = 0 ORDER BY m.rowid DESC LIMIT 1",
         (*_range(f"{task['id']}:{visit.get('id')}"), 0 if whole_visit else _marks(task)[1], actor),
@@ -534,7 +546,9 @@ def lost(conn: "sqlite3.Connection", task: Row, actor: str | None, *, whole_visi
         "AND m.rowid > ?)) LIMIT 1",
         (H.actor_id(actor), found[0], *_on_task(conn, task), found[2]),
     ).fetchone()
-    return None if taken else {"id": str(found[0]), "body": str(found[1] or "")}
+    if taken:
+        return None
+    return {"id": str(found[0]), "body": str(found[1] or ""), "refs": H._json(found[5], {}) or {}}
 
 
 def inbox(conn: "sqlite3.Connection", task: Row, actor: str | None) -> Row | None:

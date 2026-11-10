@@ -221,6 +221,7 @@ def register(app, auth, settings, settings_admin, store):
             W.STATE_CAUSES["planned"]: "finish_setup",
             W.NO_COMPUTER: "assign_computer",
             W.RUNS_FAILING: "release_hold",
+            W.LOGIN: "reconnect",
             W.COMPANY_PAUSED: "resume_company",
             W.CLOUD_LOCKED: "unlock_cloud",
             W.OUT_OF_CREDIT: "add_credit",

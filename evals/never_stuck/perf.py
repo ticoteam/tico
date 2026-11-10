@@ -55,7 +55,16 @@ def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) 
             "WHERE m.wake_key IS NOT NULL",
             (H.now(), H.now(), H.now(), H.now()),
         )
+        _started(c)
     return dict(kinds)
+
+
+def _started(c: Any) -> None:
+    """Each run that started takes its start in order (`task_wakes.started`), as a real start does: the run count
+    reads them."""
+    c.execute(
+        "INSERT OR IGNORE INTO run_starts (attempt_id) SELECT id FROM attempts WHERE started_at IS NOT NULL ORDER BY rowid"
+    )
 
 
 # The rows one task on the engine is made of, as `fill` makes them: what `clone` copies.
@@ -102,6 +111,7 @@ def clone(world: World, times: int) -> int:
                         for row in found
                     ],
                 )
+        _started(c)  # a copy's start is its own: run_starts ids only grow, so they are taken, not copied
         if guard:
             c.execute(guard[0])
         return int(c.execute("SELECT COUNT(*) FROM tasks WHERE status='open'").fetchone()[0])

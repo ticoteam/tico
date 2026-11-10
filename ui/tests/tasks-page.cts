@@ -6,7 +6,8 @@
 //    place and leaves (not on a phone); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
 //  - the view button lists You and every pipeline still in use (a retired one is not offered); picking one puts it in
 //    the address and reads its open tasks, snoozed ones left out;
-//  - the archive: Snoozed, Done and Closed each read their own tasks, and a row opens the task in its window.
+//  - the archive: Snoozed, Done and Closed each read their own tasks, and a row opens the task in its window; a
+//    pipeline's archive reads and keeps that pipeline's tasks only, a live task of another pipeline left out.
 // Pipelines themselves (list and columns, the rail, the editor) are pipeline-view-unit.cts and pipeline-drag.cts; the
 // ask screen is ask-screen.cts.
 import type {Browser, Page, Route} from 'playwright';
@@ -153,6 +154,8 @@ export interface WindowMarks {
   leavingLive?: TaskLive | undefined;
 }
 declare var TASKS_ST: Globals['TASKS_ST'];
+declare function tasksTaskPut(state: unknown, t: unknown): boolean;
+declare function tasksLiveApply(events: {id: string; task: unknown}[]): void;
 
 const NOW = Date.now();
 const at = (minutes: number) => new Date(NOW - minutes * 60000).toISOString();
@@ -382,6 +385,12 @@ async function archive(browser: Browser) {
   };
   await page.locator('#task-archive').click();
   await shows('snoozed', {status: 'open', snoozed: 'only'}, ['Renew the domain']);
+  // A write's reply is the full task, `snooze` without `snoozed`: the snoozed task stays in Snoozed.
+  await page.evaluate(() => {
+    const t = TASKS_ST.tasks.find(x => x.id === 't-5')!, {snoozed: _, ...full} = {...t, title: 'Renew the domain name', snooze: {by: 'human:ana', until: null, why: null}};
+    tasksTaskPut(TASKS_ST, full);
+  });
+  assert.deepEqual(await rowTitles(page), ['Renew the domain name']);
   await page.locator('#task-archives [data-archive="done"]').click();
   await shows('done', {status: 'done', sort: 'finished'}, ['Ship the receipt email']);
   await page.locator('#task-archives [data-archive="closed"]').click();
@@ -398,6 +407,21 @@ async function archive(browser: Browser) {
   console.log('the archive: Snoozed, Done and Closed each read their own; a row opens its task: ok');
 }
 
+async function pipelineArchive(browser: Browser) {
+  const tasks = [...fixtures(), task('t-8', 'Close the office lease', 'done', {pipeline_id: 'ops', pipeline: {id: 'ops', name: 'Operations'}})];
+  const {page, errors, reads} = await open(browser, {tasks, hash: '#/tasks?pipeline=product&archive=done'});
+  await page.waitForFunction(() => TASKS_ST.archive === 'done' && !TASKS_ST.loading);
+  assert.equal(reads.at(-1)!.searchParams.get('pipeline'), 'product', "a pipeline's archive reads that pipeline's tasks");
+  assert.deepEqual(await rowTitles(page), ['Ship the receipt email']);
+  // A task of another pipeline is done: it is not this archive's.
+  await page.evaluate(t => tasksLiveApply([{id: t.id, task: t}]), brief(tasks.at(-1)!));
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  assert.deepEqual(await rowTitles(page), ['Ship the receipt email']);
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log("a pipeline's archive: that pipeline's tasks only, read and live: ok");
+}
+
 const api = {open, fixtures, task, brief, needsOf, PIPELINES};
 export type Api = typeof api;
 export type Opened = Awaited<ReturnType<typeof open>>;
@@ -405,6 +429,6 @@ module.exports = api;
 if (require.main === module) (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    for (const run of [you, views, archive]) await run(browser);
+    for (const run of [you, views, archive, pipelineArchive]) await run(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

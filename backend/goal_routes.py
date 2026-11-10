@@ -26,12 +26,18 @@ from . import goals as G
 from . import kpis as K
 from . import models as M
 from . import names as N
+from . import org_rule_check
 from . import strategy as S
+from . import task_rule_gate
 from . import views
 from .store import H, Problem
 
 
 DRAFT_PAGE_KINDS = ("brand_draft",)
+
+
+# The words a Strategy Bot decision change writes, as the rule check reads them: (field, label).
+DECISION_SAYS = (("title", "New task"), ("body", "Task"), ("note", "Note"))
 
 
 def company_editor(who, tap=False):
@@ -493,10 +499,20 @@ def install(app, store, auth, mutate, settings):
         """At level 2 or 3, the Strategy Bot makes several bots' asks waiting on one person a single item of its own;
         the person's answer to it goes to each bot that asked (backend/strategy_merge.py)."""
         who = request.state.identity
+        # The merged item is the Strategy Bot's ask of the person: checked like any bot's ask (backend/task_rule_gate.py),
+        # refused with the rule's words when a rule covers it.
+        rules = request.app.state.task_rules
+        said = [("Title", body.title), ("Question", body.question)]
+
+        def reach(c):
+            return [rules.rule_target(c, who, body.person)]
+
+        verdict = rules.check_words(who, "strategy_merge", said, reach)
 
         def work(c):
             auth.domain(who)
             strategy_itself(c, who, "merges the asks waiting on a person")
+            rules.apply_words(c, who, verdict, said, reach, ask=True)
             person = H.resolve_actor(c, body.person) or body.person
             return CM.merge(c, who.actor, person, body.title, body.question, body.tasks)
 
@@ -525,10 +541,40 @@ def install(app, store, auth, mutate, settings):
         not do alone (a person's task, a bot offline, a refusal) becomes one proposal in the owner's Needs you, never
         dropped."""
         who = request.state.identity
+        # What the decision writes (its reason, a new task's title and body, a close's note) is checked like any task
+        # write of the Strategy Bot (backend/task_rule_gate.py); held, nothing changes. Warned, the line goes first on
+        # each text it writes.
+        rules = request.app.state.task_rules
+        changes = [x.model_dump(exclude_none=True) for x in body.changes]
+        said = [("Reason", body.reason)] + [
+            (label, change.get(key)) for change in changes for key, label in DECISION_SAYS
+        ]
+
+        def reach(c):
+            # The tasks' people only where the Strategy Bot may read the task: a decision on one it cannot read is
+            # refused in the write, and its check names nobody from it.
+            out = [rules.rule_target(c, who, x["owner"]) for x in changes if x.get("owner")]
+            for x in changes:
+                row = H.task(c, x["task_id"]) if x.get("task_id") else None
+                if row and H.task_private_readable(c, who.actor, row):
+                    out += [row["owner_id"], row["requester_id"]]
+            return [a for a in dict.fromkeys(out) if a]
+
+        verdict = rules.check_words(who, "strategy_decision", said, reach)
 
         def work(c):
             auth.domain(who)
             strategy_itself(c, who, "decides alone, at level 3")
+            gate = rules.apply_words(c, who, verdict, said, reach)
+            if task_rule_gate.held(gate):
+                return org_rule_check.answer(gate)
+            reason, made_changes = body.reason, changes
+            if gate and gate.get("warn"):
+                reason = task_rule_gate.warn_on(gate, reason)
+                made_changes = [
+                    {k: task_rule_gate.warn_on(gate, v) if k in ("body", "note") and v else v for k, v in x.items()}
+                    for x in changes
+                ]
 
             def give(owner, task_id):
                 # The checks a task create or reassign by this caller passes (POST /api/v2/tasks, /tasks/{id}).
@@ -543,14 +589,14 @@ def install(app, store, auth, mutate, settings):
             made = CA.decide(
                 c,
                 who.actor,
-                body.reason,
-                [x.model_dump(exclude_none=True) for x in body.changes],
+                reason,
+                made_changes,
                 body.goal_id or None,
                 visible=auth.task_sql(c, who),
                 give=give,
                 sees=lambda owner: auth.bot_access(c, who, H.actor_id(owner))["see"],
             )
-            return CA.receipt(CA.entry(c, made, auth.task_sql(c, who)))
+            return {**CA.receipt(CA.entry(c, made, auth.task_sql(c, who))), **org_rule_check.answer(gate)}
 
         return mutate(request, body, work)
 

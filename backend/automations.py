@@ -2387,9 +2387,10 @@ class HubServices:
             )
         return result
 
-    def _rule_text(self, c, do, args, values):
+    def _rule_text(self, c, do, args, values, hide_private=False):
         """What a step says, as the rule check reads it, and the argument a warning line goes on. A task handed to a
-        new owner (`assign`) says its title and body to them, with or without a note."""
+        new owner (`assign`) says its title and body to them, with or without a note. `hide_private`: a private
+        task's title and body are left out (a hold's reviewer may not read the task)."""
         keys = RULE_CHECKED.get(do)
         if not keys:
             return "", None
@@ -2402,9 +2403,12 @@ class HubServices:
             except ValueError:
                 task = None
             if task:
-                text = "\n\n".join(
-                    filter(None, (text, f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip()))
+                said = (
+                    "Assigned: a private task"
+                    if hide_private and H.task_private(c, task)
+                    else f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip()
                 )
+                text = "\n\n".join(filter(None, (text, said)))
         return text, _rule_key(do, args)
 
     def _rule_check(self, do, args, values, step=None):
@@ -2455,7 +2459,9 @@ class HubServices:
         if rule:
             from . import org_rule_check
 
-            text, key = self._rule_text(c, do, args, values)
+            # The reviewer's copy leaves a private task's words out; the hold keeps what was judged for its recheck.
+            judged, key = self._rule_text(c, do, args, values)
+            text, _ = self._rule_text(c, do, args, values, hide_private=True)
             gate = org_rule_check.apply(
                 c,
                 rule,
@@ -2471,6 +2477,7 @@ class HubServices:
                 },
                 tell=True,
                 obj_now=org_rule_check.current_obj(c, rule.get("obj")),
+                judged=judged,
             )
             if gate and gate.get("moved"):
                 raise TaskMoved()

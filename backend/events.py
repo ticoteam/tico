@@ -2056,7 +2056,7 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
     # A change to more tasks than one event each is worth (FAN_CAP): one `bulk` event, read lists in full.
     bulk = [row for row in rows if row["kind"] == "bulk"]
     out = [(bulk[-1], {"bulk": True})] if bulk else []
-    last, kinds, public_before, first_was = {}, {}, {}, {}
+    last, kinds, before, first_was = {}, {}, {}, {}
     for row in rows:
         if row["kind"] != "bulk":
             last[row["subject_id"]] = row
@@ -2066,9 +2066,8 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
             was = H._json(row["ref"], None) if row["kind"] in ("update", "delete") else None
             if isinstance(was, list) and len(was) >= 3:
                 first_was.setdefault(row["subject_id"], (row["ref"], was))
-    for subject, (ref, was) in first_was.items():
-        if not was[2]:
-            public_before[subject] = [ref]
+    for subject, (ref, _) in first_was.items():
+        before[subject] = [ref]
     ids = list(last)
     if not ids:
         return out
@@ -2110,10 +2109,11 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
                 entry["meeting_links"] = list(meeting_links[task_id].values())
         elif task_id not in present and _trashed_visible(c, who, task_id):
             entry["gone"] = True
-        # A formerly public row can be removed; revoked private work stays completely silent. A ticket the viewer can read
-        # now is never gone, whatever it was before.
+        # A row the viewer could open before this change (public, or private with them a party or a reader) and cannot
+        # now is removed: its id alone, so the row they hold leaves. One they could never open stays silent. A task the
+        # viewer can read now is never gone, whatever it was before.
         elif task_id not in visible and any(
-            task_reads._could_read(c, visible_sql, task_id, ref) for ref in public_before.get(task_id, ())
+            task_reads._could_read(c, visible_sql, task_id, ref) for ref in before.get(task_id, ())
         ):
             entry["gone"] = True
         else:
@@ -2329,8 +2329,12 @@ def _threads(view, rows):
             activity.setdefault(row["subject_id"], {})[row["ref"]] = None
     view.prime(subject for subject, _, _ in last)
     H.prime_messages(view.c, [ref for refs in activity.values() for ref in refs])
+    # The threads whose members lost the viewer: once they can no longer read one, its id alone, so its row leaves.
+    dropped = {row["subject_id"] for row in rows if row["kind"] == "members" and row["ref"] == view.who.actor}
     for (tid, kind, ref), row in last.items():
         if not view.conversation(tid):
+            if kind == "members" and tid in dropped:
+                out.append((row, {"thread_id": tid, "kind": "members", "gone": True}))
             continue
         found = threads.thread_row(view.c, tid)
         if found is None:

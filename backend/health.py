@@ -2843,6 +2843,16 @@ def view(c, who, settings, auth, github, config):
                     [_fix("What is new", "#/changelog")],
                 )
             )
+        elif notice.get("held"):  # 0.6 starts fresh: not offered while this company has tasks (releases.offered)
+            checks.append(
+                _check(
+                    "version",
+                    "Version",
+                    "info",
+                    f"{_v(notice.get('latest'))} is out. {notice['held']}.",
+                    [_fix("What is new", "#/changelog")],
+                )
+            )
         elif notice.get("available"):
             checks.append(
                 _check(

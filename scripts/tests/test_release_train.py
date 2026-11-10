@@ -262,6 +262,8 @@ COMMANDS = []
 @pytest.fixture(autouse=True)
 def clean_log(monkeypatch):
     monkeypatch.setattr(rt, "LOG", [])
+    # The tests' world is a 0.5 main (v0.5.200); the 0.6 line has tests of its own (test_a_new_line_...).
+    monkeypatch.setattr(rt, "LINE", (0, 5))
     monkeypatch.setattr(rt, "sleep", lambda seconds: None)
     COMMANDS.clear()
     monkeypatch.setattr(rt, "run_command", lambda argv, timeout=180: COMMANDS.append(argv) or (0, ""))
@@ -1050,6 +1052,52 @@ def test_promote_never_moves_stable_backwards(installs):
 def test_promote_skips_without_keys(installs):
     rt.promote(FakeGitHub(), dict(ENV, STABLE_UPDATE_KEY=" "))
     assert installs["updated"] == [] and any("STABLE_UPDATE_KEY" in line for line in rt.LOG)
+
+
+# ---- 0.6 starts fresh: no 0.6 main ships as a 0.5 patch, and no 0.5 install is moved to 0.6 ----
+
+
+def test_a_new_line_is_never_cut_as_a_patch_of_the_old_one_and_resumes_once_tagged(monkeypatch):
+    monkeypatch.setattr(rt, "LINE", (0, 6))
+    gh = FakeGitHub([run(C)])  # a green v0.5.201 candidate of main: it never ships
+    held = plan(gh)
+    assert held["action"] == "wait" and "tag v0.6.0 by hand" in held["held"]
+    assert rt.problems(held) == [held["held"]]  # reported once on the release-train issue
+    gh.tags_["v0.6.0"] = B
+    gh.releases["v0.6.0"] = released("v0.6.0")
+    resumed = plan(gh)
+    assert resumed["version"] == "v0.6.1" and resumed["action"] == "dispatch"
+
+
+@pytest.mark.parametrize(
+    "have, want, crosses",
+    [
+        ("0.5.216", "0.6.0", True),
+        ("v0.5.216", "v0.6.0-rc.1", True),
+        ("0.5.216", "0.7.2", True),
+        ("0.5.216", "0.5.217", False),
+        ("0.6.0", "0.6.1", False),
+        ("", "0.6.0", False),
+    ],
+)
+def test_crossing_the_fresh_start(have, want, crosses):
+    assert rt.crosses_fresh_start(have, want) is crosses
+
+
+def test_an_install_on_0_5_is_never_updated_to_0_6(installs):
+    installs["stable"]["running"] = "0.5.216"
+    with pytest.raises(rt.Fail, match="0.6 starts fresh"):
+        rt.update_install(rt.install("STABLE", ENV), "v0.6.0")
+    assert installs["updated"] == []
+
+
+def test_promote_leaves_a_0_5_stable_where_it_is_when_the_canary_runs_0_6(installs):
+    gh = FakeGitHub()
+    approval_for(gh, "v0.6.0", approved_by="chris")
+    installs["canary"]["running"] = "0.6.0"
+    installs["stable"]["running"] = "0.5.216"
+    rt.promote(gh, ENV)
+    assert installs["updated"] == [] and any("0.6 starts fresh" in line for line in rt.LOG)
 
 
 # ---- approved automatically: no person needed (RELEASE_NEEDS_PERSON off, no High risk item) ----
