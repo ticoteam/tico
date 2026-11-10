@@ -42,40 +42,17 @@ def test_a_bad_signature_is_refused_and_an_unset_secret_hides_the_path(api, tmp_
 
 
 def test_a_pull_request_never_moves_its_task_through_merge_and_deploy(api):
-    """A PR on a task is information: opened, merged and deployed, the task keeps its status and step."""
-    typ = post(
-        api,
-        "task-types",
-        {
-            "name": "Product",
-            "steps": [
-                {"name": "Build", "status": "doing"},
-                {"name": "QA", "status": "review"},
-                {"name": "Shipped", "status": "done"},
-            ],
-        },
-    )["type"]
+    """A PR on a task is information: opened, merged and deployed, the task keeps its status and stage."""
     plain = post(api, "tasks", {"owner": "cpo", "title": "Ship the pricing page", "body": "x", "links": [PR]})
-    custom = post(
-        api,
-        "tasks",
-        {
-            "owner": "cpo",
-            "title": "Ship the pricing copy",
-            "body": "x",
-            "links": [PR],
-            "type": typ["id"],
-            "step": "Build",
-        },
-    )
+    custom = post(api, "tasks", {"owner": "cpo", "title": "Ship the pricing copy", "body": "x", "links": [PR]})
     with api.app.state.store.transaction() as c:  # a legacy product-lane row used to move; nothing does now
         c.execute("UPDATE tasks SET lane='product' WHERE id=?", (plain["id"],))
-    before = {t["id"]: (t["status"], t["step_id"]) for t in (plain, custom)}
+    before = {t["id"]: (t["status"], t["stage"]["id"]) for t in (plain, custom)}
 
     def unmoved():
-        for tid, (status, step) in before.items():
+        for tid, (status, stage) in before.items():
             task = get(api, "tasks/" + tid)["task"]
-            assert (task["status"], task["step_id"]) == (status, step)
+            assert (task["status"], task["stage"]["id"]) == (status, stage)
         return [get(api, "tasks/" + tid)["task"]["links"][0] for tid in before]
 
     opened = hook(api, "pull_request", pr_event("opened"))
@@ -391,13 +368,12 @@ def test_new_head_clears_stale_conflict_and_deduplicates_per_head(api):
     assert clear_wake()
 
 
-def test_grouped_wakes_retry_bad_rows_and_send_blocked_tasks(api, monkeypatch):
-    finished_status = "done"
+def test_grouped_wakes_retry_bad_rows_and_send_open_tasks(api, monkeypatch):
     from backend.repositories import save_metadata
 
     tasks = [
         post(api, "tasks", {"owner": "cpo", "title": title, "body": "Review work"})
-        for title in ("Broken notice", "Blocked task", "Finished task")
+        for title in ("Broken notice", "Open task", "Finished task")
     ]
     store = api.app.state.store
     with store.transaction() as c:
@@ -405,8 +381,7 @@ def test_grouped_wakes_retry_bad_rows_and_send_blocked_tasks(api, monkeypatch):
             save_metadata(
                 c, "github-task-wake:" + task["id"], {"due": H.shift(H.now(), seconds=-1), "items": ["Checks failed"]}
             )
-        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tasks[1]["id"],))
-        c.execute("UPDATE tasks SET status=? WHERE id=?", (finished_status, tasks[2]["id"]))
+        H.task_done(c, "human:ana", tasks[2]["id"], "Finished.")
     wake = H._wake
 
     def broken(c, task, *args, **kwargs):
@@ -444,14 +419,13 @@ def test_deploy_query_uses_repository_index_and_ignores_other_repos(api):
     store.settings.release_commit = "release-sha"
     store.settings.release_repo = "TicoTeam/Tico"
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='ready' WHERE id IN (?,?)", (own["id"], other["id"]))
         c.execute("UPDATE task_links SET state='merged',pr_sha='release-sha'")
         plan = c.execute(
             "EXPLAIN QUERY PLAN " + G.DEPLOY_QUERY, ("https://github.com/ticoteam/tico/pull/%",)
         ).fetchall()
         assert any("task_links_repo_url" in r[3] and "url>?" in r[3] for r in plan)
         assert G.ship_deployed(c, store.settings) == [own["id"]]
-        assert H.task(c, own["id"])["status"] == "ready"
+        assert H.task(c, own["id"])["status"] == "open"
         assert H.task_links(c, other["id"])[0]["state"] == "merged"
 
 
@@ -762,24 +736,6 @@ def test_a_pr_linked_again_in_another_case_is_the_same_link(api):
     assert 'wake_once' in json.loads(next(v for k, v in links.items() if k != 'dup')['detail'])
 
 
-def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on GitHub', 'body': 'x', 'links': [PR]})
-    post(api, 'tasks/' + task['id'] + '/links', {'url': PR, 'wake_once': True}, expected=422)  # no App
-    _app(api)
-    post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://example.com/deploy', 'wake_once': True}, expected=422)
-    _arm(api, task['id'])
-    with api.app.state.store.transaction() as c:
-        assert H.waiting_for(c, H.task(c, task['id'])) is None  # nothing from GitHub on it yet
-    hook(api, 'pull_request', pr_event('opened'))
-    with api.app.state.store.transaction() as c:
-        assert H.waiting_for(c, H.task(c, task['id'])) == 'GitHub on tico#412'
-        H.task_update(c, 'bot:cpo', task['id'], status='waiting', note='Waiting on CI for tico#412')
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-3), task['id']))
-    hook(api, 'pull_request', pr_event('closed'))  # a closed PR has nothing left to wait for
-    with api.app.state.store.transaction() as c:
-        assert H.waiting_for(c, H.task(c, task['id'])) is None
-
-
 class FakeHistory:
     """A small repository GitHub answers for: each commit is its parents, its whole tree and the renames it made."""
 
@@ -1022,7 +978,7 @@ def test_a_release_that_reverts_a_merged_pr_does_not_ship_it(api, monkeypatch):
         assert _burst(api, task['id']) == (
             [f"Shipped: tico#{n} is in the running release {revert[:12]} {url}"] if n in shipped else []
         ), n
-        assert get(api, 'tasks/' + task['id'])['task']['step_id'] == task['step_id']
+        assert get(api, 'tasks/' + task['id'])['task']['stage']['id'] == task['stage']['id']
     # A revert is fixed history: the next pass asks GitHub nothing more about it.
     _refresh_release(api, monkeypatch, h, revert)
     assert h.calls == []
@@ -1091,34 +1047,6 @@ def test_opened_non_engineering_pr_does_not_need_creation_qa(api):
     assert not _prs(api, task['id'])[412]['detail'].get('qa_default_pending')
 
 
-def test_stale_non_engineering_qa_marker_settles_without_repeated_github_reads(api, monkeypatch):
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
-    # Existing links can carry the marker written by the old opened-webhook path.
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
-            (json.dumps({'qa_default_pending': True, 'kept': 'metadata'}), task['id']),
-        )
-    calls = []
-
-    def fetch(method, path, **kw):
-        calls.append(path)
-        assert path == '/repos/ticoteam/tico/pulls/412'
-        return SimpleNamespace(status_code=200, json=lambda: _branch_pr(412, 'planning-notes'))
-
-    service, run = _reconciler(api, monkeypatch, fetch)
-    run(fresh=True)
-    detail = _prs(api, task['id'])[412]['detail']
-    assert not detail.get('qa_default_pending')
-    assert detail['kept'] == 'metadata'
-    assert calls == ['/repos/ticoteam/tico/pulls/412']
-    # Ignore both caches: the settled link itself must exclude the next pass.
-    run(fresh=True)
-    assert calls == ['/repos/ticoteam/tico/pulls/412']
-    with service.store.read() as c:
-        assert H.task_labels(H.task(c, task['id'])) == []
-
-
 def test_a_pr_from_a_worktree_branch_registers_itself_on_both_repos_and_never_from_a_fork(api):
     """A bot that opens a PR and never links it still gets the link its worktree's release waits on."""
     _app(api)
@@ -1159,7 +1087,7 @@ def test_a_pr_from_a_worktree_branch_registers_itself_on_both_repos_and_never_fr
     assert _burst(api, task['id']) == []
 
 
-def test_reconcile_heals_stale_and_unregistered_prs_on_a_declined_task_nobody_reads(api, monkeypatch):
+def test_reconcile_heals_stale_and_unregistered_prs_on_a_closed_task_nobody_reads(api, monkeypatch):
     _app(api)
     task = post(
         api,
@@ -1215,7 +1143,7 @@ def test_reconcile_heals_stale_and_unregistered_prs_on_a_declined_task_nobody_re
 
     service, run = _reconciler(api, monkeypatch, fetch)
     with service.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (task['id'],))
+        H.task_close(c, "human:ana", task['id'], "Not needed.")
     run()
     prs = _prs(api, task['id'])
     assert prs[746]['state'] == 'merged' and prs[990]['state'] == 'open' and prs[990]['added_by'] == 'keeper'
@@ -1376,125 +1304,6 @@ def test_draft_failures_stay_visible_until_the_branch_pr_is_linked(api, monkeypa
     assert _prs(api, task['id'])[8]['state'] == 'draft' and 'pr_error' not in _worktree_detail(api, tree)
 
 
-def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_linked(api):
-    """Any move to a review step, or to done, with pushed work no pull request carries would orphan the worktree; a
-    link, by hand or by the branch's own PR, lets it through. A branch only moved to newer main is no such work."""
-    _app(api)
-    with api.app.state.store.transaction() as c:
-        dev = H.type_create(
-            c,
-            H.KEEPER,
-            'Dev tickets',
-            [
-                {'name': 'In Progress', 'status': 'doing'},
-                {'name': 'Review 1', 'status': 'review'},
-                {'name': 'Review 2', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
-            ],
-        )
-    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Gateway key per install', 'body': 'x'})
-    branch = f"tico/{task['id'][:8]}-gateway-key-per-install"
-    repos = ('ticoteam/tico', 'ticoteam/tico-services')
-    for repo in repos:
-        _worktree(api, task['id'], repo, branch, expected_head='a' * 40)
-
-    def move(**change):
-        try:
-            with api.app.state.store.transaction() as c:
-                return H.task_update(c, 'human:ana', task['id'], **change)['status']
-        except H.Refused as refused:
-            return str(refused)
-
-    assert move(type=dev['id'], step='In Progress') == 'doing'
-    # Moved to newer main and nothing more: no commit of the task's own, so nothing to refuse.
-    with api.app.state.store.transaction() as c:
-        for repo in repos:
-            c.execute("INSERT INTO main_pushes(sha,repo,pushed_at) VALUES(?,?,?)", (repo[-1] * 40, repo, H.now()))
-            c.execute(
-                "UPDATE task_links SET detail=json_set(detail,'$.last_commit',?,'$.ahead',0) "
-                "WHERE task_id=? AND kind='worktree' AND repo=?",
-                (repo[-1] * 40, task['id'], repo),
-            )
-    assert move(step='Review 1') == 'review'
-    # A push counts the moment its webhook lands, before any computer reports it, in both repositories.
-    for repo in repos:
-        hook(
-            api,
-            'push',
-            {
-                'ref': 'refs/heads/' + branch,
-                'repository': {'full_name': repo},
-                'after': 'e' * 40,
-                'head_commit': {'id': 'e' * 40},
-            },
-        )
-    refused = move(step='Review 2')
-    assert all(f'{repo} branch {branch}' in refused for repo in repos)
-    assert move(note='still working') == 'review'
-    assert move(status='waiting') == 'waiting'
-    assert 'ticoteam/tico branch' in move(step='Review 1')
-    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(984, branch)})
-    still = move(step='Done')
-    assert 'ticoteam/tico-services branch' in still and 'ticoteam/tico branch' not in still
-    post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/ticoteam/tico-services/pull/16'})
-    hook(
-        api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(16, branch, repo='ticoteam/tico-services')}
-    )
-    # Linking is necessary; the review gate also needs a current passing receipt.
-    assert move(note='Tests: head ' + 'b' * 40 + ': 9 passed, 0 failed') == 'waiting'
-    assert move(step='Review 2') == 'review' and move(step='Done') == 'done'
-
-
-def test_a_hand_off_waits_for_a_branch_check_when_a_push_left_no_webhook_and_no_report(api, monkeypatch):
-    """A push GitHub never announced and no computer reported is on GitHub only: until the background pass has read
-    the branch since its last known head, a hand-off is held; the pass drafts the PR (or finds nothing) and frees
-    it. A head reported while unpushed is read again once it is reported pushed. Synthetic: no real GitHub call."""
-    _app(api)
-    pushed = post(api, 'tasks', {'owner': 'cpo', 'title': 'Silent push', 'body': 'x'})
-    branch = f"tico/{pushed['id'][:8]}-silent-push"
-    _worktree(api, pushed['id'], 'ticoteam/tico', branch, expected_head='a' * 40)
-    quiet = post(api, 'tasks', {'owner': 'cpo', 'title': 'Quiet', 'body': 'x'})
-    local = _worktree(
-        api,
-        quiet['id'],
-        'ticoteam/tico',
-        f"tico/{quiet['id'][:8]}-quiet",
-        expected_head='a' * 40,
-        last_commit='e' * 40,
-        ahead=1,
-    )
-
-    def fetch(method, path, headers=None, params=None, json=None):
-        if method == 'POST':
-            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(31, branch, draft=True))
-        if '/compare/' in path:
-            # Only the silent push's branch is on GitHub; the quiet one has its commit on the computer only.
-            return (
-                SimpleNamespace(status_code=200, json=lambda: {'ahead_by': 1})
-                if path.endswith(quote(branch, safe=''))
-                else SimpleNamespace(status_code=404, json=lambda: {})
-            )
-        return SimpleNamespace(status_code=200, json=lambda: [])
-
-    _, run = _reconciler(api, monkeypatch, fetch)
-
-    def review(task):
-        try:
-            with api.app.state.store.transaction() as c:
-                return H.task_update(c, 'human:ana', task['id'], status='review')['status']
-        except H.Refused as refused:
-            return str(refused)
-
-    assert all('not checked on GitHub' in review(task) for task in (pushed, quiet))
-    run()
-    assert _prs(api, pushed['id'])[31]['state'] == 'draft' and review(pushed) == 'review'
-    assert _worktree_detail(api, local)['remote']['absent'] and review(quiet) == 'review'
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (quiet['id'],))
-        c.execute("UPDATE task_links SET detail=json_set(detail,'$.ahead',0) WHERE id=?", (local,))
-    assert 'has commits with no pull request linked' in review(quiet)
-
-
 def _queue(api, task_id, action, reason=None, head='a' * 40, **over):
     """A merge-queue webhook for the task's PR at `head`. GitHub's dequeue `reason` rides on the top-level payload."""
     body = pr_event(action, head={'sha': head}, **over)
@@ -1526,18 +1335,15 @@ def _github_pr(api, monkeypatch, **pr):
 @pytest.mark.parametrize('reason', ['CHECKS_FAILED', 'SOME_REASON_GITHUB_ADDED_LATER'])
 def test_a_merge_queue_removal_wakes_the_owner_once_when_github_still_has_the_pr_open(api, monkeypatch, reason):
     """The webhook sends nothing for a removal that is not a merge. The maintenance pass reads the pull request, and if it
-    is still open at the removed head the owner is woken once, with the reason and the head, and the head's merge wake is
-    due again. A failed read waits for the next pass; a redelivery says nothing new; a removal after a re-enqueue is news."""
-    from backend import verdict_moves as V
-
+    is still open at the removed head the owner is woken once, with the reason and the head. A failed read waits for the
+    next pass; a redelivery says nothing new; a removal after a re-enqueue is news."""
     service, seen, fake = _github_pr(api, monkeypatch)
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship the queued change', 'body': 'x', 'links': [PR]})
     hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
-    with api.app.state.store.transaction() as c:
-        assert V._merge_woken(c, H.task(c, task['id']), 'a' * 40, H.task_links(c, task['id'])[0]) is True
     _queue(api, task['id'], 'enqueued')
     with api.app.state.store.transaction() as c:
-        assert V._queued(H.task_links(c, task['id'])[0], 'a' * 40)
+        queue = H._json(H.task_links(c, task['id'])[0]['detail'], {})['merge_queue']
+        assert (queue['state'], queue['head']) == ('queued', 'a' * 40)
     _queue(api, task['id'], 'dequeued', reason)
     item = f"Removed from the merge queue ({reason}) at {'a' * 12}: fix and merge again"
     assert _burst(api, task['id']) == [] and seen == []
@@ -1550,8 +1356,8 @@ def test_a_merge_queue_removal_wakes_the_owner_once_when_github_still_has_the_pr
     with api.app.state.store.transaction() as c:
         assert c.execute('SELECT body FROM messages ORDER BY rowid DESC LIMIT 1').fetchone()[0] == item
         pr = H.task_links(c, task['id'])[0]
-        assert not V._queued(pr, 'a' * 40) and 'verify' not in H._json(pr['detail'], {})['merge_queue']
-        assert V._merge_woken(c, H.task(c, task['id']), 'a' * 40, pr) is True  # due again after the removal
+        queue = H._json(pr['detail'], {})['merge_queue']
+        assert queue['state'] == 'dequeued' and 'verify' not in queue
     reads = len(seen)
     G.refresh_queue_removals(service)
     assert len(seen) == reads  # nothing is marked: nothing is read
@@ -1603,9 +1409,9 @@ def test_a_removal_for_a_pr_github_reads_as_merged_does_not_wake_the_owner(api, 
     assert len(seen) == reads
 
 
-def _task_state(api, task_id, status):
+def _done(api, task_id):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status=? WHERE id=?", (status, task_id))
+        H.task_done(c, "human:ana", task_id, "Done.")
 
 
 def _merged(api):
@@ -1622,9 +1428,8 @@ def _flush(api):
         return G.flush_wakes(c)
 
 
-def test_a_merge_wakes_the_bot_card_waiting_on_its_pull_request_once(api):
+def test_a_merge_wakes_the_bot_whose_task_has_the_pull_request_once(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
-    _task_state(api, task['id'], 'waiting')
     _merged(api)
     assert len(_burst(api, task['id'])) == 1 and 'merged' in _burst(api, task['id'])[0]
     assert _flush(api) == [task['id']]
@@ -1632,8 +1437,8 @@ def test_a_merge_wakes_the_bot_card_waiting_on_its_pull_request_once(api):
         body = c.execute(
             'SELECT body FROM messages WHERE recipient_id=? ORDER BY rowid DESC LIMIT 1', (task['owner_id'],)
         ).fetchone()[0]
-    assert 'Carry this card on' in body
-    # GitHub redelivers the merge, and a read refresh finds the same merge: neither wakes the card again.
+    assert 'Carry this task on' in body
+    # GitHub redelivers the merge, and a read refresh finds the same merge: neither wakes the task again.
     _merged(api)
     with api.app.state.store.transaction() as c:
         G.pull_request(
@@ -1643,61 +1448,23 @@ def test_a_merge_wakes_the_bot_card_waiting_on_its_pull_request_once(api):
     assert _flush(api) == []
 
 
-def test_a_merge_does_not_wake_a_card_a_person_owns(api):
+def test_a_merge_does_not_wake_a_task_a_person_owns(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
-    _task_state(api, task['id'], 'waiting')
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='human:ana' WHERE id=?", (task['id'],))
+        H.task_reassign(c, "human:ana", task['id'], "human:ana", "I will do it.")
     _merged(api)
     assert _burst(api, task['id']) == []
 
 
-def test_a_merge_does_not_wake_a_done_card(api):
+def test_a_merge_does_not_wake_a_done_task(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
-    _task_state(api, task['id'], 'done')
+    _done(api, task['id'])
     _merged(api)
     assert _burst(api, task['id']) == []
-
-
-def test_a_merge_wakes_the_card_blocked_on_the_pull_request_card_and_not_that_card(api):
-    from backend import task_relations as TR
-
-    pr_card = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
-    qa = post(api, 'tasks', {'owner': 'cmo', 'title': 'QA checkout', 'body': 'x'})
-    with api.app.state.store.transaction() as c:
-        TR._insert(c, 'bot:cpo', pr_card['id'], qa['id'], 'blocks', H.now())
-    _task_state(api, qa['id'], 'waiting')
-    _merged(api)
-    assert _burst(api, pr_card['id']) == [], 'an open card is on its own step, not waiting'
-    assert len(_burst(api, qa['id'])) == 1
-
-
-def test_a_card_the_milestone_wait_woke_gets_no_second_wake_from_the_merge(api):
-    from backend import repositories as R
-    from backend import task_relations as TR
-
-    pr_card = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
-    waiter = post(api, 'tasks', {'owner': 'cmo', 'title': 'QA checkout', 'body': 'x'})
-    with api.app.state.store.transaction() as c:
-        # Blocked on the pull request's card and waiting for the merge: the milestone wakes it, and the card's own
-        # blocker is still open, so it stays waiting and the merge would wake it again without the skip.
-        TR._insert(c, 'bot:cpo', pr_card['id'], waiter['id'], 'blocks', H.now())
-    r = api.post(f"/api/v2/tasks/{waiter['id']}/waits", json={'on': 'pr:' + PR}, headers=headers())
-    assert r.status_code == 200, r.text
-    _task_state(api, waiter['id'], 'waiting')
-    _merged(api)
-    with api.app.state.store.transaction() as c:
-        milestone = c.execute(
-            "SELECT count(*) FROM messages WHERE recipient_id=? AND body LIKE 'Milestone:%'", (waiter['owner_id'],)
-        ).fetchone()[0]
-        assert R.metadata(c, 'github-task-wake:' + waiter['id']) == {}
-    assert milestone == 1
-    assert _burst(api, waiter['id']) == []
 
 
 def test_a_stale_event_that_reopens_a_merged_pr_does_not_rearm_its_merge_wake(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Ship checkout', 'body': 'x', 'links': [PR]})
-    _task_state(api, task['id'], 'waiting')
     _merged(api)
     assert _flush(api) == [task['id']]
     # An older edit, delivered late, still says the PR is open: the link reopens, and the next merge reading is no news.
@@ -1705,36 +1472,3 @@ def test_a_stale_event_that_reopens_a_merged_pr_does_not_rearm_its_merge_wake(ap
     _merged(api)
     assert _burst(api, task['id']) == []
     assert _flush(api) == []
-
-
-def test_a_parent_is_woken_once_for_a_merge_when_another_child_links_the_pr_later(api):
-    from backend import task_relations as TR
-
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout', 'body': 'x', 'links': [PR]})
-    parent = post(api, 'tasks', {'owner': 'cmo', 'title': 'Release checkout', 'body': 'x'})
-    with api.app.state.store.transaction() as c:
-        TR._insert(c, 'bot:cpo', child['id'], parent['id'], 'parent', H.now())
-    _task_state(api, parent['id'], 'waiting')
-    _merged(api)
-    assert len(_burst(api, parent['id'])) == 1
-    assert _flush(api) == [parent['id']]
-    late = post(api, 'tasks', {'owner': 'cpo', 'title': 'Checkout again', 'body': 'x', 'links': [PR]})
-    _task_state(api, late['id'], 'waiting')
-    _merged(api)
-    assert _burst(api, parent['id']) == [], 'the parent already heard this merge through the first child'
-    assert len(_burst(api, late['id'])) == 1
-
-
-def test_a_private_card_is_not_named_to_a_parent_outside_its_readers(api):
-    from backend import task_relations as TR
-
-    child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Secret checkout', 'body': 'x', 'links': [PR]})
-    parent = post(api, 'tasks', {'owner': 'cmo', 'title': 'Release', 'body': 'x'})
-    with api.app.state.store.transaction() as c:
-        TR._insert(c, 'bot:cpo', child['id'], parent['id'], 'parent', H.now())
-        c.execute('UPDATE tasks SET private=1 WHERE id=?', (child['id'],))
-    _task_state(api, parent['id'], 'waiting')
-    _merged(api)
-    items = _burst(api, parent['id'])
-    assert len(items) == 1
-    assert PR not in items[0] and 'Secret checkout' not in items[0]

@@ -18,7 +18,6 @@ def started_task(api, title):
     """Another started task of cmo's (a worktree needs one), so several stories can share one prepared app."""
     with api.app_state.store.transaction() as c:
         task = H.task_create(c, 'human:ana', title, 'Implement product', 'bot:cmo')
-        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task['id'],))
     return task['id']
 
 
@@ -74,7 +73,6 @@ def test_a_bot_can_create_its_51st_worktree_but_not_its_101st(prepared):
     api, tid, _ = prepared
     with api.app_state.store.transaction() as c:
         filler = H.task_create(c, 'human:ana', 'Parked work', 'Existing checkouts', 'bot:cmo')['id']
-        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (filler,))
 
     def seed(start, stop):
         with api.app_state.store.transaction() as c:
@@ -564,7 +562,6 @@ def test_finished_pr_releases_an_open_tasks_worktree_and_the_limit_names_it(prep
     }
     with api.app_state.store.transaction() as c:
         H.task_link(c, 'bot:cmo', tid, 'https://github.com/Acme/product/pull/1')
-        c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tid,))
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE task_links SET state='merged' WHERE kind='pr'")
@@ -715,7 +712,6 @@ def test_a_ready_setup_clears_a_failed_restore_and_check_health_follows(prepared
     monkeypatch.setattr(watchers, 'deliver', lambda *args: True)
     with api.app_state.store.transaction() as c:
         second = H.task_create(c, 'human:ana', 'More product', 'Implement more', 'bot:cmo')['id']
-        c.execute("UPDATE tasks SET status='doing' WHERE status='open'")  # a started task gets a worktree
     links = [post(api, f'tasks/{task}/worktrees', {'repo': 'Acme/product'}).json() for task in (tid, second)]
     failed = 'Worktree action failed; history kept. Restore path already exists and is not a worktree'
     beat = {
@@ -1307,152 +1303,6 @@ def released_events(api, tid):
         ]
 
 
-def test_a_new_worktree_starts_only_for_work_a_coding_step_can_run_on(prepared):
-    api, tid, other = prepared
-    path = f'tasks/{tid}/worktrees'
-    for status, words in (
-        ('open', 'move it to In Progress first'),
-        ('done', 'finished task'),
-        ('declined', 'finished task'),
-    ):
-        with api.app_state.store.transaction() as c:
-            c.execute('UPDATE tasks SET status=? WHERE id=?', (status, tid))
-        refused = post(api, path, {'repo': 'Acme/product'}, 'bot-test')
-        assert refused.status_code == 409 and refused.json()['error']['code'] == 'worktree_start', refused.text
-        assert words in refused.json()['error']['detail']
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (tid,))
-        c.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
-            (other, tid, H.now()),
-        )
-    refused = post(api, path, {'repo': 'Acme/product'}, 'bot-test')
-    assert refused.status_code == 409 and 'blocked by' in refused.json()['error']['detail']
-    assert 'Other work' in refused.json()['error']['detail']
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (other,))  # a done blocker blocks nothing
-    for status in ('doing', 'review', 'waiting'):  # a fix-forward or review fix at any step
-        with api.app_state.store.transaction() as c:
-            c.execute('UPDATE tasks SET status=? WHERE id=?', (status, tid))
-        assert post(api, path, {'repo': 'Acme/product'}, 'bot-test').status_code == 200
-
-
-def test_a_blocker_counts_once_its_code_is_merged_not_once_it_ships(prepared):
-    """A worktree builds from source: a blocker at Pending Release (or later) or with its pull request merged lets the
-    dependent start; one still before the merge holds it, and the refusal says what is missing."""
-    api, tid, other = prepared
-    path = f'tasks/{tid}/worktrees'
-    with api.app_state.store.transaction() as c:
-        dev = H.type_create(
-            c,
-            'human:ana',
-            'Dev tickets',
-            numbered=True,
-            steps=[
-                {'name': 'On Deck', 'status': 'open'},
-                {'name': 'In Progress', 'status': 'doing'},
-                {'name': 'Review 1', 'status': 'review'},
-                {'name': 'Review 2', 'status': 'review'},
-                {'name': 'Pending Release', 'status': 'review'},
-                {'name': 'Post Release QA', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
-                {'name': 'Closed', 'status': 'closed'},
-            ],
-        )
-        steps = {s['name']: s['id'] for s in dev['steps']}
-        c.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
-            (other, tid, H.now()),
-        )
-        pr = H.task_link(c, 'bot:cpo', other, 'https://github.com/Acme/product/pull/7')
-
-    def at(step, pr_state):
-        with api.app_state.store.transaction() as c:
-            c.execute(
-                'UPDATE tasks SET type_id=?,step_id=?,status=? WHERE id=?', (dev['id'], steps[step], 'review', other)
-            )
-            c.execute('UPDATE task_links SET state=? WHERE id=?', (pr_state, pr['id']))
-        return post(api, path, {'repo': 'Acme/product'}, 'bot-test')
-
-    refused = at('Review 2', 'open')
-    assert refused.status_code == 409 and refused.json()['error']['code'] == 'worktree_start', refused.text
-    assert refused.json()['error']['detail'] == (
-        'This task is blocked by Other work, still at Review 2 with pull '
-        'request #7 not merged yet: it gets a worktree once that code is merged.'
-    )
-
-    def starts(step, pr_state):
-        started = at(step, pr_state)
-        assert started.status_code == 200, (step, pr_state, started.text)
-        with api.app_state.store.transaction() as c:  # released, so the next check asks for a new tree
-            c.execute("UPDATE task_links SET state='removed' WHERE id=?", (started.json()['link_id'],))
-
-    starts('Pending Release', 'merged')
-    for step, pr_state in (('Pending Release', 'open'), ('Post Release QA', 'open'), ('Review 2', 'merged')):
-        starts(step, pr_state)  # the step alone, or the merged pull request alone, is enough
-    # A closed, unmerged pull request was abandoned: it neither counts as merged nor holds a merged one back.
-    with api.app_state.store.transaction() as c:
-        H.task_link(c, 'bot:cpo', other, 'https://github.com/Acme/product/pull/8')
-        c.execute("UPDATE task_links SET state='closed' WHERE kind='pr' AND number=8")
-    starts('Review 2', 'merged')
-    refused = at('Review 2', 'closed')
-    assert refused.status_code == 409
-    assert 'still at Review 2 with no merged pull request' in refused.json()['error']['detail']
-    # A merged pull request beside one still open is not enough: the open one names what is missing.
-    with api.app_state.store.transaction() as c:
-        c.execute("UPDATE task_links SET state='open' WHERE kind='pr' AND number=8")
-    refused = at('Review 2', 'merged')
-    assert 'still at Review 2 with pull request #8 not merged yet' in refused.json()['error']['detail']
-    # Every blocker counts, not only the first: a met one does not let an unmet one behind it through.
-    with api.app_state.store.transaction() as c:
-        later = H.task_create(c, 'human:ana', 'Later work', 'Implement more', 'bot:cpo')
-        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (later['id'],))
-        c.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
-            (later['id'], tid, H.now()),
-        )
-    refused = at('Pending Release', 'merged')
-    assert refused.json()['error']['detail'].startswith('This task is blocked by Later work, still at '), refused.text
-
-
-def test_only_the_pending_release_step_marks_a_blocker_merged(prepared):
-    """A step with a ready status can come before work that still changes code: a blocker there counts only by its
-    status, and one moved on to a later doing step still holds the dependent."""
-    api, tid, other = prepared
-    path = f'tasks/{tid}/worktrees'
-    with api.app_state.store.transaction() as c:
-        flow = H.type_create(
-            c,
-            'human:ana',
-            'Custom flow',
-            steps=[
-                {'name': 'Build', 'status': 'doing'},
-                {'name': 'Ready', 'status': 'ready'},
-                {'name': 'Follow-up', 'status': 'doing'},
-                {'name': 'Pending Release', 'status': 'review'},
-                {'name': 'Done', 'status': 'done'},
-            ],
-        )
-        steps = {s['name']: s['id'] for s in flow['steps']}
-        c.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,'blocks',?)",
-            (other, tid, H.now()),
-        )
-
-    def at(step, status):
-        with api.app_state.store.transaction() as c:
-            c.execute(
-                'UPDATE tasks SET type_id=?,step_id=?,status=? WHERE id=?', (flow['id'], steps[step], status, other)
-            )
-        return post(api, path, {'repo': 'Acme/product'}, 'bot-test')
-
-    refused = at('Follow-up', 'doing')
-    assert refused.status_code == 409, refused.text
-    assert 'still at Follow-up with no merged pull request' in refused.json()['error']['detail']
-    started = at('Ready', 'ready')
-    assert started.status_code == 200, started.text
-
-
 def test_an_obsolete_pending_reservation_is_canceled_without_touching_a_checkout(prepared):
     api, tid, _ = prepared
     link = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
@@ -1509,7 +1359,7 @@ def test_a_fix_forward_keeps_its_tree_while_a_turn_runs_or_the_branch_moved_past
             "UPDATE task_links SET state='merged',branch=?,detail=? WHERE id=?",
             (link['branch'], json.dumps({'head_sha': 'e' * 40}), pr['id']),
         )
-        c.execute("UPDATE tasks SET carried_by='a1' WHERE id=?", (tid,))  # the bot's turn on this task is running
+        c.execute("UPDATE attempts SET task_id=? WHERE id='a1'", (tid,))  # the bot's turn on this task is running
 
     def held():
         with api.app_state.store.read() as c:
@@ -1520,7 +1370,7 @@ def test_a_fix_forward_keeps_its_tree_while_a_turn_runs_or_the_branch_moved_past
     assert held() == 'held: live turn'
     # The turn ended, but the pushed branch has commits past the merged pull request's head: held.
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=NULL WHERE id=?", (tid,))
+        c.execute("UPDATE attempts SET task_id=NULL WHERE id='a1'")
     assert post(api, 'runners/heartbeat', body, 'runner-test').json()['worktree_actions'] == []
     assert held() == 'held: new commits since PR #7'
     # The branch is where the merged pull request left it: released, and the release says why once removed.
@@ -1762,7 +1612,7 @@ def test_a_stale_pending_tree_whose_pull_requests_finished_is_released_without_a
 def test_only_the_task_owners_own_turn_holds_its_tree(prepared):
     api, tid, _ = prepared
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by='a1' WHERE id=?", (tid,))  # cmo's turn on the task is running
+        c.execute("UPDATE attempts SET task_id=? WHERE id='a1'", (tid,))  # cmo's turn on the task is running
         assert W.live_turn(c, tid, 'bot:cmo')
         assert not W.live_turn(c, tid, 'bot:cpo')  # a reviewer's or other bot's view
         c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))  # the task moved to another bot
