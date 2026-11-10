@@ -1,6 +1,7 @@
 """Google Meet calls in threads (backend/calls.py, docs/meet.md, docs/dev/meet-calls-contract.md): a call names its
-provider, and a Google Meet call keeps its space, what its status source last said, who was rung, its card and its
-transcript messages, and whose Recorder records it. A participant row says whether that person is in the Meet now.
+provider, and a Google Meet call keeps its space, what its status source last said (and when it last saw anyone in the
+Meet, for the end rule), who was rung, its card and its transcript messages, and whose Recorder records it. A
+participant row says whether that person is in the Meet now.
 
 `calls` and `call_participants` come from 0047, so they are there on every file; the guard only keeps a rerun on a
 file that already has a column from adding it twice.
@@ -13,6 +14,7 @@ CALL_COLUMNS = (
     ("meet_code", "TEXT"),
     ("meet_conference", "TEXT"),
     ("meet_seen_at", "TEXT"),
+    ("meet_active_at", "TEXT"),
     ("meet_polled_at", "TEXT"),
     ("live_count", "INTEGER NOT NULL DEFAULT 0"),
     ("status_source", "TEXT CHECK (status_source IN ('google','recorder'))"),
