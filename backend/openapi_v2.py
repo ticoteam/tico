@@ -1059,6 +1059,16 @@ STABLE = [
         "TaskResult",
     ),
     (
+        "/api/v2/tasks/{tid}/queue",
+        "post",
+        "Tasks",
+        "queueTask",
+        "Queue again: put the PRs GitHub took out of the merge queue (or refused) back in it at their newest commit. "
+        "The stage owner, the pipeline's manager or any person. 409 task_stage off a stage that queues PRs, "
+        "task_requirement when nothing was taken out or its checks are running or failing",
+        "TaskResult",
+    ),
+    (
         "/api/v2/tasks/{tid}/restore",
         "post",
         "Tasks",

@@ -93,6 +93,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            set it aside in its stage until DATE; with no date it is On ice
     tico task reassign <id> <owner> [-m "why"] --version N   give it to another bot or person for this stage
     tico task unsnooze <id> [-m "why"]      a person brings a snoozed task back now
+    tico task queue <id> --version N        queue again, after GitHub took a PR out of the merge queue
+    tico task unlink <id> <url|link id>     take a link off a task (a PR closed without merging)
         --version N is the version you were last shown: tico task show, a list row and every wake print it. A task
         that changed since is refused; read it again. A refusal prints what is missing and the commands you may run.
     tico task create --owner <bot|human> --title "..." [--body "..."|--body-file f] [--due D] [--parent ID]
@@ -2384,6 +2386,16 @@ def parser():
     s.add_argument("id")
     s.add_argument("-m", "--why")
     s.set_defaults(fn="task unsnooze")
+    s = task.add_parser("queue", help="queue again: put the PRs GitHub took out of the merge queue back in it")
+    s.add_argument("id")
+    s.add_argument("--version", type=int, help=version_help)
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="task queue")
+    s = task.add_parser("unlink", help="take a link off a task: a PR closed without merging, by its URL or id")
+    s.add_argument("id")
+    s.add_argument("link", help="the link's URL, or its id")
+    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
+    s.set_defaults(fn="task unlink")
 
     replay = sub.add_parser("replay", help="what happened in a window, as you may see it").add_subparsers(dest="sub")
     s = replay.add_parser("show", help="what happened in a window, in time order, as you may see it (JSON)")

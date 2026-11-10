@@ -1850,6 +1850,42 @@ def task_link(api, args):
     )
 
 
+@tool(
+    "hub_task_unlink",
+    "Take a link off a task: a pull request closed without merging that another PR replaces, so PR open reads the "
+    "one that is left. Name the link by its URL or its id.",
+    {"id": TASK_ID, "link": _s("The link's URL, or its id"), "on_behalf_of": ASKED},
+    required=("id", "link"),
+    writes=True,
+)
+def task_unlink(api, args):
+    link = str(args["link"]).strip()
+    if "://" in link:
+        shown = api.get(f"tasks/{args['id']}/links")
+        found = [
+            row.get("id")
+            for row in (shown.get("links") if isinstance(shown, dict) else None) or []
+            if str(row.get("url") or "").rstrip("/").lower() == link.rstrip("/").lower()
+        ]
+        if not found:
+            raise ValueError(f"No link to {link} on this task. tico task show {args['id']} lists its links.")
+        link = str(found[0])
+    return _asked(api, args).call("DELETE", f"tasks/{args['id']}/links/{quote(link, safe='')}", {}, key=_key(args))
+
+
+@tool(
+    "hub_task_queue",
+    "Queue again: on the Merge stage, after GitHub took a PR out of the merge queue (or refused it), put it back at "
+    "its newest commit. Refused while its checks are running or failing there. Push a fix to the PR branch first when "
+    "it needs one; or move the task back instead.",
+    {"id": TASK_ID, "version": VERSION, "on_behalf_of": ASKED},
+    required=("id",),
+    writes=True,
+)
+def task_queue(api, args):
+    return _asked(api, args).post(f"tasks/{args['id']}/queue", {"version": _seen(args)}, key=_key(args))
+
+
 READERS = {
     "type": "array",
     "items": {"type": "string"},
@@ -12890,11 +12926,13 @@ ASSISTANT_WRITES = {
     "hub_task_update",
     "hub_task_done",
     "hub_task_move",
+    "hub_task_queue",
     "hub_task_reassign",
     "hub_task_comment",
     "hub_task_label",
     "hub_task_close",
     "hub_task_link",
+    "hub_task_unlink",
     "hub_task_answer",
     "hub_task_give",
     "hub_update_mark_read",
