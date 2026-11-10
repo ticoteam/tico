@@ -34,7 +34,7 @@ RERANK_SECONDS = 3600  # a thread is ranked again at most this often
 WINDOW_DAYS = 14  # only threads with a message this recent are ranked
 PASS_SECONDS = 4 * 60
 MESSAGES, MESSAGE_CHARS, TITLE_CHARS, MEMBERS = 6, 300, 200, 8
-FINISHED = ("done", "closed", "declined")
+FINISHED = ("done", "closed")
 _RUNNING = threading.Lock()
 
 
@@ -246,10 +246,16 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
     return summary
 
 
-def route_of(result):
-    from .stale_review import route_of as route
+# Which way a Decide call went, by the provider that answered it (system_routines counts calls per route).
+ROUTES = {
+    J.GATEWAY_PROVIDER: "gateway",
+    J.TYPESAFE_PROVIDER: "own_key",
+    **{name: "team_llm" for name in J.LLM_PROVIDERS.values()},
+}
 
-    return route(result)
+
+def route_of(result):
+    return ROUTES.get((result or {}).get("provider") or "", "other")
 
 
 def tick(store, at=None, engine=None):
