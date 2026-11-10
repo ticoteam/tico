@@ -611,14 +611,27 @@ class StrictDeployer(Deployer):
         return iid, created
 
     def associate(self, alloc: str, iid: str) -> None:
-        rows = self.ec2.describe_addresses(Filters=self.n.filters(self.p.name))["Addresses"]
-        at = next((a.get("InstanceId") or "" for a in rows if a["AllocationId"] == alloc), "")
-        if at and at != iid:  # never taken from another server: AWS refuses the call too, without AllowReassociation
+        """Read fresh by its id: setup's own address (its tags, the recorded allocation), free or already on this server.
+        The call never moves it: an address attached elsewhere since this read makes EC2 refuse it."""
+        try:
+            rows = self.ec2.describe_addresses(AllocationIds=[alloc])["Addresses"]
+        except Exception as e:
+            if error_code(e) != "InvalidAllocationID.NotFound":
+                raise
+            rows = []
+        row = next((a for a in rows if a.get("AllocationId") == alloc), None)
+        if row is None or not self.n.is_ours(row.get("Tags"), self.p.name) or not recorded(self.ids, "eip", alloc):
+            raise MissingInput(
+                f"Elastic IP {alloc} is no longer this install's (released, retagged, or not the allocation it recorded); "
+                "refusing to attach it. Check it by hand in the EC2 console, then run setup again."
+            )
+        at = row.get("InstanceId") or ""
+        if at and at != iid:
             raise MissingInput(
                 f"Elastic IP {alloc} is attached to {at}, which is not this install's server; refusing to move it."
             )
         if not at:
-            self.ec2.associate_address(AllocationId=alloc, InstanceId=iid)
+            self.ec2.associate_address(AllocationId=alloc, InstanceId=iid, AllowReassociation=False)
 
 
 def instance_profile(iam, name: str) -> dict | None:

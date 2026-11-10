@@ -116,8 +116,8 @@ class FakeEC2:
     def describe_security_groups(self, Filters):
         return {"SecurityGroups": self.sgs}
 
-    def describe_addresses(self, Filters):
-        return {"Addresses": self.eips}
+    def describe_addresses(self, Filters=(), AllocationIds=()):
+        return {"Addresses": [a for a in self.eips if not AllocationIds or a["AllocationId"] in AllocationIds]}
 
     def describe_volumes(self, Filters):
         (ids,) = [f["Values"] for f in Filters if f["Name"] == "attachment.instance-id"]
@@ -160,11 +160,12 @@ class FakeEC2:
         return self.eips[-1]
 
     def associate_address(self, **kw):
-        """As EC2 does: one attached elsewhere moves only with AllowReassociation."""
+        """As EC2 does for an address in a VPC: one attached elsewhere moves unless AllowReassociation is False (leaving
+        it out allows it)."""
         self._rec("associate_address", **kw)
         for a in self.eips:
             if a["AllocationId"] == kw["AllocationId"]:
-                if a.get("InstanceId") not in (None, kw["InstanceId"]) and not kw.get("AllowReassociation"):
+                if a.get("InstanceId") not in (None, kw["InstanceId"]) and kw.get("AllowReassociation", True) is False:
                     raise RuntimeError("Resource.AlreadyAssociated")
                 a["InstanceId"] = kw["InstanceId"]
 

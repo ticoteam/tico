@@ -396,8 +396,9 @@ class FilteredEC2(fakes.FakeEC2):
     def describe_security_groups(self, Filters):
         return {"SecurityGroups": self._match(self.sgs, Filters)}
 
-    def describe_addresses(self, Filters):
-        return {"Addresses": self._match(self.eips, Filters)}
+    def describe_addresses(self, Filters=(), AllocationIds=()):
+        rows = [a for a in self.eips if not AllocationIds or a["AllocationId"] in AllocationIds]
+        return {"Addresses": self._match(rows, list(Filters))}
 
 
 def test_hub_discover_and_destroy_find_only_hub_tagged_resources():
@@ -1544,13 +1545,15 @@ def test_an_elastic_ip_attached_to_another_server_is_never_moved_or_released():
     ec2 = fakes.FakeEC2()
     ec2.eips = [{"AllocationId": "eip-hub", "PublicIp": "203.0.113.9", "Tags": HUB_OURS}]
     ec2.eips[0]["InstanceId"] = "i-production"
-    dep = strict_dep(p, ec2, fakes.FakeIAM(), fakes.FakeSSM())
+    dep = strict_dep(p, ec2, fakes.FakeIAM(), fakes.FakeSSM(), ids={"eip": "eip-hub"})
     with pytest.raises(MissingInput, match="attached to i-production"):
         dep.associate("eip-hub", "i-hub")
     assert not ec2.called("associate_address")
     del ec2.eips[0]["InstanceId"]
     dep.associate("eip-hub", "i-hub")
-    assert ec2.called("associate_address") == [{"AllocationId": "eip-hub", "InstanceId": "i-hub"}]
+    assert ec2.called("associate_address") == [
+        {"AllocationId": "eip-hub", "InstanceId": "i-hub", "AllowReassociation": False}
+    ]
     # Destroy leaves it too.
     d, ec2, iam, ssm = id_install()
     ec2.eips[1]["InstanceId"] = "i-production"
@@ -1768,3 +1771,34 @@ def test_lost_cut_short_or_edited_state_never_adopts_or_deletes_what_carries_the
         code, out = go(again, deps=d)
         assert code == 2 and "never recorded making it" in out, (again, out)
     assert len(writes()) == before, writes()[before:]
+
+
+def test_an_elastic_ip_is_attached_only_after_a_fresh_read_and_never_forced():
+    # Review 4, finding 2: leaving AllowReassociation out lets EC2 move an address attached elsewhere (the fake treated
+    # it as False), and an address missing from the lookup was attached without proof it is still this install's.
+    p = hub_plan(domain="a.example", region="us-east-1")
+    ec2 = FilteredEC2()
+    ec2.eips = [{"AllocationId": "eip-hub", "PublicIp": "203.0.113.9", "Tags": HUB_OURS}]
+    dep = strict_dep(p, ec2, fakes.FakeIAM(), fakes.FakeSSM(), ids={"eip": "eip-hub"})
+    read = ec2.describe_addresses
+
+    def attached_meanwhile(**kw):  # attached to production right after setup's read
+        out = json.loads(json.dumps(read(**kw)))  # what setup read, apart from what happens next
+        ec2.eips[0]["InstanceId"] = "i-production"
+        return out
+
+    ec2.describe_addresses = attached_meanwhile
+    with pytest.raises(RuntimeError, match="AlreadyAssociated"):
+        dep.associate("eip-hub", "i-hub")
+    assert ec2.eips[0]["InstanceId"] == "i-production"
+    del ec2.describe_addresses
+    # No longer this install's by a fresh read: released, retagged or not the allocation it recorded.
+    for eips, ids in (
+        ([], {"eip": "eip-hub"}),
+        ([{"AllocationId": "eip-hub", "PublicIp": "203.0.113.9", "Tags": HUB_TAGS}], {"eip": "eip-hub"}),
+        ([{"AllocationId": "eip-hub", "PublicIp": "203.0.113.9", "Tags": HUB_OURS}], {"eip": "eip-other"}),
+    ):
+        ec2.eips, ec2.calls = eips, []
+        with pytest.raises(MissingInput, match="Elastic IP eip-hub"):
+            strict_dep(p, ec2, fakes.FakeIAM(), fakes.FakeSSM(), ids=ids).associate("eip-hub", "i-hub")
+        assert not ec2.called("associate_address")
