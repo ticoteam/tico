@@ -17,6 +17,7 @@ engine's modules reach back to hubdb and the store.
 """
 
 from collections.abc import Callable, Iterable
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, NoReturn
 
 from . import hubdb_core, task_effects
@@ -383,3 +384,138 @@ def task_waits(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> "dict[str
     from . import waiting_on as W
 
     return W.waiting_on_many(conn, task_ids)
+
+
+def _may(
+    conn: "sqlite3.Connection",
+    row: Row,
+    standing: Any,
+    answer: Row | None,
+    viewer: str,
+    holder: str | None,
+    works: bool,
+) -> list[str]:
+    """What `viewer` may do with one requirement, as names a screen turns into buttons. A hint: the engine decides
+    when the call is made."""
+    from . import task_requirements as R
+
+    requirement: Row = standing.requirement
+    kind = requirement["kind"]
+    human = is_human(viewer)
+    pipe: Row = row.get("pipeline") or {}
+    owner = row.get("owner_id")
+    out: list[str] = []
+    asked = False
+    if kind in ("ok", "answer"):
+        person = R.person_of(conn, requirement, row["visit"]["id"])
+        asked = viewer == person or (person is None and human)
+    if kind == "owner_done" and not standing.met and (human or viewer in (owner, pipe.get("manager_id"))):
+        out.append("done")
+    if kind == "ok" and not standing.met:
+        if answer and answer["answer"] == "no":
+            if viewer in (owner, holder):
+                out.append("again")
+        elif asked:
+            out += ["ok", "no"]
+    if kind == "answer" and not standing.met and asked:
+        out.append("answer")
+    if kind in ("ok", "answer") and not standing.met and asked and human:
+        out.append("give")
+    if answer and (human or answer["by_id"] == viewer):
+        out.append("undo")
+    if requirement.get("visit_id") and (works or viewer == requirement.get("added_by_id")):
+        out.append("withdraw")
+    if requirement.get("by_bot") and human:
+        out.append("thumbs")
+    return out
+
+
+def task_view(conn: "sqlite3.Connection", task_id: str, viewer: str | None = None) -> Row | None:
+    """The engine's part of a task as JSON (docs/dev/pipelines-v3-cutover.md, "The task as JSON"): where it is, whose
+    turn it is, everything it needs to leave its stage, and what `viewer` may do about each. None when there is no
+    such task. A read: it writes nothing, and it does not check that `viewer` may read the task (the caller did)."""
+    from . import task_engine as E
+    from . import task_requirements as R
+    from . import waiting_on as W
+
+    H = _h()
+    row = E.task(conn, task_id)
+    if not row:
+        return None
+    visit: Row = row.get("visit") or {}
+    stage: Row = row.get("stage") or {}
+    pipe: Row = row.get("pipeline") or {}
+    live = row["status"] == "open" and bool(visit)
+    standings = R.standings(conn, row) if live else []
+    waits = [asdict(wait) for wait in W.of(conn, row, standings=standings)] if live else []
+    answers = R.newest_answers(conn, visit["id"]) if live else {}
+    holder = W.holder(conn, row) if live else None
+    works = bool(viewer) and can_work(conn, str(viewer), row)
+    to_leave: list[Row] = []
+    for standing in standings:
+        requirement: Row = standing.requirement
+        answer = answers.get(requirement["id"])
+        to_leave.append(
+            {
+                "requirement_id": requirement["id"],
+                "kind": requirement["kind"],
+                "line": R.name_of(requirement),
+                "met": standing.met,
+                "standing": standing.line,
+                "who": None if standing.met else standing.on,
+                "asked_by": requirement.get("added_by_id") if requirement.get("visit_id") else None,
+                "choices": requirement.get("choices"),
+                "shows": requirement.get("shows") or [],
+                "answer": {
+                    "id": answer["id"],
+                    "value": answer["answer"],
+                    "note": answer.get("notes"),
+                    "by": answer["by_id"],
+                    "at": answer["created_at"],
+                }
+                if answer
+                else None,
+                "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
+            }
+        )
+    following = E.next_stage(conn, row) if live else None
+    above = conn.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (task_id,)).fetchone()
+    filed: list[Row] = []
+    for child_id, kind in conn.execute(
+        "SELECT to_task_id, kind FROM links WHERE from_task_id=? ORDER BY created_at, id", (task_id,)
+    ).fetchall():
+        child: Row | None = H.task(conn, child_id)
+        if not child:
+            continue
+        shown = viewer is None or H.task_private_readable(conn, viewer, child)
+        filed.append(
+            {"id": child_id, "kind": kind, "status": child["status"], "title": child["title"] if shown else None}
+        )
+    snooze: Row | None = row.get("snooze")
+    late = None
+    if live and visit.get("late_told_at"):
+        late = {"since": visit["late_told_at"], "level": "person" if visit.get("late_person_at") else "told"}
+    return {
+        "id": task_id,
+        "status": row["status"],
+        "version": int(row.get("version") or 0),
+        "pipeline": {"id": pipe.get("id"), "name": pipe.get("name")},
+        "stage": {
+            "id": stage.get("id"),
+            "name": stage.get("name"),
+            "kind": stage.get("kind"),
+            "by_hand": bool(stage.get("by_hand")),
+        },
+        "owner_id": row.get("owner_id"),
+        "assignee_id": row.get("assignee_id"),
+        "turn": waits[0] if waits else None,
+        "waits": waits,
+        "to_leave": to_leave,
+        "next": {"id": following["id"], "name": following["name"]} if following else None,
+        "late": late,
+        "snooze": {"until": snooze.get("until_at"), "by": snooze.get("by_id"), "why": snooze.get("why")}
+        if snooze
+        else None,
+        "filed_by": above[0] if above else None,
+        "filed": filed,
+    }

@@ -78,7 +78,7 @@ H.attempt(conn, call, *args, **kwargs) -> row | None
     # For code that acts for nobody and may be refused. Runs the call in a savepoint. A refusal rolls back that call
     # alone and returns None; the caller's other writes stand. This replaces try_auto_move and strict=False.
 H.task(conn, task_id)                    # the row, as today, without the dead columns
-H.task_view(conn, row, viewer=None)      # the row with the fields under "The task as JSON", for one viewer
+H.task_view(conn, task_id, viewer=None)  # the engine's fields under "The task as JSON", for one viewer
 H.task_waits(conn, task_ids)             # {task_id: [wait, ...]}, one batched read
 ```
 
@@ -174,41 +174,43 @@ review actions, stage-requirement routes, task types, stuck, flow, and `status`,
 
 ## The task as JSON
 
-Full (`GET /api/v2/tasks/{id}`), on top of today's plain fields (id, number, title, body, due, labels, private, parent,
-requester, created, updated):
+Full (`GET /api/v2/tasks/{id}`): today's plain fields (id, number, title, body, due, labels, private, parent,
+requester, created, updated) with what `H.task_view` returns laid over them:
 
 ```
 status          "open" | "done" | "closed"
 version         int
 pipeline        {"id", "name"}
 stage           {"id", "name", "kind": "work" | "done" | "closed", "by_hand": bool}
-owner           actor | null            who has it now
-assignee        actor | null
+owner_id        actor | null            who has it now (the route shows it as it shows any actor)
+assignee_id     actor | null
 turn            the headline wait: {"state", "who", "line", "since", "until", "requirement_id", "ask"} | null
 waits           [wait, ...]             every wait, headline first
 to_leave        [requirement, ...]      every requirement of the stage and every one added to this visit
 next            {"id", "name"} | null   the stage a forward move goes to
-late            null | {"since", "level"}
+late            null | {"since", "level": "told" | "person"}
 snooze          null | {"until", "by", "why"}
 filed_by        task id | null
-filed           [{"id", "title", "status"}, ...]
+filed           [{"id", "kind", "status", "title"}, ...]    title is null for a task the viewer may not read
 ```
 
 A requirement in `to_leave`:
 
 ```
-requirement_id, kind, line, met: bool, pushed_past: bool
-who             actor | null            who it waits on
-asked_by        actor | null            set when it was added to this task
+requirement_id, kind, line, met: bool
+standing        one sentence: how it stands ("OK'd", "Sent back: ...", "No task filed yet")
+who             actor or task id | null   who or what it waits on
+asked_by        actor | null              set when it was added to this task
 choices         [str, ...] | null
-shows           [ref, ...]              what to look at ("page:12", "file:...")
+shows           [ref, ...]                what to look at ("page:12", "file:...")
 answer          null | {"id", "value", "note", "by", "at"}
-may             ["ok", "no", "again", "give", "answer", "undo", "withdraw", "thumbs"]   what this viewer may do with it
+may             ["done", "ok", "no", "again", "answer", "give", "undo", "withdraw", "thumbs"]   for this viewer; a hint
 ```
 
 Brief (`GET /api/v2/tasks`, lists, Needs you): `status, version, pipeline_id, stage_id, owner, assignee, turn, late,
 snoozed`. `turn.state` is one of the nine in `waiting_on.STATES`. The fields `type_id, step_id, step, step_rank,
-waiting_on, blocked, blocked_reason, check_back_at, hold` are gone from both.
+waiting_on, blocked, blocked_reason, check_back_at, hold` are gone from both. A list builds `turn` for all its rows
+with one `H.task_waits(ids)`, never one read per row.
 
 ## Bot commands
 
