@@ -53,34 +53,21 @@ EMPTY = (
     "doc_source_jobs",
     "update_queue",
     "task_reminders",
-    "task_check_back_wakes",
     "calendar_actions",
     "suggestions",  # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries",
     "worktree_waits",
     "effects",  # a GitHub call a task's move still owes (backend/stage_effects.py): the copy makes none
-    "check_waits",
     "check_head_provenance",
     "idempotency",  # bindings too
     "idempotency_messages",
     "blob_media_retries",
     "seat_requests",  # a cloud agent request's key: a replay re-files
-    # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
-    "task_milestone_waits",
-    "milestones",
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects",
     "google_signin_refusals",
     # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
     "quarantine_holds",
-    # Pipeline routing: a live link sends a ticket on to another pipeline when its stage is reached, a handoff is one
-    # it did and may still return, and a review claim is one person's lock on a requirement. The copy starts with none.
-    "pipeline_links",
-    "pipeline_handoffs",
-    "review_claims",
-    # GitHub checks: a check run is one post the copy could make, the cursor a pass's lease. The copy starts with none.
-    "pipeline_check_runs",
-    "pipeline_check_cursor",
     # A note a migration leaves for the first start (seed the roadmap types once); a copy of a started hub has none.
     "first_start_seeds",
     # The retired Nightly memory tidy pilot's ledger: history only.
@@ -323,10 +310,7 @@ HISTORY = {
     "skill_usage_dailies": "used_on",
     "unlisted_skill_usage_dailies": "used_on",
     "skill_suggestions": "created_at",
-    "stage_decisions": "created_at",
     # A manager action points at its run: the action is cut first.
-    "pipeline_manager_actions": "created_at",
-    "pipeline_manager_runs": "started_at",
     "factory_manager_actions": "created_at",
     "factory_manager_runs": "started_at",
     # Run steps before their runs: a step row points at its run.
@@ -360,13 +344,7 @@ KEEP = (
             "postal_mail_settings",  # access and routing settings cannot send in rehearsal mode
             "maintenance_steps",  # each step's switch, "How often" and cursor: a copy keeps the team's settings
             "factories",
-            "pipeline_members",
-            "stage_requirements",
-            "stage_requirement_versions",
-            "requirement_attachments",
-            "stage_visits",
             "agents",
-            "approvals",
             "archives",
             "assistant_actions",
             "attempt_conversations",
@@ -546,16 +524,12 @@ KEEP = (
             "slack_channels",
             "slack_digests",
             "slack_reads",
-            "stale_judged",
             "memory_tidy_cards",
             "memory_tidy_keeps",
-            "stale_suggestions",
             "stall_triage",
             "storage_moves",
             "strategy_bets",
             "strategy_versions",
-            "stuck_spells",
-            "stuck_alarms",  # the stuck alarm's ledger (backend/stuck_alarm.py): a copy files no alarm twice
             "system_runs",
             "tags",
             "task_assets",
@@ -563,16 +537,13 @@ KEEP = (
             "task_delegations",
             "history_events",
             "task_file_reviews",
-            "task_holds",
             "task_links",
             "task_relations",
             "task_roles",
             "task_run_models",
-            "task_steps",
             "task_tags",
             "task_trash",
             "task_trash_assets",
-            "task_types",
             "tasks",
             # The one task engine (backend/task_engine.py): what a pipeline is, where each task stands and how it got
             # there. task_move_guards is the one row the tasks_move_only trigger reads.

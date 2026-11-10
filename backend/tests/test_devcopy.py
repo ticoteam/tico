@@ -5,6 +5,7 @@ import re
 import sqlite3
 import stat
 from contextlib import closing
+from importlib import import_module
 from pathlib import Path
 
 import pytest
@@ -209,6 +210,8 @@ def test_every_table_is_classified(tmp_path, booted):
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", text))  # and a migration script drops again
     for source in (Path(devcopy.__file__).parent / "migrations").glob("*.py"):  # and a migration file drops for good
         dropped |= set(re.findall(r"DROP TABLE IF EXISTS ([a-z_]+);", source.read_text()))
+    # The Pipelines v3 cut-over drops the old task engine's tables from its own list.
+    dropped |= set(import_module("backend.migrations.20261110054000_pipelines_v3_cutover").OLD_TABLES)
     names -= dropped | {old for old, _new, _wave in renames_data.TABLES}  # an old schema step's name, renamed since
     groups = (devcopy.KEEP, set(devcopy.HISTORY), set(devcopy.EMPTY), set(finance.DEV_COPY_EMPTIED))
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
