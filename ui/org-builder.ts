@@ -152,7 +152,8 @@ function obEnsure(state: OBState): void {
     .finally(() => { org.loading = null; if (ONB === state && state.steps[state.step] === 'org') onbRender(state); });
 }
 function obSuggested(state: OBState): string[] {
-  const software = state.record.answers.software_product === 'yes';
+  // A blank answer is yes (D7), as on the default chart (company_import.default_chart): only "no" drops Product and Engineering.
+  const software = state.record.answers.software_product !== 'no';
   return state.org.departments.filter(d => (d.software_only ? software : OB_CORE.includes(d.id))).map(d => d.id);
 }
 // A returning draft keeps its departments, answers and bots, and opens on its chart; a first visit starts with the pick.
