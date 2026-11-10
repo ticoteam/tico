@@ -33,11 +33,13 @@ pub const CLOSED: &[&str] = &["done", "closed", "declined"];
 pub const SESSION_SWEEP_S: u64 = 600;
 const RULES_CAP: usize = 16 * 1024;
 const MEMORY_FOLDERS: &[&str] = &["memory", "knowledge"];
-/// Problems no wait clears: the bot has no checkout, or one with no upstream for a worktree to share. A task's turn
-/// then runs in the main checkout; any other problem is worth waiting out first (WORKTREE_WAIT_S). A private meeting's
-/// copy needs no upstream (ensure), and its turn never falls back to the checkout.
+/// A missing bot checkout may use the main checkout. Other task-worktree problems wait out WORKTREE_WAIT_S; if the
+/// task folder is still absent, the turn fails closed instead of using the main checkout. A private meeting's copy
+/// needs no upstream (ensure), and its turn never falls back to the checkout.
 pub const MISSING: &str = "the bot's checkout is missing";
 pub const NO_UPSTREAM: &str = "the bot's checkout has no upstream to share between tasks";
+/// An upstream lookup failed; this is not proof that the checkout has no upstream.
+pub const UPSTREAM_LOOKUP_FAILED: &str = "upstream lookup failed";
 /// How long a task turn that is not a person's waits for its worktree, retrying, before it runs in the bot's
 /// checkout: in the checkout it would hold every chat with the bot behind it for its whole turn.
 const WORKTREE_WAIT_S: u64 = 120;
@@ -446,6 +448,7 @@ fn fault_name(f: &Fault) -> String {
     match f {
         Fault::Timeout(_) => "TimeoutExpired".into(),
         Fault::Stopped => gitrun::STOPPED.into(),
+        Fault::Io(message) if message.starts_with(UPSTREAM_LOOKUP_FAILED) => message.clone(),
         Fault::Io(_) => "OSError".into(),
     }
 }
@@ -475,7 +478,7 @@ pub fn git_reason(out: &Out) -> String {
     crate::redact::scrub_credentials(&first.chars().take(160).collect::<String>(), &[])
 }
 
-/// The main checkout's upstream as a remote-tracking ref (`origin/main`), or "".
+/// The main checkout's upstream as a remote-tracking ref (`origin/main`), or "" when Git confirms none.
 pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
     let done = g(
         main,
@@ -483,17 +486,32 @@ pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
         15,
     )
-    .await?;
+    .await
+    .map_err(|fault| Fault::Io(format!("{UPSTREAM_LOOKUP_FAILED}: {fault}")))?;
     let r = done.stdout.trim().to_string();
-    Ok(if done.ok() && r.contains('/') {
-        r
-    } else {
-        String::new()
-    })
+    if done.ok() {
+        if r.contains('/') {
+            return Ok(r);
+        }
+        return Err(Fault::Io(format!(
+            "{UPSTREAM_LOOKUP_FAILED}: git rev-parse --abbrev-ref --symbolic-full-name @{{u}} exited 0 without a remote-tracking ref"
+        )));
+    }
+    if done.stderr.lines().any(|line| {
+        line.trim_start()
+            .starts_with("fatal: no upstream configured for branch ")
+    }) {
+        return Ok(String::new());
+    }
+    Err(Fault::Io(format!(
+        "{UPSTREAM_LOOKUP_FAILED}: git rev-parse --abbrev-ref --symbolic-full-name @{{u}} exited {}: {}",
+        done.code,
+        crate::redact::scrub_credentials(&git_reason(&done), &[])
+    )))
 }
 
-/// Make or reuse the task's worktree: (upstream ref, problem). A path refusal stops the turn; other problems
-/// let it run in the main checkout.
+/// Make or reuse the task's worktree: (upstream ref, problem). A path refusal stops the turn. Placement distinguishes
+/// an unavailable upstream from an ordinary worktree problem before it decides whether to use the main checkout.
 pub async fn ensure(
     main: &Path,
     path: &Path,
@@ -1729,11 +1747,15 @@ impl Runner {
             let session = path_for(&self.config.projects_dir(), &place.bot, &place.task);
             let (mut tracked, mut problem) =
                 self.task_worktree(place, &session, attempt, env).await?;
+            let absent_worktree_without_upstream = problem == NO_UPSTREAM && !session.exists();
             if place.private && !problem.is_empty() {
                 // Never in the bot's checkout: what it wrote there would reach its other work.
                 return Err(format!("{PRIVATE_COPY_FAILED} ({problem})"));
             }
-            if !problem.is_empty() && !place.person && problem != MISSING && problem != NO_UPSTREAM
+            if !problem.is_empty()
+                && !place.person
+                && problem != MISSING
+                && (problem != NO_UPSTREAM || absent_worktree_without_upstream)
             {
                 // In the checkout this turn would hold the bot's chats behind it for the whole turn, so it waits for
                 // its worktree first, holding nothing a chat needs.
@@ -1769,12 +1791,19 @@ impl Runner {
                     (tracked, problem) = self.task_worktree(place, &session, attempt, env).await?;
                 }
             }
+            if problem.starts_with(UPSTREAM_LOOKUP_FAILED)
+                || (!session.exists() && problem != MISSING)
+            {
+                return Err(format!(
+                    "{problem}; refusing to run this task in the bot's shared checkout"
+                ));
+            }
             if !problem.is_empty() && crate::continuity::memory_pass(&attempt["config"]) {
                 // A memory pass never runs in the bot's own checkout: its edits there would reach main (criterion 24).
                 return Err(format!("the nightly memory tidy pass has no checkout of its own ({problem}), so it did not run"));
             }
             if !problem.is_empty() {
-                // Without a worktree of its own the task's turn waits for the main checkout like any other.
+                // Other worktree failures can use the main checkout after the retry window.
                 crate::util::diagnostic(&format!(
                     "Tico runner: {}: task {} runs in the bot's checkout ({problem})",
                     place.bot, place.task

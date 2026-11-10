@@ -8442,6 +8442,78 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
+    #[tokio::test]
+    async fn a_task_without_a_worktree_never_falls_back_when_upstream_is_unavailable() {
+        let _controls = RunControls;
+        crate::sessions::WORKTREE_WAIT.with(|v| v.set(Some((Duration::ZERO, Duration::ZERO))));
+        let (url, _seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "task-upstream-unavailable");
+        let mut env = crate::env::Env::new();
+        env.insert(
+            "PATH".into(),
+            "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin".into(),
+        );
+
+        for (case, configure_missing_remote) in [("no-upstream", false), ("lookup-error", true)] {
+            let bot = format!("{}-{}", case, uuid::Uuid::new_v4().simple());
+            let task = format!("task-{case}");
+            let config = json!({"runtime": "pi", "harness": "pi", "model": "synthetic"});
+            let main = crate::sessions::local_path(&runner.config, &bot, &config);
+            std::fs::create_dir_all(&main).unwrap();
+            repo_git(&main, &["init", "-q", "-b", "main"]);
+            std::fs::write(main.join("AGENT.md"), "# Fixture\n").unwrap();
+            repo_git(&main, &["add", "-A"]);
+            repo_git(&main, &["commit", "-qm", "start"]);
+            if configure_missing_remote {
+                repo_git(&main, &["config", "branch.main.remote", "missing-remote"]);
+                repo_git(&main, &["config", "branch.main.merge", "refs/heads/main"]);
+            }
+
+            let mut attempt = json!({
+                "id": format!("a-{case}"), "bot": bot, "token": "synthetic", "lease_seconds": 120,
+                "lane": format!("task:{task}"), "task": {"id": task},
+                "conversation": {"id": "c1"}, "message": {"refs": {}}, "config": config
+            });
+            let lost = AtomicBool::new(false);
+            let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+            let session = crate::sessions::path_for(&runner.config.projects_dir(), &bot, &task);
+            let result = runner
+                .place_turn(&mut place, &mut attempt, &env, &lost)
+                .await;
+            let error =
+                result.expect_err("an unavailable upstream must not use the shared checkout");
+            assert!(
+                !place.has_checkout(),
+                "a failed task placement never holds the shared checkout"
+            );
+            assert!(place.session_path.is_none());
+            assert!(
+                !session.exists(),
+                "the failed lookup did not create a task worktree"
+            );
+            if configure_missing_remote {
+                assert!(
+                    error.contains(crate::sessions::UPSTREAM_LOOKUP_FAILED),
+                    "{error}"
+                );
+                assert!(
+                    error.contains("exited 128"),
+                    "the Git exit code is preserved: {error}"
+                );
+                assert!(
+                    error.contains("fatal:"),
+                    "Git's reason is preserved: {error}"
+                );
+            } else {
+                assert!(error.contains(crate::sessions::NO_UPSTREAM), "{error}");
+            }
+            drop(place);
+        }
+
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     fn repo_git(dir: &Path, args: &[&str]) -> String {
         let out = std::process::Command::new("git")
             .args([
