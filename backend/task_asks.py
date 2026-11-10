@@ -440,20 +440,26 @@ def refuses_plain_ok(conn: "sqlite3.Connection", requirement_id: str, value: obj
 # The bots that act for a person (backend/assistant.py, backend/botops_act.py): they never give an OK of any kind.
 ACTS_FOR_PEOPLE = ("bot:assistant", "bot:botops")
 NOT_YOURS = "An OK is the person's own: the Assistant and BotOps never give one. Send back is fine."
+OWN_IN_TICO = "An OK is the person's own, in Tico. Send back is yours to say"
 
 
 def refuses_ok_by(conn: "sqlite3.Connection", who: object, requirement_id: str, value: object) -> str | None:
-    """For an answer route, before the engine: the refusal's words when the Assistant or BotOps (acting for a person,
-    confirmed or not, or as itself) answers `ok` to an OK requirement, bound or plain, else None. A send back, a look
-    again and a question's answer stay theirs to give."""
+    """For every answer path before the engine (the answer route, a batch decision): the refusal's words when `ok` to
+    an OK requirement, bound or plain, on anyone's ask, does not come from the person's own session: the Assistant or
+    BotOps (acting for a person, confirmed or not, or as itself), a personal token, or anything else acting for them.
+    Else None. A send back, a look again and a question's answer stay theirs to give."""
     if str(value or "").strip().casefold() != "ok":
         return None
-    acting = str(getattr(who, "via", "") or "") in ("assistant", "botops")
+    via = str(getattr(who, "via", "") or "")
     actors = {str(getattr(who, name, "") or "") for name in ("actor", "task_actor")}
-    if not acting and not (actors & set(ACTS_FOR_PEOPLE)):
+    if via in ("assistant", "botops") or actors & set(ACTS_FOR_PEOPLE):
+        words = NOT_YOURS
+    elif via or getattr(who, "via_token", False):
+        words = OWN_IN_TICO
+    else:
         return None
     found = conn.execute("SELECT kind FROM requirements WHERE id=?", (requirement_id,)).fetchone()
-    return NOT_YOURS if found and found[0] == "ok" else None
+    return words if found and found[0] == "ok" else None
 
 
 # ----------------------------------------------------------------------------- asking

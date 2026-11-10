@@ -182,9 +182,11 @@ def test_a_plain_ok_answer_never_gives_a_bound_ok_whoever_sends_it(api):
     )
     tid = bots_task(api, bot)
     rid = ask(api, bot, tid)
-    for token in ("ben-test", "ben-token"):
-        status, _, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", token, {"value": "ok"})
-        assert status == 409 and K.FROM_PREVIEW in detail
+    status, _, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ben-test", {"value": "ok"})
+    assert status == 409 and K.FROM_PREVIEW in detail
+    # A token never gives an OK at all, so it is refused before the preview is even asked for.
+    status, _, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ben-token", {"value": "ok"})
+    assert status == 403 and K.OWN_IN_TICO in detail
     with api.app.state.store.transaction() as c:
         try:
             H.task_answer(c, "human:ben", tid, rid, "ok")
@@ -265,6 +267,42 @@ def test_the_assistant_and_botops_never_answer_ok_to_an_ok_even_a_plain_one(api)
         api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ana-assistant-confirmed", {"value": "no", "note": "Not now."}
     )
     assert status == 200
+
+
+def test_a_personal_token_never_gives_an_ok_on_anyones_ask_but_sends_back_and_her_own_click_oks(api):
+    """A plain OK asked of Ana, by a bot and by Ben. Her personal token is refused `ok` at the answer route and in a
+    batch decision, with the same words; its send back goes through; her own signed-in click OKs."""
+    as_bot(api)
+    ids = api.app.state.auth.settings.test_identities
+    ids["ana-token"] = Identity("human:ana", "owner", "ana@acme.example", via_token=True)
+    tid = bots_task(api, "ops-bot-test")
+    asks = []
+    with api.app.state.store.transaction() as c:
+        for by in ("bot:ops", "human:ben"):
+            version = H.task(c, tid)["version"]
+            asked = H.task_ask(c, by, tid, "human:ana", "OK?", kind="ok", seen_version=version)
+            asks.append(asked["requirement_id"])
+    for rid in asks:
+        status, code, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{rid}/answer", "ana-token", {"value": "ok"})
+        assert (status, code) == (403, "ok_not_yours"), (rid, status, code)
+        assert detail == K.OWN_IN_TICO, detail
+    with api.app.state.store.transaction() as c:
+        from backend import batch
+
+        item = {"key": "ask:" + asks[0], "title": "OK?"}
+        with pytest.raises(Exception) as refused:
+            batch._apply_decide(c, ids["ana-token"], item, {"decision": "ok"})
+        assert getattr(refused.value, "detail", "") == K.OWN_IN_TICO, refused.value
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM answers WHERE requirement_id IN (?, ?)", tuple(asks)).fetchone()
+    status, _, _, _ = call(
+        api, "POST", f"tasks/{tid}/asks/{asks[0]}/answer", "ana-token", {"value": "no", "note": "Not now."}
+    )
+    assert status == 200
+    status, _, detail, _ = call(api, "POST", f"tasks/{tid}/asks/{asks[1]}/answer", "ana-test", {"value": "ok"})
+    assert status == 200, detail
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT answer FROM answers WHERE requirement_id=?", (asks[1],)).fetchone()[0] == "ok"
 
 
 # ----------------------------------------------------------------------------- the generic use (hub ok use)
