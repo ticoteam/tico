@@ -182,6 +182,76 @@ def check_name(given: str | None, had: str, domain: str) -> None:
         )
 
 
+# --- buckets setup makes -------------------------------------------------------------------------------------------
+# A bucket is setup's when it carries both tags, or, untagged, when setup saved a claim on its name (the name and when)
+# before it sent the create call: a run that stopped between the create and the tagging. Nothing else is ever adopted.
+
+
+def claimed(claims: str, bucket: str) -> bool:
+    return any(c.split("@")[0] == bucket for c in claims.split())
+
+
+def with_claim(claims: str, bucket: str, on: bool) -> str:
+    rest = [c for c in claims.split() if c.split("@")[0] != bucket]
+    return " ".join(rest + ([f"{bucket}@{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}"] if on else []))
+
+
+def error_code(e: Exception) -> str:
+    return str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
+
+
+def bucket_tags(s3, owned: dict) -> list[dict]:
+    try:
+        return s3.get_bucket_tagging(**owned).get("TagSet") or []
+    except Exception as e:  # NoSuchTagSet: a bucket with no tags at all
+        if error_code(e) == "NoSuchTagSet":
+            return []
+        raise
+
+
+def bucket_proof(s3, owned: dict, names: Names, name: str, claims: str, pick: str) -> str:
+    """Reads only: "absent", "ours" (both tags) or "claimed" (untagged, claimed by this setup); else refused."""
+    try:
+        s3.head_bucket(**owned)
+    except Exception as e:
+        if error_code(e) not in ("404", "NoSuchBucket", "NotFound"):
+            raise
+        return "absent"
+    tags = bucket_tags(s3, owned)
+    if names.is_ours(tags, name):
+        return "ours"
+    if not tags and claimed(claims, owned["Bucket"]):
+        return "claimed"
+    raise not_ours("S3 bucket", owned["Bucket"], names, name, pick)
+
+
+def ensure_bucket(
+    s3, owned: dict, region: str, names: Names, name: str, proof: str, claim: Callable[[str, bool], None], pick: str
+) -> None:
+    """After bucket_proof: tags a claimed bucket, or claims the name, creates the bucket and tags it at once."""
+    bucket, tagging = owned["Bucket"], {"TagSet": names.tags(name)}
+    if proof == "claimed":
+        s3.put_bucket_tagging(**owned, Tagging=tagging)
+        return
+    if proof != "absent":
+        return
+    claim(bucket, True)  # saved before the create call, so a retry after a failure below knows the bucket for setup's
+    location = {} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}
+    try:
+        s3.create_bucket(Bucket=bucket, **location)
+    except Exception as e:
+        if error_code(e) in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):  # made by someone since the read
+            claim(bucket, False)
+            raise not_ours("S3 bucket", bucket, names, name, pick) from None
+        raise
+    # us-east-1 answers success for a bucket this account already holds: one with tags was not made by this call. (One
+    # made untagged in the instant between the read and the create stays indistinguishable: S3 has no exclusive create.)
+    if bucket_tags(s3, owned):
+        claim(bucket, False)
+        raise not_ours("S3 bucket", bucket, names, name, pick)
+    s3.put_bucket_tagging(**owned, Tagging=tagging)
+
+
 def check_account(had: str, account: str, what: str) -> None:
     """An install's resources are its account's: the same names and tags in another account are someone else's."""
     if had and account != had:
@@ -420,25 +490,17 @@ class Deployer:
         if prof is not None and not profile_is_ours(prof, n, self.n):
             raise not_ours("IAM instance profile", n, self.n, self.p.name)
 
-    def ensure_plan_bucket(self, s3, region: str) -> None:
+    def ensure_plan_bucket(self, s3, region: str, claims: str = "", claim=None) -> None:
         """Configure only setup's dedicated bucket, in the installer's account. Never adopt an unrelated bucket.
         Every safety setting precedes the first chart upload. Re-running repairs an interrupted configuration.
         """
-        bucket = self.p.plan_bucket
-        owned = {"Bucket": bucket, "ExpectedBucketOwner": self.account_id}
+        owned = {"Bucket": self.p.plan_bucket, "ExpectedBucketOwner": self.account_id}
         try:
-            s3.head_bucket(**owned)
-        except Exception as exc:
-            code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
-            if code not in ("404", "NoSuchBucket", "NotFound"):
-                raise
-            location = {} if region == "us-east-1" else {"CreateBucketConfiguration": {"LocationConstraint": region}}
             # A collision is an error, never permission to reuse someone else's name.
-            s3.create_bucket(Bucket=bucket, **location)
-            s3.put_bucket_tagging(**owned, Tagging={"TagSet": self.n.tags(self.p.name)})
-        else:
-            if not self.n.is_ours(s3.get_bucket_tagging(**owned).get("TagSet"), self.p.name):
-                raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.")
+            proof = bucket_proof(s3, owned, self.n, self.p.name, claims, "--name")
+            ensure_bucket(s3, owned, region, self.n, self.p.name, proof, claim or (lambda b, on: None), "--name")
+        except MissingInput:
+            raise SystemExit("The starter plan bucket was not created by this setup; refusing to reuse it.") from None
         s3.put_public_access_block(
             **owned,
             PublicAccessBlockConfiguration={

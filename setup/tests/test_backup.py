@@ -14,15 +14,26 @@ class Missing(Exception):
 
 
 class FakeS3:
+    """An existing bucket is setup's (tagged); a new one has no tags until it is tagged."""
+
     def __init__(self, exists=False):
         self.exists, self.calls = exists, []
+        self.tags = OURS if exists else []
 
     def head_bucket(self, **kw):
         if not self.exists:
             raise Missing("404")
 
+    def create_bucket(self, **kw):
+        self.calls.append(("create_bucket", kw))
+        self.exists = True
+
+    def put_bucket_tagging(self, **kw):
+        self.calls.append(("put_bucket_tagging", kw))
+        self.tags = kw["Tagging"]["TagSet"]
+
     def get_bucket_tagging(self, **kw):
-        return {"TagSet": OURS}
+        return {"TagSet": self.tags}
 
     def __getattr__(self, name):
         return lambda **kw: self.calls.append((name, kw))

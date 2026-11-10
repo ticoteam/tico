@@ -254,9 +254,14 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
     awsmod.check_account(mine.get("aws_account_id", ""), account, f"Backup storage for {domain}")
     # Before the first AWS write, beside (never in) the server's state: a retry keeps it all without the flags.
-    state.save_backup(
-        domain, {"asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region, "aws_account_id": account}
-    )
+    record = {**mine, "asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region}
+    record["aws_account_id"] = account
+    state.save_backup(domain, record)
+
+    def claim(bucket: str, on: bool) -> None:
+        record["bucket_claims"] = awsmod.with_claim(record.get("bucket_claims", ""), bucket, on)
+        state.save_backup(domain, record)
+
     values = bk.create_s3(
         deps.aws_s3(args.aws_region, args.aws_profile),
         iam,
@@ -266,6 +271,8 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
         name=name,
         say=io.say,
         names=names,
+        claims=record.get("bucket_claims", ""),
+        claim=claim,
     )
     io.say("\nOn the server, before the installer (the key is shown once; keep it out of shell history and chat):")
     io.say(f"  export LITESTREAM_ACCESS_KEY_ID={values['LITESTREAM_ACCESS_KEY_ID']}")

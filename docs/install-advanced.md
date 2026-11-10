@@ -56,7 +56,7 @@ A self-install's `--company-file` goes through a private, encrypted bucket setup
 public access blocked and a one-day expiry rule. Setup keeps its bucket name and chart for retries. The server role
 can read only this install's plan prefix. Creating the bucket needs permission to create/tag S3 buckets and configure
 public access blocking, ownership controls, encryption and lifecycle rules. A failure stops before the chart upload.
-Setup refuses an existing bucket without this install's ownership tags. The empty bucket remains after the chart is
+Setup refuses an existing bucket without this install's ownership tags; the one exception is an untagged bucket whose name this install saved a claim on just before creating it (a run that stopped before tagging it). The empty bucket remains after the chart is
 deleted. With an explicit `--plan-bucket BUCKET`
 (and `--plan-bucket-region` when it differs from `--aws-region`), as Tico's hosted servers use, setup puts the packed
 plan at `plans/<name>/<sha256>` in that bucket before launch, grants the server's role `s3:GetObject` on

@@ -1080,3 +1080,69 @@ def test_a_runner_and_backup_storage_keep_their_aws_account(monkeypatch):
     code, out = go(["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-east-1"], deps=d)
     assert code == 2 and "set up in us-west-2" in out, out
     assert not [c for c, _ in log if not c.startswith(READS)]
+
+
+class RacingS3(S3):
+    """A bucket that someone makes between setup's read (absent) and its create, which us-east-1 answers with success."""
+
+    def __init__(self, tags):
+        super().__init__()
+        self.appears = tags
+
+    def create_bucket(self, **kw):
+        self._rec("create_bucket", kw)
+        self.tagsets[kw["Bucket"]] = self.appears
+
+
+def test_a_bucket_that_appears_between_the_read_and_the_create_is_never_adopted():
+    # (An untagged one made in that instant cannot be told from a new one in us-east-1: the residual window.)
+    for tags in (PRODUCTION, TICO_TAGS):
+        s3, iam = RacingS3(tags), IAM()
+        with pytest.raises(MissingInput, match="was not made by this setup"):
+            backup.create_s3(
+                s3, iam, domain="tico.example.com", region="us-east-1", account_id=ACCOUNT, name="acme", say=print
+            )
+        assert not s3.called("put_bucket_tagging") and not iam.called("create_user")
+        assert [n for n, _ in s3.calls] == ["head_bucket", "create_bucket", "get_bucket_tagging"]
+
+
+def test_a_bucket_setup_made_but_could_not_tag_is_finished_by_the_retry_and_only_with_its_claim():
+    iam, s3 = IAM(), S3()
+    s3.put_bucket_tagging = lambda **kw: (_ for _ in ()).throw(ClientError("SlowDown"))
+    d = fakes.deps()
+    d.aws_clients = lambda region, profile: (None, iam, None, ACCOUNT)
+    d.aws_s3 = lambda region, profile: s3
+    argv = ["backup-storage", "--domain", "laptop.example.com", "--aws-region", "us-west-2"]
+    with pytest.raises(ClientError):
+        go(argv, deps=d)
+    bucket = aws.DEFAULT_NAMES.backup_bucket("laptop.example.com", ACCOUNT)
+    assert s3.tagsets[bucket] == [] and state.load_backup("laptop.example.com")["bucket_claims"].startswith(
+        bucket + "@"
+    )
+    del s3.put_bucket_tagging
+    assert go(argv, deps=d)[0] == 0  # the claim saved before the create: setup's own bucket, tagged now
+    assert aws.DEFAULT_NAMES.is_ours(s3.tagsets[bucket], "laptop-example-com")
+    # Without the claim, the same untagged bucket is someone else's.
+    s3.tagsets[bucket] = []
+    claimless = state.load_backup("laptop.example.com")
+    del claimless["bucket_claims"]
+    state.save_backup("laptop.example.com", claimless)
+    code, out = go(argv, deps=d)
+    assert code == 2 and "was not made by this setup" in out, out
+
+
+def test_the_plan_bucket_setup_made_but_could_not_tag_is_finished_with_its_claim():
+    p = aws.plan_aws(
+        domain="a.example", front_door="caddy", region="us-east-1", name="acme", plan_bucket="tico-setup-plans-x"
+    )
+    d = aws.Deployer(p, None, None, None, ACCOUNT)
+    s3, claims = S3(), []
+    s3.put_bucket_tagging = lambda **kw: (_ for _ in ()).throw(ClientError("SlowDown"))
+    with pytest.raises(ClientError):
+        d.ensure_plan_bucket(s3, "us-east-1", claim=lambda b, on: claims.append((b, on)))
+    assert claims == [("tico-setup-plans-x", True)] and s3.tagsets["tico-setup-plans-x"] == []
+    del s3.put_bucket_tagging
+    with pytest.raises(SystemExit, match="refusing to reuse"):
+        d.ensure_plan_bucket(s3, "us-east-1")  # no claim: never adopted
+    d.ensure_plan_bucket(s3, "us-east-1", claims="tico-setup-plans-x@2026-11-10T00:00:00Z")
+    assert aws.DEFAULT_NAMES.is_ours(s3.tagsets["tico-setup-plans-x"], "acme")

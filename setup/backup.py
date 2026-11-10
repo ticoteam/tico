@@ -13,6 +13,7 @@ from typing import Callable
 
 from . import aws as awsmod
 from .cloudflare import Cloudflare, CloudflareError
+from .ui import MissingInput
 
 CHOICES = {
     "aws": "an S3 bucket in your AWS account, created for you (versioned, encrypted, private)",
@@ -74,22 +75,22 @@ def create_s3(
     name: str,
     say: Callable[[str], None] = print,
     names: awsmod.Names = awsmod.DEFAULT_NAMES,
+    claims: str = "",
+    claim: Callable[[str, bool], None] | None = None,
 ) -> dict[str, str]:
-    """Returns the .env values. Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest.
+    """Returns the .env values. `claims`/`claim`: the bucket names this setup saved a claim on before creating them,
+    and how to save one (aws.ensure_bucket). Safe to re-run: an existing bucket is kept and a fresh key replaces the oldest.
     Only a bucket (in this account) and a user that carry both of this install's tags are reused; anything else of the
     same name is refused before the first write."""
     bucket = names.backup_bucket(domain, account_id)
     owned = {"Bucket": bucket, "ExpectedBucketOwner": account_id}
+    pick = "--domain or another --asset-prefix"
     try:
-        s3.head_bucket(**owned)
-        exists = True
+        proof = awsmod.bucket_proof(s3, owned, names, name, claims, pick)
+    except MissingInput:
+        raise
     except Exception as e:
-        code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
-        if code not in ("404", "NoSuchBucket", "NotFound"):
-            raise RuntimeError(f"cannot use bucket {bucket}: {code or e}") from e
-        exists = False
-    if exists and not names.is_ours(bucket_tags(s3, owned), name):
-        raise awsmod.not_ours("S3 bucket", bucket, names, name, pick="--domain or another --asset-prefix")
+        raise RuntimeError(f"cannot use bucket {bucket}: {awsmod.error_code(e) or e}") from e
     user = names.backup_user(name)
     try:
         iam.get_user(UserName=user)
@@ -98,16 +99,8 @@ def create_s3(
         user_exists = False
     if user_exists and not names.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
         raise awsmod.not_ours("IAM user", user, names, name)
-    if exists:
-        say(f"  bucket {bucket} exists; keeping it")
-    else:
-        args = {"Bucket": bucket}
-        if region != "us-east-1":
-            args["CreateBucketConfiguration"] = {"LocationConstraint": region}
-        s3.create_bucket(**args)
-        # Tagged at once, so a retry after a failure below still knows the bucket for its own.
-        s3.put_bucket_tagging(**owned, Tagging={"TagSet": names.tags(name)})
-        say(f"  created bucket {bucket}")
+    awsmod.ensure_bucket(s3, owned, region, names, name, proof, claim or (lambda b, on: None), pick)
+    say(f"  created bucket {bucket}" if proof == "absent" else f"  bucket {bucket} exists; keeping it")
     s3.put_public_access_block(
         **owned,
         PublicAccessBlockConfiguration={
@@ -182,13 +175,7 @@ def create_s3(
     }
 
 
-def bucket_tags(s3, owned: dict) -> list[dict]:
-    try:
-        return s3.get_bucket_tagging(**owned).get("TagSet") or []
-    except Exception as e:  # NoSuchTagSet: a bucket with no tags at all
-        if str(getattr(e, "response", {}).get("Error", {}).get("Code", "")) == "NoSuchTagSet":
-            return []
-        raise
+bucket_tags = awsmod.bucket_tags
 
 
 def r2_endpoint(account_id: str) -> str:
