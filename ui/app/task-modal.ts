@@ -632,8 +632,8 @@ const TASK_EVENT_WORDS: Record<string, (v: string | null | undefined, x: ModalEv
     return `waived QA${w.head ? ` on ${String(w.head).slice(0, 7)}` : ''}: a waiver, not a QA pass`; },
   verdict: v => `recorded the verdict ${v || 'none'}`,
   // A hand-off through a link: `new` is the pipeline sent to (on the source) or the pipeline it came from (on the target).
-  handoff: (v: string | null | undefined) => `sent it to ${TASK_TYPES.find(type => type.id === v)?.name || 'another pipeline'}`,
-  handoff_from: (v: string | null | undefined) => `received it from ${TASK_TYPES.find(type => type.id === v)?.name || 'another pipeline'}`,
+  handoff: (v: string | null | undefined) => `sent to ${TASK_TYPES.find(type => type.id === v)?.name || 'another pipeline'}`,
+  handoff_from: (v: string | null | undefined) => `received from ${TASK_TYPES.find(type => type.id === v)?.name || 'another pipeline'}`,
   lint: v => `noted: ${v}`, rank: () => 'moved it in the queue', children: v => String(v || ''), note: v => `noted: ${clipLine(String(v || ''), 200)}`, comment: () => 'deleted a comment'};
 // `files`: the task's files (ui/app/task-files.ts), for the files a comment carried.
 function commentLineHTML(x: ModalLine, i: number, all: ModalLine[] | null | undefined, files: TfFile[] = [], taskId: string | number = '', canAnswer = true) {

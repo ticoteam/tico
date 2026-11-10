@@ -60,7 +60,9 @@ declare function settingsShow(tab: string): void;
         {id: 'copy', name: 'Copy review', status: 'review'}, {id: 'complete', name: 'Complete', status: 'done'},
         {id: 'archive', name: 'Archive', status: 'closed'}].map((step, position) => ({...step, position, type_id: 'marketing'}))},
       // The roadmap types go by role, whoever manages them; a Dev tickets type made later beside Engineering goes first.
-      {id: 'product-roadmap', name: 'Product roadmap', role: 'product-roadmap', manager: 'product-lead', steps: []},
+      {id: 'product-roadmap', name: 'Product roadmap', role: 'product-roadmap', manager: 'product-lead', steps: [
+        {id: 'ideas', name: 'Ideas', status: 'open'}, {id: 'in-dev', name: 'In development', status: 'doing'},
+        {id: 'shipped', name: 'Shipped', status: 'done'}].map((step, position) => ({...step, position, type_id: 'product-roadmap'}))},
       {id: 'engineering', name: 'Engineering', role: 'engineering', manager: 'engineering-lead', steps: []},
       {id: 'dev-tickets', name: 'Dev tickets', role: 'engineering', manager: null, steps: []}];
     const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
@@ -89,6 +91,12 @@ declare function settingsShow(tab: string): void;
     // A Dev ticket at a working step carries when it got there; past four hours its card says so in amber.
     tasks[3]!.step_since = new Date(Date.now() - 5 * 3600e3).toISOString();
     tasks[1]!.step_since = new Date(Date.now() - 30 * 60e3).toISOString();
+    // Two Product cards wait in In development, the stage a Product card leaves for Engineering.
+    const inDev = types[2]!.steps[1]!;
+    tasks.push({...tasks[0]!, id: 'product-0', title: 'Ship the export', type_id: 'product-roadmap', step_id: inDev.id, step: inDev,
+      type: {id: 'product-roadmap', name: 'Product roadmap'}, status: 'doing'},
+      {...tasks[0]!, id: 'product-1', title: 'Sync the roadmap', type_id: 'product-roadmap', step_id: inDev.id, step: inDev,
+        type: {id: 'product-roadmap', name: 'Product roadmap'}, status: 'doing'});
     tasks.push({...tasks[2]!, id: 'closed-task', title: 'Dropped campaign', step_id: 'archive', step: types[1]!.steps[4], status: 'closed'});
     await page.route('**/*', async route => {
       const req = route.request(), url = new URL(req.url()), p = url.pathname;
@@ -165,7 +173,9 @@ declare function settingsShow(tab: string): void;
         'task-1': {chip: {handoff_id: 'h2', pipeline: 'Engineering', task_id: 'task-2', stage: 'Copy review', readable: true},
           from: {pipeline: 'Marketing', task_id: 'task-0', title: 'Write the campaign', readable: true}}}});
       if (p === '/api/v2/pipeline-links') return json({next: null, links: url.searchParams.get('pipeline') === 'marketing'
-        ? [{id: 'link-copy', from_pipeline_id: 'marketing', from_pipeline_stage_id: 'copy', to_pipeline_id: 'engineering', mode: 'spawn'}] : []});
+        ? [{id: 'link-copy', from_pipeline_id: 'marketing', from_pipeline_stage_id: 'copy', to_pipeline_id: 'engineering', mode: 'spawn'}]
+        : url.searchParams.get('pipeline') === 'product-roadmap'
+          ? [{id: 'link-product', from_pipeline_id: 'product-roadmap', from_pipeline_stage_id: 'in-dev', to_pipeline_id: 'engineering', mode: 'spawn'}] : []});
       if (p === '/api/v2/conversations') return json({conversations: []});
       if (p.endsWith('/messages')) return json({messages: []});
       if (p === '/api/v2/models') return json({models: [], harnesses: []});
@@ -174,7 +184,7 @@ declare function settingsShow(tab: string): void;
     await page.goto('http://tico-ui.test/#/tasks');
     await page.waitForFunction(() => TASKS_ST && !TASKS_ST.loading && TASKS_ST.type === 'marketing' && document.querySelector('#task-body .bcard'));
     assert.deepEqual(await page.locator('#task-body .bcol h2').allTextContents(),
-      ['Draft', 'Legal review', 'In Engineering', 'Doing', 'Finished'], 'done and closed steps fold into one strip; a stage a spawn link leaves is headed by the pipeline it sends to');
+      ['Draft', 'Legal review', 'Copy review', 'Doing', 'Finished'], 'done and closed steps fold into one strip; a stage a spawn link leaves keeps its own name');
     assert.equal(await page.locator('#task-body .bcard').count(), 3, 'finished work leaves the board');
     assert.deepEqual(await page.locator('#task-body [data-col="draft"] .bcard .tl-waiting').allTextContents(), ['Waiting'],
       'a waiting task stays in its step with a tag');
@@ -252,12 +262,20 @@ declare function settingsShow(tab: string): void;
     assert.equal(await unreadable.evaluate(el => el.tagName), 'SPAN', 'a chip the reader cannot follow is not a link');
     assert.equal(await unreadable.innerText(), 'Engineering');
     // Its activity lists the hand-off to Engineering and the approval that let it go.
-    const sent = page.locator('.tmark', {hasText: 'sent it to Engineering'});
+    const sent = page.locator('.tmark', {hasText: 'sent to Engineering'});
     await sent.first().waitFor();
     assert.match(await sent.first().innerText(), /approved by Lead \(met\) at Review/);
-    // The stage a spawn link leaves is headed by the pipeline it sends to, with its count.
-    await page.locator('#task-body section[data-col="copy"] h2', {hasText: 'In Engineering'}).waitFor();
-    assert.match(await page.locator('#task-body section[data-col="copy"] .cnt').innerText(), /^· \d+$/);
+    // Only the Product board's In development column is headed by the pipeline it sends to, with its count: the stage
+    // a spawn link leaves on any other board keeps its own name.
+    assert.equal(await page.locator('#task-body section[data-col="copy"] h2').innerText(), 'Copy review');
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-task-type="product-roadmap"]').click();
+    await page.waitForFunction(() => location.hash.includes('type=product-roadmap'));
+    await page.locator('#task-body section[data-col="in-dev"] h2', {hasText: 'In Engineering'}).waitFor();
+    assert.equal(await page.locator('#task-body section[data-col="in-dev"] h2').innerText(), 'In Engineering · 2');
+    await page.locator('#task-scope').click();
+    await page.locator('#task-filter-pop [data-task-type="marketing"]').click();
+    await page.waitForFunction(() => location.hash.includes('type=marketing'));
     assert.equal(await peek.locator('.tmodal-head .pill').count(), 0, 'the header carries no state pill');
     assert.equal(await peek.locator('[data-tag-key]').innerText(), 'release · Oct 2');
     assert.equal(await peek.locator('[data-prop="tags"]').count(), 1);
