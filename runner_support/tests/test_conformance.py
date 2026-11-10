@@ -407,15 +407,16 @@ def test_a_public_session_hears_a_report_on_an_open_task_and_not_one_on_a_privat
     ]
     until(lambda: settled_count() == 3, "the task turns")
     with api.app.state.store.transaction() as c:
-        for task in tasks:
-            H.event(c, H.KEEPER, "task.started_in", task["id"], {"conversation": public["id"]})
-            assert H.task_report(c, H.task(c, task["id"]), "blocked", "Waiting on the owner"), task["title"]
+        # The quiet "Started task" line a task filed from the public thread leaves there (hubdb._task_started).
+        lines = [H._task_started(c, H.task(c, task["id"]), H.conversation(c, public["id"])) for task in tasks]
+    # Both are written (the thread's members may read both tasks); the turn's filter keeps the private one out.
+    assert all(lines), [task["title"] for task, line in zip(tasks, lines) if not line]
 
     post(api, f"threads/{public['id']}/messages", {"text": "@ops and now?"})
     until(lambda: settled_count() == 4, "the public turn after the reports")
     prompt = computer.prompts()[-1]["prompt"]
     assert "and now?" in prompt
-    assert "Book the venue: blocked." in prompt, "the filter must not hide a report on an open task"
+    assert "Started task: Book the venue" in prompt, "the filter must not hide a line about an open task"
     assert "Acme acquisition" not in prompt
     # The flag is on the turn's page only: no reader's page says a message is narrower than its thread.
     page = computer.api.get(f"/api/v2/threads/{public['id']}/timeline", headers=headers())
@@ -1295,8 +1296,6 @@ def test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_it
 
     task = post(api, "tasks", {"owner": "ops", "title": "Build product", "body": "Please build the product."})
     until(lambda: any(a["state"] == "completed" for a in computer.attempts()), "the task's first turn")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (task["id"],))  # a started task gets a worktree
     link = post(
         api,
         f"tasks/{task['id']}/worktrees/attach",
