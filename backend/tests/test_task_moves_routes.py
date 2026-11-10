@@ -209,9 +209,11 @@ def ask_ok(api, bot, tid, content, to="ben"):
 
 
 def no(api, path, body, token, status):
+    """The refusal's code and words: flat for the engine's task_* rules, under `error` for the rest."""
     r = api.post("/api/v2/" + path, json=body, headers=headers(token))
     assert r.status_code == status, r.text
-    return r.json()
+    out = r.json()
+    return out["error"] if isinstance(out["error"], dict) else {"code": out["error"], "detail": out["detail"]}
 
 
 def test_a_bot_asks_for_an_ok_only_with_a_version_and_only_for_a_generic_subject(api):
@@ -219,9 +221,9 @@ def test_a_bot_asks_for_an_ok_only_with_a_version_and_only_for_a_generic_subject
     made = task(api, owner="ops")
     version = show(api, made["id"])["version"]
     ask = {"to": "ben", "line": "OK to post this?", "subject": FORUM, "content": {"text": "Hi"}}
-    assert no(api, f"tasks/{made['id']}/oks", ask, bot, 409)["error"] == "task_changed"
+    assert no(api, f"tasks/{made['id']}/oks", ask, bot, 409)["code"] == "task_changed"
     owned = {**ask, "subject": "email_send:1", "version": version}
-    assert no(api, f"tasks/{made['id']}/oks", owned, bot, 422)["error"] == "validation"
+    assert no(api, f"tasks/{made['id']}/oks", owned, bot, 422)["code"] == "validation"
     rid = ask_ok(api, bot, made["id"], {"text": "Hi"})
     assert rid == ask_ok(api, bot, made["id"], {"text": "Hi"})  # the same ask, asked again
     item = next(i for i in get(api, "needs-you", token="ben-test")["items"] if i["kind"] == "ask")
@@ -245,17 +247,17 @@ def test_an_ok_is_only_the_asked_persons_own_click_on_exactly_what_they_were_sho
     assert shown["content"] == content and shown["standing"] == "waiting" and shown["task_id"] == made["id"]
     right = shown["shown_hash"]
     # Nothing is used before an OK, and a plain "ok" answer is not one.
-    assert no(api, f"oks/{rid}/use", use, bot, 409)["error"] == "task_ok_missing"
+    assert no(api, f"oks/{rid}/use", use, bot, 409)["code"] == "task_ok_missing"
     # A bot never gives an OK, not even its own ask's with the right hash.
-    assert no(api, give, {"shown_hash": right}, bot, 403)["error"] == "identity"
+    assert no(api, give, {"shown_hash": right}, bot, 403)["code"] == "identity"
     # Nor does the person through a token: only their own click in their own session.
-    assert no(api, give, {"shown_hash": right}, "ben-token", 403)["error"] == "identity"
+    assert no(api, give, {"shown_hash": right}, "ben-token", 403)["code"] == "identity"
     # A person who is not the one asked is refused, though she opened it too.
     cara = get(api, f"oks/{rid}", token="cara-test")["shown_hash"]
     assert "Ben" in no(api, give, {"shown_hash": cara}, "cara-test", 409)["detail"]
     # A hash that is not what was asked about is refused.
     wrong = no(api, give, {"shown_hash": "0" * 64}, "ben-test", 409)
-    assert wrong["error"] == "task_changed"
+    assert wrong["code"] == "task_changed"
     assert get(api, f"oks/{rid}", token="ben-test")["standing"] == "waiting"
 
     key = "ok-" + rid
@@ -266,11 +268,11 @@ def test_an_ok_is_only_the_asked_persons_own_click_on_exactly_what_they_were_sho
     assert get(api, f"oks/{rid}", token="ben-test")["standing"] == "ok"
 
     # Only whoever asked uses it, for exactly that content, once.
-    assert no(api, f"oks/{rid}/use", use, "ana-test", 403)["error"] == "identity"
+    assert no(api, f"oks/{rid}/use", use, "ana-test", 403)["code"] == "identity"
     changed = {**use, "content": {"text": "We ship on Monday."}}
-    assert no(api, f"oks/{rid}/use", changed, bot, 409)["error"] == "task_ok_changed"
+    assert no(api, f"oks/{rid}/use", changed, bot, 409)["code"] == "task_ok_changed"
     used = api.post(f"/api/v2/oks/{rid}/use", json=use, headers=headers(bot))
     assert used.status_code == 200, used.text
-    assert no(api, f"oks/{rid}/use", use, bot, 409)["error"] == "consumed"
+    assert no(api, f"oks/{rid}/use", use, bot, 409)["code"] == "consumed"
     assert get(api, f"oks/{rid}", token="ben-test")["standing"] == "used"
     assert api.get("/api/v2/oks/nope", headers=headers("ben-test")).status_code == 404
