@@ -398,7 +398,7 @@ async function archive(browser: Browser) {
   console.log('the archive: Snoozed, Done and Closed each read their own; a row opens its task: ok');
 }
 
-const api = {open, fixtures, task, brief, needsOf};
+const api = {open, fixtures, task, brief, needsOf, PIPELINES};
 export type Api = typeof api;
 export type Opened = Awaited<ReturnType<typeof open>>;
 module.exports = api;
