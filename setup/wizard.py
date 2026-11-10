@@ -131,7 +131,9 @@ def gather_company_file(args, s):
     s.company = plan["company"]["name"]
 
 
-def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
+def gather(io: IO, args, s: Settings, dry: bool, restore=None) -> Settings:
+    """`restore(s)`: once a domain that was asked for is known, the install saved for it, whole, with this run's answers
+    so far; the rest of this run's flags then apply to it."""
     a = Asker(io, args, s, dry)
     a.get("target", "Where should Tico run?", choices=st.TARGETS, default="aws")
     a.get(
@@ -140,6 +142,9 @@ def gather(io: IO, args, s: Settings, dry: bool) -> Settings:
         validate=lambda v: bool(st.DOMAIN_RE.match(v.lower())),
     )
     s.domain = s.domain.lower()
+    if restore:
+        s = restore(s)
+        a = Asker(io, args, s, dry)
     a.get("front_door", "How should people reach it?", choices=st.FRONT_DOORS, default="caddy")
     if s.target == "ssh":
         a.get("ssh_host", "SSH destination (user@host)", flag="--ssh")
@@ -704,10 +709,9 @@ def _r53_client(profile: str):
 # --- 4. the run --------------------------------------------------------------------------------------------
 
 
-def run(args, io: IO, deps: Deps) -> int:
-    dry = args.dry_run
-    domain_hint = (args.domain or "").lower()
-    saved, saved_env = state.load(domain_hint) if domain_hint else ({}, "")
+def start(args, domain: str) -> tuple[Settings, dict]:
+    """The settings a run starts from: what was saved for the domain, then this run's environment and company file."""
+    saved, saved_env = state.load(domain) if domain else ({}, "")
     s = st.from_saved(saved, saved_env) if saved else Settings()
     s.cf_token = os.environ.get("CLOUDFLARE_API_TOKEN", "")
     s.tunnel_token = os.environ.get("CLOUDFLARE_TUNNEL_TOKEN", "") or s.tunnel_token
@@ -715,13 +719,32 @@ def run(args, io: IO, deps: Deps) -> int:
     s.inbound_key = os.environ.get("TICO_INBOUND_KEY", "") or s.inbound_key
     s.inbound_url = os.environ.get("TICO_INBOUND_URL", "") or s.inbound_url
     gather_company_file(args, s)
+    return s, saved
+
+
+def run(args, io: IO, deps: Deps) -> int:
+    dry = args.dry_run
+    domain_hint = (args.domain or "").lower()
+    s, saved = start(args, domain_hint)
     io.say("tico setup" + (" (dry run: nothing will be created or changed)" if dry else ""))
     io.say(USAGE_NOTICE + " Details: PRIVACY.md in the Tico repository.")
     if saved:
         io.say(f"Resuming from the last run for {domain_hint} (secrets kept in {state.home() / domain_hint}).")
-    gather(io, args, s, dry)
-    # By the domain gather settled, also when it was asked rather than given: a re-run never needs the flag again.
-    kept = saved or state.load(s.domain)[0]
+
+    def restore(asked: Settings) -> Settings:
+        # The domain was asked for: its saved install whole (name, prefix, private .env), as if --domain had named it.
+        nonlocal saved
+        if not asked.domain or asked.domain.startswith("<"):
+            return asked
+        again, saved = start(args, asked.domain)
+        if not saved:
+            return asked
+        io.say(f"Resuming from the last run for {asked.domain} (secrets kept in {state.home() / asked.domain}).")
+        again.target, again.domain = asked.target, asked.domain
+        return again
+
+    s = gather(io, args, s, dry, restore=None if saved else restore)
+    kept = saved
     # Without a server install, the prefix `setup backup-storage` made the domain's bucket with.
     s.asset_prefix = awsmod.asset_prefix(getattr(args, "asset_prefix", None), kept or state.load_backup(s.domain))
     hosted.gather(args, s, dry)

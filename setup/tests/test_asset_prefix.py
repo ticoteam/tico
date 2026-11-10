@@ -978,3 +978,19 @@ def test_backup_storage_saves_its_prefix_before_provisioning_and_keeps_it():
     assert code == 2 and "named with --asset-prefix hub" in out
     assert state.load("laptop.example.com") == ({}, "")  # no server state is made or changed for it
     assert state.known_domains() == []
+
+
+class StopAtPlan(fakes.CaptureIO):
+    def confirm(self, question, default=True):
+        return False if "Go ahead" in question else default
+
+
+def test_a_prompted_domain_restores_its_whole_saved_install(tmp_path):
+    d, ec2, iam, ssm, s3, log = hub_world()
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    io = StopAtPlan(interactive=True, answers=["", DOMAIN])  # the target's default, then the domain
+    code, out = go([], deps=d, io=io)
+    assert code == 1 and "Stopped; nothing was changed." in out, out
+    assert f"Resuming from the last run for {DOMAIN}" in out
+    assert "Security group hub-hotmic:" in out and "SSM SecureString /hub/hotmic/env" in out, out
+    assert "hub-hub-hotmicapp-com" not in out
