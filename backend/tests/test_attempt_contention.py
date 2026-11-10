@@ -256,6 +256,9 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
         assert health.runner_route_latency(c, now + 16 * 60) is None
 
 
+WORKERS = 12
+
+
 @pytest.mark.slow
 @pytest.mark.alone
 def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
@@ -310,7 +313,10 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
         finally:
             flight.request_finished(token)
 
-    with ThreadPoolExecutor(max_workers=18) as pool:
+    # 12 workers: the heartbeat, the scheduler tick and 10 requests in flight, the profile the scale test
+    # (test_attempt_contention_scale.py) holds to. With 18, the extra threads only queue on the CPU and the GIL, so a
+    # route's p95 measured how busy the VM was rather than the SQLite contention this test is about.
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         beat = pool.submit(
             api.post,
             "/api/v2/runners/heartbeat",
@@ -339,7 +345,7 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
         for name, values in samples.items()
     }
     print("SNAPSHOT_RECEIPT " + json.dumps(snapshot_counts, sort_keys=True))
-    print("CONTENTION_RECEIPT " + json.dumps(receipt, sort_keys=True))
+    print("CONTENTION_RECEIPT " + json.dumps({"workers": WORKERS, **receipt}, sort_keys=True))
     rec.drain()
     print("HOLDERS " + json.dumps(sorted(rec.long_holds, key=lambda h: -h["hold_s"])[:10]))
     assert not failures, failures
