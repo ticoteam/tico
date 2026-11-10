@@ -327,15 +327,17 @@ def _open_visit(conn: "sqlite3.Connection", task_id: str, stage_id: str, how: st
 
 
 def _close_visit(conn: "sqlite3.Connection", visit: Row, how: str, by: str, why: str | None, ts: str) -> None:
-    """Leave a visit. The requirements added to it end with it."""
+    """Leave a visit. The requirements added to it end with it: a visit that ends met keeps them as they were (they did
+    their work, and a bound OK among them may still be used, task_asks), any other end withdraws them."""
     conn.execute(
         "UPDATE visits SET left_at=?, how=?, by_id=?, why=? WHERE id=? AND left_at IS NULL",
         (ts, how, str(by), why, visit["id"]),
     )
-    conn.execute(
-        "UPDATE requirements SET withdrawn_at=? WHERE visit_id=? AND withdrawn_at IS NULL",
-        (ts, visit["id"]),
-    )
+    if how != "met":
+        conn.execute(
+            "UPDATE requirements SET withdrawn_at=? WHERE visit_id=? AND withdrawn_at IS NULL",
+            (ts, visit["id"]),
+        )
 
 
 def check_version(

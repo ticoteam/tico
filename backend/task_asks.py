@@ -372,10 +372,8 @@ def _state(conn: "sqlite3.Connection", row: Row) -> tuple[str, Row | None, Row |
         # Sent back or taken back: dead for good, whatever the answers say since (an undone send back included).
         newest = _newest_answer(conn, visit["id"], requirement["id"]) or {}
         return (SENT_BACK if newest.get("answer") == "no" else WITHDRAWN), requirement, visit
-    # The engine ends a visit's asks with it (task_engine._close_visit). A visit that ended because what it needed was
-    # met, this OK among it, moved on with the OK: that is the OK doing its work, not taking it back.
-    met = visit.get("how") == "met" and requirement.get("withdrawn_at") == visit.get("left_at")
-    if requirement.get("withdrawn_at") and not met:
+    # Withdrawn means taken back: a visit that ends met leaves its asks as they were (task_engine._close_visit).
+    if requirement.get("withdrawn_at"):
         return WITHDRAWN, requirement, visit
     if _task_status(conn, visit["task_id"]) in (None, "closed") or visit.get("how") in ENDS_ASKS:
         return WITHDRAWN, requirement, visit

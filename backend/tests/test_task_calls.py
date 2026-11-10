@@ -698,3 +698,62 @@ def test_a_task_is_never_replaced_by_an_insert(c):
     with pytest.raises(sqlite3.IntegrityError, match="never replaced"):
         c.execute("INSERT OR REPLACE INTO tasks (id, status, owner_id) VALUES (?, 'open', ?)", (row["id"], HELPER))
     assert E.task(c, row["id"])["owner_id"] == BUILDER
+
+
+def test_an_ok_bound_to_content_that_moves_the_task_on_is_still_given_and_can_be_used(c):
+    """A bot asks Ana for an OK on its own task and finishes its work: her OK is the last thing the stage needs, so the
+    task moves on as she gives it. The visit ends with the OK met, not taken back: it can be used."""
+    from backend import task_asks as K
+
+    email = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "a" * 64}
+    row = _new(c, by=ANA, owner=BUILDER)
+    asked = K.ask_ok(
+        c,
+        BUILDER,
+        ANA,
+        "Send this email?",
+        shows=["email:e1"],
+        subject="hq_reply:TK-1",
+        content=email,
+        task_id=row["id"],
+    )
+    H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
+    assert H.task(c, row["id"])["status"] == "open"  # it waits on Ana's OK
+    shown = K.show(c, ANA, asked["requirement_id"], email, own_click=True)
+    K.give_ok(c, ANA, asked["requirement_id"], shown, own_click=True)
+    assert H.task(c, row["id"])["status"] == "done"
+    assert K.standing(c, asked["requirement_id"]) == K.OK
+    K.use(c, asked["requirement_id"], "hq_reply:TK-1", email, BUILDER)
+    assert K.standing(c, asked["requirement_id"]) == K.USED
+
+
+def test_an_ok_taken_back_before_the_task_moves_on_stays_taken_back_whatever_the_clock_says(c, monkeypatch):
+    """Ana OKs an email, then it changes and her OK is taken back; the task moves on once Ben answers where to send
+    it. Her OK stays withdrawn and cannot be used, even when every write lands in the same instant: a met OK is not
+    told from a taken-back one by two timestamps that happen to match."""
+    from backend import hubdb
+    from backend import task_asks as K
+
+    monkeypatch.setattr(hubdb, "now", lambda: "2026-11-10T12:00:00.000000Z")
+    email = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "b" * 64}
+    row = _new(c, by=ANA, owner=BUILDER)
+    asked = K.ask_ok(
+        c,
+        BUILDER,
+        ANA,
+        "Send this email?",
+        shows=["email:e2"],
+        subject="hq_reply:TK-2",
+        content=email,
+        task_id=row["id"],
+    )
+    question = H.task_ask(c, ANA, row["id"], BEN, "Which address?", seen_version=_version(c, row["id"]))
+    H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
+    shown = K.show(c, ANA, asked["requirement_id"], email, own_click=True)
+    K.give_ok(c, ANA, asked["requirement_id"], shown, own_click=True)
+    K.withdraw(c, asked["requirement_id"], "The email changed")
+    H.task_answer(c, BEN, row["id"], question["requirement_id"], "The office")
+    assert H.task(c, row["id"])["status"] == "done"
+    assert K.standing(c, asked["requirement_id"]) == K.WITHDRAWN
+    with pytest.raises(Exception):
+        K.use(c, asked["requirement_id"], "hq_reply:TK-2", email, BUILDER)
