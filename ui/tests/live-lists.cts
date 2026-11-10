@@ -19,6 +19,7 @@ type Task = ReturnType<typeof task>;
 declare const LIVE_SOON: Map<string, unknown>;
 declare function liveEmit(topic: string, data: unknown): void;
 declare function refresh(force: boolean): Promise<void>;
+declare function botNeedsChanged(slug: string): void;
 declare const S: {v2: {needs: unknown[]; needsCount?: number}};
 
 const BOTS = [['ops', 'Ops'], ['pm', 'PM']].map(([name, display_name]) => ({name, display_name, host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}));
@@ -116,9 +117,11 @@ const gone = (id: string) => { SERVER.delete(id); return {id, kind: 'delete', ki
   await emit('tasks', gone('t1'), event(task('t3', 'Pick the release day', 'spec', {owner_id: 'human:ana', requester_id: 'bot:ops'})));
   await page.waitForFunction(() => !document.querySelector('#t-open')?.textContent?.includes('Draft the release notes')
     && !document.querySelector('#t-c3')?.textContent?.includes('Pick the release day'));
+  // Needs you changing draws the tab from the list the app holds; nothing is read for it.
+  await page.evaluate(() => { for (let i = 0; i < 5; i++) botNeedsChanged('ops'); });
   await settled();
   assert.equal(reads.tasks, listed, 'no task list read follows a task event');
-  assert.equal(reads.tabs, tabbed, 'no filter read follows a task event');
+  assert.equal(reads.tabs, tabbed, 'no filter read follows a task or Needs you event');
   // The 2-minute refresh: a delta from the open read's cursor, what changed comes in; the tabs are read once with it.
   delta = {tasks: [task('t5', 'Send the release mail', 'spec', {owner_id: 'bot:ops'})], gone: []};
   await page.evaluate(() => refresh(false));

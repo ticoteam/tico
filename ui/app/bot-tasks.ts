@@ -417,13 +417,12 @@ function botNeedsPaint(slug: string): Set<string> {
   list.innerHTML = items.length || more ? `<div class="bot-task-list">${items.map(botTaskRowHTML).join('')}</div>${more}` : '<div class="rail-empty">Nothing needs you.</div>';
   return new Set(items.map(t => String(t.id)));
 }
-// Needs you changed: refresh filter membership and supplement deduplication.
+// Needs you changed: the Needs you tab is drawn again from the list the app holds (botNeedsPaint adds this bot's items
+// it does not show yet). Nothing is read for it (Nov 3): which tasks the tab's own rule takes turns on every wait of a
+// task, which no row carries, so the 2-minute refresh's tab read settles that (botTasksCatchUp).
 function botNeedsChanged(slug: string) {
   const seen = BOT_TASKS_CACHE.get(slug);
-  if (seen && BOT?.loaded?.has('tasks')) {
-    botTasksRender(slug, seen.owned);
-    void botTaskFilterRead(slug);
-  }
+  if (seen && BOT?.loaded?.has('tasks')) botTasksRender(slug, seen.owned);
 }
 function botTasksRender(slug: string, owned: {tasks: BotListTask[]}) {
   if (!$('#t-open') || BOT?.slug !== slug) return;
