@@ -684,7 +684,7 @@ def test_hub_route53_comments_and_sign_in_client_name():
     route53.upsert(r53, "Z1", [dns.Record("A", "hub.hotmicapp.com", "203.0.113.9")], HUB)
     route53.delete(r53, "Z1", [dict(r53.records[0])], HUB)
     comments = [c["ChangeBatch"]["Comment"] for c in r53.called("change_resource_record_sets")]
-    assert comments == ["tico setup", "tico setup destroy"]
+    assert comments == ["hub setup", "hub setup destroy"]
     assert "Application type: Web application. Name it hub." in signin.steps(signin.PROVIDERS["google"], "hub")
     assert signin.steps(signin.PROVIDERS["microsoft"], "hub")[0].startswith("Register an application named hub;")
     assert signin.steps(signin.PROVIDERS["google"]) == signin.PROVIDERS["google"].steps

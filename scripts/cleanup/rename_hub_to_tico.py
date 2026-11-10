@@ -49,6 +49,7 @@ KEEP = {
     "runner-rs/tests/fixtures/recovery-shell-events.json",  # keeps hub rows next to its tico rows: alias coverage
     "backend/tests/test_lost_lease_reads.py",  # runs those fixture rows by their command text
     "backend/tests/test_no_taught_hub.py",  # the test that no taught line says hub
+    "setup/tests/test_asset_prefix.py",  # a hub-named install's DNS change comments say "hub setup": its asset prefix
 }
 BINARY = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".woff", ".woff2", ".zip", ".gz", ".sqlite", ".db", ".ico", ".icns"}
 BINARY |= {".mp4", ".mp3", ".wav", ".webp", ".ttf", ".otf", ".lock", ".svg", ".car", ".a", ".so", ".dylib"}
