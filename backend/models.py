@@ -433,6 +433,22 @@ class PipelineRetire(Contract):
     settings_version: int | None = None
 
 
+class ReleaseScheduleUpdate(Contract):
+    """The team's release schedule (backend/release_schedule_routes.py); only what is sent changes. `bot` and `writer`
+    name the Release Manager and Technical Writer ("" finds them by starter template)."""
+
+    on: bool | None = None
+    times: list[Annotated[str, Field(max_length=5)]] | None = Field(default=None, max_length=2)
+    bot: str | None = Field(default=None, max_length=100)
+    writer: str | None = Field(default=None, max_length=100)
+
+
+class ReleaseNow(Contract):
+    """Ask the Release Manager for a release now; `note` goes in its task."""
+
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class FactoryNew(Contract):
     """A new factory (S12): a name, unique among the live ones, and what it is for."""
 

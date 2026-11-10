@@ -117,6 +117,7 @@ from . import (
     task_pipelines_routes,
     task_factories_routes,
     preferences_routes,
+    release_schedule_routes,
     task_comments_routes,
     task_followers_routes,
     task_links_routes,
@@ -3772,6 +3773,7 @@ def create_app(settings=None):
     task_pipelines_routes.register(app, auth, mutate, store)
     task_factories_routes.register(app, auth, mutate, store)
     preferences_routes.register(app, auth, mutate, store)
+    release_schedule_routes.register(app, auth, mutate, store)
 
     def readable_task(who, tid):
         """The task `who` may read, or None: what an ingest preflight outside the write judges."""

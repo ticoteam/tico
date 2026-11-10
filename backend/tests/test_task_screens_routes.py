@@ -115,3 +115,17 @@ def test_a_preference_is_the_callers_own(api):
     assert get(api, "preferences/compose.send_way", token="ben-test")["value"] is None
     r = api.post("/api/v2/preferences/assistant.decides", json={"value": True}, headers=headers())
     assert r.status_code == 403, r.text
+
+
+def test_the_release_schedule_reads_and_changes_and_release_now_answers_why_nothing_went(api):
+    seen = get(api, "release-schedule")
+    assert seen["on"] is True and seen["times"] == ["10:00"] and seen["pending"] == 0
+    assert seen["can_change"] is True and seen["can_release"] is True and seen["next"]
+    r = api.patch("/api/v2/release-schedule", json={"times": ["09:00", "15:30"]}, headers=headers())
+    assert r.status_code == 200 and r.json()["times"] == ["09:00", "15:30"], r.text
+    r = api.patch("/api/v2/release-schedule", json={"times": ["25:00"]}, headers=headers())
+    assert r.status_code == 422, r.text
+    r = api.patch("/api/v2/release-schedule", json={"on": False}, headers=headers("cara-test"))
+    assert r.status_code == 403, r.text
+    answer = post(api, "release/now", {"note": "Hotfix for the login loop"})
+    assert answer["sent"] is False and answer["reason"] in ("no_release_manager", "nothing_pending")
