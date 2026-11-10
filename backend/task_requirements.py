@@ -276,8 +276,33 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     return Standing(requirement, MET, line="Done")
 
 
-def _later_phase(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+def _not_built(task: Row, requirement: Row) -> Standing:
+    """A kind whose standing is not built yet: the owner's turn, saying so. Save refuses these kinds on a stage until
+    they are built (pipeline_settings.PHASE), so only a row written before that refusal reaches here."""
     return Standing(requirement, NOT_MET, task.get("owner_id"), f"{name_of(requirement)} is not built yet")
+
+
+# The five kinds the Product and Engineering pipelines bring. Each is its own function so each lands on its own:
+# `_page` with backend/task_pages.py and Jev's verdicts (page_verdicts), the four GitHub kinds with backend/task_facts.py.
+# The lines each one says are in docs/dev/pipelines-v3-build.md ("Standings of the Product and Engineering kinds").
+def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    return _not_built(task, requirement)
+
+
+def _pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    return _not_built(task, requirement)
+
+
+def _checks_pass(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    return _not_built(task, requirement)
+
+
+def _pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    return _not_built(task, requirement)
+
+
+def _in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    return _not_built(task, requirement)
 
 
 KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standing]] = {
@@ -285,11 +310,28 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
     "ok": _ok,
     "answer": _answer,
     "linked_done": _linked_done,
-    "page": _later_phase,
-    "pr_open": _later_phase,
-    "checks_pass": _later_phase,
-    "pr_merged": _later_phase,
-    "in_release": _later_phase,
+    "page": _page,
+    "pr_open": _pr_open,
+    "checks_pass": _checks_pass,
+    "pr_merged": _pr_merged,
+    "in_release": _in_release,
+}
+# The keys a requirement's `settings` may hold, by kind. Anything else is refused at save (pipeline_settings).
+# - page: `rubric` (Jev's "what to check"; empty means the requirement's line), `at_head` (the page is for the newest
+#   commit of every linked PR: a new commit puts it back to the owner), `with_release` (Jev is also shown the release
+#   of the tasks this task filed, so "production is older than the release" is judged against a fact).
+# - in_release: `release_repo` ("owner/name"; empty means the server's release repo, else each PR's own repo) and
+#   `prereleases` (a pre-release counts, D3; off by default).
+SETTINGS: dict[str, tuple[str, ...]] = {
+    "owner_done": (),
+    "ok": (),
+    "answer": (),
+    "linked_done": (),
+    "page": ("rubric", "at_head", "with_release"),
+    "pr_open": (),
+    "checks_pass": (),
+    "pr_merged": (),
+    "in_release": ("release_repo", "prereleases"),
 }
 
 

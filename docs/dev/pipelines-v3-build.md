@@ -68,7 +68,8 @@ tasks         + pipeline_id, stage_id, assignee_id      (status, owner_id, versi
 messages      + wake_key, unique where not null
 ```
 
-`pr_facts` and `releases` arrive with phase 3.
+The Product and Engineering tables are in `backend/migrations/20261110213830_product_engineering_facts.py`; see
+"Product and Engineering" below.
 
 `tasks.status` on the engine is `open`, `done` or `closed`, and always equals the kind of the task's stage (`work` is
 `open`).
@@ -266,7 +267,9 @@ def people_only(requirement) -> bool
 id), `line` (what is missing, one sentence), `name`, `requirement`, and `met`. A kind reads tables only. It never calls
 GitHub, Jev or a computer.
 
-Phase 1 kinds: `owner_done`, `ok`, `answer`, `linked_done`. The rest refuse to be saved until their phase.
+Phase 1 kinds: `owner_done`, `ok`, `answer`, `linked_done`. The other five are in KINDS and say "<Name> is not built
+yet" until their track lands; `pipeline_settings` refuses to save them until then. `SETTINGS` lists the settings keys
+each kind takes.
 
 ## waiting_on.py
 
@@ -527,6 +530,75 @@ The record `read` gives and `save` takes. Keys are the column names. `settings_v
   `settings_version` by one and writes one `events` row, `pipeline.save`, with `version` and `changes`
   (`{path: [old, new]}`). `retire` writes `pipeline.retire`. A save that removes a requirement, raises or lifts a limit,
   or turns off by hand calls `task_engine.fill_open_slots` on the pipeline's stages.
+
+## Product and Engineering
+
+Release 0.6. The shared base is on `chris/pe-base`; the full contract (owners, tracks, choices) is
+`reports/2026-11-09-pipelines-v3/resume/pe-contract.md` in the planning repo. Tables
+(`20261110213830_product_engineering_facts.py`):
+
+```
+pr_facts           id, repo (nocase), number, state (open|closed|merged), draft, head_sha, head_seen_at,
+                   checks_state (none|pending|success|failure), checks (json), checks_started_at,
+                   merged_sha, merged_at, queue_state (none|queued|auto_merge|removed), queued_at,
+                   removed_at, removed_reason, failing_check, failing_check_url,
+                   fact_version (ms), read_at, created_at, updated_at        unique (repo, number)
+releases           id, repo, tag, commit_sha, prerelease, published_at, fact_version, read_at, created_at
+                   unique (repo, tag)
+release_reads      repo (pk), read_at, fact_version     a read happened, even with no releases (C31)
+release_commits    release_id, commit_sha, included, checked_at              pk (release_id, commit_sha)
+github_deliveries  id (X-GitHub-Delivery), event, received_at               kept 7 days
+requirement_pages  id, visit_id, requirement_id, file_id, version, heads (json), attached_by_id, created_at,
+                   replaced_at            one not replaced per (visit_id, requirement_id)
+page_verdicts      id, file_id, version, rubric_hash, verdict (null|met|not_met|unsure|failed), p, reasons,
+                   model, cost_usd, tries, last_error, next_try_at, created_at, updated_at
+                   unique (file_id, version, rubric_hash)
+effects            + repo, number, head_sha, next_try_at
+```
+
+Modules: `task_facts.py` (facts, the `GitHub` protocol), `page_verdicts.py` (Jev's verdict store and step),
+`task_pages.py` (attach), `merge_queue.py` (queue, queue again, pull), `pipeline_seats.py` (roles to bots, the OK
+person). Tests and the rig use `backend/tests/helpers/fake_github.py`.
+
+### Standings of the Product and Engineering kinds
+
+`owner` is the task's owner (for Merge, the stage owner: Release Manager). A requirement never calls GitHub or Jev.
+
+```
+page          no page attached                          not_met  owner   No page attached
+              at_head and a linked PR's head moved      not_met  owner   New commits since the review
+              verdict owed                               waiting  jev     Jev is checking
+              verdict failed (3 tries)                   waiting  person  Jev couldn't check this
+              not_met                                    not_met  owner   Jev sent it back: <reasons>
+              unsure                                     waiting  person  Jev is unsure: <reasons>
+              met, person_id set, no OK for this version waiting  person  OK <name> (version <n>)
+              person said no for this version            not_met  owner   Sent back: <notes>
+              met and OK'd for this version              met              OK'd
+              met, no person                             met              Jev passed it
+pr_open       no PR linked                               not_met  owner   No PR linked
+              no fact yet                                waiting  github  Reading the PR from GitHub
+              every PR closed without merging            not_met  owner   <ref> was closed without merging
+              an open or merged PR                       met              PR open
+checks_pass   a check failed                             not_met  owner   Checks failed on <ref>: <names>
+              running < 2 hours                          waiting  github  Checks running
+              running >= 2 hours                         not_met  owner   Checks still running after 2 hours
+              no checks, < 10 min since head seen        waiting  github  Waiting for checks
+              no checks after 10 min (C13)               met              No checks on this repo
+              all pass                                   met              Checks pass
+pr_merged     effect owed                                waiting  github  Queuing the PR
+              queued / auto-merge on                     waiting  github  In the merge queue
+              GitHub refused the queue call 3 times      not_met  owner   GitHub refused the merge: <reason>
+              removed from the queue                     not_met  owner   Dropped from the merge queue: <reason>
+                                                                          (<failing check> when known)
+              every PR merged                            met              Merged
+in_release    a PR not merged                            waiting  github  Not merged yet
+              releases never read                        waiting  github  Reading releases
+              repo publishes none (C31)                  met              This repo doesn't publish releases
+              merged, no release holds it yet            waiting  github  Waiting for a release of <repo>
+              in a counted release                       met              In <tag>
+```
+
+With many PRs the first unmet one, in link order, gives the line.
 
 ## Tests and the rig
 
