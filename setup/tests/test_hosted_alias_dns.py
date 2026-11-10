@@ -108,21 +108,11 @@ def test_destroy_uses_persisted_or_explicit_operational_dns_and_deletes_it_first
     d, ec2, iam, ssm, r53 = alias_world(ec2=server(), r53=r53)
     if saved:
         state.save(
-            PUBLIC,
-            {
-                "domain": PUBLIC,
-                "target": "aws",
-                "aws_name": NAME,
-                "dns_name": DOMAIN,
-                "dns_zone": ZONE,
-                "aws_account_id": "123456789012",
-                "aws_region": "us-east-2",
-            },
-            "",
+            PUBLIC, {"domain": PUBLIC, "target": "aws", "aws_name": NAME, "dns_name": DOMAIN, "dns_zone": ZONE}, ""
         )
     argv = ["destroy", "--domain", PUBLIC, "--name", NAME, "--dns", "--yes"]
     if not saved:
-        argv += ["--dns-name", DOMAIN, "--dns-zone", ZONE, "--asset-prefix", "tico", "--aws-region", "us-east-2"]
+        argv += ["--dns-name", DOMAIN, "--dns-zone", ZONE]
     order = []
     change, terminate = r53.change_resource_record_sets, ec2.terminate_instances
     r53.change_resource_record_sets = lambda **kw: (order.append("dns"), change(**kw))
@@ -141,10 +131,6 @@ def test_destroy_refuses_mismatched_dns_authority_without_releasing_resources():
             PUBLIC,
             "--name",
             NAME,
-            "--asset-prefix",
-            "tico",
-            "--aws-region",
-            "us-east-2",
             "--dns",
             "--yes",
             "--dns-name",

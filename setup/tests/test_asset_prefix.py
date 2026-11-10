@@ -1643,3 +1643,81 @@ def test_a_security_group_left_without_its_ingress_gets_it_on_the_retry():
     ec2.sgs = [{"GroupId": "sg-hub", "Tags": HUB_TAGS}]
     aws.Deployer(old, ec2, IAM(), fakes.FakeSSM(), ACCOUNT, say=print, sleep=lambda s: None).ensure_sg()
     assert not ec2.called("authorize_security_group_ingress")
+
+
+class Lost(Exception):
+    """The connection dropped after AWS did the work: the call happened, its answer never came back."""
+
+
+STOPS = [
+    "create_bucket",
+    "create_user",
+    "put_object",
+    "create_security_group",
+    "authorize_security_group_ingress",
+    "allocate_address",
+    "create_role",
+    "put_role_policy",
+    "create_instance_profile",
+    "put_parameter",
+    "run_instances",
+    "associate_address",
+    "change_resource_record_sets",
+]
+
+
+@pytest.mark.parametrize("stop", STOPS)
+def test_a_hub_install_in_us_east_1_stopped_anywhere_finishes_on_a_plain_retry_and_destroys(tmp_path, stop):
+    # The HotMic install as it will run: a clean account but for production, --asset-prefix hub --name hotmic in
+    # us-east-1. Each write in turn is done by AWS but its answer is lost; the same command again finishes the install
+    # with no manual step, and destroy --dns removes the server, its IAM, SSM and DNS, keeping the backup bucket.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    clients, region_s3 = d.aws_clients, d.aws_s3
+    fired = []
+
+    def lossy(client):
+        def wrap(name, real):
+            def call(*a, **kw):
+                out = real(*a, **kw)
+                if name == stop and not fired:
+                    fired.append(name)
+                    raise Lost(name)
+                return out
+
+            return call
+
+        return type(
+            "Lossy",
+            (),
+            {
+                "__getattr__": lambda self, n: (
+                    wrap(n, getattr(client, n))
+                    if n != "exceptions" and callable(getattr(client, n))
+                    else getattr(client, n)
+                )
+            },
+        )()
+
+    d.aws_clients = lambda region, profile: (*(lossy(c) for c in clients(region, profile)[:3]), HOTMIC_ACCOUNT)
+    d.aws_s3 = lambda region, profile: lossy(region_s3(region, profile))
+    r53 = d.route53_client(None)
+    d.route53_client = lambda profile: lossy(r53)
+    argv = hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic", "--backup", "aws")
+    argv[argv.index("us-west-2")] = "us-east-1"
+    try:
+        code, out = go(argv, deps=d)
+    except Lost:  # some steps let the error end the run as it is (a traceback, as on main)
+        code, out = None, ""
+    assert fired == [stop] and code != 0, out
+    code, out = go(argv, deps=d)
+    assert code == 0, out
+    saved = state.load(DOMAIN)[0]
+    assert saved["aws_region"] == "us-east-1" and saved["aws_account_id"] == HOTMIC_ACCOUNT and saved["dns_records"]
+    assert len([i for i in ec2.instances if i.get("State", {}).get("Name") != "terminated"]) == 1
+    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    assert code == 0 and "  left alone: " not in out and "Left alone" not in out, out
+    gone = deleted(ec2, iam, ssm)
+    assert len(gone["instances"]) == 1 and gone["roles"] == ["hub-hotmic"] and gone["params"] == ["/hub/hotmic/env"]
+    assert gone["eips"] and gone["sgs"] and gone["profiles"] == ["hub-hotmic"]
+    assert not r53.records  # the A record setup made is gone
+    assert not s3.called("delete_bucket")  # the backup copy stays
