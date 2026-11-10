@@ -1851,7 +1851,7 @@ def task_link(api, args):
 
 
 @tool(
-    "hub_task_unlink",
+    "tico_task_unlink",
     "Take a link off a task: a pull request closed without merging that another PR replaces, so PR open reads the "
     "one that is left. Name the link by its URL or its id.",
     {"id": TASK_ID, "link": _s("The link's URL, or its id"), "on_behalf_of": ASKED},
@@ -1874,7 +1874,7 @@ def task_unlink(api, args):
 
 
 @tool(
-    "hub_task_queue",
+    "tico_task_queue",
     "Queue again: on the Merge stage, after GitHub took a PR out of the merge queue (or refused it), put it back at "
     "its newest commit. Refused while its checks are running or failing there. Push a fix to the PR branch first when "
     "it needs one; or move the task back instead.",
@@ -12950,6 +12950,8 @@ ASSISTANT_WRITES = {
     "tico_task_label",
     "tico_task_close",
     "tico_task_link",
+    "tico_task_unlink",
+    "tico_task_queue",
     "tico_task_answer",
     "tico_task_give",
     "tico_update_mark_read",
@@ -13147,8 +13149,6 @@ AUDIENCE = {
         for name in ("tico_sql", "tico_classify", "tico_decision_ask", "tico_decision_outcome", "tico_market_ask")
     },
 }
-# Writes the Assistant may make for its person: queue again (the Merge stage) and take a link off a task.
-ASSISTANT_WRITES.update(("hub_task_queue", "hub_task_unlink"))
 
 
 def kind_of(me):

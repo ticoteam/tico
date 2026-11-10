@@ -14,7 +14,7 @@ the Engineering pipeline's Merge stage). Track C owns this file.
   with "Dropped from the merge queue: <reason>", and the owner gets ONE wake (`removed`), keyed
   `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself.
 - The owner (Release Manager, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
-  `tico task queue <task>`, MCP `hub_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
+  `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
   Merge: nothing sends it back through Review; the merge queue's checks are the gate. The manager hears of the new

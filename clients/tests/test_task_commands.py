@@ -129,12 +129,12 @@ COMMANDS = [
     ),
     (
         ["task", "queue", "T1", "--version", "3"],
-        ("hub_task_queue", {"id": "T1", "version": 3}),
+        ("tico_task_queue", {"id": "T1", "version": 3}),
         ("POST", "tasks/T1/queue", {"version": 3}),
     ),
     (
         ["task", "unlink", "T1", "L7"],
-        ("hub_task_unlink", {"id": "T1", "link": "L7"}),
+        ("tico_task_unlink", {"id": "T1", "link": "L7"}),
         ("DELETE", "tasks/T1/links/L7", {}),
     ),
     (
@@ -499,7 +499,7 @@ def test_unlink_finds_the_link_by_its_url_and_says_so_when_there_is_none():
             return {"links": [{"id": "L1", "url": "https://github.com/acme/app/pull/1"}, {"id": "L2", "url": "x"}]}
 
     api = Links()
-    hubtools.BY_NAME["hub_task_unlink"]["fn"](api, {"id": "T1", "link": "https://github.com/Acme/app/pull/1/"})
+    hubtools.BY_NAME["tico_task_unlink"]["fn"](api, {"id": "T1", "link": "https://github.com/Acme/app/pull/1/"})
     assert api.writes() == [("DELETE", "tasks/T1/links/L1", {})]
     with pytest.raises(ValueError, match="No link to https://github.com/acme/app/pull/9"):
-        hubtools.BY_NAME["hub_task_unlink"]["fn"](Links(), {"id": "T1", "link": "https://github.com/acme/app/pull/9"})
+        hubtools.BY_NAME["tico_task_unlink"]["fn"](Links(), {"id": "T1", "link": "https://github.com/acme/app/pull/9"})
