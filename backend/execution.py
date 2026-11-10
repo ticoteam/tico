@@ -1914,6 +1914,30 @@ def finished_before_start(c, row):
     return bool(ended and ended >= msg["created_at"])
 
 
+START_REFUSED = "attempt.start_refused"
+
+
+def start_refused(c, aid):
+    """Whether this lease's `started` was refused once (refuse_start): it never starts after that, whatever the task
+    does next. Read on the events index by actor, action and target."""
+    return bool(
+        c.execute(
+            "SELECT 1 FROM events WHERE actor=? AND action=? AND target=? LIMIT 1", (H.KEEPER, START_REFUSED, aid)
+        ).fetchone()
+    )
+
+
+def refuse_start(c, row, detail):
+    """Refuse a lease's start for good, in the transaction that answers `started`: the refusal is on record and its
+    place is let go. From then on `started` is refused, renew and start-place say stop, and the run its computer reports
+    interrupted settles as skipped (held_before_start), even once the task wants a run again: a fresh wake, on a new
+    lease, is what runs. Returns the answer the route turns into a 409 `start_wait` after the write commits."""
+    if not start_refused(c, row["id"]):
+        H.event(c, H.KEEPER, START_REFUSED, row["id"], {"bot": row["bot_id"], "job_id": row["job_id"], "why": detail})
+    c.execute("UPDATE start_places SET start_until=NULL WHERE attempt_id=?", (row["id"],))
+    return {"started": False, "refused": {"code": "start_wait", "detail": detail}}
+
+
 def held_before_start(c, row):
     """Whether a turn its computer has not started is no longer wanted: its task ended after the message that started
     it (finished_before_start), or the engine holds it now (task_wakes.may_start, the turn's own lease not counted).
@@ -1921,7 +1945,7 @@ def held_before_start(c, row):
     since: the turn is stopped before it starts and its job canceled, not run nor queued again."""
     if row["state"] != "leased":
         return False
-    if finished_before_start(c, row):
+    if start_refused(c, row["id"]) or finished_before_start(c, row):
         return True
     from . import task_wakes
 
@@ -5737,6 +5761,8 @@ class Execution:
             **(
                 {"stop": True}
                 if row["stop_requested_at"]
+                or row["state"] == "leased"
+                and start_refused(c, aid)
                 or (wait(c, aid) or start_places.is_waiting(c, aid))
                 and held_before_start(c, row)
                 else {}
@@ -5839,12 +5865,14 @@ class Execution:
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
+        if start_refused(c, aid):
+            return {"started": False, "refused": {"code": "start_wait", "detail": "This turn's start was refused"}}
         if start_places.is_waiting(c, aid) and finished_before_start(c, row):
-            raise Problem("start_wait", "Task finished while this turn was waiting", 409)
+            return refuse_start(c, row, "Task finished while this turn was waiting")
         if held_before_start(c, row):
             # Its computer asks for a place again, is told to stop, and reports the turn interrupted: it settles as
-            # skipped (complete), its job canceled.
-            raise Problem("start_wait", "The task no longer waits on this turn", 409)
+            # skipped (complete), its job canceled. The refusal is kept, so the answer never changes for this lease.
+            return refuse_start(c, row, "The task no longer waits on this turn")
         reserved = (
             start_places.reserve(c, row, self.store.settings, harness_allocated=body.harness_allocated)
             if start_places.managed(c, aid)

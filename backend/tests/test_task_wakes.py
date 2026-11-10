@@ -335,6 +335,46 @@ def test_a_run_claimed_before_a_change_and_started_after_it_counts_for_the_chang
         assert eighth and not task_wakes.may_start(c, eighth)  # an eighth run never starts
 
 
+def test_a_refused_start_stays_refused_for_its_lease_even_once_the_task_wants_it_again(api):
+    """`started` was refused (the task was snoozed after the claim). The snooze ends before the computer asks again:
+    the refusal is on record, so its lease never starts. `started` is refused again, renew and start-place say stop,
+    and the run it reports interrupted settles as skipped, its job canceled and not handed back. A fresh wake, on a new
+    lease, is what runs."""
+    from backend import task_engine as E
+    from backend.tests.helpers.api import assign, claim, post, ready, runner
+
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    token = machine["token"]
+    tid = post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Draft it."})["id"]
+    aid = claim(api, machine)["id"]
+    with api.app.state.store.transaction() as c:
+        job = c.execute("SELECT job_id FROM attempts WHERE id=?", (aid,)).fetchone()[0]
+        E.snooze(c, tid, ANA)
+    refused = post(api, f"attempts/{aid}/started", {"thread_id": "t-" + aid}, token, expected=409)
+    assert refused["error"]["code"] == "start_wait"
+    with api.app.state.store.transaction() as c:
+        E.unsnooze(c, tid, ANA)
+        c.execute("UPDATE jobs SET state='canceled' WHERE state='queued' AND id<>?", (job,))
+        place = c.execute("SELECT start_until FROM start_places WHERE attempt_id=?", (aid,)).fetchone()
+        assert place is None or place[0] is None  # its place was let go with the refusal
+    assert post(api, f"attempts/{aid}/renew", {}, token).get("stop") is True
+    assert post(api, f"attempts/{aid}/start-place", {}, token).get("stop") is True
+    again = post(api, f"attempts/{aid}/started", {"thread_id": "t-" + aid}, token, expected=409)
+    assert again["error"]["code"] == "start_wait"
+    post(api, f"attempts/{aid}/complete", {"outcome": "interrupted", "last_seq": 0}, token)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT started_at FROM attempts WHERE id=?", (aid,)).fetchone()[0] is None
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()[0] == "canceled"  # skipped
+    with api.app.state.store.transaction() as c:
+        row = E.task(c, tid)
+        task_wakes.add(c, row, "bot:ops", row["visit"], "Carry on.", wake_key=f"{tid}:fresh")
+    fresh = claim(api, machine)["id"]
+    assert fresh != aid
+    assert post(api, f"attempts/{fresh}/started", {"thread_id": "t-" + fresh}, token)["started"] is True
+
+
 def test_a_live_run_on_one_task_never_hides_a_lost_wake_on_another_in_the_same_conversation(c, general):
     """Two open tasks share a conversation. The builder's live run on the footer task is not a run on the launch note:
     the note's wake that never ran is lost, and the never-stuck check wakes the builder for it again."""
