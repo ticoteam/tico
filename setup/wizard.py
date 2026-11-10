@@ -1573,10 +1573,13 @@ def _destroy_strict(args, io: IO, deps: Deps, saved: dict) -> int:
     ec2, iam, ssm, account = deps.aws_clients(region, args.aws_profile or saved.get("aws_profile", ""))
     owned.check_account(saved.get("aws_account_id", ""), account, domain)
     found = awsmod.discover(ec2, iam, ssm, name, names)
+    recorded_dns = saved.get("dns_records", []) + saved.get("dns_pending", [])
     if not found:
         io.say(f"Nothing tagged {names.managed_tag[0]}={names.managed_tag[1]}, {names.name_tag}={name} in {region}.")
-        return 0
-    io.say(f"Tagged {names.name_tag}={name} in {region}:")
+        if not (getattr(args, "dns", False) and recorded_dns):
+            return 0  # else the DNS records this install recorded making are still deleted, the server already gone
+    else:
+        io.say(f"Tagged {names.name_tag}={name} in {region}:")
     for kind, ids in found.items():
         for i in ids:
             io.say(f"  {kind}: {i}")

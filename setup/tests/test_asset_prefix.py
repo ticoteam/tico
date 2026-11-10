@@ -2109,3 +2109,18 @@ def test_iam_reads_right_after_a_create_wait_out_iam_lag_and_a_lost_launch_answe
     tokens = [kw["ClientToken"] for kw in ec2.called("run_instances")]
     assert len(ec2.instances) == 1 and len(tokens) == 2 and tokens[0] == tokens[1]
     assert again.ids["instance"] == "i-1"
+
+
+def test_destroy_dns_deletes_the_recorded_records_after_the_server_is_already_gone(tmp_path):
+    # Codex review 4: destroy returned early when no AWS resource was left, so `destroy --dns` after a plain destroy
+    # (or after the server was removed by hand) never deleted the DNS records this install recorded making.
+    d, ec2, iam, ssm, s3, log = hub_world()
+    r53 = d.route53_client("")._inner
+    assert go(hub_args(tmp_path, "--asset-prefix", "hub", "--name", "hotmic"), deps=d)[0] == 0
+    assert len(r53.records) == 1 and state.load(DOMAIN)[0]["dns_records"]
+    code, out = go(["destroy", "--domain", DOMAIN, "--yes"], deps=d)
+    assert code == 0 and len(r53.records) == 1, out
+    ec2.instances, ec2.sgs, ec2.eips, ssm.params = [], [], [], {}  # all of it gone now
+    iam.roles, iam.profiles = {}, {}
+    code, out = go(["destroy", "--domain", DOMAIN, "--dns", "--yes"], deps=d)
+    assert code == 0 and "DNS records deleted." in out and r53.records == [], out
