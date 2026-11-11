@@ -46,3 +46,5 @@
   .org-fac .rdo-br>.rdo-row>li{padding:0}
   .org-fac .rdo-br>.rdo-row>li::before,.org-fac .rdo-br>.rdo-row>li::after{display:none}
 }
+/* A pipeline with no manager: an empty avatar slot where the manager's would be. */
+.org-fac-empty{display:inline-block;width:16px;height:16px;border-radius:50%;border:1px dashed var(--muted);box-sizing:border-box;vertical-align:middle}
