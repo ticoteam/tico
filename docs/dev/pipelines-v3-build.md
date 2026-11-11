@@ -40,8 +40,8 @@ pipelines     id, name, goal, prefix, manager_id, owner_id, private (0|1), facto
               settings_version, created_at, updated_at, retired_at
               unique name and unique prefix among rows not retired
 stages        id, pipeline_id, position, kind (work|done|closed), name, purpose, owner, by_hand (0|1),
-              task_limit, expected_minutes, expected_bots_only (0|1), on_enter (json), created_at,
-              updated_at, retired_at
+              requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes, expected_bots_only (0|1),
+              on_enter (json), created_at, updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
 requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
               who_oks (none|people_only|people_with_exceptions), person_id, added_by_id, by_bot (0|1),
@@ -225,9 +225,10 @@ turn (`waiting_on.turn`) through `task_wakes.add`; write one `history_events` ro
 `fill_open_slots` and pushes to screens.
 
 A stage with no requirements passes a task straight on when the next stage has room, unless the stage is by hand. The
-never-stuck check does it, on its next pass. A by-hand stage holds a person's request only once it was moved back
-there or snoozed: on its first visit (`task_engine.not_held_by_hand`) the check moves it on when the next stage has
-room, oldest first, before C10's room wake (`never_stuck._requests`).
+never-stuck check does it, on its next pass. A by-hand stage holds every task, unless it has `requests_move_on` (Product's
+Ideas): then a person's request on its first visit (`task_engine.not_held_by_hand`) is moved on by the check when the
+next stage has room, oldest first, before C10's room wake (`never_stuck._requests`). C10 wakes nobody for a by-hand
+stage owned by each task's assignee (Growth's Ideas): every task there rests.
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes

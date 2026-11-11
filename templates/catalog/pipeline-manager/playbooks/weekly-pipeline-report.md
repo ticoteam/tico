@@ -6,7 +6,7 @@ minutes. The outcome is one page your manager can read in two minutes. Nothing i
 ## Steps
 1. Read `knowledge/pipeline.md` and `knowledge/manager-practice.md`.
 2. Read the open tasks: `tico task list --status open`. Each row has its stage and its Turn line; keep the rows in your
-   pipeline's stages and check a doubtful one with `tico task show <id>`. Read the snoozed ones with
+   pipelines' stages and check a doubtful one with `tico task show <id>`. Read the snoozed ones with
    `tico task list --snoozed only`. A task you could not read is "not read", not clean.
 3. Read the tasks you were woken about this week: `tico task list --member me`, and the decision you made on each.
 4. Write `reports/YYYY-MM-DD-pipeline.md` in this order: the headline in one line; tasks per stage; each task that
