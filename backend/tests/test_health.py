@@ -952,8 +952,9 @@ def _hosted(api, runner, bot, report):
 
 
 def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment):
-    """A bot that may open pull requests but whose Claude Code settings deny `gh pr create` stops at that step; a bot
-    that only reads keeps its denies, and the deny on its own repository is not counted."""
+    """A bot that may push but whose Claude Code settings deny `git push` stops at that step; a bot that only reads
+    keeps its denies, and the deny on its own repository is not counted. Its `gh` denies are not named here: write
+    access does not say its work opens pull requests or issues (its AGENT.md does: "Claude Code permissions")."""
     api = environment()
     runner = enrolled(api)
     add_bot(api, "monitor")
@@ -968,7 +969,7 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
     check = health_of(api)[1]["harness_denies"]
     assert check["status"] == "warn" and check["label"] == "Harness permissions"
     assert "monitor may write to acme/app" in check["summary"]
-    assert "gh pr create, gh issue create, gh issue comment, git push" in check["summary"]
+    assert "deny git push." in check["summary"] and "gh " not in check["summary"]
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
     assert "harness_denies" not in health_of(api, as_person(api, "sam"))[1]
@@ -991,7 +992,8 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
         },
     )
     assert "harness_denies" not in health_of(api)[1]
-    # Denying merge and review to a bot that opens pull requests is a policy, not a leftover.
+    # Denying `gh` writes to a bot that may push is its job's policy, not a leftover: a Release Owner given write to
+    # push fixes denies opening and commenting on pull requests, because Tico queues and merges them itself.
     _hosted(
         api,
         runner,
@@ -1000,7 +1002,9 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
             "ready": True,
             "runtime": "claude",
             "tools": [tool],
-            "warnings": ["Claude Code settings deny: gh pr merge, gh pr review, gh release create"],
+            "warnings": [
+                "Claude Code settings deny: gh pr comment, gh pr create, gh pr edit, gh pr merge, gh pr review"
+            ],
         },
     )
     assert "harness_denies" not in health_of(api)[1]
@@ -1021,7 +1025,7 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
         )
         BS.write(c, 'reviewer', {'repo_access_mode': 'all'})
     read = {"service": "github", "identity": "acme/docs", "can": ["read"], "scope": {"repo": "acme/docs"}}
-    deny = "Claude Code settings deny: gh pr comment, gh pr create, gh pr review"
+    deny = "Claude Code settings deny: gh pr comment, gh pr create, gh pr review, git push"
     _hosted(api, runner, "reviewer", {"ready": True, "runtime": "claude", "warnings": [deny], "tools": [read]})
     from backend.bot_tools import listing
 
@@ -1034,7 +1038,7 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
         BS.write(c, 'reviewer', {'repo_access_mode': 'chosen'})
         c.execute("INSERT INTO bot_repo_access VALUES('reviewer','acme/product','write')")
     summary = health_of(api)[1]["harness_denies"]["summary"]
-    assert "reviewer may write to acme/product" in summary and "gh pr create, gh pr comment" in summary
+    assert "reviewer may write to acme/product" in summary and "deny git push." in summary
 
 
 def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, monkeypatch):

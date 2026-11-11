@@ -989,7 +989,16 @@ pub async fn preflight(
                     .unwrap_or_else(|| "Missing bot repository or AGENT.md".into()),
             );
         } else if repository_present {
-            if caps.repo_permission_lint {
+            // Its harness's permission rules matter only where its turns run on that harness: signed in here, signed
+            // in at each turn by a subscription, or with a key granted to the bot. While none is, its turns wait or
+            // the Tico AI Gateway runs them on another harness, which never reads those rules.
+            let harness_runs = status["authenticated"] == "ready"
+                || subscribed(entry, &runtime)
+                || (caps.api_key_in_turn
+                    && crate::harness_tools::api_key_env(&runtime)
+                        .iter()
+                        .any(|key| crate::hosts::gemini::has_grant(&bot, key)));
+            if caps.repo_permission_lint && harness_runs {
                 warnings.extend(crate::readiness_extra::deny_warnings(&path));
             }
             if let Ok(text) = std::fs::read(path.join("AGENT.md")) {
@@ -1734,6 +1743,43 @@ mod tests {
             (json!(true), json!("rejected")),
             "{covered:?}"
         );
+        let _ = std::fs::remove_dir_all(config.str("projects_dir"));
+    }
+
+    #[tokio::test]
+    async fn claude_code_denies_are_named_only_where_its_turns_run_on_claude_code() {
+        // Acme rc.3: a cloud machine with no Claude sign-in, whose bots all ran on the Gateway, still warned about
+        // the Release Owner's Claude Code denies.
+        let config = checkouts(&["deny-bot"]);
+        let path = config.projects_dir().join("bot-deny-bot");
+        std::fs::create_dir_all(path.join(".claude")).unwrap();
+        std::fs::write(
+            path.join(".claude/settings.json"),
+            r#"{"permissions": {"deny": ["Bash(gh pr merge *)"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            path.join("AGENT.md"),
+            "Merge with `gh pr merge --squash`.\n",
+        )
+        .unwrap();
+        let sign = SignIn::new(Path::new(&config.str("projects_dir")));
+        let assignments = vec![json!({"bot": "deny-bot",
+            "config": {"runtime": "claude", "harness": "claude", "model": "claude-sonnet-5"}})];
+        let denies = |rows: &[Map<String, Value>]| {
+            row_of(rows, "deny-bot")["warnings"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|w| w.as_str().unwrap_or_default().starts_with("Claude Code"))
+                .count()
+        };
+        let missing = map(json!({"claude": {"installed": true, "authenticated": "missing"}}));
+        let rows = preflight(&config, &sign, &assignments, &missing, false).await;
+        assert_eq!(denies(&rows), 0, "{rows:?}");
+        let ready = map(json!({"claude": {"installed": true, "authenticated": "ready"}}));
+        let rows = preflight(&config, &sign, &assignments, &ready, false).await;
+        assert_eq!(denies(&rows), 2, "{rows:?}");
         let _ = std::fs::remove_dir_all(config.str("projects_dir"));
     }
 }

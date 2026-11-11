@@ -384,16 +384,11 @@ PUBLISH_WARNING = "GitHub history not published: "  # runner-rs/src/readiness_ex
 DENIED_WARNING = "Claude Code denies what AGENT.md asks for: "  # runner-rs/src/readiness_extra.rs
 DENIES_WARNING = "Claude Code settings deny: "  # runner-rs/src/readiness_extra.rs
 # GitHub writes a bot's access may allow: the command, and the `can` verbs (backend/bot_tools.py) that allow it.
-# Merging and reviewing are left out: denying them to a bot that opens pull requests is a policy (a person or
-# another bot merges; no bot approves its own work), not a leftover.
-GITHUB_WRITES = (
-    ("gh pr create", ("write", "pull_requests")),
-    ("gh pr comment", ("write", "pull_requests")),
-    ("gh pr edit", ("write", "pull_requests")),
-    ("gh issue create", ("write", "issues")),
-    ("gh issue comment", ("write", "issues")),
-    ("git push", ("write",)),
-)
+# Only a push: write access to a repository is given for pushing, and says nothing about whether the bot's work opens,
+# edits or comments on pull requests or issues. A Release Owner given write to push fixes in Merge denies `gh pr create`
+# on purpose, because Tico queues and merges the pull request itself. Whether a bot needs a `gh` command is what its
+# AGENT.md asks for, which the computer compares with the same denies (Health "Claude Code permissions").
+GITHUB_WRITES = (("git push", ("write",)),)
 WRITE_VERBS = {"write", "pull_requests", "issues"}
 
 
@@ -460,8 +455,9 @@ def _reported(c, prefix, limit=200):
 
 
 def harness_denies(c, settings):
-    """(bot, command, repositories) for each GitHub write a bot's access allows on a repository other than its own
-    but its Claude Code settings deny. Its own repository is left out, so a bot that only reads keeps its denies."""
+    """(bot, command, repositories) for each GitHub write in GITHUB_WRITES (a push) a bot's access allows on a
+    repository other than its own but its Claude Code settings deny. Its own repository is left out, so a bot that
+    only reads keeps its denies."""
     from .bot_tools import listing, prime_state
     from .github_app import repo_of
     from .repositories import Reads
@@ -2270,31 +2266,39 @@ def _failed(c):
 
 
 def _fallbacks(c, loads=None):
-    """(on fallback, limited): bots whose latest run in the last day ran on a fallback harness, with that
-    harness and when the unbroken run of fallback turns began; and bots a usage limit still holds."""
+    """(on fallback, limited, ran): bots whose latest run in the last day ran on something other than what the bot is
+    set to, with that harness, the model that did the work, the runtime it is set to when the claim moved it to the
+    Gateway because that runtime is not signed in on its computer (`waiting_for_sign_in`, backend/models_preset.py),
+    and when the unbroken run of such turns began; bots a usage limit still holds; and how many bots ran at all."""
     from .execution import cooling_off
 
     since, latest = H.shift(H.now(), hours=-RECENT_HOURS), {}
     for r in c.execute(
-        "SELECT bot_id,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS harness "
+        "SELECT bot_id,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS hop,"
+        "json_extract(result,'$.waiting_for_sign_in') AS unsigned,usage_model "
         "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished_at>? "
         "ORDER BY bot_id,finished_at DESC",
         (since,),
     ):
+        # The runner's own hop names its harness; a turn the claim moved to the Gateway ran on the Gateway's.
+        harness = r["hop"] or (models_preset.GATEWAY_RUNTIME if r["unsigned"] else None)
         row = latest.setdefault(
             r["bot_id"],
-            {"bot": r["bot_id"], "harness": r["harness"], "changed_at": r["began"], "open": bool(r["harness"])},
+            {
+                "bot": r["bot_id"],
+                "harness": harness,
+                "model": r["usage_model"] or None,
+                "waiting_for_sign_in": (r["unsigned"] or None) if not r["hop"] else None,
+                "changed_at": r["began"],
+                "open": bool(harness),
+            },
         )
-        if row["open"] and r["harness"]:
+        if row["open"] and harness:
             row["changed_at"] = r["began"]
         else:
             row["open"] = False
     on = sorted(
-        (
-            {"bot": row["bot"], "harness": row["harness"], "changed_at": row["changed_at"]}
-            for row in latest.values()
-            if row["harness"]
-        ),
+        ({k: v for k, v in row.items() if k != "open"} for row in latest.values() if row["harness"]),
         key=lambda row: (row["changed_at"] or "", row["bot"]),
     )
     limited = [
@@ -2302,7 +2306,77 @@ def _fallbacks(c, loads=None):
         for r in c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited' ORDER BY changed_at,bot")
         if cooling_off(c, r["bot"], loads)
     ]
-    return on, limited
+    return on, limited, len(latest)
+
+
+# What a person calls the subscription a runtime signs in with, in Health's line about what bots run on.
+SUBSCRIPTION_NAMES = {"claude": "Claude", "codex": "Codex"}
+
+
+def _model_words(runtime, model):
+    """`Codex (gpt-6-luna)`, or `Tico Medium` for a Tico model."""
+    from . import gateway_tiers
+
+    found = gateway_tiers.resolve(model)
+    if found:
+        return "Tico " + found["label"]
+    return _harness_name(runtime) + (f" ({model})" if model else "") if runtime else str(model or "")
+
+
+def _ran_on_words(row):
+    """What a row of `_fallbacks` ran on: the model the runner counted, else the Gateway for a turn the claim moved
+    there, else the fallback's harness."""
+    if not row.get("model") and row.get("waiting_for_sign_in"):
+        return "the Tico AI Gateway"
+    return _model_words(row["harness"], row.get("model"))
+
+
+def _fallback_lines(c, settings, on, ran):
+    """One plain line per bot in `on` (from `_fallbacks`) saying what it is set to and what it runs on instead, set on
+    each row as `line`; and the summary for Health: those lines, or one line when every bot that ran in the last day
+    ran on the Gateway because its subscription is not signed in on its computer."""
+    from .shared_bots import follow
+
+    if not on:
+        return ""
+    record, bots = providers.load(c, settings), [row["bot"] for row in on]
+    configs = {}
+    for part in H.chunks(bots):
+        configs.update(
+            (r["bot"], r["config"])
+            for r in c.execute(
+                f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot IN ({','.join('?' * len(part))})",
+                part,
+            )
+        )
+    for row in on:
+        runtime, model = providers.bot_choice(
+            c, settings, follow(c, row["bot"], H._json(configs.get(row["bot"]), {}) or {}), record
+        )
+        row["set_to"] = {"runtime": runtime, "model": model}
+        ran_on = _ran_on_words(row)
+        name = _bot_name(c, row["bot"])
+        if row.get("waiting_for_sign_in"):
+            unsigned = row["waiting_for_sign_in"]
+            row["line"] = (
+                f"{name} is set to {_model_words(runtime or unsigned, model)} and runs on {ran_on}: its computer "
+                f"has no {SUBSCRIPTION_NAMES.get(unsigned, _harness_name(unsigned))} subscription."
+            )
+        else:
+            row["line"] = (
+                f"{name} is set to {_model_words(runtime, model)} and runs on its fallback, {ran_on}: "
+                f"what it is set to was not available."
+            )
+    unsigned = sorted({row["waiting_for_sign_in"] for row in on if row.get("waiting_for_sign_in")})
+    if len(on) > 1 and len(on) == ran and all(row.get("waiting_for_sign_in") for row in on):
+        models = sorted({_ran_on_words(row) for row in on})
+        names = " or ".join(SUBSCRIPTION_NAMES.get(r, _harness_name(r)) for r in unsigned)
+        return (
+            f"Every bot runs on {' or '.join(models)}, not the model it is set to: its computer has no {names} "
+            "subscription."
+        )
+    lines = [row["line"] for row in on]
+    return " ".join(lines[:3]) + ("" if len(lines) <= 3 else f" And {len(lines) - 3} more bots.")
 
 
 def _bot_computers(computers):
@@ -2512,6 +2586,7 @@ NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_
 # (backend/sql.py), since they name tasks the Admin may not read.
 NEVER_STUCK_KEY = "health:never_stuck"
 NEVER_STUCK_TASKS_KEY = "health:never_stuck:tasks"
+NEVER_STUCK_FRESH_MINUTES = 10  # an older reading says when it was read
 
 
 def _plate_people(c, auth):
@@ -2673,22 +2748,33 @@ def _never_stuck_check(c, visible_sql=None):
         return json.loads(row[0]) if row else None
 
     reading = stored(NEVER_STUCK_KEY)
-    named = stored(NEVER_STUCK_TASKS_KEY) if visible_sql else None
+    named = stored(NEVER_STUCK_TASKS_KEY)
     if not reading or (visible_sql and not (named and "broken_tasks" in named)):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
-    if visible_sql and named:
+    if named and "broken_tasks" in named:
+        # The reading is up to an hour old: a task done since then no longer counts, so the numbers never say a task
+        # is stuck after it closed. A task that got stuck since then waits for the next reading.
         listed, breaks = named["tasks"], named["broken_tasks"]
         ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
-        readable = _readable(c, visible_sql, sorted(ids))
-        counts = {key: sum(1 for tid in listed.get(key, []) if tid in readable) for key in NEVER_STUCK_COUNTS}
-        # A break counts for a reader of every task it is about; one about no task is the company's alone.
-        counts["broken"] = sum(1 for found in breaks if found and all(tid in readable for tid in found))
+        readable = _readable(c, visible_sql or "1", sorted(ids))
+        still_open = _readable(c, f"status='open' AND ({visible_sql or '1'})", sorted(ids))
+        counts = {key: sum(1 for tid in listed.get(key, []) if tid in still_open) for key in NEVER_STUCK_COUNTS}
+        counts["no_one"] = len({tid for tid in listed.get("no_one", []) if tid in still_open})
+        # A break can be about a done task (a wake queued after it closed), so it counts until the next reading. It
+        # counts for a reader of every task it is about; one about no task is the company's alone.
+        counts["broken"] = (
+            sum(1 for found in breaks if found and all(tid in readable for tid in found))
+            if visible_sql
+            else int(reading.get("broken") or 0)
+        )
     else:
         counts = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
     summary = (
         f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
         f"{counts['manager']} with a manager, {counts['person']} reached a person, {counts['cant_run']} can't run."
     )
+    if reading.get("at") and str(reading["at"]) < H.shift(H.now(), minutes=-NEVER_STUCK_FRESH_MINUTES):
+        summary += f" Read at {str(reading['at'])[11:16]} UTC; tasks closed since are left out."
     if counts["no_one"]:
         # The company's owner and Admins learn how many, never which: no one who reads them can move them.
         them = "it" if counts["no_one"] == 1 else "them"
@@ -2767,13 +2853,19 @@ def view(c, who, settings, auth, github, config):
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
     blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
-    on_fallback, limited = _fallbacks(c, loads) if kind != "bot" else ([], [])
+    on_fallback, limited, ran = _fallbacks(c, loads) if kind != "bot" else ([], [], 0)
     if not full and (on_fallback or limited):  # the same rule as `stuck`: only bots the caller may read
         readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
         on_fallback = [row for row in on_fallback if readable.get(row["bot"], auth.FULL)["read"]]
         limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
+    # What bots run on when it is not what they are set to: two reviewers set to different models that both run on
+    # the Gateway are not independent, and a person reads that here.
+    if running_on := _fallback_lines(c, settings, on_fallback, ran):
+        checks.append(
+            _check("on_fallback", "What bots run on", "info", running_on, [_fix("Open Models", "#/settings", "models")])
+        )
     from . import task_privacy
 
     refused, queued = [], refused_queues(c, settings, loads)

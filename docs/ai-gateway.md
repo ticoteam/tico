@@ -66,6 +66,11 @@ running on the Gateway. They never fail for it. The missing sign-in is the only 
 whose checkout is missing, whose settings differ from the server's, or whose computer doesn't have pi waits as before,
 and Health says which.
 
+Each run the Gateway takes this way is marked as run on it (Runs shows the `pi` fallback mark), and Health's **What bots
+run on** says which bots ran on something other than what they are set to, for example "Reviewer 2 is set to Codex
+(gpt-6-luna) and runs on Tico Medium: its computer has no Codex subscription", or one line when every bot that ran did.
+Two bots set to different models for independent work, such as two reviewers, are the same model until then.
+
 When a used-up login has its bots on the Gateway, **Settings → General → Health → Details** says so in one line, for example "Team box's
 Claude login is used up. Bots are on Tico Gateway until it resets." When the bot's computer can't run Gateway work,
 Health says the bot stopped and what to do: sign in another login, or add a Docker runner. When the gateway key reaches

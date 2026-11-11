@@ -3873,8 +3873,11 @@ SCHEMAS = {
         on_fallback={
             "type": "array",
             "items": {"type": "object"},
-            "description": "Bots whose latest run in the last day ran on a fallback harness (the caller may read "
-            "them): bot, harness, since (when the unbroken run of fallback turns began)",
+            "description": "Bots whose latest run in the last day ran on something other than what they are set to "
+            "(the caller may read them): bot, harness (what ran it), model (the model that did the work, or null), "
+            "waiting_for_sign_in (the runtime it is set to, when the Gateway ran it because that runtime is not signed "
+            "in on its computer, else null), set_to {runtime, model}, line (one plain sentence), changed_at (when the "
+            "unbroken run of such turns began)",
         },
         limited={
             "type": "array",

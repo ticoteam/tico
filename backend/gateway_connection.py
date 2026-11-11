@@ -489,6 +489,9 @@ def hand_out(c, attempt_id, config):
             "model": str(config.get("model") or ""),
             "fallback": {"harness": str(fallback.get("harness") or ""), "model": str(fallback.get("model") or "")},
             "gateway_fallback": str(config.get("gateway_fallback") or ""),
+            # The runtime the bot is set to, when the claim moved its turn to the Gateway because that runtime is not
+            # signed in on the computer (models_preset.on_gateway): the run records it, and Health says so.
+            "waiting_for_sign_in": str(config.get("waiting_for_sign_in") or ""),
         },
     )
 
