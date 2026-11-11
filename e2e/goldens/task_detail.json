@@ -264,6 +264,7 @@
       "to_leave": [],
       "turn": null,
       "updated_at": "<time>",
+      "values": {},
       "version": 3,
       "visibility": "private",
       "waits": []
