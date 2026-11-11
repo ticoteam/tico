@@ -671,19 +671,22 @@ function onbWelcomeHTML(state: OnbState): string {
 // then who reports to whom; an open seat is muted. The built-ins' own group comes last, under the name the server gives
 // it (setup's team step shows it the same way); a group with no name is not shown, so its id never reaches the screen.
 function onbLiveTeams(): OnbTeam[] {
-  const slug = (ref: string | null | undefined) => String(ref || '').replace(/^bot:/, '');
+  // A line may name a bot by id or by slug (`bot:` or bare; a company file's bots have ids apart from their slugs):
+  // every role is keyed by its id, so a line finds it either way.
+  const ids = new Map((S.emps || []).flatMap(bot => [[bot.id, bot.id], [bot.slug || bot.id, bot.id]] as [string, string][]));
+  const idOf = (ref: string | null | undefined) => { const key = String(ref || '').replace(/^bot:/, ''); return ids.get(key) || key; };
   const last = (group: {id: string}) => Number(group.id === BUILT_IN_GROUP);
   const groups = [...(S.orgGroups || [])].filter(group => group.name || group.id !== BUILT_IN_GROUP)
     .sort((a, b) => last(a) - last(b) || (a.order ?? 1e9) - (b.order ?? 1e9));
   return groups.map(group => {
     const bots = (S.emps || []).filter(bot => bot.team === group.id)
-      .map(bot => ({id: bot.slug || bot.id, title: botDisplayName(bot.slug || bot.id), live: true, reports_to: slug(bot.reports_to) || null}));
+      .map(bot => ({id: bot.id, title: botDisplayName(bot.id), live: true, reports_to: idOf(bot.reports_to) || null}));
     const seats = (S.seats || []).filter(seat => seat.team === group.id)
-      .map(seat => ({id: 'seat:' + seat.id, title: seat.title, live: false, reports_to: slug(seat.reports_to) || null}));
+      .map(seat => ({id: 'seat:' + seat.id, title: seat.title, live: false, reports_to: idOf(seat.reports_to) || null}));
     const all = [...bots, ...seats];
     // A group with no lead (General: no bot leads it) still reads from its head: the role most of the team reports to.
     const reports = (id: string) => all.filter(role => role.reports_to === id).length;
-    const lead = slug(group.lead) || [...all].sort((a, b) => reports(b.id) - reports(a.id))[0]?.id;
+    const lead = idOf(group.lead) || [...all].sort((a, b) => reports(b.id) - reports(a.id))[0]?.id;
     const roles = all.sort((a, b) => Number(b.id === lead) - Number(a.id === lead));
     return {team: group.name || group.id, on: true, roles};
   }).filter(team => team.roles.length);
