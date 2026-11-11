@@ -23,7 +23,9 @@ from fastapi.testclient import TestClient
 from backend import cloud_access, migrations
 from backend.app import create_app
 from backend.company_file import starter
+from backend.execution import AWAKE_SETTLE
 from backend.observability import Observability
+from backend.store import H
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
 from backend.tests.helpers.sample_company import OWNER_EMAIL, settings_for, signed_in
@@ -311,3 +313,95 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path):
     assert results[0][0] == results[1][0], "The schema depends on the order the pending migrations ran in"
     assert not changes(results[0][1], results[1][1])
     assert not changes(company.before, results[0][1]), "The pending migrations changed the company"
+
+
+REMOVED = ("growth-manager", "legal-owner", "segment-product-owner")  # live seat bots' templates in the fixture
+
+
+def test_a_bot_whose_template_the_new_release_no_longer_ships_keeps_working(company, tmp_path):
+    """A release renames and removes templates. A running company's bots made from one that is gone are still its bots:
+    the server starts, each is still there with its manager and its work, its page opens and it can be handed a task."""
+    catalog = tmp_path / "catalog"
+    shutil.copytree(company.settings.catalog_dir, catalog, ignore=shutil.ignore_patterns(*REMOVED))
+    company.settings.catalog_dir = catalog
+    company.start()
+    company.start()
+    found = changes(company.before, company.after())
+    assert not found, "Starting without three templates changed the company:\n  " + "\n  ".join(found)
+    with TestClient(create_app(company.settings)) as api:
+        for slug in ("growth-manager", "legal-owner", "creators-product-owner"):
+            page = api.get(f"/api/v2/bots/{slug}", headers=signed_in())
+            assert page.status_code == 200, f"{slug}'s page does not open once its template is gone: {page.text[:300]}"
+            task = api.post(
+                "/api/v2/tasks",
+                json={"title": "Say hello", "body": "After the update.", "owner": slug},
+                headers=signed_in(),
+            )
+            assert task.status_code == 200, (
+                f"{slug} cannot be handed a task once its template is gone: {task.text[:300]}"
+            )
+        for path in ("employees", "v2/pipelines", "v2/groups", "v2/onboarding", "v2/setup"):
+            read = api.get("/api/" + path, headers=signed_in())
+            assert read.status_code == 200, f"/api/{path} fails once a live bot's template is gone: {read.text[:300]}"
+    assert not company.failed, company.failed
+
+
+COMPUTER_TOKEN = "the-shared-computer-test-token-0123456789"
+# One turn as a runner sends it (contracts/runner/fixtures, the kept release's copy), in order.
+TURN = ["heartbeat.ok", "claim.attempt", "start_place.reserved", "started.ok", "events.ok", "renew.ok", "complete.ok"]
+
+
+def test_the_computer_still_on_the_last_release_keeps_working_until_it_updates(company):
+    """The server is updated first; the company's computer runs the last release's runner until it updates itself. Its
+    requests, as that release recorded them, are still taken: its heartbeat, a claim that hands it the work its bots
+    had waiting, and the turn through to done. A refusal here stops every bot of the company at once."""
+    from backend.auth import digest
+    from scripts import check_wire_contract as W
+
+    kept = W.RELEASES / "0.6.0"
+    wire = W.load(kept)["wire"]
+    with closing(sqlite3.connect(company.db)) as c:
+        # The computer's own token never leaves it: the test gives the enrolled computer one it knows.
+        c.execute("UPDATE runners SET token_hash=? WHERE revoked_at IS NULL", (digest(COMPUTER_TOKEN),))
+        c.commit()
+        placed = [row[0] for row in c.execute("SELECT bot FROM assignments")]
+    with TestClient(create_app(company.settings)) as api:
+        cloud_access.apply(api.app.state.store, cloud_access.parse(signals("open")))
+        api.app.state.cloud_machines.client = company.hq
+        aid = ""
+        for step in TURN:
+            name = step.split(".")[0]
+            body = json.loads((kept / W.FIXTURES / (step + ".json")).read_text())["request"]
+            if name == "heartbeat":
+                body["version"] = body["release"] = RELEASES[-1].removeprefix("v")
+                body["readiness"] = {
+                    "schema_version": 1,
+                    "bots": {
+                        bot: {
+                            "ready": True,
+                            "runtime": "claude",
+                            "repository_present": True,
+                            "configuration_valid": True,
+                            "problems": [],
+                        }
+                        for bot in placed
+                    },
+                }
+            answer = api.post(
+                wire["endpoints"][name]["path"].replace("{aid}", aid),
+                json=body,
+                headers={"Authorization": "Bearer " + COMPUTER_TOKEN, "Idempotency-Key": f"{name}:{aid}"},
+            )
+            assert answer.status_code == 200, (
+                f"After the update the computer on {RELEASES[-1]} is refused at {name}: {answer.text[:400]}"
+            )
+            if name == "heartbeat":
+                # Work is handed out once a computer that was out of contact has reported in for two minutes
+                # (execution.AWAKE_SETTLE): those two minutes have passed.
+                with api.app.state.store.transaction() as c:
+                    c.execute("UPDATE runner_states SET awake_since=?", (H.shift(H.now(), seconds=-AWAKE_SETTLE - 1),))
+            if name == "claim":
+                attempt = answer.json()["attempt"]
+                assert attempt, f"The computer on {RELEASES[-1]} is handed no work after the update: {answer.json()}"
+                aid = attempt["id"]
+    assert not company.failed, company.failed
