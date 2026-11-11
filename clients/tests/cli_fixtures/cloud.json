@@ -28,7 +28,9 @@
   "tools": [
    [
     "tico_cloud_show",
-    {}
+    {
+     "operation_id": null
+    }
    ]
   ],
   "http": [
@@ -55,7 +57,9 @@
   "tools": [
    [
     "tico_cloud_set",
-    {}
+    {
+     "operation_id": null
+    }
    ]
   ],
   "http": [],
@@ -80,6 +84,7 @@
     {
      "always_on": true,
      "grow_storage": true,
+     "operation_id": null,
      "pause_minutes": 5,
      "size": "size-1"
     }
@@ -117,7 +122,8 @@
    [
     "tico_cloud_replace",
     {
-     "confirm": "confirm-1"
+     "confirm": "confirm-1",
+     "operation_id": null
     }
    ]
   ],
@@ -147,7 +153,8 @@
    [
     "tico_cloud_set",
     {
-     "always_on": false
+     "always_on": false,
+     "operation_id": null
     }
    ]
   ],

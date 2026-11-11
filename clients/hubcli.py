@@ -457,6 +457,7 @@ def parser():
     sub = p.add_subparsers(dest="cmd")
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
     from clients.commands import threads as thread_commands, webhooks
+    from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -2739,39 +2740,8 @@ def parser():
     s = seat.add_parser("close", help="take a seat off the chart (a person)")
     s.add_argument("seat")
     s.set_defaults(fn="seat close")
-    org = sub.add_parser("org", help="the order of the team chart").add_subparsers(dest="sub")
-    s = org.add_parser("order", help="a manager's direct reports in the chart's order; --set puts them in an order")
-    s.add_argument("manager", help="a bot's slug or a human's id (human:<id> when one could be either)")
-    s.add_argument(
-        "--set",
-        type=lambda text: [x.strip() for x in text.split(",") if x.strip()],
-        metavar="A,B,C",
-        help="its reports in the new order, comma-separated; the ones left out keep their places",
-    )
-    s.set_defaults(fn="org order")
-    s = org.add_parser("reports-to", help="change who a teammate reports to, as the person who asked")
-    s.add_argument("teammate", help="bot:<slug> or human:<id>")
-    s.add_argument("reports_to", metavar="manager", help="a bot's slug or human:<id>")
-    s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
-    s.set_defaults(fn="org reports-to")
-    org.add_parser("models", help="the published starter org chart models that recommendations come from").set_defaults(
-        fn="org models"
-    )
-    health = sub.add_parser("health", help="what is wrong, and where").add_subparsers(dest="sub")
-    s = health.add_parser("check", help="what is wrong with the bots, most urgent first, each with its fix")
-    s.set_defaults(fn="health check")
-    s = health.add_parser("metrics", help="the server's flight recorder: requests, CPU, loop lag, SQL, database size")
-    s.add_argument("--minutes", type=int)
-    s.add_argument("--section", help="requests, slow, process, sql, db or events; comma-separated")
-    s.set_defaults(fn="health metrics")
-    health.add_parser(
-        "findings", help="what Check health found on this install, each problem with its report"
-    ).set_defaults(fn="health findings")
-    s = health.add_parser(
-        "report", help="report a finding as a Tico bug: one ticket per problem, with the redacted diagnostics"
-    )
-    s.add_argument("key", nargs="?", help="the finding's key or signature, from its task")
-    s.set_defaults(fn="health report")
+    cli_spec.add(sub, org_commands.ORG)  # tico org: clients/commands/org.py
+    cli_spec.add(sub, computers.HEALTH)  # tico health: clients/commands/computers.py
     changelog = sub.add_parser("changelog", help="shipped product changes and your own read state").add_subparsers(
         dest="sub"
     )
@@ -3386,21 +3356,7 @@ def parser():
     s = pair.add_parser("decline", help="turn down the profile that printed this code")
     s.add_argument("code")
     s.set_defaults(fn="agent pair decline")
-    humans = sub.add_parser("human", help="the humans on the team: add one, list who is on it").add_subparsers(
-        dest="sub"
-    )
-    s = humans.add_parser("add", help="add a human to the roster and the sign-in list")
-    s.add_argument("email")
-    s.add_argument("--name")
-    s.add_argument("--title")
-    s.add_argument("--reports-to")
-    s.set_defaults(fn="human add")
-    humans.add_parser("list", help="the humans on the roster").set_defaults(fn="human list")
-    s = humans.add_parser("access", help="show or set who may see, read and write to a human")
-    s.add_argument("human")
-    for level in ("see", "read", "write"):
-        s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
-    s.set_defaults(fn="human access")
+    cli_spec.add(sub, org_commands.HUMAN)  # tico human: clients/commands/org.py
     groups = sub.add_parser("group", help="the groups: sub-teams that nest, holding humans and bots").add_subparsers(
         dest="sub"
     )
@@ -3448,39 +3404,7 @@ def parser():
     )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="api")
-    comp = sub.add_parser("computer", help="the computers a bot may go on").add_subparsers(dest="sub")
-    s = comp.add_parser("list", help="the computers a bot may go on, one short row each; --computer for one in full")
-    s.add_argument("--computer", help="one computer's label or id: its full detail, large sections capped")
-    s.add_argument(
-        "--section",
-        choices=["assigned", "repositories", "bots", "runtimes", "harnesses", "recent_errors"],
-        help="with --computer: one page of this section only",
-    )
-    s.add_argument("--offset", type=int, help="with --section: the first item to return")
-    s.set_defaults(fn="computer list")
-    s = comp.add_parser("performance", help="a computer's CPU, memory and disk over time, overloads and what ran then")
-    s.add_argument("computer", help="the computer's label or id")
-    s.add_argument("--hours", type=int, default=24)
-    s.set_defaults(fn="computer performance")
-    s = comp.add_parser(
-        "turns-at-once", help="set how many turns a computer runs at once: N, or automatic for its own capacity"
-    )
-    s.add_argument("computer", help="the computer's id")
-    s.add_argument("limit", type=lambda v: None if v == "automatic" else int(v), help="N (1 to 256), or automatic")
-    s.set_defaults(fn="computer turns-at-once")
-    s = comp.add_parser("browser-exit", help="read or set whether a computer shares its internet with bots: on or off")
-    s.add_argument("computer", help="the computer's id")
-    s.add_argument("sharing", nargs="?", choices=["on", "off"], default=argparse.SUPPRESS)
-    s.add_argument(
-        "--bots",
-        type=lambda v: [b.strip() for b in v.split(",") if b.strip()],
-        help="comma-separated bot slugs it shares with",
-    )
-    s.add_argument("--cap-gb", dest="daily_cap_gb", type=float, help="the daily cap in GB (default 5)")
-    s.add_argument(
-        "--usage", action="store_true", default=None, help="also show the last 7 days of what went through it"
-    )
-    s.set_defaults(fn="computer browser-exit")
+    cli_spec.add(sub, computers.COMPUTER)  # tico computer: clients/commands/computers.py
     cred = sub.add_parser("credential", help="ask for a credential in the chat, store one, list them").add_subparsers(
         dest="sub"
     )
@@ -3893,21 +3817,14 @@ def parser():
     s = keys.add_parser("revoke", help="stop a key at once")
     s.add_argument("id")
     s.set_defaults(fn="service-key revoke")
-    from clients.commands import org as hubtools_org
+    org_commands.add_commands(sub)  # tico bot list|go-live-all|quarantine-clear
+    cli_spec.add(sub, org_commands.SPEND)  # tico usage, billing, reach: clients/commands/org.py
+    from clients.commands import connections
 
-    hubtools_org.add_commands(sub)  # people, bots, the org chart, usage, billing and reach
-
-    from clients.commands import (
-        connections as hubtools_connections,
-    )  # `tico github`, and the connection verbs of `tico repo` and `tico health`
-
-    hubtools_connections.add_commands(sub)
-    from clients.commands import (
-        computer_upkeep as hubtools_computers,
-    )  # `tico upgrade`, `tico cloud`, `tico subscription`, computer restart
-
-    hubtools_computers.add_commands(sub)
-    hubcli_pipelines.add(sub, task)  # pipeline, stage, company; task request|approve|send-back|wait
+    connections.add_commands(sub)  # `tico github`, and the connection verbs of `tico repo`
+    cli_spec.add(sub, computer_upkeep.UPKEEP)  # tico upgrade, cloud, subscription: clients/commands/computer_upkeep.py
+    cli_spec.add(sub, pipeline_commands.CLI)  # tico pipeline, stage, company, requirement: commands/pipelines.py
+    hubcli_pipelines.add(task)  # task request|approve|send-back|wait
     return p
 
 
@@ -4094,7 +4011,7 @@ def rename_argv(argv):
         return argv, None  # `tico notice list` is new; only `tico notice <text>` is the old send
     from clients.commands.org import ORG_COMMANDS
 
-    if argv[:1] == ["org"] and argv[1:2] and argv[1] in ("order", "reports-to", "models", *ORG_COMMANDS):
+    if argv[:1] == ["org"] and argv[1:2] and argv[1] in ORG_COMMANDS:
         return argv, None  # `tico org` alone is the old `tico team show`; its subcommands are new
     for old, new, tail, rewrite in RENAMED:
         if tuple(argv[: len(old)]) == old:

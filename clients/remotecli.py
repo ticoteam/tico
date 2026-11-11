@@ -71,12 +71,10 @@ def via_tool(client, args, **more):
     }
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
-    if args.fn in ("bot turns-at-once", "computer turns-at-once") and hasattr(args, "limit"):
+    if args.fn == "bot turns-at-once" and hasattr(args, "limit"):
         fields["limit"] = args.limit  # explicit null restores the default; omission only reads
     if args.fn == "bot browser-exit" and hasattr(args, "computer"):
         fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
-    if args.fn == "computer browser-exit" and "sharing" in fields:
-        fields["sharing"] = fields["sharing"] == "on"
     fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -283,13 +281,12 @@ def run(args, who=None):
         return spec.call(client, args)
     from clients.commands.org import COMMANDS as ORG_COMMANDS
 
-    if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # clients/commands/org.py, clients/commands/pipelines.py
+    if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # `tico bot list` and the like; `tico task request` ...
         return via_tool(client, args)
 
-    from clients.commands import computer_upkeep as hubtools_computers
     from clients.commands import connections as hubtools_connections
 
-    if fn in hubtools_connections.COMMANDS or fn in hubtools_computers.COMMANDS:
+    if fn in hubtools_connections.COMMANDS:
         return hubtools_connections.run_command(client, args)
     if args.cmd == "inbound":
         return via_tool(client, args)
@@ -388,9 +385,6 @@ def run(args, who=None):
         return bots(client, args)
     if fn in (
         "bot repo-create",
-        "human add",
-        "human list",
-        "human access",
         "group list",
         "group update",
         "group delete",
@@ -422,9 +416,6 @@ def run(args, who=None):
         "calendar status",
         "team show",
         "team budget",
-        "org order",
-        "org reports-to",
-        "org models",
         "run list",
         "message list",
         "message mark-read",
@@ -504,7 +495,7 @@ def run(args, who=None):
         text = Path(args.file).read_text(encoding="utf-8") if args.file else args.message
         report = {"message": text, "include_ids": not args.no_ids, "task": args.task, "operation_id": key}
         return hubtools.support_report(client, report)
-    if args.cmd in ("api", "computer", "credential", "support", "health") or fn == "message redact":
+    if args.cmd in ("api", "credential", "support") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":
         from clients import hubtools
@@ -1091,7 +1082,7 @@ def run(args, who=None):
 
 
 def botops_tools(client, args):
-    """`tico api`, `tico credential ...`, `tico computer list`, `tico health check`, `tico message redact`, `tico support file`: the
+    """`tico api`, `tico credential ...`, `tico message redact`, `tico support file`: the
     tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
 

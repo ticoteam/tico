@@ -1,15 +1,17 @@
 """Computer tools: restart a computer's runner, which release each computer runs, this installation's own update, the
 shared Tico Cloud machine and the company's AI subscriptions. Each is a `tico` command and an MCP tool of the same name
 (`tico computer restart` is `tico_computer_restart`), registered into the one table like any other module listed in
-clients/commands/__init__.py; it shares clients/commands/connections.py's command helpers.
+clients/commands/__init__.py. UPKEEP is their command lines as specs (clients/cli_spec.py).
 
 A computer is the machine (a Mac, a server, a cloud machine); its runner is the Tico software on it. Every tool composes
 the ordinary routes with the caller's own token (backend/computers_routes.py, backend/cloud_machines.py,
 backend/model_subscriptions.py, the system/update routes). Pure stdlib, like hubtools.
 """
 
+import argparse
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import TOOLS, tool
@@ -199,7 +201,12 @@ def cloud_show(api, args):
     {
         "size": _s("small, default, large or xlarge (tico cloud show lists them)"),
         "always_on": {"type": "boolean", "description": "Keep it running when idle"},
-        "pause_minutes": {"type": "integer", "minimum": 5, "maximum": 1440},
+        "pause_minutes": {
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 1440,
+            "description": "Idle minutes before it pauses, 5-1440",
+        },
         "grow_storage": {"type": "boolean", "description": "Move to the next size with more disk when nearly full"},
     },
     writes=True,
@@ -284,95 +291,38 @@ AUDIENCE = {
 
 
 # ----------------------------------------------------------------------------- the `tico` commands
-def add_commands(sub):
-    """Add `tico computer restart|versions`, `tico upgrade`, `tico cloud` and `tico subscription` to the CLI's parser."""
-    from clients.commands.connections import _command, _group
-
-    computer = _group(sub, "computer")
-    s = _command(
-        computer,
-        "restart",
-        "restart a computer's runner on the latest code once no turn runs (the Owner, an admin or its person)",
-        "tico computer restart 'Shared cloud machine'",
-        "computer restart",
-    )
-    s.add_argument("computer", help="its label or id")
-    _command(
-        computer,
-        "versions",
-        "the server's release and each computer's release, runner version and update state",
-        "tico computer versions",
-        "computer versions",
-    )
-
-    upgrade = sub.add_parser("upgrade", help="update this installation to a newer Tico release (the Owner)")
-    upgrade = upgrade.add_subparsers(dest="sub")
-    _command(
-        upgrade,
-        "status",
-        "the release this server runs and any update in progress",
-        "tico upgrade status",
-        "upgrade status",
-    )
-    _command(upgrade, "check", "ask now whether a newer release is out", "tico upgrade check", "upgrade check")
-    s = _command(
-        upgrade,
-        "start",
+# `tico computer restart` and `versions` are in COMPUTER (clients/commands/computers.py).
+UPKEEP = (
+    Group("upgrade", "update this installation to a newer Tico release (the Owner)"),
+    Command("upgrade status", "the release this server runs and any update in progress", example="tico upgrade status"),
+    Command("upgrade check", "ask now whether a newer release is out", example="tico upgrade check"),
+    Command(
+        "upgrade start",
         "update to a release, self-hosted; running turns resume after",
-        "tico upgrade start 0.6.0",
-        "upgrade start",
-    )
-    s.add_argument("version")
-
-    cloud = sub.add_parser("cloud", help="the company's Tico Cloud machines").add_subparsers(dest="sub")
-    _command(
-        cloud, "show", "the shared cloud machine, the sizes on offer and the caps", "tico cloud show", "cloud show"
-    )
-    s = _command(
-        cloud,
-        "set",
+        example="tico upgrade start 0.6.0",
+    ),
+    Group("cloud", "the company's Tico Cloud machines"),
+    Command("cloud show", "the shared cloud machine, the sizes on offer and the caps", example="tico cloud show"),
+    Command(
+        "cloud set",
         "change the shared machine's size, Always on, Pause after or Grow storage (the Owner or an admin)",
-        "tico cloud set --size large --pause-minutes 60",
-        "cloud set",
-    )
-    s.add_argument("--size")
-    s.add_argument("--pause-minutes", dest="pause_minutes", type=int, metavar="N")
-    for flag, dest, words in (
-        ("always-on", "always_on", "keep it running"),
-        ("grow-storage", "grow_storage", "grow disk"),
-    ):
-        on_off = s.add_mutually_exclusive_group()
-        on_off.add_argument(f"--{flag}", dest=dest, action="store_true", default=None, help=words)
-        on_off.add_argument(f"--no-{flag}", dest=dest, action="store_false", default=None, help=f"do not {words}")
-    s = _command(
-        cloud,
-        "replace",
+        args=(
+            Arg("pause_minutes", metavar="N"),
+            Arg("always_on", action=argparse.BooleanOptionalAction, default=None),
+            Arg("grow_storage", action=argparse.BooleanOptionalAction, default=None),
+        ),
+        example="tico cloud set --size large --pause-minutes 60",
+    ),
+    Command(
+        "cloud replace",
         "delete the shared machine and its disk; the next work makes a new one (the Owner or an admin)",
-        "tico cloud replace --confirm 'Shared cloud machine'",
-        "cloud replace",
-    )
-    s.add_argument("--confirm", required=True, metavar="NAME", help="the shared machine's computer name, exactly")
-
-    subscription = sub.add_parser("subscription", help="the company's AI subscriptions").add_subparsers(dest="sub")
-    _command(
-        subscription,
-        "list",
+        args=(Arg("confirm", "--confirm", metavar="NAME"),),
+        example="tico cloud replace --confirm 'Shared cloud machine'",
+    ),
+    Group("subscription", "the company's AI subscriptions"),
+    Command(
+        "subscription list",
         "each subscription, its status and the computers given it; values never shown (a person)",
-        "tico subscription list",
-        "subscription list",
-    )
-
-
-COMMANDS = frozenset(
-    {
-        "computer restart",
-        "computer versions",
-        "upgrade status",
-        "upgrade check",
-        "upgrade start",
-        "cloud show",
-        "cloud set",
-        "cloud replace",
-        "subscription list",
-    }
+        example="tico subscription list",
+    ),
 )

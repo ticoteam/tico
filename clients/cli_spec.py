@@ -14,6 +14,8 @@ A spec says only what differs:
 - `Arg` overrides one property: a flag where a positional would be, another spelling, arity, a default. Several
   `Arg`s of one name are several flags setting it (`--archive` and `--unarchive` each a const of `archived`). An
   object property is given whole by an `Arg` with a `type` (`type=json.loads`), or folded from flags with `into`.
+  `choices` are the words a value is typed as when they are not the property's own (`on`/`off` for a boolean, which
+  `convert` turns into true or false).
 - An `Arg` with `into=` is a flag of the command line alone that `Command.convert` folds into that property (`--who`
   and `--everyone` into the Who scope object); it is not passed on itself. Its help is the description of `part` (its
   name by default) inside that object property.
@@ -60,6 +62,7 @@ class Arg:
     action: str | None = None
     const: Any = None
     metavar: str | None = None
+    choices: tuple[str, ...] | None = None  # the words it takes when they are not the property's values (on, off)
     into: str | None = None  # the property `convert` folds this flag into
     part: str | None = None  # with `into`: the key inside it whose description is the help; the name by default
 
@@ -184,8 +187,8 @@ def _argument(a, prop, schema_required, suppress):
     takes_value = keywords.get("action") in (None, "store", "append")
     if takes_value and (a.type or kind in ("integer", "number")):
         keywords["type"] = a.type or (int if kind == "integer" else float)
-    if takes_value and "enum" in prop:
-        keywords["choices"] = list(prop["enum"])
+    if takes_value and (a.choices or "enum" in prop):
+        keywords["choices"] = list(a.choices or prop["enum"])
     if a.nargs:
         keywords["nargs"] = a.nargs
     default = a.default

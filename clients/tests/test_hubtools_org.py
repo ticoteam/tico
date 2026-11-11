@@ -386,7 +386,7 @@ def test_human_remove_without_confirm_is_a_usage_error():
 
 
 def test_new_tools_are_offered_to_people_and_botops_not_the_assistant_or_bots():
-    for name in hubtools_org.COMMANDS.values():
+    for name in (t["name"] for t in hubtools_org.TOOLS):
         kinds = hubtools.offered_to(hubtools.BY_NAME[name])
         assert "assistant" not in kinds and "bot" not in kinds, name
     assert "botops" not in hubtools.offered_to(hubtools.BY_NAME["tico_human_remove"])

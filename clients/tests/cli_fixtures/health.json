@@ -189,7 +189,9 @@
   "tools": [
    [
     "tico_health_ready",
-    {}
+    {
+     "operation_id": null
+    }
    ]
   ],
   "http": [
@@ -241,7 +243,8 @@
       "bots-1",
       "bots-1b"
      ],
-     "github": false
+     "github": false,
+     "operation_id": null
     }
    ]
   ],

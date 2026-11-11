@@ -83,7 +83,8 @@ def cli(monkeypatch, api, *argv):
 
 def test_every_connection_tool_is_registered_with_a_command_and_offered_to_people_not_the_assistant():
     names = {t["name"] for t in hubtools_connections.MINE}
-    assert names == {remotecli.tool_name(fn) for fn in hubtools_connections.COMMANDS}
+    commands = {*hubtools_connections.COMMANDS, "health ready"}  # `tico health ready` is a spec (computers.HEALTH)
+    assert names == {remotecli.tool_name(fn) for fn in commands}
     for name in names:
         entry = hubtools.BY_NAME[name]
         assert entry in hubtools.TOOLS

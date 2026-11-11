@@ -2,8 +2,9 @@
 
 Each tool here is registered into `hubtools.TOOLS` by hubtools itself (it reads `TOOLS` below just before it builds
 `BY_NAME`), so the MCP server, the stdio adapter and the `tico` CLI serve them like any other: `tico bot list` is
-`tico_bot_list`. `add_commands` puts their commands under the CLI's nouns (clients/hubcli.py `parser`), and
-clients/remotecli.py runs each through its tool (`COMMANDS`). Nothing here decides who may do what: every rule is the
+`tico_bot_list`. ORG, HUMAN and SPEND are their command lines as specs (clients/cli_spec.py), with `tico org order`,
+`reports-to` and `models` and `tico human add`, `list` and `access`, whose tools are in clients/commands/admin.py;
+`add_commands` still builds the `tico bot` ones by hand, and clients/remotecli.py runs those through `COMMANDS`. Nothing here decides who may do what: every rule is the
 server's, and a refusal is the server's own words.
 
 Pure stdlib and no import of hubtools at module level, so importing this first is as safe as importing hubtools first.
@@ -12,6 +13,7 @@ Pure stdlib and no import of hubtools at module level, so importing this first i
 import argparse
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.tico import APIError
 
 TOOLS = []  # each {"name", "description", "properties", "required", "writes", "fn"}; hubtools registers them
@@ -496,7 +498,7 @@ def human_invite(api, args):
     "with history. Undo a left mark with tico_settings_set people.person.left.",
     {
         "human": _s("The person: their id, email or exact name"),
-        "confirm": _s("Their exact name or email, as tico_human_show shows it"),
+        "confirm": _s("Their exact name or email, as `human show` shows it"),
         "delete": _flag("Delete them for good (only someone with no history)"),
     },
     required=("human", "confirm"),
@@ -652,23 +654,103 @@ def reach_set(api, args):
 
 
 # ----------------------------------------------------------------------------- the `tico` commands
-# command words -> its tool; clients/remotecli.py runs each through via_tool.
+def _names(text):
+    return [x.strip() for x in text.split(",") if x.strip()]
+
+
+ORG = (
+    Group("org", "the order of the team chart"),
+    Command(
+        "org order",
+        "a manager's direct reports in the chart's order; --set puts them in an order",
+        args=(Arg("set", action="store", type=_names, metavar="A,B,C"),),
+        example="tico org order builder-manager --set builder,reviewer",
+    ),
+    Command(
+        "org reports-to",
+        "change who a teammate reports to, as the person who asked",
+        args=(Arg("reports_to", metavar="manager"), Arg("on_behalf_of", metavar="MESSAGE_ID")),
+        example="tico org reports-to bot:builder human:7",
+    ),
+    Command(
+        "org models", "the published starter org chart models that recommendations come from", example="tico org models"
+    ),
+    Command(
+        "org show",
+        "the org in one call: people and roles, bots, who reports to whom, who holds each pipeline stage (anyone)",
+        example="tico org show",
+    ),
+)
+# Subcommands of `tico org` itself, which clients/hubcli.py must not rewrite to the old `tico org` (`team show`).
+ORG_COMMANDS = tuple(c.path.split()[-1] for c in ORG if isinstance(c, Command))
+
+HUMAN = (
+    Group("human", "the humans on the team: add one, list who is on it"),
+    Command(
+        "human add",
+        "add a human to the roster and the sign-in list",
+        example='tico human add ben@acme.example --name "Ben Ortiz" --reports-to human:1',
+    ),
+    Command("human list", "the humans on the roster", example="tico human list"),
+    Command(
+        "human access",
+        "show or set who may see, read and write to a human",
+        example="tico human access human:7 --see everyone",
+    ),
+    Command(
+        "human show",
+        "one person: profile, direct reports, and (owner and admins) role and sign-in",
+        example="tico human show ben@acme.example",
+    ),
+    Command(
+        "human invite",
+        "send someone on the roster an invite to sign in (owner and admins)",
+        example="tico human invite ben",
+    ),
+    Command(
+        "human remove",
+        "mark someone as left; --delete removes someone with no history for good (the owner)",
+        args=(Arg("confirm", "--confirm"), Arg("delete", default=None)),
+        example='tico human remove ben --confirm "Ben Ortiz"',
+    ),
+)
+
+SPEND = (
+    Group("usage", "model spend and its limits (people)"),
+    Command(
+        "usage show",
+        "estimated model spend by bot, day, routine, task, harness, model, effort or subscription (people)",
+        example="tico usage show --group model --from 2026-11-01",
+    ),
+    Command("usage limits", "the spend limits and what each has spent (people)", example="tico usage limits"),
+    Group("billing", "the company's Tico balance and statement (owner and admins)"),
+    Command(
+        "billing show",
+        "balance, credits, usage by day and the statement (owner and admins)",
+        example="tico billing show --month 2026-10",
+    ),
+    Group("reach", "who each teammate may reach, and how often (Rules › Internal)"),
+    Command(
+        "reach show",
+        "the reach map, or one party's effective reach and lines (anyone)",
+        args=(Arg("party", positional=True, nargs="?"),),
+        example="tico reach show bot:builder",
+    ),
+    Command(
+        "reach set",
+        "set a party's mode and daily counts; inherit clears one (owner, admins, team leads, a bot's managers)",
+        args=(Arg("chats_per_day", type=str), Arg("tasks_per_day", type=str)),  # a number, or inherit
+        example="tico reach set bot:builder --mode closed --tasks-per-day 20",
+    ),
+)
+
+# The bot commands here wait for `tico bot` to move to a spec: command words -> its tool; clients/remotecli.py runs
+# each through via_tool.
 COMMANDS = {
     "bot list": "tico_bot_list",
     "bot go-live-all": "tico_bot_go_live_all",
     "bot quarantine-clear": "tico_bot_quarantine_clear",
-    "org show": "tico_org_show",
-    "human show": "tico_human_show",
-    "human invite": "tico_human_invite",
-    "human remove": "tico_human_remove",
-    "usage show": "tico_usage_show",
-    "usage limits": "tico_usage_limits",
-    "billing show": "tico_billing_show",
-    "reach show": "tico_reach_show",
-    "reach set": "tico_reach_set",
 }
-# Subcommands of `tico org` itself, which clients/hubcli.py must not rewrite to the old `tico org` (`team show`).
-ORG_COMMANDS = ("show",)
 
 
 def _subcommands(sub, noun, help_):
@@ -691,8 +773,8 @@ def _command(group, words, help_, example):
 
 
 def add_commands(sub):
-    """The commands for these tools under `tico bot`, `tico org`, `tico human`, `tico usage`, `tico billing` and `tico
-    reach`. `sub` is the CLI's top-level subcommands (clients/hubcli.py `parser`)."""
+    """`tico bot list`, `go-live-all` and `quarantine-clear` under `tico bot`. `sub` is the CLI's top-level subcommands
+    (clients/hubcli.py `parser`)."""
     bot = _subcommands(sub, "bot", "bots")
     s = _command(
         bot,
@@ -724,78 +806,3 @@ def add_commands(sub):
     )
     s.add_argument("bot")
     s.add_argument("--note", help="why it is safe to resume")
-
-    org = _subcommands(sub, "org", "the org chart")
-    _command(
-        org,
-        "org show",
-        "the org in one call: people and roles, bots, who reports to whom, who holds each pipeline stage (anyone)",
-        "tico org show",
-    )
-
-    human = _subcommands(sub, "human", "the humans on the team")
-    s = _command(
-        human,
-        "human show",
-        "one person: profile, direct reports, and (owner and admins) role and sign-in",
-        "tico human show ben@acme.example",
-    )
-    s.add_argument("human", help="their id, email or exact name")
-    s = _command(
-        human,
-        "human invite",
-        "send someone on the roster an invite to sign in (owner and admins)",
-        "tico human invite ben",
-    )
-    s.add_argument("human", help="their id, email or exact name")
-    s = _command(
-        human,
-        "human remove",
-        "mark someone as left; --delete removes someone with no history for good (the owner)",
-        'tico human remove ben --confirm "Ben Ortiz"',
-    )
-    s.add_argument("human", help="their id, email or exact name")
-    s.add_argument("--confirm", required=True, help="their exact name or email")
-    s.add_argument("--delete", action="store_true", default=None, help="delete for good (no history only)")
-
-    usage = _subcommands(sub, "usage", "model spend and its limits (people)")
-    s = _command(
-        usage,
-        "usage show",
-        "estimated model spend by bot, day, routine, task, harness, model, effort or subscription (people)",
-        "tico usage show --group model --from 2026-11-01",
-    )
-    s.add_argument("--group", choices=USAGE_GROUPS)
-    s.add_argument("--from", dest="from")
-    s.add_argument("--to")
-    s.add_argument("--bot", help="one bot's daily series")
-    s.add_argument("--bots", help="only these bots, comma-separated")
-    _command(usage, "usage limits", "the spend limits and what each has spent (people)", "tico usage limits")
-
-    billing = _subcommands(sub, "billing", "the company's Tico balance and statement (owner and admins)")
-    s = _command(
-        billing,
-        "billing show",
-        "balance, credits, usage by day and the statement (owner and admins)",
-        "tico billing show",
-    )
-    s.add_argument("--month", help="YYYY-MM")
-
-    reach = _subcommands(sub, "reach", "who each teammate may reach, and how often (Rules › Internal)")
-    s = _command(
-        reach,
-        "reach show",
-        "the reach map, or one party's effective reach and lines (anyone)",
-        "tico reach show bot:builder",
-    )
-    s.add_argument("party", nargs="?", help="*, group:<id>, human:<id> or a bot's slug")
-    s = _command(
-        reach,
-        "reach set",
-        "set a party's mode and daily counts; inherit clears one (owner, admins, team leads, a bot's managers)",
-        "tico reach set bot:builder --mode closed --tasks-per-day 20",
-    )
-    s.add_argument("party", help="*, group:<id>, human:<id> or a bot's slug")
-    s.add_argument("--mode", choices=["open", "nearby", "closed", "inherit"])
-    s.add_argument("--chats-per-day", dest="chats_per_day", help="a number, or inherit")
-    s.add_argument("--tasks-per-day", dest="tasks_per_day", help="a number, or inherit")

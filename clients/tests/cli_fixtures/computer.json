@@ -231,7 +231,7 @@
      "computer": "computer-1",
      "daily_cap_gb": 2.5,
      "operation_id": null,
-     "sharing": "on",
+     "sharing": true,
      "usage": true
     }
    ]
@@ -289,7 +289,8 @@
    [
     "tico_computer_restart",
     {
-     "computer": "computer-1"
+     "computer": "computer-1",
+     "operation_id": null
     }
    ]
   ],
@@ -328,7 +329,9 @@
   "tools": [
    [
     "tico_computer_versions",
-    {}
+    {
+     "operation_id": null
+    }
    ]
   ],
   "http": [
@@ -399,6 +402,7 @@
     "tico_computer_turns_at_once",
     {
      "computer": "mac-1",
+     "limit": null,
      "operation_id": null
     }
    ]
@@ -408,11 +412,18 @@
     "GET",
     "me",
     null
+   ],
+   [
+    "POST",
+    "computers/mac-1/turns-at-once",
+    {
+     "turns_at_once": null
+    }
    ]
   ],
-  "stdout": "{\n  \"error\": \"KeyError: 'limit'\"\n}\n",
+  "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
-  "exit": 1
+  "exit": 0
  },
  {
   "argv": [
@@ -439,5 +450,45 @@
   "stdout": "",
   "stderr": "tico computer list: error: argument --section: invalid choice: 'nope' (choose from assigned, repositories, bots, runtimes, harnesses, recent_errors)",
   "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "browser-exit",
+   "mac-1",
+   "off"
+  ],
+  "tools": [
+   [
+    "tico_computer_browser_exit",
+    {
+     "computer": "mac-1",
+     "operation_id": null,
+     "sharing": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "computers/mac-1/browser-exit",
+    {
+     "sharing": false
+    }
+   ],
+   [
+    "GET",
+    "computers/mac-1/browser-exit",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
  }
 ]

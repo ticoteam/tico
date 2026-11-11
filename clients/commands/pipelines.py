@@ -7,17 +7,20 @@ call that blocks for minutes has no place in a bot's turn or an MCP call). Every
 call made as the caller, so the server decides who may do what.
 
 Listed in clients/commands/__init__.py like any other tool module; `_access` merges its AUDIENCE and SHELL_ONLY lines.
-The command lines live in clients/hubcli_pipelines.py (stdlib only, so `tico --help` stays fast), called once from
-hubcli.parser(); remotecli.run sends its COMMANDS through `via_tool`.
+CLI is the `tico pipeline`, `stage`, `company` and `requirement` command lines as specs (clients/cli_spec.py); the
+`tico task request|approve|send-back|wait` ones are still built by hand in clients/hubcli_pipelines.py.
 """
 
+import argparse
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
 from clients import cli_plumbing
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._requester import PEOPLE
 from clients.commands._schemas import TASK_ID, _key, _s
@@ -25,7 +28,7 @@ from clients.commands.tasks import task_create
 from clients.tico import APIError
 
 PIPELINE = _s("The pipeline: its id or its name, any case (product, Engineering)")
-STAGE = _s("The stage's id (product-spec, engineering-review-1); tico_pipeline_show lists them")
+STAGE = _s("The stage's id (product-spec, engineering-review-1), from `pipeline show`")
 WHOEVER = "whoever the task is for"  # a stage held by `assignee`: each task's own owner holds it
 
 
@@ -357,7 +360,7 @@ def task_send_back(api, args):
 VERSION_SEEN = {
     "type": "integer",
     "minimum": 0,
-    "description": "The pipeline's settings_version you read (tico_pipeline_show); default the one read now",
+    "description": "The pipeline's settings_version you read (`pipeline show`); default the one read now",
 }
 CONFIRM = _s("The exact name of what is removed, typed again: nothing is removed without it")
 HOLDER = _s("Who holds it: a bot slug, bot:<id>, human:<id>, `me`, or `assignee` (whoever the task is for)")
@@ -700,7 +703,11 @@ def requirement_list(api, args):
     'Example: tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me',
     {
         "stage": STAGE,
-        "kind": {"type": "string", "enum": ["page", "ok", "owner_done", "linked_done", "item"]},
+        "kind": {
+            "type": "string",
+            "enum": ["page", "ok", "owner_done", "linked_done", "item"],
+            "description": "What it asks for: a page, an OK, the owner done, the linked tasks done, or a source's item",
+        },
         "source": _s("An item: its source (github)"),
         "condition": _s("An item: its source's condition (pr_open, checks_pass, pr_merged)"),
         **REQUIREMENT_FIELDS,
@@ -990,3 +997,141 @@ AUDIENCE = {
     )
 }
 SHELL_ONLY = {"tico_task_wait"}
+
+
+# ----------------------------------------------------------------------------- the `tico` commands
+ANYONE = " (anyone)"
+CHANGERS = " (the owner and Admins, the pipeline's owner or its manager)"
+MAKERS = " (the owner and Admins)"
+
+
+def record_file(path):
+    """`--file`: a pipeline's whole record as JSON, from a file or `-` for stdin (read here, never by the tool)."""
+    try:
+        with sys.stdin if path == "-" else open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(f"cannot read a JSON record from {path}: {exc}") from None
+    if isinstance(data, dict) and isinstance(data.get("pipeline"), dict):
+        data = data["pipeline"]  # as `tico pipeline show` or GET pipelines/{id} prints it
+    if not isinstance(data, dict):
+        raise argparse.ArgumentTypeError(f"{path} must hold a JSON object: the pipeline's record")
+    return data
+
+
+def _either(name):
+    """A boolean given as --name or --no-name, and left out when neither is."""
+    return Arg(name, action=argparse.BooleanOptionalAction, default=None)
+
+
+_CONFIRM = Arg("confirm", "--confirm")
+_FIRST = Arg("first", default=None)
+
+CLI = (
+    Group("pipeline", "the company's pipelines and their stages"),
+    Command(
+        "pipeline list",
+        "the pipelines, each with its manager and stages" + ANYONE,
+        args=(Arg("retired", default=None),),
+        example="tico pipeline list",
+    ),
+    Command(
+        "pipeline show",
+        "one pipeline: every stage in order, who holds it and what it takes to leave it" + ANYONE,
+        args=(Arg("record", default=None),),
+        example="tico pipeline show product",
+    ),
+    Command(
+        "pipeline log",
+        "what happened in a pipeline lately, in the tasks you may read (the manager's Log)" + ANYONE,
+        example="tico pipeline log engineering",
+    ),
+    Command(
+        "pipeline create",
+        "make a pipeline with its stages in order, each held by whoever the task is for unless a holder is given"
+        + MAKERS,
+        args=(Arg("name", "--name"), Arg("stages", "--stage"), Arg("private", default=None)),
+        example='tico pipeline create support --name Support --manager success-team-manager --stage Triage --stage "Doing:success-team-manager"',
+    ),
+    Command(
+        "pipeline update",
+        "change a pipeline's name, goal, manager, owner, prefix or privacy (its stages change with tico stage)"
+        + CHANGERS,
+        args=(_either("private"),),
+        example='tico pipeline update product --goal "Specs a builder can build from"',
+    ),
+    Command(
+        "pipeline save",
+        "make or replace a pipeline from its whole record: stages and requirements with an id change in place, "
+        "without one are made, left out are retired" + CHANGERS,
+        args=(Arg("record", "--file", type=record_file, metavar="FILE"),),
+        example="tico pipeline save support --file support.json",
+    ),
+    Command(
+        "pipeline remove",
+        "retire a pipeline (refused while it holds an open task); --confirm is its exact name" + CHANGERS,
+        args=(_CONFIRM,),
+        example="tico pipeline remove support --confirm Support",
+    ),
+    Group("stage", "one stage of a pipeline"),
+    Command(
+        "stage show",
+        "one stage: its pipeline, who holds it, what it takes to leave it" + ANYONE,
+        example="tico stage show product-spec",
+    ),
+    Command(
+        "stage add",
+        "add a stage to a pipeline: last, first, or after a stage" + CHANGERS,
+        args=(_FIRST, _either("by_hand")),
+        example='tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2',
+    ),
+    Command(
+        "stage update",
+        "change a stage: name, purpose, holder, by hand, task limit, expected time" + CHANGERS,
+        args=(_either("by_hand"), Arg("no_limit", default=None)),
+        example="tico stage update product-ideas --no-by-hand",
+    ),
+    Command(
+        "stage move",
+        "put a stage first, or after another stage of its pipeline" + CHANGERS,
+        args=(_FIRST,),
+        example="tico stage move engineering-review-2 --after engineering-review-1",
+    ),
+    Command(
+        "stage remove",
+        "take a stage out of its pipeline (refused while it holds open tasks); --confirm is its exact name" + CHANGERS,
+        args=(_CONFIRM,),
+        example='tico stage remove engineering-fixes-2 --confirm "Fixes 2"',
+    ),
+    Group("company", "the company's shape"),
+    Command(
+        "company show",
+        "the company in one read: you, every pipeline and stage, every bot and what it holds" + ANYONE,
+        args=(Arg("retired", default=None),),
+        example="tico company show",
+    ),
+    Group("requirement", "what it takes to leave a stage"),
+    Command(
+        "requirement list",
+        "what it takes to leave a stage: each requirement's id, kind, line and who gives its OK" + ANYONE,
+        example="tico requirement list product-spec",
+    ),
+    Command(
+        "requirement add",
+        "add a requirement to a stage: page, ok, owner_done, linked_done, or item (a source's condition)" + CHANGERS,
+        args=(Arg("kind", "--kind"), _either("can_push_past")),
+        example='tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me',
+    ),
+    Command(
+        "requirement update",
+        "change a requirement: line, who OKs it, the person, push past, rubric (never its kind)" + CHANGERS,
+        args=(_either("can_push_past"),),
+        example="tico requirement update 01e01f8d --who-oks people_only",
+    ),
+    Command(
+        "requirement remove",
+        "take a requirement off a stage; --confirm is its line (or its kind when it has none)" + CHANGERS,
+        args=(_CONFIRM,),
+        example='tico requirement remove 01e01f8d --confirm "Spec page"',
+    ),
+)

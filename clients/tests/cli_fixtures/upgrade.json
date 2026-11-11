@@ -28,7 +28,9 @@
   "tools": [
    [
     "tico_upgrade_status",
-    {}
+    {
+     "operation_id": null
+    }
    ]
   ],
   "http": [
@@ -50,7 +52,9 @@
   "tools": [
    [
     "tico_upgrade_check",
-    {}
+    {
+     "operation_id": null
+    }
    ]
   ],
   "http": [
@@ -74,6 +78,7 @@
    [
     "tico_upgrade_start",
     {
+     "operation_id": null,
      "version": "version-1"
     }
    ]
