@@ -1588,24 +1588,41 @@ def task_file(api, args):
             "enum": ["hide", "only", "all"],
             "description": "Snoozed tasks: hide (default), only them, or all",
         },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Tasks in this page (500 at most); with limit or offset the answer is `{tasks, next_offset}`",
+        },
+        "offset": {"type": "integer", "minimum": 0, "description": "Skip this many: a page's next_offset"},
     },
 )
 def task_list(api, args):
     more = {name: args[name] for name in ("sort", "number", "updated_since", "snoozed", "q") if args.get(name)}
+    paged = args.get("limit") is not None or args.get("offset") is not None
+    if paged:
+        more.update({name: args[name] for name in ("limit", "offset") if args.get(name) is not None})
     if args.get("member"):
         more["member"] = _target(api, args["member"])
         if args.get("role"):
             more["role"] = args["role"]
     if args.get("brief"):
         more["brief"] = "true"
-    rows = api.get(
+    page = api.get(
         "tasks",
         owner=_target(api, args.get("owner")) if args.get("owner") else None,
         requester=_target(api, args.get("requester")) if args.get("requester") else None,
         status=",".join(args["status"]) if args.get("status") else None,
         label=args.get("label") or None,
         **more,
-    )["tasks"]
+    )
+    rows = page["tasks"]
+    if paged:  # a page: its next_offset reads on (null on the last page)
+        return {
+            "tasks": rows,
+            "next_offset": page.get("next_offset"),
+            **({"bots": api.get("bots")} if args.get("all") else {}),
+        }
     return {"tasks": rows, "bots": api.get("bots")} if args.get("all") else rows
 
 
@@ -2302,10 +2319,13 @@ def goal_strategy_bot_decide(api, args):
     "each decision it made alone and each thing it proposed "
     "instead because it stays the owner's, with the reason and what Undo restored. The owner only: anyone else, "
     "the Strategy Owner included, is refused.",
-    {"before": _s("next_before from the previous page")},
+    {
+        "before": _s("next_before from the previous page"),
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Entries in this page (50 at most)"},
+    },
 )
 def goal_strategy_bot_log(api, args):
-    return api.get("strategy-bot/log" + (f"?before={quote(args['before'])}" if args.get("before") else ""))
+    return api.get("strategy-bot/log", before=args.get("before"), limit=args.get("limit"))
 
 
 @tool(
@@ -4702,12 +4722,23 @@ def _card_settings(args):
 @tool(
     "tico_card_list",
     "What is pinned at a place, in order: each card with what it shows you, and the pages you may "
-    "read. Without a place, the cards you made or see.",
-    {"place": PLACE},
+    "read. Without a place, the cards you made or see, newest first, a page at a time (`next` reads on).",
+    {
+        "place": PLACE,
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Without a place: cards in this page",
+        },
+        "cursor": _s("Without a place: the page after this one, a page's `next`"),
+    },
 )
 def card_list(api, args):
     person = _as_person(api)
-    return person.get("places/" + args["place"]) if args.get("place") else person.get("cards")
+    if args.get("place"):
+        return person.get("places/" + args["place"])
+    return person.get("cards", limit=args.get("limit"), cursor=args.get("cursor"))
 
 
 @tool(
@@ -5088,10 +5119,11 @@ def _doc_missing(ref):
     {
         "prefix": _s("Only paths starting with this, e.g. sales/"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+        "cursor": _s("The page after this one: a page's next_cursor"),
     },
 )
 def docs_list(api, args):
-    return api.get("docs", path_prefix=args.get("prefix"), limit=args.get("limit"))
+    return api.get("docs", path_prefix=args.get("prefix"), limit=args.get("limit"), cursor=args.get("cursor"))
 
 
 @tool(
@@ -9701,7 +9733,8 @@ def thread_read(api, args):
     required=("q",),
 )
 def thread_search(api, args):
-    return api.get("threads/search", q=args["q"], cursor=args.get("cursor"), limit=args.get("limit"))
+    # The route reads the page's next_cursor as `before` (backend/thread_api.py search).
+    return api.get("threads/search", q=args["q"], before=args.get("cursor"), limit=args.get("limit"))
 
 
 @tool(

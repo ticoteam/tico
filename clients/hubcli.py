@@ -941,9 +941,9 @@ def _finance_payload(text):
     return value
 
 
-def thread_page_flags(s):
-    """The paging flags of a thread list: a page's next_cursor reads on, and --limit sets the size."""
-    s.add_argument("--cursor", help="the page after this cursor: a page's next_cursor")
+def thread_page_flags(s, key="next_cursor"):
+    """The paging flags of a thread list: a page's next_cursor (or `key`) reads on, and --limit sets the size."""
+    s.add_argument("--cursor", help=f"the page after this cursor: a page's {key}")
     s.add_argument("--limit", type=int, help="items in the page (50 by default, 100 at most)")
 
 
@@ -1776,6 +1776,7 @@ def parser():
     ).add_subparsers(dest="sub")
     s = cards.add_parser("list", help="what is pinned at a place, with what each card shows you")
     s.add_argument("--place")
+    thread_page_flags(s, "next")
     s.set_defaults(fn="card list")
     for name, helptext in (
         ("add", "add a built-in card, pinned at --place"),
@@ -1822,6 +1823,7 @@ def parser():
     s = docs.add_parser("list", help="internal docs by path")
     s.add_argument("--prefix", help="only paths starting with this, e.g. sales/")
     s.add_argument("--limit", type=int)
+    s.add_argument("--cursor", help="the page after this one: a page's next_cursor")
     s.set_defaults(fn="doc list")
     s = docs.add_parser("read", help="one internal or indexed external doc in full")
     s.add_argument("ref", help="a doc id/path, external:<id>, or manual:<name>")
@@ -2354,6 +2356,8 @@ def parser():
         choices=["only", "all"],
         help="snoozed tasks are left out: only lists just them, all lists them with the rest",
     )
+    s.add_argument("--limit", type=int, help="tasks in a page (500 at most); the answer is then {tasks, next_offset}")
+    s.add_argument("--offset", type=int, help="skip this many: a page's next_offset")
     s.set_defaults(fn="task list")
     s = task.add_parser(
         "show",
@@ -2543,6 +2547,7 @@ def parser():
         help="the Strategy Owner log (the owner only): what it decided alone and what it proposed instead",
     )
     s.add_argument("--before", help="next_before from the previous page")
+    s.add_argument("--limit", type=int, help="entries in the page (50 at most)")
     s.set_defaults(fn="goal strategy-bot-log")
 
     def target_flags(s):
@@ -4081,6 +4086,7 @@ def parser():
     s.add_argument("--scope", choices=("all", "direct"), help="direct: only your direct reports")
     s.add_argument("--unread", action="store_true")
     s.add_argument("--limit", type=int)
+    s.add_argument("--before", help="older than this: a page's next_before")
     s.set_defaults(fn="update list")
     s = upd.add_parser("show")
     s.add_argument("update")
@@ -4708,6 +4714,9 @@ def parser():
     s.add_argument("method", type=str.upper, choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("path", help="/api/v2/... or the part after it")
     s.add_argument("body", nargs="?", help="a JSON body for a write; - reads it from standard input")
+    s.add_argument(
+        "--file", help="read the JSON body from this file (- is standard input), for a body too long to type"
+    )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="api")
     comp = sub.add_parser("computer", help="the computers a bot may go on").add_subparsers(dest="sub")

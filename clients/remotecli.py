@@ -1154,7 +1154,18 @@ def botops_tools(client, args):
 
     key = os.environ.get("HUB_OPERATION_ID")
     if args.fn == "api":
-        text = sys.stdin.read() if args.body == "-" else args.body
+        source = getattr(args, "file", None)
+        if source and args.body:
+            raise APIError("body", "Give the body one way: inline, or --file PATH")
+        if "-" in (args.body, source):
+            text = sys.stdin.read()
+        elif source:
+            try:
+                text = Path(source).expanduser().read_text()
+            except OSError as exc:
+                raise APIError("body", f"Cannot read {source}: {exc.strerror}") from None
+        else:
+            text = args.body
         try:
             body = json.loads(text) if text else None
         except ValueError:
