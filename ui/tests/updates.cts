@@ -155,7 +155,7 @@ const bots = [['seo', 'AI SEO'], ['finance', 'Finance'], ['cmo', 'AI CMO'], ['ga
     await page.evaluate(() => (document.querySelector('#search-modal') as HTMLDialogElement).close());
     await page.locator('#side .rd-co-toggle').click();
     assert.equal(await page.locator('#rd-co').isVisible(), true, 'and opens again');
-    assert.equal(await page.locator('.side-scroll .nav-link:visible').first().getAttribute('data-nav'), 'overview');
+    assert.equal(await page.locator('.side-scroll .nav-link:visible').first().getAttribute('data-nav'), 'tasks', 'Tasks heads the rail');
     await page.waitForFunction(() => (window as unknown as PageWin).__badges.length > 0);
     assert.equal(await page.evaluate(() => (window as unknown as PageWin).__badges[0]), '2', 'the badge opens on the unread count');
     // Just the updates, each only its bullets: no title, no sections, no greeting,

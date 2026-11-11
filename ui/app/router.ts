@@ -65,6 +65,7 @@ function route(hash: string = location.hash): void {
   if (!S.route.startsWith('#/bot/')) botStopped();
   if (!S.route.startsWith('#/seat/')) recruitStop();
   threadsSync();      // the sidebar's Threads link and the rail's lists (ui/app/threads.ts)
+  calendarStop(S.route); calRowSync();   // the Calendar page's card and reads; the sidebar's day bar (ui/app/calendar*.ts)
   setupMark();        // the wizard's mark first: Ask stays away from it (ui/app/notices.ts)
   askSync();          // Ask's button: away on the Assistant page and in setup (ui/app/ask-panel.ts)
   renderTree();
@@ -102,6 +103,7 @@ function route(hash: string = location.hash): void {
     pageBot(decodeURIComponent(ref), tab);
   }
   else if (S.route === THREADS_ROUTE || S.route.startsWith(THREADS_ROUTE + '?')) pageThreads();
+  else if (calendarRoute(S.route)) { /* the Calendar page (ui/app/calendar.ts) */ }
   else if (S.route.startsWith(THREAD_ROUTE)) pageThread(decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0] ?? ''));
   else if (S.route.startsWith('#/seat/')) { const [id = '', template] = (S.route.slice(7).split('?')[0] ?? '').split('/').map(decodeURIComponent); void pageSeat(id, template || ''); }
   else if (S.route === ASSISTANT) pageAssistant();
