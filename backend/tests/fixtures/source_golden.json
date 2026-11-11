@@ -15,9 +15,9 @@
   "github_kinds": [
    {
     "kind": "pr_open",
-    "state": "met",
-    "whose": null,
-    "line": "PR open",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
     "can_push_past": true
    },
    {
@@ -168,11 +168,6 @@
    }
   ],
   "waiting": [
-   [
-    "bot",
-    "bot:builder",
-    "GitHub hasn't answered about acme/app#1 for 2 hours"
-   ],
    [
     "bot",
     "bot:builder",
@@ -815,11 +810,6 @@
     "bot",
     "bot:builder",
     "acme/app#1 was closed without merging"
-   ],
-   [
-    "bot",
-    "bot:builder",
-    "acme/app#1 was closed without merging"
    ]
   ],
   "turn": "bot:builder",
@@ -872,9 +862,9 @@
   "requirements": [
    {
     "kind": "pr_open",
-    "state": "met",
-    "whose": null,
-    "line": "PR open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
     "can_push_past": true
    },
    {
@@ -888,9 +878,9 @@
   "github_kinds": [
    {
     "kind": "pr_open",
-    "state": "met",
-    "whose": null,
-    "line": "PR open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
     "can_push_past": true
    },
    {
@@ -1018,11 +1008,6 @@
    }
   ],
   "waiting": [
-   [
-    "github",
-    null,
-    "Reading the PR from GitHub"
-   ],
    [
     "github",
     null,
@@ -1524,11 +1509,6 @@
     "bot",
     "bot:builder",
     "GitHub hasn't answered about acme/app#1 for 2 hours"
-   ],
-   [
-    "bot",
-    "bot:builder",
-    "GitHub hasn't answered about acme/app#1 for 2 hours"
    ]
   ],
   "turn": "bot:builder",
@@ -1562,7 +1542,7 @@
     "kind": "pr_merged",
     "state": "waiting",
     "whose": "github",
-    "line": "Queuing the PR",
+    "line": "In the merge queue",
     "can_push_past": false
    }
   ],
@@ -1585,7 +1565,7 @@
     "kind": "pr_merged",
     "state": "waiting",
     "whose": "github",
-    "line": "Queuing the PR",
+    "line": "In the merge queue",
     "can_push_past": false
    },
    {
@@ -1600,7 +1580,7 @@
    [
     "github",
     null,
-    "Queuing the PR"
+    "In the merge queue"
    ]
   ],
   "turn": null,
@@ -2366,7 +2346,9 @@
     "error": null
    }
   ],
-  "due": [],
+  "due": [
+   "acme/app#1"
+  ],
   "github_calls": [
    [
     "ready",
@@ -4546,11 +4528,6 @@
    }
   ],
   "waiting": [
-   [
-    "github",
-    null,
-    "Reading the PR from GitHub"
-   ],
    [
     "github",
     null,
@@ -6774,7 +6751,7 @@
     "kind": "pr_merged",
     "state": "waiting",
     "whose": "github",
-    "line": "Queuing the PR",
+    "line": "In the merge queue",
     "can_push_past": false
    }
   ],
@@ -6797,7 +6774,7 @@
     "kind": "pr_merged",
     "state": "waiting",
     "whose": "github",
-    "line": "Queuing the PR",
+    "line": "In the merge queue",
     "can_push_past": false
    },
    {
@@ -6812,7 +6789,7 @@
    [
     "github",
     null,
-    "Queuing the PR"
+    "In the merge queue"
    ]
   ],
   "turn": null,
@@ -7049,11 +7026,6 @@
    }
   ],
   "waiting": [
-   [
-    "github",
-    null,
-    "Reading the PR from GitHub"
-   ],
    [
     "github",
     null,
@@ -7557,11 +7529,6 @@
     "github",
     null,
     "Reading the PR from GitHub"
-   ],
-   [
-    "github",
-    null,
-    "Reading the PR from GitHub"
    ]
   ],
   "turn": null,
@@ -7831,11 +7798,6 @@
    }
   ],
   "waiting": [
-   [
-    "bot",
-    "bot:builder",
-    "acme/app#1 was closed without merging"
-   ],
    [
     "bot",
     "bot:builder",
@@ -8226,11 +8188,6 @@
     "bot",
     "bot:builder",
     "No PR linked"
-   ],
-   [
-    "bot",
-    "bot:builder",
-    "No PR linked"
    ]
   ],
   "turn": "bot:builder",
@@ -8299,11 +8256,6 @@
    }
   ],
   "waiting": [
-   [
-    "github",
-    null,
-    "Reading the PR from GitHub"
-   ],
    [
     "github",
     null,
