@@ -405,6 +405,16 @@ def example_line(p):
     return " ".join(parts)
 
 
+def _bad_command_word(p, message):
+    """Whether argparse's error is about the word naming a command (`task lst`), not a flag's or argument's value
+    (`rules due --status late`), which argparse's own list of choices already answers."""
+    return any(
+        message.startswith(f"argument {argparse._get_action_name(action)}: invalid choice")
+        for action in p._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+
+
 class HubParser(argparse.ArgumentParser):
     """The parser of the root and of every command: argparse builds each subparser from this class, so one error
     method covers all of them. Each error says what would have worked: the closest command, the closest flag, or the
@@ -428,7 +438,7 @@ class HubParser(argparse.ArgumentParser):
             if words:
                 node.print_usage(sys.stderr)
                 self.exit(2, f"{node.prog}: error: {message}{hint}\n")
-        elif "invalid choice" in message and self.prog != PROG:  # a bad word under a command, e.g. `task lst`
+        elif self.prog != PROG and _bad_command_word(self, message):  # a bad word under a command, e.g. `task lst`
             bad = message.split("invalid choice: '", 1)[-1].split("'", 1)[0]
             under = self.prog.split()[1:]
             names = [" ".join(under + list(path)) for path in command_paths(self)]

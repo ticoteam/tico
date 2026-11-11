@@ -1286,7 +1286,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico rules due: error: argument --status: invalid choice: 'late' (choose from overdue, due_soon, upcoming, satisfied) Did you mean: tico rules due list, tico rules due add?",
+  "stderr": "tico rules due: error: argument --status: invalid choice: 'late' (choose from overdue, due_soon, upcoming, satisfied)",
   "exit": 64
  },
  {
