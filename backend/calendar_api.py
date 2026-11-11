@@ -1517,6 +1517,52 @@ def _record_google(c: Any, who: Any, caller: Row, action: str, occ: Row, calenda
     return occ
 
 
+def _one_occurrence(c: Any, auth: Any, who: Any, occurrence_id: str) -> Row:
+    """One event occurrence as the caller sees it, read the way the list reads its home: a Tico one from the store
+    (a private one shows as Busy to a non-attendee, as in the list), a Google one through the caller's own Google
+    access (`_google_source`). Anything else, or what the caller cannot see, is 404."""
+    gone = Problem("not_found", "There is no such event", 404)
+    caller = _caller(c, who)
+    try:
+        parsed = _parse_occurrence(occurrence_id)
+    except Problem:
+        raise gone from None
+    if parsed["home"] == "tico":
+        row = cal_store.event(c, parsed["event_id"])
+        if not row or row.get("recurring_event_id") or row.get("status") == "cancelled":
+            raise gone
+        if parsed["original"]:
+            if not row.get("rrule"):
+                raise gone
+            occ = cal_store._instance_occurrence(c, row, parsed["original"])  # pyright: ignore[reportPrivateUsage]
+        else:
+            if row.get("rrule"):
+                raise gone
+            try:
+                occ = cal_store._first(c, row)  # pyright: ignore[reportPrivateUsage]
+            except Problem:
+                raise gone from None
+        if not occ or occ.get("status") == "cancelled" or occ.get("occurrence_id") != occurrence_id:
+            raise gone
+        return _decorate(c, auth, who, caller, [occ])[0]
+    cal = _google(parsed["calendar_id"])
+    source = _google_source(c, who, caller, _viewer_google(c, caller), cal)
+    if "error" in source:
+        raise gone
+    try:
+        occ = cast(
+            Row,
+            gcal.event(
+                c, source["as"], parsed["calendar_id"], parsed["event_id"], calendar=_obj(cal), people=_people_map(c)
+            ),
+        )
+    except Problem as refused:
+        if refused.status in (403, 404):
+            raise gone from None
+        raise
+    return _decorate(c, auth, who, caller, [occ])[0]
+
+
 def meeting_link_facts(c: Any, who: Any, occurrence_id: object) -> Row | None:
     """What a calendar_event_links row needs for a live meeting started from an occurrence, or None when the
     occurrence cannot be resolved (the meeting starts anyway). A Google one is read as the caller."""
@@ -1711,6 +1757,13 @@ def install_calendar(app: Any, store: Any, mutate: Callable[..., Any]) -> None:
         if scope == "following":
             raise Problem("scope", "On Google, change this one or all of a repeated event", 422)
         return str(current.get("event_id") or event_id) if scope == "all" else event_id
+
+    @app.get("/api/v2/calendar/events/{occurrence_id:path}")
+    def calendar_event(request: Request, occurrence_id: str) -> Row:
+        """One occurrence as the caller sees it (the Recorder checks a Join link against it). 404 when it is not an
+        event, or the caller cannot see it."""
+        with store.read() as c:
+            return _one_occurrence(c, auth, request.state.identity, occurrence_id)
 
     @app.patch("/api/v2/calendar/events/{occurrence_id:path}")
     def calendar_change(request: Request, occurrence_id: str, body: EventChange) -> Any:

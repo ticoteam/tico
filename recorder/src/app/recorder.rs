@@ -5,7 +5,7 @@
 mod record_link;
 #[path = "task_links.rs"]
 mod task_links;
-pub use record_link::RecordLink;
+pub use record_link::{RecordLink, joinable, occurrence_path};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -65,7 +65,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 12] = [
+const BACKGROUND: [&str; 13] = [
     "live",
     "calendar",
     "autodraft",
@@ -78,6 +78,7 @@ const BACKGROUND: [&str; 12] = [
     "items",
     "presence",
     "record-live",
+    "record-check",
 ];
 /// A record link waiting for sign-in to its org is dropped after this long.
 const PENDING_RECORD_FOR: Duration = Duration::from_secs(300);
@@ -1221,6 +1222,15 @@ impl Recorder {
                 self.busy = false;
             }
             let here = reply.meeting == self.meeting;
+            if reply.kind == "record-check" {
+                match reply.result {
+                    Ok(answer) => self.record_checked(&answer),
+                    Err(error) => {
+                        eprintln!("Join link not recorded: Tico did not show the event: {error}")
+                    }
+                }
+                continue;
+            }
             if reply.kind == "more-links" {
                 if here
                     && let Ok(value) = reply.result
@@ -2908,10 +2918,11 @@ impl Recorder {
             self.roster_for.clear();
         }
     }
-    /// A `tico-recorder://record?title=…` link: records the event being joined as a live meeting in its org, named
-    /// as the event and linked to it (`calendar_event`). A recording already running stays the only one: it comes
-    /// to the front instead. An org the Recorder has no sign-in for asks to sign in first, and the recording starts
-    /// once it is signed in (`continue_record`).
+    /// A `tico-recorder://record?event=…` link (Join on a calendar event). Any web page can open one, so it starts
+    /// nothing by itself: the org is asked for the occurrence as the signed-in person sees it, and `record_checked`
+    /// records only one they can join that is on now. A recording already running stays the only one: it comes to
+    /// the front instead. An org the Recorder has no sign-in for asks to sign in first, and the check runs once it
+    /// is signed in (`continue_record`).
     pub fn record_event(&mut self, link: RecordLink) {
         if let Some((id, _)) = &self.active {
             let id = id.clone();
@@ -2922,22 +2933,17 @@ impl Recorder {
             self.error = UPDATING.into();
             return;
         }
-        let Some(title) = link.title.clone() else {
+        let Some(event) = link.event.clone() else {
             return;
         };
         match self.connection_for(&link.server) {
             Some(destination) => {
-                let event = link.event.unwrap_or_default();
-                let begun = self.begin_recording(&title, move |store, id| {
-                    store.update_context(id, |context| {
-                        context.calendar_event = event;
-                        Ok(())
-                    })
+                let (config, connect) = (self.config.clone(), self.tico_for);
+                self.job_for("record-check", None, move || {
+                    let occurrence =
+                        connect(&config, &destination)?.call(&occurrence_path(&event), None, "")?;
+                    Ok(json!({"destination": destination, "event": event, "occurrence": occurrence}))
                 });
-                if let Some((id, true)) = begun {
-                    self.choose_connection(&destination);
-                    self.go_live(&id, &destination);
-                }
             }
             None => {
                 let address = link.server.clone();
@@ -2946,6 +2952,38 @@ impl Recorder {
                     self.connect = Some(address);
                 }
             }
+        }
+    }
+    /// The org's answer to a Join link's check: records the occurrence under the org's title when `joinable` says
+    /// so (and nothing is recording meanwhile), else only logs why not.
+    pub fn record_checked(&mut self, answer: &Value) {
+        let (destination, event) = (
+            answer["destination"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+            answer["event"].as_str().unwrap_or_default().to_owned(),
+        );
+        let title = match joinable(&answer["occurrence"], chrono::Utc::now()) {
+            Ok(title) => title,
+            Err(why) => {
+                eprintln!("Join link not recorded: {why}");
+                return;
+            }
+        };
+        if self.active.is_some() || self.updating || destination.is_empty() || event.is_empty() {
+            eprintln!("Join link not recorded: a recording or an update started meanwhile");
+            return;
+        }
+        let begun = self.begin_recording(&title, move |store, id| {
+            store.update_context(id, |context| {
+                context.calendar_event = event;
+                Ok(())
+            })
+        });
+        if let Some((id, true)) = begun {
+            self.choose_connection(&destination);
+            self.go_live(&id, &destination);
         }
     }
     /// Opens the recording `id` as a private live meeting in `destination`, which links it to its calendar event.
@@ -2982,6 +3020,10 @@ impl Recorder {
         if let Some((_, at)) = &mut self.pending_record {
             *at = Instant::now() - PENDING_RECORD_FOR;
         }
+    }
+    #[cfg(test)]
+    pub fn checking_record(&self) -> bool {
+        self.background.contains("record-check")
     }
     pub fn confirm_connect(&mut self) {
         if let Some(address) = self.connect.take() {

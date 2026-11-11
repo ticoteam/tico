@@ -331,3 +331,72 @@ def test_search_merges_tico_and_google_and_is_partial_when_the_budget_runs_out(a
     with api.app.state.store.read() as c:
         logged = c.execute("SELECT detail FROM events WHERE action='calendar.search'").fetchone()
     assert logged is not None and '"partial": true' in logged["detail"]
+
+
+def one(api, occurrence_id, token="ana-test", expected=200):
+    r = api.get("/api/v2/calendar/events/" + occurrence_id, headers=headers(token))
+    assert r.status_code == expected, r.text
+    return r.json()
+
+
+def test_one_occurrence_reads_as_the_caller_sees_it_and_the_writes_on_its_path_still_work(api, google):
+    people(api)
+    made = create(api, {"title": "Standup", "start": at(9), "end": at(10)}, "ana-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE calendar_events SET meeting_url=? WHERE id=?", ("https://meet.example/abc", made["event_id"]))
+    shown = one(api, made["occurrence_id"])
+    assert (shown["occurrence_id"], shown["title"], shown["can"]["join"]) == (made["occurrence_id"], "Standup", True)
+    assert one(api, made["occurrence_id"], "ben-test")["can"]["join"] is True  # a Tico calendar is the company's
+    # One instance of a repeating event, by its original start.
+    daily = create(api, {"title": "Daily", "start": at(11), "end": at(11.5), "repeat": "daily"}, "ana-test")
+    second = f"tico:{daily['event_id']}:{at(35)}"
+    assert one(api, second)["start"] == at(35)
+    one(api, f"tico:{daily['event_id']}:{at(35.25)}", expected=404)  # not an instance
+    one(api, f"tico:{daily['event_id']}", expected=404)  # a series is not one occurrence
+    for missing in ("tico:nope", "google:x:busy:" + at(9), "run:abc", "nonsense", "google:only"):
+        one(api, missing, expected=404)
+    # PATCH, DELETE and POST …/response on the same path are not shadowed by the GET.
+    r = api.patch("/api/v2/calendar/events/" + made["occurrence_id"], json={"title": "Sync"}, headers=headers())
+    assert r.status_code == 200 and r.json()["title"] == "Sync", r.text
+    r = api.post(
+        "/api/v2/calendar/events/" + made["occurrence_id"] + "/response",
+        json={"response": "accepted"},
+        headers=headers(),
+    )
+    assert r.status_code == 403 and r.json()["error"]["code"] == "not_attendee", r.text  # its own handler answered
+    r = api.delete("/api/v2/calendar/events/" + made["occurrence_id"], headers=headers())
+    assert r.status_code == 200, r.text
+    one(api, made["occurrence_id"], expected=404)  # cancelled
+
+
+def test_one_private_tico_occurrence_is_busy_to_a_non_attendee_who_cannot_join_it(api, google):
+    people(api)
+    token, _ = bot(api)
+    made = create(
+        api,
+        {"title": "Salary talk", "start": at(9), "end": at(10), "visibility": "private", "attendees": ["human:cara"]},
+        token,
+    )
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE calendar_events SET meeting_url=? WHERE id=?", ("https://meet.example/x", made["event_id"]))
+    hidden = one(api, made["occurrence_id"], "ben-test")
+    assert (hidden["title"], hidden["busy_only"], hidden["meeting_url"], hidden["can"]["join"]) == (
+        "Busy",
+        True,
+        None,
+        False,
+    )
+    attending = one(api, made["occurrence_id"], "cara-test")
+    assert (attending["title"], attending["can"]["join"]) == ("Salary talk", True)
+
+
+def test_one_google_occurrence_is_read_as_the_viewer_and_404_when_they_cannot_see_it(api, google):
+    people(api)
+    google.connected.add("ana@acme.example")
+    standup = g_occ("team-cal", "g1", "Standup", at(9), at(10))
+    standup["meeting_url"] = "https://meet.google.com/abc-defg-hij"
+    google.cals["team-cal"] = [standup]
+    shown = one(api, "google:team-cal:g1")
+    assert (shown["title"], shown["can"]["join"]) == ("Standup", True)
+    one(api, "google:team-cal:missing", expected=404)
+    one(api, "google:team-cal:g1", "ben-test", expected=404)  # no Google of his own: nothing to read it as
