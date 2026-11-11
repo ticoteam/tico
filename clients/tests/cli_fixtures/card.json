@@ -137,7 +137,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico card add <template>\ntico card add: error: the following arguments are required: template",
+  "stderr": "Example: tico card add {tasks_by_status|done_per_week|needs_you|spend|kpi|automation_runs|latest_pages|needs_attention|unread_threads|my_tasks|updates|growth_number|growth_funnel|growth_channels|growth_retention|growth_board}\ntico card add: error: the following arguments are required: template",
   "exit": 64
  },
  {
@@ -183,36 +183,11 @@
    "add",
    "nope"
   ],
-  "tools": [
-   [
-    "tico_card_add",
-    {
-     "operation_id": null,
-     "template": "nope"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "POST",
-    "cards",
-    {
-     "template": "nope",
-     "settings": {},
-     "title": "",
-     "place": "",
-     "size": "medium"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico card add: error: argument template: invalid choice: 'nope' (choose from tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs, latest_pages, needs_attention, unread_threads, my_tasks, updates, growth_number, growth_funnel, growth_channels, growth_retention, growth_board)",
+  "exit": 64
  },
  {
   "argv": [

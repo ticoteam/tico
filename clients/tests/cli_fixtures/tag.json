@@ -349,9 +349,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"kind\",\n  \"detail\": \"Tag metadata must be a JSON object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
+  "stdout": "",
+  "stderr": "tico tag create: error: argument --metadata: Tag metadata must be a JSON object",
+  "exit": 64
  },
  {
   "argv": [
@@ -363,9 +363,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"JSONDecodeError: Expecting value: line 1 column 1 (char 0)\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico tag create: error: argument --metadata: not JSON (Expecting value: line 1 column 1 (char 0))",
+  "exit": 64
  },
  {
   "argv": [
@@ -377,9 +377,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing.md'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico tag create: error: argument --markdown-file: cannot read missing.md (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -393,9 +393,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing.md'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico tag create: error: argument --markdown-file: cannot read missing.md (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -538,9 +538,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing.md'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico tag update: error: argument --markdown-file: cannot read missing.md (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -554,8 +554,8 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"kind\",\n  \"detail\": \"Tag metadata must be a JSON object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
+  "stdout": "",
+  "stderr": "tico tag update: error: argument --metadata: Tag metadata must be a JSON object",
+  "exit": 64
  }
 ]

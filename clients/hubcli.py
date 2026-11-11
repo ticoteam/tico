@@ -430,6 +430,7 @@ def parser():
     from clients.commands import webhooks
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
+    from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -757,49 +758,8 @@ def parser():
     s.add_argument("id")
     s.add_argument("--restore", action="store_true", default=None)
     s.set_defaults(fn="page archive")
-    cards = sub.add_parser(
-        "card", help="Tico's built-in cards on the Dashboard, team pages, sidebars and tasks"
-    ).add_subparsers(dest="sub")
-    s = cards.add_parser("list", help="what is pinned at a place, with what each card shows you")
-    s.add_argument("--place")
-    thread_page_flags(s, "next")
-    s.set_defaults(fn="card list")
-    for name, helptext in (
-        ("add", "add a built-in card, pinned at --place"),
-        ("update", "change a card's heading or settings"),
-    ):
-        s = cards.add_parser(name, help=helptext)
-        s.add_argument("template" if name == "add" else "card")
-        s.add_argument("--title")
-        s.add_argument("--team")
-        s.add_argument("--weeks", type=int)
-        s.add_argument("--count", type=int)
-        s.add_argument("--kpi")
-        s.add_argument("--metric")
-        s.add_argument("--channel")
-        s.add_argument("--months", type=int)
-        if name == "add":
-            s.add_argument("--place")
-            s.add_argument("--size", choices=["small", "medium", "large"])
-        s.set_defaults(fn="card " + name)
-    s = cards.add_parser("remove", help="remove a card and its pins")
-    s.add_argument("card")
-    s.set_defaults(fn="card remove")
-    pins = sub.add_parser("pin", help="pin a page or a card at a place").add_subparsers(dest="sub")
-    s = pins.add_parser("add", help="pin page:<file id> or card:<id> at a place")
-    s.add_argument("place")
-    s.add_argument("item")
-    s.add_argument("--size", choices=["small", "medium", "large"])
-    s.add_argument("--position", type=int)
-    s.set_defaults(fn="pin add")
-    s = pins.add_parser("update", help="resize or move a pin")
-    s.add_argument("pin")
-    s.add_argument("--size", choices=["small", "medium", "large"])
-    s.add_argument("--position", type=int)
-    s.set_defaults(fn="pin update")
-    s = pins.add_parser("remove", help="unpin")
-    s.add_argument("pin")
-    s.set_defaults(fn="pin remove")
+    cli_spec.add(sub, content_commands.CARD)  # tico card: clients/commands/content.py
+    cli_spec.add(sub, content_commands.PIN)  # tico pin
     docs = sub.add_parser(
         "doc", help="read and search team docs and external sources, write internal docs, ask the Librarian"
     ).add_subparsers(dest="sub")
@@ -902,35 +862,7 @@ def parser():
     s.add_argument("--proposer", choices=["botops", "assistant"], default=None, help="only the cards one proposed")
     s.add_argument("--owner", default=None, help="only one person's cards, e.g. human:ana")
     s.set_defaults(fn="assistant proposals")
-    # Tags keep the existing task --label key contract.
-    tag = sub.add_parser("tag", help="tags and checklist templates").add_subparsers(dest="sub")
-    s = tag.add_parser("list")
-    s.add_argument("--templates", dest="is_template", action="store_const", const=True, default=None)
-    s.add_argument("--instances", dest="is_template", action="store_const", const=False)
-    s.set_defaults(fn="tag list")
-    s = tag.add_parser("show")
-    s.add_argument("id", help="tag key or id")
-    s.add_argument("--offset", type=int)
-    s.set_defaults(fn="tag show")
-    s = tag.add_parser("create")
-    s.add_argument("key")
-    s.add_argument("--label")
-    s.add_argument("--metadata", help="JSON object")
-    s.add_argument("--markdown")
-    s.add_argument("--markdown-file")
-    s.add_argument("--template", dest="is_template", action="store_const", const=True, default=None)
-    s.add_argument("--from-template", dest="template_id")
-    s.add_argument("--owner")
-    s.set_defaults(fn="tag create")
-    s = tag.add_parser("update")
-    s.add_argument("id", help="tag key or id")
-    s.add_argument("--version", type=int, required=True)
-    s.add_argument("--label")
-    s.add_argument("--metadata", help="JSON object; replaces metadata")
-    s.add_argument("--markdown")
-    s.add_argument("--markdown-file")
-    s.add_argument("--owner")
-    s.set_defaults(fn="tag update")
+    cli_spec.add(sub, task_work_commands.TAG)  # tico tag: clients/commands/task_work.py
 
     task = sub.add_parser("task", aliases=["tasks"]).add_subparsers(dest="sub")
     s = task.add_parser("child", help="create a subtask")
@@ -2008,26 +1940,7 @@ def parser():
             help=f"runs allowed per {window} for bots with no budget of their own; 0 for no limit",
         )
     s.set_defaults(fn="team budget")
-    seat = sub.add_parser("seat", help="Recruiting seats: roles on the chart with no bot yet").add_subparsers(
-        dest="sub"
-    )
-    seat.add_parser("list", help="the Recruiting seats").set_defaults(fn="seat list")
-    s = seat.add_parser("create", help="add a seat under you or someone below you (a person)")
-    s.add_argument("title")
-    s.add_argument("--description", help="its job description")
-    s.add_argument("--reports-to", dest="reports_to", help="a bot's slug or human:<id>; you by default")
-    s.add_argument("--team", help="a group id")
-    s.set_defaults(fn="seat create")
-    s = seat.add_parser("update", help="change a seat's title, job description, reporting line or group (a person)")
-    s.add_argument("seat")
-    s.add_argument("--title")
-    s.add_argument("--description")
-    s.add_argument("--reports-to", dest="reports_to")
-    s.add_argument("--team")
-    s.set_defaults(fn="seat update")
-    s = seat.add_parser("close", help="take a seat off the chart (a person)")
-    s.add_argument("seat")
-    s.set_defaults(fn="seat close")
+    cli_spec.add(sub, admin_commands.SEAT)  # tico seat: clients/commands/admin.py
     cli_spec.add(sub, org_commands.ORG)  # tico org: clients/commands/org.py
     cli_spec.add(sub, computers.HEALTH)  # tico health: clients/commands/computers.py
     changelog = sub.add_parser("changelog", help="shipped product changes and your own read state").add_subparsers(

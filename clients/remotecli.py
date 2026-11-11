@@ -300,8 +300,6 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "call":
         return via_tool(client, args)
-    if args.cmd in ("card", "pin"):
-        return via_tool(client, args)
     if fn == "event-types":
         return via_tool(client, args)
     if fn == "team icon":
@@ -357,19 +355,6 @@ def run(args, who=None):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
     if fn == "tool report":
         return via_tool(client, args, tools=json.loads(args.tools))
-    if args.cmd == "tag":
-        more = {}
-        if getattr(args, "markdown_file", None):
-            more["markdown"] = Path(args.markdown_file).read_text()
-        if getattr(args, "metadata", None) is not None:
-            more["metadata"] = json.loads(args.metadata)
-            if not isinstance(more["metadata"], dict):
-                raise APIError("kind", "Tag metadata must be a JSON object")
-        fields = vars(args).copy()
-        fields.pop("markdown_file", None)
-        from argparse import Namespace
-
-        return via_tool(client, Namespace(**fields), **more)
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
         return bots(client, args)
     if fn in (
@@ -416,10 +401,6 @@ def run(args, who=None):
         "slack channel add",
         "slack channel remove",
         "slack channel import",
-        "seat list",
-        "seat create",
-        "seat update",
-        "seat close",
         "setup show",
         "setup complete",
         "setup invite",
