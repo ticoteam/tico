@@ -672,10 +672,14 @@ tico sql "SELECT slug FROM bots"
 curl -H "Authorization: Bearer $HUB_TOKEN" https://hub.acme.example/api/v2/bots
 ```
 
+To keep several companies apart in one shell, save each as a profile instead:
+`tico auth add acme --url https://hub.acme.example --token-file ~/tico/acme_token`, then `tico --profile acme ...`
+([The `tico` CLI from a terminal](cli.md)).
+
 No `HUB_BOT`: the token is you, not a bot. It is you for every purpose, with the rights you
 have in the browser (a member sees what a member sees, an admin adds bots for their own
-account, the owner does what the owner does), and it leaves the same audit trail. What a token cannot do is make or revoke
-tokens or make another standing credential (a bot's agent credential, a pairing); that takes a signed-in browser, and a
+account, the owner does what the owner does), and it leaves the same audit trail. What a token cannot do is make
+tokens (it may list and revoke its own person's) or make another standing credential (a bot's agent credential, a pairing); that takes a signed-in browser, and a
 service key it makes ends with it, so a leaked token cannot extend its own life. Revoke one on the same page, and it stops
 at once; the owner and the Admins see and revoke anyone's. Every token
 made or revoked is an `events` row (`token.create`, `token.revoke`).

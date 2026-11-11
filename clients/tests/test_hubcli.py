@@ -1,7 +1,8 @@
 """The `tico` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
-depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
+depends on: 0 fine, 2 refused or a non-retryable API error, 1 may retry; 4 needs sign-in, 5 not found and 64 usage
+(docs/cli.md). The real HTTP round
 trip is `runner_support/tests/test_conformance.py`; here the API is a stub or absent.
 """
 
@@ -615,7 +616,7 @@ class AgainstAStub(unittest.TestCase):
         for argv in (["task", "update", "T1", "--title", "x"], ["task", "done", "T1", "-m", "x"]):
             Stub.seen.clear()
             code, out = run_hub(*argv, env=self.env)
-            self.assertEqual(code, 1, out)
+            self.assertEqual(code, 64, out)  # usage (docs/cli.md)
             self.assertEqual((out["error"], out["detail"]), ("usage", version_needed("T1")))
             self.assertIn("--version N", out["detail"])
             self.assertFalse([s for s in Stub.seen if s[0] == "POST"])

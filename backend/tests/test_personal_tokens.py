@@ -55,16 +55,25 @@ def test_revoked_and_expired_tokens_are_refused_like_unknown_ones(tokens):
     post(tokens, "me/tokens/" + revoked["id"] + "/revoke", {}, token=ADMIN, expected=409)
 
 
-def test_a_token_cannot_list_mint_or_revoke_tokens(tokens):
-    issued = mint(tokens)
+def test_a_token_lists_and_revokes_its_persons_tokens_but_never_mints_one(tokens):
+    issued, other = mint(tokens), mint(tokens, label="other script")
     refused = "Manage tokens from a signed-in browser"
-    r = tokens.get("/api/v2/me/tokens", headers=headers(issued["token"]))
-    assert r.status_code == 403 and r.json()["error"]["detail"] == refused
     r = tokens.post("/api/v2/me/tokens", json={"label": "another"}, headers=headers(issued["token"]))
     assert r.status_code == 403 and r.json()["error"]["detail"] == refused
-    r = tokens.post("/api/v2/me/tokens/" + issued["id"] + "/revoke", json={}, headers=headers(issued["token"]))
-    assert r.status_code == 403 and r.json()["error"]["detail"] == refused
-    assert len(get(tokens, "me/tokens", token=ADMIN)["tokens"]) == 1
+    # Reading the list and stopping a token lengthen nothing (`tico token list`, `tico token revoke`).
+    listed = get(tokens, "me/tokens", token=issued["token"])["tokens"]
+    assert {row["id"] for row in listed} == {issued["id"], other["id"]}
+    assert issued["token"] not in str(listed) and other["token"] not in str(listed)
+    post(tokens, "me/tokens/" + other["id"] + "/revoke", {}, token=issued["token"])
+    assert tokens.get("/api/v2/me", headers=headers(other["token"])).status_code == 401
+    # Everyone's list and someone else's token stay with the browser, even for an admin's token.
+    anas = mint(tokens, OWNER)
+    assert tokens.get("/api/v2/access/tokens", headers=headers(issued["token"])).status_code == 403
+    post(tokens, "me/tokens/" + anas["id"] + "/revoke", {}, token=issued["token"], expected=404)
+    assert tokens.get("/api/v2/me", headers=headers(anas["token"])).status_code == 200
+    # A token may stop itself, and is then refused like any revoked one.
+    post(tokens, "me/tokens/" + issued["id"] + "/revoke", {}, token=issued["token"])
+    assert tokens.get("/api/v2/me", headers=headers(issued["token"])).status_code == 401
     # Machines and bots have no tokens either.
     from backend.tests.helpers.api import runner
 
@@ -74,7 +83,7 @@ def test_a_token_cannot_list_mint_or_revoke_tokens(tokens):
 
 def test_the_owner_and_admins_see_and_revoke_everyones_tokens_and_members_only_their_own(tokens):
     bens, anas, caras = mint(tokens, ADMIN), mint(tokens, OWNER), mint(tokens, PLAIN)
-    # A member sees no one else's tokens and cannot revoke them; nobody does it with a token.
+    # A member sees no one else's tokens and cannot revoke them; nobody sees everyone's with a token.
     assert tokens.get("/api/v2/access/tokens", headers=headers(PLAIN)).status_code == 403
     post(tokens, "me/tokens/" + bens["id"] + "/revoke", {}, token=PLAIN, expected=404)
     assert tokens.get("/api/v2/access/tokens", headers=headers(bens["token"])).status_code == 403

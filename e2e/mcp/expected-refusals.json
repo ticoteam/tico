@@ -283,6 +283,7 @@
  "tico_thread_unreact": "404 not_found",
  "tico_thread_update": "404 not_found",
  "tico_thread_upload": "usage",
+ "tico_token_revoke": "404 not_found",
  "tico_tool_add": "422 entry",
  "tico_tool_check": "404 not_found",
  "tico_tool_learn": "404 not_found",
