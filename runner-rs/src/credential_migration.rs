@@ -198,7 +198,11 @@ mod tests {
             "tools:\n  - env: SEARCH_KEY\n",
         )
         .unwrap();
-        std::fs::write(secrets.join("assistant.env"), "OWN=1\nHUB_TOKEN=nope\n# NOTE=x\n").unwrap();
+        std::fs::write(
+            secrets.join("assistant.env"),
+            "OWN=1\nHUB_TOKEN=nope\n# NOTE=x\n",
+        )
+        .unwrap();
         std::fs::write(secrets.join("cert.pem"), "PEM").unwrap();
         std::fs::write(
             secrets.join("_shared.env"),
