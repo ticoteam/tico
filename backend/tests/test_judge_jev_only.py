@@ -127,9 +127,10 @@ def test_a_draft_still_runs_on_the_companys_own_model_and_sends_only_its_two_tex
     assert updates.own_model(cursor, env={}) is None
 
 
-def test_jev_failing_on_a_page_verdict_is_retried_then_a_persons_never_met(api, wire, monkeypatch):
+def test_jev_failing_on_a_page_verdict_is_retried_then_the_managers_never_met(api, wire, monkeypatch):
     """The Heartbeat's Jev step (page_verdicts.run, through the server's own engine) asks only Jev; a Jev that does not
-    answer is a try, never a verdict, and after TRIES the page is a person's to decide."""
+    answer is a try, never a verdict, and after TRIES the page is the pipeline's manager bot's to decide (two sign-offs
+    rule, Nov 11)."""
     import uuid
 
     from backend import page_verdicts as V
@@ -185,5 +186,9 @@ def test_jev_failing_on_a_page_verdict_is_retried_then_a_persons_never_met(api, 
     _jev_only(wire["requests"])
     with store.read() as r:
         (standing,) = R.standings(r, E.task(r, row["id"]))
-        assert standing.line == "Jev couldn't check this: The decision model did not answer; try again shortly"
+        assert standing.on == "bot:manager"
+        assert standing.line == (
+            f"{R.DECIDE} Jev couldn't check this: The decision model did not answer; try again shortly. "
+            "The check: Spec page"
+        )
         assert E.task(r, row["id"])["stage"]["name"] == "Spec"

@@ -295,7 +295,7 @@ def test_unsure_on_a_bots_stage_goes_back_to_the_bot_once_then_to_the_pipelines_
     standing = _standing(c, row)
     assert (standing.state, standing.on) == (R.NOT_MET, WRITER)
     assert standing.line == (
-        f"{R.FIX_OR_EXPLAIN} Jev is unsure: Can't tell if the scope is set The check: Says what done looks like"
+        f"{R.FIX_OR_EXPLAIN} Jev is unsure: Can't tell if the scope is set. The check: Says what done looks like"
     )
     with _refused("task_requirement"):
         A.answer(c, row["id"], rid, BEN, "ok")  # nobody's to OK: it is the bot's turn
@@ -414,8 +414,9 @@ def test_a_page_a_person_oks_anyway_goes_to_them_every_version_and_after_a_send_
     assert standing.line == (
         'Version 2, after the send back: "Round the result to 10 places". Jev is unsure: Still can\'t tell'
     )
-    # The bot never asks its own OK of the page, or "OK to merge?": Tico asks the person.
-    for kind, choices, shows in (("ok", None, [f"page:{fid}@2"]), ("ok", None, None), ("answer", ["Yes", "No"], None)):
+    # The bot never asks its own OK of the page, or "OK to merge?" of it: Tico asks the person.
+    page = [f"page:{fid}@2"]
+    for kind, choices, shows in (("ok", None, page), ("ok", None, None), ("answer", ["Yes", "No"], page)):
         with _refused("Attach the new version; Tico asks the person"):
             E.add_requirement(
                 c, row["id"], WRITER, kind, BEN, "OK to merge?", choices=choices, shows=shows, seen_version=_v(c, row)
@@ -425,6 +426,41 @@ def test_a_page_a_person_oks_anyway_goes_to_them_every_version_and_after_a_send_
     )
     assert asked["requirement_id"], "a real question is still the bot's to ask"
     assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] == "Spec", "the question is still open"
+
+
+def test_a_plain_yes_no_question_on_a_stage_with_a_page_a_person_oks_is_allowed(c, store):
+    """Lead's review of #3283: the Product Owner asking a person a clarifying yes/no in Spec is normal. Only a yes/no
+    that shows the people-only page itself is refused (it would be a second OK of that page)."""
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    _pipeline(c, who_oks="people_only")
+    row = _owned(c, po)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid, by=po), "met")
+    assert _standing(c, row).state == R.WAITING, "the person OKs the Spec page"
+    with _refused("Attach the new version; Tico asks the person"):
+        E.add_requirement(
+            c,
+            row["id"],
+            po,
+            "answer",
+            BEN,
+            "Is this spec OK?",
+            choices=["Yes", "No"],
+            shows=[f"page:{fid}@1"],
+            seen_version=_v(c, row),
+        )
+    asked = E.add_requirement(
+        c,
+        row["id"],
+        po,
+        "answer",
+        BEN,
+        "Should negate accept strings?",
+        choices=["Yes", "No"],
+        seen_version=_v(c, row),
+    )
+    assert asked["requirement_id"], "a plain clarifying yes/no is the Product Owner's to ask"
 
 
 def test_after_a_send_back_a_met_page_a_person_oks_is_asked_of_the_same_person(c, store):
@@ -439,12 +475,46 @@ def test_after_a_send_back_a_met_page_a_person_oks_is_asked_of_the_same_person(c
     assert standing.line.startswith('Version 2, after the send back: "Add the rounding". OK '), standing.line
 
 
-def test_a_failed_check_goes_to_a_person_once_per_visit(c, store):
+def test_a_failed_check_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_once(c, store):
+    """Nov 11 (two sign-offs rule): Jev could not check, after its retries, on a stage a bot holds. The page may be
+    fine and only Jev was down, so there is no bot round: the manager bot decides it, with why. No person."""
+    rid = _pipeline(c, page_settings={"rubric": "Says what done looks like"})
+    row = _task(c)
+    _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "unsure", "no model", failed=True)
+    standing = _standing(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, "bot:manager")
+    assert standing.line == f"{R.DECIDE} Jev couldn't check this: no model. The check: Says what done looks like"
+    with _refused("task_requirement"):
+        A.answer(c, row["id"], rid, BEN, "ok")
+    with _refused("task_why"):
+        A.answer(c, row["id"], rid, "bot:manager", "ok", seen_version=_v(c, row))
+    done = A.answer(c, row["id"], rid, "bot:manager", "ok", "Says done is a nightly run", seen_version=_v(c, row))
+    assert done["stage"]["name"] == "Done"
+
+
+def test_a_failed_check_on_the_managers_own_stage_is_a_persons(c, store):
+    _pipeline(c)
+    row = _owned(c, "bot:manager")
+    _say(c, _attach(c, row, "page:" + _page(c, store)[0], by="bot:manager"), "unsure", "no model", failed=True)
+    standing = _standing(c, row)
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev couldn't check this: no model")
+
+
+def test_a_failed_check_on_a_page_a_person_oks_anyway_is_theirs(c, store):
+    _pipeline(c, who_oks="people_only")
+    row = _task(c)
+    _say(c, _attach(c, row, "page:" + _page(c, store)[0]), "unsure", "no model", failed=True)
+    standing = _standing(c, row)
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "Jev couldn't check this: no model")
+
+
+def test_a_failed_check_goes_to_a_person_once_per_visit_with_no_manager_bot(c, store):
     rid = _pipeline(c)
+    c.execute("UPDATE pipelines SET manager_id=NULL WHERE id='product'")
     row = _task(c)
     fid, _ = _page(c, store)
     _say(c, _attach(c, row, "page:" + fid), "unsure", "no model", failed=True)
-    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, None), "failed is not routed to bots"
+    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, None), "no manager bot: a person"
     A.answer(c, row["id"], rid, BEN, "no", "Set the scope")
     _page(c, store, "<p>v2</p>", fid=fid)
     second = _attach(c, row, "page:" + fid)
@@ -459,6 +529,7 @@ def test_a_failed_check_goes_to_a_person_once_per_visit(c, store):
 
 def test_a_failed_check_is_a_persons_to_decide_and_their_ok_meets_it(c, store):
     rid = _pipeline(c)
+    c.execute("UPDATE pipelines SET manager_id=NULL WHERE id='product'")
     row = _task(c)
     made = _attach(c, row, "page:" + _page(c, store)[0])
     _say(c, made, "unsure", "no model", failed=True)
@@ -676,7 +747,7 @@ def test_the_judge_is_told_the_one_linked_prs_repo_number_and_author(store, seed
     assert work["context"]["heads"] == {"acme/app#12": "aaa"}
 
 
-def test_three_failed_calls_give_the_page_to_a_person(store, seeded, monkeypatch):
+def test_three_failed_calls_give_the_page_to_the_pipelines_manager(store, seeded, monkeypatch):
     def build(c):
         _pipeline(c)
         row = _task(c)
@@ -694,7 +765,17 @@ def test_three_failed_calls_give_the_page_to_a_person(store, seeded, monkeypatch
             assert verdict["tries"] == tries
     assert verdict["verdict"] == "failed" and verdict["last_error"] == "No judge is configured on this server"
     with store.read() as r:
-        assert _standing(r, row).line == "Jev couldn't check this: No judge is configured on this server"
+        standing = _standing(r, row)
+        assert standing.on == "bot:manager"
+        assert standing.line.startswith(f"{R.DECIDE} Jev couldn't check this: No judge is configured on this server.")
+        (woken,) = [
+            m[0]
+            for m in r.execute(
+                "SELECT body FROM messages WHERE recipient_id='bot:manager' AND wake_key LIKE ?",
+                (row["id"] + ":%:jev:%",),
+            )
+        ]
+    assert 'Jev could not check "Spec page": you decide it, as the pipeline\'s manager.' in woken
 
 
 def test_a_failed_call_waits_before_the_next_try(store, seeded, monkeypatch):

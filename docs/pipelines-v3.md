@@ -319,9 +319,12 @@ lists all of them. The list is never empty for an open task. Each state's look i
      back, the person who sent it back, with their words. On a stage a bot holds: back to that bot once, "not yet
      met: fix it or explain it on the page", with Jev's reason and the check; the next unsure in the same visit goes
      to the pipeline's manager bot, who OKs it or sends it back and says why; with no manager bot, or when the
-     manager holds the stage, a person as before. A bot never asks its own OK of a page a person OKs already: it
-     attaches the new version. (Changed Nov 11 by the two sign-offs rule.)
-   - If not: Retried 3 times, then a person.
+     manager holds the stage, a person as before. A bot never asks its own OK of a page a person OKs already, nor a
+     yes/no that shows that page: it attaches the new version. A plain yes/no question is still its to ask. (Changed Nov 11 by the two sign-offs rule.)
+   - If not: Retried 3 times. Then, on a stage a bot holds and a page that is not people only, the pipeline's
+     manager bot decides it and says why; with no manager bot, or when the manager holds the stage, a person once
+     per visit, then the owner. A page a person OKs anyway goes to that person. (Changed Nov 11 by the two sign-offs
+     rule.)
 6. **GitHub**
    - Starts: Checks are running, the PR is in the merge queue, or it merged and waits for a release.
    - Ends: The metadata arrives, by webhook or by the 5-minute read.

@@ -336,7 +336,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
     exact version when the requirement names one or is people only. An answer counts only for the page version it was given on.
     Jev unsure on a stage a bot holds goes to bots first (two sign-offs rule, Nov 11; `_unsure_to_bots`): back to that bot
-    once, then to the pipeline's manager bot. Otherwise, and when Jev could not check, a person decides, once per visit:
+    once, then to the pipeline's manager bot; when Jev could not check, straight to the manager bot. Otherwise a person
+    decides, once per visit:
     after a person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's
     list."""
     from . import page_verdicts as V
@@ -386,10 +387,9 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
             # A person OKs this page whatever Jev says: they are asked at once, every version, with Jev's reason. A bot
             # round trip adds nothing (Acme, Nov 11: after a send back, v2 went to nobody and the Builder improvised asks).
             return Standing(requirement, WAITING, person, after + line)
-        if said == "unsure":
-            routed = _unsure_to_bots(conn, task, requirement, line)
-            if routed:
-                return routed
+        routed = _unsure_to_bots(conn, task, requirement, line, failed=said == "failed")
+        if routed:
+            return routed
         if conn.execute(ASKED_ONCE_SQL, (visit_id, requirement["id"])).fetchone():
             return Standing(requirement, NOT_MET, owner, line)
         return Standing(requirement, WAITING, person, line)
@@ -416,13 +416,17 @@ def _sent_back(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -
     return {"by_id": str(found[0]), "said": " ".join(str(found[1] or "").split())}
 
 
-def _unsure_to_bots(conn: "sqlite3.Connection", task: Row, requirement: Row, line: str) -> Standing | None:
+def _unsure_to_bots(
+    conn: "sqlite3.Connection", task: Row, requirement: Row, line: str, *, failed: bool = False
+) -> Standing | None:
     """Jev unsure of a page on a stage a bot holds (docs/pipelines-v3.md "Jev is checking"; the two sign-offs rule of
     Nov 11 put this before a person). The first time this visit, it is that bot's turn with Jev's reason and the check
     line, to fix the page or explain on it. The next time, the pipeline's manager bot decides: it OKs the page or sends it
     back, with why, as an answer on the task. None, so a person decides as before, when a person holds the stage, or no
-    manager bot is set, or the manager is the bot that holds it. A page a person OKs anyway (people only, or naming
-    someone) never comes here."""
+    manager bot is set, or the manager is the bot that holds it. `failed` (Jev could not check, after its retries) skips
+    the bot's round: the manager decides at once, since the page may be fine and only Jev was down (Nov 11: a Jev outage
+    never makes a third kind of person sign-off). A page a person OKs anyway (people only, or naming someone) never
+    comes here."""
     from . import waiting_on as W
 
     held = W.holder(conn, task)
@@ -430,8 +434,8 @@ def _unsure_to_bots(conn: "sqlite3.Connection", task: Row, requirement: Row, lin
         return None
     settings: Row = requirement.get("settings") or {}
     check = " ".join(str(settings.get("rubric") or "").split()) or name_of(requirement)
-    said = line if check in line else f"{line} The check: {check}"
-    if not conn.execute(UNSURE_BEFORE_SQL, (task["visit"]["id"], requirement["id"])).fetchone():
+    said = line if check in line else f"{line.rstrip('.')}. The check: {check}"
+    if not failed and not conn.execute(UNSURE_BEFORE_SQL, (task["visit"]["id"], requirement["id"])).fetchone():
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"{FIX_OR_EXPLAIN} {said}")
     pipeline: Row = task.get("pipeline") or {}
     manager: object = pipeline.get("manager_id")
