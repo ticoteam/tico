@@ -1182,14 +1182,24 @@ def recorded(conn: "sqlite3.Connection", effect: Row, said: Row, state: str, ver
             return True
         # merged at once, where the repo has neither a queue nor auto-merge: read in full on the next pass
         IM.mark_due(conn, SOURCE, PR, pr_key(repo, number))
+        if how == "merged":
+            _merged_by_tico(conn, repo, number)
         return False
     if how == "merged":
         IM.mark_due(conn, SOURCE, PR, pr_key(repo, number))
+        _merged_by_tico(conn, repo, number)
         _merged_anyway(conn, task_id, str(effect["visit_id"]), ref)
     elif how == "dequeued":
         save_and_settle(conn, repo, number, {"queue_state": "none"}, version)
         E._event(conn, task_id, E.SYSTEM, "pr_dequeued", ref, None, None, {"ref": ref})
     return False
+
+
+def _merged_by_tico(conn: "sqlite3.Connection", repo: str, number: int) -> None:
+    """Tico's call found the PR merged: the other PRs on its base are read at once (backend/github.py `base_moved`)."""
+    from .. import github as G
+
+    cast(Any, G).merged_by_tico(conn, repo, number)
 
 
 def _merged_anyway(conn: "sqlite3.Connection", task_id: str, visit_id: str, ref: str) -> None:

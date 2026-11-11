@@ -18,6 +18,7 @@ step. A person moves the task. The repository's webhook posts here signed with
                                        result is the head's one `pr_checks_done`, never a second wake.
 - a review requested or withdrawn   -> that person is on or off the task in `github_review_role`
 - a push to main                    -> the commits are recorded, in order, in `main_pushes`
+- a branch moved (a merge, a push)  -> the open pull requests based on it are read for conflicts at once (`base_moved`)
 
 A merge queue (`enqueued`, `dequeued`) sets the link's `merge_queue` state. A removal from the queue for any reason but a
 merge is read by the maintenance pass first (`_queue_event`, `refresh_queue_removals`), and wakes the owner once when
@@ -403,19 +404,113 @@ CONFLICT_READS_PER_PASS = 30
 CONFLICT_UNKNOWN_MINUTES = 5
 CONFLICT_STALE_MINUTES = 30
 CONFLICT_RETRY_S = 1800  # a read GitHub refused or that failed waits half an hour, not one 10 s pass
+# After a base move GitHub answers `mergeable: null` until it has computed the new answer, which the first read starts:
+# a PR still unknown is read again after each of these, about a minute in all, then left to the five-minute read.
+RECHECK_AFTER_S = (10, 20, 30)
 _conflict_retry = {}  # link id -> monotonic time a failed read may be tried again
+
+
+def base_moved(c, repo, branch, sha="", *, default_branch="", merged_number=None):
+    """`branch` of `repo` moved (a pull request merged into it, the merge queue's merge, any push): GitHub sends no event
+    for the other pull requests on it, so each open or draft one on an open task is marked to be read on the next pass
+    (`detail.recheck`, read by `refresh_conflicts`). A link whose base is not known yet counts as on the default branch.
+    One move is one read per pull request: a mark not yet read is left as it is, and so is one already read for the
+    same commit (the merge's webhook, the push and Tico's own merge call all report one move). Returns how many links
+    were marked."""
+    repo, branch = str(repo or ""), str(branch or "")
+    if not repo or not branch:
+        return 0
+    if not default_branch:
+        found = c.execute(
+            "SELECT default_branch FROM repositories WHERE lower(full_name)=?", (repo.lower(),)
+        ).fetchone()
+        default_branch = str((found and found[0]) or "")
+    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+    rows = H._rows(
+        c.execute(
+            "SELECT l.id,l.number,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
+            "WHERE l.kind='pr' AND l.state IN ('open','draft') AND lower(l.repo)=? AND l.number IS NOT NULL "
+            f"AND t.status IN ({marks}) AND (json_extract(l.detail,'$.base_ref')=? "
+            "OR (json_extract(l.detail,'$.base_ref') IS NULL AND ?=?))",
+            (repo.lower(), *H.ACTIVE_STATUSES, branch, branch, default_branch),
+        )
+    )
+    now, marked = H.now(), 0
+    for link in rows:
+        if merged_number is not None and int(link["number"]) == int(merged_number):
+            continue
+        detail = H._json(link["detail"], {}) or {}
+        old = detail.get("recheck") or {}
+        if old and (not old.get("tries") or not sha or not old.get("sha") or old["sha"] == sha):
+            if sha and not old.get("sha"):
+                old["sha"] = sha
+                c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
+            continue
+        detail["recheck"] = {"sha": sha, "at": now, "due": now, "tries": 0}
+        c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
+        marked += 1
+    return marked
+
+
+def merged_by_tico(c, repo, number):
+    """Tico's own merge call (or its dequeue) found the pull request merged: its base moved (`base_moved`), before the
+    merge's webhook says so."""
+    found = c.execute(
+        "SELECT json_extract(detail,'$.base_ref') FROM task_links WHERE kind='pr' AND lower(repo)=? AND number=? "
+        "AND json_extract(detail,'$.base_ref') IS NOT NULL LIMIT 1",
+        (str(repo).lower(), int(number)),
+    ).fetchone()
+    if found:
+        return base_moved(c, repo, found[0], merged_number=number)
+    default = c.execute("SELECT default_branch FROM repositories WHERE lower(full_name)=?", (str(repo).lower(),))
+    branch = (default.fetchone() or [""])[0]
+    return base_moved(c, repo, branch, merged_number=number) if branch else 0
+
+
+def _settle_recheck(c, ids, at, pr):
+    """After a base move's read: a known answer (or a PR no longer open) ends the mark; GitHub's `null` (still computing)
+    is read again after the next RECHECK_AFTER_S step, and after the last one the mark ends. A link marked again since
+    the read (`at` differs: another move) keeps its new mark."""
+    known = (
+        pr.get("state") != "open" or pr.get("mergeable") is not None or pr.get("mergeable_state") in ("dirty", "clean")
+    )
+    for link_id in ids:
+        found = c.execute("SELECT detail FROM task_links WHERE id=?", (link_id,)).fetchone()
+        detail = H._json(found[0] if found else None, {}) or {}
+        mark = detail.get("recheck") or {}
+        if mark.get("at") != at:
+            continue
+        tries = int(mark.get("tries") or 0) + 1
+        if known or tries > len(RECHECK_AFTER_S):
+            detail.pop("recheck", None)
+        else:
+            detail["recheck"] = {**mark, "tries": tries, "due": H.shift(H.now(), seconds=RECHECK_AFTER_S[tries - 1])}
+        c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link_id))
 
 
 def refresh_conflicts(service: Any) -> int:
     """The maintenance pass's read of open pull requests on open tasks whose mergeability is not known (read again
     after five minutes: GitHub computes it lazily) or has not been read for thirty (a move of the base branch sends no
-    pull request event). A conflict found wakes the owner once per head, as the webhook's would (`pull_request`). At most
-    CONFLICT_READS_PER_PASS pull requests are read per pass, the longest unread first."""
+    pull request event). First come the pull requests whose base branch moved (`base_moved`, due at once, then while
+    GitHub still computes): one read per pull request however many links name it. A conflict found wakes the owner
+    once per head, as the webhook's would (`pull_request`). At most CONFLICT_READS_PER_PASS pull requests are read per
+    pass, the moved ones first, then the longest unread."""
     with service.store.read() as c:
         app = service.row(c)
         if not app:
             return 0
         marks = ",".join("?" * len(H.ACTIVE_STATUSES))
+        moved = H._rows(
+            c.execute(
+                "SELECT l.id,l.url,l.repo,l.number,json_extract(l.detail,'$.recheck.at') AS recheck FROM task_links l "
+                "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
+                "WHERE l.kind='pr' AND l.state IN ('open','draft') AND l.number IS NOT NULL AND r.reachable=1 "
+                f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) "
+                "AND json_extract(l.detail,'$.recheck.due')<=? "
+                "ORDER BY json_extract(l.detail,'$.recheck.due'),l.id LIMIT ?",
+                (str(app["org"] or "").lower() + "/%", *H.ACTIVE_STATUSES, H.now(), 500),
+            )
+        )
         rows = H._rows(
             c.execute(
                 "SELECT l.id,l.url,l.repo,l.number FROM task_links l "
@@ -439,10 +534,19 @@ def refresh_conflicts(service: Any) -> int:
     now = time.monotonic()
     for gone in [k for k, due in _conflict_retry.items() if due <= now]:
         _conflict_retry.pop(gone, None)
-    rows = [r for r in rows if r["id"] not in _conflict_retry][:CONFLICT_READS_PER_PASS]
+    # One read per pull request: the moved ones first, each with the links (and their marks) it settles.
+    due = {}
+    for r in moved + rows:
+        if r["id"] in _conflict_retry:
+            continue
+        key = (str(r["repo"]).lower(), int(r["number"]))
+        entry = due.setdefault(key, {**r, "marks": {}})
+        if r.get("recheck"):
+            entry["marks"][r["id"]] = r["recheck"]
     read = 0
-    for r in rows:
+    for r in list(due.values())[:CONFLICT_READS_PER_PASS]:
         _conflict_retry[r["id"]] = now + CONFLICT_RETRY_S
+        pr = None
         try:
             token, _ = service.mint([r["repo"]], {"pull_requests": "read"})
             response = service._call(
@@ -450,21 +554,27 @@ def refresh_conflicts(service: Any) -> int:
                 f"/repos/{quote(r['repo'], safe='/')}/pulls/{r['number']}",
                 headers={"Authorization": "Bearer " + token},
             )
-            if response.status_code != 200:
-                continue
-            pr = response.json()
-            pr["html_url"] = r["url"]
+            if response.status_code == 200:
+                pr = response.json()
+                pr["html_url"] = r["url"]
         except Exception:
             logging.getLogger("tico.github").exception("Conflict read failed for %s #%s", r["repo"], r["number"])
+        if pr is None and not r["marks"]:
             continue
         with service.store.transaction() as c:
-            pull_request(
-                c,
-                {"action": "refresh", "pull_request": pr},
-                review_role=service.settings.github_review_role,
-                release_repo=service.settings.release_repo,
-                read_refresh=True,
-            )
+            if pr is not None:
+                pull_request(
+                    c,
+                    {"action": "refresh", "pull_request": pr},
+                    review_role=service.settings.github_review_role,
+                    release_repo=service.settings.release_repo,
+                    read_refresh=True,
+                )
+            # A failed read ends a base move's mark: the half-hour wait above and the stale read take it from there.
+            for at in set(r["marks"].values()):
+                _settle_recheck(c, [i for i, a in r["marks"].items() if a == at], at, pr or {"state": "unread"})
+        if pr is None:
+            continue
         _conflict_retry.pop(r["id"], None)
         read += 1
     return read
@@ -574,6 +684,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         author = str((pr.get("user") or {}).get("login") or "").lower()
         if author:
             detail["author_login"] = author
+        base_ref = str((pr.get("base") or {}).get("ref") or "")
+        if base_ref:
+            detail["base_ref"] = base_ref  # the branch whose moves send this PR's mergeability to be read (base_moved)
         if pr.get("mergeable_state"):
             detail["mergeable_state"] = pr["mergeable_state"]
         elif new_head:
@@ -682,6 +795,18 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
     _merge_wakes(c, merged, url)
+    if action == "closed" and pr.get("merged"):
+        # The merge moved its base: the other pull requests on it may conflict now, and GitHub tells them nothing.
+        repository = payload.get("repository") or {}
+        match = PR_LINK.match(url)
+        base_moved(
+            c,
+            repository.get("full_name") or (f"{match.group(1)}/{match.group(2)}" if match else ""),
+            (pr.get("base") or {}).get("ref"),
+            str(pr.get("merge_commit_sha") or ""),
+            default_branch=str(repository.get("default_branch") or ""),
+            merged_number=pr.get("number") or (int(match.group(3)) if match else None),
+        )
     return {"pr": url, "action": action, "tasks": len(links)}
 
 
@@ -1594,7 +1719,8 @@ def reconcile_worktree_prs(service):
 
 
 def push(c, payload):
-    """A push to the default branch: every commit, in order, so a deploy can be placed on main."""
+    """A push to the default branch: every commit, in order, so a deploy can be placed on main. A push to any branch
+    has the open pull requests based on it read again (`base_moved`)."""
     ref = str(payload.get("ref") or "")
     repo = str((payload.get("repository") or {}).get("full_name") or "")
     default = str((payload.get("repository") or {}).get("default_branch") or "main")
@@ -1634,6 +1760,9 @@ def push(c, payload):
             detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now(), pushed_last_at=H.now())
             detail.pop("stale_push_cleared", None)  # a release names only a stale push the newest push left behind
             c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
+    if branch and not payload.get("deleted") and payload.get("after"):
+        # Any branch that moved may be some open pull request's base (a merge, the merge queue's, a direct push).
+        base_moved(c, repo, branch, str(payload["after"]), default_branch=default)
     if ref != "refs/heads/" + default:
         return {"ref": ref, "commits": 0}
     shas = [str(x.get("id") or "") for x in (payload.get("commits") or [])]
