@@ -626,7 +626,7 @@ pr_merged     effect owed                                waiting  github  Queuin
 in_release    a PR not merged                            waiting  github  Not merged yet
               releases never read                        waiting  github  Reading releases
               repo publishes none (C31)                  met              This repo doesn't publish releases
-              merged, no release holds it yet            waiting  github  Waiting for a release of <repo>
+              merged, no release holds it yet            waiting  github  Waiting for the next release of <repo>
               in a counted release                       met              In <tag>
 ```
 

@@ -397,7 +397,7 @@ def _one(
         _to_person(conn, row, level, done)
         return
     _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen, live)
-    _late(conn, row, at, done, seen)
+    _late(conn, row, at, done, seen, waits)
 
 
 # ----------------------------------------------------------------------------- the ladder
@@ -647,7 +647,14 @@ def _span(seconds: float) -> str:
     return f"{max(minutes, 1)} minutes"
 
 
-def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], seen: dict[str, str | None]) -> None:
+def _late(
+    conn: "sqlite3.Connection",
+    row: Row,
+    at: str,
+    done: dict[str, int],
+    seen: dict[str, str | None],
+    waits: "list[W.Wait] | None" = None,
+) -> None:
     H = _h()
     stage = row["stage"]
     minutes = int(stage.get("expected_minutes") or 0)
@@ -664,6 +671,9 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
         return
     spent = _spent(conn, visit, at)
     if spent < minutes * 60:
+        return
+    if _next_release_only(conn, W.of(conn, row, seen) if waits is None else waits):
+        _late_release(conn, row, at, spent, minutes, done)
         return
     manager = _manager(conn, row, seen)
     said = f"Late: {_span(spent)} in {stage['name']}, expected {_span(minutes * 60)}."
@@ -715,6 +725,41 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             # Still there at 3 times the expected time: one person's list, once. Already a person's turn, or paused
             # with its cause in a person's list: nothing.
             _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
+
+
+def _next_release_only(conn: "sqlite3.Connection", waits: "list[W.Wait]") -> bool:
+    """Whether all the task waits on is the next release of a repository Tico does not cut releases for (In a release
+    with no Release with): a release a person cuts, or the repository's own train."""
+    from .item_sources import github_release
+
+    if not waits or any(wait.state != W.SOURCE or not wait.requirement_id for wait in waits):
+        return False
+    for wait in waits:
+        requirement = R.get(conn, str(wait.requirement_id))
+        if not requirement or not github_release.waits_for_next_release(requirement):
+            return False
+    return True
+
+
+def _late_release(
+    conn: "sqlite3.Connection", row: Row, at: str, spent: float, minutes: int, done: dict[str, int]
+) -> None:
+    """A task that waits only for the next release, which no bot can bring: no bot is told Late or woken. After a week
+    (github_release.RELEASE_WAIT_S), or the stage's expected time when that is longer, it is Late and lands in one
+    person's list, once."""
+    from .item_sources import github_release
+
+    visit = row["visit"]
+    bound = max(minutes * 60, github_release.RELEASE_WAIT_S)
+    if spent < bound or visit.get("late_person_at"):
+        return
+    conn.execute(
+        "UPDATE visits SET late_told_at=COALESCE(late_told_at, ?), late_person_at=? WHERE id=?", (at, at, visit["id"])
+    )
+    _event(conn, row["id"], "late", None, None, {"expected_minutes": int(bound // 60)})
+    done["late"] += 1
+    fresh = E.task(conn, row["id"]) or row
+    _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
 
 
 def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int]) -> None:

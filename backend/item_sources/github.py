@@ -91,10 +91,11 @@ class GitHub(Protocol):
         `merged` means GitHub merged it first ("PR merged anyway")."""
         ...
 
-    def post_check(self, repo: str, sha: str, ok: bool, summary: str) -> bool:
-        """Post Tico's `tico/merge-ok` check run on a commit: success or failure, with a one-line summary. Only the
-        server posts it, with its own Checks: write token that no bot's token carries. False when the App has no
-        Checks: write (nothing posted); raises when GitHub could not be asked or refused."""
+    def post_check(self, repo: str, sha: str, ok: bool | None, summary: str) -> bool:
+        """Post Tico's `tico/merge-ok` check run on a commit: success (True), failure (False) or neutral (None: a merge
+        group of PRs no Tico task links, `answer_merge_group`), with a one-line summary. Only the server posts it, with
+        its own Checks: write token that no bot's token carries. False when the App has no Checks: write (nothing
+        posted); raises when GitHub could not be asked or refused."""
         ...
 
     def merge_group_prs(self, repo: str, base_ref: str, head_sha: str) -> list[Row]:
@@ -1247,16 +1248,27 @@ def queued_by_tico(conn: "sqlite3.Connection", repo: str, number: int, head_sha:
 GROUP_READ_WAITS = (1.0, 2.0)  # seconds between reads of a group GitHub does not list yet (a webhook has 10)
 
 
+def tracked(conn: "sqlite3.Connection", repo: str, number: int) -> bool:
+    """Whether a PR is a Tico task's: an open task on the engine links it (`linked_tasks`)."""
+    return bool(linked_tasks(conn, repo, number))
+
+
 def answer_merge_group(store: Any, github: "GitHub", payload: Row) -> Row:
     """GitHub's merge queue asks for the checks on a group's merge commit (`merge_group` `checks_requested`): post
-    `tico/merge-ok` there, success only when Tico queued every PR in the group at exactly its head now. Anything it
-    cannot read or decide is failure (closed). No transaction is held during GitHub's calls. Returns {ok, posted}."""
+    `tico/merge-ok` there. Success when Tico's Merge stage queued every PR in the group at exactly its head now. Failure
+    when a PR of a Tico task is in it that the Merge stage did not queue at that head, and when Tico cannot read or
+    decide (closed). Neutral when the rest are PRs no Tico task links: on a repository shared with people, their PRs
+    are not Tico's to pass or fail, and GitHub counts neutral as passing a required check. A repository whose ruleset
+    requires the check still lets no untracked PR in: it is refused at its own head, where Tico never posts the check
+    (docs/github-app.md "Require Tico's merge check"). No transaction is held during GitHub's calls. Returns {ok, posted}:
+    `ok` is True (success), False (failure) or None (neutral)."""
     group = _obj(payload.get("merge_group"))
     repo = str(_obj(payload.get("repository")).get("full_name") or "")
     head = str(group.get("head_sha") or "")
     if payload.get("action") != "checks_requested" or not repo or not head:
         return {}
-    ok, line = False, "Tico could not read this merge group, so it can't say each PR was signed off."
+    ok: bool | None = False
+    line = "Tico could not read this merge group, so it can't say each PR was signed off."
     try:
         prs = github.merge_group_prs(repo, str(group.get("base_ref") or ""), head)
         for wait in GROUP_READ_WAITS:  # GitHub may list the group's entry a moment after it asks
@@ -1266,11 +1278,15 @@ def answer_merge_group(store: Any, github: "GitHub", payload: Row) -> Row:
             prs = github.merge_group_prs(repo, str(group.get("base_ref") or ""), head)
         with store.read() as conn:
             others = [p for p in prs if not queued_by_tico(conn, repo, int(p["number"]), str(p.get("head_sha") or ""))]
+            theirs = [p for p in others if tracked(conn, repo, int(p["number"]))]
         if prs and not others:
             ok, line = True, f"Tico's Merge stage queued every PR in this group: {len(prs)}."
+        elif theirs:
+            refs = ", ".join(pr_ref(repo, int(p["number"])) for p in theirs)
+            line = f"Not queued by Tico's Merge stage at this commit: {refs}."
         elif prs:
             refs = ", ".join(pr_ref(repo, int(p["number"])) for p in others)
-            line = f"Not queued by Tico's Merge stage at this commit: {refs}."
+            ok, line = None, f"Not Tico tasks' PRs, so not Tico's to pass: {refs}."
     except Exception:  # noqa: BLE001 - fail closed: the group waits on a failure, never on a guess
         LOG.warning("Reading the merge group %s of %s failed", head, repo, exc_info=True)
     try:
@@ -1359,7 +1375,7 @@ def _open_one(task: Row, requirement: Row, link: Row) -> Standing:
     return Standing(requirement, MET, line="PR open")
 
 
-def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
+def _checks_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
 
     metadata, ref = link["metadata"], link["ref"]
     if not metadata:
@@ -1382,15 +1398,32 @@ def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
         seen = _seconds_since(metadata.get("head_seen_at"))
         if seen is None or seen < NO_CHECKS_AFTER_S:
             return Standing(requirement, WAITING, SOURCE, "Waiting for checks")
-        return Standing(requirement, MET, line="No checks on this repo")  # C13
+        if metadata.get("draft") or not runs_checks(conn, str(link["repo"])):
+            return Standing(requirement, MET, line="No checks on this repo")  # C13
+        # A ready PR on a repo that runs checks: no checks yet is an outage or a skipped run, never a pass.
+        if seen < CHECKS_TOO_LONG_S:
+            return Standing(requirement, WAITING, SOURCE, "Waiting for checks")
+        return Standing(requirement, NOT_MET, task.get("owner_id"), f"No checks on {ref} after 2 hours")
     return Standing(requirement, MET, line="Checks pass")
+
+
+def runs_checks(conn: "sqlite3.Connection", repo: str) -> bool:
+    """Whether a repo runs checks: a PR of it Tico has saved had any (running, passed, failed or skipped), not counting
+    Tico's own. Read from saved PRs, so it costs no call to GitHub; a repo's first PR has none to go by (C13 then)."""
+    prefix = repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "#%"
+    found = conn.execute(
+        "SELECT 1 FROM item_metadata WHERE source=? AND item_type=? AND item_key LIKE ? ESCAPE '\\' "
+        "AND json_extract(fields, '$.checks_state') IN ('pending', 'success', 'failure', 'skipped') LIMIT 1",
+        (SOURCE, PR, prefix),
+    ).fetchone()
+    return found is not None
 
 
 def checks_pass(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     prs, said = _prs(conn, task, requirement)
     if said:
         return said
-    found = [_silent(task, requirement, link, _checks_one(task, requirement, link)) for link in prs]
+    found = [_silent(task, requirement, link, _checks_one(conn, task, requirement, link)) for link in prs]
     if all(s.met for s in found):
         return Standing(requirement, MET, line=next((s.line for s in found if s.line == "Checks pass"), found[0].line))
     return _first(requirement, found)

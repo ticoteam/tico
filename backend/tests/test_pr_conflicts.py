@@ -87,8 +87,10 @@ def test_a_conflict_while_a_reviewer_holds_the_stage_wakes_the_builder_once_per_
     key = f"{eng}:{visit}:conflict:{PR}@aaa"
     assert _conflict_wakes(c, eng) == [(key, "bot:builder"), (key + ":holder", "bot:rev-b")]
     wake = c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
-    assert wake.startswith(f"{PR} conflicts with its base branch. You built it: rebase its branch on the default")
-    assert "push, and say so on this task. The task stays in Review 2" in wake
+    assert wake.startswith(f"{PR} conflicts with its base branch. You built it: rebase its branch on its base branch")
+    # The Builder may push its own branch only with a lease (its settings deny a plain force push).
+    assert "`git push --force-with-lease` (never a plain `--force`)" in wake
+    assert "say so on this task. The task stays in Review 2" in wake
     note = c.execute("SELECT body, refs FROM messages WHERE wake_key=?", (key + ":holder",)).fetchone()
     assert f"{PR} conflicts with its base branch. builder is rebasing it: it is not yours to fix." in note[0]
     assert "once the new one is pushed, review that one" in note[0]
@@ -103,7 +105,7 @@ def test_a_conflict_while_a_reviewer_holds_the_stage_wakes_the_builder_once_per_
     assert W.turn(c, row) == "bot:builder"
     assert "bot:builder" in W.turns(c, row)  # its run is not held (task_wakes.may_start)
     line = next(w.line for w in waits if w.who == "bot:builder")
-    assert line.startswith(f"{PR} conflicts with its base branch: ") and "rebases it on the default branch" in line
+    assert line.startswith(f"{PR} conflicts with its base branch: ") and "rebases it on its base branch" in line
     # To leave: not met, the Builder's.
     view = H.task_view(c, eng, X.ANA)
     conflict = next(t for t in view["to_leave"] if t.get("requirement_id") == f"conflict:{eng}")

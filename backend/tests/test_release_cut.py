@@ -211,7 +211,7 @@ def test_with_no_sign_off_stage_a_bot_is_refused_and_with_no_way_set_everyone_is
     with company.transaction() as c:
         refused(lambda: GR.cut(c, task_id, RM, seen_version=version(c, task_id)), "task_needs_person")
         c.execute("UPDATE requirements SET settings='{}' WHERE condition='in_release'")
-        assert "no way set" in refused(lambda: GR.cut(c, task_id, ANA), "task_requirement")
+        assert "Tico does not cut releases here" in refused(lambda: GR.cut(c, task_id, ANA), "task_requirement")
 
 
 # ----------------------------------------------------------------------------- failures never wait silently
@@ -271,14 +271,69 @@ def test_no_release_after_an_ask_is_the_owner_s_then_a_person_s(company, gh):
         assert [w.state for w in W.of(c, E.task(c, task_id))] == [W.PERSON]
 
 
-def test_a_repo_with_no_way_set_waits_half_an_hour_then_it_is_the_owner_s_turn(company, gh):
+def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_a_person_hears_once_after_a_week(company, gh):
+    """ticoteam/tico: Release with stays empty and a person tags each rc. Only that release ends the wait: no bot is
+    woken, climbs a ladder or is told Late, and a person hears once if no release comes for a week."""
     task_id = to_release(company, gh, release={})
+    waiting = (R.WAITING, "github", f"Waiting for the next release of {REPO}")
     with company.transaction() as c:
-        assert line(c, task_id) == (R.WAITING, "github", f"Waiting for a release of {REPO}")
-        at = H.shift(H.now(), minutes=-45)
-        c.execute("UPDATE visits SET entered_at=? WHERE task_id=? AND left_at IS NULL", (at, task_id))
-        state, on, said = line(c, task_id)
-        assert (state, on) == (R.NOT_MET, RM) and "Tico has no way set" in said
+        c.execute("UPDATE stages SET expected_minutes=1440 WHERE id='eng-release'")  # as the preset: a day
+        assert line(c, task_id) == waiting
+        assert [w.state for w in W.of(c, E.task(c, task_id))] == [W.SOURCE]
+        for days in (0.1, 1, 3, 6.9):  # past Release's expected day, and its 3 days
+            assert NS.check(c, H.shift(H.now(), hours=days * 24))["late"] == 0
+        assert line(c, task_id) == waiting
+        assert wakes(c, task_id) == [] and wakes(c, task_id, EM) == []  # neither the Release Owner nor the manager
+        assert "late" not in X.events(c, task_id)
+        done = NS.check(c, H.shift(H.now(), days=7, minutes=1))
+        assert (done["late"], done["to_person"], done["woken"]) == (1, 1, 0)
+        waits = W.of(c, E.task(c, task_id))
+        assert [w.state for w in waits] == [W.PERSON, W.SOURCE] and waits[0].who == ANA
+        assert waits[1].line == waiting[2]
+        assert NS.check(c, H.shift(H.now(), days=9))["late"] == 0  # once
+        assert wakes(c, task_id) == [] and wakes(c, task_id, EM) == []
+    gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)  # a pre-release does not count here (D3)
+    gh.publish(REPO, "v1.0.0")  # the person's release
+    F.refresh(company, gh, H.shift(H.now(), minutes=20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Done"
+
+
+def test_only_a_person_changes_how_releases_are_cut(company):
+    from backend import pipeline_settings as PS
+
+    with company.transaction() as c:
+        engineering(c, release={})
+        # The test pipeline's PR merged and In a release are written straight to the table; saved, they can't be pushed
+        # past (C3).
+        c.execute("UPDATE requirements SET can_push_past=0 WHERE condition IN ('pr_merged', 'in_release')")
+
+        def edit(by, change):
+            record = PS.read(c, "eng")
+            change(next(s for s in record["stages"] if s["name"] == "Release"))
+            return PS.save(c, by, record, seen_version=record["settings_version"])
+
+        def setting(**settings):
+            return lambda stage: stage["requirements"][0]["settings"].update(settings)
+
+        def added(stage):
+            new = {"kind": "item", "source": "github", "condition": "in_release", "settings": {"release_with": "tag"}}
+            stage["requirements"].append(new)
+
+        for change in (
+            setting(release_with="tag"),
+            setting(release_with="workflow:release.yml"),
+            setting(prereleases=True),
+            setting(release_repo="acme/server"),
+            added,
+        ):
+            with pytest.raises(H.Refused, match="Only a person changes how releases are cut") as raised:
+                edit(EM, change)  # the pipeline's manager bot
+            assert raised.value.rule == "task_settings"
+        edit(EM, lambda stage: stage.update(expected_minutes=600))  # the rest of it a manager bot still changes
+        assert edit(ANA, setting(release_with="tag", prereleases=True))  # a person may
+        with pytest.raises(H.Refused, match="Only a person changes how releases are cut"):
+            edit(EM, setting(release_with=""))  # and a bot may not take it back either
 
 
 def test_release_with_is_checked_when_the_pipeline_is_saved():

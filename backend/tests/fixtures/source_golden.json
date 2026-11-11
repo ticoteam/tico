@@ -4681,7 +4681,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -4711,7 +4711,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -4719,7 +4719,7 @@
    [
     "github",
     null,
-    "Waiting for a release of acme/app"
+    "Waiting for the next release of acme/app"
    ]
   ],
   "turn": null,
@@ -5067,7 +5067,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -5097,7 +5097,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -5105,7 +5105,7 @@
    [
     "github",
     null,
-    "Waiting for a release of acme/app"
+    "Waiting for the next release of acme/app"
    ]
   ],
   "turn": null,
@@ -5202,7 +5202,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -5232,7 +5232,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -5240,7 +5240,7 @@
    [
     "github",
     null,
-    "Waiting for a release of acme/app"
+    "Waiting for the next release of acme/app"
    ]
   ],
   "turn": null,
@@ -6855,7 +6855,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -6885,7 +6885,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -6893,7 +6893,7 @@
    [
     "github",
     null,
-    "Waiting for a release of acme/app"
+    "Waiting for the next release of acme/app"
    ]
   ],
   "turn": null,

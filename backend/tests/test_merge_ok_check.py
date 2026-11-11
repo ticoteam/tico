@@ -161,16 +161,28 @@ def test_a_group_asked_before_tico_recorded_its_enqueue_still_passes(company):
     assert MQ.answer_merge_group(company, gh, gh.group(REPO, 1))["ok"] is True
 
 
-def test_a_group_with_a_pr_tico_did_not_queue_fails(company):
+def test_a_group_with_a_pr_no_tico_task_links_is_neutral_and_one_with_a_task_s_pr_tico_did_not_queue_fails(company):
+    """A repo shared with people (ticoteam/tico, about 95 merges a day): a person's PR is not Tico's to pass or fail, so
+    its group gets neutral, which GitHub counts as passing a required check. A Tico task's PR the Merge stage did not
+    queue still fails its group."""
     gh = FakeGitHub()
     with company.transaction() as c:
         in_merge(c, gh, 1)
     MQ.run(company, gh)
-    gh.set_checks(REPO, gh.open_pr(REPO, 3), "success")  # queued on GitHub by someone else, no task in Merge
+    gh.set_checks(REPO, gh.open_pr(REPO, 3), "success")  # queued on GitHub by a person, no task links it
     payload = gh.group(REPO, 1, 3)
-    assert MQ.answer_merge_group(company, gh, payload) == {"ok": False, "posted": True}
+    assert MQ.answer_merge_group(company, gh, payload) == {"ok": None, "posted": True}
     head = payload["merge_group"]["head_sha"]
-    assert gh.merge_ok_on(REPO, head) is False and "acme/app#3" in gh.merge_ok[(REPO, head)][-1][1]
+    assert gh.merge_ok_on(REPO, head) == "neutral" and "acme/app#3" in gh.merge_ok[(REPO, head)][-1][1]
+    alone = gh.group(REPO, 3)
+    assert MQ.answer_merge_group(company, gh, alone)["ok"] is None
+    with company.transaction() as c:
+        new(c, 4)  # a Tico task's PR, still in Build: queued around the Merge stage
+    gh.set_checks(REPO, gh.open_pr(REPO, 4), "success")
+    payload = gh.group(REPO, 1, 3, 4)
+    assert MQ.answer_merge_group(company, gh, payload) == {"ok": False, "posted": True}
+    said = gh.merge_ok[(REPO, payload["merge_group"]["head_sha"])][-1][1]
+    assert "acme/app#4" in said and "acme/app#3" not in said
 
 
 def test_a_group_whose_pr_moved_on_or_left_merge_fails(company):
@@ -209,8 +221,8 @@ def test_the_merge_group_webhook_answers_tico_merge_ok(hook_api, monkeypatch):  
     monkeypatch.setattr(G, "AppGitHub", lambda service: gh)
     payload = gh.group(REPO, 1)
     answer = hook(hook_api, "merge_group", payload)
-    assert answer == {"ok": True, "merge_ok": False, "posted": True}
-    assert gh.merge_ok_on(REPO, payload["merge_group"]["head_sha"]) is False  # no task queued it
+    assert answer == {"ok": True, "merge_ok": None, "posted": True}
+    assert gh.merge_ok_on(REPO, payload["merge_group"]["head_sha"]) == "neutral"  # no task links it
 
 
 # ----------------------------------------------------------------------------- AppGitHub: the calls GitHub sees
@@ -248,6 +260,8 @@ def test_app_github_posts_a_completed_check_run_with_the_server_s_checks_token()
     assert (method, path, headers["Authorization"]) == ("POST", "/repos/acme/app/check-runs", "Bearer ghs_checks")
     assert body["name"] == "tico/merge-ok" and body["head_sha"] == "a" * 40
     assert (body["status"], body["conclusion"]) == ("completed", "failure")
+    assert G.AppGitHub(service).post_check(REPO, "b" * 40, None, "Not Tico tasks' PRs") is True
+    assert service.calls[-1][3]["conclusion"] == "neutral"  # passes a required check on GitHub
     assert G.AppGitHub(Service({"checks": "read"})).post_check(REPO, "a" * 40, True, "") is False
     with pytest.raises(G.GitHubRefused):
         G.AppGitHub(Service(None)).post_check(REPO, "a" * 40, True, "")

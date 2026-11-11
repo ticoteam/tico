@@ -33,7 +33,10 @@ permissions on the installation, and the next run's token carries it (at once wh
 
 ### Cutting a release
 
-The Engineering pipeline's Release stage waits for a published release that holds the merge. When its In a release
+The Engineering pipeline's Release stage waits for a published release that holds the merge. Only a person sets how
+releases are cut: a bot's change to Release with, Pre-releases count or the release repo is refused. Left empty, Tico
+cuts nothing and waits for the next release, whoever makes it (a person tagging each one, or the repository's own
+train). When its In a release
 requirement names **Release with** `workflow:<file>` (for example `workflow:release.yml`), the Release Owner asks with
 `tico task release <task>` and the server runs that workflow on the default branch with a token naming Actions: write
 alone; with `tag`, it creates the named tag with Contents: write. No bot's token carries either for this. An App made
@@ -303,11 +306,19 @@ existing repository grants keep their normal behavior.
 
 When a task's Merge stage queues a pull request, the Tico server first posts a check run named `tico/merge-ok` as
 success on exactly the commit it queues. Taking the PR out (the task is sent back or closed) turns it to failure on
-that commit. When the merge queue builds a group, Tico answers on the group's commit too: success only when the Merge
-stage queued every PR in the group at its current head, failure otherwise, and failure when it cannot read the group.
+that commit. When the merge queue builds a group, Tico answers on the group's commit too: success when the Merge stage
+queued every PR in the group at its current head; failure when the group holds a PR a Tico task links that the Merge
+stage did not queue at that head, and when Tico cannot read the group; neutral when the other PRs are ones no open
+Tico task links. Neutral is for a repository shared with people: their PRs are not Tico's to pass or fail, and GitHub
+counts a neutral conclusion as passing a required check, so a red Tico check never lands on their groups.
 A repository ruleset that requires this check stops any bot (or person) from merging or queuing a PR around the Merge
 stage, its reviews and the person's OK: GitHub refuses the merge or the queue until Tico has posted success on that
 commit.
+
+The ruleset is for a repository only Tico merges into. It still holds there with neutral groups: a required check
+must pass on a PR's own head before GitHub lets it into the queue, and Tico posts `tico/merge-ok` on a PR's head only
+when its Merge stage queues it, so a PR no task links never gets in. On a repository people also merge into, do not
+add the ruleset: every PR of theirs would wait for a check Tico never posts.
 
 What it means: Tico's Merge stage queued this PR at this commit, after the sign-off. It does not mean every commit was
 reviewed: a commit pushed after the person's OK still merges once green when the stage owner queues it again (C22 in
@@ -578,7 +589,9 @@ app from its settings page.
 New GitHub Apps include the task events and read permissions automatically. For an existing
 App, enable webhook events for Pull requests, Pull request reviews,
 Pull request review comments, Check runs, Check suites, Workflow runs and Commit statuses, plus Push for
-deploy tracking and Merge group for [Tico's merge check](#require-ticos-merge-check). Release events are not used. The webhook remains `POST /api/v2/github/webhook` with signature verification.
+deploy tracking, Merge group for [Tico's merge check](#require-ticos-merge-check), and Release: Tico saves a published
+release when it hears of it, for the tasks a Release stage holds (without it, the 5-minute read finds it) and for
+automations' `release.published`. The webhook remains `POST /api/v2/github/webhook` with signature verification.
 Checks need read access to Checks and commit statuses need read access to Commit statuses in
 the GitHub App. Existing installations without these events keep their last known PR states;
 opening a task refreshes reachable PRs, cached for three minutes.

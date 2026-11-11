@@ -177,7 +177,7 @@ def standing(conn: "sqlite3.Connection", row: Row, others: "Iterable[R.Standing]
         "choices": None,
         "created_at": row["visit"]["entered_at"],
     }
-    line = f"{refs} conflicts with its base branch: {name} rebases it on the default branch"
+    line = f"{refs} conflicts with its base branch: {name} rebases it on its base branch"
     if asked:
         person = asked.on or _person_for(conn, row)
         requirement["held_for"] = person or "a person"
@@ -229,9 +229,9 @@ def tell(conn: "sqlite3.Connection", task_id: str, pr: str, head: str) -> bool:
     who = found.on
     if is_bot(who):
         lead = (
-            f"{pr} conflicts with its base branch. You built it: rebase its branch on the default branch, keep the "
-            "work of both sides, push, and say so on this task. The task stays in "
-            f"{stage}; you do not move it."
+            f"{pr} conflicts with its base branch. You built it: rebase its branch on its base branch, keep the work "
+            "of both sides, push it with `git push --force-with-lease` (never a plain `--force`), and say so on this "
+            f"task. The task stays in {stage}; you do not move it."
         )
         if any(_oked_by_a_person(s) for s in standings):
             # A rebase is not a new version of the page a person OK'd: a new page would ask them again.

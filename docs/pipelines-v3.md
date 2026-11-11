@@ -112,7 +112,9 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C12.** Stale checks are dropped. *Today a model flags tasks that look forgotten and lists them for you.* Bot tasks
   are covered by the never-stuck check. Your own old to-dos just stay in your list.
 - **C13.** A repo with no checks: if GitHub shows no checks for a commit 10 minutes after the push, Checks pass is met
-  and says "No checks on this repo".
+  and says "No checks on this repo". Only for a draft, or a repo none of whose saved PRs ever ran a check: on a repo
+  with CI a ready PR waits for its checks (an Actions outage or a skipped run is never a pass), and 2 hours with none
+  is the owner's turn.
 - **C14.** Forward moves go one stage at a time. Dragging a task several stages ahead counts as pushing past every stage
   skipped, with one reason.
 - **C15.** A bot can have one requirement of its own open on a task at a time. If it asks again, the new one replaces the
@@ -161,8 +163,9 @@ Sign-off A: the parts, the moves, whose turn it is, the never-stuck check, asks,
 
 ## The model: six parts
 
-Customers and manager bots can edit all of it. General, Product, Engineering and the Growth and Success pipelines are
-presets built from these parts.
+Customers and manager bots can edit all of it, except how releases are cut: In a release's Release with, Pre-releases
+count and release repo are a person's to change, and a bot's change is refused whatever the route (API, CLI, MCP).
+General, Product, Engineering and the Growth and Success pipelines are presets built from these parts.
 
 - **Pipeline.** A line of stages with a name, a one-line goal and a manager bot. It ends in two built-in stages: Done and
   Closed.
@@ -1009,8 +1012,8 @@ late. Nothing depends on the exact 10 seconds.
 - **A new commit during Review** puts the review back to Waiting on the reviewer.
 - **A merge conflict before Merge** is the Builder's (the Build stage's owner bot), whoever holds the stage: "No merge
   conflict" is not met and is the Builder's turn. The Builder is woken at once, once per PR and conflicting commit, to
-  rebase on the default branch, keep both sides' work, push and say so; the task stays in its stage. A bot holding
-  the stage (a reviewer) gets one quiet line that it is not its to fix. The ladder tries the Builder, then the manager
+  rebase on the PR's base branch, keep both sides' work, push with `git push --force-with-lease` (never a plain force)
+  and say so; the task stays in its stage. A bot holding the stage (a reviewer) gets one quiet line that it is not its to fix. The ladder tries the Builder, then the manager
   bot. With no Builder bot it is the stage owner's, as before. In Merge, the merge queue's drop says it.
   While the stage waits on a person's OK or answer, the conflict is held: it stays not met, the person's ask adds one
   line ("The PR has a merge conflict: Builder fixes it after your OK."), and the Builder is not woken, so the ask does
@@ -1032,8 +1035,10 @@ late. Nothing depends on the exact 10 seconds.
 - **`tico/merge-ok`.** Before queuing a PR, the server posts a check run `tico/merge-ok` = success on exactly the commit
   it queues (from the queue action or a queue-again, never otherwise); taking the PR out turns it to failure on that
   commit. When GitHub's merge queue asks for the checks on a group's commit (the `merge_group` webhook), Tico answers
-  success only if its Merge stage queues every PR in the group at its current head. Only the server's own token writes
-  checks; no bot's token does. A repo ruleset that requires the check, pinned to the company App, stops a bot merging
+  success only if its Merge stage queues every PR in the group at its current head, failure when the group holds a
+  Tico task's PR the Merge stage did not queue there, and neutral when the others are PRs no Tico task links (a repo
+  shared with people: their PRs are not Tico's to pass or fail). Only the server's own token writes checks; no bot's
+  token does. A repo ruleset that requires the check, pinned to the company App, stops a bot merging
   or queuing a PR around the Merge stage ([GitHub App](github-app.md#require-ticos-merge-check)). It means "Tico's Merge
   stage queued this PR after the person's OK", not "every commit was reviewed": under C22 the owner's queue-again posts
   it on a commit pushed after the OK. A post that fails queues nothing and is tried again like any failed call.
@@ -1058,7 +1063,12 @@ late. Nothing depends on the exact 10 seconds.
   (`release_found`, the ask moot), and the tool answers "Already in <tag> of <repo>".
   GitHub refusing, or no release an hour after the ask, is the Release Owner's turn with why (it asks again or says why
   not); a second failure since the merge, or a permission the App lacks, is a person's, and health warns "Tico can't cut
-  releases" while a task waits on a Release with that needs it. With no way set, the task waits on GitHub for 30 minutes, then it is the Release Owner's turn.
+  releases" while a task waits on a Release with that needs it. Only a person sets Release with.
+  With no way set (the repo releases on its own, or a person cuts each release, as on a repo that tags rcs by hand),
+  the task shows "Waiting for the next release of <repo>" and only that release ends it: nobody's turn, no wake, no
+  ladder and no Late for a bot. After a week (or the stage's expected time, when longer) it is Late and lands in one
+  person's list, once. A week, because a weekly stable train is the slowest cadence a repo keeps on purpose; a repo
+  cutting pre-releases several times a day never gets near it.
 
 ### What gets deleted
 
