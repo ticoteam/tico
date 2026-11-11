@@ -93,6 +93,9 @@ WORKFLOW_EDITS_REFUSED = (
 # token for it, and only after the installation reports Checks as read and write. An App made before it asks the Owner
 # to accept the change; until then nothing is posted.
 CHECKS_PERMISSIONS = {"checks": "write", "metadata": "read"}
+# Asked for in the manifest only because GitHub refuses a manifest whose `merge_group` event no permission covers. No
+# token ever names it (a token naming a permission an older installation lacks is refused), so an App without it works.
+MERGE_GROUP_EVENT_PERMISSIONS = {"merge_queues": "read"}
 # What no bot's turn token ever writes, whatever a repository opts in to (RAISES): a bot that could post a check or a
 # commit status could pass `tico/merge-ok` itself and merge around the Merge stage.
 TURN_NEVER_WRITE = ("checks", "statuses", "administration")
@@ -1717,6 +1720,7 @@ def manifest(settings, name, administration, personal=False):
     public = settings.public_url
     permissions = {**TURN_READS, **TURN_PERMISSIONS}  # a write a bot needs wins over the same read
     permissions.update(CHECKS_PERMISSIONS)  # the server's own tico/merge-ok check; no bot's token carries it
+    permissions.update(MERGE_GROUP_EVENT_PERMISSIONS)  # what GitHub requires for the `merge_group` event below
     # Tico itself runs a repository's release workflow when the Release Owner asks (item_sources/github_release.py),
     # with a server token naming Actions: write alone. A bot's turn still reads Actions only (TURN_READS, mint_turn),
     # unless an Owner lets that bot run workflows (`run_workflows`).

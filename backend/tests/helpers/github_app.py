@@ -31,6 +31,38 @@ PEM = KEY.private_bytes(
 PUBLIC = "https://tico.acme.example"
 
 
+# The repository permission GitHub requires before an App may subscribe to a webhook event: "To subscribe to this
+# event, a GitHub App must have at least read-level access for the ... repository permission", per event, at
+# https://docs.github.com/en/webhooks/webhook-events-and-payloads (read Nov 11, 2026). GitHub's Create GitHub App page
+# refuses a whole manifest with one uncovered event ("Default events are not supported by permissions: merge_group",
+# v0.6.0-rc.7). An event the manifest gains must be added here from that page.
+EVENT_PERMISSIONS = {
+    "pull_request": "pull_requests",
+    "pull_request_review": "pull_requests",
+    "pull_request_review_comment": "pull_requests",
+    "check_run": "checks",
+    "check_suite": "checks",
+    "workflow_run": "actions",
+    "status": "statuses",
+    "push": "contents",
+    "release": "contents",
+    "merge_group": "merge_queues",
+}
+
+
+def manifest_refusal(body):
+    """What GitHub's Create GitHub App page says to a manifest it refuses, or "" for one it accepts."""
+    permissions = body.get("default_permissions") or {}
+    unknown = [e for e in body.get("default_events") or [] if e not in EVENT_PERMISSIONS]
+    if unknown:  # the fake cannot say GitHub would accept an event it has no permission on record for
+        return "Default events unknown to the fake GitHub (add them to EVENT_PERMISSIONS): " + ", ".join(unknown)
+    events = body.get("default_events") or []
+    bare = [e for e in events if permissions.get(EVENT_PERMISSIONS[e]) not in ("read", "write")]
+    if bare:
+        return "Default events are not supported by permissions: " + ", ".join(bare)
+    return ""
+
+
 class FakeGitHub:
     def __init__(self):
         self.calls, self.installations = [], [{"id": 77, "account": {"login": "Acme"}}]
@@ -257,6 +289,14 @@ class FakeGitHub:
     def of(self, suffix):
         return [c for c in self.calls if c[1].endswith(suffix)]
 
+    def create_app(self, body):
+        """The person's browser posting the manifest to GitHub's Create GitHub App page: the code GitHub redirects back
+        with, or the error page GitHub shows instead (no App is made and the person never returns to Tico)."""
+        refusal = manifest_refusal(body)
+        if refusal:
+            raise AssertionError("GitHub refused the App manifest: " + refusal)
+        return "the-code"
+
 
 @pytest.fixture
 def gh(monkeypatch):
@@ -337,8 +377,9 @@ def manifest(api, **params):
 
 
 def connect(api, **params):
-    state = manifest(api, **params)["state"]
-    r = api.get("/api/v2/github/app/callback", params={"code": "the-code", "state": state}, headers=auth())
+    asked = manifest(api, **params)
+    code = G.TRANSPORT.handler.create_app(asked["manifest"])  # GitHub makes the App only from a manifest it accepts
+    r = api.get("/api/v2/github/app/callback", params={"code": code, "state": asked["state"]}, headers=auth())
     assert r.status_code == 302, r.text
     return r
 
