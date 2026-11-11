@@ -290,8 +290,18 @@ fn squeezed(raw: &str, hide: &str) -> String {
 #[ignore = "runs the real claude and codex CLIs: scripts/cli_contract.sh"]
 fn both_clis_report_a_version_the_runner_can_read() {
     let home = Home::new();
-    for id in ["claude-code", "codex"] {
-        let m = manifest(id);
+    // The CLIs a plan can be connected on (the manifest's `connect`): the ones this contract is about.
+    let connectable: Vec<Manifest> = harness_tools::load_all()
+        .unwrap()
+        .into_values()
+        .filter(|m| m.login.as_ref().is_some_and(|l| !l.connect.is_empty()))
+        .collect();
+    assert_eq!(
+        connectable.len(),
+        2,
+        "a new CLI with Connect needs its own contract tests here"
+    );
+    for m in connectable {
         let (code, out) = home.run(&m.executable, &m.version_args, "", 30);
         assert_eq!(code, Some(0), "`{} --version` failed", m.executable);
         let found = Regex::new(&m.version_pattern)
@@ -306,10 +316,12 @@ fn both_clis_report_a_version_the_runner_can_read() {
             out.trim()
         );
         println!("cli contract: {} {found}", m.executable);
-        if id == "claude-code" {
+        // A CLI that takes a message for the running turn (`steer`) may need a minimum version for it.
+        if m.capabilities.steer {
             assert!(
                 crate::hosts::claude::version_tuple(&out).is_some(),
-                "Claude Code's version decides steering; it could not be read from {:?}",
+                "`{} --version` decides steering; its three numbers could not be read from {:?}",
+                m.executable,
                 out.trim()
             );
         }
