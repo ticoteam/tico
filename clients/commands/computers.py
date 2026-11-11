@@ -12,6 +12,7 @@ from clients.cli_spec import NULL, Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._requester import _as_person
+from clients.commands._shared import text_file
 
 
 @tool(
@@ -385,7 +386,10 @@ def support_file(api, args):
     "Write it self-contained: what failed, since when, the exact error, what you tried. No secrets, tokens or customer "
     "data. Don't hand the person a copy-and-paste task instead.",
     {
-        "message": _s("The whole report, plain text, up to 4000 characters"),
+        "message": _s(
+            "The whole report, plain text, up to 4000 characters: what failed, since when, the exact error, what you "
+            "tried. On a command line, --file names a UTF-8 file that holds it"
+        ),
         "include_ids": {
             "type": "boolean",
             "description": "Send the Tico version and this install's ID with it (default true)",
@@ -434,7 +438,7 @@ def support_message(value):
     "OK'd it and its replies reach their Support page. Before their OK, after they send it back, or for an OK you did "
     "not ask for, it is refused; a second call answers with the same ticket. When Tico support cannot be reached, "
     "try again later (Maintenance also sends it): it still goes once.",
-    {"ok": _s("The OK id tico_support_report returned")},
+    {"ok": _s("The OK id `support report` printed")},
     required=("ok",),
     writes=True,
 )
@@ -666,4 +670,31 @@ MAINTENANCE = (
         example="tico maintenance run",
     ),
     Command("maintenance runs", "recent runs with each step's status", example="tico maintenance runs --limit 5"),
+)
+
+
+SUPPORT = (
+    Group("support", "tell the Tico team about a gap or a fault"),
+    Command(
+        "support file",
+        "a Confirm card shows the message; nothing is sent until the person confirms",
+        example="tico support file 'Cannot add a second Slack workspace'",
+    ),
+    Command(
+        "support report",
+        "send a Tico bug report (a person OKs it first, unless the team lets bots send)",
+        args=(
+            Arg("message", "--message"),
+            Arg("message", "--file", type=text_file),
+            Arg("include_ids", "--no-ids", action="store_const", const=False),
+        ),
+        one_of=(("message",),),
+        example="tico support report --message 'The trigger list 500s since 0.6.1'",
+    ),
+    Command(
+        "support send",
+        "send a report a person OK'd; filed as the person who OK'd it",
+        args=(Arg("ok", "--ok"),),
+        example="tico support send --ok rq_1",
+    ),
 )

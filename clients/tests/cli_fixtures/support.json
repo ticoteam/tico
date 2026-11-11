@@ -8,7 +8,16 @@
    "--task",
    "1"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_support_report",
+    {
+     "message": "...",
+     "operation_id": null,
+     "task": "1"
+    }
+   ]
+  ],
   "http": [
    [
     "POST",
@@ -33,7 +42,15 @@
    "--ok",
    "1"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_support_send",
+    {
+     "ok": "1",
+     "operation_id": null
+    }
+   ]
+  ],
   "http": [
    [
     "POST",
@@ -135,7 +152,15 @@
    "--message",
    "..."
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_support_report",
+    {
+     "message": "...",
+     "operation_id": null
+    }
+   ]
+  ],
   "http": [
    [
     "POST",
@@ -234,7 +259,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico support report: error: argument --file: not allowed with argument --message",
+  "stderr": "tico support report: error: argument --file: cannot read file-1 (No such file or directory)",
   "exit": 64
  },
  {
@@ -244,7 +269,15 @@
    "--ok",
    "ok-1"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_support_send",
+    {
+     "ok": "ok-1",
+     "operation_id": null
+    }
+   ]
+  ],
   "http": [
    [
     "POST",
@@ -265,7 +298,15 @@
    "--message",
    "The trigger list 500s since 0.6.1"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_support_report",
+    {
+     "message": "The trigger list 500s since 0.6.1",
+     "operation_id": null
+    }
+   ]
+  ],
   "http": [
    [
     "POST",
@@ -294,7 +335,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico support report: error: argument --file: not allowed with argument --message",
+  "stderr": "tico support report: error: argument --file: cannot read r.txt (No such file or directory)",
   "exit": 64
  },
  {
@@ -306,9 +347,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing-report.txt'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico support report: error: argument --file: cannot read missing-report.txt (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -320,7 +361,17 @@
    "--task",
    "T1"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_support_report",
+    {
+     "include_ids": false,
+     "message": "It fails",
+     "operation_id": null,
+     "task": "T1"
+    }
+   ]
+  ],
   "http": [
    [
     "POST",
@@ -357,7 +408,15 @@
    "--ok",
    "rq_1"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_support_send",
+    {
+     "ok": "rq_1",
+     "operation_id": null
+    }
+   ]
+  ],
   "http": [
    [
     "POST",

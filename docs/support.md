@@ -175,7 +175,7 @@ yes, as below.
    host it goes to, and OKs it with their own click in Tico. Their Assistant and a token cannot give this OK. Saying
    no sends nothing. The ask goes to the person whose token or Assistant drafted the report, else the owner of its task
    when that is a person, else the install's default person.
-3. After the OK, `tico support send --approval <id>` (MCP `tico_support_send`,
+3. After the OK, `tico support send --ok <id>` (MCP `tico_support_send`,
    `POST /api/v2/support/tickets/from-approval`) files it **as the person who OK'd it**: the ticket is kept under their
    name and counts toward their 10 a day. A bot's report is not in their Support chat, and its replies are not either.
    Only whoever asked for the OK may send it, and only once it is OK'd and its message still matches its hash. The OK
