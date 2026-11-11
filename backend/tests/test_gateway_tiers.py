@@ -530,7 +530,7 @@ def test_every_tool_a_service_names_is_a_hub_tool():
     } <= named and named <= known, named - known
 
 
-def test_a_decision_reserves_the_spend_of_jev_whatever_level_the_caller_names(api, monkeypatch):
+def test_a_decision_reserves_the_spend_of_jev(api, monkeypatch):
     from backend import judge as B
 
     store = api.app.state.store
@@ -543,14 +543,9 @@ def test_a_decision_reserves_the_spend_of_jev_whatever_level_the_caller_names(ap
     with store.read() as c:
         engine = B.server_engine(store, c, step)
     store.settings.decisions_monthly_usd = 50
-    for level in ("low", "high"):
-        with pytest.raises(J.JudgeError):  # the fake host answers nothing; only the reservation matters
-            engine(
-                {"team": "Acme"},
-                {"q": {"type": "choice", "question": "?", "criteria": {"a": "a", "b": "b"}}},
-                level=level,
-            )
-        assert seen[-1] == ["tico-decide-low"], seen
+    with pytest.raises(J.JudgeError):  # the fake host answers nothing; only the reservation matters
+        engine({"team": "Acme"}, {"q": {"type": "choice", "question": "?", "criteria": {"a": "a", "b": "b"}}})
+    assert seen == [["tico-decide-low"]], seen
 
 
 def test_a_rehearsal_server_searches_nothing_even_with_a_gateway_key(api, monkeypatch):
