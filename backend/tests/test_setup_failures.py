@@ -4,10 +4,31 @@
 import json
 
 from backend import setup_failures as SF
-from backend.tests.helpers.api import headers, runner
-from backend.tests.test_harness_actions import HARNESS, ask
+from backend.tests.helpers.api import headers, post, runner
 
 SECRET = "ghs_PLANTEDsecret0123456789abcdef"
+
+
+HARNESS = {
+    "name": "Codex",
+    "runtime": "codex",
+    "installed": True,
+    "version": "0.158.0",
+    "managed": True,
+    "source": "tools",
+    "pinned": False,
+    "pin": "",
+    "authenticated": "ready",
+    "update_available": True,
+    "latest": "0.160.0",
+    "wanted": True,
+    "state": "idle",
+    "detail": "",
+}
+
+
+def ask(api, r):
+    return post(api, f"runners/{r['runner_id']}/harness-actions", {"harness": "codex", "action": "update"})
 
 
 def failed(api, action=SF.ACTION):
