@@ -379,6 +379,7 @@ const auHeadLock = (a: AuRow) => a.builtin && !auMayPause(a)
 function auDrawHead() {
   auDrawn(AU);
   const hd = auEl(AU.root, '.au-hd'), a = AU.cur;
+  AU.root.classList.toggle('au-one', !!AU.id);   // Listening's search and + belong to its list (listening.css)
   auEl(AU.root, '.au-crumb').innerHTML = AU.id ? `<a class="au-up" href="${auBase()}"><span class="nav-icon" aria-hidden="true">chevron_left</span>${AU.lst ? 'Listening' : 'Automations'}</a>` : '';
   if (!AU.id) { hd.innerHTML = ''; return; }
   if (AU.id === AU_MAINT) { auMaintHead(hd); return; }

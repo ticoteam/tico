@@ -234,9 +234,17 @@ function lstBody(ed: AuTriggerEd): {name: string; trigger: AuFlowTrigger} | stri
   const at = /^\d{2}:\d{2}$/.test(String(t.at || '')) ? String(t.at) : '08:00';
   return {name, trigger: {...t, type: 'listening', sources, rules, limits: lstSorted(limits), at, tz: String(t.tz || '').trim() || auZone()}};
 }
+/** A save that was refused says why; the next save that goes through takes that away. */
+let lstRefusal: Element | null = null;
+function lstRefused(why: string): void {
+  lstRefusal?.remove();
+  toast(why, true);
+  lstRefusal = [...document.querySelectorAll('.toast.err')].at(-1) || null;
+}
 /** After a save: a new push source's address is shown once, and the sources' health is read again. */
 function lstSaved(out: AuRow): void {
   const state = AU;
+  lstRefusal?.remove(); lstRefusal = null;
   if (!state) return;
   const made = (out as AuRow & {push_addresses?: Record<string, string> | null}).push_addresses;
   if (made && Object.keys(made).length) { state.lstAddr = {...state.lstAddr, ...made}; auDrawPane(); }
@@ -268,6 +276,15 @@ async function lstNewAddress(sourceId: string, button: HTMLElement): Promise<voi
 const lstByWords = (by: string | undefined): string => by === 'item' ? 'Each item' : 'By tag';
 /** A path condition that is just "this tag": the tag, else ''. */
 const lstTagOf = (c: AuCond): string => c.field === 'item.tag' && (c.op || 'is') === 'is' && typeof c.value === 'string' ? c.value : '';
+/** A path that is just one tag: its only condition is "item.tag is <its name>". Its editor is one tag field. */
+function lstIsTagPath(p: AuPath): boolean {
+  const w = p.when || [], c = w[0];
+  return w.length === 1 && !!c && c.field === 'item.tag' && (c.op || 'is') === 'is' && (c.min == null || c.min === '') && c.value === (p.name || '');
+}
+/** A tag path's one field: the tag, which is the path's name and its condition's value. */
+function lstTagField(i: number, p: AuPath, many: boolean): string {
+  return `<div class="au-ir">${auIn(`step.paths.${i}.name`, p.name, 'tag', 'data-lst-tagpath aria-label="Tag" maxlength="24" autocapitalize="off" spellcheck="false"')}${many ? auX('step.paths', i, 'Remove path') : ''}</div>`;
+}
 const lstTagPath = (tag: string): AuPath => ({name: tag, when: [{field: 'item.tag', op: 'is', value: tag}], steps: []});
 /** A new Paths step in a listening: by tag, one path for each Keep rule's tag. */
 function lstNewPaths(): Pick<AuStep, 'by' | 'paths' | 'otherwise'> {
@@ -296,7 +313,7 @@ function lstRunHTML(run: object): string {
   const c = l.counts || {};
   const rows: Array<[string, number | undefined, string]> = [['Read', c.read, ''], ['Duplicates removed', c.duplicates, ''], ['Dropped by rules', c.dropped, ''],
     ['Kept', c.kept, ''], ['Sent', c.sent ?? l.count, ' lst-b'], ['Waiting', c.waiting ?? l.waiting, ' muted']];
-  if (c.failed) rows.push(['Could not score', c.failed, ' muted']);
+  if (Number(c.failed) > 0) rows.splice(3, 0, ['Could not score', c.failed, '']);
   return `<div class="lst-run"><div class="lst-cnt"><div class="au-lb">Since the last one</div>
       ${rows.map(([label, n, cls]) => `<div class="lst-cr${cls}"><span>${label}</span><span class="au-n">${n == null ? '—' : Number(n).toLocaleString()}</span></div>`).join('')}</div>
     <div class="lst-sent"><div class="au-lb">Sent</div><pre>${esc(l.text || '')}</pre></div></div>

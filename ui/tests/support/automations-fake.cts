@@ -374,7 +374,7 @@ function listenRuns(now = Date.now()): Run[] {
     return {id: 'lrun_' + (60 - i), automation_id: 'au_market', version: 3, trigger_ref: 'listening:' + (60 - i),
       started_at: new Date(at).toISOString(), finished_at: new Date(at + 21000).toISOString(), status: 'ok', cost: 0.06, summary: '3 sent',
       listening: {name: 'Market listening', sent_at: new Date(at).toISOString(), count: 3, waiting: 27, text: LISTEN_TEXT,
-        counts: {read: 212, duplicates: 41, dropped: 138, kept: 33, sent: 3, waiting: 27, failed: 0}},
+        counts: {read: 212, duplicates: 41, dropped: 136, kept: 33, sent: 3, waiting: 27, failed: 2}},
       steps: [{id: 'lp1', type: 'paths', status: 'ok', outputs: {summary: 'competitor 1 · question 1 · Otherwise 1'}, cost: 0},
         {id: 'lb1', type: 'bot_turn', status: 'ok', outputs: {}, cost: 0.06},
         {id: 'lt1', type: 'action', status: 'ok', outputs: {result: '1 task'}, cost: 0},

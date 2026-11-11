@@ -11,7 +11,7 @@ const {openAutomations, PHONE, DESKTOP, sideways, shot} = require('./support/aut
 
 type Trigger = {type: string; at?: string; tz?: string; sources: {id: string; kind: string; site?: string; target?: string}[];
   rules: {do: string; tag?: string; text: string}[]; limits: {count: number; per: string}[]};
-type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {name: string; when: unknown[]}[]}[]};
+type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {name: string; when: unknown[]; steps?: unknown[]}[]}[]};
 
 (async () => {
   const browser = await chromium.launch();
@@ -73,6 +73,7 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       await row.click();
       await page.waitForSelector('.lst-blk');
       assert.match(await page.locator('.au-crumb').innerText(), /Listening/);
+      assert.equal(await page.locator('.au-ph :is(.au-q,.au-new)').evaluateAll(els => els.some(el => (el as HTMLElement).checkVisibility())), false, tag + ': the search and the + are the list\'s');
       const secs = page.locator('.lst-blk .lst-sec');
       assert.deepEqual(await secs.locator('.au-lb').allInnerTexts().then(t => t.map(x => x.toLowerCase())), ['sources', 'rules', 'rate limits']);
       assert.equal(await secs.nth(0).locator('.lst-r').count(), 5);
@@ -99,13 +100,15 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       await page.fill('[data-b="trigger.rules.5.tag"]', 'buyer');
       await page.fill('[data-b="trigger.rules.5.text"]', 'Someone asking for a price');
       await page.locator('.au-save').click();
-      await page.locator('.toast, #toast', {hasText: 'Each tag is used once'}).first().waitFor();
+      await page.locator('.toast.err', {hasText: 'Each tag is used once'}).waitFor();
       assert.equal(writes.length, 0, tag + ': a repeated tag is not sent');
+      await shot(page, 's2-refused-desktop');
       await page.fill('[data-b="trigger.rules.5.tag"]', 'price');
       await page.fill('[data-b="name"]', 'Market watch');
       await shot(page, 's2-edit-desktop');
       await page.locator('.au-save').click();
       await page.waitForFunction(() => document.querySelector('.au-ver')?.textContent === 'v4');
+      assert.equal(await page.locator('.toast.err').count(), 0, tag + ': a save that goes through takes the refusal away');
       const sent = writes.at(-1)!;
       assert.equal(sent.method + ' ' + sent.path, 'PATCH /api/v2/automations/au_market');
       const body = sent.body as Body, t = body.trigger!;
@@ -151,14 +154,30 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.equal(await page.locator('.au-ed [data-op="lst-by"][aria-pressed="true"]').innerText(), 'By tag');
       assert.deepEqual(await page.locator('.au-ed [data-op="lst-tag"]').allInnerTexts(), ['+ buyer', '+ price'], tag + ': the Keep tags no path takes');
       assert.deepEqual(await page.locator('#au-fields option').evaluateAll(o => o.map(x => (x as HTMLOptionElement).value)), ['item.tag', 'item.title', 'item.site', 'item.score']);
+      // A tag path is one field: no condition row, no minimum. The tag typed is its name and its condition.
+      assert.equal(await page.locator('.au-ed [data-lst-tagpath]').count(), 2);
+      assert.equal(await page.locator('.au-ed .au-cond-row').count(), 0, tag + ': no condition rows for tag paths');
       await page.locator('.au-ed [data-op="lst-tag"][data-v="buyer"]').click();
+      await page.fill('.au-ed [data-b="step.paths.1.name"]', 'ask');
+      // + Condition: the path then shows its rows, the field on its own line.
+      await page.locator('.au-ed [data-path-ed="0"] [data-op="add"][data-tpl="cond"]').click();
+      assert.equal(await page.locator('.au-ed [data-path-ed="0"] .au-cond-row').count(), 2);
+      await page.fill('.au-ed [data-b="step.paths.0.when.1.field"]', 'item.site');
+      await page.fill('.au-ed [data-b="step.paths.0.when.1.value"]', 'northwind.com');
+      const fw = await page.locator('.au-ed [data-b="step.paths.0.when.1.field"]').evaluate(el => el.getBoundingClientRect().width);
+      assert.ok(fw > 200, tag + ': a condition field is wide enough to read (' + fw + ')');
+      const vw = await page.locator('.au-ed [data-b="step.paths.0.when.1.value"]').evaluate(el => el.getBoundingClientRect().width);
+      assert.ok(vw > 140, tag + ': and its value (' + vw + ')');
+      assert.equal(await page.locator('.au-ed [data-path-ed] .au-pct').evaluateAll(els => els.some(el => (el as HTMLElement).checkVisibility())), false, tag + ': no minimum');
       await page.locator('.au-ed [data-op="lst-by"][data-v="item"]').click();
-      assert.deepEqual(await page.locator('.au-ed [data-op="lst-tag"]').allInnerTexts(), ['+ price']);
+      assert.deepEqual(await page.locator('.au-ed [data-op="lst-tag"]').allInnerTexts(), ['+ question', '+ price']);
       await shot(page, 's4-paths-desktop');
       await page.locator('.au-save').click();
       await page.waitForFunction(() => document.querySelector('.au-ver')?.textContent === 'v6');
       const step = (writes.at(-1)!.body as Body).steps![0]!;
       assert.equal(step.by, 'item');
+      assert.deepEqual(step.paths![1], {name: 'ask', when: [{field: 'item.tag', op: 'is', value: 'ask'}], steps: step.paths![1]!.steps});
+      assert.equal(step.paths![0]!.when.length, 2);
       assert.deepEqual(step.paths![2], {name: 'buyer', when: [{field: 'item.tag', op: 'is', value: 'buyer'}], steps: []});
       assert.match(await page.locator('.au-pcard').innerText(), /Each item/);
 
@@ -167,7 +186,7 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       await page.waitForSelector('.lst-run');
       assert.equal(await page.locator('.lst-run').count(), 1, tag + ': the newest send is open');
       assert.deepEqual(await page.locator('.lst-cr').allInnerTexts().then(t => t.map(x => x.replace(/\s+/g, ' ').trim())),
-        ['Read 212', 'Duplicates removed 41', 'Dropped by rules 138', 'Kept 33', 'Sent 3', 'Waiting 27']);
+        ['Read 212', 'Duplicates removed 41', 'Dropped by rules 136', 'Could not score 2', 'Kept 33', 'Sent 3', 'Waiting 27']);
       assert.match(await page.locator('.lst-sent pre').innerText(), /^Market listening · Tue Nov 10, 14:00 · 3 of 30\n\n1\. competitor {2}Northwind Team plan is now \$15 a seat/);
       assert.equal(await page.locator('.au-rx .au-sl:not(.muted)').count(), 4, tag + ': then what the steps did');
       await shot(page, 's3-run-desktop');

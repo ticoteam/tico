@@ -9,6 +9,8 @@
 .au-lst :is(.au-rail,.au-range,.au-fbtn,.au-ctl){display:none}
 .au-lst .au-ph .au-s{padding:0;width:240px}
 .au-lst .au-ph .au-q{width:100%}
+/* one listening open: the search and the + are the list's */
+.au-lst.au-one .au-ph :is(.au-s,.au-newbox){display:none}
 
 /* the list: a dot, the name, the limits, when it last sent */
 .lst-list{display:grid;padding:0 28px 48px}
@@ -43,6 +45,10 @@
 .au-ir.lst-lr{white-space:nowrap}
 .au-ir.lst-lr>input{flex:0 0 64px}
 .lst-tags{margin-top:0}
+/* a path's conditions: the field on its own line, then the test and the value; an item has no confidence to set */
+.au-lst .au-ed [data-path-ed] .au-cond-row{grid-template-columns:88px minmax(0,1fr) auto}
+.au-lst .au-ed [data-path-ed] .au-cond-row>:first-child{grid-column:1/-1}
+.au-lst .au-ed [data-path-ed] .au-cond-row .au-pct{display:none}
 .lst-tags .au-c1{color:var(--ink);font:inherit;font-size:var(--t-sm);cursor:pointer}
 .lst-tags .au-c1:hover{border-color:var(--g4)}
 

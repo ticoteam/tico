@@ -342,8 +342,8 @@ function auActionFields(s: AuStep) {
 }
 function auPathsFields(s: AuStep, ed: AuStepEd) {
   return (lstIs() ? lstPathsFields(s) : '') + auBox('Paths', (s.paths || []).map((p, i) => `<div class="au-rb${String(ed.path) === String(i) ? ' focus' : ''}" data-path-ed="${i}">
-      <div class="au-ir">${auIn(`step.paths.${i}.name`, p.name, 'Name', 'aria-label="Path name"')}${(s.paths || []).length > 1 ? auX('step.paths', i, 'Remove path') : ''}</div>
-      ${auCondRows(`step.paths.${i}.when`, p.when)}${auPlus(`step.paths.${i}.when`, 'cond', 'Condition')}</div>`).join('')
+      ${lstIs() && lstIsTagPath(p) ? lstTagField(i, p, (s.paths || []).length > 1) : `<div class="au-ir">${auIn(`step.paths.${i}.name`, p.name, 'Name', 'aria-label="Path name"')}${(s.paths || []).length > 1 ? auX('step.paths', i, 'Remove path') : ''}</div>
+      ${auCondRows(`step.paths.${i}.when`, p.when)}`}${auPlus(`step.paths.${i}.when`, 'cond', 'Condition')}</div>`).join('')
     + `<div class="au-rb fb"><div class="au-ir"><input type="text" value="Otherwise" disabled aria-label="Path name"></div><span class="muted">Nothing else</span></div>`
     + ((s.paths || []).length < AU_MAX_PATHS ? auPlus('step.paths', 'path', 'Path') : ''));
 }
@@ -394,6 +394,8 @@ function auEdWire(box: HTMLElement) {
     if (b === 'set') { auEdIs(ed, 'step'); ed.custom = !v; if (v) { ed.step.set = String(v); delete ed.step.questions; auDecideQs(ed); } auDrawSide(); return; }
     if (b.startsWith('qs.')) ed.custom = true;
     auPathSet(ed, b, v);
+    // A listening's tag path: the tag typed is the path's name and its condition's value.
+    if (t.hasAttribute('data-lst-tagpath')) auPathSet(ed, b.replace(/name$/, 'when.0.value'), v);
     // An action's text edited under its own name: the other names the hub reads first go, so the edit is what runs.
     const argAt = /^(.*)\.args\.([a-z_]+)$/.exec(b), act = argAt && auPathGet<AuAct>(ed, argAt[1]!), names = AU_ARG_NAMES[String(act?.do)];
     if (names && names.key === argAt![2] && act?.args) for (const k of [...names.keys, ...(names.drop || [])]) if (k !== names.key) delete act.args[k];
@@ -428,7 +430,7 @@ function auEdWire(box: HTMLElement) {
       if (!auPathGet(ed, at)) auPathSet(ed, at, list);
       const tpls: AuBag = {cond: {field: '', op: 'is', value: ''}, then: {do: 'archive', args: {}}, bact: auBoardNewAct(), q: {id: 'question', type: 'noul', ask: '', opts: ''},
         rule: {when: [{field: '', op: 'is', value: ''}], match: 'all', then: [{do: 'archive', args: {}}], stop: true},
-        path: {name: 'Path ' + (list.length + 1), when: [], steps: []},
+        path: lstIs() ? lstTagPath('') : {name: 'Path ' + (list.length + 1), when: [], steps: []},
         lsrc: {id: lstNewId(), kind: 'search', site: '', target: ''}, lrule: {do: 'keep', tag: '', text: ''}, llimit: lstNextLimit(list as LstLimit[])};
       list.push(tpls[m.dataset.tpl!]);   // add carries data-tpl
     }
@@ -450,7 +452,7 @@ async function auEdSave(button?: HTMLButtonElement) {
   let body: { trigger: AuFlowTrigger } | { steps?: unknown; destinations?: unknown };
   if (ed.kind === 'trigger' && ed.trigger.type === 'listening') {
     const made = lstBody(ed);
-    if (typeof made === 'string') { toast(made, true); if (button) button.disabled = false; return; }
+    if (typeof made === 'string') { lstRefused(made); if (button) button.disabled = false; return; }
     body = made;
   }
   else if (ed.kind === 'trigger') {
