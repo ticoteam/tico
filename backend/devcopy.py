@@ -102,7 +102,7 @@ EMPTY = (
     "watcher_items",
     "watcher_refs",
     "task_manager_seen",
-    "task_manager_reports",  # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
+    "task_manager_reports",  # the General Manager's repeat ledger and last checks: the copy starts its hourly report fresh
     "bookkeeper_seen",
     "bookkeeper_watch_listed",  # the Finance Owner's ledgers: the copy starts its checks fresh
     "org_rule_holds",  # org rules: a held output could still be sent anyway from the copy

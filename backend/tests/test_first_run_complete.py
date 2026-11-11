@@ -68,11 +68,11 @@ def sample(api):
 
 
 # Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps). With no
-# Pipeline Manager, the Task Manager stands in (pipeline_settings.preset: the ladder).
+# Pipeline Manager, the General Manager stands in (pipeline_settings.preset: the ladder).
 MANAGERS = {
     "onboarding": {"product": "product-pipeline-manager", "engineering": "engineering-pipeline-manager"},
-    "company_file": {"product": "task-manager", "engineering": "task-manager"},
-    "sample": {"product": "task-manager", "engineering": "task-manager"},
+    "company_file": {"product": "general-manager", "engineering": "general-manager"},
+    "sample": {"product": "general-manager", "engineering": "general-manager"},
 }
 
 
@@ -88,13 +88,13 @@ def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_no
     slugs = {f"bot:{r['id']}": r["slug"] for r in rows(api, "SELECT id, slug FROM bots")}
     managers = {r["id"]: slugs.get(r["manager_id"], r["manager_id"]) for r in after_setup["managers"]}
     # The Growth and Success pipelines' managers: each its own Pipeline Manager once the chart has it, else the
-    # Task Manager (pipeline_presets_more).
+    # General Manager (pipeline_presets_more).
     others = {
-        p: more.manager_role(p) if more.manager_role(p) in slugs.values() else "task-manager"
+        p: more.manager_role(p) if more.manager_role(p) in slugs.values() else "general-manager"
         for p in more.PRESETS
         if p not in more.PRIVATE
     }
-    # Legal and Finance (private): made only with their owner bot as manager, never the Task Manager.
+    # Legal and Finance (private): made only with their owner bot as manager, never the General Manager.
     by_template = {
         r["template"]: r["slug"]
         for r in rows(
@@ -105,7 +105,7 @@ def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_no
         owner = by_template.get(more.ROLES[p]["manager"])
         if owner:
             others[p] = owner
-    assert managers == {"general": "task-manager", **MANAGERS[first_run.__name__], **others}
+    assert managers == {"general": "general-manager", **MANAGERS[first_run.__name__], **others}
     assert {"bot": "botops", "routine_key": routines.SWEEP_KEY} in after_setup["routines"]
     restarted = environment(seed_roster=False)
     assert whole(restarted) == after_setup

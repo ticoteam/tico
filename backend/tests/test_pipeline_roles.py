@@ -1,5 +1,5 @@
 """No Product or Engineering stage is left without an owner (docs/pipelines-v3.md "Default pipelines", the ladder): a
-role no bot fills goes up to the pipeline's manager, and a manager no bot fills to the Task Manager, until the role's
+role no bot fills goes up to the pipeline's manager, and a manager no bot fills to the General Manager, until the role's
 bot appears (pipeline_settings.preset, _fill). The sample company, which has none of the six roles but a Builder, is the
 company the first live one was, built on the same path."""
 
@@ -16,7 +16,7 @@ from backend.tests.helpers.sample_company import (  # noqa: F401
 )
 
 PRESETS = ("product", "engineering")
-TM = "task-manager"
+TM = "general-manager"
 BUILDER_STAGES = ("engineering-on-deck", "engineering-build", "engineering-fixes-1", "engineering-fixes-2")
 
 
@@ -85,7 +85,7 @@ def test_a_half_staffed_company_is_staffed_on_its_next_start(environment):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE pipelines SET manager_id=NULL WHERE id IN ('product','engineering')")
         c.execute(
-            "UPDATE stages SET owner=NULL WHERE pipeline_id IN ('product','engineering') AND owner='bot:task-manager'"
+            "UPDATE stages SET owner=NULL WHERE pipeline_id IN ('product','engineering') AND owner='bot:general-manager'"
         )
     half = _staffing(api)
     assert half["product"][0] is None and set(half["product"][1].values()) == {None}

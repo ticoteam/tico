@@ -3453,23 +3453,23 @@ def can_move(conn, actor):
 
 
 # ----------------------------------------------------------------------------- who works a task
-TASK_MANAGER = "bot:task-manager"
+GENERAL_MANAGER = "bot:general-manager"
 
 
-def task_manager_acts(conn, actor, row):
-    """The Task Manager's narrow mover right (docs/task-manager.md): on a task it may read it moves and closes it with
+def general_manager_acts(conn, actor, row):
+    """The General Manager's narrow mover right (docs/general-manager.md): on a task it may read it moves and closes it with
     a note, relates, comments and reassigns within the department. It is not a `mover` (no lane, number, labels or
     tags) and never a bot with rights on a bot, a credential, a send or spending. The slug alone is not
-    enough: the bot behind it must be built from the task-manager template, so a bot someone names the same cannot ride on
+    enough: the bot behind it must be built from the general-manager template, so a bot someone names the same cannot ride on
     it. A private task it is not on stays unreadable (task_private_readable), so this never widens privacy."""
-    if actor != TASK_MANAGER or not row:
+    if actor != GENERAL_MANAGER or not row:
         return False
     built = (
-        _one(conn, f"SELECT s.template AS template FROM bot_config bc {BS.JOIN} WHERE bot=?", ("task-manager",))
+        _one(conn, f"SELECT s.template AS template FROM bot_config bc {BS.JOIN} WHERE bot=?", ("general-manager",))
         if _has_table(conn, "bot_config")
         else None
     )
-    return (built or {}).get("template") == "task-manager" and task_private_readable(conn, actor, row)
+    return (built or {}).get("template") == "general-manager" and task_private_readable(conn, actor, row)
 
 
 def task_private(conn, row):
@@ -3774,7 +3774,7 @@ PRODUCT_BOT_SLUGS = frozenset(
         DESIGN_OWNER,
         "librarian",
         "strategy-owner",
-        "task-manager",
+        "general-manager",
         "health-monitor",
         "finance-owner",
         "doc-updater",
@@ -4706,7 +4706,7 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
         and not task_participant(conn, actor, row)
         and not delegated
         and not task_ancestor_party(conn, actor, row)
-        and not (kind is None and task_manager_acts(conn, actor, row))
+        and not (kind is None and general_manager_acts(conn, actor, row))
     ):  # relations only, never pull request links
         refuse(
             conn,
@@ -5856,7 +5856,7 @@ def task_create(
 
 def title_key(title):
     """What two task titles are compared by, for a duplicate: case-folded, trimmed, inner spaces collapsed. The
-    create and rename refusals, the Task Manager's duplicates and the stale review's twin all use it; the stored
+    create and rename refusals, the General Manager's duplicates and the stale review's twin all use it; the stored
     title stays as typed. In Python, since SQLite's lower() folds ASCII only."""
     return " ".join(str(title or "").split()).casefold()
 
@@ -6010,9 +6010,9 @@ def task_update(
         owner = None
     from . import task_calls
 
-    mine = _task_party(conn, actor, row) or task_manager_acts(conn, actor, row)
-    if actor == TASK_MANAGER and actor not in (row["owner_id"], row["requester_id"]):
-        # Its grant is narrow (task_manager_acts): notes, a move and a reassignment, nothing else.
+    mine = _task_party(conn, actor, row) or general_manager_acts(conn, actor, row)
+    if actor == GENERAL_MANAGER and actor not in (row["owner_id"], row["requester_id"]):
+        # Its grant is narrow (general_manager_acts): notes, a move and a reassignment, nothing else.
         beyond = [
             name
             for name, value in (
@@ -6039,7 +6039,7 @@ def task_update(
                 conn,
                 actor,
                 "identity",
-                f"The Task Manager moves, notes and reassigns tasks only, not {', '.join(beyond or ['size'])}",
+                f"The General Manager moves, notes and reassigns tasks only, not {', '.join(beyond or ['size'])}",
             )
     if mover is None:
         mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)

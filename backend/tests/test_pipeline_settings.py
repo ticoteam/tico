@@ -118,12 +118,12 @@ def _without_ids(value):
 
 
 def test_general_from_its_preset_has_the_fixed_ids_and_a_task_goes_from_to_do_to_done(c):
-    # The first start made General before the company had a bot. Once the Task Manager exists it manages it.
+    # The first start made General before the company had a bot. Once the General Manager exists it manages it.
     assert PS.read(c, "general")["manager_id"] is None
-    X.bot(c, "task-manager")
+    X.bot(c, "general-manager")
     assert _made(c) == []
     general = PS.read(c, "general")
-    assert (general["name"], general["preset"], general["manager_id"]) == ("General", "general", "bot:task-manager")
+    assert (general["name"], general["preset"], general["manager_id"]) == ("General", "general", "bot:general-manager")
     assert [s["id"] for s in general["stages"]] == ["general-todo"]
     assert (general["done"]["id"], general["closed"]["id"]) == ("general-done", "general-closed")
     todo = general["stages"][0]
@@ -148,7 +148,7 @@ def test_presets_run_on_every_boot_make_general_once_and_never_change_it_again(c
     changed["goal"] = "Everything that has no other home"
     changed["stages"][0]["expected_minutes"] = 600
     PS.save(c, ANA, changed)
-    X.bot(c, "task-manager")  # a Task Manager that arrives later does not change General either
+    X.bot(c, "general-manager")  # a General Manager that arrives later does not change General either
     assert _made(c) == []
     after = PS.read(c, "general")
     assert (after["goal"], after["stages"][0]["expected_minutes"], after["manager_id"]) == (

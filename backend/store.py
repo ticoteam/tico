@@ -1391,9 +1391,9 @@ class Store:
             from . import cards as _cards
 
             c.executescript(_cards.SCHEMA)
-            from . import task_manager as _task_manager
+            from . import general_manager as _general_manager
 
-            c.executescript(_task_manager.SCHEMA)
+            c.executescript(_general_manager.SCHEMA)
             from . import bookkeeper as _bookkeeper
 
             c.executescript(_bookkeeper.SCHEMA)

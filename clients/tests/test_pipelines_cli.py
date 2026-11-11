@@ -16,7 +16,7 @@ PIPELINES = {
         {
             "id": "general",
             "name": "General",
-            "manager_id": "bot:task-manager",
+            "manager_id": "bot:general-manager",
             "settings_version": 1,
             "stages": [
                 {

@@ -109,7 +109,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    below, pick **Marketing** and keep **Content Owner** (`content-owner`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** Ten built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, Task Manager,
+4. **Create my team.** Ten built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, General Manager,
    Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:

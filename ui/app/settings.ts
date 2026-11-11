@@ -135,9 +135,9 @@ const SETTINGS_ALIAS: Record<string, string> = {humans: 'people', computers: 'de
 const SETTINGS_REPOS_CARD = '#set-repos[data-drawn]';
 // The Gateway card once drawn (renderSettingsProviders marks it), so a link to the old Gateway page lands on it filled in.
 const SETTINGS_GATEWAY_CARD = '#settings-gateway-card[data-drawn]';
-// System's cards left Settings: its jobs are Automations' System jobs, Releases, Task Manager and the Strategy Owner are
+// System's cards left Settings: its jobs are Automations' System jobs, Releases, General Manager and the Strategy Owner are
 // those built-in bots' Settings, Screening is Security. The router asks for an old address's new home (or '' to stay).
-const SETTINGS_SYSTEM_BOTS: Record<string, string> = {'set-task-manager-card': 'task-manager', 'set-strategy-bot-card': 'strategy-owner'};
+const SETTINGS_SYSTEM_BOTS: Record<string, string> = {'set-general-manager-card': 'general-manager', 'set-strategy-bot-card': 'strategy-owner'};
 function settingsMovedOut(tab: string, card = '') {
   if (tab === 'strategy-bot') card = 'set-strategy-bot-card';
   else if (tab === 'releases') card = 'set-release-card';

@@ -199,7 +199,7 @@ function finTeamKids<T extends {id: string; name: string; parent: string | null}
   return teams.filter(t => (t.parent || '') === (id || '') || (!id && t.parent && !teams.some(x => x.id === t.parent)))
     .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name)));
 }
-// A built-in helper (the Assistant, BotOps, Strategy Owner, Librarian, Task Manager, Finance Owner…; ui/app/sidebar.js
+// A built-in helper (the Assistant, BotOps, Strategy Owner, Librarian, General Manager, Finance Owner…; ui/app/sidebar.js
 // isHelperBot): listed together as Helpers, after the org chart.
 function finHelper(actor: string) {
   if (!String(actor || '').startsWith('bot:')) return false;

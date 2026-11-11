@@ -9,12 +9,12 @@ is the spec, [Pipelines v3](pipelines-v3.md). This page is the short version and
 A pipeline is a line of stages with a name, a one-line goal and a manager bot. It ends in two built-in stages, Done
 and Closed. A stage has a name, an owner, what a task needs to leave it, an expected time and an optional limit.
 
-A new company has one pipeline, **General**, managed by the Task Manager bot:
+A new company has one pipeline, **General**, managed by the General Manager bot:
 
 - **To do.** Owner: the task's assignee. To leave: the owner says done. No limit. Expected time: 1 day for a bot.
 - **Done.** When the owner says done, it is Done. Nobody checks it. It can be reopened with a note.
 
-A task with no assignee wakes the Task Manager to pick one. Product and Engineering pipelines come later
+A task with no assignee wakes the General Manager to pick one. Product and Engineering pipelines come later
 ([Default pipelines](pipelines-v3.md#default-pipelines)).
 
 A task's status is `open`, `done` or `closed`. Nothing else is stored about where it is: its pipeline, its stage and

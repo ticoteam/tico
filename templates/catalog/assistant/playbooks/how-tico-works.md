@@ -17,7 +17,7 @@ Read this when a person asks why something is on their queue, or how to make it 
 - **Health Monitor**: findings about bots and computers, including test pings. Repeated test pings are a source to stop.
 - **BotOps**: support and health tasks, and questions about bot setup.
 - **PR Reviewer**: a review task per pull request.
-- **Task Manager**: tasks it created while routing work.
+- **General Manager**: tasks it created while routing work.
 - **Routines and automations**: any task filed on a schedule or a trigger.
 
 ## Automations and watchers

@@ -65,9 +65,9 @@ HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
 INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
 # System's other cards moved to the built-in bots' own Settings and to Settings > Security. Releases is on whichever bot
 # is the Release Owner: its address reads the schedule and opens that bot (ui/app/settings.ts settingsMovedOut).
-RELEASES, TASK_MANAGER, SECURITY = (
+RELEASES, GENERAL_MANAGER, SECURITY = (
     "Release Owner > Settings > Releases",
-    "Task Manager > Settings",
+    "General Manager > Settings",
     "Settings > Security",
 )
 SYSTEM_JOBS = "#/automations/system-jobs"
@@ -1282,25 +1282,25 @@ ENTRIES = TEAM_RULES + [
     ],
     S(
         "task_manager.on",
-        "Task Manager",
-        TASK_MANAGER,
+        "General Manager",
+        GENERAL_MANAGER,
         "owner",
         "direct",
         "POST",
-        "task-manager/turn-on",
+        "general-manager/turn-on",
         value="json",
-        card="#/bot/task-manager/settings",
+        card="#/bot/general-manager/settings",
     ),
     S(
         "task_manager.off",
-        "Task Manager off",
-        TASK_MANAGER,
+        "General Manager off",
+        GENERAL_MANAGER,
         "owner",
         "direct",
         "POST",
-        "task-manager/turn-off",
+        "general-manager/turn-off",
         value="json",
-        card="#/bot/task-manager/settings",
+        card="#/bot/general-manager/settings",
     ),
     # Webhooks
     S(

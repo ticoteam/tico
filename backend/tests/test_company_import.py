@@ -58,7 +58,7 @@ BUILTINS = {
     "botops",
     "librarian",
     "strategy-owner",
-    "task-manager",
+    "general-manager",
     "finance-owner",
     "rules-owner",
     "design-owner",
@@ -145,11 +145,11 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up %'")
     assert not rows(
         api,
-        "SELECT bot FROM bot_config WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','task-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner')",
+        "SELECT bot FROM bot_config WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','general-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner')",
     )
     assert not rows(
         api,
-        "SELECT bot FROM assignments WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','task-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner')",
+        "SELECT bot FROM assignments WHERE bot NOT IN ('assistant','botops','librarian','strategy-owner','general-manager','finance-owner','rules-owner','design-owner','updates-owner','automations-owner')",
     )
     machine(api)
     assert {r["bot"] for r in rows(api, "SELECT bot FROM assignments")} <= BUILTINS
@@ -1805,7 +1805,7 @@ def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its
             "success-monitoring",
         ]
         bots = {r[0] for r in c.execute("SELECT slug FROM bots")}
-        assert {"assistant", "botops", "task-manager", *LIVE_DEFAULT} <= bots
+        assert {"assistant", "botops", "general-manager", *LIVE_DEFAULT} <= bots
         assert c.execute("SELECT count(*) FROM seats WHERE closed_at IS NULL").fetchone()[0] > 0
         assert not c.execute("SELECT action FROM events WHERE action LIKE '%failed%'").fetchall()
 

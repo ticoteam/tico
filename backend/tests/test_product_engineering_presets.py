@@ -185,7 +185,7 @@ def test_presets_wait_for_setup_and_a_company_that_builds_no_software_gets_neith
 
 
 def test_an_rc1_company_with_general_only_gets_the_pair_and_nothing_else_changes(c):
-    X.bot(c, "task-manager")
+    X.bot(c, "general-manager")
     _answers(c, software="", completed=False)
     PS.ensure_presets(c)
     _team(c)

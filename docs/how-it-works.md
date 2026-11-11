@@ -14,7 +14,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 - **Built-in**: four bots every team gets. The [Assistant](assistant.md) is each human's own helper and their one DM,
   the owner's too; the other three are helpers it hands work to. BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
-  manual; the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
+  manual; the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [General Manager](general-manager.md)
   is a built-in helper outside the chart: it manages the General pipeline, and once an hour it looks for tasks that say
   Paused, held bots and duplicates, and wakes only when it finds something. [Check health](health-monitor.md) is a
   plain-code step that runs hourly and opens one BotOps task
@@ -32,7 +32,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
 | Strategy Owner (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
-| Task Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `tico task-manager status` |
+| General Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `tico general-manager status` |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: its Home or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
 
@@ -136,7 +136,7 @@ and, for the owner and admins, **SQL**. Tasks has You and a view of each pipelin
 and Closed behind
 the archive button; Routines and wake rules are **Automations**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
-**Tasks**, **Docs** and **More**. The assistant (Tico, `assistant`), BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner and the Design Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
+**Tasks**, **Docs** and **More**. The assistant (Tico, `assistant`), BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner and the Design Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
 (`#/assistant`, also the first tab on their own page, is the same chat in full): it looks things up at once, does low-risk things as that human, and
 proposes anything with a side effect for their own click ([The Assistant](assistant.md)). The owner's DM is the
@@ -650,7 +650,7 @@ with a line each); the bot's owner, operator, a person it reports up to, or BotO
 Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `social-media-manager` and
 `sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `reviewer` that
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
-another platform Responders; BotOps, the Task Manager and the Librarian Custom; everything else a Doer.
+another platform Responders; BotOps, the General Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The old wake preset is part of the profile: Token saver became a
 Doer with a 30-minute window and Performance a Doer; `wake_preset` and `POST /api/v2/bots/{bot}/wake-preset` still read and
 set that window. **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,
@@ -723,7 +723,7 @@ options, and their missing repositories do not count as readiness or Health fail
 ## Task pipelines
 
 Every task is in one pipeline, at one stage, with one owner whose turn it is. A new company has one pipeline,
-General, with one stage, To do, managed by the Task Manager. A task's status is `open`, `done` or `closed`; only
+General, with one stage, To do, managed by the General Manager. A task's status is `open`, `done` or `closed`; only
 the task engine moves it. See [Pipelines and stages](tasks.md#pipelines-and-stages) and
 [Pipelines](pipelines-v3.md).
 

@@ -872,14 +872,14 @@ class SettingsAdmin:
 
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
-        # The assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner, the Design Owner, the Updates
+        # The assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Design Owner, the Updates
         # Owner and the Automations Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,
             "botops",
             "librarian",
             "strategy-owner",
-            "task-manager",
+            "general-manager",
             "finance-owner",
             H.DESIGN_OWNER,
             "updates-owner",
@@ -894,8 +894,8 @@ class SettingsAdmin:
                     if bot == "botops"
                     else "The Librarian"
                     if bot == "librarian"
-                    else "The Task Manager"
-                    if bot == "task-manager"
+                    else "The General Manager"
+                    if bot == "general-manager"
                     else "The Finance Owner"
                     if bot == "finance-owner"
                     else "The Design Owner"

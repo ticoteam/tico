@@ -28,7 +28,7 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         "security-audit": P.REVIEWER,
         "pr-reviewer-sol": P.REVIEWER,
         "botops": P.CUSTOM,
-        "task-manager": P.CUSTOM,
+        "general-manager": P.CUSTOM,
         "writer": P.DOER,
     }
     with api.app.state.store.transaction() as c:

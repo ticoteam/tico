@@ -16,7 +16,7 @@ Steps:
    - Not needed: the evidence shows the work is no longer wanted, or another task did it.
    - Unsure: the task has an open ask to a person, a review that has not come back, or evidence that disagrees.
 3. Plainly done: `tico task done <id> -m "<the release or the answer, in one line>" --version N`.
-4. Merged, not shipped: change nothing. If something is still left on the task, say so on the Task Manager's check task.
+4. Merged, not shipped: change nothing. If something is still left on the task, say so on the General Manager's check task.
 5. Not needed: `tico task close <id> -m "<the evidence in one line>" --version N`. A task a person asked for is not yours
    to close: ask that person on the task.
 6. Unsure: change nothing. Comment on the task with what you saw, or put one line in Needs you for the department.

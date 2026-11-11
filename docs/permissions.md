@@ -247,7 +247,7 @@ on `/api/v2/groups` through `tico api`, or `tico group update`), with that perso
 refused. The Strategy Owner only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
 same rights. Built-in bots stay outside groups.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner, the Rules Owner and the Design Owner) act for the whole team, so only the owner changes their settings,
+**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Rules Owner and the Design Owner) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
 `librarian`, `strategy-owner` or `assistant`; an Admin can, and manages every other bot.
 The Strategy Owner's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Owner](strategy-bot.md)).
@@ -391,7 +391,7 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner or Design Owner);
+- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner or Design Owner);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 

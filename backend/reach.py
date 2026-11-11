@@ -494,7 +494,7 @@ def remove_line(c, auth, who, line_id, via=None, checked=True):
 # it are what nearby reach is for, so it is checked like any bot.
 HELPERS = (
     "botops",
-    "task-manager",
+    "general-manager",
     "strategy-owner",
     "librarian",
     "support-owner",

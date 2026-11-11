@@ -53,15 +53,15 @@ def _file(c, by=CARA, title="Review the reseller contract", **more):
 
 # ----------------------------------------------------------------------------- the presets
 def test_legal_and_finance_wait_for_their_owner_bots(company):
-    """No owner bot, no pipeline (never the Task Manager standing in), and no empty Corporate factory. Each appears
+    """No owner bot, no pipeline (never the General Manager standing in), and no empty Corporate factory. Each appears
     once its bot does, managed and staffed by it, with no limit and no person's OK."""
     with company.transaction() as c:
         X.pipeline(c)
-        _bot(c, "task-manager", "task-manager")
+        _bot(c, "general-manager", "general-manager")
         PS.ensure_presets(c)
         assert not c.execute("SELECT 1 FROM pipelines WHERE id IN ('legal','finance')").fetchone()
         assert not c.execute("SELECT 1 FROM factories WHERE id='corporate'").fetchone()
-        assert PS.preset(c, "legal")["manager_id"] is None  # not the Task Manager
+        assert PS.preset(c, "legal")["manager_id"] is None  # not the General Manager
 
         _bot(c, "legal-owner", "legal-owner")
         assert PS.ensure_private(c) == ["legal"]
@@ -85,10 +85,10 @@ def test_legal_and_finance_wait_for_their_owner_bots(company):
         assert PS.read(c, "finance")["goal"] == "Money in, money out, and the books that show both"
 
 
-def test_a_private_preset_never_gets_the_task_manager_when_its_bot_goes(company):
+def test_a_private_preset_never_gets_the_general_manager_when_its_bot_goes(company):
     with company.transaction() as c:
         X.pipeline(c)
-        _bot(c, "task-manager", "task-manager")
+        _bot(c, "general-manager", "general-manager")
         _legal(c)
         c.execute("UPDATE bots SET state='archived' WHERE id='legal-owner'")
         PS.ensure_presets(c)  # _fill on an untouched preset
@@ -288,10 +288,10 @@ def test_settings_refuse_a_private_change_on_a_pipeline_with_tasks(c):
         PS.save(c, ANA, {**general, "private": True, "manager_id": "bot:ops"})
 
 
-def test_settings_refuse_the_task_manager_or_no_manager(c):
-    _bot(c, "task-manager", "task-manager")
-    with pytest.raises(H.Refused, match="Task Manager"):
-        PS.save(c, ANA, _record(manager_id="bot:task-manager"))
+def test_settings_refuse_the_general_manager_or_no_manager(c):
+    _bot(c, "general-manager", "general-manager")
+    with pytest.raises(H.Refused, match="General Manager"):
+        PS.save(c, ANA, _record(manager_id="bot:general-manager"))
     with pytest.raises(H.Refused, match="needs a manager"):
         PS.save(c, ANA, _record(manager_id=None))
     made = PS.save(c, ANA, _record())  # a brand-new private pipeline

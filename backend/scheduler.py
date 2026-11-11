@@ -50,13 +50,13 @@ def run_kpi_asks(store, auth, at, failures=None):
 
 
 def run_task_manager_report(store, auth, at, failures=None):
-    # One report per department, built in plain code (backend/task_manager.py). Nothing to report is a quiet run: no task
-    # and no model call. A department with something gets one "Task check" task for the Task Manager.
-    with SR.recording(store, "task_manager_report", failures, "task_manager") as run:
-        from . import task_manager
+    # One report per department, built in plain code (backend/general_manager.py). Nothing to report is a quiet run: no task
+    # and no model call. A department with something gets one "Task check" task for the General Manager.
+    with SR.recording(store, "task_manager_report", failures, "general_manager") as run:
+        from . import general_manager
 
         with store.transaction() as c:
-            made = task_manager.report(c, auth, store.settings, stamp(at))
+            made = general_manager.report(c, auth, store.settings, stamp(at))
         run.did(made["words"], quiet=not made["items"])
 
 

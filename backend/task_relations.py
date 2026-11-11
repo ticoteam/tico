@@ -293,7 +293,7 @@ def _history(conn, actor, from_id, to_id, kind, added, note="", at=None):
 
 
 def _mine(conn, actor, row, mover):
-    """task_update's gate: a party, a delegate, an ancestor's party, the Task Manager, or a mover."""
+    """task_update's gate: a party, a delegate, an ancestor's party, the General Manager, or a mover."""
     H = _H()
     mover = H.task_mover(conn, actor, row, mover)
     mine = H.task_participant(conn, actor, row) or bool(
@@ -303,7 +303,7 @@ def _mine(conn, actor, row, mover):
             (row["id"], actor, H.now()),
         )
     )
-    mine = mine or H.task_ancestor_party(conn, actor, row) or H.task_manager_acts(conn, actor, row)
+    mine = mine or H.task_ancestor_party(conn, actor, row) or H.general_manager_acts(conn, actor, row)
     if not mine and not mover and actor != H.KEEPER:
         H.refuse(
             conn, actor, "identity", f"{row['id']} is changed by its parties, their managers, delegates or task movers"

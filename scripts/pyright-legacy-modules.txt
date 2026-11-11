@@ -528,7 +528,7 @@ backend/task_followers.py
 backend/task_followers_routes.py
 backend/task_links_routes.py
 backend/task_list_routes.py
-backend/task_manager.py
+backend/general_manager.py
 backend/task_models.py
 backend/task_privacy.py
 backend/task_quarantine.py

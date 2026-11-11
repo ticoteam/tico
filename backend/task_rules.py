@@ -1,7 +1,7 @@
 """The org builder's fixed departments, and which one a teammate is in.
 
 Department tags come from the org builder's fixed catalog, not arbitrary group names. The outgoing webhooks, the
-Task Manager and the routines list read them here.
+General Manager and the routines list read them here.
 
 The task rule that closed a done task after a day went with the old engine: a task that is Done stays Done.
 """

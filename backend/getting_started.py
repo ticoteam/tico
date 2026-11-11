@@ -121,7 +121,7 @@ def _login_target(runners, wanted, c=None):
 
 
 def built_in(settings):
-    """The bots every install starts with: the four a person talks to, the Task Manager (docs/task-manager.md), the
+    """The bots every install starts with: the four a person talks to, the General Manager (docs/general-manager.md), the
     Finance Owner (docs/bookkeeper.md), the Design Owner, the Updates and Automations Owners, and the Rules Owner, which
     onboarding.ensure_counsel adds once a computer enrolls. The Rules Owner is built in, so it is not one of the company's own
     bots (own_bots)."""
@@ -130,7 +130,7 @@ def built_in(settings):
         BOTOPS,
         LIBRARIAN,
         "strategy-owner",
-        "task-manager",
+        "general-manager",
         "finance-owner",
         H.DESIGN_OWNER,
         H.RULES_OWNER,

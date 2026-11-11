@@ -15,7 +15,7 @@ interface StrategyLogHost extends HTMLElement {
 // Regular checks on or off (the KPI pass and the automatic goal colours), then three levels (backend/strategy_bot.py LEVELS),
 // each with its one sentence of what it will and won't do. Picking a level shows that sentence again with a Confirm
 // before anything changes. Where the level is only the default (`level_chosen` false), the owner can confirm it too,
-// so a later default never moves them. It is a helper's settings, beside the Task Manager's: nobody chats with it, the
+// so a later default never moves them. It is a helper's settings, beside the General Manager's: nobody chats with it, the
 // Assistant hands it the work. Only the owner sees the card; the server refuses everyone else, admins and every bot
 // included. Its name, pause and budget are the rest of its page's Settings.
 let STRATEGY_BOT_PICK: number | null = null;

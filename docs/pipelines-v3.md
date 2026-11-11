@@ -672,7 +672,7 @@ Twelve presets built from the same parts, in four factories. Customers and manag
 A new org gets General at its first start, and the rest once its setup finishes (Product and Engineering only if it
 builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
 renamed is never made again. Legal and Finance are made only once their owner bot exists (the Legal Owner, the
-Finance Owner), the moment it is made; never with the Task Manager standing in. Growth and Success
+Finance Owner), the moment it is made; never with the General Manager standing in. Growth and Success
 Monitoring are made only where their factory's Experiments pipeline is.
 
 A preset the company has keeps its stages and requirements on an upgrade, but its wording nobody edited follows the
@@ -692,7 +692,7 @@ there. The pipeline itself (name, goal, stages, manager, counts) is seen by ever
 
 - Private is set as a pipeline is made (a preset, or a new one), or while it holds no task; never changed on one that
   holds tasks. Only a person turns it off.
-- Its manager reads its tasks, so it is never the Task Manager (which reads no private task) and never empty. The
+- Its manager reads its tasks, so it is never the General Manager (which reads no private task) and never empty. The
   never-stuck ladder stops at the manager, then a person who reads the task (the company's owner).
 - Its stages have no limit (a limit counts tasks a reader can't see) and no OK from a person.
 - Legal: prefix LG, "Contracts and compliance questions answered before they hold up the business". Intake → Review →
@@ -703,18 +703,18 @@ there. The pipeline itself (name, goal, stages, manager, counts) is seen by ever
 
 ### General
 
-Where every task goes unless it belongs to another pipeline. Manager: the Task Manager bot.
+Where every task goes unless it belongs to another pipeline. Manager: the General Manager bot.
 
 Stages: To do → Done · Closed
 
 - **To do.** Owner: the task's assignee. To leave: Owner says done. No limit. Expected time: 1 day for a bot. For a task
-  with no assignee, the Task Manager is woken to pick one.
+  with no assignee, the General Manager is woken to pick one.
 - **Done.** When the bot says done, it is Done. Nobody checks it. You can reopen it with a note.
 
 Roles are found by the seat's template, never by a name: the Product and Engineering Pipeline Managers
 (`pipeline-manager`, each by its chart id), the Product Owner, Builder, Reviewer 1, Reviewer 2 and Release Owner. A
 software company has all of them live, with the QA Owner; a role nobody fills goes up to the pipeline's manager, and a
-manager nobody fills to the Task Manager, until the role's bot appears. The person on a people OK is the first person
+manager nobody fills to the General Manager, until the role's bot appears. The person on a people OK is the first person
 above the pipeline's manager bot on the org chart, else the org owner. Product and Engineering are made for a company
 that answers yes to "Do you build software?" (a blank answer is yes); an untouched pair is retired when it answers no.
 
@@ -771,7 +771,7 @@ Also:
 ### Growth and Success
 
 Each pipeline's manager is its own Pipeline Manager (`<pipeline>-pipeline-manager`); a Monitoring pipeline's is its
-Experiments pipeline's, so one seat manages both. A stage's owner is found by its role's template; until that bot exists, the stage is the manager's, and a manager nobody fills is the Task Manager
+Experiments pipeline's, so one seat manages both. A stage's owner is found by its role's template; until that bot exists, the stage is the manager's, and a manager nobody fills is the General Manager
 (the ladder above). Built in `backend/pipeline_presets_more.py`.
 
 - **Growth Experiments** (GX) and **Success Experiments** (SX). Test ideas, keep what works, drop the rest. Every
@@ -1656,7 +1656,7 @@ How each one works on the engine.
 - **Waiting on the outside world.** A vendor reply, a date, a long job: Snooze to a date with the reason.
 - **A request made in chat.** Stays chat unless the bot files a task. If the bot hits a rule that needs your OK and has
   no task, Tico files one.
-- **Work for "someone".** A General task with no assignee belongs to the Task Manager, who assigns it.
+- **Work for "someone".** A General task with no assignee belongs to the General Manager, who assigns it.
 - **Action items from a meeting.** General tasks.
 - **Moving a task to another pipeline.** It lands in that pipeline's first stage.
 - **Goals.** Not tasks. A goal links to the tasks that serve it.
@@ -1681,7 +1681,7 @@ Each feature that exists today, and where it goes.
 - **D5.** "Done looks like" on a task. It moves under Details.
 - **D6.** The daily cap on how many tasks one sender can give another.
 - **D7.** Quarantine. A quarantined bot's tasks say Paused.
-- **D8.** The Task Manager bot. It becomes General's manager.
+- **D8.** The General Manager bot. It becomes General's manager.
 - **D9.** Jev checking pages, with a "what to check" line on each requirement. Jev only, no model picker.
 - **D10.** GitHub check runs that mirror a task's requirements on its PR.
 - **D11.** Factories and their output counts.

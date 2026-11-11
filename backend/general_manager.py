@@ -1,4 +1,4 @@
-"""The Task Manager (docs/task-manager.md): a built-in helper bot that tidies tasks, never the work.
+"""The General Manager (docs/general-manager.md): a built-in helper bot that tidies tasks, never the work.
 
 It is the manager of the General pipeline, so the never-stuck check hands it a General task whose owner bot tried three
 times, that is Late, or that has no assignee (backend/never_stuck.py). Beside that, Tico finds what needs tidying in
@@ -14,8 +14,8 @@ department's report is built here:
 
 A task belongs to its owner's department: the org chart's fixed department list (templates/groups.yaml), a group inside one
 counting as it; a task whose owner is in none goes to "Company". Only company tasks the bot may read are listed: a private
-task, or one of a bot the Task Manager has no access to, never appears (the same fence its own writes meet,
-`H.task_manager_acts`). A task in a pipeline whose manager is another bot that is active is that manager's, and is left
+task, or one of a bot the General Manager has no access to, never appears (the same fence its own writes meet,
+`H.general_manager_acts`). A task in a pipeline whose manager is another bot that is active is that manager's, and is left
 out. An item reported once is not reported again for a day unless it changed, so something the bot was unsure of does
 not wake it every hour.
 
@@ -28,8 +28,8 @@ import sqlite3
 from . import hubdb as H
 from .store import Problem
 
-SLUG = "task-manager"
-NAME = "Task Manager"
+SLUG = "general-manager"
+NAME = "General Manager"
 ACTOR = "bot:" + SLUG
 EVENT = "task_manager_report"  # the routine's key and the wake's `refs.wake`
 COMPANY = "company"  # the group of a task whose owner is in no department
@@ -98,7 +98,7 @@ class Chart:
 
 
 def same_department(c, a, b):
-    """Whether two owners are in the same department: the one fence on the Task Manager's reassigning
+    """Whether two owners are in the same department: the one fence on the General Manager's reassigning
     (task_calls.task_reassign). Owners in no department count as one group."""
     chart = Chart(c)
     return chart.of(a) == chart.of(b)
@@ -122,14 +122,14 @@ def _item(kind, row, why, fix, owner=None, stamp=None, about=()):
 
 
 def _readable(c, row):
-    """The Task Manager lists only a company task it may read, the rule its own reads and writes meet."""
+    """The General Manager lists only a company task it may read, the rule its own reads and writes meet."""
     return bool(row) and not H.task_private(c, row) and H.bot_reads_task(c, ACTOR, row)
 
 
 def _managed_pipelines(c):
     """The pipelines whose manager is another bot that is active. Their tasks are that manager's to tidy, so the Task
     Manager leaves them out. A pipeline with no manager, or one whose manager is missing, paused or archived, stays
-    covered, and so does General, whose manager is the Task Manager itself."""
+    covered, and so does General, whose manager is the General Manager itself."""
     return {
         row["id"]
         for row in H._rows(
@@ -144,9 +144,9 @@ def _managed_pipelines(c):
 
 def _paused(c):
     """Open tasks that say Paused: the bot whose turn it is cannot run (it was removed, is paused or quarantined, has no
-    computer, keeps failing its runs). Nobody is woken about them until that changes, so the Task Manager may give one
+    computer, keeps failing its runs). Nobody is woken about them until that changes, so the General Manager may give one
     to another bot. A cause that stops the whole company is the company owner's to fix, and is not listed. Nor are the
-    Task Manager's own tasks: what stops it is a person's to fix."""
+    General Manager's own tasks: what stops it is a person's to fix."""
     from . import task_wakes
 
     seen = {}
@@ -200,7 +200,7 @@ def _paused(c):
 
 def _held(c):
     """Bots held after five fast failures in a row (run_backoff) or for going over a turn budget (turn_budgets). Each
-    hold already has its Needs-you item; this line hands the look at its runs to BotOps, since the Task Manager never
+    hold already has its Needs-you item; this line hands the look at its runs to BotOps, since the General Manager never
     releases a bot itself."""
     rows = []
     for sql, why in (
@@ -431,9 +431,9 @@ def _fresh(c, items, at):
 
 def report(c, auth, settings, at):
     """One pass: build every department's report, deliver the non-empty ones. Returns {"items", "departments",
-    "words"}. With the Task Manager paused or missing it opens nothing, because the tasks would have nobody to run them."""
+    "words"}. With the General Manager paused or missing it opens nothing, because the tasks would have nobody to run them."""
     if not active(c):
-        return {"items": 0, "departments": 0, "words": "The Task Manager is off", "tasks": []}
+        return {"items": 0, "departments": 0, "words": "The General Manager is off", "tasks": []}
     by, chart = collect(c, settings, at)
     total, made = 0, []
     for dept in chart.order():
@@ -473,7 +473,7 @@ def report(c, auth, settings, at):
 
 
 def view(c, settings):
-    """What Settings and `tico task-manager` show: whether the bot is on, and each department's last check."""
+    """What Settings and `tico general-manager` show: whether the bot is on, and each department's last check."""
     from . import system_routines as SR
 
     chart = Chart(c, settings)
@@ -519,9 +519,9 @@ def install(app, store, auth, mutate, onboarding, settings_admin, settings):
             raise Problem("forbidden", "People and bots read this", 403)
         return who
 
-    @app.get("/api/v2/task-manager")
-    def task_manager(request: Request):
-        """Whether the Task Manager is on, the routine's switch and schedule, and for each department how many items its
+    @app.get("/api/v2/general-manager")
+    def general_manager(request: Request):
+        """Whether the General Manager is on, the routine's switch and schedule, and for each department how many items its
         last check found and its open Task check task (a task a reader may not open is left out)."""
         who = person(request)
         with store.read() as c:
@@ -531,14 +531,14 @@ def install(app, store, auth, mutate, onboarding, settings_admin, settings):
                     row["task"] = None
             return out
 
-    @app.post("/api/v2/task-manager/turn-on")
+    @app.post("/api/v2/general-manager/turn-on")
     def turn_on(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":
             raise Problem("forbidden", "Only the owner turns the " + NAME + " back on", 403)
-        return mutate(request, body, lambda c: onboarding.turn_on_task_manager(c, who))
+        return mutate(request, body, lambda c: onboarding.turn_on_general_manager(c, who))
 
-    @app.post("/api/v2/task-manager/turn-off")
+    @app.post("/api/v2/general-manager/turn-off")
     def turn_off(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":

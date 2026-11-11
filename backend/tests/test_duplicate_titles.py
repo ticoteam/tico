@@ -1,10 +1,10 @@
 """An unfinished task's title is taken whatever its case and spacing (hubdb.title_key): creating or renaming another
-task between the same requester and owner, under the same parent, to that title is refused; the Task Manager and the
+task between the same requester and owner, under the same parent, to that title is refused; the General Manager and the
 stale review find the same pairs. Synthetic fixtures."""
 
 import pytest
 
-from backend import task_manager as TM
+from backend import general_manager as TM
 from backend.store import H
 
 ANA, OPS = "human:ana", "bot:ops"
@@ -51,7 +51,7 @@ def test_unfinished_titles_are_taken_whatever_their_case_and_spacing(conn):
     child = H.task_create(conn, ANA, "PATCH LOGIN", "x", OPS, parent_id=parent["id"])
     assert again["id"] != child["id"]
 
-    # The Task Manager pairs twins by the same rule.
+    # The General Manager pairs twins by the same rule.
     first = H.task_create(conn, ANA, "Renew the domain", "x", OPS, private=False)
     # Made before this rule, or by a path that skips it: a twin that differs by inner spacing and case.
     twin = H.task_create(conn, ANA, "Renew the domain later", "x", OPS, private=False)

@@ -1,5 +1,5 @@
 """BotOps changes a team setting with the rights of the person who asked, never its own (docs/permissions.md): the
-release schedule, the Task Manager, stalled task check, the team's run budget, task types, tags and incoming triggers.
+release schedule, the General Manager, stalled task check, the team's run budget, task types, tags and incoming triggers.
 
 Ana owns the company, Ben is an admin, Cara is a member (the base fixture).
 """
@@ -16,7 +16,7 @@ def test_an_owner_changes_team_settings_through_botops_and_a_member_is_refused(a
         ("tico_release_schedule", {"on": False}),
         ("tico_team_budget", {"hour": 5}),
         ("tico_maintenance_set", {"paused": True}),
-        ("tico_task_manager_set", {"on": True}),
+        ("tico_general_manager_set", {"on": True}),
     ):
         err, result = mcp(api, name, args, ana["token"])
         assert not err, (name, result)

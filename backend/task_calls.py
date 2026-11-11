@@ -109,7 +109,7 @@ def _task_write(
 # ----------------------------------------------------------------------------- who may
 def can_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | None = None) -> bool:
     """Whether `actor` can work this task: its owner, its requester, their managers and delegates, a party to a task
-    above it, the Task Manager, the manager and the owner of its pipeline, or a person who moves tasks."""
+    above it, the General Manager, the manager and the owner of its pipeline, or a person who moves tasks."""
     from . import task_engine as E
 
     H = _h()
@@ -117,7 +117,7 @@ def can_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | Non
         return True
     if not H.task_private_readable(conn, actor, row):
         return False
-    if H._task_party(conn, actor, row) or H.task_manager_acts(conn, actor, row):
+    if H._task_party(conn, actor, row) or H.general_manager_acts(conn, actor, row):
         return True
     pipe: Row = E.pipeline(conn, row["pipeline_id"]) or {} if row.get("pipeline_id") else {}
     if actor in (pipe.get("manager_id"), pipe.get("owner_id")):
@@ -299,7 +299,7 @@ def task_reassign(
     mover: bool | None = None,
 ) -> Row:
     """Give the task to another owner for this stage. Checked as any hand-over is: the actor reaches the new owner,
-    the new owner takes tasks, the Task Manager stays in the department, and a bot's hand-over to a person passes the
+    the new owner takes tasks, the General Manager stays in the department, and a bot's hand-over to a person passes the
     strategy rules."""
     from . import task_engine as E
 
@@ -310,16 +310,16 @@ def task_reassign(
         H._botops_only(conn, actor, H.resolve_actor(conn, owner))
         target = H._reach(conn, actor, owner)
     if target and target != row.get("owner_id"):
-        if actor == H.TASK_MANAGER:
-            from . import task_manager
+        if actor == H.GENERAL_MANAGER:
+            from . import general_manager
 
-            department: Any = task_manager
+            department: Any = general_manager
             if not department.same_department(conn, row.get("owner_id"), target):
                 _refuse(
                     conn,
                     actor,
                     "identity",
-                    "The Task Manager reassigns only within the owner's department. Leave a comment for the "
+                    "The General Manager reassigns only within the owner's department. Leave a comment for the "
                     "department instead.",
                     task_id,
                 )

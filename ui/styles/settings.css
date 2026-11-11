@@ -795,7 +795,7 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 /* Webhook dialogs' small section heads (ui/app/settings-webhooks.ts) */
 .wr-sub{margin:8px 0 2px;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);font-size:var(--t-label);font-weight:600}
 /* A swappable field (input or step list) sits in the grid as its label would. */
-/* Releases and Task Manager cards (ui/app/settings-release.ts) */
+/* Releases and General Manager cards (ui/app/settings-release.ts) */
 .rel-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:0}
 .rel-line input[type=time]{width:auto;max-width:100%}
 .rel-line input[type=text]{flex:1 1 140px;min-width:0}

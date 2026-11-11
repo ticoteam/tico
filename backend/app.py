@@ -5656,9 +5656,9 @@ def create_app(settings=None):
     from .maintenance_health import install as install_health
 
     install_health(app, store, auth, mutate, settings)
-    from .task_manager import install as install_task_manager
+    from .general_manager import install as install_general_manager
 
-    install_task_manager(app, store, auth, mutate, onboarding, settings_admin, settings)
+    install_general_manager(app, store, auth, mutate, onboarding, settings_admin, settings)
     # A computer's screen in the app (backend/screen.py); its websockets go before the static mounts below.
     from .screen import install as install_screen
 

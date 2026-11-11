@@ -122,12 +122,12 @@ ACTIONS = {
         ("health", "invariants", "production", "alert", "stuck"),
     ),
     "report_tasks": (
-        "list each department's stalled, overdue and out-of-step tasks for the Task Manager",
+        "list each department's stalled, overdue and out-of-step tasks for the General Manager",
         ("tasks", "stalled", "overdue", "department", "report"),
     ),
-    "wake_task_manager": (
+    "wake_general_manager": (
         "open a Task check task for each department that has something to fix",
-        ("tasks", "wake", "task manager"),
+        ("tasks", "wake", "general manager"),
     ),
     "check_books": (
         "read the Finance Owner's Finance work queue: rows to categorize, bills, payments due, overdue "
@@ -423,14 +423,14 @@ JOBS = [
     ),
     Job(
         "task_manager_report",
-        "Task Manager report",
+        "General Manager report",
         "Lists each department's paused tasks, held bots, runs waiting on an owner's review and duplicate tasks in plain "
-        "code, and opens one task for the Task Manager per department that has something.",
+        "code, and opens one task for the General Manager per department that has something.",
         CHECKS,
         "Hourly on weekdays, 08:00 to 18:00",
         3600,
         control=True,
-        then=("report_tasks", "wake_task_manager"),
+        then=("report_tasks", "wake_general_manager"),
     ),
     Job(
         "bookkeeper_check",
@@ -1439,10 +1439,12 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
         }
         item["search"] = search_words(job, when_words, then_words, department)
         if job.key == "task_manager_report":
-            from .task_manager import active as task_manager_active
+            from .general_manager import active as general_manager_active
 
             item["note"] = (
-                None if task_manager_active(c) else "Opens no tasks while the Task Manager is paused (Settings > Bots)"
+                None
+                if general_manager_active(c)
+                else "Opens no tasks while the General Manager is paused (Settings > Bots)"
             )
         if job.key in ("bookkeeper_check", "bookkeeper_watch", "bookkeeper_rules_digest"):
             from .bookkeeper import active as bookkeeper_active

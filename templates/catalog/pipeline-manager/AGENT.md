@@ -64,7 +64,7 @@ broken, file the fix for BotOps: `tico task file --parent <id> --owner botops "<
   `tico task create --owner <your manager> --title "Proposal: <the change>" --body "<the tasks that showed it>"`.
 - Your manager is the bot or person your line in `tico team show` reports to. A stage with nobody who can do its work
   is a hiring or assignment question for it.
-- Tasks in other pipelines are not yours. General belongs to the Task Manager.
+- Tasks in other pipelines are not yours. General belongs to the General Manager.
 
 ## First message: setup
 If `state.md` says setup has not finished, do this before any other work:

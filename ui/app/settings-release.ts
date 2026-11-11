@@ -1,5 +1,5 @@
 /* ui/app/settings-release.ts — The built-in bots' cards on their bot page's Settings (Releases on the Release Owner's,
-   Task Manager's and the Strategy Owner's), Settings > Security's Screening card, and the board's Release now
+   General Manager's and the Strategy Owner's), Settings > Security's Screening card, and the board's Release now
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -147,24 +147,24 @@ async function renderReleaseCard(): Promise<void> {
   if (Array.isArray(RELEASE_VIEW?.times)) releaseCardPaint();
 }
 
-// The Task Manager (backend/task_manager.py): a built-in helper that checks each department's tasks on a schedule
+// The General Manager (backend/general_manager.py): a built-in helper that checks each department's tasks on a schedule
 // and files one check task per department with what it found. The owner pauses and resumes it.
-interface SettingsTaskManagerDepartment {
+interface SettingsGeneralManagerDepartment {
   department: string;
   name: string;
   checked?: string | null;
   items: number;
   task?: { id: string; title?: string } | null;
 }
-interface SettingsTaskManagerView {
+interface SettingsGeneralManagerView {
   on: boolean;
   state?: string;
   bot?: string;
   last_run?: { started_at?: string | null; finished_at?: string | null } | null;
-  departments?: SettingsTaskManagerDepartment[];
+  departments?: SettingsGeneralManagerDepartment[];
 }
-let TASK_MANAGER_VIEW: SettingsTaskManagerView | null = null;
-function taskManagerHTML(v: SettingsTaskManagerView): string {
+let GENERAL_MANAGER_VIEW: SettingsGeneralManagerView | null = null;
+function generalManagerHTML(v: SettingsGeneralManagerView): string {
   const owner = S.me?.role === 'owner';
   const state = v.on ? 'On' : v.state === 'paused' ? 'Paused' : 'Off';
   const last = v.last_run && (v.last_run.finished_at || v.last_run.started_at);
@@ -180,17 +180,17 @@ function taskManagerHTML(v: SettingsTaskManagerView): string {
       ${toggle}${botPageView()?.slug === v.bot ? '' : `<a class="ghost" href="#/bot/${encodeURIComponent(String(v.bot))}">Open</a>`}</div>
     <div class="tm-list">${rows}</div><p class="settings-cell-note" role="status" data-tm-status></p>`;
 }
-function taskManagerPaint(): void {
-  const el = document.querySelector<HTMLElement>('#set-task-manager'), card = document.querySelector<HTMLElement>('#set-task-manager-card');
-  if (!el || !card || !TASK_MANAGER_VIEW) return;
+function generalManagerPaint(): void {
+  const el = document.querySelector<HTMLElement>('#set-general-manager'), card = document.querySelector<HTMLElement>('#set-general-manager-card');
+  if (!el || !card || !GENERAL_MANAGER_VIEW) return;
   card.hidden = false;
-  el.innerHTML = taskManagerHTML(TASK_MANAGER_VIEW);
+  el.innerHTML = generalManagerHTML(GENERAL_MANAGER_VIEW);
   el.onclick = async ev => {
     const toggle = eventElement(ev)?.closest<HTMLButtonElement>('[data-tm-toggle]'); if (!toggle) return;
     toggle.disabled = true;
     try {
-      await post('/v2/task-manager/turn-' + toggle.dataset.tmToggle, {});
-      TASK_MANAGER_VIEW = await get<SettingsTaskManagerView>('/v2/task-manager'); taskManagerPaint();
+      await post('/v2/general-manager/turn-' + toggle.dataset.tmToggle, {});
+      GENERAL_MANAGER_VIEW = await get<SettingsGeneralManagerView>('/v2/general-manager'); generalManagerPaint();
     } catch (e) {
       toggle.disabled = false;
       // The status line is drawn with the card above.
@@ -198,11 +198,11 @@ function taskManagerPaint(): void {
     }
   };
 }
-async function renderTaskManagerCard(): Promise<void> {
-  if (!document.querySelector('#set-task-manager')) return;
-  // An install without the Task Manager answers 404; the card stays hidden.
-  try { TASK_MANAGER_VIEW = await get<SettingsTaskManagerView>('/v2/task-manager'); } catch { return; }
-  if (Array.isArray(TASK_MANAGER_VIEW?.departments)) taskManagerPaint();
+async function renderGeneralManagerCard(): Promise<void> {
+  if (!document.querySelector('#set-general-manager')) return;
+  // An install without the General Manager answers 404; the card stays hidden.
+  try { GENERAL_MANAGER_VIEW = await get<SettingsGeneralManagerView>('/v2/general-manager'); } catch { return; }
+  if (Array.isArray(GENERAL_MANAGER_VIEW?.departments)) generalManagerPaint();
 }
 
 // Screening (backend/screening.py): a switch per detector (patterns, decision model), a mode per door outside text comes
@@ -295,13 +295,13 @@ async function renderScreeningCard(): Promise<void> {
 // Manager's checks, the Strategy Owner's levels (the owner's alone), and Releases on whichever bot the release schedule
 // names or finds as its Release Owner. Each keeps the permissions it had in Settings: the server's answers decide.
 function botBuiltinCardsHTML(slug: string): string {
-  if (slug === 'task-manager') return '<section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>';
+  if (slug === 'general-manager') return '<section class="card" id="set-general-manager-card" hidden><header><h2>General Manager</h2><span class="pill">Built-in</span></header><div id="set-general-manager"></div></section>';
   if (slug === 'strategy-owner' && settingsStrategyBotShown()) return `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span></header>
     <div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>`;
   return '';
 }
 async function botBuiltinCardsMount(slug: string): Promise<void> {
-  if (slug === 'task-manager') void renderTaskManagerCard();
+  if (slug === 'general-manager') void renderGeneralManagerCard();
   if (slug === 'strategy-owner') void renderSettingsStrategyBot();
   const host = document.querySelector<HTMLElement>('#bot-builtin-cards');
   try { await releaseScheduleLoad(); } catch { return; }   // a team with no schedule to read has no Releases card
