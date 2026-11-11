@@ -168,8 +168,21 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             parts.append(f"pipeline_id=(SELECT id FROM pipelines WHERE rowid={int(found[0])})")
         if stage is not None:
             found = c.execute("SELECT rowid FROM stages WHERE id=?", (stage,)).fetchone()
+            if not found and pipeline is not None:
+                # A stage by its name within the pipeline, as a move takes it (`tico task move <id> Slipping`): a bot
+                # that lists "Watching" by name is not refused (Initech, Nov 11).
+                found = c.execute(
+                    "SELECT rowid FROM stages WHERE pipeline_id=? AND lower(name)=lower(?) AND retired_at IS NULL",
+                    (pipeline, str(stage).strip()),
+                ).fetchone()
             if not found:
-                raise Problem("stage", "No such stage", 422)
+                raise Problem(
+                    "stage",
+                    "No such stage in this pipeline"
+                    if pipeline is not None
+                    else "No such stage. Give its id, or its name with the pipeline",
+                    422,
+                )
             parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={int(found[0])})")
         if pushed_past is not None:
             parts.append(

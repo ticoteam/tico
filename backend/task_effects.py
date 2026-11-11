@@ -81,11 +81,27 @@ def _publish(conn: "sqlite3.Connection", name: str, row: Row, actor: str, change
     H.hook(conn, name, row["id"], lambda: facts, actor, revision=revision)
 
 
+def filed_ended(conn: "sqlite3.Connection", above: Row, by: str) -> Row:
+    """The last task `above` filed on this visit ended (task_engine._ended, before it wakes anyone): a snooze a bot set
+    on `above` was a wait for what it filed ("snoozed till Chris applies it"), and that wait is over, so the snooze ends
+    and the owner is woken now with how each ended, not on the snooze's date. The same rule as a done ending your own
+    snooze (backend/answers.py): a snooze a person set is theirs to end, and stays. Returns `above` as it is now."""
+    H = _h()
+    snoozed: Row | None = above.get("snooze")
+    if not snoozed or not H.is_bot(snoozed.get("by_id")):
+        return above
+    from . import task_engine
+
+    engine: Any = task_engine
+    return engine.unsnooze(conn, above["id"], by, "What it filed has ended")
+
+
 def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None) -> None:
     """A bot that asked for a task hears once how it ended, on its next run: no run starts for it (never-stuck rule 7).
     Not when it ended it itself or owns it. Not when the engine already told it, on the task that filed this one, that
     what it filed there has ended (task_engine._ended, which runs before this): only a wake it wrote counts, so a
-    parent that is closing, is snoozed, or has left the stage the task was filed from takes nothing away."""
+    parent that is closing, that a person snoozed, or that has left the stage the task was filed from takes nothing
+    away. A bot's snooze there ended with the last filed task (`filed_ended`), so that parent's owner was woken."""
     H = _h()
     requester = after.get("requester_id")
     if not H.is_bot(requester) or requester in (actor, after.get("owner_id")):

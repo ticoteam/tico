@@ -409,6 +409,9 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
 - A bot's snooze never hides a person's open ask: that ask stays in the person's Needs you, and their answer ends the
   snooze. Only the person's own snooze takes it out of their list.
 - Finishing or closing a task ends its snooze.
+- A bot's snooze on a task that waits on tasks it filed ends when the last of them ends, and the owner is woken with how
+  each ended. A person's snooze stays. *Changed Nov 11: Initech's SEO Owner slept a week after the person said the
+  change was applied.*
 - A bot should give an end date. With none, the task shows "On ice" and the manager bot is told once (C1).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
 
@@ -815,7 +818,8 @@ Experiments pipeline's, so one seat manages both. A stage's owner is found by it
   - **One KPI** the Owner makes at setup (`tico kpi create`) and puts under the North Star as an input.
   - **A channel tag** `channel:<key>` on every task, the keys of `backend/company_file/chart_formula.json`.
   - **No Tool to make the change:** after the person's OK the Owner files `Apply: <change>` for the person the playbook
-    names, with the exact change. No pack ships an ads or email write Tool.
+    names: a one-sentence ask first, the exact change below it. Refused, it fixes it and files again; it never says it
+    filed what was not. No pack ships an ads or email write Tool.
   - **The brand check** is a sub-task to the Design Owner (`design-owner`), answered `Brand check: passed` or not; a
     video goes from it to the Video Owner, who gets a person's OK (`tico task ask --kind ok`) on a brief with the
     script, the shots and the cost before it makes anything. Writing for another channel's bet is a sub-task to the

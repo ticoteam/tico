@@ -32,6 +32,8 @@ def test_a_list_keeps_a_pipelines_or_a_stages_tasks_and_those_pushed_past(api):
     assert moved["stage"]["id"] == "build"
     assert ids(api, "pipeline=product") == {spec["id"], pushed["id"]}
     assert ids(api, "stage=build") == {pushed["id"]}
+    # By its name within the pipeline, as a move takes it: a bot that listed "Watching" by name counted none.
+    assert ids(api, "pipeline=product&stage=Build") == ids(api, "pipeline=product&stage=build ") == {pushed["id"]}
     assert ids(api, "pipeline=product&pushed_past=true") == {pushed["id"]}
     assert ids(api, "pipeline=product&pushed_past=false") == {spec["id"]}
     rows = {t["id"]: t for t in get(api, "tasks?brief=true")["tasks"]}
@@ -41,7 +43,7 @@ def test_a_list_keeps_a_pipelines_or_a_stages_tasks_and_those_pushed_past(api):
     assert {spec["id"], pushed["id"], general["id"]} <= ids(api, "waiting_on=ben")
     assert ids(api, "waiting_on=ben&pipeline=product") == {spec["id"], pushed["id"]}
     assert ids(api, "waiting_on=cara") == set()
-    for bad in ("pipeline=nope", "stage=nope", "waiting_on=nobody-here"):
+    for bad in ("pipeline=nope", "stage=nope", "stage=Build", "pipeline=product&stage=Ship", "waiting_on=nobody-here"):
         r = api.get("/api/v2/tasks?" + bad, headers=headers())
         assert r.status_code == 422, (bad, r.text)
 

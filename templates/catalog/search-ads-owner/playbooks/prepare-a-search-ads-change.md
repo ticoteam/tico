@@ -56,7 +56,11 @@ copy and its sources in `knowledge/copy.md`.
   rule. Record it in `knowledge/changes.md` as "proposed".
 - **For upkeep:** make the change within a granted Tool, or file it for the person who puts changes live:
 
-      tico task create --owner <person id> --label channel:search-ads --title "Apply: <the change>" --body "<exactly what to change, where, and why>"
+      tico task create --owner <person id> --label channel:search-ads --title "Apply: <the change>" --body-file <body file>
+
+  The body file's first paragraph is one or two plain sentences, under 40 words, with no links, ids or file paths.
+  Below it, after a blank line: exactly what to change, where, and why. If it is refused, nothing was filed: fix it
+  and run it again.
 
   Record it in `knowledge/changes.md` as "made" or "filed", with the date.
 - **For a plan or a diagnosis:** answer on the task in under 150 words. A plan someone wants built becomes an idea in
