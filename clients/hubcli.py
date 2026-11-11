@@ -4473,6 +4473,10 @@ def parser():
     from clients import hubtools_org
 
     hubtools_org.add_commands(sub)  # people, bots, the org chart, usage, billing and reach
+
+    from clients import hubtools_connections  # `tico github`, and the connection verbs of `tico repo` and `tico health`
+
+    hubtools_connections.add_commands(sub)
     return p
 
 

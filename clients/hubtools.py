@@ -13541,3 +13541,8 @@ class Protocol:
                 "isError": True,
             },
         }
+
+
+# The connection tools (GitHub App, repositories and who may use them, whether the company can work) live in their own
+# module and register into this table, TOOLS, BY_NAME and AUDIENCE, when it is imported; last, so all of the above exists.
+from clients import hubtools_connections  # noqa: F401
