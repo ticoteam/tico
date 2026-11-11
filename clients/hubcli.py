@@ -5155,6 +5155,9 @@ def parser():
     s = keys.add_parser("revoke", help="stop a key at once")
     s.add_argument("id")
     s.set_defaults(fn="service-key revoke")
+    from clients import hubtools_org
+
+    hubtools_org.add_commands(sub)  # people, bots, the org chart, usage, billing and reach
     return p
 
 
@@ -5343,8 +5346,10 @@ def rename_argv(argv):
         return ["note", "create"] + argv[1:], '"tico note <bot> <text>" is now "tico note create <bot> <text>"'
     if argv[:1] == ["notice"] and len(argv) > 1 and (argv[1] in NOTICE_COMMANDS or argv[1].startswith("-")):
         return argv, None  # `tico notice list` is new; only `tico notice <text>` is the old send
-    if argv[:2] in (["org", "order"], ["org", "reports-to"]):  # `tico org` alone is the old `tico team show`
-        return argv, None
+    from clients.hubtools_org import ORG_COMMANDS
+
+    if argv[:1] == ["org"] and argv[1:2] and argv[1] in ("order", "reports-to", "models", *ORG_COMMANDS):
+        return argv, None  # `tico org` alone is the old `tico team show`; its subcommands are new
     for old, new, tail, rewrite in RENAMED:
         if tuple(argv[: len(old)]) == old:
             rest = argv[len(old) :]

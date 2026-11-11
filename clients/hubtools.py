@@ -12892,6 +12892,14 @@ def call_bot_remove(api, args):
     )
 
 
+# People, bots, the org chart, usage and reach: their own module (clients/hubtools_org.py), registered here like any tool.
+from clients import hubtools_org
+
+for _spec in hubtools_org.TOOLS:
+    tool(_spec["name"], _spec["description"], _spec["properties"], _spec["required"], writes=_spec["writes"])(
+        _spec["fn"]
+    )
+
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 
@@ -13149,6 +13157,7 @@ AUDIENCE = {
         for name in ("tico_sql", "tico_classify", "tico_decision_ask", "tico_decision_outcome", "tico_market_ask")
     },
 }
+AUDIENCE.update(hubtools_org.AUDIENCE)
 
 
 def kind_of(me):
