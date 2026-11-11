@@ -556,8 +556,8 @@ def enter(
         _drop_stale(conn, str(parent))  # the parent waits on it now: its owner's queued wake for the parent goes
     _owned(conn, row, _task(conn, task_id), by)
     entered = _task(conn, task_id)
-    stage_effects.enter(conn, entered, by)
-    _wake_turn(conn, entered, refs=wake, trigger=trigger, source=source)
+    lead = stage_effects.enter(conn, entered, by)
+    _wake_turn(conn, entered, lead, refs=wake, trigger=trigger, source=source)
     return entered
 
 
@@ -845,8 +845,7 @@ def move(
     _owned(conn, row, _task(conn, task_id), by)
     moved = _task(conn, task_id)
     if target["kind"] == "work":
-        stage_effects.enter(conn, moved, by)
-        _wake_turn(conn, moved)
+        _wake_turn(conn, moved, stage_effects.enter(conn, moved, by))
     elif not cascade:
         _ended(conn, moved, by)
     if pushed:

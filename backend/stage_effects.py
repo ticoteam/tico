@@ -11,7 +11,9 @@ the page that counted on the nearest earlier stage with a page requirement (the 
 filed by the filing task's owner (the Product Owner), who is its requester. When that is refused (the Product
 Owner is paused or still onboarding) the engine files it itself; one refused even then (the target was retired)
 files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed yet"), the
-owner's turn, and the owner may file one by hand. History: `handoff_filed` on the filing task.
+owner's turn, and the owner may file one by hand. The owner's one wake for the stage opens with why (a private task:
+the first stage's owner there cannot read it; the engine never adds a reader). History: `handoff_filed` on the
+filing task.
 
 Queueing (`{"queue_prs": true}`): merge_queue.queue on enter, merge_queue.pull on undo (track C).
 """
@@ -67,8 +69,8 @@ def _filer(conn: "sqlite3.Connection", task: Row, by: str) -> str:
     return str(H.KEEPER)
 
 
-def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> str | None:
-    """File the handoff into pipeline `target`. Returns the filed task's id, or None when it was refused."""
+def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[str | None, str]:
+    """File the handoff into pipeline `target`. Returns the filed task's id and "", or None and why it was refused."""
     H = _h()
     body = str(task.get("body") or "").rstrip()
     spec = _spec_line(conn, task)
@@ -98,22 +100,36 @@ def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> str | 
             continue
         conn.execute("RELEASE stage_effects_file")
         H.history_event(conn, "task", task["id"], by, "handoff_filed", None, made["id"], None, {"pipeline": target})
-        return str(made["id"])
+        return str(made["id"]), ""
     H.event(conn, by, "task.handoff_refused", task["id"], {"pipeline": target, "why": str(last or "")})
-    return None
+    return None, _refused_line(conn, target, last)
 
 
-def enter(conn: "sqlite3.Connection", task: Row, by: str) -> None:
+def _refused_line(conn: "sqlite3.Connection", target: str, refused: Exception | None) -> str:
+    """Why no task was filed, in the refusal's own words (a private task: who owns the first stage there and cannot
+    read it; the engine never adds a reader)."""
+    from . import task_engine
+
+    extra: Row = getattr(refused, "extra", None) or {}
+    why = str(extra.get("cause") or getattr(refused, "detail", "") or "").strip().rstrip(".")
+    name = (task_engine.pipeline(conn, target) or {}).get("name") or target
+    return f"No {name} task was filed: {why}." if why else f"No {name} task was filed."
+
+
+def enter(conn: "sqlite3.Connection", task: Row, by: str) -> str:
     """Run the on-enter action of the stage `task` just entered. `task` is `task_engine.task()`'s shape. Never raises
-    into the move for a refused filing (see the module's docstring)."""
+    into the move for a refused filing (see the module's docstring). Returns what the owner's wake for the stage opens
+    with: why no task was filed, else ""."""
     action = _on_enter(task.get("stage"))
     target = action.get("file_into")
+    lead = ""
     if isinstance(target, str) and target and task.get("visit"):
-        _file(conn, task, target, by)
+        _, lead = _file(conn, task, target, by)
     if action.get("queue_prs") is True:
         from . import merge_queue
 
         merge_queue.queue(conn, task, by)
+    return lead
 
 
 def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:

@@ -393,6 +393,27 @@ def test_a_handoff_nobody_can_file_files_nothing_and_the_move_goes_through(c):
     assert (standing.state, standing.on, standing.line) == (R.NOT_MET, "bot:pm", "No task filed yet")
 
 
+def test_a_private_product_task_whose_handoff_builder_cannot_read_tells_the_product_manager_why(c):
+    """The engine never adds a reader: the private Engineering task is not filed, the stage waits on the Product
+    Manager, and their one wake for it says why."""
+    row = _product_task(c)
+    c.execute("UPDATE tasks SET private=1 WHERE id=?", (row["id"],))
+    readers = c.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()[0]
+    moved = E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
+    assert moved["stage_id"] == "product-in-development" and _filed(c, row["id"]) == []
+    standing = R.standings(c, moved)[0]
+    assert (standing.state, standing.on) == (R.NOT_MET, "bot:pm")
+    assert c.execute("SELECT readers FROM tasks WHERE id=?", (row["id"],)).fetchone()[0] == readers
+    wakes = c.execute(
+        "SELECT m.body FROM messages m JOIN jobs j ON j.message_id = m.id WHERE m.wake_key LIKE ? AND j.state='queued'",
+        (f"{row['id']}:{moved['visit']['id']}:%",),
+    ).fetchall()
+    assert len(wakes) == 1, wakes
+    assert wakes[0][0].startswith(
+        "No Engineering task was filed: builder owns On deck and cannot read this private task.\n"
+    ), wakes[0][0]
+
+
 def test_not_validated_files_a_new_task_each_time_even_with_the_same_title(c):
     """Scenario 26 on a pipeline that files into General, whose filed task its owner can finish."""
     PS.ensure_presets(c)

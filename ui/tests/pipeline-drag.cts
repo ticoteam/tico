@@ -122,6 +122,22 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
     const goal = page.locator('#pe-dialog [data-pe-pf="goal"]');
     await goal.waitFor();
     assert.equal(await page.locator('#pe-title').innerText(), 'Product');
+    // S11 as drawn: each stage one row, in order, the one asked for open; a closed row shows how many requirements it
+    // has; labels sit left-aligned above their fields, and Prefix is a short field beside Manager.
+    assert.deepEqual(await page.locator('#pe-dialog .pe-stage-name').allInnerTexts(), ['Spec', 'Build']);
+    assert.equal(await page.locator('#pe-dialog .pe-stage[open] .pe-stage-name').innerText(), 'Build');
+    assert.equal((await page.locator('#pe-dialog .pe-stage:not([open]) .pe-stage-reqs').innerText()).trim(), '✓ 1');
+    const layout = await page.evaluate(() => {
+      const box = (sel: string) => document.querySelector(sel)!.getBoundingClientRect();
+      const label = document.querySelector('#pe-dialog .pe-fields .pe-f > span')!;
+      return {align: getComputedStyle(label).textAlign, labelX: label.getBoundingClientRect().x, goalX: box('[data-pe-pf="goal"]').x,
+        goalW: box('[data-pe-pf="goal"]').width, prefixW: box('[data-pe-pf="prefix"]').width,
+        prefixY: box('[data-pe-pf="prefix"]').y, managerY: box('[data-pe-pf="manager_id"]').y};
+    });
+    assert.ok(['left', 'start'].includes(layout.align), `labels left-aligned, got ${layout.align}`);
+    assert.ok(Math.abs(layout.labelX - layout.goalX) < 2, 'a label starts where its field starts');
+    assert.ok(layout.prefixW < layout.goalW / 4, 'Prefix is a short field');
+    assert.ok(Math.abs(layout.prefixY - layout.managerY) < 2, 'Prefix sits beside Manager');
     await goal.fill('Ship it');
     await page.locator('#pe-dialog [data-pe-save]').click();
     await page.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])') && !document.querySelector('#pe-dialog [data-pe-error]:not([hidden])'));

@@ -78,27 +78,33 @@ function peExpected(minutes: number | null): {n: string; unit: number} {
 
 // ---------------------------------------------------------------- drawing
 
-const peF = (label: string, control: string): string => `<label class="pe-f"><span>${esc(label)}</span>${control}</label>`;
+/** A field: its name above its control, as every form in the app. `size` narrows it ('short': a number or a prefix). */
+const peF = (label: string, control: string, size = ''): string =>
+  `<label class="pe-f${size ? ' pe-f-' + size : ''}"><span>${esc(label)}</span>${control}</label>`;
+/** Fields side by side on one line; they wrap on a narrow screen. */
+const peRow = (fields: string): string => `<div class="pe-row">${fields}</div>`;
 
 function peReqHTML(req: PipelineReqRec, si: number, ri: number): string {
   const at = `data-pe-si="${si}" data-pe-ri="${ri}"`;
   const okKind = PE_OK_KINDS.includes(req.kind), never = PE_NEVER_PUSHED.includes(req.kind);
   const kinds = PE_KINDS.map(([k, name]) => `<option value="${k}"${k === req.kind ? ' selected' : ''}>${esc(name)}</option>`).join('');
   const page = req.kind === 'page';
-  const who = req.person_id ? actorLabel(req.person_id) : '';
+  const person = req.person_id ? actorLabel(req.person_id) : '';
+  // S11: a page's row says who checks it, "Jev, then Ana"; any other kind names its person.
+  const who = page ? (person ? `Jev, then ${person}` : 'Jev') : person;
   return `<details class="pe-req"${req.id ? '' : ' open'}><summary><span class="pe-req-name">${esc(req.line || peKindName(req.kind))}</span>`
-    + `<span class="pe-req-who muted">${esc(who)}</span></summary><div class="pe-req-body">`
+    + `<span class="pe-req-who muted">${esc(who)}</span></summary><div class="pe-req-body"><div class="pe-row">`
     + peF('Needs', `<select data-pe-rf="kind" ${at}${req.id ? ' disabled' : ''}>${kinds}</select>`)
     // A page's line is what Jev checks (S11); on any other kind it is the requirement's name.
-    + peF(req.kind === 'page' ? 'Jev checks' : 'Name', `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" autocomplete="off">`)
+    + peF(req.kind === 'page' ? 'Jev checks' : 'Name', `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" placeholder="${esc(peKindName(req.kind))}" autocomplete="off">`) + '</div>'
     // A page's person is optional: Jev checks, then that person OKs the version Jev passed.
-    + (okKind ? peF(page ? 'Then OK from' : 'From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, page ? 'Nobody' : 'Choose')}</select>`)
-      + peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`) : '')
+    + (okKind ? '<div class="pe-row">' + peF(page ? 'Then OK from' : 'From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, page ? 'Nobody' : 'Choose')}</select>`)
+      + peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`) + '</div>' : '')
     + (req.kind === 'in_release' ? peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`) : '')
-    + (PE_SWITCHES[req.kind] ?? []).map(([key, label]) =>
+    + '<div class="pe-req-foot">' + (PE_SWITCHES[req.kind] ?? []).map(([key, label]) =>
       `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${req.settings[key] === true ? ' checked' : ''}> ${esc(label)}</label>`).join('')
     + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`
-    + `<button type="button" class="ghost pe-req-x" data-pe-req-x ${at}>Remove</button></div></details>`;
+    + `<button type="button" class="ghost pe-req-x" data-pe-req-x ${at}>Remove</button></div></div></details>`;
 }
 
 /** A stage's On enter: nothing, file a linked task into a pipeline, or queue the task's PRs. A pipeline the list lacks
@@ -117,22 +123,29 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
   const at = `data-pe-si="${si}"`;
   const ex = peExpected(stage.expected_minutes);
   const owners = [{id: PE_ASSIGNEE, name: 'Whoever it is assigned to'}, ...peBots(), ...pePeople()];
-  const body = peF('Name', `<input data-pe-sf="name" ${at} maxlength="80" value="${esc(stage.name)}" required autocomplete="off">`)
-    + peF('Purpose', `<input data-pe-sf="purpose" ${at} maxlength="300" value="${esc(stage.purpose)}" autocomplete="off">`)
-    + peF('Owner', `<select data-pe-sf="owner" ${at}>${peChoice(owners, stage.owner, 'Not set')}</select>`)
+  const body = peRow(peF('Name', `<input data-pe-sf="name" ${at} maxlength="80" value="${esc(stage.name)}" required autocomplete="off">`, 'name')
+    + peF('Purpose', `<input data-pe-sf="purpose" ${at} maxlength="300" value="${esc(stage.purpose)}" autocomplete="off">`))
+    + peRow(peF('Owner', `<select data-pe-sf="owner" ${at}>${peChoice(owners, stage.owner, 'Not set')}</select>`)
     + peF('Tasks leave', `<select data-pe-sf="by_hand" ${at}><option value="0"${stage.by_hand ? '' : ' selected'}>When requirements are met</option>`
-      + `<option value="1"${stage.by_hand ? ' selected' : ''}>By hand</option></select>`)
-    + (si > 0 ? peF('Limit', `<input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="task_limit" ${at} value="${stage.task_limit ?? ''}" placeholder="None">`) : '')
-    + peF('On enter', `<select data-pe-sf="on_enter" ${at}>${peOnEnterOptions(state, stage)}</select>`)
-    + `<div class="pe-f"><span>Expected time</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="None" aria-label="Expected time">`
+      + `<option value="1"${stage.by_hand ? ' selected' : ''}>By hand</option></select>`))
+    + peRow((si > 0 ? peF('Limit', `<input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="task_limit" ${at} value="${stage.task_limit ?? ''}" placeholder="None">`, 'short') : '')
+    + `<div class="pe-f pe-f-time"><span>Expected time</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="None" aria-label="Expected time">`
     + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`
+    + peF('On enter', `<select data-pe-sf="on_enter" ${at}>${peOnEnterOptions(state, stage)}</select>`))
     + `<h4 class="pe-h">To leave</h4>`
     + stage.requirements.map((req, ri) => peReqHTML(req, si, ri)).join('')
     + `<button type="button" class="ghost pe-add" data-pe-req-add ${at}>+ Requirement</button>`;
+  // The closed row: its name, who owns it, and how many requirements it has to leave (named when pointed at).
+  const owner = stage.owner === PE_ASSIGNEE ? '' : stage.owner;
+  const reqs = stage.requirements.map(r => r.line || peKindName(r.kind));
+  const meta = `<span class="pe-stage-meta">`
+    + (reqs.length ? `<span class="pe-stage-reqs" title="${esc(reqs.join(', '))}" aria-label="${reqs.length} to leave">✓ ${reqs.length}</span>` : '')
+    + (owner ? `<span class="pe-stage-owner">${actorAvatar(owner, 18)}<span>${esc(actorLabel(owner) || owner)}</span></span>` : '')
+    + `</span>`;
   const tools = `<span class="pe-tools"><button type="button" class="ghost" data-pe-up ${at} aria-label="Move up"${si === 0 ? ' disabled' : ''}>↑</button>`
     + `<button type="button" class="ghost" data-pe-down ${at} aria-label="Move down"${si === count - 1 ? ' disabled' : ''}>↓</button>`
     + `<button type="button" class="ghost" data-pe-stage-x ${at}${count < 2 ? ' disabled' : ''}>Remove</button></span>`;
-  return `<details class="pe-stage" ${at}${state.open.has(stage) ? ' open' : ''}><summary><span class="pe-stage-name">${esc(stage.name || 'New stage')}</span>${tools}</summary>`
+  return `<details class="pe-stage" ${at}${state.open.has(stage) ? ' open' : ''}><summary><span class="pe-stage-name">${esc(stage.name || 'New stage')}</span>${meta}${tools}</summary>`
     + `<div class="pe-stage-body">${body}</div></details>`;
 }
 
@@ -148,9 +161,10 @@ function peBodyHTML(state: PeState): string {
   const d = state.draft;
   const factories = (state.factories ?? []).map(f => ({id: f.id, name: f.name}));
   const fields = peF('Goal', `<input data-pe-pf="goal" maxlength="300" value="${esc(d.goal)}" autocomplete="off">`)
-    + peF('Manager', `<select data-pe-pf="manager_id">${peChoice(peBots(), d.manager_id, 'Not set')}</select>`)
+    + peRow(peF('Manager', `<select data-pe-pf="manager_id">${peChoice(peBots(), d.manager_id, 'Not set')}</select>`)
     + (state.factories ? peF('Factory', `<select data-pe-pf="factory_id">${peChoice(factories, d.factory_id, 'None')}</select>`) : '')
-    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" autocomplete="off">`);
+    // An empty prefix shows the pipeline's first letter as the example.
+    + peF('Prefix', `<input data-pe-pf="prefix" maxlength="2" value="${esc(d.prefix ?? '')}" placeholder="${esc(d.name.trim().charAt(0).toUpperCase())}" autocomplete="off">`, 'short'));
   const stages = d.stages.map((s, i) => peStageHTML(state, s, i, d.stages.length)).join('');
   return `${peClashHTML(state)}<div class="pe-fields">${fields}</div><div class="pe-stages">${stages}</div>`
     + `<p class="err" role="alert" data-pe-error${state.error ? '' : ' hidden'}>${esc(state.error)}</p>`

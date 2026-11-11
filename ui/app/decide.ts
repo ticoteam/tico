@@ -14,7 +14,8 @@
 type AskKind = 'ok' | 'question' | 'yours' | 'stuck' | 'fix' | 'mention';
 /** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
     with no bound grant (a stage's OK of a page): Approve is a plain answer. `missing`: a part of what it shows did not
-    load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. */
+    load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. `page`: on
+    a page requirement, the page this content is (`<file id>@<version>`), the one an answer is for. */
 interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
   hash: string | null;
@@ -24,6 +25,7 @@ interface AskOkView {
   error: string;
   missing: boolean;
   urls: string[];
+  page: string;
 }
 /** The 👎 sheet: what was wrong, then (Make a rule) the rule drafted from it. */
 interface AskSheet {
@@ -379,7 +381,7 @@ function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
 /** Reads what an OK is for, once, and holds it. `changed`: read again after the engine said it changed. */
 async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
   const rid = decideRid(it);
-  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: []};
+  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: [], page: decidePage(it)};
   const before = st.ok.get(rid);
   if (before) decideOkLet(before);
   st.ok.set(rid, v);
@@ -540,8 +542,16 @@ async function decideDo(st: DecState, it: NeedsEntry, label: string, run: () => 
     decidePaintSide(st);
   }
 }
-/** A page requirement's ask: the version on screen, which the answer is for. */
-const decidePageVersion = (it: NeedsEntry): number | undefined => it.ask?.page?.version;
+/** A page requirement's ask: the page attached now (`<file id>@<version>`), '' when there is none. */
+const decidePage = (it: NeedsEntry): string => it.ask?.page ? `${it.ask.page.file_id}@${it.ask.page.version}` : '';
+/** The page on screen, which an answer is for. A refresh that brought another page leaves the screen as it was read:
+    that page is read and shown with "It changed. Look again." and nothing is sent (null). */
+async function decideShownPage(st: DecState, it: NeedsEntry): Promise<string | undefined | null> {
+  const v = st.ok.get(decideRid(it));
+  if (!v || v.page === decidePage(it)) return v?.page || undefined;
+  await decideOkLoad(st, it, true);
+  return null;
+}
 const decideUndoAnswer = (r: unknown) => { const id = (r as TaskMoved | null)?.answer_id; return id ? () => answerUndo(id) : null; };
 const decideUndoReopen = (taskId: string) => () => () => taskMove(taskId, 'reopen', null);
 /** Approve: the person's own OK of exactly what is on screen. A change since it was read is shown, never OK'd. */
@@ -549,7 +559,9 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
   const rid = decideRid(it), v = st.ok.get(rid), taskId = it.task_id;
   if (!v || !taskId || st.busy) return;
   if (v.state === 'none') {
-    await decideDo(st, it, 'Approved', () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, decideNote('#dc-notes') || undefined, decidePageVersion(it)), decideUndoAnswer);
+    const page = await decideShownPage(st, it);
+    if (page === null) return;
+    await decideDo(st, it, 'Approved', () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, decideNote('#dc-notes') || undefined, page), decideUndoAnswer);
     return;
   }
   const hash = v.state === 'ready' ? v.hash : null;
@@ -595,7 +607,11 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   }
   switch (what) {
     case 'approve': await decideApprove(st, it); return;
-    case 'sendback': { const note = decideNote('#dc-notes'); if (note) await decideDo(st, it, 'Sent back', () => taskAnswer(taskId, rid, 'no', ver, note, decidePageVersion(it)), decideUndoAnswer); return; }
+    case 'sendback': {
+      const note = decideNote('#dc-notes'), page = note ? await decideShownPage(st, it) : null;
+      if (note && page !== null) await decideDo(st, it, 'Sent back', () => taskAnswer(taskId, rid, 'no', ver, note, page), decideUndoAnswer);
+      return;
+    }
     case 'other': { const text = decideNote('#dc-other'); if (text) await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, text, ver), decideUndoAnswer); return; }
     case 'done': await decideDo(st, it, 'Done', () => taskDone(taskId, ver), decideUndoReopen(taskId)); return;
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;

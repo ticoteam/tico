@@ -100,13 +100,14 @@ def release_tags(conn: "sqlite3.Connection", task_id: str) -> list[str]:
 
 def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tuple[str, Row]:
     """What a page attached now is judged against: the rubric (the requirement's `rubric`, else its line, else its
-    kind's name) and the context Jev is shown beside it: `heads` (at_head), `release` (with_release)."""
+    kind's name) and the context Jev is shown beside it: `task` (Jev is shown this task's own title and spec, so the
+    same page on another task is another verdict), `heads` (at_head), `release` (with_release)."""
     from . import task_facts as F
     from . import task_requirements as R
 
     settings: Row = requirement.get("settings") or {}
     rubric = str(settings.get("rubric") or "").strip() or R.name_of(requirement)
-    context: Row = {}
+    context: Row = {"task": row["id"]}
     if settings.get("at_head"):
         context["heads"] = F.heads(conn, row["id"])
     if settings.get("with_release"):

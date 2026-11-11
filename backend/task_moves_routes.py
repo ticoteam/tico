@@ -469,7 +469,7 @@ def register(
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
             if not row or not F.file_visible(c, auth, who, row, {}):  # pyright: ignore[reportUnknownMemberType]
                 raise Problem("not_found", "That page is not one you can read", 404)
-            made = task_pages.attach(c, task_id, body.requirement, ref, who.actor, seen_version=body.version)
+            made = H.task_page_attach(c, who.actor, task_id, body.requirement, ref, body.version)
             return {"page": {"file_id": made["file_id"], "version": made["version"]}}
 
         return work(request, tid, body, call)
@@ -638,9 +638,7 @@ def register(
         commit (backend/merge_queue.py `requeue`). The stage owner, the pipeline's manager or any person."""
 
         def call(c: Any, who: Any, task_id: str) -> Any:
-            from . import merge_queue
-
-            owed = merge_queue.requeue(c, task_id, who.actor, seen_version=body.version)
+            owed = H.task_requeue(c, who.actor, task_id, body.version)
             return {"queued": [{"repo": e["repo"], "number": e["number"], "head": e["head_sha"]} for e in owed]}
 
         return work(request, tid, body, call)

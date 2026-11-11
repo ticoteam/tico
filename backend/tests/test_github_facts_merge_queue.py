@@ -813,6 +813,29 @@ def test_queue_again_over_http(hook_api):
     assert r.status_code == 409 and r.json()["error"] == "task_requirement", r.text
 
 
+def test_a_refused_queue_again_on_a_private_task_keeps_none_of_its_words(hook_api):
+    """The company owner reads refusals and events but not a private task: "The checks on acme/app#1 are still
+    running" is kept as "Private task write refused"."""
+    store = hook_api.app.state.store
+    gh = FakeGitHub()
+    with store.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+        c.execute("UPDATE tasks SET private=1 WHERE id=?", (task_id,))
+    MQ.run(store, gh)
+    gh.drop(REPO, 1)
+    F.refresh(store, gh, later())
+    with store.transaction() as c:
+        F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "pending"}]}, F.version_now())
+    headers = {"Authorization": "Bearer ana-test", "Idempotency-Key": "q-private"}
+    r = hook_api.post(f"/api/v2/tasks/{task_id}/queue", json={}, headers=headers)
+    assert r.status_code == 409 and "still running" in r.json()["detail"], r.text
+    with store.read() as c:
+        refusals = [str(x[0]) for x in c.execute("SELECT detail FROM refusals").fetchall()]
+        events = [" ".join(map(str, x)) for x in c.execute("SELECT * FROM events WHERE action='refused'").fetchall()]
+    assert any("Private task write refused" in d for d in refusals), refusals
+    assert not [line for line in refusals + events if "acme/app#1" in line or "still running" in line]
+
+
 def test_the_heartbeat_steps_are_quiet_without_a_github_app():
     class Ctx:
         github_app = None
