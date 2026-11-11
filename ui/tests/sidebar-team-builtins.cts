@@ -1,6 +1,7 @@
 // Offline: the Team list of a new 0.6 company (the first live one's shape). The owner's own seeded group ("Leadership")
-// is not drawn: the bots that report straight to the owner sit at the top of the list beside them. The Built-in group
-// lists the built-in bots, starts folded and unfolds. The Team header has no org chart button (Strategy › Org has it).
+// is not drawn: the bots that report straight to the owner sit at the top of the list beside them, the Assistant among
+// them. The General group is the General Manager's team: it starts folded, the General Manager is its one row, and the
+// other built-ins are the General Manager's reports under it. The Team header has no org chart button (Strategy › Org has it).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -11,17 +12,18 @@ const FULL = {see: true, read: true, write: true};
 const bot = (id: string, display_name: string, team: string, org_parent: string, reports_to: string | null = null, helper = false) =>
   ({id, name: id, slug: id, display_name, team, org_parent, reports_to, helper, host: 'cloud', status: 'active', state: 'active', can_chat: true,
     my_access: FULL, users: [{id: 'chris', name: 'Chris'}], owner_id: 'chris', revision: 1});
-const BUILT_INS = [['assistant', 'Assistant', 'p:chris'], ['botops', 'BotOps', 'b:assistant'], ['general-manager', 'General Manager', 'p:chris'],
-  ['strategy-owner', 'Strategy Owner', 'p:chris'], ['librarian', 'Librarian', 'p:chris'], ['rules-owner', 'Rules Owner', 'p:chris'],
-  ['design-owner', 'Design Owner', 'p:chris'], ['updates-owner', 'Updates Owner', 'p:chris'], ['automations-owner', 'Automations Owner', 'p:chris']] as const;
+const REPORTS = [['botops', 'BotOps'], ['strategy-owner', 'Strategy Owner'], ['librarian', 'Librarian'], ['rules-owner', 'Rules Owner'],
+  ['design-owner', 'Design Owner'], ['updates-owner', 'Updates Owner'], ['automations-owner', 'Automations Owner']] as const;
 const BOTS = [
-  ...BUILT_INS.map(([id, name, up]) => bot(id, name, 'built-in', up, null, ['general-manager', 'rules-owner', 'design-owner', 'updates-owner', 'automations-owner'].includes(id))),
-  bot('hop', 'Head of Product', 'leadership', 'b:strategy-owner', 'human:chris'),
+  bot('assistant', 'Assistant', '', 'p:chris', 'human:chris'),
+  bot('general-manager', 'General Manager', 'built-in', 'p:chris', 'human:chris', true),
+  ...REPORTS.map(([id, name]) => bot(id, name, 'built-in', 'b:general-manager', 'general-manager', ['rules-owner', 'design-owner', 'updates-owner', 'automations-owner'].includes(id))),
+  bot('hop', 'Head of Product', 'leadership', 'p:chris', 'human:chris'),
   bot('cm', 'Content Owner', 'leadership', 'p:chris', 'human:chris'),
   bot('sa', 'Support Agent', 'leadership', 'p:chris', 'human:chris'),
   bot('builder', 'Builder', 'engineering', 'b:hop', 'hop'),
 ];
-const GROUPS = [{id: 'built-in', name: 'Built-in', parent: '', order: 0}, {id: 'leadership', name: 'Leadership', parent: '', order: 1},
+const GROUPS = [{id: 'built-in', name: 'General', parent: '', order: 0}, {id: 'leadership', name: 'Leadership', parent: '', order: 1},
   {id: 'engineering', name: 'Engineering', parent: '', order: 2}];
 const PEOPLE = [{id: 'chris', name: 'Chris', email: 'chris@example.test', title: 'Owner', team: 'leadership', org_parent: '', reports_to: ''}];
 
@@ -52,25 +54,33 @@ const PEOPLE = [{id: 'chris', name: 'Chris', email: 'chris@example.test', title:
     const tree = page.locator('#tree');
     // No Leadership group: the owner's direct reports are top-level rows of the list.
     assert.equal(await tree.locator('.dept-name', {hasText: 'Leadership'}).count(), 0, 'no Leadership group');
-    for (const id of ['cm', 'sa', 'hop'])
+    for (const id of ['cm', 'sa', 'hop', 'assistant'])
       assert.equal(await page.locator(`#tree > li > .noderow > a.node[data-org="b:${id}"]`).count(), 1, `${id} at the top level`);
     assert.ok(await page.locator('#tree > li.org-group .dept-name', {hasText: 'Engineering'}).isVisible());
-    // Built-in lists the built-ins, folded at first, and unfolds.
-    const builtIn = page.locator('#tree > li.org-group:has([data-toggle="g:built-in"])');
-    assert.equal(await builtIn.locator('a.node').count(), BUILT_INS.length, 'every built-in in the group');
-    assert.equal(await builtIn.locator(':scope > ul').isHidden(), true, 'folded by default');
-    await builtIn.locator('[data-toggle="g:built-in"]').click();
-    await page.waitForFunction(() => !document.querySelector('#tree [data-toggle="g:built-in"]')?.closest('li')?.querySelector(':scope > ul')?.hasAttribute('hidden'));
-    for (const [id] of BUILT_INS) assert.ok(await builtIn.locator(`a.node[data-org="b:${id}"]`).isVisible(), `${id} listed`);
-    assert.equal(await builtIn.locator('[data-group-rename], [data-group-delete], [data-group-plus]').count(), 0, 'Built-in is Tico\'s own');
-    await builtIn.locator('[data-toggle="g:built-in"]').click();
-    await page.waitForFunction(() => !!document.querySelector('#tree [data-toggle="g:built-in"]')?.closest('li')?.querySelector(':scope > ul')?.hasAttribute('hidden'));
-    // Built-in comes after the teammates.
+    // General is the General Manager's team: folded at first; unfolded, the General Manager is its one row, and its
+    // reports show once that row is unfolded.
+    const general = page.locator('#tree > li.org-group:has([data-toggle="g:built-in"])');
+    const folded = (key: string, hidden: boolean) => page.waitForFunction(([k, h]) =>
+      !!document.querySelector(`#tree [data-toggle="${k}"]`)?.closest('li')?.querySelector(':scope > ul')?.hasAttribute('hidden') === h, [key, hidden] as const);
+    assert.equal(await general.locator('a.node').count(), REPORTS.length + 1, 'the General Manager and its reports');
+    assert.equal(await general.locator('a.node[data-org="b:assistant"]').count(), 0, 'the Assistant reports to its person');
+    assert.equal(await general.locator(':scope > ul').isHidden(), true, 'folded by default');
+    await general.locator('[data-toggle="g:built-in"]').click();
+    await folded('g:built-in', false);
+    assert.equal(await general.locator(':scope > ul > li').count(), 1, 'one row in the team: its Manager');
+    assert.ok(await general.locator(':scope > ul > li > .noderow > a.node[data-org="b:general-manager"]').isVisible());
+    await general.locator('[data-toggle="b:general-manager"]').click();
+    await folded('b:general-manager', false);
+    for (const [id] of REPORTS) assert.ok(await general.locator(`a.node[data-org="b:${id}"]`).isVisible(), `${id} under the General Manager`);
+    assert.equal(await general.locator('[data-group-rename], [data-group-delete], [data-group-plus]').count(), 0, 'General is Tico\'s own');
+    await general.locator('[data-toggle="g:built-in"]').click();
+    await folded('g:built-in', true);
+    // General comes after the teammates.
     const order = await page.locator('#tree > li:not(.org-no-group)').evaluateAll(lis => lis.map(li => li.querySelector('.dept-name, .nm')?.textContent?.trim()));
-    assert.equal(order.at(-1), 'Built-in');
+    assert.equal(order.at(-1), 'General');
     // No org chart button in the Team header.
     assert.equal(await page.locator('#org-chart-link, .org-head a[href="#/strategy/org"]').count(), 0, 'no org chart button');
     assert.deepEqual(errors, []);
-    console.log('Team list: no Leadership group, top-level reports, Built-in lists its bots folded, no org chart button');
+    console.log('Team list: no Leadership group, top-level reports, General is the General Manager and its reports, no org chart button');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

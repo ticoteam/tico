@@ -32,7 +32,7 @@ type RdoCtx = {seen: Set<string>; group?: typeof rdoGroupBlock};
 const RDO_FOLDED_KEY = 'tico.org.chart.folded.v2';
 let RDO: RdoState | null = null;             // {groups: [GET /v2/groups rows], zoom, folded: Set of group ids, manual: zoomed or panned by hand}
 let RDO_SEQ = 0;
-// The Built-in group starts folded. A chart saved under the key before it (v1) keeps the folds it had, plus this one.
+// The General group starts folded. A chart saved under the key before it (v1) keeps the folds it had, plus this one.
 const rdoFoldedLoad = (): Set<string> => {
   try {
     const saved = localStorage.getItem(RDO_FOLDED_KEY);
@@ -91,12 +91,11 @@ function rdoTree(leadOf: (id: string) => string = id => rdoGroup(id)?.lead || ''
   for (const [k, kids] of Object.entries(orgTreeWithHelpers(orgTreeByParent()))) by[k] = kids.filter(n => n.kind !== 'seat' && !(n.kind === 'group' && n.helpers));
   rdoMembers(by);
   orgChartShape(by, rdoKey, leadOf);
-  orgSetupLift(by, ORG_FAC_BOTS);   // the Factories section draws these bots (org-factories.ts); their reports stay here
   by[''] = by[''] || [];
   return by;
 }
 // The members the server lists for each group (GET /v2/groups `bots`) that the chart's own rules left out: the built-in
-// bots, which orgTreeWithHelpers takes off the tree, and a group the roster does not carry yet. A bot already on the chart
+// bots (the General Manager's team), which orgTreeWithHelpers takes off the tree, and a group the roster does not carry yet. A bot already on the chart
 // stays where it is, and a bot the caller may not see is left out here as it is in the tree.
 function rdoMembers(by: OrgByParent): void {
   const kidsOf = (key: string): OrgNode[] => {
@@ -115,8 +114,16 @@ function rdoMembers(by: OrgByParent): void {
       const e = S.emps.find(row => row.id === id);
       if (!e || placed.has(id) || !orgBranchVisible(e) || !orgMineKeep(e)) continue;
       placed.add(id);
-      kidsOf('g:' + g.id).push({kind: 'bot', ...e});
+      // A member sits under the member it reports to (the General Manager's reports under it), else in the group itself.
+      const boss = orgBossKey({kind: 'bot', ...e});
+      kidsOf(boss.startsWith('b:') && boss !== 'b:' + id && (g.bots || []).includes(boss.slice(2)) ? boss : 'g:' + g.id).push({kind: 'bot', ...e});
     }
+  }
+  // A built-in in no group (the Assistant) hangs from the person it reports to.
+  for (const e of S.emps) {
+    if (placed.has(e.id) || !isBuiltInBot(e.id) || e.team || !orgBranchVisible(e) || !orgMineKeep(e)) continue;
+    const boss = orgBossKey({kind: 'bot', ...e});
+    if (boss.startsWith('p:')) { placed.add(e.id); kidsOf(boss).push({kind: 'bot', ...e}); }
   }
 }
 // The server keeps the built-in bots in their group and refuses to move one (422), so the sheet offers no Move to….
@@ -177,7 +184,7 @@ function rdoChartHtml(by: OrgByParent = rdoTree(), ctx: RdoCtx = {seen: new Set<
   const top = rdoTop(by);
   const row = top ? [...(by[rdoKey(top)] || []), ...(by[''] || []).filter(n => rdoKey(n) !== rdoKey(top))] : (by[''] || []);
   if (top) ctx.seen.add(rdoKey(top));
-  // The Built-in group is a column in the row when the Rules map draws it (ctx.group). On the Strategy chart it sits under
+  // The General group is a column in the row when the Rules map draws it (ctx.group). On the Strategy chart it sits under
   // the row, centred on the owner: a folded tab then never widens the row, so the owner stays over the teams' middle.
   type ChartNode = OrgNode;
   const inTray = (n: ChartNode) => !ctx.group && n.kind === 'group' && n.id === BUILT_IN_GROUP;
@@ -317,9 +324,8 @@ async function pageRdOrg(): Promise<void> {
   rdoWire($('#rdo-pane'));
   window.removeEventListener('resize', rdoFitHeight); window.addEventListener('resize', rdoFitHeight);
   rdoDraw();
-  // The locked Factories section below the chart (ui/app/org-factories.ts). Its bots leave the people chart, so the chart
-  // is drawn again once they are known.
-  orgFactoriesMount($('#org-fac-host')).then(changed => { if (changed && seq === RDO_SEQ && $('#rdo-cv')) rdoDraw(); });
+  // The locked Factories section below the chart (ui/app/org-factories.ts).
+  void orgFactoriesMount($('#org-fac-host'));
   // Once the web font is in (or given up on), fit again: names in another face measure differently.
   document.fonts?.ready.then(() => { if (seq === RDO_SEQ && $('#rdo-cv') && !RDO?.manual) rdoFit(); });
   // The groups with their leads.

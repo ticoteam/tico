@@ -323,10 +323,14 @@ def chart_entries(c, settings, roster, entries, archived=(), hidden=False):
     that hang straight under the owner and are a Head (a `lead: true` card) or have no manager at all. Built-in bots,
     helpers and message bots stay where they are, and so does anyone under a group or another person. A copy; with no
     Strategy Owner (or no owner on the roster) yet, or on the chart of a person who hid it (`hidden`, from `hidden_for`),
-    `entries` itself. Only for drawing the chart: permission checks read the stored `reports_to`."""
+    `entries` itself; and when the Strategy Owner reports to a bot, as it does to the General Manager in a company
+    started on the Manager chart, `entries` itself too: nothing is re-hung. Only for drawing the chart: permission checks read the stored `reports_to`."""
     archived = set(archived or ())
     if hidden or SLUG not in (entries or {}) or SLUG in archived:
         return entries
+    line = P._clean((entries[SLUG] or {}).get("reports_to"))
+    if line and not line.startswith("human:"):
+        return entries  # it reports to a bot (the General Manager): the chart is the reporting lines as they are
     owner = P.person((roster or {}).get("default_user"), roster)
     if not owner or owner.get("hidden"):
         return entries

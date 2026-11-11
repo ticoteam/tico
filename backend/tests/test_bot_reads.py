@@ -70,7 +70,7 @@ def test_a_bot_sees_the_other_bots_with_reports_to_and_department_except_those_i
         "its group's name, as the bot itself or through its manager"
     )
     assert bots["finance"]["department"] == "Customer Support", "in no group of its own: its manager's group"
-    assert bots["assistant"]["department"] == "Built-in", "a built-in bot is in the Built-in group"
+    assert bots["assistant"]["department"] == "", "the Assistant reports to its person and is in no group"
     assert (bots["ops"]["template"], bots["finance"]["template"]) == ("support", "")
     assert bots["product-design"]["reports_to"] == "cpo" and bots["product-design"]["org_parent"] == "b:cpo", (
         "under the hidden bot's manager, not dropped"

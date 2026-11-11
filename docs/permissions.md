@@ -245,7 +245,7 @@ and remove groups and put humans and bots in them; members read them. A group is
 group, or a group under another, can change who reads a bot. BotOps does this as the person who asked it (`POST`, `PATCH` and `DELETE`
 on `/api/v2/groups` through `tico api`, or `tico group update`), with that person's own rights: an owner or an admin, at once; a member is
 refused. The Strategy Owner only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
-same rights. Built-in bots stay outside groups.
+same rights. Built-in bots stay in the General group, which nobody adds to or removes from by hand.
 
 **The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Rules Owner and the Design Owner) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
@@ -425,6 +425,8 @@ Its instructions are changed by a **next-run task** the manager files for the re
 Creating, archiving and restoring a report are asked of BotOps (below). A manager reaches only the bots directly under it, and
 `Auth.report_manager` decides that.
 It does not widen `Auth.bot_manager`: a manager bot owns nothing it did not own before.
+The default chart makes no bot a group's lead: a lead sets its group's reach and spend limits, and those stay with people.
+A bot becomes a lead only when a person names it one.
 
 Two switches turn it off, and the owner's comes first:
 

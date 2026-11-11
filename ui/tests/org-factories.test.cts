@@ -114,12 +114,6 @@ const box = (html: string, id: string) => {
   assert.ok(hit, `a box for ${id}`);
   return hit[0];
 };
-// One group of the people chart, from its opening tag to the next group's.
-const chartGroup = (chart: string, id: string, nextId?: string) => {
-  const from = chart.indexOf(`data-rdo-group="${id}"`);
-  assert.ok(from >= 0, `the people chart has group ${id}`);
-  return chart.slice(from, nextId ? chart.indexOf(`data-rdo-group="${nextId}"`) : undefined);
-};
 const count = (html: string, re: RegExp) => (html.match(re) || []).length;
 const decode = (s: string) => s.replace(/&amp;/g, '&');
 const ref = (id: string) => `data-rdo-ref="bot:${id}"`;
@@ -128,9 +122,8 @@ const ref = (id: string) => `data-rdo-ref="bot:${id}"`;
 async function page(map: OrgOverview = overview(), {mounted = true}: {mounted?: boolean} = {}) {
   const ctx = context(async () => map);
   const host = {isConnected: true, innerHTML: ''};
-  let changed = false;
-  if (mounted) changed = await ctx.orgFactoriesMount(host);
-  return {ctx, section: host.innerHTML, chart: ctx.rdoChartHtml(), changed};
+  if (mounted) await ctx.orgFactoriesMount(host);
+  return {ctx, section: host.innerHTML, chart: ctx.rdoChartHtml()};
 }
 
 const tests: [string, () => unknown][] = [];
@@ -238,12 +231,12 @@ test('the phone rule stacks that row: the branch is held to the box and its card
 test('mount draws into a connected host, draws nothing when the read fails or lacks its lists, and skips a host the page has left', async () => {
   let ctx = context(async () => overview());
   const host = {isConnected: true, innerHTML: ''};
-  assert.equal(await ctx.orgFactoriesMount(host), true, 'it drew bots, so the chart is drawn again');
+  await ctx.orgFactoriesMount(host);
   assert.equal(count(host.innerHTML, /data-org-fac="/g), 3);
 
   ctx = context(async () => { throw new Error('offline'); });
   const failed = {isConnected: true, innerHTML: ''};
-  assert.equal(await ctx.orgFactoriesMount(failed), false);
+  await ctx.orgFactoriesMount(failed);
   assert.equal(failed.innerHTML, '');
 
   ctx = context(async () => ({}));
@@ -253,43 +246,18 @@ test('mount draws into a connected host, draws nothing when the read fails or la
 
   ctx = context(async () => overview());
   const gone = {isConnected: false, innerHTML: ''};
-  assert.equal(await ctx.orgFactoriesMount(gone), false);
+  await ctx.orgFactoriesMount(gone);
   assert.equal(gone.innerHTML, '');
 });
 
 // ---- the combined page: the people chart and the section together
 
-test('the drawn managers leave the people chart once the section is mounted, and their reports stay', async () => {
-  const map = overview([legal]);
-  const before = (await page(map, {mounted: false})).chart;
-  for (const id of ['b-42', 'growth-fm', 'sales-mgr', 'product-fm', 'product-mgr', 'dev-mgr', 'success-mgr'])
-    assert.match(before, new RegExp(ref(id)), `before the section, ${id} is on the chart`);
-
-  const {chart, section, changed} = await page(map);
-  assert.equal(changed, true);
-  for (const id of ['b-42', 'growth-fm', 'sales-mgr', 'product-fm', 'product-mgr', 'dev-mgr', 'success-mgr', 'gc'])
-    assert.doesNotMatch(chart, new RegExp(ref(id)), `${id} is not on the people chart`);
-  // Marketing Manager's report, the copywriter, moves up under Growth, where its manager stood.
-  assert.match(chartGroup(chart, 'g-growth', 'g-product'), new RegExp(ref('b-7')));
-  // A factory with one pipeline draws no Factory Manager, so its bot stays on the chart.
-  assert.match(chart, new RegExp(ref('success-fm')));
-  // And every drawn bot is on the section exactly once.
-  assert.equal(count(section, /data-org-card="fm"/g) + count(section, /data-org-card="pm"/g), 8);
-  assert.equal(count(section, /href="#\/bot\/b-42"/g), 1, 'Marketing Manager is drawn once, on the section');
-});
-
-test('the combined page names each drawn manager once, and the chart keeps the rest', async () => {
+test('a manager of a pipeline stays on the people chart with its reports, and is a card on the section', async () => {
   const {chart, section} = await page(overview([legal]));
-  assert.equal(count(chart + section, /Marketing Manager/g), 1);
-  assert.equal(count(chart + section, /General Counsel/g), 1);
-  assert.match(chart, new RegExp(ref('b-7')));
-});
-
-test('no factories: the people chart keeps every bot', async () => {
-  const {chart, changed} = await page({factories: [], pipelines: [], edges: [], inputs: []});
-  assert.equal(changed, false);
-  for (const id of ['b-42', 'growth-fm', 'sales-mgr', 'product-fm', 'success-mgr', 'b-7'])
-    assert.match(chart, new RegExp(ref(id)), `${id} stays on the chart`);
+  for (const id of ['b-42', 'growth-fm', 'sales-mgr', 'product-fm', 'product-mgr', 'dev-mgr', 'success-mgr', 'success-fm', 'b-7'])
+    assert.match(chart, new RegExp(ref(id)), `${id} is on the people chart`);
+  assert.equal(count(section, /data-org-card="fm"/g) + count(section, /data-org-card="pm"/g), 8);
+  assert.equal(count(section, /href="#\/bot\/b-42"/g), 1, 'Marketing Manager is one card on the section');
 });
 
 (async () => {

@@ -1202,6 +1202,7 @@ class Onboarding:
             ("counsel", self.ensure_counsel),
             ("brand_owner", self.ensure_brand_owner),
             ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),
+            ("general_team", self.ensure_general_team),
             ("builtin_routines", self.ensure_builtin_routines),
             ("seat_routines", self.arm_live_seats),
             ("seat_repositories", self.seat_repositories),
@@ -1235,7 +1236,7 @@ class Onboarding:
 
     def ensure_general_manager(self, c):
         """The same for the General Manager (docs/general-manager.md): a company from before it was built in gets it once it can
-        run it. It is a helper outside the org chart, so no chart or seat changes."""
+        run it. Its team and lines are `ensure_general_team`'s."""
         return self._ensure_builtin(c, "general-manager", "General Manager", "task_manager.turned_on")
 
     def ensure_bookkeeper(self, c):
@@ -1254,6 +1255,26 @@ class Onboarding:
         under its slug (a Brand Manager) keeps that bot as it is and gets no second one (`_ensure_builtin`). Its monthly
         audit starts off and goes on when its setup is done (`onboarded`)."""
         return self._ensure_builtin(c, H.DESIGN_OWNER, "Design Owner", "brand_owner.turned_on")
+
+    def ensure_general_team(self, c):
+        """Every built-in has one manager: the General Manager's team (Groups.GENERAL_TEAM) reports to it, and it, the
+        Assistant and the Finance Owner report to the owner. Only a line nobody set is filled, so a built-in added in a later release
+        gets its manager on the next start and a line a person changed stays. The General group gets no lead: a
+        lead sets its group's reach and limits (backend/reach.py, backend/usage.py), which stay with people."""
+        manager, owner = H.bot(c, Groups.GENERAL_MANAGER), self.auth.owner_id(c)
+        if not owner or not manager or manager["state"] == "archived":
+            return
+        who, top = self.auth.owner_identity(c), "human:" + owner
+        lines = {slug: Groups.GENERAL_MANAGER for slug in Groups.GENERAL_TEAM}
+        lines |= {Groups.GENERAL_MANAGER: top, self.settings.assistant_bot: top, "finance-owner": top}
+        for slug, line in lines.items():
+            bot = H.bot(c, slug)
+            row = c.execute("SELECT revision, reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            if not bot or bot["state"] == "archived" or not row or row["reports_to"]:
+                continue
+            self.admin.update_bot(
+                c, who, slug, M.BotDefinitionUpdate(reports_to=line, expected_revision=row["revision"])
+            )
 
     def turn_on_general_manager(self, c, who):
         """Bring the General Manager back after it was paused or archived by an older version (its report is plain code and
