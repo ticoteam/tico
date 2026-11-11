@@ -11,7 +11,9 @@ A spec says only what differs:
 - `Command.help` is the leaf's one-line summary and `Command.example` one command line, shown under its `--help`.
 - An argument's help is its property's description in the schema, the same text an MCP client reads; a help that
   reads badly on a command line is fixed there, never overridden here.
-- `Arg` overrides one property: a flag where a positional would be, another spelling, arity, a default.
+- `Arg` overrides one property: a flag where a positional would be, another spelling, arity, a default. Several
+  `Arg`s of one name are several flags setting it (`--archive` and `--unarchive` each a const of `archived`). An
+  object property is given whole by an `Arg` with a `type` (`type=json.loads`), or folded from flags with `into`.
 - An `Arg` with `into=` is a flag of the command line alone that `Command.convert` folds into that property (`--who`
   and `--everyone` into the Who scope object); it is not passed on itself. Its help is the description of `part` (its
   name by default) inside that object property.
@@ -108,7 +110,10 @@ class Command:
     def arguments(self, suppress=False):
         """(option strings or the positional's name, add_argument keywords) for each argument, in schema order."""
         props, required = self.properties()
-        given = {a.name: a for a in self.args if not a.into}
+        given = {}
+        for a in self.args:
+            if not a.into:
+                given.setdefault(a.name, []).append(a)
         if unknown := set(given) - set(props):
             raise ValueError(f"{self.path}: {sorted(unknown)} are not properties of {self.tool}")
         folded = {}
@@ -123,9 +128,12 @@ class Command:
                 parts = prop.get("properties", {})
                 out += [_argument(a, parts.get(a.part or a.name, {}), False, suppress) for a in folded[name]]
             elif name != "operation_id" or name in given:
-                if prop.get("type") == "object":
-                    raise ValueError(f"{self.path}: {name} is an object; give it flags with into={name!r}")
-                out.append(_argument(given.get(name, Arg(name)), prop, name in required, suppress))
+                spelled = given.get(name, [Arg(name)])
+                if prop.get("type") == "object" and not all(a.type for a in spelled):
+                    raise ValueError(
+                        f"{self.path}: {name} is an object; give it flags with into={name!r}, or take it whole with type="
+                    )
+                out += [_argument(a, prop, name in required, suppress) for a in spelled]
         if self.render:
             out.append((["--json"], {"action": "store_true", "help": "print the answer as JSON"}))
         return out
@@ -157,6 +165,8 @@ class Command:
 
 def _argument(a, prop, schema_required, suppress):
     kind = prop.get("type")
+    if isinstance(kind, list):  # ["integer", "null"]: the value's type; null is sent by a NULL const
+        kind = next((k for k in kind if k != "null"), None)
     keywords = {}
     if a.metavar:
         keywords["metavar"] = a.metavar
@@ -165,6 +175,8 @@ def _argument(a, prop, schema_required, suppress):
     help = prop.get("description") or _range(prop)
     if help and keywords.get("action") == "append":
         help += " (repeatable)"
+    if help and keywords.get("action") == "store_const":  # one of several flags setting it: say which value
+        help += f" (sends {_word(a.const)})"
     if help and help != a.metavar:
         keywords["help"] = help.replace("%", "%%")
     if a.const is not None:
@@ -190,6 +202,10 @@ def _argument(a, prop, schema_required, suppress):
     if a.required if a.required is not None else schema_required:
         keywords["required"] = True
     return [a.flag or "--" + a.name.replace("_", "-")], keywords
+
+
+def _word(value):
+    return "null" if value is NULL else str(value).lower() if isinstance(value, bool) else str(value)
 
 
 def _range(prop):

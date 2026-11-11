@@ -6,7 +6,6 @@ import io
 import json
 import os
 import re
-import shlex
 import sys
 import time
 import uuid
@@ -78,8 +77,6 @@ def via_tool(client, args, **more):
         fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
     if args.fn == "computer browser-exit" and "sharing" in fields:
         fields["sharing"] = fields["sharing"] == "on"
-    if args.fn == "thread update" and fields.pop("keep_forever", False):
-        fields["retention_days"] = None  # explicit null keeps its messages for good; omission leaves the policy alone
     fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -296,11 +293,9 @@ def run(args, who=None):
         return hubtools_connections.run_command(client, args)
     if args.cmd == "inbound":
         return via_tool(client, args)
-    if args.cmd in ("mail", "email", "letter", "alerts") or fn in ("tool index", "tool check"):
+    if args.cmd in ("mail", "letter", "alerts") or fn in ("tool index", "tool check"):
         return via_tool(client, args)
     if args.cmd == "maintenance":
-        return via_tool(client, args)
-    if args.cmd == "thread":
         return via_tool(client, args)
     if args.cmd == "contacts":
         return via_tool(client, _contacts_args(args))
@@ -902,7 +897,7 @@ def run(args, who=None):
             if args.body_file:
                 args.body = Path(args.body_file).read_text()
         return tool(client, args)
-    if cmd in ("kpi", "proposal", "strategy", "brand", "growth"):
+    if cmd in ("kpi", "proposal", "strategy", "brand"):
         return tool(client, args)
     if cmd == "lens":
         from clients import hubtools
@@ -1059,19 +1054,6 @@ def run(args, who=None):
             "has_more": bool(page.get("has_more")),
             "next_before": page.get("next_before"),
         }
-    if fn == "thread link-slack":  # the MCP tool of the same name: the CLI and MCP run one function
-        from clients import hubtools
-
-        return hubtools.BY_NAME["tico_thread_link_slack"]["fn"](
-            client,
-            {
-                "thread": args.thread,
-                "channel": args.channel,
-                "history": args.history,
-                "off": args.off,
-                "operation_id": key,
-            },
-        )
     if cmd == "automation":
         return automation(client, args)
     if cmd == "release":
@@ -1723,56 +1705,6 @@ def strategy_section_text(result, key):
     return (current.get("sections") or {}).get(key) or ""
 
 
-def email_text(result, action):
-    if action in ("archive", "unarchive", "mark-read", "mark-unread", "label", "unlabel"):
-        verb = {
-            "archive": "Archived",
-            "unarchive": "Unarchived",
-            "mark-read": "Marked read",
-            "mark-unread": "Marked unread",
-            "label": "Labeled",
-            "unlabel": "Unlabeled",
-        }[action]
-        text = f"{verb} {result['count']} messages in {result['mailbox']}."
-        if not result['count']:
-            return text
-        undo = result['undo']
-        words = ['tico', 'email', undo['action'].replace('_', '-'), result['mailbox']]
-        if 'label' in undo:
-            words.append(undo['label'])
-        command = shlex.join(words + undo['ids'])
-        return text + (
-            " Undo: " + command if len(command) <= 1000 else " Undo: use the inverse action and ids from --json."
-        )
-    if action == "mailboxes":
-        boxes = result.get("mailboxes") or []
-        return "# Email mailboxes\n\n" + ("\n".join("- " + box["address"] for box in boxes) or "No readable mailboxes.")
-    messages = [result] if action == "message" else result.get("messages") or []
-    lines = ["# Email", ""]
-    if not messages:
-        lines.append("No messages.")
-    for message in messages:
-        lines.extend(
-            [
-                "## " + (message.get("subject") or "(no subject)"),
-                f"Mailbox: {message['mailbox']}",
-                f"Message: {message['msg_id']} · Thread: {message['thread_id']}",
-                "From: " + (message.get("from_header") or message.get("from_addr") or ""),
-                "To: " + ", ".join(message.get("to") or []),
-                "Date: " + (message.get("date") or ""),
-                "Labels: " + ", ".join(message.get("labels") or []),
-                "",
-                message.get("body", message.get("snippet") or ""),
-                "",
-            ]
-        )
-        for attachment in message.get("attachments") or []:
-            lines.append(f"Attachment: {attachment['name']} ({attachment['type']}, {attachment['size']} bytes)")
-    if result.get("next_cursor"):
-        lines.extend(["Next cursor: " + result["next_cursor"], ""])
-    return "\n".join(lines)
-
-
 def _entity_line(row):
     """One entity in a list: its id, name and status, and the link keys it has to us (customer_of ...)."""
     keys = " ".join(row.get("links_to_us") or [])
@@ -1825,25 +1757,6 @@ def main(args, who=None, fields=None):
             from clients import profiles
 
             print(json.dumps(profiles.pick(result, fields), indent=2, default=str))
-        elif (
-            args.cmd == "email"
-            and args.sub
-            in (
-                "mailboxes",
-                "inbox",
-                "search",
-                "thread",
-                "message",
-                "archive",
-                "unarchive",
-                "mark-read",
-                "mark-unread",
-                "label",
-                "unlabel",
-            )
-            and not args.json
-        ):
-            print(email_text(result, args.sub))
         elif (spec := cli_spec.of(args)) is not None and spec.render and not args.json:
             print(spec.render(args, result))
         elif args.cmd == "sql" and not args.json:
@@ -1863,7 +1776,7 @@ def main(args, who=None, fields=None):
             print(strategy_section_text(result, args.section))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
-        elif args.cmd in ("brand", "growth") and not getattr(args, "json", False) and args.fn != "growth numbers":
+        elif args.cmd == "brand" and not getattr(args, "json", False):
             print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])

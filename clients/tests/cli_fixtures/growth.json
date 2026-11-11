@@ -37,11 +37,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/channels",
     null
    ]
@@ -69,11 +64,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/channels?include_retired=true",
     null
    ]
@@ -98,11 +88,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/channels",
@@ -132,11 +117,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/channels/google-search",
     null
    ]
@@ -163,11 +143,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/channels/google-search",
@@ -210,11 +185,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -291,11 +261,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "growth/channels",
     {
@@ -338,11 +303,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -396,11 +356,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "PATCH",
     "growth/channels/google-search",
     {}
@@ -468,11 +423,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "PATCH",
     "growth/channels/google-search",
     {
@@ -511,11 +461,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -566,11 +511,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "growth/channels/google-search/retire",
     {}
@@ -598,11 +538,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -647,11 +582,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/sources",
     null
    ]
@@ -679,11 +609,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/sources?include_retired=true",
     null
    ]
@@ -708,11 +633,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/sources",
@@ -747,11 +667,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -815,11 +730,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "growth/sources",
     {
@@ -867,11 +777,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "growth/sources",
     {
@@ -902,11 +807,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -968,11 +868,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "PATCH",
     "growth/sources/id-1",
     {
@@ -1007,11 +902,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -1062,11 +952,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "growth/sources/id-1/retire",
     {}
@@ -1094,11 +979,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -1143,11 +1023,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/cohorts",
     null
    ]
@@ -1182,11 +1057,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/cohorts?channel=google-search&month=2026-10&limit=5",
     null
    ]
@@ -1211,11 +1081,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/cohorts",
@@ -1247,11 +1112,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "PUT",
     "growth/cohorts",
@@ -1322,11 +1182,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "PUT",
     "growth/cohorts",
     {
@@ -1374,11 +1229,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "PUT",
     "growth/cohorts",
     {
@@ -1405,11 +1255,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/economics",
@@ -1439,11 +1284,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/economics?month=2026-10",
     null
    ]
@@ -1469,11 +1309,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/economics",
     null
    ]
@@ -1496,11 +1331,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/numbers",
@@ -1530,11 +1360,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/numbers?months=5",
     null
    ]
@@ -1560,11 +1385,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/numbers",
     null
    ]
@@ -1587,11 +1407,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/kpis",
@@ -1619,11 +1434,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/kpis",
     null
    ]
@@ -1646,11 +1456,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/settings",
@@ -1689,11 +1494,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "PUT",
     "growth/settings",
     {
@@ -1722,11 +1522,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/settings",
     null
    ]
@@ -1753,11 +1548,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "growth/cohorts?month=YYYY-MM",
@@ -1825,11 +1615,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "growth/channels/1",
     null
    ]
@@ -1858,11 +1643,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",

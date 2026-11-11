@@ -2099,5 +2099,36 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "update",
+   "thread-1",
+   "--keep-days",
+   "14"
+  ],
+  "tools": [
+   [
+    "tico_thread_update",
+    {
+     "operation_id": null,
+     "retention_days": 14,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "threads/thread-1",
+    {
+     "retention_days": 14
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
  }
 ]

@@ -78,7 +78,9 @@ ANSWERS = {
     },
     "GET growth/channels": {"channels": [_CHANNEL]},
     "GET growth/sources": {
-        "sources": [{"id": "s1", "truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp", "reach_ref": "ads"}],
+        "sources": [
+            {"id": "s1", "truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp", "reach_ref": "ads"}
+        ],
         "conflicts": [{"truth_for": "bookings", "sources": ["s2", "s3"]}],
     },
     "GET growth/cohorts": {"cohorts": [{"month": "2026-10", "channel": None, "spend": 900, "new_customers": 3}]},

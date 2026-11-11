@@ -2,8 +2,11 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import json
+import shlex
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import TASK_ID, _key, _s
 
@@ -232,16 +235,28 @@ EMAIL_ORGANIZE = ('archive', 'unarchive', 'mark_read', 'mark_unread', 'label', '
 
 
 def _register_email_organize(action):
-    properties = {
-        'mailbox': _s('Whole Workspace mailbox address'),
-        'ids': {'type': 'array', 'items': {'type': 'string', 'maxLength': 128}, 'minItems': 1, 'maxItems': 500},
-        'query': _s('Gmail query instead of ids; resolved live before changing messages'),
-        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 500, 'default': 100},
-    }
+    properties = {'mailbox': _s('Whole Workspace mailbox address')}
     required = ('mailbox',)
-    if action in ('label', 'unlabel'):
+    if action in ('label', 'unlabel'):  # before the ids: `tico email label <address> <label> <id>...`
         properties['label'] = _s('Gmail label name; label creates a missing user label, unlabel never does')
         required += ('label',)
+    properties |= {
+        'ids': {
+            'type': 'array',
+            'items': {'type': 'string', 'maxLength': 128},
+            'minItems': 1,
+            'maxItems': 500,
+            'description': 'Message ids, from `email inbox` or `email search`',
+        },
+        'query': _s('Gmail query instead of ids; resolved live before changing messages'),
+        'limit': {
+            'type': 'integer',
+            'minimum': 1,
+            'maximum': 500,
+            'default': 100,
+            'description': 'With query: at most this many messages, 1-500 (default 100)',
+        },
+    }
 
     @tool(
         'tico_email_' + action,
@@ -262,6 +277,128 @@ def _register_email_organize(action):
 
 for _email_action in EMAIL_ORGANIZE:
     _register_email_organize(_email_action)
+
+
+def email_text(result, action):
+    """`tico email <action>` as text: an organize action's count and its undo line, the mailboxes, or the messages."""
+    if action in ('archive', 'unarchive', 'mark-read', 'mark-unread', 'label', 'unlabel'):
+        verb = {
+            'archive': 'Archived',
+            'unarchive': 'Unarchived',
+            'mark-read': 'Marked read',
+            'mark-unread': 'Marked unread',
+            'label': 'Labeled',
+            'unlabel': 'Unlabeled',
+        }[action]
+        text = f"{verb} {result['count']} messages in {result['mailbox']}."
+        if not result['count']:
+            return text
+        undo = result['undo']
+        words = ['tico', 'email', undo['action'].replace('_', '-'), result['mailbox']]
+        if 'label' in undo:
+            words.append(undo['label'])
+        command = shlex.join(words + undo['ids'])
+        return text + (
+            " Undo: " + command if len(command) <= 1000 else " Undo: use the inverse action and ids from --json."
+        )
+    if action == 'mailboxes':
+        boxes = result.get('mailboxes') or []
+        return "# Email mailboxes\n\n" + ("\n".join("- " + box['address'] for box in boxes) or "No readable mailboxes.")
+    messages = [result] if action == 'message' else result.get('messages') or []
+    lines = ["# Email", ""]
+    if not messages:
+        lines.append("No messages.")
+    for message in messages:
+        lines.extend(
+            [
+                "## " + (message.get('subject') or "(no subject)"),
+                f"Mailbox: {message['mailbox']}",
+                f"Message: {message['msg_id']} · Thread: {message['thread_id']}",
+                "From: " + (message.get('from_header') or message.get('from_addr') or ""),
+                "To: " + ", ".join(message.get('to') or []),
+                "Date: " + (message.get('date') or ""),
+                "Labels: " + ", ".join(message.get('labels') or []),
+                "",
+                message.get('body', message.get('snippet') or ""),
+                "",
+            ]
+        )
+        for attachment in message.get('attachments') or []:
+            lines.append(f"Attachment: {attachment['name']} ({attachment['type']}, {attachment['size']} bytes)")
+    if result.get('next_cursor'):
+        lines.extend(["Next cursor: " + result['next_cursor'], ""])
+    return "\n".join(lines)
+
+
+def _email_text(args, result):
+    return email_text(result, args.sub)
+
+
+_ADDRESS = Arg('mailbox', metavar='address')
+_ORGANIZE = (
+    _ADDRESS,
+    Arg('ids', nargs='*', action='store', positional=True, metavar='message-id'),
+    Arg('limit', default=100),
+)
+
+# `tico email ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+CLI = (
+    Group('email', 'read and organize email, set sending policy, and manage pending sends'),
+    Command(
+        'email policy',
+        "read or change the sending policy of the company, an inbox or a bot",
+        args=(Arg('settings', type=json.loads, metavar='JSON'),),
+        example='tico email policy --bot ana --settings \'{"mode": "ask_first"}\'',
+    ),
+    Command(
+        'email sends',
+        "an inbox's pending sends, or its send audit",
+        args=(Arg('mailbox', '--mailbox'),),
+        example='tico email sends --mailbox ops@acme.test --pending',
+    ),
+    Command('email cancel', "cancel a pending send before it goes out", example='tico email cancel snd_1'),
+    Command('email mailboxes', "the mailboxes you may read", render=_email_text, example='tico email mailboxes'),
+    Command(
+        'email inbox',
+        "a mailbox's inbox, newest first: headers only",
+        args=(_ADDRESS, Arg('q', '--q', default=''), Arg('limit', default=50)),
+        render=_email_text,
+        example='tico email inbox ops@acme.test --q is:unread',
+    ),
+    Command(
+        'email search',
+        "search a mailbox with Gmail's query syntax",
+        args=(_ADDRESS, Arg('limit', default=50)),
+        render=_email_text,
+        example="tico email search ops@acme.test 'from:bank newer_than:7d'",
+    ),
+    Command(
+        'email thread',
+        "one email thread with its bodies",
+        args=(_ADDRESS, Arg('id', metavar='thread-id')),
+        render=_email_text,
+        example='tico email thread ops@acme.test 18c2f0a1b2c3d4e5',
+    ),
+    Command(
+        'email message',
+        "one email with its body and attachments",
+        args=(_ADDRESS, Arg('id', metavar='message-id')),
+        render=_email_text,
+        example='tico email message ops@acme.test 18c2f0a1b2c3d4e5',
+    ),
+    *(
+        Command(
+            'email ' + action.replace('_', '-'),
+            action.replace('_', ' ') + " messages by id, or every message a query finds; prints the undo",
+            args=_ORGANIZE,
+            render=_email_text,
+            example=f"tico email {action.replace('_', '-')} ops@acme.test"
+            + (' Receipts' if 'label' in action else '')
+            + " --query 'older_than:30d'",
+        )
+        for action in EMAIL_ORGANIZE
+    ),
+)
 
 
 # ----------------------------------------------------------------------------- physical mail (backend/postal_mail.py)

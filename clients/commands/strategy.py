@@ -7,6 +7,7 @@ from urllib.parse import quote
 import time
 from clients.tico import APIError
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s, _target
 from clients.commands._requester import _as_person
@@ -307,8 +308,8 @@ CHANNEL_PROPS = {
     "source_id": _s("The source that holds its spend"),
     "why": _s("Why we use it, in a line"),
     "guardrail_kpi_id": _s("A KPI that must stay under guardrail_max"),
-    "guardrail_max": {"type": "number"},
-    "sort": {"type": "integer"},
+    "guardrail_max": {"type": "number", "description": "The most that KPI may reach"},
+    "sort": {"type": "integer", "description": "Its place in the list, lowest first"},
 }
 
 
@@ -322,7 +323,7 @@ def _channel_body(api, args, keys):
 @tool(
     "tico_growth_channel_list",
     "The growth channels by sort then name: stage, owner, monthly budget, why, guardrail.",
-    {"include_retired": {"type": "boolean", "default": False}},
+    {"include_retired": {"type": "boolean", "default": False, "description": "Also the retired ones"}},
 )
 def growth_channel_list(api, args):
     return api.get("growth/channels", include_retired="true" if args.get("include_retired") else None)
@@ -400,7 +401,7 @@ def _source_body(api, args):
     "tico_growth_source_list",
     "Which system holds the truth for each number (bookings, spend, sign-ups), how a bot "
     "reaches it and what it may do there, and any number two sources both claim.",
-    {"include_retired": {"type": "boolean", "default": False}},
+    {"include_retired": {"type": "boolean", "default": False, "description": "Also the retired ones"}},
 )
 def growth_source_list(api, args):
     return api.get("growth/sources", include_retired="true" if args.get("include_retired") else None)
@@ -458,7 +459,12 @@ COHORT_FIELDS = (
     {
         "channel": _s("A channel slug, or unknown"),
         "month": _s("YYYY-MM"),
-        "limit": {"type": "integer", "default": 500, "maximum": 2000},
+        "limit": {
+            "type": "integer",
+            "default": 500,
+            "maximum": 2000,
+            "description": "At most this many rows (default 500)",
+        },
     },
 )
 def growth_cohort_list(api, args):
@@ -472,9 +478,9 @@ def growth_cohort_list(api, args):
     {
         "channel": _s("A channel slug, or unknown"),
         "month": _s("YYYY-MM"),
-        "spend": {"type": "number"},
-        "bot_cost": {"type": "number"},
-        "new_customers": {"type": "integer", "minimum": 0},
+        "spend": {"type": "number", "description": "Spend in the month, in the team's unit"},
+        "bot_cost": {"type": "number", "description": "What the bots working it cost in the month"},
+        "new_customers": {"type": "integer", "minimum": 0, "description": "New customers in the month"},
         "kept_d30": {"type": "number", "description": "% kept after 30 days"},
         "kept_d90": {"type": "number", "description": "% kept after 90 days"},
         "kept_d180": {"type": "number", "description": "% kept after 180 days"},
@@ -563,6 +569,136 @@ def growth_settings(api, args):
     if not values:
         return api.get("growth/settings")
     return _as_person(api).call("PUT", "growth/settings", values, _key(args))
+
+
+def _growth_text(args, result):
+    from clients import remotecli  # tables and indented lines, shared with `tico brand`
+
+    return remotecli.growth_text(args.fn, result)
+
+
+_RETIRED = Arg("include_retired", "--retired", default=None)
+_CHANNEL = (
+    Arg("budget_month", "--budget", metavar="N"),
+    Arg("source_id", "--source", metavar="ID"),
+    Arg("guardrail_kpi_id", "--guardrail-kpi", metavar="ID"),
+    Arg("guardrail_max", "--guardrail-max", metavar="N"),
+)
+_SOURCE = (Arg("truth_for", "--truth-for"), Arg("system", "--system"), Arg("reach_kind", "--reach-kind"))
+
+# `tico growth ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+CLI = (
+    Group("growth", "growth: channels, sources, monthly cohorts, unit economics, the numbers"),
+    Group("growth channel", "the channels customers come from"),
+    Command(
+        "growth channel list",
+        "the channels: stage, owner, budget",
+        args=(_RETIRED,),
+        render=_growth_text,
+        example="tico growth channel list",
+    ),
+    Command(
+        "growth channel show", "one channel", render=_growth_text, example="tico growth channel show google-search"
+    ),
+    Command(
+        "growth channel add",
+        "add a channel (owner or admin)",
+        args=(Arg("name", "--name"), *_CHANNEL),
+        render=_growth_text,
+        example="tico growth channel add google-search --name 'Google Search' --track performance --budget 2000",
+    ),
+    Command(
+        "growth channel update",
+        "change a channel (owner or admin; the owning bot may change why, stage, budget)",
+        args=_CHANNEL,
+        render=_growth_text,
+        example="tico growth channel update google-search --stage scaling",
+    ),
+    Command(
+        "growth channel retire",
+        "retire a channel (owner or admin)",
+        render=_growth_text,
+        example="tico growth channel retire google-search",
+    ),
+    Group("growth source", "which system holds the truth for each number"),
+    Command(
+        "growth source list",
+        "the sources, and any number two of them claim",
+        args=(_RETIRED,),
+        render=_growth_text,
+        example="tico growth source list",
+    ),
+    Command(
+        "growth source add",
+        "say which system holds a number (owner or admin)",
+        args=_SOURCE,
+        render=_growth_text,
+        example="tico growth source add --truth-for 'ad spend' --system 'Google Ads' --reach-kind mcp",
+    ),
+    Command(
+        "growth source update",
+        "change a source (owner or admin)",
+        args=_SOURCE,
+        render=_growth_text,
+        example="tico growth source update src_1 --may 'read only'",
+    ),
+    Command(
+        "growth source retire",
+        "retire a source (owner or admin)",
+        render=_growth_text,
+        example="tico growth source retire src_1",
+    ),
+    Group("growth cohort", "monthly numbers by channel"),
+    Command(
+        "growth cohort list",
+        "the monthly cohorts by channel",
+        args=(Arg("channel", metavar="SLUG"), Arg("month", metavar="YYYY-MM")),
+        render=_growth_text,
+        example="tico growth cohort list --channel google-search",
+    ),
+    Command(
+        "growth cohort set",
+        "one channel's month, only the fields given (any bot or an admin)",
+        args=(
+            Arg("channel", "--channel", metavar="SLUG"),
+            Arg("month", "--month", metavar="YYYY-MM"),
+            Arg("new_customers", "--new", metavar="N"),
+            Arg("kept_d30", "--d30", metavar="PCT"),
+            Arg("kept_d90", "--d90", metavar="PCT"),
+            Arg("kept_d180", "--d180", metavar="PCT"),
+            Arg("revenue_month", "--revenue", metavar="N"),
+            Arg("margin_pct", "--margin", metavar="PCT"),
+            Arg("sources", type=json.loads, metavar="JSON"),
+            Arg("source", metavar="FIELD=TEXT"),
+        ),
+        render=_growth_text,
+        example="tico growth cohort set --channel google-search --month 2026-10 --spend 1800 --new 6",
+    ),
+    Command(
+        "growth economics",
+        "CAC, months kept, LTV and LTV:CAC by channel",
+        args=(Arg("month", metavar="YYYY-MM"),),
+        render=_growth_text,
+        example="tico growth economics --month 2026-10",
+    ),
+    Command(
+        "growth numbers",
+        "the monthly series, each channel's economics, the KPI tree, markers",
+        args=(Arg("months", metavar="N"),),
+        render=lambda args, result: json.dumps(result, indent=2),
+        example="tico growth numbers --months 6",
+    ),
+    Command(
+        "growth kpis", "the KPI tree: North Star, inputs, guardrails", render=_growth_text, example="tico growth kpis"
+    ),
+    Command(
+        "growth settings",
+        "unit, revenue, margin; --set or --values changes them (owner or admin)",
+        args=(Arg("values", type=json.loads, metavar="JSON"), Arg("set", metavar="KEY=VALUE")),
+        render=_growth_text,
+        example="tico growth settings --set unit=customer --set margin_pct=70",
+    ),
+)
 
 
 # ----------------------------------------------------------------------------- lenses

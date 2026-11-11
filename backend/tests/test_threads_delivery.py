@@ -578,7 +578,7 @@ def test_a_purge_sends_no_tombstone_and_nothing_not_yet_sent_to_an_outside_desti
 
 
 def test_retention_is_set_from_the_cli_and_the_tool(monkeypatch):
-    from clients import hubcli, hubtools, remotecli
+    from clients import cli_spec, hubcli, hubtools
 
     calls = []
 
@@ -594,8 +594,9 @@ def test_retention_is_set_from_the_cli_and_the_tool(monkeypatch):
 
     parser = hubcli.build_parser() if hasattr(hubcli, "build_parser") else hubcli.parser()
     calls.clear()
-    remotecli.via_tool(Api(), parser.parse_args(["thread", "update", "t1", "--keep-days", "14"]))
-    remotecli.via_tool(Api(), parser.parse_args(["thread", "update", "t1", "--keep-forever"]))
+    for line in (["thread", "update", "t1", "--keep-days", "14"], ["thread", "update", "t1", "--keep-forever"]):
+        args = parser.parse_args(line)
+        cli_spec.of(args).call(Api(), args)
     assert [body for _, body in calls] == [{"retention_days": 14}, {"retention_days": None}]
 
 

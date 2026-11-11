@@ -6,6 +6,7 @@ from urllib.parse import quote
 from clients import s3links
 from clients.tico import APIError
 
+from clients.cli_spec import NULL, Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import DEFER_FOR, DELIVERY, _delivery, _key, _refs, _s, _target
 from clients.commands._shared import VISUALS, _CHANNEL, _uploaded, _visuals
@@ -328,7 +329,7 @@ def ack(api, args):
 # ----------------------------------------------------------------------------- threads (docs/threads.md)
 # A thread is any conversation: a root, a sub-thread (a side branch from one message), a DM or a Home. The routes are
 # /api/v2/threads (contract §10); the rules are the server's, and what a person or bot may read is decided there.
-THREAD_ID = _s("Thread id: from tico_thread_list or tico_thread_show")
+THREAD_ID = _s("The thread's id, from `thread list` or `thread show`")
 
 
 THREAD_CURSOR = _s("The page after this cursor: a page's next_cursor")
@@ -405,7 +406,12 @@ def thread_show(api, args):
     "teammate.",
     {
         "title": _s("The title: needed unless it is a DM with one teammate"),
-        "audience": {"type": "string", "enum": ["members", "team", "company", "personal"], "default": "members"},
+        "audience": {
+            "type": "string",
+            "enum": ["members", "team", "company", "personal"],
+            "default": "members",
+            "description": "Who reads it: its members (the default), a team, the company, or you alone",
+        },
         "audience_group_id": _s("For audience team: the group's id"),
         "members": {
             "type": "array",
@@ -709,7 +715,12 @@ def thread_members_list(api, args):
     {
         "thread": THREAD_ID,
         "actor": THREAD_ACTOR,
-        "role": {"type": "string", "enum": ["member", "owner"], "default": "member"},
+        "role": {
+            "type": "string",
+            "enum": ["member", "owner"],
+            "default": "member",
+            "description": "owner: may also remove members",
+        },
     },
     required=("thread", "actor"),
     writes=True,
@@ -744,13 +755,17 @@ def thread_members_remove(api, args):
     {
         "thread": THREAD_ID,
         "title": _s("The new title"),
-        "archived": {"type": "boolean"},
+        "archived": {"type": "boolean", "description": "true archives the thread, false unarchives it"},
         "pinned_for_everyone": {
             "type": "boolean",
             "description": "true pins it for everyone who reads it, false "
             "takes that pin off. Not on a DM with one teammate, a Home or a task's thread",
         },
-        "audience": {"type": "string", "enum": ["members", "team", "company"]},
+        "audience": {
+            "type": "string",
+            "enum": ["members", "team", "company"],
+            "description": "team or company makes it public; only its starter or an admin can",
+        },
         "audience_group_id": _s("For audience team: the group's id"),
         "retention_days": {
             "type": ["integer", "null"],
@@ -847,7 +862,7 @@ def thread_slack_resume(api, args):
     "Make a task from a thread message you can read. The server copies the message and a link "
     "back, and the task is private unless the thread is company-wide.",
     {
-        "message_id": _s("The message id from tico_thread_show"),
+        "message_id": _s("The message's id, from `thread show`"),
         "title": _s("Task title"),
         "owner": _s("Who does it: a bot slug, a person id, or `me`"),
     },
@@ -860,3 +875,165 @@ def thread_task(api, args):
         {"title": args["title"], "owner": _target(api, args["owner"])},
         key=_key(args),
     )
+
+
+_REFS = Arg("refs", "--ref", metavar="KIND:ID")
+
+# `tico thread ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+CLI = (
+    Group("thread", "threads: list yours, read one, post, reply in a sub-thread, follow, search, catch up"),
+    Command(
+        "thread catchup",
+        "summarize what is new in a thread into your Assistant DM",
+        args=(Arg("scope", "--thread-only", action="store_const", const="thread", default="subtree"),),
+        example="tico thread catchup th_1 --thread-only",
+    ),
+    Command(
+        "thread catch-up",
+        "each thread with something new for you, mentions first, with its new messages",
+        example="tico thread catch-up --limit 10",
+    ),
+    Command(
+        "thread pin", "pin a thread for yourself: it stays at the top of your list", example="tico thread pin th_1"
+    ),
+    Command(
+        "thread unpin", "unpin a thread for yourself, even one pinned for everyone", example="tico thread unpin th_1"
+    ),
+    Command(
+        "thread list",
+        "your threads: needs attention first, then unread, then recent; DMs apart",
+        args=(Arg("with", metavar="ACTOR"),),
+        example="tico thread list --with bot:ana",
+    ),
+    Command(
+        "thread show",
+        "one thread in tree order: each message, then the sub-threads under it",
+        args=(Arg("flat", default=None),),
+        example="tico thread show th_1 --flat",
+    ),
+    Command(
+        "thread home",
+        "a teammate's Home thread, made on first use (needs Read on them)",
+        example="tico thread home bot:ana",
+    ),
+    Command(
+        "thread dm-group",
+        "a group DM with several people or bots, with an optional first message",
+        args=(Arg("members", nargs="+", action="store", metavar="ACTOR"),),
+        example="tico thread dm-group human:7 bot:ana --title Launch --body 'Kickoff at 3'",
+    ),
+    Command(
+        "thread dm", "your DM with one person or bot: the open one, or a new one", example="tico thread dm bot:ana"
+    ),
+    Command(
+        "thread create",
+        "start a thread: its audience decides who reads it",
+        args=(
+            Arg("title", positional=True, nargs="?"),
+            Arg("audience_group_id", "--group", metavar="ID"),
+            Arg("members", "--member", metavar="ACTOR"),
+        ),
+        example="tico thread create Launch --member bot:ana --body 'Plan here'",
+    ),
+    Command(
+        "thread post",
+        "post a message to a thread",
+        args=(Arg("reply_to", metavar="MESSAGE"), _REFS),
+        example="tico thread post th_1 'Shipped it' --ref task:42",
+    ),
+    Command(
+        "thread bot-status",
+        "the bots a thread waits on: working, up next or can't reply, and why",
+        example="tico thread bot-status th_1",
+    ),
+    Command(
+        "thread reply",
+        "a side topic in a message's sub-thread; to answer a message use post --reply-to",
+        args=(_REFS,),
+        example="tico thread reply th_1 msg_1 'A side question'",
+    ),
+    Command(
+        "thread edit",
+        "edit a message you wrote: its text becomes a new revision",
+        example="tico thread edit msg_1 'Shipped it today'",
+    ),
+    Command(
+        "thread sub",
+        "open a message's sub-thread without posting; it is made if it does not exist",
+        example="tico thread sub msg_1",
+    ),
+    Command("thread react", "add your reaction to a message, such as :+1:", example="tico thread react msg_1 :+1:"),
+    Command("thread unreact", "remove your reaction from a message", example="tico thread unreact msg_1 :+1:"),
+    Command(
+        "thread open-earlier",
+        "open a bot's earlier messages to the people who read its Home (a manager of the bot)",
+        example="tico thread open-earlier th_1",
+    ),
+    Command(
+        "thread task",
+        "make a task from a message: private unless the thread is company-wide",
+        args=(Arg("title", "--title"), Arg("owner", "--owner")),
+        example="tico thread task msg_1 --title 'Send the invoice' --owner me",
+    ),
+    Command("thread delete", "delete a message you wrote: a marker stays", example="tico thread delete msg_1"),
+    Command(
+        "thread upload",
+        "post a message with a local file to a thread: the file is streamed to Tico",
+        args=(Arg("under", metavar="MESSAGE"), Arg("reply_to", metavar="MESSAGE")),
+        example="tico thread upload th_1 ./report.pdf --text 'This week'",
+    ),
+    Command(
+        "thread slack-resume",
+        "check a suspended or refused Slack link again (admins); its id is in link-slack's listing",
+        example="tico thread slack-resume sl_1",
+    ),
+    Command(
+        "thread follow",
+        "follow a thread: live, mentions, digest or muted",
+        example="tico thread follow th_1 --notify mentions",
+    ),
+    Command(
+        "thread unfollow", "stop following a thread; you keep what you can read", example="tico thread unfollow th_1"
+    ),
+    Command(
+        "thread read", "mark a thread read to a message's seq, or all of it", example="tico thread read th_1 --all"
+    ),
+    Command("thread search", "search the threads you can read", example="tico thread search invoice"),
+    Group("thread members", "who can read a thread: list, add, remove"),
+    Command(
+        "thread members list",
+        "the people, bots and groups in a thread, with their roles",
+        example="tico thread members list th_1",
+    ),
+    Command(
+        "thread members add",
+        "add a person, bot or group so it can read the thread",
+        args=(Arg("role", "--owner", action="store_const", const="owner"),),
+        example="tico thread members add th_1 bot:ana",
+    ),
+    Command(
+        "thread members remove",
+        "remove a person, bot or group: they stop reading the thread (owner or admin)",
+        example="tico thread members remove th_1 bot:ana",
+    ),
+    Command(
+        "thread update",
+        "rename, archive or unarchive a thread, or change who may read it",
+        args=(
+            Arg("archived", "--archive", action="store_const", const=True),
+            Arg("archived", "--unarchive", action="store_const", const=False),
+            Arg("pinned_for_everyone", "--pin-for-everyone", action="store_const", const=True),
+            Arg("pinned_for_everyone", "--unpin-for-everyone", action="store_const", const=False),
+            Arg("audience_group_id", "--group", metavar="ID"),
+            Arg("retention_days", "--keep-days", metavar="DAYS"),
+            Arg("retention_days", "--keep-forever", action="store_const", const=NULL),
+        ),
+        example="tico thread update th_1 --title 'Launch, week 2' --archive",
+    ),
+    Command(
+        "thread link-slack",
+        "link a thread to a Slack channel (admins), list its links, or --off to take them away",
+        args=(Arg("channel", positional=True, nargs="?"),),
+        example="tico thread link-slack th_1 '#customer_success' --history",
+    ),
+)
