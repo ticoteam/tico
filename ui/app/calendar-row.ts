@@ -79,6 +79,12 @@ function calRecordOn(): boolean { try { return localStorage.getItem(CAL_RECORD_K
 function calRecordSet(on: boolean): void { try { localStorage.setItem(CAL_RECORD_KEY, on ? 'on' : 'off'); } catch { /* not kept */ } }
 function calRecorder(o: CalOccurrence): void {
   if (!calRecordOn() || !recorderMac()) return;
+  // The desktop app opens the Recorder itself (`recordEvent`, app/src/bridge.rs, on the page's own org): a page's hidden
+  // frame cannot follow the link there. An app without `recordEvent` opens nothing, as it does for a call (thread-call.ts).
+  if (window.ticoNative) {
+    if (nativeHas('recordEvent')) try { void Promise.resolve(nativeHandler('recordEvent')?.postMessage({event: o.occurrence_id, title: o.title})).catch(() => {}); } catch {}
+    return;
+  }
   recorderLinkOpen(`tico-recorder://record?server=${encodeURIComponent(location.origin)}&title=${encodeURIComponent(o.title)}&event=${encodeURIComponent(o.occurrence_id)}`, 'cal-recorder-link');
 }
 // A Join link: the call itself, so a new tab opens it as any link would; the click also starts the Recorder.

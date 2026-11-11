@@ -88,11 +88,11 @@ const DIALOG_SCRIPT: &str = r#"
 "#;
 
 /// What only a Mac build answers: whether Tico Recorder is installed (`hasRecorder`), opening it on the page's org
-/// (`openRecorder`) and having it record a call there (`recordCall`).
+/// (`openRecorder`), having it record a call there (`recordCall`) or a calendar event (`recordEvent`).
 const RECORDER_SCRIPT: &str = r#"
 (() => {
   if (!window.ticoNativeFeatures) return;
-  window.ticoNativeFeatures.push('openRecorder', 'recordCall');
+  window.ticoNativeFeatures.push('openRecorder', 'recordCall', 'recordEvent');
 })();
 "#;
 
@@ -361,6 +361,31 @@ pub(crate) fn bridge(
             let opened = org
                 .and_then(|org| org.hub())
                 .is_some_and(|hub| crate::recorder::record_call(&hub, call));
+            return Ok(Value::Bool(opened));
+        }
+        // A calendar event's Join ({event: occurrence id, title}): the Recorder records it on the caller's own org, as
+        // `recordCall` does for a call. Answers whether the Recorder was opened (installed, and a link it takes).
+        "recordEvent" => {
+            let event = body
+                .as_ref()
+                .and_then(|b| b.get("event"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let title = body
+                .as_ref()
+                .and_then(|b| b.get("title"))
+                .and_then(Value::as_str);
+            let org = org_of(webview.label()).and_then(|org| {
+                app.state::<AppState>()
+                    .orgs
+                    .lock()
+                    .unwrap()
+                    .get(org)
+                    .cloned()
+            });
+            let opened = org
+                .and_then(|org| org.hub())
+                .is_some_and(|hub| crate::recorder::record_event(&hub, event, title));
             return Ok(Value::Bool(opened));
         }
         _ => {}
@@ -1075,6 +1100,7 @@ mod visual_bridge_tests {
             "windowMode",
             "openRecorder",
             "recordCall",
+            "recordEvent",
         ] {
             assert!(!own_page_call(name));
         }
@@ -1137,6 +1163,11 @@ mod visual_bridge_tests {
                 script.contains("'openRecorder'"),
                 several,
                 "Record is offered only by a Mac build"
+            );
+            assert_eq!(
+                script.contains("'recordEvent'"),
+                several,
+                "a calendar Join is recorded only by a Mac build"
             );
         }
         assert!(BRIDGE_SCRIPT.contains("'orgInfo'"));
