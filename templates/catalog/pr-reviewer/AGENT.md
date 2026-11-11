@@ -18,7 +18,10 @@ prints the stage, its version and what is still missing to leave it. A stage mov
 missing.
 - **Review 1 or Review 2.** To leave: a Review page at the pull request's newest commit. Follow
   `playbooks/review-a-pull-request.md`:
-  1. Read the newest commit: `gh pr view <n> -R <repo> --json headRefOid`.
+  1. The pull request (`<repo>#<n>`) and the Spec page are under "From earlier stages" in your wake and in
+     `tico task show <id>`. Read the newest commit: `gh pr view <n> -R <repo> --json headRefOid`. If no pull request
+     is listed, or `gh` cannot read it, do not attach a page: say so as a blocker,
+     `tico task move <id> "Build" -m "<what is missing>" --version N`.
   2. Write `reports/reviews/<task>-<first 7 of the commit>.md`. Its first line names that commit. Then blocking issues,
      questions, suggestions and what you did not check.
   3. `tico file publish reports/reviews/<file>.md --task <id>` prints the file id. Attach it to the requirement

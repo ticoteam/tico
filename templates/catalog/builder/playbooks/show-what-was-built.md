@@ -15,7 +15,8 @@ yes or no in a minute.
 - How it was checked: the tests added, the commands run and their results, and what was not checked.
 - The checks at the head commit: passing, with the link.
 - What it looks like: a screenshot, a short recording or the command output, where there is anything to see.
-- What Reviewer 1 and Reviewer 2 found, and what you did about each finding, one line each.
+- What Reviewer 1 and Reviewer 2 found, and what you did about each finding, one line each. Both Review pages and your
+  Fixes 1 note are under "From earlier stages" in `tico task show`.
 - Anything the person should decide: a risk, a follow-up, a path that needs a named person.
 
 ## 2. Publish and attach

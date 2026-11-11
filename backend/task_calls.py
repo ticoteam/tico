@@ -942,6 +942,15 @@ def task_view(
         child = children.get(str(child_id))
         if child:
             filed.append({"id": child_id, "kind": kind, "status": child["status"], "title": child["title"]})
+    from . import stage_inputs
+
+    # What earlier stages handed on (the Spec page, the PR, each Review page), as far as `viewer` may read the task
+    # that filed this one and the tasks this one filed.
+    inputs = (
+        stage_inputs.of(conn, row, shown, lambda filer: _readable(conn, viewer, filer["id"], visible_sql))
+        if live
+        else []
+    )
     snooze: Row | None = row.get("snooze")
     late = None
     if live and visit.get("late_told_at"):
@@ -962,6 +971,7 @@ def task_view(
         "turn": waits[0] if waits else None,
         "waits": waits,
         "to_leave": to_leave,
+        "inputs": inputs,
         "next": {"id": following["id"], "name": following["name"]} if following else None,
         "late": late,
         "snooze": {"until": snooze.get("until_at"), "by": snooze.get("by_id"), "why": snooze.get("why")}

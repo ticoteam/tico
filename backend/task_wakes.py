@@ -45,8 +45,10 @@ def key(task_id: str, visit_id: str, level: str = "owner", try_n: int = 0) -> st
 
 def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | None) -> str:
     """What a bot reads when it is woken for a task: the stage, the person's notes on the sign-off that let it in
-    (stage_effects.notes_on_the_way_in), what is missing, and how its run may end. Said to `to`,
-    whom it wakes, in words kept in the task's thread: a task this one filed is named only as `told` allows."""
+    (stage_effects.notes_on_the_way_in), what earlier stages handed on (stage_inputs), what is missing, and how its run
+    may end. Said to `to`, whom it wakes, in words kept in the task's thread: a task this one filed is named only as
+    `told` allows, and the pages of the task that filed this one only when it is not private."""
+    from . import stage_inputs
     from . import waiting_on as W
 
     stage: Row = task.get("stage") or {}
@@ -57,9 +59,14 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
     lines.append(f"{task.get('title') or 'A task'} is in {stage.get('name', '?')} ({pipeline.get('name', '?')}).")
     # What the person said with the sign-off that let the task in here: theirs, for whoever acts on it next.
     lines.extend(stage_effects.notes_on_the_way_in(conn, task))
+    shown = told(conn, task, to)
+    handed = stage_inputs.of(conn, task, shown, lambda filer: not _h().task_private(conn, filer))
+    if handed:
+        lines.append("From earlier stages (read each before you act):")
+        lines += stage_inputs.lines(conn, handed)
+        lines.append(stage_inputs.IF_MISSING)
     missing = [s for s in R.standings(conn, task) if not s.met]
     if missing:
-        shown = told(conn, task, to)
         lines.append("Missing to leave this stage:")
         for s in (W.unnamed(each, shown) for each in missing):
             waits = f" Waiting on {s.on}." if s.state == R.WAITING and s.on else ""

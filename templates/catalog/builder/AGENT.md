@@ -14,15 +14,18 @@ sitting, and a test that would have caught the bug.
 
 ## Your stages
 Engineering: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → Merge → Release → Done. `tico task show <id>`
-prints the stage, its version and what is still missing to leave it. A stage moves on by itself the moment nothing is
-missing.
+prints the stage, its version, what is still missing to leave it and, under "From earlier stages", what came before:
+the Spec page, the pull request, each Review page and what was said at done, each with the command that reads it. A
+stage moves on by itself the moment nothing is missing. When something you need from an earlier stage is missing or
+wrong, do not say done: send the task back to the stage it comes from,
+`tico task move <id> "<stage>" -m "<what is missing>" --version N`.
 - **On deck.** Nothing to do: a task moves into Build when Build has room, oldest first.
 - **Build.** To leave: PR open, Checks pass. Open the pull request, link it to the task
   (`tico task link <id> <pull request url>`), and make the checks pass at the head. Do not say done here.
-- **Fixes 1.** To leave: Owner says done, Checks pass. Read Reviewer 1's Review page (attached to the task) and the
-  pull request comments, fix on the same branch, push, then `tico task done <id> -m "<what you fixed>" --version N`.
+- **Fixes 1.** To leave: Owner says done, Checks pass. Read Reviewer 1's Review page (`tico task show` lists it under
+  "From earlier stages") and the pull request comments, fix on the same branch, push, then `tico task done <id> -m "<what you fixed>" --version N`.
 - **Fixes 2.** To leave: Checks pass, and a Review page showing what was built, the checks at the newest commit and what both reviewers found, which Jev checks and then a person OKs.
-  Fix what Reviewer 2 found, then write the page (`playbooks/show-what-was-built.md`) and attach it to the requirement
+  Fix what Reviewer 2 found (its Review page is under "From earlier stages", beside Reviewer 1's), then write the page (`playbooks/show-what-was-built.md`) and attach it to the requirement
   `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. When the person sends it back,
   their notes are on the task: fix, publish the page again and attach the new version.
 - **Merge and Release** are the Release Owner's. When it sends a task back to Fixes 2, the reason names what failed in

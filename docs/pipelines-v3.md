@@ -346,6 +346,25 @@ A bot working a task must leave it in one of five states. Its wake says so.
 
 Anything else is "stopped early", and the never-stuck check wakes it again.
 
+### What a stage is handed
+
+A stage's own requirements never name what earlier stages made: the Spec, the PR, each Review page, what the Builder
+said it fixed. So every wake, and the task's own read (`inputs`, which `tico task show` prints under "From earlier
+stages"), lists them, oldest first (backend/stage_inputs.py):
+
+- **The PR**: each PR linked to the task, open with its newest commit, merged with its commit, or closed. A Product task
+  also lists the PRs of the Engineering tasks it filed, with the release each went out in.
+- **Each earlier page**: the page that counted for each page requirement on an earlier visit (the newest per
+  requirement), as `page:<file id>@<version>` with the command that reads it. The filed Engineering task also gets the
+  Product task's pages from before it was filed (the Spec as it was OK'd).
+- **What was said at done**: an owner's note when it said an earlier stage's work was done ("fixed ...; declined ...").
+- **What is missing**: a page requirement of a stage before this one that no visit ever attached, because the task was
+  pushed past it or moved over it.
+
+A bot that lacks an input it needs does not say done. It moves the task back to the stage the input comes from, saying
+what is missing; its wake says so. A done said with nothing changed is not refused (a review with no findings needs no
+change), but the note is handed on, so the next stage and the person who OKs Fixes 2 read what was and was not done.
+
 ### Limits
 
 - A stage's limit counts its open tasks that are not snoozed.

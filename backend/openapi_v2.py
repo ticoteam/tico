@@ -2582,6 +2582,26 @@ SCHEMAS = {
         waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
         to_leave=items(ref("TaskRequirement"))
         | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},
+        inputs=items(
+            obj(
+                {
+                    "kind": {"enum": ["pr", "page", "done", "missing"]},
+                    "line": "s",
+                    "stage": "s",
+                    "by": "n",
+                    "url": "n",
+                    "file_id": "s",
+                    "version": "i",
+                    "ref": "s",
+                },
+                required=["kind", "line"],
+            )
+        )
+        | {
+            "description": "On the task's own read: what earlier stages handed on, oldest first (stage_inputs.of): "
+            "its PRs, each earlier stage's page, what an owner said when it said done, and a page that was never "
+            "attached"
+        },
         next={
             "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
             "description": "On the task's own read: the stage a forward move goes to",

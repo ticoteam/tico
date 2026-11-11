@@ -10,8 +10,10 @@ No person OK is needed.
 
     tico task show <id>
 
-Read the OK'd Spec page the task links (`page:<file id>@<version>`), its acceptance criteria and their check tags, and the
-Engineering tasks it filed with the release each shipped in.
+Under "From earlier stages" it lists the OK'd Spec page (`page:<file id>@<version>`; read it with
+`tico file read <file id>`) and the pull request of each Engineering task it filed, with the release each shipped in.
+Read the spec's acceptance criteria and their check tags. If a pull request says "in no release yet", production does
+not run it: go to step 2's snooze.
 
 ## 2. Check the version production runs
 

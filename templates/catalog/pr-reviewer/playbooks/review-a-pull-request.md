@@ -3,7 +3,8 @@
 Used in your Engineering review stage (Review 1 or Review 2), and for each pull request in
 `playbooks/weekday-review-queue.md`. Budget 15 minutes.
 
-Inputs: the pull request's description, its linked issue, its diff, its checks, `knowledge/standards.md`, `knowledge/patterns.md`,
+Inputs: the pull request and the Spec page listed under "From earlier stages" in `tico task show <id>` (in Review 2,
+also Reviewer 1's page and what the Builder said it fixed), the pull request's description, its linked issue, its diff, its checks, `knowledge/standards.md`, `knowledge/patterns.md`,
 and `knowledge/review-practice.md`.
 
 Outcome: one Review page at one head commit. Its first line names that commit; then a summary and whether anything

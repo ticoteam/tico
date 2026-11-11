@@ -1211,6 +1211,14 @@ def task_text(task, actors=None):
         if item.get("may"):
             words.append("you may: " + ", ".join(item["may"]))
         lines.append("  ".join(words))
+    inputs = [i for i in task.get("inputs") or [] if isinstance(i, dict)]
+    if inputs:
+        # What earlier stages handed on (backend/stage_inputs.py): the PR, each earlier page, what was said at done.
+        lines.append("From earlier stages:")
+        for entry in inputs:
+            who = _who(entry.get("by"), actors)
+            line = entry.get("line") or entry.get("label") or ""
+            lines.append(f"  {line}" + (f" ({who})" if who else ""))
     following = task.get("next")
     lines.append("Next: " + ((following or {}).get("name") or "none"))
     if task.get("filed_by"):

@@ -113,6 +113,88 @@ def test_read_grant_reads_pull_requests_comments_and_deployments_but_never_write
     assert read['permissions']['pull_requests'] == read['permissions']['issues'] == 'read'
 
 
+def _runner_reads_with(api, tmp_path, answer):
+    """runner_support.git_credentials.apply with the hub's answer: which token git and gh get for each repository."""
+    import os
+    import shutil
+    import subprocess
+
+    from clients.tico import APIError
+    from runner_support import git_credentials as G
+
+    class Hub:
+        def post(self, path, body):
+            r = api.post('/api/v2/' + path, json=body, headers=auth('runner-test'))
+            if r.status_code >= 300:
+                error = r.json()['error']
+                raise APIError(error['code'], error['detail'], r.status_code)
+            return r.json()
+
+    read = answer['tokens'][0]['token']
+    gh = tmp_path / 'bin' / 'gh'
+    gh.parent.mkdir()
+    gh.write_text("#!/bin/sh\nprintf '%s' \"$GH_TOKEN\"\n")
+    gh.chmod(0o755)
+    home = tmp_path / 'home'
+    home.mkdir()
+    env = {'PATH': str(gh.parent) + os.pathsep + os.environ['PATH'], 'HOME': str(home), 'GIT_CONFIG_NOSYSTEM': '1'}
+    assert G.apply(env, Hub(), 'cpo') is True
+    for path, wanted in (('Acme/docs.git', read), ('Acme/product.git', None), ('Acme/emp-cpo.git', None)):
+        filled = subprocess.run(
+            ['git', 'credential', 'fill'],
+            input=f'protocol=https\nhost=github.com\npath={path}\n\n',
+            env={**env, 'GIT_ASKPASS': 'true'},
+            cwd=home,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if wanted:
+            assert f'password={wanted}' in filled.stdout, filled.stderr
+        else:
+            assert 'password=ghs_' not in filled.stdout
+    wrapper = shutil.which('gh', path=env['PATH'])
+    for args, wanted in (
+        (['pr', 'view', '3', '-R', 'Acme/docs'], read),
+        (['pr', 'diff', 'https://github.com/Acme/docs/pull/3'], read),
+        (['pr', 'merge', '3', '-R', 'Acme/product'], ''),
+    ):
+        ran = subprocess.run([wrapper, *args], env=env, cwd=home, capture_output=True, text=True, timeout=120)
+        assert ran.stdout == wanted, (args, ran.stderr)
+        assert ran.returncode == (0 if wanted else 1)
+
+
+def test_read_grant_still_reads_when_the_bot_repo_is_unreachable(api, gh, tmp_path):
+    # Acme rc.3: the App was installed on the product repo only, so each bot's own repository (its one write
+    # grant) was unreachable. That alone used to refuse the whole answer (409), and a reviewer with a read grant
+    # got no login at all: `gh pr view` and `git fetch` failed. The read token is minted; nothing writes.
+    catalog(api, gh)
+    runner_token(api, 'cpo')
+    put(api, 'repositories/Acme/docs', {'enabled': True})
+    put(api, 'bots/cpo/repositories', {'mode': 'chosen', 'chosen': [{'full_name': 'Acme/docs', 'access': 'read'}]})
+    gh.missing.add('emp-cpo')
+    token = turn_token(api)
+    assert token.status_code == 200, token.text
+    answer = token.json()
+    assert [(t['access'], t['repositories']) for t in answer['tokens']] == [('read', ['Acme/docs'])]
+    assert answer['token'] == answer['tokens'][0]['token']
+    minted = [r[2] for r in gh.of('/access_tokens') if r[2].get('repositories') == ['docs']][-1]
+    assert minted['permissions'] == {'contents': 'read', 'metadata': 'read'}
+    assert not any(
+        'write' in r[2].get('permissions', {}).values() and 'docs' in (r[2].get('repositories') or [])
+        for r in gh.of('/access_tokens')
+    )
+    # The runner side: git's credential helper and the gh wrapper hand that read login to `git fetch`, `gh pr view`
+    # and `gh pr diff` on the read repository, and nothing to a repository outside the grant. Pushing, merging and
+    # approving are GitHub's to refuse: the only token is the read-only one above.
+    _runner_reads_with(api, tmp_path, answer)
+    # With nothing but the unreachable own repository, the answer still says why.
+    put(api, 'bots/cpo/repositories', {'mode': 'own'})
+    refused = turn_token(api)
+    assert refused.status_code == 409 and refused.json()['error']['code'] == 'github_repo_missing'
+    assert 'tico bot repo-create cpo' in refused.json()['error']['detail']
+
+
 def test_modes_mixed_scopes_alias_and_default(api, gh):
     catalog(api, gh)
     runner_token(api, 'cpo')
