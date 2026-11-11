@@ -513,12 +513,12 @@ async function connectPlan(browser: Browser) {
   await onStep(page, 'failed');
   await dialog.locator('[data-plan-close]').click();
   await dialog.waitFor({state: 'detached'});
-  // A start the server refuses for another reason: its sentence, and its reference small after it.
+  // A start the server refuses for another reason: its sentence, with its reference after it.
   data.connectBroken = 'Tico could not start the sign-in.';
   await page.locator('#subs-add').click();
   await dialog.locator('[data-plan-kind=claude_token]').click();
   await onStep(page, 'failed');
-  assert.equal(await dialog.locator('[data-plan-ref]').innerText(), 'sf-1a2b3c4d');
+  assert.match(await dialog.locator('.plan-said').innerText(), /sf-1a2b3c4d$/);
   await dialog.locator('[data-plan-close]').click();
   await dialog.waitFor({state: 'detached'});
   data.connectBroken = '';

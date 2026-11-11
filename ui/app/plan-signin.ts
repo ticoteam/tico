@@ -18,7 +18,7 @@ const PLAN_POLL_MS = 2000, PLAN_ASK_MS = 3000, PLAN_DONE_MS = 1400;
 // A sign-in lives fifteen minutes on the server; one the page cannot read for longer than that has ended.
 const PLAN_LIFE_MS = 16 * 60000;
 // What the provider's page is called on its button.
-const PLAN_PROVIDER: Record<string, string> = {claude: 'Claude', codex: 'ChatGPT'};
+const PLAN_PROVIDER: Record<string, string> = {claude_token: 'Claude', codex_login: 'ChatGPT'};
 // A code as the provider's page hands it back: long, one word. Shorter ones are typed and sent with Sign in.
 const PLAN_CODE = /^[A-Za-z0-9_\-#.~%+=/]{20,600}$/;
 const PLAN_PASTE: Record<string, {label: string; help: string}> = {
@@ -43,11 +43,9 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
   let agreed = false;
   // The provider's page was opened from here: only then is there something to wait for.
   let opened = false, asked = Date.now();
-  // The server's reference for a refusal, when it sends one: small, after its sentence, for whoever is asked to help.
-  let ref = '';
 
   const row = () => subsKind(chosen);
-  const provider = () => PLAN_PROVIDER[row().runtime] || row().label;
+  const provider = () => PLAN_PROVIDER[chosen] || row().label;
   const logins = () => `/v2/computers/${encodeURIComponent(login?.runner_id || '')}/logins/${encodeURIComponent(login?.id || '')}`;
   const drop = (found: PlanLogin | null) => { if (found?.id && planLive(found.state)) void post(`/v2/computers/${encodeURIComponent(found.runner_id)}/logins/${encodeURIComponent(found.id)}/cancel`, {}).catch(() => {}); };
   const halt = () => { run += 1; clearTimeout(timer); const was = login; login = null; drop(was); };
@@ -81,7 +79,7 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
         <div class="plan-foot">${pasteLink()}<span class="spacer"></span><button type="button" class="ghost" data-plan-cancel>Cancel</button></div>`;
     }
     if (step === 'done') return `<div class="plan-done" role="status"><span class="plan-check" aria-hidden="true">✓</span><b>${esc(name)}</b></div>`;
-    if (step === 'failed') return `<p class="plan-said" role="alert">${esc(message)}${ref ? ` <small class="muted" data-plan-ref>${esc(ref)}</small>` : ''}</p>
+    if (step === 'failed') return `<p class="plan-said" role="alert">${esc(message)}</p>
       <button type="button" class="primary plan-wide" data-plan-retry>Try again</button>
       <div class="plan-foot">${pasteLink()}</div>`;
     if (step === 'none') return `<p class="plan-said" role="alert">No computer online</p>
@@ -111,14 +109,14 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
     if (closed) return;
     heading.textContent = step === 'pick' ? 'Add subscription' : sub ? `Reconnect ${sub.name}` : row().label;
     dialog.dataset.planStep = step;
-    const key = [step, waking, message, ref, login?.id, login?.state === 'finishing', login?.url, login?.code, login?.accepts_code, login?.code_sent].join('|');
+    const key = [step, waking, message, login?.id, login?.state === 'finishing', login?.url, login?.code, login?.accepts_code, login?.code_sent].join('|');
     if (key === drawn) return;
     drawn = key;
     body.innerHTML = html();
     body.querySelector<HTMLElement>(step === 'signin' ? '[data-plan-open]' : '#plan-secret, [data-plan-retry], [data-plan-kind]')?.focus({preventScroll: true});
   };
   const show = (next: PlanStep, why = '') => { step = next; message = why; draw(); };
-  const failed = (why: string, mark = '') => { halt(); ref = mark; show('failed', why); };
+  const failed = (why: string) => { halt(); show('failed', why); };
 
   // Follow the sign-in until the server has saved its result.
   const poll = async (mine: number) => {
@@ -164,7 +162,7 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
       // A server from before the sign-in route has only the value to take.
       if (errorCode(error) === 'offline') { halt(); show('none'); }
       else if (errorStatus(error) === 404) { halt(); show('paste'); }
-      else { const mark = (errorBody(error) as {ref?: unknown}).ref; failed(errorMessage(error, 'The sign-in did not start'), typeof mark === 'string' ? mark : ''); }
+      else failed(errorMessage(error, 'The sign-in did not start'));   // with the server's reference after it, when it sent one
       return;
     }
     // Closed, canceled or started again meanwhile: nobody is left to finish this one.

@@ -79,12 +79,12 @@ def server_links():
 
 def test_ui_links_name_a_settings_tab_that_exists():
     tabs, links = settings_tabs(), list(ui_links())
-    # The links people hit most: chat's waiting line, the heartbeat banner, setup's subscription line.
+    # The links people hit most: chat's waiting line, the heartbeat banner, the sign-in sheet's Add a computer.
     assert {
         ("ui/app/chat.ts", "models"),
         ("ui/app/chat.ts", "devices"),
         ("ui/app/heartbeat.ts", "health"),
-        ("ui/app/welcome.ts", "devices"),
+        ("ui/app/plan-signin.ts", "devices"),
     } <= set(links)
     assert [(rel, tab) for rel, tab in links if tab not in tabs] == []
 
