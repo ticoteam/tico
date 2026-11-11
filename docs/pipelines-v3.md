@@ -157,7 +157,8 @@ Sign-off A: the parts, the moves, whose turn it is, the never-stuck check, asks,
 
 ## The model: six parts
 
-Customers and manager bots can edit all of it. General, Product and Engineering are presets built from these parts.
+Customers and manager bots can edit all of it. General, Product, Engineering and the Growth and Success pipelines are
+presets built from these parts.
 
 - **Pipeline.** A line of stages with a name, a one-line goal and a manager bot. It ends in two built-in stages: Done and
   Closed.
@@ -584,7 +585,19 @@ are chat, not asks. The setup checklist is onboarding and is not touched.
 
 ## Default pipelines
 
-Three presets built from the same parts. A new org gets all three. Customers and manager bots can change any of it.
+Eight presets built from the same parts, in three factories. Customers and manager bots can change any of it.
+
+| Factory | Pipelines |
+|---|---|
+| Product | Product → Engineering |
+| Growth | Growth Experiments; Lead → Opportunity |
+| Success | Customer; Success Experiments |
+| none | General |
+
+A new org gets General at its first start, and the rest once its setup finishes (Product and Engineering only if it
+builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
+renamed is never made again. Legal and Finance wait for private pipelines: until then, make their tasks private one by
+one.
 
 ### General
 
@@ -647,6 +660,32 @@ Also:
 - A person can own an Engineering task. It goes through Merge and Release the same way.
 - One Builder is a single point of failure. If it can't run, every task it owns says Paused and one row lands in a
   person's list.
+
+### Growth and Success
+
+Each pipeline's manager is its own Pipeline Manager (`<pipeline>-pipeline-manager`). A stage's owner is found by its
+role's template; until that bot exists, the stage is the manager's, and a manager nobody fills is the Task Manager
+(the ladder above). Built in `backend/pipeline_presets_more.py`.
+
+- **Growth Experiments** (GX) and **Success Experiments** (SX). Test ideas, keep what works, drop the rest. Every
+  stage belongs to the task's assignee, the teammate running that experiment; with nobody assigned, the manager is
+  woken to pick one.
+  Stages: Ideas → On deck → Running → Measuring → Done · Closed
+  - **Ideas.** Tasks leave by hand. Snooze one to park it.
+  - **On deck.** Plan it. To leave: Owner says done. If it spends money or publishes, the owner adds an OK from a
+    person to that task first, so only those wait on a person. Expected time: 1 day.
+  - **Running.** To leave: Owner says done. Limit 3. Expected time: 7 days.
+  - **Measuring.** To leave: a Results page (the number before and after, keep or drop). Jev checks it. Expected time:
+    2 days. Done is a measured experiment, kept or dropped; Closed is one stopped before it was measured.
+- **Lead** (L). Find leads and bring the qualified ones to Opportunity.
+  Stages: Targets (Lead Generation Owner) → Outreach → Replies → Qualified (Outbound Sales Owner) → Done · Closed.
+  Each of the first three: Owner says done. **Qualified** files an Opportunity on enter; to leave: Linked work done,
+  so a lead is Done when its deal is won.
+- **Opportunity** (O). Turn leads into customers. Stages, all the Inbound Sales Owner's: Talking → Proposal →
+  Closing → Done (won) · Closed (lost). **Proposal:** a Proposal page, Jev checks it, then **a person OKs it**.
+  The others: Owner says done. Nothing is filed on Won.
+- **Customer** (C). Customers reach their goals; referrals are the main result. Stages, all the Success Owner's:
+  Onboarding → Active → Referral asked → Done (referred) · Closed. Each: Owner says done.
 
 ## B. The architecture
 
