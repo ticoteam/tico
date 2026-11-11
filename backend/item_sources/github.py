@@ -762,6 +762,20 @@ def queues_prs(stage: Row | None) -> bool:
     return SA.act_of(stage) == (SOURCE, QUEUE)
 
 
+LINK_IN_MERGE = "Send the task back before linking another pull request."
+
+
+def queues_now(conn: "sqlite3.Connection", task_id: str) -> bool:
+    """Whether the open task is in a stage whose on-enter action queues its PRs. While it is, only a person links a
+    new PR to it (hubdb.task_link refuses anyone else with LINK_IN_MERGE): every PR the stage queues was signed off on
+    the stages before it, or by the person who linked it."""
+    found = conn.execute(
+        "SELECT s.on_enter FROM tasks t JOIN stages s ON s.id = t.stage_id WHERE t.id=? AND t.status='open'",
+        (task_id,),
+    ).fetchone()
+    return bool(found) and queues_prs({"on_enter": found[0]})
+
+
 def entered(conn: "sqlite3.Connection", task: Row, by: str, action: str) -> list[Row]:
     """A stage that acts on GitHub was entered (source_actions.enter): its one action queues the task's PRs."""
     return queue(conn, task, by) if action == QUEUE else []

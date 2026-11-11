@@ -4431,6 +4431,12 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
                 + ": no result is left to wake on",
             )
         return _arm_wake_once(conn, actor, have, wake_once)
+    if kind == "pr" and match and not is_human(actor):
+        from .item_sources import github as GS
+
+        if GS.queues_now(conn, task_id):
+            # The Merge stage queues the PRs that were signed off: a new one is linked by a person, or after going back.
+            refuse(conn, actor, "task_stage", GS.LINK_IN_MERGE)
     title = str(title or "").strip()
     if not title:
         m = PR_URL.match(url) or ISSUE_URL.match(url)

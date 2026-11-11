@@ -279,6 +279,8 @@ def register_worktree_pr(c, pr):
     app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     if not app or str(app["org"] or "").lower() != match.group(1).lower():
         return set()
+    from .item_sources import github as GS
+
     made = set()
     for row in H._rows(
         c.execute(
@@ -289,7 +291,7 @@ def register_worktree_pr(c, pr):
         if not c.execute(
             "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
             (row["task_id"], repo.lower(), int(match.group(3))),
-        ).fetchone():
+        ).fetchone() and not GS.queues_now(c, row["task_id"]):  # in Merge only a person links a new PR
             link = H.task_link(c, H.KEEPER, row["task_id"], url)
             made.add(link["id"])
             H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})

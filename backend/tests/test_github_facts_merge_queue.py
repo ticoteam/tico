@@ -858,3 +858,136 @@ def test_the_heartbeat_steps_are_quiet_without_a_github_app():
 
     assert HB.item_metadata(Ctx()) == ("No GitHub app", True)
     assert HB.source_actions(Ctx()) == ("No GitHub app", True)
+
+
+# ----------------------------------------------------------------------------- only signed-off PRs reach the queue
+# Every way into a stage that queues PRs passes the stages before it (docs/pipelines-v3.md "GitHub", "Merge"): a bot
+# can't push past the person's OK, link a new PR there, move back into it, or reopen or restore a task into it.
+def preset_engineering(c):
+    """The Engineering preset with the Fixes 2 OK people-only (chris/rc3-signoffs makes the preset so)."""
+    from backend import pipeline_settings as PS
+    from backend.tests.helpers.product_engineering_presets import _answers, _team
+
+    _answers(c)
+    _team(c)
+    PS.ensure_presets(c)
+    pid = c.execute("SELECT id FROM pipelines WHERE name='Engineering'").fetchone()[0]
+    c.execute(
+        "UPDATE requirements SET who_oks='people_only' WHERE kind='page' AND stage_id IN "
+        "(SELECT id FROM stages WHERE pipeline_id=? AND name='Fixes 2')",
+        (pid,),
+    )
+    return pid
+
+
+def test_a_bot_cannot_push_its_task_from_build_past_the_person_s_ok_into_merge(c):
+    from backend import task_calls as TC
+
+    pid = preset_engineering(c)
+    task_id = X.new_task(c, X.ANA, "Ship it", pid)["id"]
+    H.task_link(c, X.ANA, task_id, f"https://github.com/{REPO}/pull/1")
+    gh = FakeGitHub()
+    gh.set_checks(REPO, gh.open_pr(REPO, 1), "success")
+    seen(c, gh)
+    assert stage(c, task_id) == "Build"
+    version = E.task(c, task_id)["version"]
+    detail = refused(lambda: TC.task_move(c, "bot:builder", task_id, "Merge", "ship it", version), "task_needs_person")
+    assert "needs a person" in detail
+    assert stage(c, task_id) == "Build" and effects(c, task_id) == []
+
+
+def test_in_merge_only_a_person_links_another_pr(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+        gh.open_pr(REPO, 2)
+        for bot in (RM, B, H.KEEPER):
+            url = f"https://github.com/{REPO}/pull/2"
+            with pytest.raises(H.Refused) as raised:
+                H.task_link(c, bot, task_id, url, mover=True)
+            assert raised.value.detail == F.LINK_IN_MERGE, raised.value
+        assert [p["number"] for p in F.prs_of(c, task_id)] == [1]
+        H.task_link(c, X.ANA, task_id, f"https://github.com/{REPO}/pull/2")  # a person's link is queued as before
+        seen(c, gh, 2)
+        assert [e["item_key"] for e in c.execute("SELECT item_key FROM effects").fetchall()] == [REF, "acme/app#2"]
+
+
+def test_a_worktree_branch_pr_is_not_linked_while_its_task_is_in_merge(hook_api):
+    from backend import github as G
+
+    gh = FakeGitHub()
+    with hook_api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM github_app")
+        task_id = in_merge(c, gh, 1)
+        c.execute(
+            "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,ciphertext,"
+            "nonce,created_at,created_by) VALUES('app',1,'tico','c','acme',0,NULL,'',x'00',x'00','t','ana')"
+        )
+        branch = f"tico/{task_id[:8]}-ship-it"
+        c.execute(
+            "INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch) "
+            "VALUES('wt1',?,'worktree','worktree:x','x','ready',?,?,?,?)",
+            (task_id, X.ANA, H.now(), REPO, branch),
+        )
+        pr = {
+            "html_url": f"https://github.com/{REPO}/pull/2",
+            "head": {"ref": branch, "repo": {"full_name": REPO}},
+        }
+        assert G.register_worktree_pr(c, pr) == set()
+        assert [p["number"] for p in F.prs_of(c, task_id)] == [1]
+        E.move(c, task_id, "Build", X.ANA, "Another PR")
+        assert len(G.register_worktree_pr(c, pr)) == 1  # out of Merge it is linked as before
+
+
+def test_a_bot_does_not_move_a_task_back_into_merge_from_a_later_stage(company):
+    from backend import task_calls as TC
+
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.merge(REPO, 1)
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release"
+        gh.open_pr(REPO, 2)
+        H.task_link(c, RM, task_id, f"https://github.com/{REPO}/pull/2")  # outside Merge a bot may link
+        seen(c, gh, 2)
+        version = E.task(c, task_id)["version"]
+        detail = refused(lambda: TC.task_move(c, RM, task_id, "Merge", "again", version), "task_stage")
+        assert detail == "Only a person moves a task back into Merge. Move it back to Build instead."
+        TC.task_move(c, RM, task_id, "Build", "Review the new PR", version)
+        assert stage(c, task_id) == "Build"
+        assert [r[0] for r in c.execute("SELECT item_key FROM effects WHERE kind='act'")] == [REF]
+
+
+@pytest.mark.parametrize("via", ["engine", "api"])
+def test_a_reopened_task_lands_before_merge_and_is_asked_again(company, via):
+    from backend import task_calls as TC
+
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    with company.transaction() as c:
+        c.execute("UPDATE tasks SET requester_id=? WHERE id=?", (EM, task_id))  # a bot's request: a bot may close it
+        E.move(c, task_id, E.CLOSED, RM, "Not now", E.task(c, task_id)["version"])
+        gh.set_checks(REPO, gh.push(REPO, 1), "failure")  # a commit nobody reviewed
+        seen(c, gh)
+        version = E.task(c, task_id)["version"]
+        if via == "engine":
+            E.move(c, task_id, E.REOPEN, RM, "Try again", version)
+        else:
+            TC.task_move(c, RM, task_id, E.REOPEN, "Try again", version)
+        assert stage(c, task_id) == "Build"
+        assert [r[0] for r in c.execute("SELECT state FROM effects WHERE kind='act'")] == ["done"]
+
+
+def test_a_task_restored_from_the_trash_lands_before_merge(c):
+    from backend import task_delete
+
+    gh = FakeGitHub()
+    task_id = in_merge(c, gh, 1)
+    assert task_delete.delete_tasks(c, [task_id], apply=True, keep_work=True)["applied"]
+    assert task_delete.restore_tasks(c, [task_id], X.ANA)["restored"]
+    assert stage(c, task_id) == "Build" and effects(c, task_id) == []
