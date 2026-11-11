@@ -336,12 +336,9 @@ def test_task_list_narrows_to_a_pipeline_a_stage_and_whose_turn_it_is(cli, capsy
     )
 
 
-def test_pipeline_list_is_new_and_the_old_pipeline_lines_still_say_what_to_use():
-    assert hubcli.removed_notice(["pipeline", "list"]) is None
-    assert hubcli.removed_notice(["pipeline", "show", "product"]) is None
-    assert "on its page" in hubcli.removed_notice(["pipeline", "--type", "Ops"])
-    assert hubcli.removed_notice(["task", "wait", "T1"]) is None
-    assert "tico task file" in hubcli.removed_notice(["task", "wait", "t1", "--on", "task:t2"])
+def test_the_pipeline_requirement_and_wait_commands_are_no_longer_caught_as_removed():
+    for argv in (["pipeline", "list"], ["requirement", "list", "s1"], ["task", "wait", "T1"], ["stage", "show", "s1"]):
+        assert hubcli.removed_notice(argv) is None
 
 
 # ----------------------------------------------------------------------------- tico task wait

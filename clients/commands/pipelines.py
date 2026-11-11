@@ -6,13 +6,13 @@ person's OK or send back on the task that waits on them, and `tico task wait` (a
 call that blocks for minutes has no place in a bot's turn or an MCP call). Every read and write is an ordinary API
 call made as the caller, so the server decides who may do what.
 
-A side module of the tool table. How one joins it (clients/hubtools_<area>.py does the same):
+A side module of the tool table. How one joins it (clients/commands/connections.py and computer_upkeep.py do the same):
 
   1. define tools here with `hubtools.tool`; they append to `hubtools.TOOLS` like any other;
   2. end with `_register()`: the module's AUDIENCE and SHELL_ONLY lines join hubtools', and BY_NAME is refreshed;
   3. hubtools.py imports the module on its last line, so every client of the table (the CLI, both MCP doors, the
      tests) sees its tools; importing the module first works too;
-  4. the command lines live in clients/hubcli_<area>.py (stdlib only, so `tico --help` stays fast), called once from
+  4. the command lines live in clients/hubcli_pipelines.py (stdlib only, so `tico --help` stays fast), called once from
      hubcli.parser(); remotecli.run sends its COMMANDS through `via_tool`.
 """
 

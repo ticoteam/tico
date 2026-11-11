@@ -1,6 +1,6 @@
-"""`tico requirements`, `tico requirement attach`, `tico pipeline` and `tico pipeline-manager` are gone in Pipelines v3
-(docs/pipelines-v3.md): a task moves with `tico task done` and `tico task move`, and a pipeline's settings are a
-person's, on its page. A bot taught one of the old lines is told in one line what to use, on the CLI and over MCP."""
+"""The 0.5 tools `tico_requirements`, `tico_requirement_attach`, `tico_pipeline` and `tico_pipeline_manager` are gone in
+Pipelines v3 (docs/pipelines-v3.md): over MCP each is an unknown tool and calls nothing. `tico pipeline`, `tico stage` and
+`tico requirement` are the new commands (clients/hubcli_pipelines.py)."""
 
 import pytest
 
@@ -20,22 +20,6 @@ class Recorder:
     def post(self, path, body, key=None):
         self.calls.append(("POST", path))
         return {}
-
-
-@pytest.mark.parametrize(
-    "line, says",
-    [
-        (["requirements", "stage-42"], "tico task done"),
-        (["requirement", "attach", "task-7", "req-3", "--source", "link"], "tico task move"),
-        (["pipeline", "--type", "Ops"], "on its page"),
-        (["pipeline-manager", "Product", "cpo"], "on its page"),
-        (["pipeline-manager", "product-roadmap", "--clear"], "on its page"),
-    ],
-)
-def test_an_old_pipeline_command_says_in_one_line_what_to_use(line, says):
-    notice = hubcli.removed_notice(line)
-    assert notice and notice.startswith(f'tico: "{line[0]}" is gone; ') and says in notice
-    assert "\n" not in notice
 
 
 @pytest.mark.parametrize(

@@ -61,14 +61,6 @@ CHANGERS = "The company's owner and Admins, the pipeline's owner or its manager 
 MAKERS = "The company's owner and Admins may run it."
 
 
-def current(argv):
-    """True for a line of these commands, which an older command of the same words (hubcli.REMOVED) must not catch:
-    `tico pipeline list` is new where `tico pipeline --type` is gone, and `tico task wait <id> --on task:<id>` is the
-    old wait."""
-    words = " ".join(argv[:2])
-    return words in COMMANDS or words == WAIT and "--on" not in argv
-
-
 def _leaf(group, name, fn, help_, who, example):
     s = group.add_parser(
         name,
