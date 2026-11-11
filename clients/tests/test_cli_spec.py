@@ -117,10 +117,49 @@ def test_a_fixed_property_is_sent_and_an_omitted_one_is_not_and_neither_takes_an
             parse(specs, ["fake", "few", "x", flag, "9"])
 
 
+def test_exactly_one_of_an_id_or_a_local_flag_and_the_local_flag_is_not_sent(calls, capsys):
+    every = Arg("all", local=True, action="store_true", help="every one of them")
+    show = Command("fake list", args=(Arg("id", nargs="?"), every), one_of=(("id", "all"),))
+    specs = (Group("fake"), show)
+    args = parse(specs, ["fake", "list", "--all"])
+    assert args.all is True and show.prepare(args)[1] == {"operation_id": None}
+    assert show.prepare(parse(specs, ["fake", "list", "x"]))[1] == {"id": "x", "operation_id": None}
+    for argv, says in (
+        (["fake", "list"], "one of the arguments id --all is required"),
+        (["fake", "list", "x", "--all"], "not allowed with"),
+    ):
+        with pytest.raises(SystemExit):
+            parse(specs, argv)
+        assert says in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        parse(specs, ["fake", "list", "-h"])
+    assert "every one of them" in capsys.readouterr().out
+
+
+def test_exactly_one_of_the_flags_that_set_a_required_property(calls, capsys):
+    few = Command(
+        "fake few",
+        tool="tico_fake_list",
+        args=(Arg("id", "--id"), Arg("id", "--first", action="store_const", const="1")),
+        one_of=(("id",),),
+    )
+    specs = (Group("fake"), few)
+    assert few.prepare(parse(specs, ["fake", "few", "--first"]))[1]["id"] == "1"
+    assert few.prepare(parse(specs, ["fake", "few", "--id", "x"]))[1]["id"] == "x"
+    for argv in (["fake", "few"], ["fake", "few", "--first", "--id", "x"]):
+        with pytest.raises(SystemExit):
+            parse(specs, argv)
+    capsys.readouterr()
+
+
 @pytest.mark.parametrize(
     ("command", "says"),
     [
         (Command("fake show", args=(Arg("nope"),)), "not properties"),
+        (Command("fake list", args=(Arg("limit", help="how many"),)), "its help is its description there"),
+        (Command("fake list", args=(Arg("limit", local=True),)), "is local"),
+        (Command("fake list", one_of=(("nope",),)), "are not its arguments"),
+        (Command("fake list", one_of=(("id", "limit"),)), "takes nargs"),
         (Command("fake show", fixed=(("nope", 1),)), "not properties"),
         (Command("fake list", args=(Arg("limit"),), fixed=(("limit", 1),)), "are fixed or omitted"),
         (Command("fake list", omit=("nope",)), "not properties"),
