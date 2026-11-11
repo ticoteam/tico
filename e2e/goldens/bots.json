@@ -78,7 +78,7 @@
       },
       "task_model": null,
       "task_model_warning": "",
-      "team": "built-in",
+      "team": null,
       "temp": false,
       "template": "",
       "template_version": "",

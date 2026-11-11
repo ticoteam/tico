@@ -79,14 +79,14 @@ def company(environment):
     )
     build_team(api)
     # The team builder put the Heads and their reports in the Heads' department (Marketing, the Growth Manager's). The outside helper bots (no
-    # team of their own) sit in the Built-in group, which Tico keeps; the owner has no group yet.
+    # team of their own) sit in the General group, which Tico keeps (the Assistant is in none); the owner has no group yet.
     names = labels(api)
     assert {
         g["id"]: sorted(names.get(bot, bot) for bot in g["bots"])
         for g in api.get("/api/v2/groups", headers=signed_in()).json()
     } == {
         "marketing": ["eng-lead", "growth-manager", "support"],
-        "built-in": ["assistant", "botops", "inbox", "strategy-owner"],
+        "built-in": ["botops", "inbox", "strategy-owner"],
     }
     home = api.post(
         "/api/v2/groups", json={"name": "Home", "add": {"people": ["morgan"], "bots": ["scribe"]}}, headers=signed_in()
@@ -255,7 +255,7 @@ def test_the_strategy_bot_heads_the_chart_gains_no_access_and_answers_to_its_old
     assert under_strategy == {"growth-manager", "eng-lead", "scribe"}
     assert bots["support"][0] == "b:growth-manager"
     # The Head's department hangs under the Strategy Owner with it; the owner's own group stays, or the chart would loop.
-    # The Built-in group is top level, not under the Strategy Owner even though strategy-owner sits in it.
+    # The General group is top level, not under the Strategy Owner even though strategy-owner sits in it.
     expected = {"marketing": "b:strategy-owner", "home": "", "built-in": ""}
     assert groups(api) == groups(api, "/api/humans") == expected
     assert bots["personal"][0] == "p:morgan" and bots["rileys"][0] == "p:riley"

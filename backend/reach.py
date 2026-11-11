@@ -20,6 +20,7 @@ Tables: backend/migrations/0040_reach.sql (0045_reach_nearby.sql adds the `nearb
 """
 
 import dataclasses
+import json
 import os
 from datetime import timedelta
 from typing import Literal
@@ -764,7 +765,7 @@ def _held(c, task_id, field, current, before):
 
 def task_parties(c, task_id, before=None):
     """Everyone a task is shared with: its owner, requester, everyone an ask on it named (or was given to), its readers
-    (a group's by its members), everyone who owned it, and whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
+    (a group's by its members), everyone who owned it, in this stage or an earlier one, and whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
     are left out, as their joins are not dated)."""
     row = (
         c.execute(
@@ -777,6 +778,14 @@ def task_parties(c, task_id, before=None):
         return set()
     out = {row["requester_id"]} | H.reader_actors(c, dict(row))
     out |= _held(c, task_id, "reassign", row["owner_id"], before)
+    # A stage hand-off is a move, not a reassign: whoever owned it in an earlier stage worked it too.
+    for r in c.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
+        "AND data IS NOT NULL" + (" AND created_at<?" if before else ""),
+        (task_id, *((before,) if before else ())),
+    ):
+        moved = json.loads(r["data"] or "{}")
+        out |= {moved.get("owner"), moved.get("was_owner")}
     # Whoever an ask on it named, in any visit, and whoever one was given to.
     dated = " AND r.created_at<?" if before else ""
     out |= {

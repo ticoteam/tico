@@ -1,7 +1,8 @@
 # General Manager
 
-The General Manager is a built-in helper that keeps tasks moving without anyone having to look. It sits outside the
-org chart like the [Librarian](librarian.md), and runs on Haiku 5.5 at low
+The General Manager is a built-in bot that keeps tasks moving without anyone having to look. It reports to the
+owner, and the other built-ins (BotOps, the [Librarian](librarian.md), the Strategy Owner and the Rules, Design,
+Updates and Automations Owners) are its team, the General group on the chart. It runs on Haiku 5.5 at low
 effort. Every team has it: it is added when a team is set up, and an existing team gets it on upgrade. It is **on by
 default**. The owner can pause it (`POST /api/v2/general-manager/turn-off`, `tico general-manager bot off`); pausing keeps its
 history and `turn-on` wakes it again.

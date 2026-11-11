@@ -60,11 +60,11 @@ const assistantName = (): string => {
 const assistantBot = (): string => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_bot;
 // The built-in Rules Owner's slug (backend/hubdb.py COUNSEL): Tico's own name, so a team's own bot named counsel stays theirs.
 const RULES_OWNER_BOT = 'rules-owner';
-// The group the server keeps the built-in bots in (backend/groups.py BUILT_IN): Tico's own, collapsed on the team chart.
+// The General Manager's team, the group the server keeps the built-in bots in (backend/groups.py BUILT_IN): Tico's own.
 const BUILT_IN_GROUP = 'built-in';
 // The assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Rules Owner, the Design Owner and the
 // Updates and Automations Owners are built in to every team: pause and rename them, never archive or delete. They sit in
-// the Built-in group of the team chart, which nobody drags them out of; their settings are Settings > Bots and their bot
+// the General group of the team chart, which nobody drags them out of; their settings are Settings > Bots and their bot
 // page's Settings.
 const isBuiltInBot = (slug: string): boolean => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'strategy-owner' || slug === 'general-manager' || slug === 'finance-owner' || slug === RULES_OWNER_BOT || slug === 'design-owner'
   || slug === 'updates-owner' || slug === 'automations-owner';

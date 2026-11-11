@@ -287,7 +287,7 @@ function mailPersonVisible(person: OrgPerson): boolean {
   return false;
 }
 function defaultCollapsed() {
-  const by = sidebarTree(), keys = new Set<string>([`g:${BUILT_IN_GROUP}`]);   // Built-in starts folded
+  const by = sidebarTree(), keys = new Set<string>([`g:${BUILT_IN_GROUP}`]);   // General starts folded
   const founder = (by[''] || []).find(n => n.kind === 'person' && !n.person?.reports_to);
   for (const k of Object.keys(by)) {
     if (!k || !by[k]?.length) continue;
@@ -310,7 +310,7 @@ function ensureCollapsed() {
       const saved = id && localStorage.getItem(collapsedStorageKey());
       if (saved) {
         collapsed = new Set(JSON.parse(saved)); collapsedSaved = true;
-        // Folds saved before the Built-in group listed its bots are kept, with Built-in folded once.
+        // Folds saved before the General group listed its bots are kept, with General folded once.
         if (!localStorage.getItem('hub.collapsed.builtin.' + id)) { collapsed.add(`g:${BUILT_IN_GROUP}`); localStorage.setItem('hub.collapsed.builtin.' + id, '1'); saveCollapsed(); }
         return;
       }
@@ -762,7 +762,7 @@ $('#org-history').onclick = () => {
 // `reports_to` is untouched, and a helper's reports hang where it would have. The Strategy Owner is an Assistant helper.
 const isHelperBot = (e: Employee) => isBuiltInBot(e.id) || !!e.helper;
 // The order here and on Goals: the Assistant, then the other built-ins, then other helpers.
-const HELPER_ORDER = ['botops', 'librarian', 'strategy-owner', 'general-manager', 'finance-owner', RULES_OWNER_BOT, 'design-owner', 'inbox-manager'];
+const HELPER_ORDER = ['general-manager', 'botops', 'librarian', 'strategy-owner', 'finance-owner', RULES_OWNER_BOT, 'design-owner', 'inbox-manager'];
 const helperRank = (e: Employee) => e.id === assistantBot() ? -1 : HELPER_ORDER.includes(e.id) ? HELPER_ORDER.indexOf(e.id) : 99;
 function orgTreeWithHelpers(byParent: OrgByParent): OrgByParent {
   const out: OrgByParent = {}, bot: Record<string, OrgBotNode> = {}, parentOf: Record<string, string> = {};
@@ -775,13 +775,20 @@ function orgTreeWithHelpers(byParent: OrgByParent): OrgByParent {
     if (!(n.kind === 'bot' && isHelperBot(n))) (out[lift(parent)] ||= []).push(n);
   return out;
 }
-// The Team list's tree: the chart's (orgTreeWithHelpers), with the built-ins listed flat in the Built-in group when the
-// company has it (backend/groups.py BUILT_IN), and the top person's own group dissolved (orgOwnGroupDissolve).
+// The Team list's tree: the chart's (orgTreeWithHelpers), with the built-ins put back when the company has the General
+// group (backend/groups.py BUILT_IN), and the top person's own group dissolved (orgOwnGroupDissolve). The group is the
+// General Manager's team: a member sits under the member it reports to, else in the group itself, so the General Manager
+// is its first row with its reports under it. A built-in in no group (the Assistant) hangs from its person.
 function sidebarTree(): OrgByParent {
-  const raw = orgTreeByParent(), by = orgTreeWithHelpers(raw);
+  const raw = orgTreeByParent(), by = orgTreeWithHelpers(raw), group = 'g:' + BUILT_IN_GROUP;
   if ((S.orgGroups || []).some(g => g.id === BUILT_IN_GROUP)) {
-    const builtIns = Object.values(raw).flat().filter(n => n.kind === 'bot' && isHelperBot(n) && (isBuiltInBot(n.id) || n.team === BUILT_IN_GROUP));
-    if (builtIns.length) by['g:' + BUILT_IN_GROUP] = [...(by['g:' + BUILT_IN_GROUP] || []), ...builtIns];
+    const member = (n: OrgNode): boolean => n.kind === 'bot' && isHelperBot(n) && n.team === BUILT_IN_GROUP;
+    const members = new Set(Object.values(raw).flat().filter(member).map(n => 'b:' + n.id));
+    for (const [parent, kids] of Object.entries(raw)) for (const n of kids) {
+      if (n.kind !== 'bot' || !isHelperBot(n) || !(isBuiltInBot(n.id) || member(n))) continue;
+      const at = member(n) ? (members.has(parent) ? parent : group) : parent.startsWith('b:') ? group : parent;
+      by[at] = [...(by[at] || []), n];
+    }
   }
   orgOwnGroupDissolve(by);
   return by;
@@ -858,7 +865,7 @@ function renderTree() {
     if (!top) return rec('', 0);
     const isGroup = (n: OrgNode) => n.kind === 'group', under = orgSorted(topKey, byParent[topKey]);
     const rest = orgSorted('', byParent['']!.filter(n => n !== top));
-    // The Built-in group comes last, after the teammates.
+    // The General group comes last, after the teammates.
     const builtIn = (n: OrgNode) => n.kind === 'group' && n.id === BUILT_IN_GROUP, team = (n: OrgNode) => isGroup(n) && !builtIn(n);
     return rows('', [top], 0) + rows(topKey, under.filter(team), 1) + rows('', rest.filter(team), 1)
       + rows(topKey, under.filter(n => !isGroup(n)), 1) + rows('', rest.filter(n => !isGroup(n)), 1)
@@ -869,7 +876,7 @@ function renderTree() {
   // flat: the history list, one row per bot and person, no children and nothing to drag
   const row = (node: OrgNode, depth: number, flat = false, at: OrgPlace = {parent: '', order: []}): string => {
     if (node.kind === 'group') {
-      // Built-in is Tico's own: nothing is added to it, and it is not renamed, deleted or dragged.
+      // General is Tico's own: nothing is added to it, and it is not renamed, deleted or dragged.
       const own = node.id !== BUILT_IN_GROUP;
       const key = 'g:' + node.id, manage = own && orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
       // The plus opens the add menu for this group (ui/app/team-add.ts): recruit a bot, an existing one, or a group.

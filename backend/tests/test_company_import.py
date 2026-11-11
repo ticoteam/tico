@@ -1557,10 +1557,10 @@ def test_two_teams_in_one_department_import_as_two_groups_each_holding_its_own_s
     assert names.count("Lab network") == names.count("Biopharma accounts") == names.count("Sales") == 1
     assert {"lab-network", "biopharma-accounts"} <= set(by_id)
     assert names.index("Lab network") < names.index("Biopharma accounts")
-    # The Assistant and BotOps are built-ins: they sit in the Built-in group, whatever team the file gives them.
-    assert {r["team"] for r in rows(api, "SELECT team FROM bot_config WHERE bot IN ('assistant','botops')")} == {
-        "built-in"
-    }
+    # The Assistant and BotOps are built-ins: whatever team the file gives them, BotOps sits in the General group and
+    # the Assistant, which reports to its person, in none.
+    teams = {r["bot"]: r["team"] for r in rows(api, "SELECT bot, team FROM bot_config")}
+    assert teams["botops"] == "built-in" and not teams["assistant"]
 
 
 def test_import_keeps_where_the_company_serves_and_each_segments_own_places(environment):
@@ -1700,14 +1700,14 @@ def test_live_bots_and_the_finance_owner_sit_in_their_teams_and_the_built_ins_in
     slugs = {r["id"]: r["slug"] for r in rows(api, "SELECT id,slug FROM bots")}
     teams = {slugs[r["bot"]]: names.get(r["team"], "") for r in rows(api, "SELECT bot,team FROM bot_config")}
     assert teams["lead-builder"] == teams["code-reviewer"] == teams["qa-owner"] == "Engineering"
-    assert teams["finance-owner"] == "Corporate"  # the Finance Owner is on the chart, not in the Built-in group
-    assert teams["assistant"] == teams["botops"] == "Built-in"
-    assert names["built-in"] == "Built-in"
-    # The chart's Built-in group lists its members' ids (the UI draws the group from this row).
+    assert teams["finance-owner"] == "Corporate"  # the Finance Owner is on the chart, not in the General group
+    assert (teams["assistant"], teams["botops"]) == ("", "General")
+    assert names["built-in"] == "General"
+    # The chart's General group lists its members' ids (the UI draws the group from this row).
     built_in = next(g for g in api.get("/api/v2/groups", headers=signed_in()).json() if g["id"] == "built-in")
     ids = bot_ids(api)
-    assert {ids["assistant"], ids["botops"]} <= set(built_in["bots"])
-    assert ids["finance-owner"] not in built_in["bots"]
+    assert ids["botops"] in built_in["bots"]
+    assert ids["finance-owner"] not in built_in["bots"] and ids["assistant"] not in built_in["bots"]
 
 
 def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environment, monkeypatch):

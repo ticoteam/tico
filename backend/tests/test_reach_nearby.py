@@ -636,3 +636,38 @@ def test_a_task_for_the_person_goes_through_the_manager_who_passes_it_on_and_the
             (since,),
         ).fetchall()
     assert any("Apply: add the sitemap: Done" in r["body"] for r in woke), [r["body"] for r in woke]
+
+
+def test_a_bot_reaches_the_bot_that_worked_the_task_in_an_earlier_stage(api):
+    """Finance and Ops share no manager and no team. Finance drafts, the pipeline hands the task to Ops, and Ops asks
+    Finance about the draft on that task: the bot that worked it before is one the task is shared with. Off the task,
+    Finance stays out of Ops's reach."""
+    from backend.tests.helpers import engine as X
+
+    chart(api)
+    as_bot(api, "finance", "fin-test")
+    as_bot(api, "ops", "ops-test")
+    assert not reach.decide(ctx(api), "bot:ops", "bot:finance").allowed
+    with api.app.state.store.transaction() as c:
+        X.pipeline(
+            c,
+            "copy",
+            "Copy",
+            (
+                {"name": "Draft", "owner": "bot:finance", "requirements": [{"kind": "owner_done"}]},
+                {"name": "Edit", "owner": "bot:ops", "requirements": [{"kind": "owner_done"}]},
+            ),
+        )
+    copy = task(api, "ben-test", "bot:finance", title="Copy task", pipeline="copy")
+    r = api.post(f"/api/v2/tasks/{copy['id']}/done", json={"version": copy["version"]}, headers=headers("fin-test"))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        now = H.task(c, copy["id"])
+    assert now["owner_id"] == "bot:ops"
+    r = api.post(
+        f"/api/v2/tasks/{copy['id']}/asks",
+        json={"to": "bot:finance", "line": "Which figure is the launch price?", "version": now["version"]},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    task(api, "ops-test", "bot:finance", title="Something new for Finance", expected=409)

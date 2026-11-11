@@ -5,15 +5,12 @@
    factory setup, so none of them moves, folds or opens an edit menu. The read is the one Company › Factories reads
    (overview-factories.ts ofRead: GET /api/v2/factories and GET /api/v2/pipelines). A pipeline can't be private yet
    (pipeline_settings refuses it): everyone on the team reads every pipeline.
-   The bots this section draws are not on the people chart too: orgSetupLift takes them out of it, and their reports
-   hang where they stood.
+   A pipeline's manager is its team's Manager, so the bots this section draws stay on the people chart, with their
+   reports under them.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const ORG_FAC_LOCK = '<svg aria-hidden="true" width="9" height="11" viewBox="0 0 10 12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="5" width="8" height="6" rx="1"></rect><path d="M3 5V3.5a2 2 0 014 0V5"></path></svg>';
-
-/** The roster ids of the bots the section draws, set when it is drawn: the people chart leaves them out. */
-let ORG_FAC_BOTS: Set<string> = new Set();
 
 /** A manager reference without its bot: prefix (task_types.manager and factories.manager_id are stored either way). */
 const orgBotId = (ref: string): string => ref.replace(/^bot:/, '');
@@ -70,41 +67,9 @@ function orgFactoriesHtml(groups: OfGroup[]): string {
     + `<div class="rdo-cv org-fac-cv"><div class="org-fac-boxes">${boxes}</div></div></section>`;
 }
 
-/** The roster ids of the bots the section draws as cards: each Pipeline Manager, and each Factory Manager shown. Nothing
- *  when there are no factories, since the section then draws nothing and the people chart keeps every bot. */
-function orgDrawnBots(groups: OfGroup[]): Set<string> {
-  const bots = new Set<string>();
-  if (!orgHasFactory(groups)) return bots;
-  for (const g of groups) {
-    if (g.manager && orgShowsFm(g)) bots.add(orgBotOf(g.manager));
-    for (const p of g.pipelines) if (p.manager_id) bots.add(orgBotOf(p.manager_id));
-  }
-  return bots;
-}
-
-/** Takes the bots in `bots` out of the people chart's map, `by` (changed in place). Each one's reports take its place
- *  under the group or manager above, so nobody under a manager goes missing. The map keys are the chart's (`g:`, `p:`, `b:`). */
-type OrgChartNode = {kind: string; id: string};
-function orgSetupLift(by: Record<string, OrgChartNode[]>, bots: Set<string>): void {
-  if (!bots.size) return;
-  const seen = new Set<string>();
-  const lift = (nodes: OrgChartNode[]): OrgChartNode[] => nodes.flatMap((n): OrgChartNode[] => {
-    if (n.kind !== 'bot' || !bots.has(n.id)) return [n];
-    if (seen.has(n.id)) return [];
-    seen.add(n.id);
-    return lift(by['b:' + n.id] || []);
-  });
-  // A removed bot's own list is read through its place above, so it is not lifted twice.
-  for (const key of Object.keys(by)) if (!(key.startsWith('b:') && bots.has(key.slice(2)))) by[key] = lift(by[key] || []);
-}
-
-/** Draws the section into host, below the chart, and records its bots for the people chart. Resolves true when the chart
- *  must be drawn again (it now leaves bots out). A failed read leaves the chart
- *  alone; so does a host the page has left. */
-async function orgFactoriesMount(host: HTMLElement): Promise<boolean> {
+/** Draws the section into host, below the chart. A failed read draws nothing; so does a host the page has left. */
+async function orgFactoriesMount(host: HTMLElement): Promise<void> {
   const groups = await ofRead('7d').catch(() => null);
-  if (!groups || !host.isConnected) return false;
-  ORG_FAC_BOTS = orgDrawnBots(groups);
+  if (!groups || !host.isConnected) return;
   host.innerHTML = orgFactoriesHtml(groups);
-  return ORG_FAC_BOTS.size > 0;
 }
