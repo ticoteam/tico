@@ -473,7 +473,7 @@ function onbWire(state: OnbState, key: string) {
     if (file) file.onchange = () => void onbReadCompanyFile(state, file.files?.[0]);
   }
   if (key === 'run' || key === 'welcome') onbWireComputer(state);
-  if (key === 'welcome') next?.focus();
+  if (key === 'welcome') next?.focus({preventScroll: true});   // the team reads from the top; Start is a key press away
   const hide = $('#onb-hide');
   // For good: Finish setup leaves the sidebar now and stays away (Getting started's dismissal, per person).
   if (hide) hide.onclick = () => { if (GS) GS = {...GS, dismissed: true}; void gsState({checklist: true}); state.dialog?.close(); };
