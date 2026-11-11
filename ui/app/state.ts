@@ -62,10 +62,12 @@ const assistantBot = (): string => S.config.assistant_bot || CONFIG_DEFAULTS.ass
 const COUNSEL_BOT = 'tico-counsel';
 // The group the server keeps the built-in bots in (backend/groups.py BUILT_IN): Tico's own, collapsed on the team chart.
 const BUILT_IN_GROUP = 'built-in';
-// The assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Bookkeeper, Counsel and the Brand Owner are built
-// in to every team: pause and rename them, never archive or delete. They sit in the Built-in group of the team chart, which
+// The assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Bookkeeper, Counsel, the Brand Owner and the
+// Updates and Automations Owners are built in to every team: pause and rename them, never archive or delete. They sit in the Built-in group of the team chart, which
 // nobody drags them out of; their settings are Settings > Bots and their bot page's Settings.
-const isBuiltInBot = (slug: string): boolean => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager' || slug === 'bookkeeper' || slug === COUNSEL_BOT || slug === 'brand';
+// The same set as backend/getting_started.py `built_in`.
+const BUILT_IN_BOTS = new Set(['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'brand', 'updates-owner', 'automations-owner']);
+const isBuiltInBot = (slug: string): boolean => slug === assistantBot() || BUILT_IN_BOTS.has(slug);
 // The Assistant's helpers (backend/assistant.py HELPERS): everyone's one chat is their Assistant, which hands these the
 // work. Nobody chats with them: their bot pages have no composer, and every "ask" on a page opens the Ask panel.
 const ASSISTANT_HELPERS = ['botops', 'goal-manager', 'librarian', COUNSEL_BOT];
