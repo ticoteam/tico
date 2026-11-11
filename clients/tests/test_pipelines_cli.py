@@ -178,6 +178,36 @@ LINES = [
     ),
     (["task", "approve", "T1", "-m", "Looks right"], {"id": "T1", "note": "Looks right"}),
     (["task", "send-back", "T1", "-m", "Cover -0"], {"id": "T1", "note": "Cover -0"}),
+    (["pipeline", "show", "product", "--record"], {"pipeline": "product", "record": True}),
+    (
+        ["pipeline", "create", "support", "--name", "Support", "--stage", "Triage", "--stage", "Doing:me"],
+        {"id": "support", "name": "Support", "stages": ["Triage", "Doing:me"]},
+    ),
+    (
+        ["pipeline", "update", "product", "--manager", "pm-2", "--no-private"],
+        {"pipeline": "product", "manager": "pm-2", "private": False},
+    ),
+    (["pipeline", "remove", "product", "--confirm", "Product"], {"pipeline": "product", "confirm": "Product"}),
+    (
+        ["stage", "add", "product", "Review", "--after", "product-ideas", "--holder", "reviewer", "--by-hand"],
+        {"pipeline": "product", "name": "Review", "after": "product-ideas", "holder": "reviewer", "by_hand": True},
+    ),
+    (
+        ["stage", "update", "product-spec", "--no-limit", "--no-by-hand"],
+        {"stage": "product-spec", "no_limit": True, "by_hand": False},
+    ),
+    (["stage", "move", "product-spec", "--first"], {"stage": "product-spec", "first": True}),
+    (["stage", "remove", "product-ideas", "--confirm", "Ideas"], {"stage": "product-ideas", "confirm": "Ideas"}),
+    (["requirement", "list", "product-spec"], {"stage": "product-spec"}),
+    (
+        ["requirement", "add", "product-ideas", "--kind", "ok", "--person", "me", "--version", "2"],
+        {"stage": "product-ideas", "kind": "ok", "person": "me", "version": 2},
+    ),
+    (
+        ["requirement", "update", "r1", "--who-oks", "none", "--no-can-push-past"],
+        {"requirement": "r1", "who_oks": "none", "can_push_past": False},
+    ),
+    (["requirement", "remove", "r1", "--confirm", "Spec page"], {"requirement": "r1", "confirm": "Spec page"}),
 ]
 
 
@@ -483,3 +513,196 @@ def test_the_cli_runs_the_waiter_with_the_lines_flags(cli, monkeypatch, capsys):
 @pytest.mark.parametrize("text, s", [("90", 90), ("90s", 90), ("15m", 900), ("2h", 7200), ("1d", 86400), ("", 5)])
 def test_a_time_is_seconds_minutes_hours_or_days(text, s):
     assert P.seconds(text, 5) == s
+
+
+# ----------------------------------------------------------------------------- changing pipelines
+def saved(api):
+    """The one write: its path and the record it saved."""
+    [(_, path, body)] = api.writes()
+    return path, body
+
+
+def stage(body, sid):
+    return next(s for s in body["stages"] if s.get("id") == sid)
+
+
+def test_a_change_saves_the_whole_record_at_the_version_it_read_and_never_sends_what_the_server_adds():
+    api = Api()
+    P.stage_update(api, {"stage": "product-spec", "no_limit": True, "holder": "me", "purpose": "Write it"})
+    path, body = saved(api)
+    assert path == "pipelines/product" and body["settings_version"] == 2
+    assert "may_change" not in body and "retired_at" not in body
+    spec = stage(body, "product-spec")
+    assert spec["task_limit"] is None and spec["owner"] == "human:ana" and spec["purpose"] == "Write it"
+    assert stage(body, "product-ideas") == PIPELINES["pipelines"][1]["stages"][0]  # the rest goes back as read
+    api = Api()
+    P.stage_update(api, {"stage": "product-spec", "limit": 3, "version": 9, "by_hand": True})
+    _, body = saved(api)
+    assert body["settings_version"] == 9 and stage(body, "product-spec")["task_limit"] == 3
+    assert stage(body, "product-spec")["by_hand"] is True
+
+
+def test_stages_go_last_first_or_after_one_and_move_in_their_pipeline():
+    order = lambda api: [s.get("id") or s["name"] for s in saved(api)[1]["stages"]]
+    api = Api()
+    P.stage_add(api, {"pipeline": "Product", "name": "Review"})
+    assert order(api) == ["product-ideas", "product-spec", "Review"]
+    assert saved(api)[1]["stages"][-1] == {"name": "Review", "owner": "assignee", "requirements": []}
+    api = Api()
+    P.stage_add(api, {"pipeline": "product", "name": "Review", "after": "Ideas", "holder": "reviewer"})
+    assert order(api) == ["product-ideas", "Review", "product-spec"]
+    assert saved(api)[1]["stages"][1]["owner"] == "bot:reviewer"
+    api = Api()
+    P.stage_add(api, {"pipeline": "product", "name": "Intake", "first": True})
+    assert order(api) == ["Intake", "product-ideas", "product-spec"]
+    api = Api()
+    P.stage_move(api, {"stage": "product-spec", "first": True})
+    assert order(api) == ["product-spec", "product-ideas"]
+    for wrong in ({"stage": "product-spec"}, {"stage": "product-spec", "after": "nope"}):
+        api = Api()
+        with pytest.raises(APIError) as refused:
+            P.stage_move(api, wrong)
+        assert refused.value.code == "usage" and api.writes() == []
+
+
+def test_removing_takes_its_exact_name_and_nothing_is_sent_without_it(cli, capsys):
+    for remove, args, name in (
+        (P.stage_remove, {"stage": "product-ideas"}, "Ideas"),
+        (P.pipeline_remove, {"pipeline": "product"}, "Product"),
+        (P.requirement_remove, {"requirement": "r1"}, "Spec page"),
+        (P.requirement_remove, {"requirement": "r0"}, "owner_done"),  # a requirement with no line: its kind
+    ):
+        for wrong in ("", name.swapcase(), name + "x"):
+            api = Api()
+            with pytest.raises(APIError, match="--confirm"):
+                remove(api, {**args, "confirm": wrong})
+            assert api.writes() == []
+        api = Api()
+        remove(api, {**args, "confirm": name})
+        assert len(api.writes()) == 1
+    code, api = cli(["stage", "remove", "product-ideas", "--confirm", "ideas"])
+    assert code == 2 and api.writes() == [] and json.loads(capsys.readouterr().out)["error"] == "usage"
+    api = Api()
+    P.stage_remove(api, {"stage": "product-ideas", "confirm": "Ideas"})
+    assert [s["id"] for s in saved(api)[1]["stages"]] == ["product-spec"]
+    api = Api()
+    P.pipeline_remove(api, {"pipeline": "Product", "confirm": "Product"})
+    assert saved(api) == ("pipelines/product/retire", {"settings_version": 2})
+
+
+def test_requirements_are_listed_added_changed_and_removed_on_their_stage():
+    listed = P.requirement_list(Api(), {"stage": "product-spec"})
+    assert listed["pipeline"] == "product" and listed["settings_version"] == 2
+    assert [r["id"] for r in listed["requirements"]] == ["r1"]
+    api = Api()
+    P.requirement_add(
+        api,
+        {
+            "stage": "product-ideas",
+            "kind": "page",
+            "line": "Brief",
+            "who_oks": "people_only",
+            "person": "me",
+            "rubric": "Short",
+        },
+    )
+    assert stage(saved(api)[1], "product-ideas")["requirements"] == [
+        {
+            "kind": "page",
+            "source": None,
+            "condition": None,
+            "line": "Brief",
+            "who_oks": "people_only",
+            "person_id": "human:ana",
+            "settings": {"rubric": "Short"},
+        }
+    ]
+    api = Api()
+    P.requirement_add(api, {"stage": "engineering-build", "kind": "item", "source": "github", "condition": "pr_merged"})
+    _, body = saved(api)
+    assert path_of(api) == "pipelines/engineering" and "settings_version" in body and body["settings_version"] is None
+    assert stage(body, "engineering-build")["requirements"][-1]["condition"] == "pr_merged"
+    api = Api()
+    P.requirement_update(api, {"requirement": "r1", "who_oks": "none", "can_push_past": False, "line": "The spec"})
+    [req] = stage(saved(api)[1], "product-spec")["requirements"]
+    assert req == {**req, "id": "r1", "kind": "page", "who_oks": "none", "can_push_past": False, "line": "The spec"}
+    api = Api()
+    P.requirement_remove(api, {"requirement": "r1", "confirm": "Spec page"})
+    assert stage(saved(api)[1], "product-spec")["requirements"] == []
+    with pytest.raises(APIError, match="No requirement 'nope'"):
+        P.requirement_update(Api(), {"requirement": "nope", "line": "x"})
+
+
+def path_of(api):
+    return saved(api)[0]
+
+
+def test_a_new_pipeline_names_its_holders_and_is_never_made_over_one_that_is_there():
+    api = Api()
+    P.pipeline_create(
+        api,
+        {
+            "id": "support",
+            "name": "Support",
+            "manager": "support-lead",
+            "prefix": "S",
+            "stages": ["Triage", "Doing:me", "Check:bot:x1"],
+        },
+    )
+    path, body = saved(api)
+    assert path == "pipelines/support" and "settings_version" not in body
+    assert body["manager_id"] == "bot:support-lead" and body["prefix"] == "S"
+    assert [(s["name"], s["owner"]) for s in body["stages"]] == [
+        ("Triage", "assignee"),
+        ("Doing", "human:ana"),
+        ("Check", "bot:x1"),
+    ]
+    for taken in ("product", "old"):
+        api = Api()
+        with pytest.raises(APIError, match="there already"):
+            P.pipeline_create(api, {"id": taken, "name": "X", "stages": ["A"]})
+        assert api.writes() == []
+
+
+def test_a_pipelines_own_fields_change_and_its_manager_is_named_as_the_record_names_it():
+    api = Api()
+    P.pipeline_update(
+        api, {"pipeline": "general", "manager": "bot:pm-2", "owner": "me", "goal": "Odd jobs", "private": False}
+    )
+    _, body = saved(api)
+    assert (body["manager_id"], body["owner_id"], body["goal"], body["private"]) == (
+        "bot:pm-2",
+        "human:ana",
+        "Odd jobs",
+        False,
+    )
+    assert body["settings_version"] == 1 and body["stages"] == PIPELINES["pipelines"][0]["stages"]
+
+
+def test_save_takes_a_whole_record_from_a_file_as_show_record_prints_it(cli, capsys, tmp_path):
+    record = {"pipeline": {**PIPELINES["pipelines"][1], "goal": "Specs", "may_change": True}}
+    path = tmp_path / "product.json"
+    path.write_text(json.dumps(record))
+    code, api = cli(["pipeline", "save", "product", "--file", str(path)])
+    assert code == 0
+    _, body = saved(api)
+    assert body["goal"] == "Specs" and body["settings_version"] == 2 and "may_change" not in body
+    new = tmp_path / "support.json"
+    new.write_text(json.dumps({"name": "Support", "stages": [{"name": "Triage", "owner": "assignee"}]}))
+    code, api = cli(["pipeline", "save", "support", "--file", str(new)])
+    assert code == 0 and saved(api) == (
+        "pipelines/support",
+        {"name": "Support", "stages": [{"name": "Triage", "owner": "assignee"}], "id": "support"},
+    )
+    capsys.readouterr()
+    code, api = cli(["pipeline", "save", "product", "--file", str(new)])  # there already, and no version read
+    assert code == 2 and api.writes() == [] and "--version" in json.loads(capsys.readouterr().out)["detail"]
+    (tmp_path / "bad.json").write_text("[1]")
+    with pytest.raises(SystemExit):
+        hubcli.parser().parse_args(["pipeline", "save", "x", "--file", str(tmp_path / "bad.json")])
+    assert "JSON object" in capsys.readouterr().err
+
+
+def test_show_record_is_the_settings_record_a_save_takes():
+    shown = P.pipeline_show(Api(), {"pipeline": "product", "record": True})["pipeline"]
+    assert shown == PIPELINES["pipelines"][1]
