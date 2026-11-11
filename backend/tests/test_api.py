@@ -123,7 +123,9 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     tested in test_assistant.py). Every other route still refuses it, and a person's task for it
     still lands in that person's own room."""
     post(api, "chat/assistant", {"text": "Hello"}, expected=403)
-    post(api, "messages", {"to": "assistant", "text": "Hello"}, token="ben-test", expected=403)
+    # `assistant` names the caller's own Assistant (backend/recipients.py), so a message to it lands in their room.
+    sent = post(api, "messages", {"to": "assistant", "text": "Hello"}, token="ben-test")
+    assert sent["refs"]["assistant"] is True and sent["recipient_id"] == "bot:assistant"
     ana = post(api, "tasks", {"owner": "assistant", "title": "Ana's review", "body": "Private context."})
     ben = post(
         api, "tasks", {"owner": "assistant", "title": "Ben's review", "body": "Private context."}, token="ben-test"

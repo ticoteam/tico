@@ -236,9 +236,9 @@ def _internal_bots_read_company_and_their_groups_threads_and_external_agents_do_
     store, auth, who = world
     import json
 
-    bot = "bot:content"
+    bot = "bot:content-owner"
     with store.transaction() as c:
-        # The demo's Content bot is in Marketing; here Marketing sits under Operations.
+        # The demo's Content Owner is in Marketing; here Marketing sits under Operations.
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster["org_groups"] = {
             "operations": {"name": "Operations"},

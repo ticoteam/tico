@@ -218,7 +218,8 @@ def test_a_bot_the_caller_cannot_see_is_neither_named_nor_counted_on_the_team(ap
     seen_by_cara = suggest(api, team, token="cara-test")
     head = lead_of(seen_by_cara)
     assert not head["on_team"] and head["bot"] is None and head["checked"]
-    text = json.dumps(seen_by_cara)
+    # The bot's slug is its template's, which the role's public pick names: only that mention may show.
+    text = json.dumps(seen_by_cara).replace(f'"template": "{slug}"', "")
     assert slug not in text and name not in text
 
 
@@ -237,7 +238,8 @@ def test_a_bot_the_permissions_do_not_name_is_hidden_from_the_team_even_for_the_
     found = suggest(api, team)
     head = lead_of(found)
     assert not head["on_team"] and head["bot"] is None and head["checked"]
-    assert slug not in json.dumps(found) and hidden not in json.dumps(found)
+    text = json.dumps(found).replace(f'"template": "{slug}"', "")  # the role's public pick names the template
+    assert slug not in text and hidden not in text
 
 
 def test_the_team_and_the_callers_access_are_read_as_one_snapshot(api, monkeypatch):
