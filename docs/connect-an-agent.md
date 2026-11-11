@@ -176,7 +176,7 @@ What the agent can do from there, for each part of **Finish setup**:
 | Choose models (your subscriptions or the Gateway default) | `tico_settings_set` on `models.providers` (`tico_settings_find` and `tico_settings_show` read it first); the Gateway's own setting is `models.gateway` |
 | Add a Tico Cloud computer | `tico_api` `POST /api/v2/bots/<bot>/cloud-machine` with `{"mode": "cloud", "placement": "shared"}`: the company's shared cloud machine is made when its first bot runs there. `tico_bot_place` puts a bot on a computer that is already connected |
 | Skip an optional getting-started step | `tico_api` `POST /api/v2/getting-started/state` with `{"skip": "github"}` (or `"subscription"`). The other steps tick by themselves as they come true |
-| Recommend a Claude or Codex subscription | Not the agent's step: the person signs it in on their computer (**Settings > Computers**). Say it is recommended, for their own bots and within the provider's terms. `tico_setup_show` lists it as `subscription` in the getting-started items until it is signed in |
+| Recommend a Claude or ChatGPT subscription | Not the agent's step: the person signs it in on their computer (**Settings > Computers**). Say it is recommended, for their own bots and within the provider's terms. `tico_setup_show` lists it as `subscription` in the getting-started items until it is signed in |
 
 ## An agent that is a bot, not you
 

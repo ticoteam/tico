@@ -130,7 +130,7 @@ def report_claude(api, m, claude):
 
 def test_a_new_company_is_recommended_a_subscription_as_an_optional_step(api):
     row = plan_step(api)
-    assert row["label"] == "Add a Claude or Codex subscription"
+    assert row["label"] == "Add a Claude or ChatGPT subscription"
     assert (row["done"], row["optional"], row["skipped"]) == (False, True, False)
     assert row["why"] == "Recommended. Use your own subscription for your own bots, within the provider's terms."
     assert (row["href"], row["tab"]) == ("#/settings", "devices")

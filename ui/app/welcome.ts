@@ -320,7 +320,7 @@ function onbTeamMode(state: OnbState, mode: OnbState['mode']) {
 }
 
 // ----------------------------------------------------------------- What your bots run on
-// The models choice while none is made, the computer in one line, and the Claude or Codex subscription Getting started
+// The models choice while none is made, the computer in one line, and the Claude or ChatGPT subscription Getting started
 // recommends (backend/getting_started.py `subscription`) until one is signed in or skipped. Done lands on Tasks.
 function onbRunHTML(state: OnbState): string {
   const hide = state.reopened ? '<button class="ghost" type="button" id="onb-hide">Don\'t remind me</button>' : '';
