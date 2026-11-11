@@ -26,7 +26,7 @@ def test_a_bot_from_a_card_that_declares_private_tasks_is_private_by_default(api
 
 
 def test_a_bot_from_a_card_without_a_privacy_default_is_not_private(api):
-    bot_id = make(api, "sales-desk", template="sales")
+    bot_id = make(api, "sales-desk", template="inbound-sales-owner")
     with api.app.state.store.read() as c:
         assert BS.read(c, bot_id)["private_tasks_default"] is False
 

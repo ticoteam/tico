@@ -27,7 +27,7 @@ def test_assistant_fetches_only_its_own_credentials_before_start(api, person="be
     own = create(api, name="Assistant tool", env="ASSISTANT_TOOL_KEY")
     personal = create(api, name="Personal tool", env="PERSONAL_TOOL_KEY")
     other = create(api, name="Other teammate tool", env="OTHER_TOOL_KEY")
-    post(api, f"credentials/{own['id']}/grants", {"subject": "bot:coo"})
+    post(api, f"credentials/{own['id']}/grants", {"subject": "bot:assistant"})
     post(api, f"credentials/{personal['id']}/grants", {"subject": "human:" + person.removesuffix("-test")})
     post(api, f"credentials/{other['id']}/grants", {"subject": "bot:ops"})
     r, attempt = assistant_turn(api, person, busy_bots=busy_bots)
@@ -61,21 +61,21 @@ def test_only_the_owner_of_an_assistant_room_reads_or_posts_in_it(api):
     post(
         api,
         "messages",
-        {"to": "coo", "text": "Injected", "conversation_id": ana["room_id"]},
+        {"to": "assistant", "text": "Injected", "conversation_id": ana["room_id"]},
         token="ben-test",
         expected=403,
     )
     post(
         api,
         "messages",
-        {"to": "coo", "text": "Injected", "conversation_id": ben["room_id"]},
+        {"to": "assistant", "text": "Injected", "conversation_id": ben["room_id"]},
         token="ana-test",
         expected=403,
     )
-    post(api, "chat/coo", {"text": "Anywhere else"}, token="ben-test", expected=403)
+    post(api, "chat/assistant", {"text": "Anywhere else"}, token="ben-test", expected=403)
     assert [m["body"] for m in room(api, "ben-test")["messages"]] == []
     # The owner of the room may also use the generic message route; the server marks the turn.
-    ok = post(api, "messages", {"to": "coo", "text": "Also fine", "conversation_id": ana["room_id"]})
+    ok = post(api, "messages", {"to": "assistant", "text": "Also fine", "conversation_id": ana["room_id"]})
     assert ok["refs"]["assistant"] is True
 
 
@@ -182,7 +182,7 @@ def test_owner_confirms_a_group_of_recruiting_seats_before_any_are_added(api):
             {
                 "title": "Engineering reviewer",
                 "description": "Reviews changes.",
-                "reports_to": "coo",
+                "reports_to": "assistant",
                 "team": "engineering",
             }
         ]
@@ -195,7 +195,7 @@ def test_owner_confirms_a_group_of_recruiting_seats_before_any_are_added(api):
     done = post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test")["action"]
     assert done["status"] == "done" and done["result"]["status_code"] == 200, done["result"]
     assert [(seat["title"], seat["stage"], seat["reports_to"]) for seat in get(api, "seats")["seats"]] == [
-        ("Engineering reviewer", "recruiting", "coo")
+        ("Engineering reviewer", "recruiting", "assistant")
     ]
 
 
@@ -339,7 +339,7 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
     r, attempt = assistant_turn(api, 'ben-test')
     token = attempt['token']
     who = api.app.state.auth.authenticate({'authorization': 'Bearer ' + token}, '/api/v2/tasks/' + private['id'], 'GET')
-    assert who.task_actor == 'bot:coo' and who.attempt_id == attempt['id']
+    assert who.task_actor == 'bot:assistant' and who.attempt_id == attempt['id']
     for path in (
         'tasks/' + private['id'],
         'conversations/' + private['conversation_id'] + '/messages',
@@ -366,7 +366,7 @@ def test_real_assistant_lease_keeps_actual_bot_private_boundaries_and_revocation
     own = post(
         api,
         'tasks',
-        {'owner': 'bot:coo', 'title': 'Review the assistant packet', 'body': 'Review it.', 'private': True},
+        {'owner': 'bot:assistant', 'title': 'Review the assistant packet', 'body': 'Review it.', 'private': True},
         token='ben-test',
     )
     assert get(api, 'tasks/' + own['id'], token)['task']['id'] == own['id']
@@ -557,7 +557,7 @@ def test_a_cited_message_must_be_the_persons_own_recent_words_in_their_assistant
         bens = assistant.find_room(c, "human:ben")
         from_bot = H._write_message(
             c,
-            "bot:coo",
+            "bot:assistant",
             "human:ben",
             "Close the launch task",
             bens,
@@ -797,8 +797,8 @@ def test_a_close_or_owner_card_runs_through_the_tasks_own_route_and_an_ok_stays_
 def test_a_question_the_old_lookups_answered_starts_a_bot_turn(api, text):
     """No canned answer: "help", "what is waiting on me" and "open tasks" are read by the model in a bot turn."""
     r = runner(api)
-    assign(api, r, "coo")
-    ready(api, r, ["coo"])
+    assign(api, r, "assistant")
+    ready(api, r, ["assistant"])
     said = say(api, text)
     assert "reply" not in said and "fast" not in said
     assert post(api, "jobs/claim", {}, token=r["token"])["attempt"] is not None

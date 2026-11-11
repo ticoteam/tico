@@ -1,7 +1,7 @@
 // The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.ts myChatBot): the
 // page and their own page's tab read the Assistant, the composer takes words and files, and their earlier chat with the
 // Strategy Owner stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
-// and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.
+// and a helper's own page (#/bot/botops, #/bot/strategy-owner) opens for them with no composer.
 // Fixtures only.
 import type {Browser, Page} from 'playwright';
 const {chromium}: typeof import('playwright') = require('playwright');
@@ -27,7 +27,7 @@ async function open(browser: Browser, me: Person, view: View, strategyName: stri
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], {origin: 'https://tico-ui.test'});
   const page = await context.newPage();
   const errors: string[] = [], read: (string | null)[] = [], sent: {path: string; body: unknown}[] = [];
-  const helpers = ['botops', 'goal-manager'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, sender_id: 'bot:' + bot, body: 'Nothing to report.'}]}));
+  const helpers = ['botops', 'strategy-owner'].map(bot => threadsFake({bot, home: [{id: 'h-' + bot, sender_id: 'bot:' + bot, body: 'Nothing to report.'}]}));
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
@@ -39,7 +39,7 @@ async function open(browser: Browser, me: Person, view: View, strategyName: stri
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
-    if (p === '/api/employees') return json([bot('coo', 'Assistant'), bot('botops', 'BotOps'), bot('goal-manager', strategyName)]);
+    if (p === '/api/employees') return json([bot('assistant', 'Assistant'), bot('botops', 'BotOps'), bot('strategy-owner', strategyName)]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/tasks') return json({tasks: []});
@@ -57,7 +57,7 @@ async function open(browser: Browser, me: Person, view: View, strategyName: stri
       read.push(url.searchParams.get('before'));
       return json(url.searchParams.get('before')
         ? {messages: [msg('o1', 'human:ana', 'Book the offsite')], has_more: false, next_before: null}
-        : {messages: [msg('o2', 'human:ana', 'Plan my week'), msg('o3', 'bot:coo', 'Done: three tasks for Monday')], has_more: true, next_before: 'o2'});
+        : {messages: [msg('o2', 'human:ana', 'Plan my week'), msg('o3', 'bot:assistant', 'Done: three tasks for Monday')], has_more: true, next_before: 'o2'});
     }
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -85,8 +85,8 @@ const view = (over: Partial<View>): View => ({available: true, state: 'active', 
   try {
     // The owner: the Assistant, by name, and the earlier Strategy Owner chat under Earlier chats.
     const owner: Person = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
-    const mine = view({bot: 'coo', name: 'Assistant', room_id: 'assistant1', messages: [msg('c1', 'bot:coo', 'Revenue is on track.')],
-      earlier: {room_id: 'old1', bot: 'goal-manager', name: 'Chief'}});
+    const mine = view({bot: 'assistant', name: 'Assistant', room_id: 'assistant1', messages: [msg('c1', 'bot:assistant', 'Revenue is on track.')],
+      earlier: {room_id: 'old1', bot: 'strategy-owner', name: 'Chief'}});
     {
       const {page, errors, read, sent} = await open(browser, owner, mine, 'Chief');
       await page.goto('https://tico-ui.test/#/assistant');
@@ -128,7 +128,7 @@ const view = (over: Partial<View>): View => ({available: true, state: 'active', 
     // An admin is not the owner: the Assistant, as before, and no Earlier chats.
     {
       const admin: Person = {id: 'ben', role: 'human', bot_admin: true, name: 'Ben', email: 'ben@example.test', cloud: true};
-      const {page, errors, sent} = await open(browser, admin, view({bot: 'coo', name: 'Assistant'}), 'Strategy Owner');
+      const {page, errors, sent} = await open(browser, admin, view({bot: 'assistant', name: 'Assistant'}), 'Strategy Owner');
       await page.goto('https://tico-ui.test/#/assistant');
       await page.locator('#chat-composer .p-text').waitFor();
       assert.equal(await page.locator('#main .asst-top h1').innerText(), 'Assistant', 'admin: the Assistant page');
@@ -145,7 +145,7 @@ const view = (over: Partial<View>): View => ({available: true, state: 'active', 
       for (let i = 0; i < 100 && !sent.length; i++) await page.waitForTimeout(50);
       assert.deepEqual(sent.map(s => s.path), ['/api/v2/uploads/assistant/messages'], 'admin: words and the picture together');
       // A helper's own page still opens for an admin, with its Home but no DM: the Assistant hands it its work.
-      for (const helper of ['botops', 'goal-manager']) {
+      for (const helper of ['botops', 'strategy-owner']) {
         await page.goto('https://tico-ui.test/#/bot/' + helper);
         await page.locator('#bot-thread .th-msg', {hasText: 'Nothing to report.'}).waitFor();
         assert.equal(await page.locator('#btabs [data-bt=dm]').count(), 0, `admin: no DM tab on ${helper}'s page`);

@@ -90,7 +90,7 @@ def _every_mention_in_a_rule_names_a_real_teammate(built):
     named = [
         m.rstrip(".-") for r in rules if r["text"] in ours for m in re.findall(r"(?<![\w@])@(\w[\w.-]*)", r["text"])
     ]
-    assert {"ana", "ben", "bookkeeper", "accounts-payable", "firmware", "pricing"} <= set(named)
+    assert {"ana", "ben", "finance-owner", "accounts-payable-specialist", "firmware", "pricing-analyst"} <= set(named)
     assert [m for m in named if m not in bots | people] == []
     assert not any(re.search(r"\b(Ana|Ben)'s\b|go to Ben\b", text) for text in ours), "a teammate is named by @handle"
 
@@ -110,7 +110,7 @@ def _bens_rule_suggestion_waits_as_a_suggestion(built):
 def _the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     directory, settings, _rows = built
     with signed_in(settings) as api:
-        care = timeline(api, home_id(api, "bot:support-lead"))
+        care = timeline(api, home_id(api, "bot:success-team-manager"))
     held = next(m for m in CONTENT["messages"] if m.get("held"))
     assert held["say"] not in [m["body"] for m in care]
     with sqlite3.connect(settings.db_path) as db:
@@ -155,7 +155,7 @@ def _ana_sidebar_lists_her_department_homes_and_her_dms(built):
         homes = [home_id(api, spec["home"]) for spec in CONTENT["threads"].values() if "home" in spec]
         dms = [
             api.get("/api/v2/threads/dm", params={"with": with_, "create": "false"}).json()["id"]
-            for with_ in ("bot:coo", "bot:pricing")
+            for with_ in ("bot:assistant", "bot:pricing-analyst")
         ]
     assert [h for h in homes if h not in listed] == [], "department homes missing from the sidebar"
     assert [d for d in dms if d not in listed] == [], "DMs missing from the sidebar"
@@ -163,9 +163,9 @@ def _ana_sidebar_lists_her_department_homes_and_her_dms(built):
 
 def _the_company_thread_and_ana_assistant_dm_show(built):
     _, settings, _rows = built
-    first = max((m for m in CONTENT["messages"] if m["in"] == "coo"), key=lambda m: m["ago"])
+    first = max((m for m in CONTENT["messages"] if m["in"] == "assistant"), key=lambda m: m["ago"])
     with signed_in(settings) as api:
-        dm = api.get("/api/v2/threads/dm", params={"with": "bot:coo", "create": "false"})
+        dm = api.get("/api/v2/threads/dm", params={"with": "bot:assistant", "create": "false"})
         assert dm.status_code == 200
         assert first["say"] in [m["body"] for m in timeline(api, dm.json()["id"])]
         titles = [t.get("title") for t in api.get("/api/v2/threads").json().get("threads", [])]
@@ -174,9 +174,12 @@ def _the_company_thread_and_ana_assistant_dm_show(built):
 
 def _ana_and_pricing_talk_through_the_december_price(built):
     _, settings, _rows = built
-    said = [m["say"] for m in sorted((m for m in CONTENT["messages"] if m["in"] == "pricing"), key=lambda m: -m["ago"])]
+    said = [
+        m["say"]
+        for m in sorted((m for m in CONTENT["messages"] if m["in"] == "pricing-analyst"), key=lambda m: -m["ago"])
+    ]
     with signed_in(settings) as api:
-        dm = api.get("/api/v2/threads/dm", params={"with": "bot:pricing", "create": "false"})
+        dm = api.get("/api/v2/threads/dm", params={"with": "bot:pricing-analyst", "create": "false"})
         assert dm.status_code == 200
         bodies = [m["body"] for m in timeline(api, dm.json()["id"])]
     assert bodies[-len(said) :] == said

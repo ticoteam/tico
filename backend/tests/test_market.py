@@ -116,7 +116,7 @@ def test_the_server_enforces_writers_evidence_vocabulary_and_no_delete(api, tmp_
     )["entity"]
     assert created["created_by"] == "bot:librarian"
     assert get(api, "market/insights", token=librarian["token"])["insights"] is not None  # the queue is the Librarian's
-    _, _, listening = setup_attempt(api, "listening")
+    _, _, listening = setup_attempt(api, "social-media-manager")
     get(api, "market/insights", token=listening["token"], expected=403)
 
 

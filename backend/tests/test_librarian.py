@@ -120,11 +120,11 @@ def test_docs_history_is_private_and_only_docs_rooms_can_be_reopened(desk):
         other = H.open_conversation(
             c,
             "human:ana",
-            ["human:ana", "bot:coo"],
+            ["human:ana", "bot:assistant"],
             kind="chat",
             scope="personal",
             owner_actor="human:ana",
-            room_key="coo",
+            room_key="assistant",
         )
         direct = H.open_conversation(
             c, "human:ana", ["human:ana", "bot:librarian"], kind="chat", room_key="docs", owner_actor="human:ana"

@@ -193,7 +193,7 @@ MODULE_DOCS = {
     "_schemas": "Argument schemas and the helpers that read arguments, shared by the tool modules.",
     "_requester": "Who asks: the kinds of caller, the Requester a tool calls the API through, and acting for a person.",
     "_shared": "Helpers that tools of several modules call.",
-    "_access": "Who sees which tool: AUDIENCE, the Assistant's and Counsel's lists, `offered_to` and `listing`.",
+    "_access": "Who sees which tool: AUDIENCE, the Assistant's and the Rules Owner's lists, `offered_to` and `listing`.",
     "_mcp": "MCP over the table: BY_NAME, the JSON-RPC `Protocol` and the error shapes both clients print.",
     "threads": "Threads, messages, notes and conversations.",
     "tasks": "Tasks: create, list, show, move, done, close, asks and answers, OKs.",

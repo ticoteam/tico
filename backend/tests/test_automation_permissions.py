@@ -105,7 +105,7 @@ def test_automations_follow_their_owner_into_a_new_group(api):
         "automations",
         {
             "name": "Coo",
-            "owner": "bot:coo",
+            "owner": "bot:assistant",
             "group": f"group:{eng}",
             "trigger": {"type": "event", "name": "x.y"},
             "steps": [],

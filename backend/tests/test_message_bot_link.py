@@ -31,7 +31,7 @@ def add_from_template(api, slug, instructions, token="ana-test"):
             "display_name": "Inbox Manager",
             "description": "Mail",
             "status": "planned",
-            "template": "inbox",
+            "template": "inbox-manager",
             "instructions": instructions,
             **MODEL,
         },
@@ -52,7 +52,7 @@ def test_adding_the_template_in_settings_links_the_person_the_mailbox_line_names
 # ------------------------------------------------------------------ start-up backfill
 
 
-def old_message_bot(api, slug, instructions="", tools=None, template="inbox"):
+def old_message_bot(api, slug, instructions="", tools=None, template="inbox-manager"):
     """A message bot as an earlier release left it: a template and its text, and nobody's `inbox_bot`."""
     config = {"name": slug, "runtime": "fake", "status": "active", "template": template, "instructions": instructions}
     if tools:
@@ -81,7 +81,7 @@ def test_backfill_leaves_what_is_a_choice_for_an_owner(api):
     old_message_bot(api, "first", "Mailbox: ben@acme.example\n")
     old_message_bot(api, "second", "Mailbox: ben@acme.example\n")  # two bots for one person
     old_message_bot(api, "no-mailbox", "Runs mail, says nothing of whose.\n")
-    old_message_bot(api, "a-role", "Mailbox: cara@acme.example\n", template="support")
+    old_message_bot(api, "a-role", "Mailbox: cara@acme.example\n", template="support-owner")
     assert backfill(api) == []
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='archived' WHERE slug='second'")

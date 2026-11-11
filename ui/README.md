@@ -126,7 +126,7 @@ await page.context().close();
 await hub.stop();                                                 // stops the hub process this test started
 ```
 
-- `hub.tokens` names each teammate: `ana` (the owner), `chris`, `engineering-lead`, `builder-claude`, `builder-openai`
+- `hub.tokens` names each teammate: `ana` (the owner), `chris`, `engineering-team-manager`, `builder-claude`, `builder-openai`
   and `release-manager`. A page signed in as one sends that teammate's token as its Bearer.
 - To start a screen from some state, add a seed. It makes the state through the API as a teammate would, never by
   writing the database. A seed whose route is not built yet is skipped and listed in `hub.skipped`.

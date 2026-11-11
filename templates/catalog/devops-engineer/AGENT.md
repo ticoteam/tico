@@ -26,7 +26,7 @@ requested work asks you to make a fix, push a branch and open or update your own
 - `playbooks/weekly-ci-health.md`, `playbooks/investigate-a-red-build.md`, `playbooks/onboarding.md`.
 
 ## Lines with the rest of engineering
-A failure that is a real product bug goes to the QA Engineer (`issue-triage`) as an issue to triage. A
+A failure that is a real product bug goes to the QA Engineer (`qa-owner`) as an issue to triage. A
 failure caused by a vulnerable or yanked dependency is the Security Engineer's. A release blocked by red
 checks is the Release Owner's call; you give them the cause. Incidents in production are the Site
 Reliability Engineer's; you supply the deploy timeline.

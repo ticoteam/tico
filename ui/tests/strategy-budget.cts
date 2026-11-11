@@ -87,7 +87,7 @@ function big(): Team {
       g.bots.push(slug);
     }
   }
-  for (const [name, display_name] of [['coo', 'Assistant'], ['botops', 'BotOps'], ['librarian', 'Librarian']] as [string, string][]) {
+  for (const [name, display_name] of [['assistant', 'Assistant'], ['botops', 'BotOps'], ['librarian', 'Librarian']] as [string, string][]) {
     emps.push({name, display_name, org_parent: '', status: 'active', host: 'keeper', can_chat: true});
     spend(name, n++);
   }
@@ -160,7 +160,7 @@ async function open(browser: Browser, {team = small(), viewport = DESKTOP, viewe
     if (p === '/api/v2/groups') return json(team.groups);
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
-    if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
+    if (p === '/api/v2/bots/strategy-owner/routines') return json({routines: []});
     // The period's spend (backend/usage.py): a bot's week for 7 days, its month for longer; models and tasks split it.
     if (p === '/api/v2/usage' && usageStatus !== 200) return json({error: {code: 'down', detail: 'Usage is down'}}, usageStatus);
     if (p === '/api/v2/usage') {
@@ -240,8 +240,8 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       const tag = 'small desktop';
       const {page, errors, writes, usage} = await open(browser);
       assert.deepEqual(await keys(page), ['company', 'group:eng', 'group:web', 'bot:web-dev', 'bot:eng-lead', 'bot:builder', 'bot:reviewer',
-        'person:cara', 'group:sales', 'bot:sales-lead', 'bot:sdr', 'person:ben', 'group:outbound', 'person:ana', 'bot:release', 'bot:coo',
-        'bot:goal-manager', 'bot:botops', 'bot:librarian', 'bot:mail-sorter'], tag + ': under each row, its rows by spend; helpers (the Strategy Owner too) in their branch');
+        'person:cara', 'group:sales', 'bot:growth-team-manager', 'bot:sdr', 'person:ben', 'group:outbound', 'person:ana', 'bot:release', 'bot:assistant',
+        'bot:strategy-owner', 'bot:botops', 'bot:librarian', 'bot:mail-sorter'], tag + ': under each row, its rows by spend; helpers (the Strategy Owner too) in their branch');
       assert.ok(await bySpend(page), tag + ': most spend first');
       assert.equal(await page.locator('.bt-r:has([data-bt-fold="helpers"]) .bt-name').innerText(), 'Helpers', tag + ': helpers in a branch of their own');
       assert.equal(await page.locator('[data-bt-span][aria-selected="true"]').innerText(), '30 days', tag + ': 30 days to start');
@@ -249,7 +249,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       assert.equal((Date.parse(span!.to) - Date.parse(span!.from)) / 864e5, 29, tag + ': 30 days, today too');
       assert.equal(await amount(page, 'bot:builder'), '$150', tag + ': a bot, what it spent (billed and on subscriptions)');
       assert.equal(await limit(page, 'bot:builder'), '95% · $6/30m', tag + ': and the window that binds');
-      assert.equal(await limit(page, 'bot:goal-manager'), '70% · $20/day', tag + ': a day window binding says day');
+      assert.equal(await limit(page, 'bot:strategy-owner'), '70% · $20/day', tag + ': a day window binding says day');
       assert.equal(await amount(page, 'company'), '$771', tag + ': the company adds up everyone');
       assert.equal(await limit(page, 'company'), '34% · $80/30m', tag + ': against its pool');
       assert.equal(await amount(page, 'bot:eng-lead'), '$80.00', tag + ': a bot with reports, its own spend');
@@ -286,7 +286,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       // Search keeps what a match sits in; Near limit keeps what is near or over, paused, or with a full cap.
       await page.fill('#bt-q', 'sdr');
       await page.waitForFunction(() => document.querySelectorAll('[data-bt-open]').length < 10);
-      assert.deepEqual(await keys(page), ['company', 'group:sales', 'bot:sales-lead', 'bot:sdr'], tag + ': search keeps the ancestors');
+      assert.deepEqual(await keys(page), ['company', 'group:sales', 'bot:growth-team-manager', 'bot:sdr'], tag + ': search keeps the ancestors');
       await page.fill('#bt-q', 'zz');
       await page.locator('#bt-body .bt-note').waitFor();
       assert.equal(await page.locator('#bt-body .bt-note').innerText(), 'No matches', tag + ': no matches');

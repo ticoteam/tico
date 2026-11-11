@@ -22,7 +22,7 @@ SETTINGS = {
     "model": "claude-haiku-5-5",
     "reasoning_effort": "high",
     "host": "keeper",
-    "template": "engineering-lead",
+    "template": "engineering-team-manager",
     "profile": "reviewer",
     "session": "task",
     "wake_preset": "token-saver",
@@ -97,7 +97,7 @@ def test_a_declaration_reads_back_as_written_from_python_and_from_sql(tmp_path):
             assert json.loads(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0]) == wanted
         row = c.execute("SELECT * FROM bot_settings WHERE bot_id='b0'").fetchone()
         assert (row["template"], row["model"], row["compact_at"], row["stateless"]) == (
-            "engineering-lead",
+            "engineering-team-manager",
             None,
             None,
             None,
@@ -266,7 +266,7 @@ def test_an_explicit_null_reads_back_as_null_and_stateless_answers_as_before_the
     rule, before the move and after it alike."""
     path = tmp_path / "hub.db"
     _old_shape(path)
-    config = {"template": "tico-counsel", "stateless": None, "reports_to": None}
+    config = {"template": "rules-owner", "stateless": None, "reports_to": None}
     with sqlite3.connect(path) as c:
         c.execute(
             "INSERT INTO bots(id,slug,display_name,state,created_at) "
@@ -275,7 +275,7 @@ def test_an_explicit_null_reads_back_as_null_and_stateless_answers_as_before_the
         c.execute("INSERT INTO bot_config(bot,owner_id,config) VALUES('nulls','ana',?)", (json.dumps(config),))
         text = c.execute("SELECT config FROM bot_config WHERE bot='nulls'").fetchone()[0]
     before = H.stateless(json.loads(text))
-    assert H.stateless({"template": "tico-counsel"}) is True  # the rule a missing key gets
+    assert H.stateless({"template": "rules-owner"}) is True  # the rule a missing key gets
     store = boot(path)
     with store.read() as c:
         assert _moved(c, "nulls") == config

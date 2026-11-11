@@ -56,7 +56,7 @@ const checklist = () => [
   item('first_output', 'First approved output', false, {why: 'Set up a starter bot and approve the first thing it drafts. That is the point of the team.', href: '#/bot/support'}),
   item('first_update', 'Your first update arrived', false, {why: 'Each active bot posts a short update every day.', href: '#/updates'}),
 ];
-const bots = [['coo', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =>
+const bots = [['assistant', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: '', owner_id: 'ana'}));
 
 (async () => {

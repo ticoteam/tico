@@ -77,7 +77,7 @@ def _entries(c):
 def thread_mode(c, bot, row=None):
     """The main assistant is structurally personal; CPO is shared before registry republish.
     `row` is the bot's bot_config row when the caller has read it already."""
-    if bot == "coo":
+    if bot == "assistant":
         return PERSONAL
     row = (
         row
@@ -163,7 +163,7 @@ def room_bot(conversation):
     return next((H.actor_id(p) for p in conversation.get("participants", []) if str(p).startswith("bot:")), None)
 
 
-def personal_room(c, human_actor, bot="coo", subject="Private control room"):
+def personal_room(c, human_actor, bot="assistant", subject="Private control room"):
     # Once a bot's chats have moved, a person's chat with it is the bot's Home (backend/bot_home_merge.py). The Assistant's
     # rooms stay as they are: home_for_chat names no Home for them.
     from . import bot_home_merge
@@ -267,11 +267,11 @@ def chat_room(c, auth, who, bot, subject=None):
     else:
         title = (
             "Private " + auth.settings.assistant_name + " control room"
-            if bot == "coo"
+            if bot == "assistant"
             else ("Chat with " + ((H.bot(c, bot) or {}).get("display_name") or bot))
         )
         room = personal_room(c, who.actor, bot, subject or title)
-        if room["subject"] == "Private " + auth.settings.assistant_name + " control room" and bot != "coo":
+        if room["subject"] == "Private " + auth.settings.assistant_name + " control room" and bot != "assistant":
             c.execute("UPDATE conversations SET subject=? WHERE id=?", (subject or title, room["id"]))
         if subject and room["subject"] in (title, "Private " + auth.settings.assistant_name + " control room"):
             c.execute("UPDATE conversations SET subject=? WHERE id=?", (subject, room["id"]))
@@ -302,7 +302,7 @@ def work_room(c, auth, bot, requester):
         return None
     subject = (
         ("Private " + auth.settings.assistant_name + " control room")
-        if bot == "coo"
+        if bot == "assistant"
         else ("Chat with " + ((H.bot(c, bot) or {}).get("display_name") or bot))
     )
     return personal_room(c, human, bot, subject)
@@ -322,7 +322,7 @@ def task_conversation_id(c, auth, owner, requester):
     return room["id"]
 
 
-def archive_personal_room(c, actor, bot="coo"):
+def archive_personal_room(c, actor, bot="assistant"):
     row = c.execute(
         "SELECT id FROM conversations WHERE scope='personal' AND owner_id=? AND room_key=? "
         "AND closed_at IS NULL ORDER BY COALESCE(last_message_at,created_at) DESC LIMIT 1",

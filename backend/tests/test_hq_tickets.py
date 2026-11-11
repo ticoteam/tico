@@ -27,7 +27,7 @@ REF = re.compile(r"#?([0-9]{1,7})")
 
 
 def load(name):
-    path = ROOT / "templates/catalog/support/software" / name
+    path = ROOT / "templates/catalog/support-owner/software" / name
     loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(path))
     module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(module)

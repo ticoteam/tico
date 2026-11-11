@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.bookkeeper import VIEW_TITLE
-from backend.demo_sections.finance import BOOKKEEPER, CONTENT as C
+from backend.demo_sections.finance import FINANCE_OWNER, CONTENT as C
 
 
 def signed_in(settings):
@@ -86,7 +86,7 @@ def _invoices_one_paid_and_one_overdue_that_the_chase_task_covers(book):
     settings, _ = book
     with signed_in(settings) as api:
         invoices = {i["number"]: i for i in api.get("/api/v2/finance/invoices").json()["invoices"]}
-        tasks = api.get("/api/v2/tasks", params={"owner": "bot:ar-followup"}).json()["tasks"]
+        tasks = api.get("/api/v2/tasks", params={"owner": "bot:accounts-receivable-specialist"}).json()["tasks"]
     assert set(invoices) == {inv["number"] for inv in C["invoices"]}
     assert [n for n, i in invoices.items() if i["status"] == "paid"] == ["ACME-1001"]
     overdue = [n for n, i in invoices.items() if i["remaining"] > 0 and i["days_late"] > 0]
@@ -101,13 +101,13 @@ def _bills_are_drafted_by_accounts_payable_and_approved_by_ana(book):
     assert set(bills) == {bill["number"] for bill in C["bills"]}
     manufacturer = bills["LA-20417"]
     assert (manufacturer["created_by"], manufacturer["approved_by"], manufacturer["status"]) == (
-        "bot:accounts-payable",
+        "bot:accounts-payable-specialist",
         "human:ana",
         "paid",
     )
     freight = bills["KF-88213"]
     assert (freight["created_by"], freight["approved_by"], freight["status"]) == (
-        "bot:accounts-payable",
+        "bot:accounts-payable-specialist",
         "human:ana",
         "open",
     )
@@ -122,7 +122,7 @@ def _rules_are_in_force_and_the_bookkeepers_proposal_waits_for_ana(book):
     assert not rules.get(C["proposal"]["name"], {}).get("active")
     with sqlite3.connect(settings.db_path) as db:
         [(status, approval_id)] = db.execute(
-            "SELECT status, approval_id FROM fin_actions WHERE kind = 'rule_create' AND actor = ?", (BOOKKEEPER,)
+            "SELECT status, approval_id FROM fin_actions WHERE kind = 'rule_create' AND actor = ?", (FINANCE_OWNER,)
         ).fetchall()
         [(kind,)] = db.execute("SELECT kind FROM requirements WHERE id = ?", (approval_id,)).fetchall()
     assert (status, kind) == ("needs_approval", "ok")
@@ -132,7 +132,7 @@ def _the_bookkeepers_view_was_granted_six_days_ago_and_a_start_does_not_ask_agai
     settings, now = book
     with signed_in(settings) as api:
         access = api.get("/api/v2/finance/access").json()
-    bot = next(t for t in access["teammates"] if t["teammate"] == BOOKKEEPER)
+    bot = next(t for t in access["teammates"] if t["teammate"] == FINANCE_OWNER)
     assert [(g["what"], g["status"]) for g in bot["grants"]] == [("everything", "active")]
     with sqlite3.connect(settings.db_path) as db:
         tasks = db.execute("SELECT owner_id, status, created_at FROM tasks WHERE title = ?", (VIEW_TITLE,)).fetchall()

@@ -83,7 +83,7 @@ def test_manual_and_explicit_live_human_imports_but_machine_cannot_bypass(api):
 
 def test_approve_emits_once_and_reimports_never_undo_review_privacy(api):
     debrief(api)
-    made = imported(api, token='ana-test', send_to='coo')
+    made = imported(api, token='ana-test', send_to='assistant')
     assert not get(api, 'tasks')['tasks']
     approved = review(api, made['id'], token='ana-test', private=False)
     assert approved['review_state'] == 'live' and approved['delivery']['task_id']

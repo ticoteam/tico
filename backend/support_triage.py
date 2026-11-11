@@ -30,7 +30,7 @@ from .store import H
 log = logging.getLogger("tico.support_triage")
 
 SET = "support-triage"
-WATCHER = "hq-tickets"  # the Support Agent's HQ ticket watcher (templates/catalog/support/bot.yaml)
+WATCHER = "hq-tickets"  # the Support Agent's HQ ticket watcher (templates/catalog/support-owner/bot.yaml)
 KEY_PREFIX = "hq:"
 # The longest a ticket's copy waits here (its bot paused or its task refused): then `sweep` hands it to a person.
 WAIT_HOURS = 1

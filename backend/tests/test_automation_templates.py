@@ -20,12 +20,14 @@ from backend.tests.helpers.automation_templates import fill
 
 # The catalog role each bot is made from (the fixture's bots; `ben` operates the product bots, `ana` the rest).
 STAFF = {
-    "coo": "general-counsel",
+    "assistant": "general-counsel",
     "cpo": "engineering-manager",
-    "finance": "finance-lead",
-    "product-design": "marketing-lead",
-    "ops": "support-lead",
-    "doc-updater": "sales-lead",
+    "finance": "finance-owner",
+    "product-design": "growth-team-manager",
+    "ops": "success-team-manager",
+    # Marketing and sales are one template now (the Growth Team Manager): product-design holds both roles, and
+    # doc-updater takes a template only where a test gives it one.
+    "doc-updater": None,
 }
 
 
@@ -123,7 +125,7 @@ def test_the_roles_resolve_on_the_org_chart(api):
     set_templates(api, STAFF)
     flow = fill(api, "founder", "person:ana", "ana@acme.example")
     dests = by_id(flow["destinations"])
-    assert [a["args"]["owner"] for a in dests["legal"]["then"]] == ["bot:coo"]
+    assert [a["args"]["owner"] for a in dests["legal"]["then"]] == ["bot:assistant"]
     assert [a["args"]["owner"] for a in dests["engineering"]["then"]] == ["bot:cpo"]
     assert [a["args"]["owner"] for a in dests["finance"]["then"]] == ["bot:finance"]
     assert by_id(flow["steps"])["draft"]["as"] == "assistant:ana"
@@ -235,7 +237,7 @@ def test_the_answers_match_the_published_contract(api):
 
 
 def test_an_active_bot_still_onboarding_is_passed_over_for_the_next_one(api):
-    set_templates(api, {**STAFF, "doc-updater": "engineering-lead"})
+    set_templates(api, {**STAFF, "doc-updater": "engineering-team-manager"})
     onboarding(api, "cpo")  # active on the chart, but it learns and takes no task yet
     flow = fill(api, "founder", "person:ana", "ana@acme.example")
     assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
@@ -243,14 +245,14 @@ def test_an_active_bot_still_onboarding_is_passed_over_for_the_next_one(api):
 
 
 def test_a_bot_whose_profile_takes_no_tasks_is_passed_over_for_the_next_one(api):
-    set_templates(api, {**STAFF, "doc-updater": "engineering-lead"})
+    set_templates(api, {**STAFF, "doc-updater": "engineering-team-manager"})
     set_config(api, "cpo", "profile", "responder")  # answers in chat and takes no tasks
     flow = fill(api, "founder", "person:ana", "ana@acme.example")
     assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
 
 
 def test_a_bot_on_a_synced_harness_is_passed_over_for_the_next_one(api):
-    set_templates(api, {**STAFF, "doc-updater": "engineering-lead"})
+    set_templates(api, {**STAFF, "doc-updater": "engineering-team-manager"})
     set_config(api, "cpo", "harness", "dots")  # works on another platform and only syncs its chat here
     flow = fill(api, "founder", "person:ana", "ana@acme.example")
     assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
@@ -258,7 +260,7 @@ def test_a_bot_on_a_synced_harness_is_passed_over_for_the_next_one(api):
 
 def test_a_wake_that_becomes_a_task_goes_to_the_next_bot_that_takes_one(api):
     # Marketing's first candidate is onboarding, and Ana may tell neither of Ben's bots: the task goes to the second.
-    set_templates(api, {**STAFF, "cpo": "marketing-lead", "doc-updater": "engineering-lead"})
+    set_templates(api, {**STAFF, "cpo": "growth-team-manager", "doc-updater": "engineering-team-manager"})
     onboarding(api, "cpo")
     marketing = by_id(fill(api, "founder", "person:ana", "ana@acme.example")["destinations"])["marketing"]
     assert [a["do"] for a in marketing["then"]] == ["create_task"]
@@ -350,18 +352,20 @@ def test_the_draft_turn_is_asked_about_the_slack_text_it_handles(api):
 
 def test_the_turn_task_body_carries_the_mail_subject_and_body(api):
     set_templates(api, STAFF)
-    flow = bot_flow(api, "coo")
+    flow = bot_flow(api, "assistant")
     prompt = run_to_turn(flow, MAIL)["prompt"]
     with api.app.state.store.transaction() as c:
-        started = AA.start_turn(c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:coo", prompt, None)
+        started = AA.start_turn(
+            c, {"id": "auto_founder", "flow": flow}, "run_1", "draft", "bot:assistant", prompt, None
+        )
         body = c.execute("SELECT body FROM tasks WHERE id=?", (started["ref"],)).fetchone()["body"]
     assert "Board pack" in body and "Can you send the deck by Friday?" in body
 
 
 def test_a_bot_that_can_run_its_own_turn_keeps_the_draft_choose(api):
     set_templates(api, STAFF)
-    draft = by_id(bot_flow(api, "coo")["steps"])["draft"]
-    assert draft["as"] == "bot:coo" and draft["choose"]["mode"] == "draft"
+    draft = by_id(bot_flow(api, "assistant")["steps"])["draft"]
+    assert draft["as"] == "bot:assistant" and draft["choose"]["mode"] == "draft"
     assert "{{message.subject}}" in draft["prompt"] and "{{message.body}}" in draft["prompt"]
 
 
@@ -423,8 +427,8 @@ def test_a_task_hand_off_carries_the_slack_text_as_placeholders(api):
 
 def test_a_slack_bot_owner_that_cannot_file_a_draft_is_sorted_without_drafts(api):
     set_templates(api, STAFF)
-    set_config(api, "coo", "profile", "reviewer")  # runs its routine's turn, but takes no draft task
-    flow = slack_bot_flow(api, "coo")
+    set_config(api, "assistant", "profile", "reviewer")  # runs its routine's turn, but takes no draft task
+    flow = slack_bot_flow(api, "assistant")
     assert draft_actions(flow) == []
     assert_sorted_draft(flow)
     assert "meet" not in by_id(flow["steps"])["ask"]["questions"]  # the only question the draft route read
@@ -432,23 +436,24 @@ def test_a_slack_bot_owner_that_cannot_file_a_draft_is_sorted_without_drafts(api
 
 def test_a_slack_bot_owner_that_can_file_a_draft_keeps_it(api):
     set_templates(api, STAFF)
-    flow = slack_bot_flow(api, "coo")  # no profile: it takes every task, its drafts included
+    flow = slack_bot_flow(api, "assistant")  # no profile: it takes every task, its drafts included
     assert "draft_reply" in draft_actions(flow)
-    assert by_id(flow["steps"])["draft"]["as"] == "bot:coo"
+    assert by_id(flow["steps"])["draft"]["as"] == "bot:assistant"
 
 
 def test_a_reviewer_owner_keeps_its_mail_draft_since_no_task_is_filed(api):
     set_templates(api, STAFF)
-    set_config(api, "coo", "profile", "reviewer")
-    flow = bot_flow(api, "coo")
+    set_config(api, "assistant", "profile", "reviewer")
+    flow = bot_flow(api, "assistant")
     assert "draft_reply" in draft_actions(flow)
-    assert by_id(flow["steps"])["draft"]["as"] == "bot:coo"
+    assert by_id(flow["steps"])["draft"]["as"] == "bot:assistant"
 
 
 def test_a_group_whose_bot_lead_cannot_file_a_draft_is_sorted_without_drafts(api):
     set_templates(api, STAFF)
-    set_config(api, "finance", "profile", "reviewer")  # built-in bots (coo here) stay outside groups
-    gid = post(api, "groups", {"name": "Finance Desk", "add": {"bots": ["finance"]}, "lead": "bot:finance"})["id"]
+    # Built-in bots and helpers (the Assistant, the Finance Owner) stay outside groups: the Success Team Manager leads.
+    set_config(api, "ops", "profile", "reviewer")
+    gid = post(api, "groups", {"name": "Support Desk", "add": {"bots": ["ops"]}, "lead": "bot:ops"})["id"]
     listed(api, "general")
     flow = fill(api, "founder", f"group:{gid}", "slack:#general")
     F.check(flow)
@@ -468,14 +473,11 @@ def test_a_person_owner_in_slack_keeps_its_drafts(api):
     "role, old, new",
     [
         ("legal_lead", "general-counsel", "legal-owner"),
-        ("engineering_manager", "engineering-lead", "engineering-team-manager"),
-        ("finance_lead", "finance-lead", "bookkeeper"),
-        ("marketing_lead", "marketing-lead", "growth-team-manager"),
-        ("support_lead", "support-lead", "support-owner"),
-        ("sales_lead", "sales-lead", "growth-team-manager"),
+        ("engineering_manager", "engineering-manager", "engineering-team-manager"),
+        ("support_lead", "success-team-manager", "support-owner"),
     ],
 )
-def test_a_role_held_only_by_a_new_org_template_is_filled_after_the_old_one(role, old, new):
-    """A new company's bots come from the new templates; an old company's bots still come from the old ones first."""
+def test_a_role_two_templates_hold_is_filled_from_the_first_template_first(role, old, new):
+    """A role's bots come from its templates in ROLES' order: the second template's bots only after the first's."""
     assert T._candidates({new: ["new-bot"]}, role) == ["new-bot"]
     assert T._candidates({new: ["new-bot"], old: ["old-bot"]}, role) == ["old-bot", "new-bot"]

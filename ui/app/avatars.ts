@@ -70,10 +70,10 @@ interface BlobShape {
 // The symbols stay distinct when colour is unavailable; new/custom bots fall back to initials.
 const BOT_AVATARS: Record<string, BotArt> = {
   // Operations / Tico
-  coo: {tico: true, color: '#0f6e56'},
+  assistant: {tico: true, color: '#0f6e56'},
   botops: {icon: 'robot_2', color: '#0f6e56'},
   'doc-updater': {icon: 'edit_document', color: '#0f6e56'},
-  inbox: {icon: 'inbox', color: '#0f6e56'},
+  'inbox-manager': {icon: 'inbox', color: '#0f6e56'},
   // Marketing
   cmo: {icon: 'strategy', color: '#a63d65'},
   game: {icon: 'sports_esports', color: '#a63d65'},
@@ -81,26 +81,26 @@ const BOT_AVATARS: Record<string, BotArt> = {
   'content-social': {icon: 'post', color: '#a63d65'},
   social: {icon: 'post', color: '#a63d65'},
   influencer: {icon: 'record_voice_over', color: '#a63d65'},
-  'email-marketing': {icon: 'stacked_email', color: '#a63d65'},
+  'email-owner': {icon: 'stacked_email', color: '#a63d65'},
   analytics: {icon: 'analytics', color: '#a63d65'},
-  listening: {icon: 'radar', color: '#a63d65'},
-  reputation: {icon: 'reviews', color: '#a63d65'},
-  cro: {icon: 'conversion_path', color: '#a63d65'},
+  'social-media-manager': {icon: 'radar', color: '#a63d65'},
+  'reputation-manager': {icon: 'reviews', color: '#a63d65'},
+  'cro-owner': {icon: 'conversion_path', color: '#a63d65'},
   launch: {icon: 'rocket_launch', color: '#a63d65'},
-  recruiting: {icon: 'group_add', color: '#a63d65'},
+  recruiter: {icon: 'group_add', color: '#a63d65'},
   seo: {icon: 'travel_explore', color: '#a63d65'},
   // Creative
   designer: {icon: 'design_services', color: '#7a3e9d'},
-  'video-producer': {icon: 'movie_edit', color: '#7a3e9d'},
+  'video-owner': {icon: 'movie_edit', color: '#7a3e9d'},
   // Sales / Revenue
   'business-development': {icon: 'partner_exchange', color: '#1769a6'},
-  sales: {icon: 'target', color: '#1769a6'},
-  'sales-enablement': {icon: 'mail_shield', color: '#1769a6'},
-  'sales-ops': {icon: 'account_tree', color: '#1769a6'},
+  'inbound-sales-owner': {icon: 'target', color: '#1769a6'},
+  'sales-enablement-manager': {icon: 'mail_shield', color: '#1769a6'},
+  'sales-operations-manager': {icon: 'account_tree', color: '#1769a6'},
   sdr: {icon: 'person_add', color: '#1769a6'},
   // Finance
   finance: {icon: 'finance_mode', color: '#2f6b3c'},
-  bookkeeper: {icon: 'finance_mode', color: '#2f6b3c'},
+  'finance-owner': {icon: 'finance_mode', color: '#2f6b3c'},
   // Product
   'product-manager': {icon: 'route', color: '#5946b2'},
   'data-analyst': {icon: 'database_search', color: '#5946b2'},
@@ -108,7 +108,7 @@ const BOT_AVATARS: Record<string, BotArt> = {
   'bug-triage': {icon: 'bug_report', color: '#5946b2'},
   // Service
   success: {icon: 'flag_check', color: '#9a4f19'},
-  support: {icon: 'support_agent', color: '#9a4f19'},
+  'support-owner': {icon: 'support_agent', color: '#9a4f19'},
   // Legal and Engineering
   legal: {icon: 'balance', color: '#4b5563'},
   cto: {icon: 'lan', color: '#3f566b'},

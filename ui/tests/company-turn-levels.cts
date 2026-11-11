@@ -22,7 +22,7 @@ declare function pageSettings(): void;
       const errors: string[] = [], writes: unknown[] = [];
       page.on('pageerror', (error: Error) => errors.push(error.message));
       const config = {environment_id: 'fixture', company_name: 'Fixture company', app_name: 'Tico',
-        assistant_name: 'Helper', assistant_bot: 'coo', local: false, onboarding_needed: false, providers_configured: true};
+        assistant_name: 'Helper', assistant_bot: 'assistant', local: false, onboarding_needed: false, providers_configured: true};
       let levels = {warning_per_person: 40, stop_per_person: 100, people: 4, warning: 160, stop: 400, in_use: 12};
       await page.route('**/*', route => {
         const request = route.request(), p = new URL(request.url()).pathname;

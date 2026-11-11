@@ -30,15 +30,15 @@ Reconciled: 84 creators + 57 other segments + 9 with no segment = 150 new custom
 - **Creator sign-up page check** (task 4418, `channel:cro`, On deck). Waits for the growth meeting on Monday 2026-11-09.
 
 ## Asks
-- Task 4421 to the Conversion Rate Optimization Owner: find where creators drop off on the first step of sign-up, by 2026-11-10. No spend. Filed 2026-11-03.
+- Task 4421 to the CRO Owner: find where creators drop off on the first step of sign-up, by 2026-11-10. No spend. Filed 2026-11-03.
 - Task 4399 to the Search Ads Owner: quote for two more creator-only ad groups. Answered 2026-10-29: about $900 a month, estimated. The quote goes to the growth meeting as an idea. It does not start from the quote.
 
 ## Message
-- Creator message v3 (`knowledge/message.md`, changed 2026-10-30). "Set up your page in 10 minutes": approved (`tico brand show --section claims`, source: onboarding timing study, 2026-10-14). "Used by 300 creators": not approved, removed. The Brand Owner was asked on task 4406 whether it can be added with its source.
+- Creator message v3 (`knowledge/message.md`, changed 2026-10-30). "Set up your page in 10 minutes": approved (`tico brand show --section claims`, source: onboarding timing study, 2026-10-14). "Used by 300 creators": not approved, removed. The Design Owner was asked on task 4406 whether it can be added with its source.
 
 ## Decisions waiting
-- Marketing lead (`marketing-lead`): decide on task 4418 at the Monday 2026-11-09 growth meeting.
-- Marketing lead (`marketing-lead`): confirm the November creator budget of $4,500.
+- Marketing lead (`growth-team-manager`): decide on task 4418 at the Monday 2026-11-09 growth meeting.
+- Marketing lead (`growth-team-manager`): confirm the November creator budget of $4,500.
 
 ## Could not read
 - The sign-up export for 2026-10-29 to 2026-10-31 was not attached. October counts come from `tico growth cohort list` and may move when the last three days land.

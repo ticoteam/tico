@@ -9,7 +9,7 @@ Sample output for Acme, a fictional team. Every name and number is invented. Not
 
 ## Open
 - **Grant to Ben (40,000 options, 2026-08-14):** no board consent in the minute book (Corporate Secretary's index, read 2026-10-05). Ask the Corporate Secretary whether it was approved. Do not treat it as valid until then.
-- **409A:** valued 2025-11-03, so it passes 12 months on 2026-11-03. Two grants are planned before then. Counsel decides whether a new valuation is needed first.
+- **409A:** valued 2025-11-03, so it passes 12 months on 2026-11-03. Two grants are planned before then. The Rules Owner decides whether a new valuation is needed first.
 
 ## Vesting in the next 90 days
 | Holder | Date | Options |

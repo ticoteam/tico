@@ -44,7 +44,7 @@ never get a release the canary has not run. The image tags move with `docker bui
 ghcr.io first). Nothing is stored: every run works the state out from GitHub. Installs are read and updated only through
 the routes an update key reaches (GET and POST /api/v2/system/update, POST /api/v2/system/update/check;
 backend/service_keys.py), never /healthz, which a proxy may not route. The HTTP helper is the Release Owner's
-(templates/catalog/release-notes/software/rollout.py). Standard library only.
+(templates/catalog/release-notes-writer/software/rollout.py). Standard library only.
 """
 
 import argparse
@@ -65,7 +65,7 @@ import urllib.request
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-ROLLOUT_PATH = ROOT / "templates/catalog/release-notes/software/rollout.py"
+ROLLOUT_PATH = ROOT / "templates/catalog/release-notes-writer/software/rollout.py"
 NOTES_PATH = ROOT / "scripts/release_notes.py"
 LOS_ANGELES = ZoneInfo("America/Los_Angeles")  # times in the log read as the team's clock
 # A backstop for a missed event (a workflow_run that does not fire, say): it takes a step like a push does, and runs the

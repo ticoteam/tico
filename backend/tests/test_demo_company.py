@@ -208,12 +208,12 @@ def test_chats_and_slack_are_connected(ana):
 
 
 LEADS = {
-    "ops-manager": "human:ben",
-    "support-lead": "human:ben",
-    "marketing-lead": "human:cara",
-    "sales-lead": "human:cara",
+    "operations-manager": "human:ben",
+    "success-team-manager": "human:ben",
+    "growth-team-manager": "human:cara",
+    "growth-team-manager": "human:cara",
     "product-manager": "human:eli",
-    "finance-lead": "human:ana",
+    "finance-owner": "human:ana",
 }
 PEOPLE = ("human:ana", "human:ben", "human:cara", "human:eli")
 
@@ -232,7 +232,7 @@ def test_each_person_has_a_draft_update_for_every_day_and_the_friday_review(ana)
         ]
         assert {row["day"] for row in rows if row["kind"] == "daily"} == daily, person
         assert {row["day"] for row in rows if row["kind"] == "weekly"} == fridays, person
-        assert {row["drafted_by"] for row in rows} == {"coo"}, person
+        assert {row["drafted_by"] for row in rows} == {"assistant"}, person
 
 
 def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
@@ -260,13 +260,13 @@ def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
     so the demo script stands in for the model): the December price and the held refund are named."""
     messages = ana.get("/api/v2/assistant").json()["messages"]
     asked = [m for m in messages if m["sender_id"] == "human:ana" and m["body"] == "What needs me today?"]
-    answers = [m["body"] for m in messages if m["sender_id"] == "bot:coo" and "waiting on you" in m["body"]]
+    answers = [m["body"] for m in messages if m["sender_id"] == "bot:assistant" and "waiting on you" in m["body"]]
     assert asked and answers and "Home Pro's December price" in answers[0] and "refund" in answers[0]
 
 
 def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):
     pages = ana.get("/api/v2/pages").json()["pages"]
-    assert {page["bot_id"] for page in pages} == {D.PAGE["bot"], "coo"}
+    assert {page["bot_id"] for page in pages} == {D.PAGE["bot"], "assistant"}
     assert ana.get("/api/v2/team/icon").status_code == 200
     assert ana.post("/api/v2/meetings/granola/sync").status_code == 200
 

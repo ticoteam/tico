@@ -65,7 +65,7 @@ def test_a_message_to_a_person_queues_nothing(api):
 
 
 def test_a_bot_to_bot_message_and_a_needs_action_question_with_its_reply(api):
-    ops, coo = _bot(api, "ops"), _bot(api, "coo")
+    ops, coo = _bot(api, "ops"), _bot(api, "assistant")
     at = _since(api)
     with api.app.state.store.transaction() as c:
         H.say(c, ops, coo, "FYI the invoices are filed.")
@@ -135,7 +135,7 @@ def test_a_paused_bot_still_gets_its_job_queued(api):
 
 
 def test_a_thread_with_members_queues_the_mentioned_bot_through_its_carrier(api):
-    ops, coo = _bot(api, "ops"), _bot(api, "coo")
+    ops, coo = _bot(api, "ops"), _bot(api, "assistant")
     thread = post(api, "threads", {"title": "Launch", "audience": "members", "members": ["human:ben", ops, coo]})
     at = _since(api)
     post(api, f"threads/{thread['id']}/messages", {"text": "@ops take this one"})
@@ -146,7 +146,7 @@ def test_a_thread_with_members_queues_the_mentioned_bot_through_its_carrier(api)
 
 
 def test_a_group_room_queues_the_addressed_bot(api):
-    ops, coo = _bot(api, "ops"), _bot(api, "coo")
+    ops, coo = _bot(api, "ops"), _bot(api, "assistant")
     at = _since(api)
     with api.app.state.store.transaction() as c:
         conv = H.open_conversation(c, "human:ana", ["human:ana", "human:ben", ops, coo], kind="chat")
@@ -213,7 +213,7 @@ def test_an_imported_transcript_queues_nothing(api):
 
 def test_a_bot_hand_off_held_as_a_note_queues_nothing(api):
     """A message a rule turns quiet (a held bot-to-bot wake, a parked task's news) leaves a note, never a job."""
-    ops, coo = _bot(api, "ops"), _bot(api, "coo")
+    ops, coo = _bot(api, "ops"), _bot(api, "assistant")
     at = _since(api)
     with api.app.state.store.transaction() as c:
         H.say(c, ops, coo, "FYI the invoices are filed.")

@@ -137,7 +137,7 @@ def test_one_change_to_many_tasks_is_one_bulk_change_and_resets_lists(api):
 
 def test_a_bot_list_stays_304_when_only_other_tasks_change(api):
     mine = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
-    other = post(api, "tasks", {"owner": "coo", "title": "Plan the offsite", "body": "Soon."})
+    other = post(api, "tasks", {"owner": "assistant", "title": "Plan the offsite", "body": "Soon."})
 
     def read(tag=None):
         return api.get(
@@ -156,7 +156,7 @@ def test_a_bot_list_stays_304_when_only_other_tasks_change(api):
 
 
 def test_a_batch_read_returns_only_readable_tasks_and_names_the_rest_missing(api):
-    seen = post(api, "tasks", {"owner": "coo", "title": "Plan the offsite", "body": "Soon."})
+    seen = post(api, "tasks", {"owner": "assistant", "title": "Plan the offsite", "body": "Soon."})
     hidden = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])

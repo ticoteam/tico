@@ -2,7 +2,6 @@ account_balance
 account_balance_wallet
 account_tree
 add
-ads_click
 alt_route
 analytics
 api
@@ -85,7 +84,6 @@ integration_instructions
 inventory_2
 key_vertical
 label
-leaderboard
 lightbulb
 link
 local_library
@@ -99,7 +97,6 @@ manage_search
 mark_email_read
 mark_email_unread
 menu
-menu_book
 mic
 mic_off
 monitor_heart

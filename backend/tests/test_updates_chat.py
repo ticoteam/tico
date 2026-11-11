@@ -45,18 +45,18 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
         api, "tasks", {"title": "Quietly let the agency go", "body": "See notes", "owner": "fixer", "private": True}
     )
     with api.app.state.store.transaction() as c:
-        restrict(c, "finance", people=["ana"], bots=["coo"])
+        restrict(c, "finance", people=["ana"], bots=["assistant"])
         updates.post(c, bot_id(c, "sales"), "- Closed the Acme renewal", day="2026-09-29")
         updates.post(c, bot_id(c, "finance"), "- Runway is nine months", day="2026-09-29")
         updates.post(c, bot_id(c, "fixer"), f"- Sorted out [the agency](#/task/{hidden['id']})", day="2026-09-29")
         updates.post(c, bot_id(c, "fixer"), f"- Went through {hidden['id']} with the team", day="2026-09-28")
     r = runner(api)
-    assign(api, r, "coo")
-    ready(api, r, ["coo"])
+    assign(api, r, "assistant")
+    ready(api, r, ["assistant"])
     # The menu tab's own question is handed no updates; it reads them only as the person, like any reader.
-    menu, plain = claim(api, r, "coo", "What's the top update today?", "cara-test", place=None)
+    menu, plain = claim(api, r, "assistant", "What's the top update today?", "cara-test", place=None)
     assert plain["updates"] is None
-    sent, attempt = claim(api, r, "coo", "What's the top update today?", "cara-test")
+    sent, attempt = claim(api, r, "assistant", "What's the top update today?", "cara-test")
     assert sent["message"]["conversation_id"] == menu["message"]["conversation_id"], "the same chat as her menu tab"
     handed = attempt["updates"]
     assert handed["today"] == "2026-09-29"
@@ -68,7 +68,7 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
     # The owner reads Finance's too, in her own Assistant chat; not the ones that link a private task her Assistant is
     # no party to.
     strategy_bot(api)
-    _, owner = claim(api, r, "coo", "What's the top update today?", "ana-test")
+    _, owner = claim(api, r, "assistant", "What's the top update today?", "ana-test")
     assert sorted(u["text"] for u in owner["updates"]["updates"]) == [
         "- Closed the Acme renewal",
         "- Runway is nine months",
@@ -94,9 +94,9 @@ def test_the_default_order_is_a_goal_then_waits_on_you_then_newest(api, monkeypa
         updates.post(c, bot_id(c, "crier"), "- Cara, the press list needs a look", day="2026-09-29")
         updates.post(c, bot_id(c, "writer"), "- Wrote the launch post", day="2026-09-29")
     r = runner(api)
-    assign(api, r, "coo")
-    ready(api, r, ["coo"])
-    _, attempt = claim(api, r, "coo", "hi", "cara-test")
+    assign(api, r, "assistant")
+    ready(api, r, ["assistant"])
+    _, attempt = claim(api, r, "assistant", "hi", "cara-test")
     ranked = [(u["author"], u["rank"], u["goals"], u["waits_on_you"]) for u in attempt["updates"]["updates"]]
     assert ranked == [
         ("Manager", 1, ["Launch in October"], False),
@@ -167,9 +167,9 @@ def test_private_references_in_links_and_prose_never_reach_an_updates_chat_turn(
         updates.post(c, bot_id(c, "privatebot"), "- Private Bot report visible only to Cara", day="2026-09-29")
         updates.post(c, bot_id(c, "secretbot"), "- Secret Bot report visible only to Ana", day="2026-09-29")
     r = runner(api)
-    assign(api, r, "coo")
-    ready(api, r, ["coo"])
-    _, attempt = claim(api, r, "coo", "What's the top update today?", "cara-test")
+    assign(api, r, "assistant")
+    ready(api, r, ["assistant"])
+    _, attempt = claim(api, r, "assistant", "What's the top update today?", "cara-test")
     handed = [row["text"] for row in attempt["updates"]["updates"]]
     assert handed == ["- Published the public launch note"]
     serialized = json.dumps(attempt)

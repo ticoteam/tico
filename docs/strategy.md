@@ -174,7 +174,7 @@ owner's level choice for the Strategy Owner is on [Your Strategy Owner](strategy
 ## What the Strategy Owner does with it
 
 Strategy is the Strategy Owner's first job ([Your Strategy Owner](strategy-bot.md#strategy)). Its playbooks are the product
-(`templates/catalog/goal-manager/playbooks/`):
+(`templates/catalog/strategy-owner/playbooks/`):
 
 - **Draft the strategy** (`draft-the-strategy.md`): a task "Draft the strategy", or the owner asking in chat. It reads
   the market pages, the setup answers, the goals and KPIs, and turns the default guide's questions into **claims to

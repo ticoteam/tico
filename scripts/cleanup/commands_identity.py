@@ -10,7 +10,7 @@ nothing a caller can see. Run it in a fresh process per tree (and per TICO_VERSI
              qualified name, source (as an AST, after NORMALIZATIONS on the unmoved tree), defaults and closure values
   listings   `tools/list` bytes for both transports (local False/True) and every kind of caller, plus no kind
   parser     the `tico` command tree: every command's words, arguments, flags, defaults, choices and help
-  tables     AUDIENCE, SHELL_ONLY, UNLISTED, CLI_TOOL_ALIASES, the Assistant's and Counsel's lists
+  tables     AUDIENCE, SHELL_ONLY, UNLISTED, CLI_TOOL_ALIASES, the Assistant's and the Rules Owner's lists
   imports    the modules that import the table load (clients.hubmcp, clients.remotecli, backend.mcp, ...)
   versions   release_version(), SERVER_INFO, MCP initialize's serverInfo and `tico --version`, under this process's
              TICO_VERSION (split_commands runs it with the variable unset and set)

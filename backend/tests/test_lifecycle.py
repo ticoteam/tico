@@ -30,18 +30,20 @@ def onboarding(api, *slugs, manager="human:ben"):
 
 
 def test_a_recruiting_seat_holds_no_work_which_stays_with_its_manager(api):
-    seat = post(api, "seats", {"title": "Head of Support", "description": "Answers customers.", "reports_to": "coo"})
-    assert (seat["kind"], seat["stage"], seat["reports_to"]) == ("seat", "recruiting", "coo")
+    seat = post(
+        api, "seats", {"title": "Head of Support", "description": "Answers customers.", "reports_to": "assistant"}
+    )
+    assert (seat["kind"], seat["stage"], seat["reports_to"]) == ("seat", "recruiting", "assistant")
     assert [s["id"] for s in get(api, "seats")["seats"]] == [seat["id"]]
     shown = {s["id"]: s for s in get(api, "org")["seats"]}
-    assert shown[seat["id"]]["stage"] == "recruiting" and shown[seat["id"]]["reports_to"] == "coo"
+    assert shown[seat["id"]]["stage"] == "recruiting" and shown[seat["id"]]["reports_to"] == "assistant"
 
     refused = api.post(
         "/api/v2/tasks",
         json={"owner": "seat:" + seat["id"], "title": "Answer the backlog", "body": "x"},
         headers=headers(),
     )
-    assert refused.status_code >= 400 and "still being recruited" in refused.text and "coo" in refused.text, (
+    assert refused.status_code >= 400 and "still being recruited" in refused.text and "assistant" in refused.text, (
         refused.text
     )
     with api.app.state.store.read() as c:
@@ -50,7 +52,7 @@ def test_a_recruiting_seat_holds_no_work_which_stays_with_its_manager(api):
 
     # A person places a seat under themselves or below them; the owner anywhere.
     as_member(api, "ben@acme.example")
-    post(api, "seats", {"title": "Analyst", "reports_to": "coo"}, token="cara-test", expected=403)
+    post(api, "seats", {"title": "Analyst", "reports_to": "assistant"}, token="cara-test", expected=403)
     mine = post(api, "seats", {"title": "Analyst"}, token="cara-test")
     assert mine["reports_to"] == "human:cara"
     assert (
@@ -65,7 +67,7 @@ def test_a_recruiting_seat_holds_no_work_which_stays_with_its_manager(api):
 
 def test_seat_batch_checks_each_reporting_line_and_rolls_back_as_a_unit(api):
     as_member(api, "ben@acme.example")
-    plan = {"seats": [{"title": "My analyst"}, {"title": "Outside seat", "reports_to": "coo"}]}
+    plan = {"seats": [{"title": "My analyst"}, {"title": "Outside seat", "reports_to": "assistant"}]}
     post(api, "seats/batch", plan, token="ben-test", expected=403)
     assert get(api, "seats")["seats"] == []  # first row rolled back with the refused second
 
@@ -77,8 +79,8 @@ def test_seat_batch_checks_each_reporting_line_and_rolls_back_as_a_unit(api):
     )
     assert [s["title"] for s in own["seats"]] == ["My analyst", "My coordinator"]
     assert {s["reports_to"] for s in own["seats"]} == {"human:ben"}
-    anywhere = post(api, "seats/batch", {"seats": [{"title": "Owner analyst", "reports_to": "coo"}]})
-    assert anywhere["seats"][0]["reports_to"] == "coo"
+    anywhere = post(api, "seats/batch", {"seats": [{"title": "Owner analyst", "reports_to": "assistant"}]})
+    assert anywhere["seats"][0]["reports_to"] == "assistant"
 
 
 def test_an_onboarding_bot_learns_only_and_every_other_attempt_is_refused_plainly(api):
@@ -145,11 +147,11 @@ def test_any_number_onboard_at_once_and_an_upgrade_maps_set_up_to_onboarding(api
         c.execute("PRAGMA ignore_check_constraints=ON")
         c.execute("UPDATE bot_config SET onboarding_state='needs_onboarding' WHERE bot='cpo'")
         c.execute("PRAGMA ignore_check_constraints=OFF")
-        c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET onboarding_state='onboarded' WHERE bot='assistant'")
         c.execute("UPDATE bots SET state='planned' WHERE slug='doc-updater'")
     stages = {b["slug"]: (b["stage"], b["state"]) for b in get(api, "bots")}
     assert {slug for slug, (stage, _) in stages.items() if stage == "onboarding"} == {"ops", "finance", "cpo"}
-    assert stages["coo"] == ("active", "active") and stages["product-design"] == ("active", "active")
+    assert stages["assistant"] == ("active", "active") and stages["product-design"] == ("active", "active")
     assert stages["doc-updater"] == ("active", "planned")  # a planned bot keeps working as today
     with api.app.state.store.read() as c:
         assert H.parked_bots(c) == {"ops", "finance", "cpo"}
@@ -163,13 +165,15 @@ def test_an_onboarding_bot_leaves_no_note_or_word_on_a_task_kept_from_before(api
     kept = post(api, "tasks", {"owner": "ops", "title": "Audit the queue", "body": "x"})
     question = {"to": "ben", "line": "Which queue first?", "version": kept["version"]}
     post(api, f"tasks/{kept['id']}/asks", question, token=ops)
-    onboarding(api, "ops", manager="coo")
+    onboarding(api, "ops", manager="assistant")
     with api.app.state.store.read() as c:
         before = c.execute("SELECT count(*) FROM messages WHERE sender_id='bot:ops'").fetchone()[0]
 
     # A quiet note goes to its manager only; an Active bot still leaves one for the same peer.
     assert (
-        api.post("/api/v2/notes", json={"to": "coo", "text": "Read the runbook."}, headers=headers(ops)).status_code
+        api.post(
+            "/api/v2/notes", json={"to": "assistant", "text": "Read the runbook."}, headers=headers(ops)
+        ).status_code
         == 200
     )
     refused = api.post("/api/v2/notes", json={"to": "cpo", "text": "Read the runbook."}, headers=headers(ops))
@@ -179,7 +183,7 @@ def test_an_onboarding_bot_leaves_no_note_or_word_on_a_task_kept_from_before(api
         == 200
     )
     with api.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT to_actor FROM notes WHERE from_actor='bot:ops'")] == ["bot:coo"]
+        assert [r[0] for r in c.execute("SELECT to_actor FROM notes WHERE from_actor='bot:ops'")] == ["bot:assistant"]
 
     # Nothing on the kept task either: no comment, no question put to a person.
     for path, body in ((f"tasks/{kept['id']}/comments", {"text": "Started"}), (f"tasks/{kept['id']}/asks", question)):
@@ -192,11 +196,11 @@ def test_an_onboarding_bot_leaves_no_note_or_word_on_a_task_kept_from_before(api
 def test_a_seat_may_report_to_an_open_seat_and_hangs_under_it_until_that_seat_closes(api):
     """A chosen chart lays out roles under roles (bot-lifecycle-spec.md acceptance test 1): a seat reports to
     `seat:<id>`, never in a circle, and who may place it is decided by the person or bot at the top of its branch."""
-    lead = post(api, "seats", {"title": "Head of Support", "reports_to": "coo"})
+    lead = post(api, "seats", {"title": "Head of Support", "reports_to": "assistant"})
     agent = post(api, "seats", {"title": "Support agent", "reports_to": "seat:" + lead["id"]})
     assert agent["reports_to"] == "seat:" + lead["id"]
     shown = {s["id"]: s for s in get(api, "org")["seats"]}
-    assert shown[agent["id"]]["org_parent"] == "s:" + lead["id"] and shown[lead["id"]]["org_parent"] == "b:coo"
+    assert shown[agent["id"]]["org_parent"] == "s:" + lead["id"] and shown[lead["id"]]["org_parent"] == "b:assistant"
     people = {
         s["id"]: s for s in api.get("/api/people", headers=headers()).json()["seats"]
     }  # the sidebar's team chart reads these
@@ -214,21 +218,21 @@ def test_a_seat_may_report_to_an_open_seat_and_hangs_under_it_until_that_seat_cl
 
     # A closed seat's reports hang where it did.
     post(api, f"seats/{lead['id']}/close", {})
-    assert {s["id"]: s for s in get(api, "org")["seats"]}[agent["id"]]["org_parent"] == "b:coo"
+    assert {s["id"]: s for s in get(api, "org")["seats"]}[agent["id"]]["org_parent"] == "b:assistant"
     # The sidebar refreshes its seats from GET /api/v2/seats (ui/app/refresh.ts): those rows hang the same way.
     listed = {s["id"]: s["org_parent"] for s in get(api, "seats")["seats"]}
     people = {s["id"]: s["org_parent"] for s in api.get("/api/people", headers=headers()).json()["seats"]}
-    assert listed == people and listed[agent["id"]] == "b:coo"
+    assert listed == people and listed[agent["id"]] == "b:assistant"
 
     # A line through a closed seat still counts: B <- A (closed) <- C, so B cannot move under C.
-    b = post(api, "seats", {"title": "B", "reports_to": "coo"})
+    b = post(api, "seats", {"title": "B", "reports_to": "assistant"})
     a = post(api, "seats", {"title": "A", "reports_to": "seat:" + b["id"]})
     c_seat = post(api, "seats", {"title": "C", "reports_to": "seat:" + a["id"]})
     post(api, f"seats/{a['id']}/close", {})
     circle = api.patch(f"/api/v2/seats/{b['id']}", json={"reports_to": "seat:" + c_seat["id"]}, headers=headers())
     assert circle.status_code == 422 and circle.json()["error"]["code"] == "hierarchy", circle.text
-    assert {s["id"]: s for s in get(api, "org")["seats"]}[b["id"]]["reports_to"] == "coo"
-    d = post(api, "seats", {"title": "D", "reports_to": "coo"})
+    assert {s["id"]: s for s in get(api, "org")["seats"]}[b["id"]]["reports_to"] == "assistant"
+    d = post(api, "seats", {"title": "D", "reports_to": "assistant"})
     moved = api.patch(f"/api/v2/seats/{d['id']}", json={"reports_to": "seat:" + c_seat["id"]}, headers=headers())
     assert moved.status_code == 200, moved.text
     # A circle stored before this check answers to nobody: placing under it ends, and only the owner may.
@@ -257,9 +261,9 @@ def test_a_bots_own_setup_done_keeps_the_summary_it_gave_when_ready(api):
 
 
 def test_renaming_a_seat_to_another_role_drops_the_template_it_was_set_up_with(api):
-    seat = post(api, "seats", {"title": "Marketing lead", "description": "Runs marketing.", "reports_to": "coo"})
+    seat = post(api, "seats", {"title": "Marketing lead", "description": "Runs marketing.", "reports_to": "assistant"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE seats SET template='marketing-lead' WHERE id=?", (seat["id"],))
+        c.execute("UPDATE seats SET template='growth-team-manager' WHERE id=?", (seat["id"],))
 
     def template():
         with api.app.state.store.read() as c:
@@ -275,9 +279,9 @@ def test_renaming_a_seat_to_another_role_drops_the_template_it_was_set_up_with(a
     # Only the capitals change: the same role, so the template stays.
     recased = api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "MARKETING LEAD"}, headers=headers())
     assert recased.status_code == 200, recased.text
-    assert template() == "marketing-lead"
+    assert template() == "growth-team-manager"
     pinned = post(api, f"seats/{seat['id']}/recruit", {})["candidates"]
-    assert [c["template"] for c in pinned] == ["marketing-lead"]
+    assert [c["template"] for c in pinned] == ["growth-team-manager"]
 
     # A different role is a different job: the seat is no longer pinned to that template.
     renamed = api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "Support lead"}, headers=headers())

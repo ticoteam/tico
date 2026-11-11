@@ -493,7 +493,7 @@ def _roster_with_bot_and_sign_in_off(auth):
         for p in people:
             if p["id"] == "cara":
                 p["sign_in"] = False
-        people.append({"id": "coo-bot", "email": "coo@acme.example", "bot": "coo"})
+        people.append({"id": "coo-bot", "email": "assistant@acme.example", "bot": "assistant"})
         Access._save_roster(c, {**roster, "people": people})
 
 

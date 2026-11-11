@@ -29,7 +29,7 @@ interface Viewport {width: number; height: number}
 const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'cara', name: 'Cara Lee', role: 'member', team: 'mkt'},
   {id: 'mia', name: 'Mia Park', role: 'member', team: 'mkt'}, {id: 'ned', name: 'Ned Cole', role: 'member', team: 'mkt'}];
 const emps = ([['rental-mgr', 'Rental Marketing Manager', 'rental'], ['rental-google', 'Rental Google Ad Owner', 'rental'],
-  ['rental-social', 'Rental Social Ad Owner', 'rental'], ['consumer-mgr', 'Consumer Marketing Manager', 'consumer'],
+  ['rental-social', 'Rental Social Ads Owner', 'rental'], ['consumer-mgr', 'Consumer Marketing Manager', 'consumer'],
   ['consumer-google', 'Consumer Google Ad Owner', 'consumer']] as [string, string, string][]).map(([name, display_name, team]) =>
   ({name, display_name, role: display_name, team, status: 'active', host: 'keeper', can_chat: true}));
 const teams = [{id: 'mkt', name: 'Marketing', parent: '', lead: 'human:ana'}, {id: 'rental', name: 'Rental', parent: 'mkt', lead: 'bot:rental-mgr'},
@@ -78,7 +78,7 @@ const BUDGETS = [
   budget('b-mkt', 'Marketing', 900000, 159000, {}, {state: {pace_end: 880000}}),
   budget('b-rental', 'Rental Marketing Manager', 600000, 128000, {team: 'rental', parent_id: 'b-mkt'}, {state: {pace_end: 640000}}),
   budget('b-rental-g', 'Rental Google Ad Owner', 300000, 52000, {team: 'rental', teammate: 'bot:rental-google', vendor: 'Google Ads', parent_id: 'b-rental'}, ad('google_ads', 260000)),
-  budget('b-rental-m', 'Rental Social Ad Owner', 300000, 76000, {team: 'rental', teammate: 'bot:rental-social', vendor: 'Meta Ads', parent_id: 'b-rental'}, ad('meta_ads', 380000)),
+  budget('b-rental-m', 'Rental Social Ads Owner', 300000, 76000, {team: 'rental', teammate: 'bot:rental-social', vendor: 'Meta Ads', parent_id: 'b-rental'}, ad('meta_ads', 380000)),
   budget('b-consumer', 'Consumer Marketing Manager', 300000, 250000, {team: 'consumer', parent_id: 'b-mkt'}),
   // Paid through an agency: Spent is the books', Google's own figure shows beside it (reported).
   budget('b-consumer-g', 'Consumer Google Ad Owner', 300000, 250000, {team: 'consumer', teammate: 'bot:consumer-google', vendor: 'Acme Agency', parent_id: 'b-consumer'},
@@ -186,7 +186,7 @@ async function shot(page: Page, name: string) {
       await row(page, 'b-rental-g').waitFor();
       assert.deepEqual((await tabs(page)).slice(0, 2), ['P&L', 'Budgets'], tag + ': Budgets right after P&L');
       assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Consumer Marketing Manager', 'Consumer Google Ad Owner',
-        'Rental Marketing Manager', 'Rental Google Ad Owner', 'Rental Social Ad Owner', 'Video production'], tag + ': a tree, children under their parent');
+        'Rental Marketing Manager', 'Rental Google Ad Owner', 'Rental Social Ads Owner', 'Video production'], tag + ': a tree, children under their parent');
       const depth = async (id: string) => (await row(page, id).getAttribute('style'))!.match(/--d:(\d+)/)![1];
       assert.deepEqual([await depth('b-mkt'), await depth('b-rental'), await depth('b-rental-g'), await depth('b-video')], ['0', '1', '2', '1'], tag + ': indented by depth');
       assert.deepEqual(await page.locator('tr.fin-grp').allInnerTexts(), ['Other budgets'], tag + ': a budget with no line goes under Other budgets');
@@ -215,7 +215,7 @@ async function shot(page: Page, name: string) {
       assert.equal((await cell(page, 'b-video', 6).innerText()).trim(), '', tag + ': nor on one with no amount');
       // Search keeps the matches and the budgets above them.
       await page.locator('[data-fin-q]').fill('social');
-      assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Rental Marketing Manager', 'Rental Social Ad Owner'], tag + ': search keeps the path');
+      assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Rental Marketing Manager', 'Rental Social Ads Owner'], tag + ': search keeps the path');
       assert.equal(await page.locator('tr.fin-grp').count(), 0, tag + ': an empty group is left out');
       await page.locator('[data-fin-q]').fill('');
       // A row opens the rail, with its amount by month.

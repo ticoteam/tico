@@ -1,7 +1,7 @@
 """The Strategy Owner: every install has one, at the top of its org chart (docs/strategy-bot.md; spec: Head of Product,
 Strategy Owner v3).
 
-Its slug stays `goal-manager` (actor `bot:goal-manager`), so its KPI readings, goal events and old messages stay
+Its slug stays `strategy-owner` (actor `bot:strategy-owner`), so its KPI readings, goal events and old messages stay
 attached. It is named "Strategy Owner" unless the owner renames it (`name`); the names it had before are read only by
 `migrate`.
 
@@ -41,7 +41,7 @@ KEY = "strategy-bot"
 # rollback reads and writes. For one release this one writes both keys alike (`_save`, `mirror_hide`), and `migrate`
 # takes what that release wrote there since.
 OLD_KEY = "ceo-bot"
-SLUG = "goal-manager"
+SLUG = "strategy-owner"
 NAME = "Strategy Owner"
 # The names the bot had before, and "" when it had none: `migrate` renames these, and `name` treats them as no name.
 OLD_NAMES = ("Goal Manager", "CEO Bot", "Strategy Bot")
@@ -285,12 +285,12 @@ def _outside(slug, entry, assistant, helpers):
             "assistant",
             "botops",
             "librarian",
-            H.COUNSEL,
+            H.RULES_OWNER,
             SLUG,
             "health-monitor",
             "task-manager",
-            "bookkeeper",
-            H.BRAND_OWNER,
+            "finance-owner",
+            H.DESIGN_OWNER,
         )
         or slug == assistant
         or str((entry or {}).get("template") or "") in helpers

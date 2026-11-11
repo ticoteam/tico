@@ -13,7 +13,7 @@ from backend.tests.helpers.api import get, headers  # noqa: F401
 ANA, BEN, CARA = "ana@acme.example", "ben@acme.example", "cara@acme.example"
 SUPPORT = "support@acme.example"
 OUTSIDE = "team@partner.example"
-ASSISTANT = Identity("human:ana", "owner", ANA, via_token=True, via="assistant", task_actor="bot:coo")
+ASSISTANT = Identity("human:ana", "owner", ANA, via_token=True, via="assistant", task_actor="bot:assistant")
 
 
 def tx(api):
@@ -85,7 +85,7 @@ def a_person_has_read_and_write_on_their_own_mailbox_before_and_after_it_has_a_r
 
 def the_owner_admins_and_managers_get_nothing_on_someone_elses_mailbox(c):
     personal(c, CARA)
-    for who in ("person:ana", "person:ben", "bot:coo", "bot:inbox"):
+    for who in ("person:ana", "person:ben", "bot:assistant", "bot:inbox"):
         assert MA.level(c, who, CARA) == "none", who
         assert CARA not in levels(c, who), who
     assert MA.may(c, "person:ana", CARA) == {
@@ -174,14 +174,14 @@ def test_a_shared_inbox_is_read_by_admins_and_shared_only_by_an_admin(api):
 
 def an_awaiting_mailbox_is_private_until_its_person_joins(c):
     row = awaiting(c)
-    for who in ("person:ana", "person:ben", "person:cara", "bot:coo"):
+    for who in ("person:ana", "person:ben", "person:cara", "bot:assistant"):
         assert MA.level(c, who, row["address"]) == "none", who
     # A grant written on it anyway (an older row, a hand edit) counts for nothing.
-    MA.give(c, row, "bot", bot(c, "coo"), "read_write", "test")
+    MA.give(c, row, "bot", bot(c, "assistant"), "read_write", "test")
     MA.give(c, row, "person", "cara", "read_write", "test")
-    assert MA.level(c, "bot:coo", row["address"]) == "none"
+    assert MA.level(c, "bot:assistant", row["address"]) == "none"
     assert MA.level(c, "person:cara", row["address"]) == "none"
-    assert row["address"] not in levels(c, "bot:coo")
+    assert row["address"] not in levels(c, "bot:assistant")
     refused(MA.grant, c, "person:ana", row["id"], "person", "ben", "read", code="awaiting_person", status=409)
 
 
@@ -221,15 +221,15 @@ def test_adding_a_person_links_their_awaiting_mailbox(api):
 
 def a_person_grants_and_revokes_a_bot_on_their_own_mailbox(c):
     row = personal(c, CARA)
-    coo = bot(c, "coo")
-    access = MA.grant(c, "person:cara", row["id"], "bot", "coo", "read")
+    coo = bot(c, "assistant")
+    access = MA.grant(c, "person:cara", row["id"], "bot", "assistant", "read")
     assert access["grantee_id"] == coo and access["level"] == "read"
-    assert MA.level(c, "bot:coo", CARA) == "read"
-    assert MA.may(c, "bot:coo", CARA)["organize"] is False
+    assert MA.level(c, "bot:assistant", CARA) == "read"
+    assert MA.may(c, "bot:assistant", CARA)["organize"] is False
     again = MA.grant(c, "person:cara", row["id"], "bot", coo, "read_write")
     assert again["id"] == access["id"] and again["level"] == "read_write"
-    assert MA.level(c, "bot:coo", CARA) == "read_write"
-    assert MA.may(c, "bot:coo", CARA) == {
+    assert MA.level(c, "bot:assistant", CARA) == "read_write"
+    assert MA.may(c, "bot:assistant", CARA) == {
         "read": True,
         "organize": True,
         "send": True,
@@ -237,7 +237,7 @@ def a_person_grants_and_revokes_a_bot_on_their_own_mailbox(c):
         "draft": True,
     }
     MA.revoke(c, "person:cara", row["id"], access["id"])
-    assert MA.level(c, "bot:coo", CARA) == "none"
+    assert MA.level(c, "bot:assistant", CARA) == "none"
     refused(MA.revoke, c, "person:cara", row["id"], access["id"], code="not_found", status=404)
     logged = [r["action"] for r in c.execute("SELECT action FROM events WHERE target=? ORDER BY rowid", (row["id"],))]
     assert logged == ["mailbox.access_granted", "mailbox.access_granted", "mailbox.access_revoked"]
@@ -255,17 +255,17 @@ def a_grant_is_checked(c):
 
 def an_archived_bot_holds_nothing(c):
     row = personal(c, CARA)
-    MA.grant(c, "person:cara", row["id"], "bot", "coo", "read_write")
-    c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot(c, "coo"),))
-    assert MA.level(c, "bot:coo", CARA) == "none"
+    MA.grant(c, "person:cara", row["id"], "bot", "assistant", "read_write")
+    c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot(c, "assistant"),))
+    assert MA.level(c, "bot:assistant", CARA) == "none"
 
 
 def give_never_lowers_a_level(c):
     row = personal(c, CARA)
-    coo = bot(c, "coo")
+    coo = bot(c, "assistant")
     first = MA.give(c, row, "bot", coo, "read_write", "test")
     assert MA.give(c, row, "bot", coo, "read", "test") == first
-    assert MA.level(c, "bot:coo", CARA) == "read_write"
+    assert MA.level(c, "bot:assistant", CARA) == "read_write"
     with pytest.raises(ValueError):
         MA.give(c, row, "bot", coo, "admin", "test")
 
@@ -274,22 +274,22 @@ def nobody_reshares(c):
     row = personal(c, CARA)
     MA.grant(c, "person:cara", row["id"], "person", "ben", "read_write")
     # ben holds Read and write on cara's mailbox, and is an admin: he still may not pass it on.
-    refused(MA.grant, c, "person:ben", row["id"], "bot", "coo", "read", status=403)
-    refused(MA.grant, c, "person:ana", row["id"], "bot", "coo", "read", status=403)  # nor may the owner
-    refused(MA.grant, c, "bot:coo", row["id"], "bot", "coo", "read", status=403)  # nor a bot
+    refused(MA.grant, c, "person:ben", row["id"], "bot", "assistant", "read", status=403)
+    refused(MA.grant, c, "person:ana", row["id"], "bot", "assistant", "read", status=403)  # nor may the owner
+    refused(MA.grant, c, "bot:assistant", row["id"], "bot", "assistant", "read", status=403)  # nor a bot
     access = c.execute("SELECT id FROM mailbox_accesses WHERE mailbox_id=?", (row["id"],)).fetchone()["id"]
     refused(MA.revoke, c, "person:ben", row["id"], access, status=403)
     s = shared(c)
-    refused(MA.grant, c, "person:cara", s["id"], "bot", "coo", "read", status=403)  # a member, on a shared one
+    refused(MA.grant, c, "person:cara", s["id"], "bot", "assistant", "read", status=403)  # a member, on a shared one
     MA.grant(c, "person:ben", s["id"], "person", "cara", "read_write")
-    refused(MA.grant, c, "person:cara", s["id"], "bot", "coo", "read", status=403)  # even holding it
+    refused(MA.grant, c, "person:cara", s["id"], "bot", "assistant", "read", status=403)  # even holding it
 
 
 def the_assistant_may_not_share_or_stop_a_mailbox(c):
     row = personal(c, ANA)
-    refused(MA.grant, c, ASSISTANT, row["id"], "bot", "coo", "read", status=403)
+    refused(MA.grant, c, ASSISTANT, row["id"], "bot", "assistant", "read", status=403)
     refused(MA.stop, c, ASSISTANT, row["id"], status=403)
-    MA.grant(c, "person:ana", row["id"], "bot", "coo", "read")
+    MA.grant(c, "person:ana", row["id"], "bot", "assistant", "read")
     access = c.execute("SELECT id FROM mailbox_accesses WHERE mailbox_id=?", (row["id"],)).fetchone()["id"]
     refused(MA.revoke, c, ASSISTANT, row["id"], access, status=403)
 
@@ -303,14 +303,14 @@ def the_assistant_holds_exactly_its_persons_access(c):
         levels(c, ASSISTANT) == levels(c, "person:ana") == {ANA: "read_write", CARA: "read", s["address"]: "read_write"}
     )
     # Not the assistant bot's own grants.
-    assert levels(c, "bot:coo") == {}
+    assert levels(c, "bot:assistant") == {}
 
 
 def principals_from_identities(c):
-    coo = bot(c, "coo")
+    coo = bot(c, "assistant")
     assert MA.principal(c, Identity("human:cara", "human", CARA)) == MA.Principal("person", "cara")
     assert MA.principal(c, Identity("bot:" + coo, "bot")) == MA.Principal("bot", coo)
-    assert MA.principal(c, "bot:coo") == MA.Principal("bot", coo)  # by slug too
+    assert MA.principal(c, "bot:assistant") == MA.Principal("bot", coo)  # by slug too
     assert MA.principal(c, Identity("runner:r1", "runner", runner_id="r1")) is MA.NOBODY
     assert MA.principal(c, Identity("service:k1", "service")) is MA.NOBODY
     assert MA.principal(c, "bot:no-such-bot") is MA.NOBODY
@@ -343,21 +343,21 @@ def outside_the_company_domains_read_and_write_is_read(c):
     assert MA.company_domains(c) == ["acme.example"]
     out = shared(c, OUTSIDE)
     assert MA.level(c, "person:ben", OUTSIDE) == "read"
-    MA.grant(c, "person:ben", out["id"], "bot", "coo", "read_write")
-    assert MA.level(c, "bot:coo", OUTSIDE) == "read"
-    assert MA.may(c, "bot:coo", OUTSIDE)["send"] is False
+    MA.grant(c, "person:ben", out["id"], "bot", "assistant", "read_write")
+    assert MA.level(c, "bot:assistant", OUTSIDE) == "read"
+    assert MA.may(c, "bot:assistant", OUTSIDE)["send"] is False
     assert MA.inside("x@acme.example", []) is True  # nothing known: no cap
     assert MA.inside("x@partner.example", ["acme.example"]) is False
 
 
 def a_stopped_mailbox_is_used_by_nobody_and_stopped_only_by_its_person_or_an_admin(c):
     row = personal(c, CARA)
-    MA.grant(c, "person:cara", row["id"], "bot", "coo", "read_write")
-    refused(MA.stop, c, "bot:coo", row["id"], status=403)
+    MA.grant(c, "person:cara", row["id"], "bot", "assistant", "read_write")
+    refused(MA.stop, c, "bot:assistant", row["id"], status=403)
     refused(MA.stop, c, "person:eve", row["id"], status=403)
     assert MA.stop(c, "person:cara", row["id"])["status"] == "stopped"
     assert MA.level(c, "person:cara", CARA) == "none"
-    assert MA.level(c, "bot:coo", CARA) == "none"
+    assert MA.level(c, "bot:assistant", CARA) == "none"
     assert CARA in MA.stopped(c)
     refused(MA.grant, c, "person:cara", row["id"], "person", "ben", "read", code="stopped", status=409)
     s = shared(c)
@@ -402,7 +402,7 @@ def test_allowed_domains_are_the_company_domains(api):
 def test_what_tico_may_do_caps_every_level(api):
     with tx(api) as c:
         row = personal(c, CARA)
-        MA.grant(c, "person:cara", row["id"], "bot", "coo", "read_write")
+        MA.grant(c, "person:cara", row["id"], "bot", "assistant", "read_write")
     r = api.put(
         "/api/v2/google/permissions",
         json={"organize_mail": False, "send_mail": True, "change_calendar": False},
@@ -410,8 +410,8 @@ def test_what_tico_may_do_caps_every_level(api):
     )
     assert r.status_code == 200, r.text
     with tx(api) as c:
-        assert MA.level(c, "bot:coo", CARA) == "read_write"  # the level is kept
-        assert MA.may(c, "bot:coo", CARA) == {
+        assert MA.level(c, "bot:assistant", CARA) == "read_write"  # the level is kept
+        assert MA.may(c, "bot:assistant", CARA) == {
             "read": True,
             "organize": False,
             "send": True,
@@ -426,7 +426,7 @@ def test_what_tico_may_do_caps_every_level(api):
     )
     assert r.status_code == 200, r.text
     with tx(api) as c:
-        assert MA.may(c, "bot:coo", CARA) == {
+        assert MA.may(c, "bot:assistant", CARA) == {
             "read": True,
             "organize": False,
             "send": False,
@@ -449,7 +449,7 @@ def test_an_automation_action_needs_its_owner_s_level_now(api):
         row = personal(c, CARA)
         assert MA.action_refusal(c, "person:cara", CARA, "archive") is None
         assert MA.action_refusal(c, "person:cara", CARA, "send") is None
-        coo = bot(c, "coo")
+        coo = bot(c, "assistant")
         assert "Tools > cara@acme.example > Who can use it" in MA.action_refusal(c, "bot:" + coo, CARA, "label")
         MA.grant(c, "person:cara", row["id"], "bot", coo, "read")
         assert MA.action_refusal(c, "bot:" + coo, CARA, "archive")
@@ -472,13 +472,13 @@ def test_an_automation_action_needs_its_owner_s_level_now(api):
 
 
 def setting_a_message_bot_grants_it_and_moving_it_takes_the_old_grant(c):
-    coo, ops = bot(c, "coo"), bot(c, "ops")
+    coo, ops = bot(c, "assistant"), bot(c, "ops")
     cara = {"id": "cara", "email": CARA}
     row = MA.message_bot_changed(c, cara, None, "", coo)
     assert row["address"] == CARA and row["person_id"] == "cara"
-    assert MA.level(c, "bot:coo", CARA) == "read"  # no gmail entry asks to draft
+    assert MA.level(c, "bot:assistant", CARA) == "read"  # no gmail entry asks to draft
     MA.message_bot_changed(c, cara, coo, CARA, ops)
-    assert MA.level(c, "bot:coo", CARA) == "none"
+    assert MA.level(c, "bot:assistant", CARA) == "none"
     assert MA.level(c, "bot:ops", CARA) == "read"
     MA.message_bot_changed(c, cara, ops, CARA, None)
     assert MA.level(c, "bot:ops", CARA) == "none"
@@ -491,11 +491,11 @@ def making_a_message_bot_links_only_a_mailbox_its_maker_may_grant(c):
     from backend import message_bots
 
     for slug in ("ops", "doc-updater", "finance"):
-        BS.write(c, slug, {"name": slug, "template": "inbox"})
+        BS.write(c, slug, {"name": slug, "template": "inbox-manager"})
     assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: ana@acme.example\n") is None
     assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: support@acme.example\n") is None
     assert MA.level(c, "bot:ops", ANA) == "none" and MA._row(c, SUPPORT) is None
-    assert message_bots.link(c, "bot:coo", "ops", "bot:coo", "Mailbox: cara@acme.example\n") is None
+    assert message_bots.link(c, "bot:assistant", "ops", "bot:assistant", "Mailbox: cara@acme.example\n") is None
     assert message_bots.link(c, "human:cara", "ops", "human:cara", "Mailbox: cara@acme.example\n") == "cara"
     assert MA.level(c, "bot:ops", CARA) == "read_write"  # the template's read and draft
     assert message_bots.link(c, "human:ben", "doc-updater", "human:ben", "Mailbox: support@acme.example\n") == "ben"
@@ -538,7 +538,7 @@ def test_a_database_before_the_migration_answers_only_a_persons_own_email(api):
         c.execute("DROP TABLE mailbox_accesses")
         c.execute("DROP TABLE mailboxes")
         assert levels(c, "person:cara") == {CARA: "read_write"}
-        assert levels(c, "bot:coo") == {}
+        assert levels(c, "bot:assistant") == {}
         assert MA.stopped(c) == set()
         assert MA.backfill(c) == {"mailboxes": 0, "accesses": 0}
 

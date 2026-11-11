@@ -23,7 +23,7 @@ def test_counsel_copy_revoked_after_ask(api, running, removed):
     org(api)
     counsel_on(api)
     fid, _ = promoted(api)
-    edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
+    edit(api, fid, {"people": ["cara"], "bots": [H.RULES_OWNER]})
     task = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     before = get(api, "tasks/" + task, token="cara-test")
     assert "42 deals" in before["task"]["body"]
@@ -31,7 +31,7 @@ def test_counsel_copy_revoked_after_ask(api, running, removed):
     edit(
         api,
         fid,
-        {"people": [] if removed == "asker" else ["cara"], "bots": [] if removed == "counsel" else [H.COUNSEL]},
+        {"people": [] if removed == "asker" else ["cara"], "bots": [] if removed == "counsel" else [H.RULES_OWNER]},
     )
     with api.app.state.store.read() as c:
         assert c.execute("SELECT body FROM tasks WHERE id=?", (task,)).fetchone()[0] == counsel.REMOVED_PAGE
@@ -48,7 +48,7 @@ def test_counsel_copy_is_rechecked_when_group_membership_changes(api):
     counsel_on(api)
     legal = send(api, "POST", "groups", {"name": "Legal", "add": {"people": ["cara"]}})["id"]
     fid, _ = promoted(api)
-    edit(api, fid, {"teams": [legal], "bots": [H.COUNSEL]})
+    edit(api, fid, {"teams": [legal], "bots": [H.RULES_OWNER]})
     task = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     # Simulate an independent roster writer: the read gate must not rely on set_audience scrubbing alone.
     with api.app.state.store.transaction() as c:
@@ -71,7 +71,7 @@ def test_native_copy_gate_preserves_autocommit_and_later_writes(api):
     org(api)
     counsel_on(api)
     fid, _ = promoted(api)
-    edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
+    edit(api, fid, {"people": ["cara"], "bots": [H.RULES_OWNER]})
     tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     c = H.connect(api.app.state.store.settings.db_path)
     try:

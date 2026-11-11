@@ -10,13 +10,13 @@
 #   leads:
 #     category: lead              # a question id in questions/listening-item.json
 #     threshold: 0.75
-#     receiver: bot:sales-ops     # the bot that accepts or rejects each item
+#     receiver: bot:sales-operations-manager     # the bot that accepts or rejects each item
 #     unless: {category: vendor_pitch, threshold: 0.70}
 #     what: a small-team lead who might use the product, kept with what the post tells us
 #   content:
 #     category: content
 #     threshold: 0.75
-#     receiver: bot:content
+#     receiver: bot:content-owner
 #     readers: [bot:research]
 #     what: a question or pain point a useful post could answer
 destinations: {}

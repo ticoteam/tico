@@ -50,7 +50,7 @@ def company_file(api):
     draft["company"]["signals"] = ["sells_services"]
     draft = C.Turn(draft).finish()
     draft["company"].update(name="Kiln & Co", about="We make pottery.")
-    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("coo", "botops")]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "botops")]
     body = {"company_yaml": C.to_yaml(draft)}
     preview = api.post("/api/v2/onboarding/company/preview", json=body, headers=signed_in())
     assert preview.status_code == 200, preview.text

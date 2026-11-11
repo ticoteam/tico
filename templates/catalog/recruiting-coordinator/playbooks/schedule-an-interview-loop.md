@@ -1,6 +1,6 @@
 # Schedule an interview loop
 
-Triggered by a task from `recruiting` or by a hiring manager moving a candidate to interview. Budget 15 minutes.
+Triggered by a task from `recruiter` or by a hiring manager moving a candidate to interview. Budget 15 minutes.
 
 Inputs: the task, `knowledge/loops/<role>.md` (rounds, panel, length, format), `knowledge/interviewer-rules.md`, and each
 panel member's calendar for the window.

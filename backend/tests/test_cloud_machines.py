@@ -2266,26 +2266,26 @@ def placed(cloud):
 def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     execution = cloud.api.app.state.execution
     with cloud.store.transaction() as c:
-        # coo is a Builder; ops is in Engineering on the team chart, which alone is no reason for its own machine;
+        # assistant is a Builder; ops is in Engineering on the team chart, which alone is no reason for its own machine;
         # finance was made from the video producer's template.
         c.execute(
             "UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
             (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),),
         )
         BS.update(c, 'ops', {'team': 'engineering'})
-        c.execute("UPDATE bots SET display_name='Builder (Claude)' WHERE id='coo'")
-        BS.update(c, 'finance', {'template': 'video-producer'})
-        for bot in ("ops", "coo", "finance"):
+        c.execute("UPDATE bots SET display_name='Builder (Claude)' WHERE id='assistant'")
+        BS.update(c, 'finance', {'template': 'video-owner'})
+        for bot in ("ops", "assistant", "finance"):
             assert placement.auto_place(c, execution, bot) is None
-    assert [cloud.row(bot)["placement"] for bot in ("ops", "coo", "finance")] == ["shared", "own", "own"]
+    assert [cloud.row(bot)["placement"] for bot in ("ops", "assistant", "finance")] == ["shared", "own", "own"]
     assert employee(cloud.api, "ops")["cloud_machine"]["placement"] == "shared"
-    post(cloud.api, "bots/coo/cloud-machine", {"placement": "shared"})
+    post(cloud.api, "bots/assistant/cloud-machine", {"placement": "shared"})
     post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
-    assert cloud.row("coo")["placement"] == "shared" and cloud.row("ops")["placement"] == "own"
+    assert cloud.row("assistant")["placement"] == "shared" and cloud.row("ops")["placement"] == "own"
     post(cloud.api, "bots/ops/cloud-machine", {"placement": "big"}, expected=422)
     post(cloud.api, "bots/ops/cloud-machine", {"placement": "shared"}, token="cara-test", expected=403)
     with cloud.store.read() as c:
-        assert CM.members(c) == ["coo"]
+        assert CM.members(c) == ["assistant"]
 
 
 def test_only_a_builder_by_name_gets_its_own_machine_by_default(cloud):
@@ -2316,19 +2316,19 @@ def test_a_builder_template_a_copy_of_one_or_a_numbered_builder_gets_its_own_mac
         assert CM.default_placement(c, "ops") == "shared"
         _config(c, "ops", {"template": "builder"})
         assert CM.default_placement(c, "ops") == "own"
-        _config(c, "ops", {"template": "video-producer"})
+        _config(c, "ops", {"template": "video-owner"})
         assert CM.default_placement(c, "ops") == "own"
         # A copy of a Builder is heavy whatever it is called.
-        _config(c, "coo", {"template": "builder"})
-        _config(c, "ops", {"copied_from": {"bot": "coo", "sha": "0" * 40}})
+        _config(c, "assistant", {"template": "builder"})
+        _config(c, "ops", {"copied_from": {"bot": "assistant", "sha": "0" * 40}})
         assert CM.default_placement(c, "ops") == "own"
-        _config(c, "coo", {"template": "pr-reviewer"})
+        _config(c, "assistant", {"template": "reviewer"})
         assert CM.default_placement(c, "ops") == "shared"
         # A copy of a copy follows the line back to the Builder it started from; a loop of copies ends.
         _config(c, "finance", {"template": "builder"})
-        _config(c, "coo", {"copied_from": {"bot": "finance", "sha": "0" * 40}})
+        _config(c, "assistant", {"copied_from": {"bot": "finance", "sha": "0" * 40}})
         assert CM.default_placement(c, "ops") == "own"
-        _config(c, "coo", {"copied_from": {"bot": "ops", "sha": "0" * 40}})
+        _config(c, "assistant", {"copied_from": {"bot": "ops", "sha": "0" * 40}})
         assert CM.default_placement(c, "ops") == "shared"
         for name, want in (
             ("Builder 2", "own"),
@@ -2375,9 +2375,9 @@ def test_one_shared_machine_wakes_for_any_member_and_hosts_them_all(cloud):
     }
     assert get(cloud.api, "cloud-machines")["shared"]["bots"] == ["finance", "ops"]
     # A bot joining while it is up is assigned there at the next look; nothing is started or made for it.
-    adopt(cloud, "coo", "shared")
+    adopt(cloud, "assistant", "shared")
     cloud.hq.calls.clear()
-    assert cloud.tick(10) == [] and placed(cloud)["coo"] == rid
+    assert cloud.tick(10) == [] and placed(cloud)["assistant"] == rid
     # Idle, it stops; another member's new work starts it again.
     idle(cloud)
     cloud.tick(400)
@@ -2898,8 +2898,8 @@ def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_
     manager = api.app.state.cloud_machines
     monkeypatch.setattr(manager, "client", fake)
     with store.transaction() as c:  # a bootstrap bot setup left planned, with no computer
-        c.execute("UPDATE bots SET state='planned' WHERE slug='coo'")
-        BS.update(c, 'coo', {'materialize': True})
+        c.execute("UPDATE bots SET state='planned' WHERE slug='assistant'")
+        BS.update(c, 'assistant', {'materialize': True})
         c.execute("UPDATE bots SET state='archived' WHERE slug='doc-updater'")
     manager.tick()
     with store.read() as c:
@@ -2909,8 +2909,8 @@ def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_
     manager.tick()  # HQ answers: the finished setup is placed now
     with store.read() as c:
         adopted = set(CM.rows(c)) - {CM.SHARED}
-        state = c.execute("SELECT state FROM bots WHERE slug='coo'").fetchone()["state"]
-    assert adopted == {"coo", "ops", "cpo", "product-design", "finance", "inbox"} and state == "active"
+        state = c.execute("SELECT state FROM bots WHERE slug='assistant'").fetchone()["state"]
+    assert adopted == {"assistant", "ops", "cpo", "product-design", "finance", "inbox"} and state == "active"
     assert employee(api)["cloud_machine"]["mode"] == "cloud"
     # Later syncs leave a person's choices alone: a bot moved to a computer stays there.
     r = runner(api)

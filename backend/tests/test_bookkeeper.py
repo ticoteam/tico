@@ -6,6 +6,8 @@ import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
+
 from backend import bills_address as BA
 from backend import bookkeeper as BK
 from backend import groups, postal_mail
@@ -48,7 +50,7 @@ def test_it_is_built_once_outside_the_org_chart_with_exactly_its_default_rights(
         asks = c.execute("SELECT owner_id FROM tasks WHERE title=?", (BK.VIEW_TITLE,)).fetchall()
         assert len(asks) == 1 and asks[0]["owner_id"].startswith("human:")
     assert api.app.state.auth.system_bot(BK.SLUG) and BK.SLUG in groups.SYSTEM_BOTS
-    assert "bookkeeper" in helper_templates(api.app.state.store.settings)
+    assert "finance-owner" in helper_templates(api.app.state.store.settings)
     store = api.app.state.store
     with store.transaction() as c:  # a revoke sticks: the next start does not grant it again
         owner = "human:" + api.app.state.auth.owner_id(c)
@@ -172,21 +174,24 @@ def test_a_bill_emailed_to_the_address_lands_once_in_the_library_and_in_the_book
     assert row["file_id"] in task["body"]
 
 
-def test_the_retired_bookkeeping_template_is_offered_nowhere_but_a_bot_built_from_it_keeps_its_card(environment):
+def test_a_retired_template_is_offered_nowhere_but_a_bot_built_from_it_keeps_its_card(environment):
     from backend import recruit
 
     api = built(environment)
     settings = api.app.state.store.settings
-    shutil.copytree(TEMPLATE.parent / "bookkeeping", Path(settings.catalog_dir) / "bookkeeping")
+    # A retired card of its own: no catalog template is retired today, so the test makes one from the Finance Owner's.
+    folder = Path(settings.catalog_dir) / "old-books"
+    shutil.copytree(TEMPLATE, folder)
+    card = yaml.safe_load((folder / "card.yaml").read_text())
+    card.update(template="old-books", slug="old-books", name="Old Books", retired=True)
+    (folder / "card.yaml").write_text(yaml.safe_dump(card))
     onboarding = api.app.state.onboarding
     with api.app.state.store.read() as c:
-        assert "bookkeeping" not in {card["template"] for card in onboarding.catalog(c)}
-    assert "bookkeeping" not in {card["template"] for card in recruit.catalog(settings)["cards"]}
+        assert "old-books" not in {card["template"] for card in onboarding.catalog(c)}
+    assert "old-books" not in {card["template"] for card in recruit.catalog(settings)["cards"]}
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO bots(id,slug,display_name,state) VALUES('bookkeeping','bookkeeping','Acme Books','active')"
-        )
-        assert "bookkeeping" in {card["template"] for card in onboarding.catalog(c)}
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('old-books','old-books','Acme Books','active')")
+        assert "old-books" in {card["template"] for card in onboarding.catalog(c)}
 
 
 def _addressed(api):

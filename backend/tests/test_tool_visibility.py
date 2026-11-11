@@ -131,7 +131,7 @@ def test_a_listed_group_and_bot_see_it(api):
     ]
     with api.app.state.store.read() as c:
         admins = api.app.state.vault.admins
-        ops, coo = Identity("bot:ops", "bot"), Identity("bot:coo", "bot")
+        ops, coo = Identity("bot:ops", "bot"), Identity("bot:assistant", "bot")
         assert api_tools.visible(c, ops, tid, admins) is True
         assert api_tools.visible(c, coo, tid, admins) is False
 
@@ -329,8 +329,8 @@ def test_copying_a_bot_never_reports_or_tries_a_hidden_key(api):
     tools = [{"env": env, "service": ""}]
     with api.app.state.store.transaction() as c:
         ben, ana = ben_and_ana(api, c)
-        bens = bot_copy.credentials_for(c, vault, ben, "ops", "coo", tools, [])
-        anas = bot_copy.credentials_for(c, vault, ana, "ops", "coo", tools, [])
+        bens = bot_copy.credentials_for(c, vault, ben, "ops", "assistant", tools, [])
+        anas = bot_copy.credentials_for(c, vault, ana, "ops", "assistant", tools, [])
     assert bens["granted"] == [] and bens["needs"][0]["detail"] == "The original has no stored credential for it."
     assert anas["granted"] == [{"env": env, "service": "", "credential": "Close read_write"}]
 

@@ -307,7 +307,7 @@ def test_a_personal_token_never_gives_an_ok_on_anyones_ask_but_sends_back_and_he
 
 # ----------------------------------------------------------------------------- the generic use (tico ok use)
 def test_the_generic_use_lets_only_the_asker_act_once_on_exactly_what_was_okd(api):
-    """`tico ok use <rid> --for KIND:ID --content JSON` (POST /api/v2/oks/{rid}/use), as the Video Producer uses a
+    """`tico ok use <rid> --for KIND:ID --content JSON` (POST /api/v2/oks/{rid}/use), as the Video Owner uses a
     `budget_raise:<slug>` OK: refused for an OK that does not exist, still waits, is for other content or another
     subject, or is used by anyone but the bot that asked; used once; and an OK whose task was closed lets nothing go."""
     bot, other = as_bot(api), as_bot(api, "video")

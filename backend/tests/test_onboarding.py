@@ -46,13 +46,13 @@ def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_n
     machine(api)
     # The owner's edits to the instructions are the duties and limits recruiting must see; the template's text is not.
     edited = "# Help\n\nYou answer Acme's support inbox.\n\nRefund up to $40 without asking.\nNever phone a customer.\n"
-    draft(api, selected={"support": {"template": "support", "display_name": "Help", "instructions": edited}})
+    draft(api, selected={"support": {"template": "support-owner", "display_name": "Help", "instructions": edited}})
     first = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).json()
     again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text
     record = again.json()
     assert record["completed"] == first["completed"] and record["seats"] == first["seats"]
-    assert sorted(row["slug"] for row in record["bots"]) == ["botops", "coo"]
+    assert sorted(row["slug"] for row in record["bots"]) == ["assistant", "botops"]
     (seat,) = seats(api)
     assert record["seats"] == {"support": seat["id"]}
     assert seat["title"] == "Help" and seat["reports_to"] == "human:morgan"
@@ -65,27 +65,27 @@ def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_n
     assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=signed_in()).json()["tasks"] == []
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM bots WHERE slug='support'").fetchone()
-        assert not c.execute("SELECT 1 FROM assignments WHERE bot NOT IN ('coo','botops')").fetchone()
-    assert _states(api)["botops"] == _states(api)["coo"] == "active"  # the built-ins work from day one
+        assert not c.execute("SELECT 1 FROM assignments WHERE bot NOT IN ('assistant','botops')").fetchone()
+    assert _states(api)["botops"] == _states(api)["assistant"] == "active"  # the built-ins work from day one
 
 
 def test_the_default_marketing_chart_hires_the_writer_first_and_moves_it_under_the_head_when_the_head_is_hired(
     environment,
 ):
-    """ticket e9c84fc5: setup's Marketing chart is Content Marketer under Head of Marketing, which reports to the owner.
+    """ticket e9c84fc5: setup's Marketing chart is Content Owner under Head of Marketing, which reports to the owner.
     While the head's seat is still Recruiting, hiring the writer used to fail with "Reports-to bot was not found". Now the
     writer is hired under the owner and says so until the head is hired; hiring the head moves it under the new bot."""
     api = environment(catalog_dir=Settings.catalog_dir)
     machine(api)
     picks = {
         "head-of-marketing": {
-            "template": "marketing-lead",
+            "template": "growth-team-manager",
             "display_name": "Head of Marketing",
             "reports_to": "human:morgan",
         },
         "content-marketer": {
-            "template": "content",
-            "display_name": "Content Marketer",
+            "template": "content-owner",
+            "display_name": "Content Owner",
             "reports_to": "head-of-marketing",
         },
     }
@@ -93,7 +93,7 @@ def test_the_default_marketing_chart_hires_the_writer_first_and_moves_it_under_t
     done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     (head,) = [seat for seat in seats(api) if seat["title"] == "Head of Marketing"]
-    (writer,) = [seat for seat in seats(api) if seat["title"] == "Content Marketer"]
+    (writer,) = [seat for seat in seats(api) if seat["title"] == "Content Owner"]
     assert head["reports_to"] == "human:morgan" and writer["reports_to"] == "seat:" + head["id"]
 
     def recruit_and_hire(seat, template):
@@ -112,9 +112,9 @@ def test_the_default_marketing_chart_hires_the_writer_first_and_moves_it_under_t
         api.get(f"/api/v2/seats/{writer['id']}", headers=signed_in()).json()["reports_now"]["until"]
         == "Head of Marketing"
     )
-    writing = recruit_and_hire(writer, "content")
+    writing = recruit_and_hire(writer, "content-owner")
     assert writing["reports_to"] == "human:morgan" and definition_reports_to(writing) == "human:morgan"
-    leading = recruit_and_hire(head, "marketing-lead")
+    leading = recruit_and_hire(head, "growth-team-manager")
     assert definition_reports_to(leading) == "human:morgan"
     assert definition_reports_to(writing) == leading["bot"]  # moved when the head was hired, as placed
     assert seats(api) == []
@@ -126,7 +126,7 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
     from backend import routines, views
 
     inbox = {
-        "template": "inbox",
+        "template": "inbox-manager",
         "slug": "inbox",
         "name": "Inbox Manager",
         "required": False,
@@ -151,13 +151,13 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
     draft(
         api,
         selected={
-            "inbox": {"template": "inbox", "display_name": "Inbox Manager", "reports_to": "human:morgan"},
-            "support": {"template": "support", "display_name": "Help"},
+            "inbox": {"template": "inbox-manager", "display_name": "Inbox Manager", "reports_to": "human:morgan"},
+            "support": {"template": "support-owner", "display_name": "Help"},
         },
     )
     done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
-    assert sorted(row["slug"] for row in done.json()["bots"]) == ["botops", "coo", "inbox"]
+    assert sorted(row["slug"] for row in done.json()["bots"]) == ["assistant", "botops", "inbox"]
     assert set(done.json()["seats"]) == {"support"}
     with api.app.state.store.read() as c:
         assert (
@@ -174,16 +174,17 @@ def test_the_inbox_manager_turned_on_in_setup_is_a_message_bot_linked_to_the_own
 
 def test_direct_signup_with_no_chosen_chart_is_the_built_ins_and_an_empty_chart(environment):
     """bot-lifecycle-spec.md acceptance test 4: no company file and nothing picked still finishes setup, with only the
-    built-in bots and no seat, and the chart empty to recruit into."""
+    built-in bots as bots; the chart is the default chart's seats, still to recruit into."""
     api = environment()
     machine(api)
     draft(api)
     done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
     assert done.json()["completed"] and done.json()["company_import_failed"] is None
-    assert sorted(row["slug"] for row in done.json()["bots"]) == ["botops", "coo"]
-    assert seats(api) == [] and api.get("/api/v2/org", headers=signed_in()).json()["seats"] == []
-    assert _states(api)["botops"] == _states(api)["coo"] == "active"
+    assert sorted(row["slug"] for row in done.json()["bots"]) == ["assistant", "botops"]
+    # Nothing picked is the default chart (company_import.default_chart): its seats whose template this catalog has.
+    assert sorted(seat["title"] for seat in seats(api)) == ["Inbound Sales Owner", "Support Owner"]
+    assert _states(api)["botops"] == _states(api)["assistant"] == "active"
     added = api.post("/api/v2/seats", json={"title": "Head of Support"}, headers=signed_in())
     assert added.status_code == 200 and added.json()["stage"] == "recruiting"
 
@@ -192,7 +193,7 @@ def test_completing_twice_duplicates_neither_a_bot_nor_a_task(environment):
     api = environment()
     # The owner's edits to the instructions are the duties and limits recruiting must see; the template's text is not.
     edited = "# Help\n\nYou answer Acme's support inbox.\n\nRefund up to $40 without asking.\nNever phone a customer.\n"
-    draft(api, selected={"support": {"template": "support", "display_name": "Help", "instructions": edited}})
+    draft(api, selected={"support": {"template": "support-owner", "display_name": "Help", "instructions": edited}})
     first = build_team(api)
     again = build_team(api)
     assert again["completed"] == first["completed"]
@@ -307,18 +308,21 @@ def test_every_shipped_template_saves_as_the_wizard_sends_it(environment):
 
 def test_the_team_is_created_with_no_provider_and_no_computer_and_starts_once_they_exist(environment):
     api = environment(seed={}, enabled_providers=())
-    draft(api, selected={"support": {"template": "support", "display_name": "Support", "instructions": ""}})
+    draft(
+        api,
+        selected={"support-owner": {"template": "support-owner", "display_name": "Support Owner", "instructions": ""}},
+    )
     done = build_team(api)
-    assert {"botops", "support"} <= {row["slug"] for row in done["bots"]}
+    assert {"botops", "support-owner"} <= {row["slug"] for row in done["bots"]}
     with api.app.state.store.read() as c:
-        config = BS.read(c, 'support')
+        config = BS.read(c, 'support-owner')
         assert not c.execute("SELECT 1 FROM assignments").fetchone()
     assert not {"model", "runtime"} & set(config)  # it follows the company default, once there is one
     assert _states(api)["botops"] == "planned"  # nothing is placed or running yet
     machine(api)  # a computer appears: the bots are placed
     assert _states(api)["botops"] == "active"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM assignments WHERE bot='support'").fetchone()
+        assert c.execute("SELECT 1 FROM assignments WHERE bot='support-owner'").fetchone()
     api.put("/api/v2/providers", headers=signed_in(), json={"enabled": ["openai"], "expected_revision": 0})
     with api.app.state.store.read() as c:  # a provider is added: the bot resolves to it
         assert providers.bot_choice(c, api.app.state.store.settings, config)[0] == "codex"
@@ -335,13 +339,13 @@ def test_completing_onboarding_activates_the_bootstrap_bots_once_a_machine_hosts
     draft(
         api,
         selected={
-            "support": {"template": "support", "display_name": "Support", "instructions": ""},
-            "coo": {"template": "assistant", "display_name": "Morgan", "instructions": ""},
+            "support": {"template": "support-owner", "display_name": "Support", "instructions": ""},
+            "assistant": {"template": "assistant", "display_name": "Morgan", "instructions": ""},
         },
     )
     build_team(api)
     states = _states(api)
-    assert states["botops"] == "active" and states["coo"] == "active"
+    assert states["botops"] == "active" and states["assistant"] == "active"
     assert states["support"] == "planned"  # activating what BotOps builds stays a person's call
     task = api.post(
         "/api/v2/tasks", json={"owner": "botops", "title": "Look at this", "body": "x"}, headers=signed_in()
@@ -379,7 +383,7 @@ def test_the_librarian_is_always_built_with_its_daily_routine_seeded_once(enviro
     (folder / "playbooks/refresh-the-map.md").write_text("Refresh {{company_name}}'s map of the docs.\n")
     draft(api)
     record = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).json()
-    assert sorted(row["slug"] for row in record["bots"]) == ["botops", "coo", "librarian"]
+    assert sorted(row["slug"] for row in record["bots"]) == ["assistant", "botops", "librarian"]
     assert all(row["setup_task_id"] is None for row in record["bots"])  # the runner sets it up, not BotOps
     assert _states(api)["librarian"] == "active"
     (routine,) = _routines(api)
@@ -448,8 +452,8 @@ def test_the_wizard_is_told_when_the_team_name_is_only_the_servers_stand_in(tmp_
 
 
 COUNSEL_CARD = {
-    "template": "tico-counsel",
-    "slug": "tico-counsel",
+    "template": "rules-owner",
+    "slug": "rules-owner",
     "name": "Counsel",
     "required": True,
     "bootstrap": True,
@@ -486,13 +490,13 @@ def test_a_companys_own_bot_named_counsel_is_never_taken_for_the_built_in_counse
     with api.app.state.store.transaction() as c:
         api.app.state.onboarding.ensure_counsel(c)
     assert theirs() == before
-    assert _states(api)[H.COUNSEL] == "active"
-    assert not api.app.state.auth.system_bot("counsel") and api.app.state.auth.system_bot(H.COUNSEL)
+    assert _states(api)[H.RULES_OWNER] == "active"
+    assert not api.app.state.auth.system_bot("counsel") and api.app.state.auth.system_bot(H.RULES_OWNER)
     # The built-in still works: a can-I question is its task, not theirs.
     asked = api.post("/api/v2/rules/ask", json={"question": "Can I text customers on Sunday?"}, headers=signed_in())
     assert asked.status_code == 200, asked.text
     task = api.get("/api/v2/tasks/" + asked.json()["task_id"], headers=signed_in()).json()
-    assert (task.get("task") or task)["owner_id"] == "bot:" + H.COUNSEL
+    assert (task.get("task") or task)["owner_id"] == "bot:" + H.RULES_OWNER
 
 
 def test_a_restored_bot_keeps_the_model_its_config_names(environment):
@@ -501,7 +505,7 @@ def test_a_restored_bot_keeps_the_model_its_config_names(environment):
     # Only the assistant is brought back this way (create_bot restores it; any other archived slug is a duplicate).
     api = environment(
         seed={
-            "coo": {
+            "assistant": {
                 "name": "Coo",
                 "status": "archived",
                 "template": "assistant",
@@ -513,10 +517,10 @@ def test_a_restored_bot_keeps_the_model_its_config_names(environment):
     store = api.app.state.store
     with store.transaction() as c:
         who = api.app.state.auth.owner_identity(c)
-        done = api.app.state.onboarding._turn_on(c, who, "coo", "assistant", "Coo", "bot.turned_on")
+        done = api.app.state.onboarding._turn_on(c, who, "assistant", "assistant", "Coo", "bot.turned_on")
     assert done["restored"] is True
     with store.read() as c:
-        config = BS.read(c, "coo")
+        config = BS.read(c, "assistant")
     assert config["model"] == "claude-opus-5-5"
 
 

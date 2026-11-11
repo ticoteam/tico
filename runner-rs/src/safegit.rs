@@ -1124,14 +1124,17 @@ mod tests {
             ("Tico", "runner@bots.tico.invalid")
         );
         turn.insert("GIT_AUTHOR_NAME".into(), "Coo".into());
-        turn.insert("GIT_AUTHOR_EMAIL".into(), "coo@bots.tico.invalid".into());
+        turn.insert(
+            "GIT_AUTHOR_EMAIL".into(),
+            "assistant@bots.tico.invalid".into(),
+        );
         let bot = committing_environment(&turn);
         assert_eq!(
             (
                 bot["GIT_COMMITTER_NAME"].as_str(),
                 bot["GIT_COMMITTER_EMAIL"].as_str()
             ),
-            ("Coo", "coo@bots.tico.invalid")
+            ("Coo", "assistant@bots.tico.invalid")
         );
     }
 

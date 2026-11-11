@@ -93,7 +93,7 @@ def _the_strategy_bot_proposal_is_accepted_into_the_draft(built):
         needs = api.get("/api/v2/goals/needs-you").json()
     assert pending == []
     [proposal] = [p for p in decided if p["kind"] == "strategy_draft"]
-    assert proposal["proposed_by"] == "bot:goal-manager" and proposal["decided_by"] == "human:ana"
+    assert proposal["proposed_by"] == "bot:strategy-owner" and proposal["decided_by"] == "human:ana"
     assert proposal["payload"]["source"] == "briefing"
     statement = "Public bids from towns and HOAs are a motion of their own, with a survey and a fixed date."
     [bet] = [b for b in strategy["bets"] if b["statement"] == statement]

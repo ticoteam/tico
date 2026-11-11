@@ -290,10 +290,12 @@ def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net)
 
 def _the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api, net):
     made = make(api)
-    assert publish(api, "custom.x", "s", {}, "bot:goal-manager") == 0  # the broad path never raises, and sends nothing
+    assert (
+        publish(api, "custom.x", "s", {}, "bot:strategy-owner") == 0
+    )  # the broad path never raises, and sends nothing
     with api.app.state.store.transaction() as c:
         with pytest.raises(W.Refused, match="Strategy Owner"):
-            W.publish(c, "custom.x", "s", {}, "bot:goal-manager", only=made["id"])
+            W.publish(c, "custom.x", "s", {}, "bot:strategy-owner", only=made["id"])
         with pytest.raises(W.Refused, match="switch is off"):
             W.publish(c, "custom.x", "s", {}, "bot:ops", only=made["id"])
         with pytest.raises(W.Refused, match="does not exist"):

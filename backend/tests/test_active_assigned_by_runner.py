@@ -6,14 +6,14 @@ from backend import views
 
 def test_active_assignments_by_runner_match_per_computer_and_reuses_the_map(api):
     a, b = runner(api, "ana", "A Mac"), runner(api, "ana", "B Mac")
-    assign(api, a, "coo")
+    assign(api, a, "assistant")
     assign(api, b, "cpo")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='archived' WHERE slug='coo'")
+        c.execute("UPDATE bots SET state='archived' WHERE slug='assistant'")
     with api.app.state.store.read_transaction() as c:
         by = views.assignments_by_runner(c)[1]
         assert by is views.assignments_by_runner(c)[1]
-        assert "coo" not in by.get(a["runner_id"], set())
+        assert "assistant" not in by.get(a["runner_id"], set())
         assert by[b["runner_id"]] == {"cpo"}
         per_a = {
             r[0]

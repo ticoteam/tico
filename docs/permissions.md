@@ -247,9 +247,9 @@ on `/api/v2/groups` through `tico api`, or `tico group update`), with that perso
 refused. The Strategy Owner only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
 same rights. Built-in bots stay outside groups.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner, the Rules Owner and the Brand Owner) act for the whole team, so only the owner changes their settings,
+**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner, the Rules Owner and the Design Owner) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
-`librarian`, `goal-manager` or `coo`; an Admin can, and manages every other bot.
+`librarian`, `strategy-owner` or `assistant`; an Admin can, and manages every other bot.
 The Strategy Owner's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Owner](strategy-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
@@ -317,7 +317,7 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 | Mail | An inbound message a bot reads (`tico inbound read`): the subject and body | Warn |
 | Ideas | The public roadmap's suggestion form: the title and summary | Warn |
 | Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
-| Documents | A document or a link that Counsel reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
+| Documents | A document or a link that the Rules Owner reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
 | Slack | A message a person sends a bot in Slack (a DM or an @mention), and a message in a channel linked to a thread, with its edits | Warn |
 
 Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. Slack's row in Settings
@@ -342,7 +342,7 @@ The check has four layers. Two of them can be switched off in the same card:
   (`questions/injection-screen.json`). A webhook, watcher, idea or automation turn at or over the hold line (85%), on a
   door set to Hold, becomes a task for a person titled `Held: ...`: the bot is not woken and nothing is deleted. Hand the
   task to the bot to release it; close it if it is an attack. With no person to hold it, it goes to its bot with the
-  warning line instead. A document at or over the hold line, on a door set to Hold, becomes a read task for Counsel,
+  warning line instead. A document at or over the hold line, on a door set to Hold, becomes a read task for the Rules Owner,
   labelled held, with its text left out. Slack stays at Warn for now, so no Slack message is held; at Warn it gets no
   line. At or over `warn` (50%), the bot's copy starts with a line saying the text looks like a prompt injection and is
   data. That covers mail, Documents, webhooks, watchers, ideas and automation turns, not Slack. Mail is never held: its
@@ -391,7 +391,7 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner or Brand Owner);
+- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner or Design Owner);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 
@@ -762,7 +762,7 @@ who may change it, its class, the route and body it writes, and a link that open
 without knowing the route:
 
     tico settings find "sql"                                  key, name, where, class and who may change it
-    tico settings show bot.limit.usd --bot support            the current value, who may change it, whether you may
+    tico settings show bot.limit.usd --bot support-owner            the current value, who may change it, whether you may
     tico settings set release.times 09:30,17:00               change it with your rights (BotOps, the Assistant: the
                                                              person's)
 

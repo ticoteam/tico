@@ -134,7 +134,7 @@ def team_bots(api, team, token="ana-test"):
 
 def lead_of(found):
     """The suggestion's role for the head of engineering."""
-    return next(role for role in found["roles"] if role["pick"]["template"] == "engineering-lead")
+    return next(role for role in found["roles"] if role["pick"]["template"] == "engineering-team-manager")
 
 
 def test_the_suggestion_is_the_departments_roles_head_first_with_compact_candidates(api, cloud):
@@ -155,7 +155,7 @@ def test_the_suggestion_is_the_departments_roles_head_first_with_compact_candida
         for agent in [role["pick"], *role["alternatives"]]:
             assert agent["source"] == "cloud" and agent["template"] == "" and len(agent["line"]) <= 90
         assert not role["checked"] and not role["on_team"]
-    assert templates[0]["pick"]["template"] == "engineering-lead"
+    assert templates[0]["pick"]["template"] == "engineering-team-manager"
     assert templates[0]["checked"] and not templates[0]["on_team"]
     picked = [role["pick"]["template"] for role in templates]
     for role in templates:
@@ -185,21 +185,21 @@ def test_the_suggestion_is_the_departments_roles_head_first_with_compact_candida
 def test_a_role_a_bot_on_the_team_already_fills_is_on_the_team_and_not_offered_again(api):
     providers(api, "anthropic", "openai")
     team = engineering(api)
-    hired = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-lead"}])
-    assert [bot["template"] for bot in hired["bots"]] == ["engineering-lead"]
+    hired = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-team-manager"}])
+    assert [bot["template"] for bot in hired["bots"]] == ["engineering-team-manager"]
     found = suggest(api, team)
     lead = lead_of(found)
     assert lead["on_team"] and not lead["checked"] and lead["alternatives"] == []
     # The role names the bot that fills it, not the template it was built from.
     slug = hired["bots"][0]["slug"]
     assert lead["bot"]["slug"] == slug and lead["bot"]["name"] == get(api, f"bots/{slug}")["display_name"]
-    assert all(role["pick"]["template"] != "engineering-lead" for role in found["roles"] if not role["on_team"])
+    assert all(role["pick"]["template"] != "engineering-team-manager" for role in found["roles"] if not role["on_team"])
 
 
 def test_a_bot_the_caller_cannot_see_is_neither_named_nor_counted_on_the_team(api):
     providers(api, "anthropic", "openai")
     team = engineering(api)
-    slug = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-lead"}])["bots"][0]["slug"]
+    slug = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-team-manager"}])["bots"][0]["slug"]
     # Its name is its own (a template's name is public), so a leak of the name would show.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET display_name=? WHERE slug=?", ("Rhea Quill", slug))
@@ -218,14 +218,15 @@ def test_a_bot_the_caller_cannot_see_is_neither_named_nor_counted_on_the_team(ap
     seen_by_cara = suggest(api, team, token="cara-test")
     head = lead_of(seen_by_cara)
     assert not head["on_team"] and head["bot"] is None and head["checked"]
-    text = json.dumps(seen_by_cara)
+    # The bot's slug is its template's, which the role's public pick names: only that mention may show.
+    text = json.dumps(seen_by_cara).replace(f'"template": "{slug}"', "")
     assert slug not in text and name not in text
 
 
 def test_a_bot_the_permissions_do_not_name_is_hidden_from_the_team_even_for_the_owner(api, monkeypatch):
     providers(api, "anthropic", "openai")
     team = engineering(api)
-    slug = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-lead"}])["bots"][0]["slug"]
+    slug = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-team-manager"}])["bots"][0]["slug"]
     assert lead_of(suggest(api, team))["on_team"]
     # The permissions come back without this bot: a missing entry is hidden, not open to everyone.
     auth = api.app.state.auth
@@ -237,7 +238,8 @@ def test_a_bot_the_permissions_do_not_name_is_hidden_from_the_team_even_for_the_
     found = suggest(api, team)
     head = lead_of(found)
     assert not head["on_team"] and head["bot"] is None and head["checked"]
-    assert slug not in json.dumps(found) and hidden not in json.dumps(found)
+    text = json.dumps(found).replace(f'"template": "{slug}"', "")  # the role's public pick names the template
+    assert slug not in text and hidden not in text
 
 
 def test_the_team_and_the_callers_access_are_read_as_one_snapshot(api, monkeypatch):
@@ -245,7 +247,7 @@ def test_the_team_and_the_callers_access_are_read_as_one_snapshot(api, monkeypat
     the membership come from one snapshot of the database (store.read_transaction)."""
     providers(api, "anthropic", "openai")
     team = engineering(api)
-    slug = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-lead"}])["bots"][0]["slug"]
+    slug = hire(api, team, [{"role": "Head of Engineering", "template": "engineering-team-manager"}])["bots"][0]["slug"]
     store, auth = api.app.state.store, api.app.state.auth
     real = auth.bot_accesses
     bid = bot_id(api, slug)
@@ -278,14 +280,18 @@ def test_hiring_makes_one_seat_per_pick_in_the_team_with_the_head_first_and_fill
         team,
         [
             {"role": "DevOps engineer", "template": "devops-engineer"},
-            {"role": "Head of Engineering", "template": "engineering-lead"},
+            {"role": "Head of Engineering", "template": "engineering-team-manager"},
             {"role": "Security engineer", "template": "security-engineer"},
         ],
     )
     bots = {bot["template"]: bot for bot in hired["bots"]}
-    assert [bot["template"] for bot in hired["bots"]] == ["engineering-lead", "devops-engineer", "security-engineer"]
+    assert [bot["template"] for bot in hired["bots"]] == [
+        "engineering-team-manager",
+        "devops-engineer",
+        "security-engineer",
+    ]
     assert {bot["stage"] for bot in hired["bots"]} == {"onboarding"}
-    head = bots["engineering-lead"]["slug"]
+    head = bots["engineering-team-manager"]["slug"]
     assert get(api, f"bots/{head}")["reports_to"] == "human:ana"
     for template in ("devops-engineer", "security-engineer"):
         assert get(api, f"bots/{bots[template]['slug']}")["reports_to"] == bot_id(api, head)
@@ -294,15 +300,15 @@ def test_hiring_makes_one_seat_per_pick_in_the_team_with_the_head_first_and_fill
     assert not any(seat["title"] in {"Head of Engineering", "DevOps Engineer"} for seat in get(api, "seats")["seats"])
     # The same team's suggestion now has those roles on the team.
     on = {role["pick"]["template"] for role in suggest(api, team)["roles"] if role["on_team"]}
-    assert on == {"engineering-lead", "devops-engineer", "security-engineer"}
+    assert on == {"engineering-team-manager", "devops-engineer", "security-engineer"}
 
 
 def test_a_pick_outside_the_team_a_repeat_or_none_is_refused_and_nothing_is_made(api):
     providers(api, "anthropic", "openai")
     team = engineering(api)
     before = counts(api)
-    hire(api, team, [{"role": "x", "template": "sales-lead"}], expected=422)  # another department's template
-    hire(api, team, [{"role": "x", "template": "pr-reviewer"}, {"role": "y", "template": "pr-reviewer"}], expected=422)
+    hire(api, team, [{"role": "x", "template": "growth-team-manager"}], expected=422)  # another department's template
+    hire(api, team, [{"role": "x", "template": "reviewer"}, {"role": "y", "template": "reviewer"}], expected=422)
     hire(api, team, [], expected=422)
     assert counts(api) == before
 
@@ -323,7 +329,9 @@ def test_a_refused_pick_partway_through_leaves_no_seat_and_no_bot(api, monkeypat
         return real(auth, onboarding, c, who, seat_id, body)
 
     monkeypatch.setattr(recruiting, "hire", second_refused)
-    hire(api, team, [{"role": "a", "template": "pr-reviewer"}, {"role": "b", "template": "docs-writer"}], expected=409)
+    hire(
+        api, team, [{"role": "a", "template": "reviewer"}, {"role": "b", "template": "technical-writer"}], expected=409
+    )
     assert counts(api) == before and team_bots(api, team) == set()
 
 
@@ -331,32 +339,39 @@ def test_a_member_cannot_hire_into_a_team_they_do_not_lead_and_an_admin_can(api)
     providers(api, "anthropic", "openai")
     team = engineering(api)
     # Ben is an admin in the fixture, so he may hire into the team.
-    hired = hire(api, team, [{"role": "x", "template": "pr-reviewer"}], token="ben-test")
-    assert [bot["template"] for bot in hired["bots"]] == ["pr-reviewer"]
+    hired = hire(api, team, [{"role": "x", "template": "reviewer"}], token="ben-test")
+    assert [bot["template"] for bot in hired["bots"]] == ["reviewer"]
     # As a plain member he may not, even reporting to himself, which a seat alone would allow: nothing is made.
     as_member(api, "ben@acme.example")
     before = counts(api)
-    hire(api, team, [{"role": "x", "template": "docs-writer"}], token="ben-test", expected=403, reports_to="human:ben")
+    hire(
+        api,
+        team,
+        [{"role": "x", "template": "technical-writer"}],
+        token="ben-test",
+        expected=403,
+        reports_to="human:ben",
+    )
     assert counts(api) == before and len(team_bots(api, team)) == 1
 
 
 def test_only_a_person_suggests_and_hires(api):
     providers(api, "anthropic", "openai")
     team = engineering(api)
-    bot = as_bot(api, "coo")
+    bot = as_bot(api, "assistant")
     r = api.post("/api/v2/team-build/suggest", headers=bot, json={"team": team, "briefing": BRIEF})
     assert r.status_code == 403
     r = api.post(
         "/api/v2/team-build/hire",
         headers=bot,
-        json={"team": team, "reports_to": "", "picks": [{"role": "x", "template": "pr-reviewer"}]},
+        json={"team": team, "reports_to": "", "picks": [{"role": "x", "template": "reviewer"}]},
     )
     assert r.status_code == 403
 
 
 def test_an_unknown_team_is_not_found(api):
     suggest(api, "no-such-team", expected=404)
-    hire(api, "no-such-team", [{"role": "x", "template": "pr-reviewer"}], expected=404)
+    hire(api, "no-such-team", [{"role": "x", "template": "reviewer"}], expected=404)
 
 
 def test_the_head_and_every_role_the_team_fills_are_shown_however_many(api, monkeypatch):
@@ -367,13 +382,13 @@ def test_the_head_and_every_role_the_team_fills_are_shown_however_many(api, monk
     team = engineering(api)
     others = [role["pick"]["template"] for role in suggest(api, team)["roles"] if role["pick"].get("template")]
     others += [alt["template"] for role in suggest(api, team)["roles"] for alt in role["alternatives"]]
-    filled = {t: "ghost-" + t for t in dict.fromkeys(others) if t and t != "engineering-lead"}
+    filled = {t: "ghost-" + t for t in dict.fromkeys(others) if t and t != "engineering-team-manager"}
     assert len(filled) > team_build.ROLES
     monkeypatch.setattr(team_build, "_filled", lambda c, group: filled)
     roles = [role for role in suggest(api, team)["roles"] if role["pick"].get("template")]
     shown = {role["pick"]["template"]: role["on_team"] for role in roles}
-    assert roles[0]["pick"]["template"] == "engineering-lead" and shown["engineering-lead"] is False
-    picked = [t for t in shown if t != "engineering-lead"]
+    assert roles[0]["pick"]["template"] == "engineering-team-manager" and shown["engineering-team-manager"] is False
+    picked = [t for t in shown if t != "engineering-team-manager"]
     assert all(shown[t] for t in picked) and set(picked) == set(filled)
 
 

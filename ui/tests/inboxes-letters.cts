@@ -7,7 +7,7 @@
 // Form 1583 progress and its letters (sender, summary, PDF, task), with no scan or forward request; a failed letter is
 // retried by an owner. Mail by email turned off is Not in use, and its page keeps its letters, with Retry. Read grants: Who can use it on all addresses (Letters in) and on one address's page gives Read,
 // with an Idempotency-Key, lists it and takes it back; a pick waiting for its button survives a redraw; a bot that can't
-// take mail can't be picked. Legal mail goes to Counsel by its stable id, a refused change goes back to the saved one,
+// take mail can't be picked. Legal mail goes to the Rules Owner by its stable id, a refused change goes back to the saved one,
 // and a read from before a save can't put the old choice back. A member reads only: no grants, Legal mail as text.
 // Without Tico Gateway the addresses card says so, offers no order, and the list shows no error. No sideways scroll on a
 // phone. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
@@ -106,7 +106,7 @@ async function open(browser: import('playwright').Browser, {viewport = {width: 1
       return json({addresses: state.addresses, orders: state.orders, prices: state.prices});
     }
     if (p === '/api/v2/postal/bots') return admin ? json({bots: [
-      {id: 'tico-counsel', slug: 'legal', display_name: 'Counsel', state: 'active', read_error: null, routing_error: null},
+      {id: 'rules-owner', slug: 'legal', display_name: 'Rules Owner', state: 'active', read_error: null, routing_error: null},
       {id: 'synced', slug: 'synced', display_name: 'Chat bot', state: 'active', read_error: 'Physical mail is unavailable: this bot only syncs chat',
         routing_error: 'Physical mail is unavailable: this bot only syncs chat'},
     ], next: null}) : refuse();
@@ -226,15 +226,15 @@ const disabled = (option: import('playwright').Locator) => option.evaluate(o => 
       await legal.waitFor();
       assert.equal(await disabled(legal.locator('option[value="synced"]')), true, 'a chat-only bot cannot take legal mail');
       const legalSaved = () => page.waitForFunction(() => document.querySelector<HTMLSelectElement>('[data-pm-legal]')?.disabled === false);
-      await legal.selectOption('tico-counsel');
+      await legal.selectOption('rules-owner');
       await legalSaved();
-      assert.equal(state.legal_bot_id, 'tico-counsel', 'legal mail goes to Counsel by its stable id');
+      assert.equal(state.legal_bot_id, 'rules-owner', 'legal mail goes to the Rules Owner by its stable id');
       state.routingFail = true;
       await legal.selectOption('');
       await pane.locator('[data-pm-legal-error]', {hasText: 'Not saved'}).waitFor();
-      assert.equal(await legal.inputValue(), 'tico-counsel', 'a refused change restores the saved bot');
+      assert.equal(await legal.inputValue(), 'rules-owner', 'a refused change restores the saved bot');
       state.routingFail = false;
-      // A read from before a save (the server still says Counsel) can't put Counsel back while the save is in flight.
+      // A read from before a save (the server still says the Rules Owner) can't put it back while the save is in flight.
       let release!: () => void; state.holdRouting = new Promise<void>(r => { release = r; });
       const reads = state.got['/api/v2/postal/settings']!;
       await legal.selectOption('');
@@ -300,14 +300,14 @@ const disabled = (option: import('playwright').Locator) => option.evaluate(o => 
       // This address's own Read, in Who can use it.
       const access = page.locator('#inbox-access');
       await access.locator('[data-pm-grants-empty]').waitFor();
-      await access.locator('[data-pm-grantee]').selectOption('bot:tico-counsel');
+      await access.locator('[data-pm-grantee]').selectOption('bot:rules-owner');
       await access.locator('[data-pm-grant-form] button').click();
-      await access.locator('[data-pm-grant="bot:tico-counsel"]', {hasText: 'Counsel · Read'}).waitFor();
-      assert.ok(state.sent.some(s => s.method === 'PUT' && s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel'));
+      await access.locator('[data-pm-grant="bot:rules-owner"]', {hasText: 'Rules Owner · Read'}).waitFor();
+      assert.ok(state.sent.some(s => s.method === 'PUT' && s.path === '/api/v2/postal/addresses/as_1/grants/bot/rules-owner'));
       if (shots) await shot(page, 'address-desktop');
       await access.locator('[data-pm-revoke]').click();
       await access.locator('[data-pm-grants-empty]').waitFor();
-      assert.ok(state.sent.some(s => s.method === 'DELETE' && s.path === '/api/v2/postal/addresses/as_1/grants/bot/tico-counsel'));
+      assert.ok(state.sent.some(s => s.method === 'DELETE' && s.path === '/api/v2/postal/addresses/as_1/grants/bot/rules-owner'));
       // Retry the failed letter: it is asked for once, and the page redraws with what the server says now.
       await letters.locator('[data-pm-retry="pm_3"]').click();
       await page.locator('#inbox-letters [data-pm-letter="pm_3"] [data-pm-task]').waitFor();

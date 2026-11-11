@@ -14,9 +14,9 @@ from backend.app import create_app
 from backend.tests.helpers.onboarding import ASSISTANT_AGENT, ASSISTANT_CARD, BOTOPS_CARD, environment  # noqa: F401  (the fixture)
 from backend.tests.helpers.builtin_routines import COO, SWEEP, _ensure, _row, _write_assistant_routines
 
-BOOKKEEPER = {"bk": {"name": "Bk", "status": "active", "template": "bookkeeper"}}
+BOOKKEEPER = {"bk": {"name": "Bk", "status": "active", "template": "finance-owner"}}
 BOOKKEEPER_CARD = {
-    "template": "bookkeeper",
+    "template": "finance-owner",
     "slug": "bk",
     "name": "Bookkeeper",
     "required": False,
@@ -43,7 +43,7 @@ def _rows(api):
         return [
             dict(row)
             for row in c.execute(
-                "SELECT id, cron, deleted_at FROM schedules WHERE bot='coo' AND routine_key='daily-sweep'"
+                "SELECT id, cron, deleted_at FROM schedules WHERE bot='assistant' AND routine_key='daily-sweep'"
             )
         ]
 
@@ -72,7 +72,7 @@ def test_the_assistant_gets_its_daily_sweep_once_and_an_edit_a_delete_or_a_lost_
     api = environment(seed=COO)
     _write_assistant_routines(api)
     assert _rows(api) == []
-    assert _ensure(api) == [("coo", "daily-sweep")]
+    assert _ensure(api) == [("assistant", "daily-sweep")]
     assert len(_rows(api)) == 1
     row = _row(api)
     assert row["id"] == SWEEP and row["cron"] == "0 8 * * *" and row["deleted_at"] is None and row["enabled"] == 1
@@ -119,11 +119,11 @@ def test_at_startup_only_the_assistant_gets_a_routine_a_bootstrap_bot_with_routi
         seed={**COO, **BOOKKEEPER},
     )
     _write_assistant_routines(api)
-    folder = Path(api.app.state.store.settings.catalog_dir) / "bookkeeper"
+    folder = Path(api.app.state.store.settings.catalog_dir) / "finance-owner"
     (folder / "playbooks").mkdir(exist_ok=True)
-    (folder / "bot.yaml").write_text(yaml.safe_dump({"name": "bookkeeper", "routines": [MONTHLY]}))
+    (folder / "bot.yaml").write_text(yaml.safe_dump({"name": "finance-owner", "routines": [MONTHLY]}))
     (folder / "playbooks" / "monthly-report.md").write_text("Report {{company_name}}'s month.\n")
-    assert _ensure(api) == [("coo", "daily-sweep")]
+    assert _ensure(api) == [("assistant", "daily-sweep")]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM schedules WHERE bot='bk'").fetchone()[0] == 0
     api = _restart(api)

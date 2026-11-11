@@ -10,7 +10,7 @@ from backend.tests.helpers.listening import FakeJudge, _bots, _post, _token
 
 def test_only_listening_and_the_owner_save_runs_and_judgments(api):
     _bots(api)
-    coo = _token(api, "coo")
+    coo = _token(api, "assistant")
     post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok"}, token=coo, expected=403)
     post(api, "listening/runs", {"source": "X Bookmarks", "query": "q", "status": "ok"}, expected=422)
     saved = post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [_post("9", "hi")]})
@@ -31,7 +31,7 @@ def test_only_listening_and_the_owner_save_runs_and_judgments(api):
 
 def test_a_receiver_sees_and_resolves_only_its_own_inbox(api):
     _bots(api)
-    listening = _token(api, "listening")
+    listening = _token(api, "social-media-manager")
     api.app.state.judge = FakeJudge()
     saved = post(
         api,
@@ -77,7 +77,7 @@ def test_a_receiver_sees_and_resolves_only_its_own_inbox(api):
 
 def test_hub_sql_shows_posts_only_to_listening_the_owner_and_their_receivers(api):
     _bots(api)
-    listening = _token(api, "listening")
+    listening = _token(api, "social-media-manager")
     api.app.state.judge = FakeJudge()
     post(
         api,
@@ -129,7 +129,7 @@ def _merged(api):
 
 
 def _save(api, key, token="ana-test", expected=200, **fields):
-    body = {"category": "lead", "threshold": 0.8, "receiver": "bot:sales-ops", **fields}
+    body = {"category": "lead", "threshold": 0.8, "receiver": "bot:sales-operations-manager", **fields}
     return put(api, f"listening/destinations/{key}", body, token=token, expected=expected)
 
 
@@ -146,7 +146,7 @@ def test_a_destination_saved_in_settings_wins_over_the_file_on_the_same_key_and_
     assert {d["key"]: d["source"] for d in listing["destinations"]}["leads"] == "settings"
     assert {d["key"]: d["source"] for d in listing["destinations"]}["market"] == "yaml"
     assert [d for d in listing["destinations"] if d["key"] == "leads"][0]["overrides_yaml"] is True
-    listening = _token(api, "listening")
+    listening = _token(api, "social-media-manager")
     post(
         api,
         "listening/runs",
@@ -168,7 +168,7 @@ def test_saved_destinations_are_owner_only_validated_never_remove_the_files_and_
     assert "mine" not in _merged(api)
     get(api, "listening/destinations", token="ben-test")
     get(api, "listening/destinations", token="cara-test", expected=403)
-    get(api, "listening/destinations", token=_token(api, "listening"), expected=403)
+    get(api, "listening/destinations", token=_token(api, "social-media-manager"), expected=403)
     # A destination the file would refuse is refused when it is saved.
     for bad in (
         {"category": "vendor_pitch_typo"},
@@ -253,7 +253,7 @@ def test_the_market_destination_is_not_offered_when_one_already_routes_market(ap
 def test_stats_carry_a_daily_chart_and_the_callers_recent_posts(api):
     """Market › Listening reads posts per day by source and the newest routed posts; a receiver sees only its own."""
     _bots(api)
-    listening = _token(api, "listening")
+    listening = _token(api, "social-media-manager")
     api.app.state.judge = FakeJudge()
     post(
         api,

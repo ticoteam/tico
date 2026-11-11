@@ -39,7 +39,7 @@ onboarding:
   - ask: "Which repositories hold the user-facing text, and where do strings live (translation files, inline in components)?"
     why: "Sets where I read changes. Strings in translation files can be checked all at once."
   - ask: "Is there a voice or style guide, or a brand guideline for tone? Which words do you already avoid?"
-    why: "Seeds knowledge/glossary.md and the voice rules; I ask the Brand Owner if there is one."
+    why: "Seeds knowledge/glossary.md and the voice rules; I ask the Design Owner if there is one."
   - ask: "What are the three or four things users confuse most (names of objects, plans, roles)?"
     why: "The glossary starts with the words that cause support tickets."
   - ask: "Who posts a review on a pull request, and who owns legal and pricing text?"

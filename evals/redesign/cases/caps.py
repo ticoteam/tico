@@ -114,7 +114,7 @@ def s1_steps(org, f):
         "auto",
         automation,
         org,
-        "Rank · engineering-lead",
+        "Rank · engineering-team-manager",
         LEAD_REF,
         trigger={"type": "task_received", "to": LEAD_REF},
         steps=[{"id": "rank", "type": "decide", "enabled": True, "set": "task-rank@1", "out": "d1"}],
@@ -259,7 +259,7 @@ def s10_steps(org, f):
         "auto",
         automation,
         org,
-        "Triage · engineering-lead",
+        "Triage · engineering-team-manager",
         LEAD_REF,
         trigger={"type": "task_received", "to": LEAD_REF},
     )

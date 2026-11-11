@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
-CAPS = {"botops": 2500, "assistant": 1900, "goal-manager": 1800}
+CAPS = {"botops": 2500, "assistant": 1900, "strategy-owner": 1800}
 PLAYBOOK = re.compile(r"playbooks/[\w.-]+\.md")
 
 
@@ -53,7 +53,7 @@ PINNED = {
         "Closing tasks never pauses a bot or writes a rule",
         "it counts first and closes on their yes",
     ],
-    "goal-manager": [
+    "strategy-owner": [
         "Passive allows no autonomous questions",
         "Five items per person per day is a hard ceiling",
         "Never publish a strategy version",
@@ -85,7 +85,7 @@ MOVED = {
         "playbooks/jobs.md": "One ask per task",
         "playbooks/publish-a-file.md": "# Publishing your work",
     },
-    "goal-manager": {
+    "strategy-owner": {
         "playbooks/levels.md": "## Limits at every level",
         "playbooks/strategy-and-bets.md": "## Talking to Tico: the commands",
         "playbooks/which-run.md": "# Which playbook a run needs",

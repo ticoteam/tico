@@ -520,7 +520,7 @@ class Stub(BaseHTTPRequestHandler):
     def do_GET(self):
         self.seen.append(("GET", self.path, self.headers.get("Authorization"), None))
         if self.path == "/api/v2/me":
-            return self.reply(200, {"actor": "bot:coo", "kind": "bot", "id": "coo"})
+            return self.reply(200, {"actor": "bot:assistant", "kind": "bot", "id": "assistant"})
         if self.path.startswith("/api/v2/roadmap"):
             return self.reply(200, {"ok": True})
         if self.path.startswith("/api/v2/decisions/readout"):
@@ -583,7 +583,7 @@ class AgainstAStub(unittest.TestCase):
         cls.env = {
             "HUB_API_URL": f"http://127.0.0.1:{cls.server.server_port}",
             "HUB_TOKEN": "turn-token",
-            "HUB_BOT": "coo",
+            "HUB_BOT": "assistant",
         }
 
     @classmethod
@@ -597,7 +597,7 @@ class AgainstAStub(unittest.TestCase):
     def test_whoami_is_the_api_identity_under_the_turn_token(self):
         code, out = run_hub("whoami", env=self.env)
         self.assertEqual(code, 0)
-        self.assertEqual(out["actor"], "bot:coo")
+        self.assertEqual(out["actor"], "bot:assistant")
         self.assertEqual(Stub.seen[0][2], "Bearer turn-token")
 
     def test_task_update_sends_the_version_it_was_given_and_never_reads_one(self):
@@ -663,7 +663,7 @@ class AgainstAStub(unittest.TestCase):
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks")
         self.assertEqual(
             (posted["owner"], posted["check_model"], posted["check_role"], posted["parent"]),
-            ("bot:coo", "grok", "review", "T1"),
+            ("bot:assistant", "grok", "review", "T1"),
         )
         # With no value, the server picks the company's check model.
         code, out = run_hub(
@@ -671,7 +671,7 @@ class AgainstAStub(unittest.TestCase):
         )
         self.assertEqual(code, 0, out)
         posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
-        self.assertEqual((posted["owner"], posted["check_model"]), ("bot:coo", "auto"))
+        self.assertEqual((posted["owner"], posted["check_model"]), ("bot:assistant", "auto"))
 
     def test_decision_readout_reads_the_days_asked(self):
         code, out = run_hub("decision", "readout", "--days", "14", env=self.env)
@@ -876,7 +876,7 @@ never: []
 runtime: codex
 """
 AGENT = "# {{bot_name}}\n\nYou are {{bot_name}} at {{company_name}} ({{app_name}}).\n\n## Owns\n- the blog\n"
-NAMES = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "coo"}
+NAMES = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "assistant"}
 ONBOARDING = {
     "names": NAMES,
     "answers": {

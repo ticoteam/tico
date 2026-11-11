@@ -28,7 +28,7 @@ def rows(api, sql, args=()):
 def routine(
     api,
     sid,
-    bot="coo",
+    bot="assistant",
     *,
     cron="0 9 * * *",
     event=None,
@@ -49,7 +49,7 @@ def routine(
     return sid
 
 
-def rule(api, rid, event="comment", then="wake", scope=("bot", "coo"), position=0, enabled=True):
+def rule(api, rid, event="comment", then="wake", scope=("bot", "assistant"), position=0, enabled=True):
     with db(api).transaction() as c:
         c.execute(
             "INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, enabled, position, created_by, "
@@ -97,14 +97,14 @@ def decisions(api, events, targets):
 
 
 def test_every_object_moves_once_and_runs_from_one_system(api):
-    events, targets = ("comment", "step_entered", "review_requested"), ("bot:coo", "bot:ops")
+    events, targets = ("comment", "step_entered", "review_requested"), ("bot:assistant", "bot:ops")
     routine(api, "sch_daily")
     routine(api, "sch_off", on=False, title="Paused check")
     routine(api, "sch_event", event="release_published", title="Release notes")
     rule(api, "rule_wake", "comment", "wake")
     rule(api, "rule_note", "step_entered", "note", position=1)
     rule(api, "rule_team", "review_requested", "ignore", scope=("team", ""))
-    hourly(api, "coo", 0.35)
+    hourly(api, "assistant", 0.35)
     before_decisions = decisions(api, events, targets)
     with db(api).read() as c:
         before = {(i["kind"], i["id"]): i for i in M.inventory(c)}
@@ -128,7 +128,7 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
             (after[("routine", sid)]["automation"],),
         )[0]
         flow = json.loads(made["flow"])
-        assert bool(made["enabled"]) is on and flow["steps"][0]["bot"] == "bot:coo"
+        assert bool(made["enabled"]) is on and flow["steps"][0]["bot"] == "bot:assistant"
         if sid == "sch_event":
             assert flow["trigger"] == {"type": "event", "name": "release_published"}
         else:
@@ -137,7 +137,10 @@ def test_every_object_moves_once_and_runs_from_one_system(api):
     assert not rows(api, "SELECT id FROM rules WHERE id IN ('rule_wake','rule_note','rule_team')")
     assert decisions(api, events, targets) == before_decisions  # the same wakes, from What wakes
     with db(api).read() as c:
-        assert (usage_limits.own(c, "coo")["hourly_usd"], usage_limits.own(c, "coo")["per_30m_usd"]) == (None, 0.2)
+        assert (usage_limits.own(c, "assistant")["hourly_usd"], usage_limits.own(c, "assistant")["per_30m_usd"]) == (
+            None,
+            0.2,
+        )
 
     # Once: a second start (or a catch-up) changes nothing and tells nobody again.
     automations = rows(api, "SELECT id FROM automations ORDER BY id")
@@ -239,7 +242,7 @@ def test_a_routine_written_after_the_cutover_becomes_an_automation_in_the_same_w
         made = routines.create(
             c,
             "human:ana",
-            "coo",
+            "assistant",
             {"title": "Late routine", "text": "Check in.", "cron": "0 10 * * *", "timezone": "UTC"},
         )
     sid = made["id"]
@@ -377,7 +380,7 @@ def test_a_moved_wake_rule_does_what_its_filter_shows_and_an_edit_it_cannot_do_i
     with db(api).read() as c:
         row = [w for w in M.wake_rows(c, "comment") if w["id"] == "rule_wake"][0]
     assert row["then_outcome"] == "ignore" and json.loads(row["condition"]) == {"priority": "low"}
-    bad = steps + [{"id": "x", "type": "action", "do": "note", "args": {"bot": "coo", "text": "Hi"}}]
+    bad = steps + [{"id": "x", "type": "action", "do": "note", "args": {"bot": "assistant", "text": "Hi"}}]
     r = api.patch(
         f"/api/v2/automations/{aid}",
         json={"steps": bad},
@@ -401,7 +404,7 @@ def test_a_turn_prompt_runs_whole_up_to_32000_characters():
             "name": "T",
             "owner": "person:ana",
             "trigger": {"type": "event", "name": "x.y"},
-            "steps": [{"id": "t", "type": "bot_turn", "bot": "coo", "prompt": words}],
+            "steps": [{"id": "t", "type": "bot_turn", "bot": "assistant", "prompt": words}],
         },
         {},
         services,

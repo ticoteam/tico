@@ -11,7 +11,7 @@ invented. Nothing has been sent, signed or filed. First draft, not yet reviewed.
 ## Your decisions
 1. **Harbour Pilates order form, $38k, liability uncapped for data breach (clause 9.4).** Your playbook caps
    at 12 months' fees; the escalation rule sends uncapped data liability to counsel. Options on the record:
-   ask for the cap, or accept with counsel's view. Counsel: Ruth at the outside firm. Customer wants
+   ask for the cap, or accept with counsel's view. The Rules Owner: Ruth at the outside firm. Customer wants
    signature by 2026-10-02.
 2. **Expense-sharing policy for the Lisbon contractors.** Draft ready at `reports/policies/contractor-expenses-draft.md`
    since 2026-09-17 (11 days). Two `[DECIDE]` points: per-diem rate and receipt threshold.
@@ -19,18 +19,18 @@ invented. Nothing has been sent, signed or filed. First draft, not yet reviewed.
 ## Due inside 30 days
 | Date | What | Owner | Source |
 |---|---|---|---|
-| 2026-10-01 | Notice deadline, cleaning services renewal (end of term 2026-10-31 minus 30 days) | Dana | `legal-review` calendar 2026-09-28 |
-| 2026-10-15 | Annual report and fee, state of incorporation | Omar | `compliance` calendar 2026-09-28 |
-| 2026-10-19 | Access request from a former studio user, received 2026-09-19 (one month) | `privacy` | `privacy` desk 2026-09-28 |
+| 2026-10-01 | Notice deadline, cleaning services renewal (end of term 2026-10-31 minus 30 days) | Dana | `contracts-manager` calendar 2026-09-28 |
+| 2026-10-15 | Annual report and fee, state of incorporation | Omar | `compliance-manager` calendar 2026-09-28 |
+| 2026-10-19 | Access request from a former studio user, received 2026-09-19 (one month) | `privacy-manager` | `privacy-manager` desk 2026-09-28 |
 
 ## Requests this week
-- New: 2 NDAs (no Paralegal here, so both wait on Priya; one on the counterparty's paper), 1 DPA from a studio chain (to `privacy`),
+- New: 2 NDAs (no Paralegal here, so both wait on Priya; one on the counterparty's paper), 1 DPA from a studio chain (to `privacy-manager`),
   1 question on recording calls for training (answered from the documented call-recording position, 2026-06-02).
 - Closed: vendor MSA summary, trademark renewal note, board consent draft.
 - Waiting on a human over 10 days: the contractor policy above.
 
 ## Routing proposals (nothing created)
-- The question "can sales promise a 99.9% uptime credit?" to `legal-review`: it is a contract position,
+- The question "can sales promise a 99.9% uptime credit?" to `contracts-manager`: it is a contract position,
   and the playbook has no line on it yet.
 
 ## Hiring proposal (asked on the task, nothing created)
@@ -43,5 +43,5 @@ The outside firm's invoices were not in the docs, so legal spend is not in this 
 **Summary for a human, not legal advice. Have counsel review anything that matters.**
 
 ## Sources
-- `tico task list` 2026-09-28; `legal-review`, `compliance`, `privacy` reports 2026-09-28; `knowledge/escalation.md` 2026-09-14
+- `tico task list` 2026-09-28; `contracts-manager`, `compliance-manager`, `privacy-manager` reports 2026-09-28; `knowledge/escalation.md` 2026-09-14
 ```

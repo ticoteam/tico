@@ -34,14 +34,14 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
     live = claim(api, machine, "doc-updater")
     post(api, f"attempts/{live['id']}/started", {"thread_id": "t-live"}, machine["token"])  # a live run
     with api.app.state.store.transaction() as c:
-        for slug, state in (("cpo", "idle"), ("finance", "idle"), ("coo", "crashed"), ("inbox", "idle")):
+        for slug, state in (("cpo", "idle"), ("finance", "idle"), ("assistant", "crashed"), ("inbox", "idle")):
             H.status_set(c, H.KEEPER, slug, state=state, focus="Checked the queue")
         c.execute("INSERT INTO bot_budget(bot,held_at,window,runs,budget) VALUES('cpo',?,'hour',301,300)", (H.now(),))
         c.execute(
             "INSERT INTO run_backoff(bot,fails,wait_until) VALUES('finance',2,?)", (H.shift(H.now(), seconds=600),)
         )
-        usage_limits.save_own(c, "coo", {"daily_usd": 0.000001}, "human:ana")
-    slugs = ["coo", "cpo", "doc-updater", "finance", "inbox", "ops", "product-design"]
+        usage_limits.save_own(c, "assistant", {"daily_usd": 0.000001}, "human:ana")
+    slugs = ["assistant", "cpo", "doc-updater", "finance", "inbox", "ops", "product-design"]
     each, plain = lines(api, slugs, primed=False)
     together, primed = lines(api, slugs, primed=True)
     assert together == each
@@ -56,7 +56,7 @@ def test_primed_status_lines_match_each_bots_own_and_read_each_table_once(api, m
 def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch):
     # A crashed bot offers its newest held run for review; with a stop on record, only that run's own held job.
     # The clock is fixed, so jobs share a created time: the last one written is the newest, read one by one or together.
-    # coo and finance repeat ops's and cpo's shapes, so the page's held runs add no statements per bot.
+    # assistant and finance repeat ops's and cpo's shapes, so the page's held runs add no statements per bot.
     from backend.store import encode
 
     machine = setup(api, monkeypatch, tasks=9)
@@ -69,8 +69,8 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
             (jobs[2], "ops", H.now(), "tie-last", "expired", False),
             (jobs[3], "cpo", "2026-10-24T11:00:00.000000Z", "marked", "expired", True),
             (jobs[4], "cpo", H.now(), "newer", "failed", True),
-            (jobs[5], "coo", "2026-10-24T11:00:00.000000Z", "coo-old", "failed", True),
-            (jobs[6], "coo", H.now(), "coo-new", "expired", False),
+            (jobs[5], "assistant", "2026-10-24T11:00:00.000000Z", "coo-old", "failed", True),
+            (jobs[6], "assistant", H.now(), "coo-new", "expired", False),
             (jobs[7], "finance", "2026-10-24T11:00:00.000000Z", "finance-marked", "expired", True),
             (jobs[8], "finance", H.now(), "finance-newer", "failed", True),
         ):
@@ -90,12 +90,12 @@ def test_primed_status_lines_offer_the_same_held_run_for_review(api, monkeypatch
                 "INSERT OR REPLACE INTO registry_metadata VALUES(?,?)",
                 ("last-stop:" + slug, encode({"attempt_id": run, "at": H.now()})),
             )
-        for slug in ("ops", "cpo", "coo", "finance"):
+        for slug in ("ops", "cpo", "assistant", "finance"):
             H.status_set(c, H.KEEPER, slug, state="crashed", focus="Checked the queue")
-    each = lines(api, ["coo", "cpo", "finance", "ops"], primed=False)[0]
-    together, primed = lines(api, ["coo", "cpo", "finance", "ops"], primed=True)
+    each = lines(api, ["assistant", "cpo", "finance", "ops"], primed=False)[0]
+    together, primed = lines(api, ["assistant", "cpo", "finance", "ops"], primed=True)
     assert together == each and lines(api, ["cpo", "ops"], primed=True)[1] == primed
-    assert (each["coo"]["last_stop"]["attempt_id"], each["finance"]["last_stop"]["attempt_id"]) == (
+    assert (each["assistant"]["last_stop"]["attempt_id"], each["finance"]["last_stop"]["attempt_id"]) == (
         "coo-new",
         "finance-marked",
     )

@@ -30,7 +30,7 @@ STALE_PROGRESS_S = 300  # a running turn with no event or heartbeat this long ha
 RUNNING_LISTED = 10  # running turns named in the finding, least recent progress first
 # Wait reasons only a person can clear (start_places.summary's words).
 NEEDS_PERSON = {'shared login': 'a login', 'sign-in': 'a sign-in', 'quota': 'quota', 'spending limit': 'money'}
-SUPPORT_BOT = 'support'
+SUPPORT_BOT = 'support-owner'
 
 FREED = "Tico freed a dead start, will retry."
 FREED_STOPPED = "Tico freed a start a person stopped; it is not retried."

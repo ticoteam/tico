@@ -299,7 +299,7 @@ def test_counsel_read_grant_cannot_validate_a_quote_outside_the_page_audience(ap
             counsel.check_cite(
                 c,
                 api.app.state.auth,
-                Identity('bot:' + H.COUNSEL, 'bot', attempt_id='read-turn'),
+                Identity('bot:' + H.RULES_OWNER, 'bot', attempt_id='read-turn'),
                 api.app.state.blobs,
                 {'file_id': fid, 'version': 1, 'quote': 'Pipeline grew'},
             )

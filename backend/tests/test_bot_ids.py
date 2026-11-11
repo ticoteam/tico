@@ -22,7 +22,7 @@ BOT_IDS = importlib.import_module("backend.migrations.0012_bot_ids")
 THREADS_SCHEMA = importlib.import_module("backend.migrations.0047_native_threads_schema")
 
 EMPLOYEES = {
-    "coo": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex"},
+    "assistant": {"display_name": "COO", "status": "active", "host": "keeper", "runtime": "codex"},
     "cmo": {"display_name": "CMO", "status": "active", "host": "keeper", "runtime": "codex"},
 }
 PEOPLE = {"people": [{"id": "ana", "name": "Ana Rivera", "email": "ana@acme.example", "team": "leadership"}]}
@@ -193,7 +193,7 @@ class Upgrade(unittest.TestCase):
         self.conn = _old_shape_database(self.path)
         self.addCleanup(self.conn.close)
         self.conn.execute("INSERT INTO humans (id, name, email) VALUES ('ana', 'Ana', 'ana@acme.example')")
-        for slug in ("coo", "cmo", "ops-lead"):
+        for slug in ("assistant", "cmo", "ops-lead"):
             self.conn.execute(
                 "INSERT INTO bots (slug, display_name, state, created_at) VALUES (?, ?, 'active', ?)",
                 (slug, slug.upper(), H.now()),
@@ -222,7 +222,7 @@ class Upgrade(unittest.TestCase):
         # every bot kept, and the id of an existing bot is its slug
         bots_after = [tuple(r) for r in conn.execute("SELECT slug, display_name, state FROM bots ORDER BY slug")]
         self.assertEqual(bots_after, bots_before)
-        self.assertEqual({r["id"] for r in conn.execute("SELECT id FROM bots")}, {"coo", "cmo", "ops-lead"})
+        self.assertEqual({r["id"] for r in conn.execute("SELECT id FROM bots")}, {"assistant", "cmo", "ops-lead"})
         self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
         self.assertEqual(conn.execute("PRAGMA foreign_keys").fetchone()[0], 1)
 
@@ -400,7 +400,7 @@ class Ids(_Case):
 
     def test_a_product_bot_keeps_its_slug_as_id(self):
         self.assertEqual(H.new_bot_id("botops"), "botops")
-        self.assertEqual(H.new_bot_id("tico-counsel"), "tico-counsel")
+        self.assertEqual(H.new_bot_id("rules-owner"), "rules-owner")
 
     def test_resolve_bot_takes_an_id_or_a_slug_and_only_one_bot(self):
         bot_id = self.make_bot("ops-lead")

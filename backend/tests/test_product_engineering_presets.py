@@ -68,7 +68,7 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     _role_bot(c, "zz-product", "segment-product-owner")
     assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
     # A bot named like a role but from another template is not that role.
-    _role_bot(c, "product-owner-ish", "coo")
+    _role_bot(c, "product-owner-ish", "assistant")
     assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
     # Every pipeline's manager shares one template: each is the one whose slug is its chart id.
     _role_bot(c, "growth-experiments-pipeline-manager", "pipeline-manager")
@@ -759,24 +759,20 @@ def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_the
     assert [tuple(r) for r in found] == [("engineering-fixes-2", "people_only"), ("product-spec", "people_only")]
 
 
-def test_the_software_factory_guide_and_routing_playbook_name_the_seats_templates():
-    """The guide and Engineering's route-a-request playbook send work to the seats the presets place (TEMPLATES),
-    not to the 0.5 chart's Head of Product, Head of Engineering, a Product or Engineering Manager, or a release-notes
-    Release Owner."""
+def test_the_software_factory_guide_names_the_seats_templates():
+    """The guide sends work to the seats the presets place (TEMPLATES), not to the 0.5 chart's Head of Product, Head of
+    Engineering, a Product or Engineering Manager, or a release-notes Release Owner. (The Engineering Lead template and
+    its routing playbook are gone: the Engineering Team Manager took its slug.)"""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
     guide = (root / "docs/software-factory.md").read_text()
-    playbook = (root / "templates/catalog/engineering-lead/playbooks/route-a-request.md").read_text()
-    for text in (guide, playbook):
-        for old in ("Head of Product", "Head of Engineering", "Product Manager", "Engineering Manager"):
-            assert old not in text
-        for old in ("`product-lead`", "`engineering-lead`", "`product-manager`", "`engineering-manager`"):
-            assert old not in text
+    for old in ("Head of Product", "Head of Engineering", "Product Manager", "Engineering Manager"):
+        assert old not in guide
+    for old in ("`product-lead`", "`engineering-lead`", "`product-manager`", "`engineering-manager`"):
+        assert old not in guide
     for role in (S.PRODUCT_PIPELINE_MANAGER, S.PRODUCT_OWNER, S.RELEASE_MANAGER):
         assert f"`{S.TEMPLATES[role]}`" in guide
-    assert f"`{S.TEMPLATES[S.RELEASE_MANAGER]}` (Release Owner)" in playbook
-    assert f"`{S.TEMPLATES[S.PRODUCT_OWNER]}` (Product Owner)" in playbook
 
 
 @pytest.mark.parametrize(

@@ -44,7 +44,7 @@ works on a bare Python. `doctor` reports them missing rather than crashing.
 scripts/mail.sh doctor                      # builds the venv on first use, then checks setup
 scripts/mail.sh inbox --as influencer --new --format brief
 scripts/mail.sh inbox --as influencer --untriaged --format brief
-scripts/mail.sh rules backtest --as inbox --since 14d --rules /tmp/candidate.yaml
+scripts/mail.sh rules backtest --as inbox-manager --since 14d --rules /tmp/candidate.yaml
 cd <hub> && python3 -m connectors.mail whoami --as ana --mailbox ana@acme.example
 ```
 
@@ -164,7 +164,7 @@ Adding a rule to `registry/mail-rules.yaml` should come with a fixture, and with
 against real mail:
 
 ```bash
-scripts/mail.sh rules backtest --as inbox [--since 14d] [--rules candidate.yaml] \
+scripts/mail.sh rules backtest --as inbox-manager [--since 14d] [--rules candidate.yaml] \
                                [--limit 2000] [--format md|json]
 ```
 

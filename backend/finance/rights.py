@@ -1,4 +1,4 @@
-"""Setting up a helper's Finance rights in one step (the Bookkeeper bot gets finance.book, ap, ar, pay, cards and rules
+"""Setting up a helper's Finance rights in one step (the Finance Owner bot gets finance.book, ap, ar, pay, cards and rules
 when it is added), inside the caller's transaction. What a right lets the holder ask is core/rights and core/kinds; this only
 writes the grants a hire comes with."""
 

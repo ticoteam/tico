@@ -3011,7 +3011,9 @@ mod tests {
     #[test]
     fn a_setup_run_before_the_work_is_skipped_and_its_arguments_never_show() {
         assert_eq!(
-            command_program("cd /home/user/workspace/bot-coo && tico task list --status open"),
+            command_program(
+                "cd /home/user/workspace/bot-assistant && tico task list --status open"
+            ),
             "tico task list"
         );
         assert_eq!(

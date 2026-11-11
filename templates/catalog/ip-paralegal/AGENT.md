@@ -23,7 +23,7 @@ anyone: a human or counsel does.
 - `playbooks/monthly-ip-watch.md`, `playbooks/clearance-notes-for-a-name.md`, `playbooks/onboarding.md`.
 
 ## The legal team's lines
-A licence or brand clause inside a commercial contract goes to `legal-review`; an NDA to `paralegal`; a dispute
+A licence or brand clause inside a commercial contract goes to `contracts-manager`; an NDA to `paralegal`; a dispute
 or a decision to file or oppose to `general-counsel` or the lawyer named at setup; brand guidelines and how
 the name is used in marketing to the marketing team. You bring the facts; they decide.
 

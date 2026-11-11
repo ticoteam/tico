@@ -13,7 +13,7 @@ def _installed(environment):
     the automation the sweep moved to."""
     api = environment(seed=COO)
     _write_assistant_routines(api)
-    assert _ensure(api) == [("coo", "daily-sweep")]
+    assert _ensure(api) == [("assistant", "daily-sweep")]
     return api, _row(api)["automation"]
 
 
@@ -32,11 +32,11 @@ def test_the_sweep_is_listed_edited_paused_run_by_the_owner_and_hidden_from_quin
     # The owner lists the sweep with its controls.
     assert aid.startswith("auto_")
     listed = next(a for a in _call(api, "GET", "automations")["automations"] if a["id"] == aid)
-    assert listed["name"] == SWEEP_TITLE and listed["owner_id"] == "bot:coo" and listed["enabled"] is True
+    assert listed["name"] == SWEEP_TITLE and listed["owner_id"] == "bot:assistant" and listed["enabled"] is True
     assert listed["trigger"]["type"] == "schedule" and listed["trigger"]["cron"] == "0 8 * * *"
     assert listed["next_run"] and listed["can_edit"] is True and listed["can_pause"] is True
     shown = _call(api, "GET", f"automations/{aid}")
-    assert shown["steps"][0]["type"] == "bot_turn" and shown["steps"][0]["bot"] == "bot:coo"
+    assert shown["steps"][0]["type"] == "bot_turn" and shown["steps"][0]["bot"] == "bot:assistant"
     assert shown["can_edit"] is True and shown["can_pause"] is True
 
     # A person who is not above the Assistant does not see the sweep, and changes nothing about it.

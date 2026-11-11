@@ -6,11 +6,11 @@ from backend import views
 
 def test_assignments_by_runner_matches_per_computer_lookups(api):
     a, b = runner(api, "ana", "A Mac"), runner(api, "ana", "B Mac")
-    assign(api, a, "coo")
+    assign(api, a, "assistant")
     assign(api, b, "cpo")
     with api.app.state.store.transaction() as c:
         # Archive one bot on A so active_placed drops it while ordered still lists it.
-        c.execute("UPDATE bots SET state='archived' WHERE slug='coo'")
+        c.execute("UPDATE bots SET state='archived' WHERE slug='assistant'")
     with api.app.state.store.read() as c:
         placed, active = views.assignments_by_runner(c)
         assert placed[a["runner_id"]] == [
@@ -24,11 +24,11 @@ def test_assignments_by_runner_matches_per_computer_lookups(api):
                 (a["runner_id"],),
             )
         }
-        assert "coo" in placed[a["runner_id"]]
-        assert "coo" not in active.get(a["runner_id"], set())
+        assert "assistant" in placed[a["runner_id"]]
+        assert "assistant" not in active.get(a["runner_id"], set())
         assert placed[b["runner_id"]] == ["cpo"]
         assert active[b["runner_id"]] == {"cpo"}
     machines = {m["id"]: m for m in get(api, "operations")["machines"]}
-    assert "coo" in machines[a["runner_id"]]["bots"]  # archived still listed on the computer
+    assert "assistant" in machines[a["runner_id"]]["bots"]  # archived still listed on the computer
     assert "cpo" in machines[b["runner_id"]]["bots"]
-    assert "coo" not in machines[a["runner_id"]]["readiness"].get("bots", {})
+    assert "assistant" not in machines[a["runner_id"]]["readiness"].get("bots", {})

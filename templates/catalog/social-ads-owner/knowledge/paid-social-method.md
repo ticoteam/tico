@@ -1,6 +1,6 @@
 # Paid social method
 
-The standing rules behind the weekly review, the creative pipeline and every change proposal. Thresholds are platform guidance or dated third-party figures, and each line says which. Figures carried from the paid-media template's method were read there on 2026-11-01; this file did not re-read them. Team rules (the step size for budget moves, the test count, the fatigue ratio) are this company's choices, set in `knowledge/targets.md`, and are not platform rules.
+The standing rules behind the weekly review, the creative pipeline and every change proposal. Thresholds are platform guidance or dated third-party figures, and each line says which. Figures carried from the search-ads-owner template's method were read there on 2026-11-01; this file did not re-read them. Team rules (the step size for budget moves, the test count, the fatigue ratio) are this company's choices, set in `knowledge/targets.md`, and are not platform rules.
 
 ## Measure the result, not the click
 
@@ -14,11 +14,11 @@ The standing rules behind the weekly review, the creative pipeline and every cha
 
 ## Learning, budgets and volume
 
-- A campaign in its learning window is not edited unless something unusual shows up, because each edit can restart learning. Meta's developer guidance advises about 50 optimisation events per ad set in seven days to exit learning (carried from the paid-media method, read 2026-11-01).
+- A campaign in its learning window is not edited unless something unusual shows up, because each edit can restart learning. Meta's developer guidance advises about 50 optimisation events per ad set in seven days to exit learning (carried from the search-ads-owner method, read 2026-11-01).
 - Fewer, larger ad sets learn faster. Splitting a small budget across many ad sets multiplies the events each one needs.
 - Set a target near the average cost per result of the last 90 days, not below it. A target far below history starves delivery.
 - Budget moves go in steps. The team default is no more than 20 per cent in one step (a team rule in `knowledge/targets.md`). Read the effect two weeks later, not the next day.
-- A budget move between segments is the marketing lead's decision (`growth-team-manager`). Within a channel, the split between campaigns is the Social Ad Owner's.
+- A budget move between segments is the marketing lead's decision (`growth-team-manager`). Within a channel, the split between campaigns is the Social Ads Owner's.
 
 ## Diagnosing a cost per result
 
@@ -54,6 +54,6 @@ Cost per result = CPM ÷ (1,000 × link click-through rate × conversion rate), 
 
 ## Sources
 
-- Meta for Developers, learning-phase guidance: about 50 optimisation events per ad set in seven days (carried from `paid-media/knowledge/paid-method.md`, read 2026-11-01).
+- Meta for Developers, learning-phase guidance: about 50 optimisation events per ad set in seven days (carried from `search-ads-owner/knowledge/paid-method.md`, read 2026-11-01).
 - Account reporting notes from a live paid bot: censored values, configured versus observed budget, view-through segmentation and reporting lag, 2026 (carried from the same file, read 2026-11-01). The rules are general; the figures are not.
 - Arithmetic in this file (the cost-per-result identity, the standard-error spread) is computed here, not sourced.

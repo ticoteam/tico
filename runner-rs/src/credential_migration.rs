@@ -192,13 +192,17 @@ mod tests {
             std::env::temp_dir().join(format!("tico-migrate-{}", uuid::Uuid::new_v4().simple()));
         let secrets = dir.join("secrets");
         std::fs::create_dir_all(&secrets).unwrap();
-        std::fs::create_dir_all(dir.join("bot-coo")).unwrap();
+        std::fs::create_dir_all(dir.join("bot-assistant")).unwrap();
         std::fs::write(
-            dir.join("bot-coo").join("bot.yaml"),
+            dir.join("bot-assistant").join("bot.yaml"),
             "tools:\n  - env: SEARCH_KEY\n",
         )
         .unwrap();
-        std::fs::write(secrets.join("coo.env"), "OWN=1\nHUB_TOKEN=nope\n# NOTE=x\n").unwrap();
+        std::fs::write(
+            secrets.join("assistant.env"),
+            "OWN=1\nHUB_TOKEN=nope\n# NOTE=x\n",
+        )
+        .unwrap();
         std::fs::write(secrets.join("cert.pem"), "PEM").unwrap();
         std::fs::write(
             secrets.join("_shared.env"),
@@ -215,8 +219,8 @@ mod tests {
         let process = BTreeMap::from([("SEARCH_KEY".to_string(), "from-env".to_string())]);
         let got = credentials_for(
             &config,
-            "coo",
-            &json!({"bot": "coo", "config": {"runtime": "claude"}}),
+            "assistant",
+            &json!({"bot": "assistant", "config": {"runtime": "claude"}}),
             &process,
         );
         let pairs: Vec<(String, String, String)> = got

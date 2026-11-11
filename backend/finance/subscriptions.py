@@ -4,12 +4,12 @@ or money account, with its cadence (monthly or annual), its expected amount, its
 - suggested: detect() found a repeat. Monthly: a charge in each of the three calendar months before this one, amounts
   within MONTHLY_SPREAD percent of each other, each on the same day of the month within DAY_SLACK days. Annual: the two
   latest charges 11 to 13 months apart, on the same day of the month within ANNUAL_SLACK days.
-- active, ignored, cancelled: confirmed by a person or the Bookkeeper (subscription_confirm). Ignored rows raise no
+- active, ignored, cancelled: confirmed by a person or the Finance Owner (subscription_confirm). Ignored rows raise no
   Watch findings and are never suggested again. A suggested or active row with no charge for MISSED_PERIODS cadence
   periods past its next charge becomes cancelled on its own (detect() is the only thing that does that), and that
   automatic cancel clears the row's confirmation (confirmed_by, confirmed_at).
 - Revival: a cancelled row charged again (a charge later than its last_charge_on) goes back to suggested when the system
-  cancelled it (confirmed_by is empty). A row a person or the Bookkeeper cancelled stays cancelled; its charges still
+  cancelled it (confirmed_by is empty). A row a person or the Finance Owner cancelled stays cancelled; its charges still
   show up in Watch's generic checks, so a price rise or an idle card on it is raised.
 
 detect() runs once a day from the scheduler's Finance upkeep (scheduler.finance_tick, through actions.detect_subscriptions),
@@ -29,7 +29,7 @@ store of its own. `monthly` is an annual amount over twelve, rounded half up to 
 Source key: a charge's card id, else its money account id (a feed row's fin_money_accounts id; an entry's GL account id
 in a mirror book, where entries are read only for accounts with no feed rows, so the two never meet for one account).
 
-Actions (need finance.book, which the Bookkeeper holds; never gated, audited by the action log): subscription_confirm
+Actions (need finance.book, which the Finance Owner holds; never gated, audited by the action log): subscription_confirm
 {subscription_id, status: active|ignored|cancelled, amount?, cadence?, seats?} and subscription_undo {subscription_id}, which
 puts back the fields before the latest confirmation. Money is integer minor units, dates ISO days.
 """

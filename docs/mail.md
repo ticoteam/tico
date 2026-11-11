@@ -672,7 +672,7 @@ The key can act as any mailbox in the team, so bots must not be able to read it.
   list, so on this layout the mail-local calendar commands reach only those mailboxes' calendars. Any other bot, and any
   other mailbox, is refused.
   A bot is a message bot to the server when it is its person's `inbox_bot`, which is what the server checks before it names any
-  mailbox for a run. Making a bot from the `inbox` template does that itself: adding it in Settings, in the team builder, or
+  mailbox for a run. Making a bot from the `inbox-manager` template does that itself: adding it in Settings, in the team builder, or
   through BotOps records the bot as the `inbox_bot` of the person the `Mailbox:` line names (by their roster email; for a bot
   BotOps registers in a DM, the person who asked), and writes that address as its `gmail` identity, or the person's own email when
   there is no line. A bot made before this is linked when the server starts, if it is unambiguous: a message-bot template, a
@@ -764,7 +764,7 @@ inspect and remove a suppression through the API.
 tico email policy                                    # company policy
 tico email policy --settings '{"mode":"on_their_own"}'
 tico email policy --mailbox support@acme.example       # inbox effective rule
-tico email policy --bot support --settings '{"mode":"ask_first"}'
+tico email policy --bot support-owner --settings '{"mode":"ask_first"}'
 tico email sends --mailbox support@acme.example --pending
 tico email cancel <send-id>
 ```
@@ -803,9 +803,9 @@ The acting bot needs the separate Gmail `unsubscribe` verb; read/draft/send do n
 This grant cancels email-list subscriptions only, without enabling general emails or invites.
 
 ```
-scripts/mail.sh unsubscribe <message-id> --as inbox --dry-run --json
-scripts/mail.sh unsubscribe <message-id> --as inbox --archive --json
-scripts/mail.sh rules run --as inbox --json
+scripts/mail.sh unsubscribe <message-id> --as inbox-manager --dry-run --json
+scripts/mail.sh unsubscribe <message-id> --as inbox-manager --archive --json
+scripts/mail.sh rules run --as inbox-manager --json
 ```
 
 The command verifies DKIM over the raw message and both unsubscribe headers, then POSTs the

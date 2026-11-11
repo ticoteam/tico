@@ -71,7 +71,7 @@ def test_capture_splits_opening_state_from_outcome_and_needs_a_signature():
         "comments": [message("a", "human:ana", "Only the login page.", "2026-10-16T09:58:00Z")],
         "children": [
             {"id": "q", "owner_id": "human:ana", "status": "done", "title": "Check the account"},
-            {"id": "r", "owner_id": "bot:pr-reviewer", "status": "done", "title": "Review PR 12"},
+            {"id": "r", "owner_id": "bot:reviewer", "status": "done", "title": "Review PR 12"},
         ],
     }
     # A task filed for a person is one step for them; one filed for another bot is not.
@@ -86,7 +86,7 @@ def test_capture_splits_opening_state_from_outcome_and_needs_a_signature():
     }
     children = [
         {"task": {"id": "q", "owner_id": "human:ana", "status": "done"}},
-        {"task": {"id": "r", "owner_id": "bot:pr-reviewer", "status": "done"}},
+        {"task": {"id": "r", "owner_id": "bot:reviewer", "status": "done"}},
     ]
     case = replay.split(
         detail, files, {"content": "# Dev", "updated_at": "2026-10-15T00:00:00Z"}, child_details=children
@@ -182,7 +182,7 @@ class FakeTico:
 
 def run_at(minute):
     return {
-        "bot": "engineering-lead",
+        "bot": "engineering-team-manager",
         "started_at": f"2099-01-01T00:{minute:02}:02Z",
         "finished_at": f"2099-01-01T00:{minute:02}:50Z",
     }
@@ -197,7 +197,7 @@ def bot_asks_then_finishes(fake, row, event):
                 "requirement_id": "a1",
                 "kind": "answer",
                 "who": "human:owner",
-                "asked_by": "bot:engineering-lead",
+                "asked_by": "bot:engineering-team-manager",
                 "choices": None,
                 "met": False,
             }
@@ -205,9 +205,9 @@ def bot_asks_then_finishes(fake, row, event):
         row["task"]["turn"] = {"state": "person", "who": "human:owner"}
     elif event == "answered":
         row["runs"].append(run_at(2))
-        row["files"].append({"name": "engineering-summary.md", "versions": [{"by": "bot:engineering-lead"}]})
+        row["files"].append({"name": "engineering-summary.md", "versions": [{"by": "bot:engineering-team-manager"}]})
         row["messages"].append(
-            message("b1", "bot:engineering-lead", "Attached: 5 shipped, nothing broke.", "2099-01-01T00:02:30Z")
+            message("b1", "bot:engineering-team-manager", "Attached: 5 shipped, nothing broke.", "2099-01-01T00:02:30Z")
         )
         row["task"]["status"] = "done"
 
@@ -216,7 +216,10 @@ def bot_gives_up(fake, row, event):
     row["runs"] += [run_at(1), run_at(2), run_at(3), run_at(4)]
     row["messages"].append(
         message(
-            "b1", "bot:engineering-lead", "I could not read the runners (see harness logs).", "2099-01-01T00:02:00Z"
+            "b1",
+            "bot:engineering-team-manager",
+            "I could not read the runners (see harness logs).",
+            "2099-01-01T00:02:00Z",
         )
     )
     row["task"]["status"] = "closed"

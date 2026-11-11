@@ -236,7 +236,7 @@ def _changes(sub, pipeline, stage):
         "pipeline create",
         "make a pipeline with its stages in order, each held by whoever the task is for unless a holder is given",
         MAKERS,
-        'tico pipeline create support --name Support --manager support-lead --stage Triage --stage "Doing:support-lead"',
+        'tico pipeline create support --name Support --manager success-team-manager --stage Triage --stage "Doing:success-team-manager"',
     )
     s.add_argument("id", help="lowercase words joined by dashes")
     s.add_argument("--name", required=True)

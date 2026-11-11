@@ -108,7 +108,7 @@ def test_placement_order_of_a_mailbox_owner_across_servers_macs_assistants_and_m
     declare(api, BOX)
     with api.app.state.store.transaction() as c:
         mailbox_access.ensure_mailbox(c, BOX)
-    place(api, first, "coo")
+    place(api, first, "assistant")
     place(api, host, "inbox")
     assert owners(api, [first, host], BOX) == [host["runner_id"]]
     # Existing message-bot placement remains authoritative between heartbeats.
@@ -187,7 +187,7 @@ def test_stopped_awaiting_foreign_and_other_provider_mailboxes_are_not_fallback_
 def test_a_personal_google_grant_keeps_its_holder_even_when_offline(api, known_person):
     first, holder = computers(api)
     personal(api, "cara", PERSONAL, holder=holder["runner_id"])
-    place(api, first, "coo")
+    place(api, first, "assistant")
     offline(api, holder)
     assert owners(api, [first, holder]) == [holder["runner_id"]]
     assert token(api, first["token"], PERSONAL, expected=403)["error"]["kind"] == "personal_grant"
@@ -240,7 +240,7 @@ def test_publish_claim_report_and_calendar_follow_the_personal_mailbox_owner(api
 
 def test_a_shared_mailbox_without_a_bot_only_syncs_on_a_server(api, known_person):
     machines = computers(api, operator="cara", isolated=False)
-    place(api, machines[0], "coo")
+    place(api, machines[0], "assistant")
     with api.app.state.store.transaction() as c:
         mailbox_access.ensure_mailbox(c, "support@acme.example", kind="shared")
     assert owners(api, machines, "support@acme.example") == []
@@ -328,4 +328,4 @@ def test_the_owners_assistant_and_mail_page_read_live_mail_without_a_message_bot
     answer = get(api, "mail/access?mailbox=" + BOX, attempt["token"])
     assert answer["principal"] == "person:ana" and answer["level"] == "read_write"
     monkeypatch.setattr(access, "SERVER_ACCESS", lambda slug: answer)
-    assert access.resolve("coo", BOX, manifest={})[0] == BOX
+    assert access.resolve("assistant", BOX, manifest={})[0] == BOX

@@ -1,4 +1,4 @@
-"""Watch checks (spec §11, the Bookkeeper's Watch job): pure functions over posted charges, monthly spend and the runway
+"""Watch checks (spec §11, the Finance Owner's Watch job): pure functions over posted charges, monthly spend and the runway
 metric. No I/O: the caller reads the books through the viewer's slice and passes plain values, money in integer cents.
 
 Each check returns findings: {"kind", "key" (stable across runs), "label" (what a person reads), "stamp" (its facts;

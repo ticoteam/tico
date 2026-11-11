@@ -20,7 +20,7 @@
         "rank": 0,
         "status": "green",
         "status_at": "<time>",
-        "status_by_id": "bot:goal-manager",
+        "status_by_id": "bot:strategy-owner",
         "status_note": "Activation 41% vs 40% needed on pace",
         "status_source": "auto",
         "suggest_at": null,

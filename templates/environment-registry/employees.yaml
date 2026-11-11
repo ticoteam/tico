@@ -18,16 +18,16 @@ defaults:
   max_run_minutes: 60
 
 employees:
-  - name: coo
+  - name: assistant
     display_name: "{{assistant_name}}"
     reports_to: null
     status: planned
-    repo: bot-coo
+    repo: bot-assistant
     description: "The assistant {{company_name}} talks to in {{app_name}}: keeps the task list, routes work to the other bots, and asks for the decisions only a human can make."
 
   - name: botops
     display_name: "BotOps"
-    reports_to: coo
+    reports_to: assistant
     status: planned
     repo: bot-botops
     description: "The engineer that sets up every other bot from a template and keeps their repositories, instructions and readiness working."

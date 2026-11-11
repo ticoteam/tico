@@ -16,7 +16,7 @@ from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE, wi
 
 
 SEO = H.bot_actor("seo")
-COO = H.bot_actor("coo")
+COO = H.bot_actor("assistant")
 
 
 # ----------------------------------------------------------------------------- schema, connect
@@ -207,36 +207,36 @@ class Rule1Identity(HubCase):
 # ----------------------------------------------------------------------------- rule 2
 class Rule2Reach(HubCase):
     def test_a_template_name_reaches_the_one_live_bot_built_from_it_and_nothing_when_two_are(self):
-        BS.update(self.conn, "cmo", {"template": "marketing-lead"})  # a template's `--owner marketing-lead`
-        task = H.task_create(self.conn, SEO, "Review the landing page", "Check the copy", "marketing-lead")
+        BS.update(self.conn, "cmo", {"template": "growth-team-manager"})  # a template's `--owner growth-team-manager`
+        task = H.task_create(self.conn, SEO, "Review the landing page", "Check the copy", "growth-team-manager")
         self.assertEqual(H.task(self.conn, task["id"])["owner_id"], CMO)
 
         # A bot's slug or a person's id names that one first, whatever a template calls it.
-        BS.update(self.conn, "seo", {"template": "coo"})
-        self.assertEqual(H.resolve_actor(self.conn, "coo"), COO)
-        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+        BS.update(self.conn, "seo", {"template": "assistant"})
+        self.assertEqual(H.resolve_actor(self.conn, "assistant"), COO)
+        self.assertEqual(H.resolve_actor(self.conn, "growth-team-manager"), CMO)
 
         # Two live bots built from the template: the name still reaches nobody.
-        BS.update(self.conn, "seo", {"template": "marketing-lead"})
-        self.assertIsNone(H.resolve_actor(self.conn, "marketing-lead"))
+        BS.update(self.conn, "seo", {"template": "growth-team-manager"})
+        self.assertIsNone(H.resolve_actor(self.conn, "growth-team-manager"))
         self.refused(
-            "reach", H.task_create, self.conn, SEO, "Review the landing page", "Check the copy", "marketing-lead"
+            "reach", H.task_create, self.conn, SEO, "Review the landing page", "Check the copy", "growth-team-manager"
         )
 
         # An archived bot is off the roster, so the one live bot is the only match again.
         self.conn.execute("UPDATE bots SET state='archived' WHERE slug='seo'")
-        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+        self.assertEqual(H.resolve_actor(self.conn, "growth-team-manager"), CMO)
 
         # An open seat set up from the template claims the name too, until a bot fills it (the seat closes).
         now = H.now()
         self.conn.execute(
             "INSERT INTO seats(id,title,reports_to,created_at,created_by,updated_at,updated_by,template) "
-            "VALUES('seat-marketing-lead','Marketing lead','',?,?,?,?,'marketing-lead')",
+            "VALUES('seat-marketing-lead','Marketing lead','',?,?,?,?,'growth-team-manager')",
             (now, CMO, now, CMO),
         )
-        self.assertIsNone(H.resolve_actor(self.conn, "marketing-lead"))
+        self.assertIsNone(H.resolve_actor(self.conn, "growth-team-manager"))
         self.conn.execute("UPDATE seats SET closed_at=? WHERE id='seat-marketing-lead'", (now,))
-        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+        self.assertEqual(H.resolve_actor(self.conn, "growth-team-manager"), CMO)
 
         # A template no bot is built from is still no one.
         self.assertIsNone(H.resolve_actor(self.conn, "product-lead"))

@@ -218,7 +218,7 @@ def create_app(settings=None):
                 finance.ensure_setup(c, settings.owner_email)
         except Exception as exc:
             telemetry.capture("finance_setup", exc)
-        # The Assistant's routines it never had, the Bookkeeper once Finance is set up and the rest of what completes a
+        # The Assistant's routines it never had, the Finance Owner once Finance is set up and the rest of what completes a
         # company run with the start jobs, below (Onboarding.complete_company).
         # Physical mail filed before bills and tax letters were private: those tasks go private, once.
         try:
@@ -876,12 +876,12 @@ def create_app(settings=None):
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)
-                # Counsel sends nothing outside Tico (backend/counsel.py OUTWARD): refused on the server, not only in its tools.
+                # The Rules Owner sends nothing outside Tico (backend/counsel.py OUTWARD): refused on the server, not only in its tools.
                 if counsel.is_counsel(who) and await asyncio.get_running_loop().run_in_executor(
                     None, counsel.refused, store, who, request.url.path, request.method
                 ):
                     raise Problem("forbidden", counsel.REFUSED, 403)
-                # Counsel calls only its own routes (backend/counsel.py COUNSEL_ROUTES), and a Counsel run reads on them
+                # The Rules Owner calls only its own routes (backend/counsel.py COUNSEL_ROUTES), and a Rules Owner run reads on them
                 # only its own task, its read's document version and its own run (read_refused).
                 if counsel.is_counsel(who) and (
                     reason := await asyncio.get_running_loop().run_in_executor(

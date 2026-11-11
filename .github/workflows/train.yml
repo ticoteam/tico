@@ -58,7 +58,7 @@ jobs:
             scripts/release_notes.py
             scripts/release_increment.py
             scripts/pr_checks.py
-            templates/catalog/release-notes/software/rollout.py
+            templates/catalog/release-notes-writer/software/rollout.py
           sparse-checkout-cone-mode: false
       - id: guard
         env:
@@ -168,7 +168,7 @@ jobs:
             scripts/release_notes.py
             scripts/release_increment.py
             scripts/pr_checks.py
-            templates/catalog/release-notes/software/rollout.py
+            templates/catalog/release-notes-writer/software/rollout.py
           sparse-checkout-cone-mode: false
       # With no artifact (the shots job ended before it uploaded), the download fails and the issue says the pictures
       # could not be made, with this run's URL.

@@ -8,7 +8,7 @@ Six doors, each with its own mode (off, warn or hold; Settings > Security > Scre
   idea     the public roadmap's suggestion form (backend/public_roadmaps.py)
   watcher  a watcher's new task (backend/watchers.py), except the Support Agent's HQ tickets, which support triage
            checks (backend/support_triage.py)
-  document a document's text as Counsel reads it (backend/counsel.py)
+  document a document's text as the Rules Owner reads it (backend/counsel.py)
   slack    an inbound Slack message (backend/slack_threads.py, backend/slack_gateway.py)
 
 Layers, each on its own: the fencing of outside text as data, which every door already does and is not a switch; then

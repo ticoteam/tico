@@ -1093,7 +1093,7 @@ ENTRIES = TEAM_RULES + [
         "POST",
         "strategy-bot/checks",
         "on",
-        card="#/bot/goal-manager/settings",
+        card="#/bot/strategy-owner/settings",
     ),
     S(
         "strategy.level",
@@ -1105,7 +1105,7 @@ ENTRIES = TEAM_RULES + [
         "strategy-bot/level",
         "level",
         "int",
-        "#/bot/goal-manager/settings",
+        "#/bot/strategy-owner/settings",
     ),
     # Repositories
     S(

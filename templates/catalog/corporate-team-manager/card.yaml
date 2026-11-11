@@ -8,7 +8,7 @@ lead: true
 icon: account_tree
 suggest: common
 tags: [corporate, legal, finance, partnerships, compliance, deadlines]
-team_templates: [legal-owner, bookkeeper, partnerships-owner]
+team_templates: [legal-owner, finance-owner, partnerships-owner]
 summary: "Runs the corporate team's weekly review: legal, the books and partnerships against their own targets, the deadlines in the next 30 days, and the decisions needed. It proposes routing and hires, and never signs, pays, files or sends anything itself."
 pains:
   - "Legal, finance and partner work sit in different places and nobody sees the company's obligations together"

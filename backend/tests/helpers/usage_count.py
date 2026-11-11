@@ -3,7 +3,7 @@
 import sqlite3
 
 
-def complete_a_bot_turn(api, when, bot="coo"):
+def complete_a_bot_turn(api, when, bot="assistant"):
     with sqlite3.connect(str(api.app.state.store.settings.db_path)) as c:
         c.execute(
             "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,finished_at) "

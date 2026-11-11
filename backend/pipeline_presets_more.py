@@ -17,8 +17,8 @@ ladder for a role no bot fills yet (a stage's owner goes to the pipeline's manag
   the manager to pick one (C25).
 - Legal and Finance are private pipelines (backend/private_pipelines.py): every task in them is private, read by its
   requester, its owner, the pipeline's manager and the company's owner. Each is managed, and each stage owned, by its
-  owner bot: the Legal Owner (template `legal-owner`, not the built-in Counsel) and the Finance Owner (the Bookkeeper,
-  template `bookkeeper`). Nothing on them falls back to the Task Manager, which reads no private task: while the owner
+  owner bot: the Legal Owner (template `legal-owner`, not the built-in Rules Owner) and the Finance Owner (built in,
+  template `finance-owner`). Nothing on them falls back to the Task Manager, which reads no private task: while the owner
   bot does not exist the pipeline is not made (PRIVATE, `pipeline_settings.ensure_presets`). Their stages have no
   limit (a limit counts tasks a reader can't see) and no OK from a person.
 
@@ -44,7 +44,7 @@ OUTBOUND_SALES = "outbound-sales-owner"
 INBOUND_SALES = "inbound-sales-owner"
 SUCCESS = "success-owner"
 LEGAL_OWNER = "legal-owner"
-FINANCE_OWNER = "bookkeeper"  # the Finance Owner seat is filled by the built-in Bookkeeper (backend/bookkeeper.py)
+FINANCE_OWNER = "finance-owner"  # the built-in Finance Owner (backend/bookkeeper.py)
 TEMPLATE_ROLES = (LEAD_GENERATION, OUTBOUND_SALES, INBOUND_SALES, SUCCESS, LEGAL_OWNER, FINANCE_OWNER)
 
 

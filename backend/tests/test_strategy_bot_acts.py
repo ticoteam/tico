@@ -19,7 +19,7 @@ from backend import mailbox_access
 from backend import strategy_acts as SA
 from backend import strategy_bot
 
-OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
+OWNER, STRATEGY_BOT = "human:ana", "bot:strategy-owner"
 
 
 def bot(api, slug):
@@ -39,7 +39,7 @@ def bot(api, slug):
 def with_strategy_bot(api, level=1):
     """The Strategy Owner at `level`, as its own agent credential."""
     goal_manager(api, level)
-    return bot(api, "goal-manager")
+    return bot(api, "strategy-owner")
 
 
 def bot_task(api, slug, title):
@@ -52,7 +52,7 @@ def bot_task(api, slug, title):
 @pytest.fixture
 def c(company):
     with company.transaction() as conn:
-        for slug in ("ops", "finance", "goal-manager"):
+        for slug in ("ops", "finance", "strategy-owner"):
             X.bot(conn, slug)
         strategy_bot.set_level(conn, OWNER, 3)
         yield conn
@@ -402,7 +402,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     refused. A task someone changed since stays whole as they left it and is named; the rest goes back; a form holding
     the task from before the decision or the Undo gets a version conflict."""
     strategy_token = with_strategy_bot(api)
-    for slug in ("ops", "finance", "coo"):
+    for slug in ("ops", "finance", "assistant"):
         bot(api, slug)
     level(api, 3)
     ticket = bot_task(api, "ops", "Fix the guest message times")
@@ -413,9 +413,9 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         for t in ("Write the onboarding email", "Clean up old reports", "Draft the pricing page", "Plan the launch")
     )
     bot_task(api, "ops", "Answer the support inbox")
-    bot_task(api, "coo", "Review the budget")
+    bot_task(api, "assistant", "Review the budget")
     with api.app.state.store.transaction() as c:
-        H.task_reassign(c, OWNER, refused, "bot:coo", "Coo plans launches")
+        H.task_reassign(c, OWNER, refused, "bot:assistant", "Coo plans launches")
     start = {t: task(api, t) for t in (moved, back, twice, refused, ticket)}
     made = decide(
         api,
@@ -439,7 +439,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         H.task_update(c, OWNER, back, rank=-60, mover=True)  # ...and away and back
         H.task_update(c, OWNER, back, rank=decided, mover=True)
         H.task_reassign(c, OWNER, new, OWNER, "I will take this one")  # a person takes on what it made
-        BS.write(c, 'coo', {'harness': 'dots'})
+        BS.write(c, 'assistant', {'harness': 'dots'})
     held = task(api, ticket)["version"]
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)  # an admin doesn't undo
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
@@ -573,8 +573,8 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
     assert held["state"] == "proposed" and "keeps its tasks private" in held["left"][0]["why"]
     assert task(api, work)["owner_id"] == "bot:ops" and not task(api, work)["private"]
 
-    bot(api, "coo")
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
+    bot(api, "assistant")
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "assistant"}])
     assert made["state"] == "done" and "before" not in made["done"][0]  # the owner's log keeps the fields
     assert get(api, "strategy-bot/log")["items"][0]["done"][0]["before"]["private"] == 0
     with api.app.state.store.transaction() as c:  # made private since, by someone else
@@ -687,11 +687,11 @@ def test_the_log_pages_through_entries_made_in_the_same_instant(api):
 def test_undo_puts_the_owner_back_and_keeps_readers_given_the_task_since(api):
     """Readers survive a new owner, so Undo gives the task back to its owner and the readers stay."""
     strategy_token = with_strategy_bot(api)
-    for slug in ("ops", "coo"):
+    for slug in ("ops", "assistant"):
         bot(api, slug)
     level(api, 3)
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "assistant"}])
     with api.app.state.store.transaction() as c:
         c.execute(
             """UPDATE tasks SET private=1, visibility='private', readers=json_array('human:ben') WHERE id=?""", (work,)

@@ -50,7 +50,7 @@ const IDLE_MS = 10000;
 const DOT_ANIMATED = new Set(['transform', 'opacity', 'offset', 'easing', 'composite', 'computedOffset']);
 
 async function open(browser: Browser) {
-  const state = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?'), msg('a2', 'bot:coo', 'In Docs.')], sent: 0};
+  const state = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?'), msg('a2', 'bot:assistant', 'In Docs.')], sent: 0};
   const page = await browser.newPage({viewport: {width: 1280, height: 860}, serviceWorkers: 'block'});
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -64,14 +64,14 @@ async function open(browser: Browser) {
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ben', name: 'Ben'}]});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant'}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant'}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/needs-you') return json({actor: 'human:ben', count: 0, version: 'v0', items: []});
-    if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant',
+    if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'assistant', name: 'Assistant',
       can_turn_on: false, room_id: 'room1', messages: state.messages, has_more: false, next_before: null, execution: null, actions: {}, pending: []});
     if (p === '/api/v2/assistant/messages') {
-      const n = ++state.sent, user = msg('u' + n, 'human:ben', (JSON.parse(route.request().postData()!) as {text: string}).text), bot = msg('b' + n, 'bot:coo', 'On it.');
+      const n = ++state.sent, user = msg('u' + n, 'human:ben', (JSON.parse(route.request().postData()!) as {text: string}).text), bot = msg('b' + n, 'bot:assistant', 'On it.');
       state.messages.push(user, bot);
       return json({message: user});
     }

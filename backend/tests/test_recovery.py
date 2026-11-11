@@ -15,7 +15,7 @@ def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_pa
     store = Store(settings)
     store.initialize()
     with store.transaction() as c:
-        H.sync_registry(c, {"coo": {"name": "coo", "status": "active"}}, {"people": []})
+        H.sync_registry(c, {"assistant": {"name": "assistant", "status": "active"}}, {"people": []})
         c.execute("DELETE FROM cloud_migrations WHERE version=8")
         # A database as an older release left it: it never recorded migration 0052 (nor any later one, which would run
         # again after it), and still has the trigger.
@@ -28,8 +28,10 @@ def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_pa
             "INSERT INTO jobs(id,message_id,bot_id,created_at) "
             "VALUES(NEW.id,NEW.id,substr(NEW.recipient_id,5),NEW.created_at); END"
         )
-        conversation = H.open_conversation(c, "bot:coo", ["bot:coo"], kind="chat")
-        self_message = H._write_message(c, "bot:coo", "bot:coo", "legacy loop", conversation, "say", {}, None, None)
+        conversation = H.open_conversation(c, "bot:assistant", ["bot:assistant"], kind="chat")
+        self_message = H._write_message(
+            c, "bot:assistant", "bot:assistant", "legacy loop", conversation, "say", {}, None, None
+        )
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (self_message["id"],)).fetchone()[0] == "queued"
     store.initialize()
     with store.transaction() as c:
@@ -38,7 +40,7 @@ def test_store_drops_legacy_queue_trigger_and_drains_queued_self_messages(tmp_pa
         assert (
             c.execute("SELECT state FROM jobs WHERE message_id=?", (self_message["id"],)).fetchone()[0] == "completed"
         )
-        H._write_message(c, "bot:coo", "bot:coo", "ignored by enqueue", conversation, "say", {}, None, None)
+        H._write_message(c, "bot:assistant", "bot:assistant", "ignored by enqueue", conversation, "say", {}, None, None)
         assert c.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
         assert c.execute("SELECT 1 FROM cloud_migrations WHERE version=8").fetchone()
     store.initialize()

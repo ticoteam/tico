@@ -146,7 +146,8 @@ def test_a_backlog_past_one_runs_notes_gets_the_next_run_and_nothing_is_left(api
             H.note_create(c, "human:ana", "bot:cpo", f"Ordinary note {i}")
         # Three senders: one room takes at most 20 bot-to-bot messages an hour.
         ids = [
-            H.say(c, ("bot:ops", "bot:coo", "bot:finance")[i % 3], "bot:cpo", f"Update {i}")["id"] for i in range(55)
+            H.say(c, ("bot:ops", "bot:assistant", "bot:finance")[i % 3], "bot:cpo", f"Update {i}")["id"]
+            for i in range(55)
         ]
     assert jobs(api, "cpo") == 0
     post(api, "chat/cpo", {"text": "Go"})

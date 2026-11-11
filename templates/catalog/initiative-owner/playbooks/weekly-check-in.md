@@ -55,7 +55,7 @@ Do not write a strategy proposal, and do not file a task for the owner. If the w
 filed the trip task to the Strategy Owner, which puts the decision to the owner. Only when the evidence points against the
 bet and nothing has formally tripped, tell the Strategy Owner, which owns bet proposals:
 
-    tico message send goal-manager "Bet <id>: looks wrong. <evidence in one line, with its date>" --needs-action
+    tico message send strategy-owner "Bet <id>: looks wrong. <evidence in one line, with its date>" --needs-action
 
 The Strategy Owner puts the decision to the owner. Keep, rewrite and retire are the owner's to choose.
 

@@ -1,6 +1,6 @@
 # The Assistant
 
-Every human has one private DM with the team's assistant (the `coo` bot; you may have renamed it): a personal
+Every human has one private DM with the team's assistant (the `assistant` bot; you may have renamed it): a personal
 bot that knows how Tico is laid out and does things in it on your behalf. **Tico Assistant** opens it from any page except its own page and setup, and still opens while the signed-out banner shows. Where no person has loaded, the row is not shown and ⌘J does nothing; Search's icon becomes a row of its own. On a computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J) opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the middle of the tab bar (**Assistant**) opens it as a sheet, even while the signed-out banner shows. On the Assistant page a tap on that tab does not open the sheet at once; it comes up when you leave that page by a link, not by the tab bar. Where no person has loaded, a tap on that tab opens the sheet only once one does. During setup the tab bar is not shown. The panel names the page it sees, and a message sent from it carries that page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
 gave the assistant); its header has the dot, the name and the page it sees. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
@@ -59,7 +59,7 @@ For the Strategy Owner and the Librarian the event `assistant.asked_helper` reco
 `cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy change
 stays the owner's: the Strategy Owner proposes it on a Confirm card, and only the owner can confirm. The Strategy Owner's goal
 suggestions are agreed the way your own goal changes are: a yes in your chat confirms one ([below](#goals-agreed-in-words)).
-A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Owner's DM (`POST /api/v2/chat/goal-manager`) lands in their
+A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Owner's DM (`POST /api/v2/chat/strategy-owner`) lands in their
 Assistant DM instead.
 
 The owner used to message the Strategy Owner itself (`room_key: ceo`). That DM stays the owner's as read-only history:

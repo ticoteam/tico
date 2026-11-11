@@ -35,8 +35,8 @@ from . import bot_settings as BS
 KEY = "onboarding"
 BOTOPS = "botops"
 LIBRARIAN = "librarian"
-GOAL_MANAGER = G.GOAL_MANAGER  # keeps the KPIs and sets goals' automatic colours (docs/goals-and-kpis.md)
-ASSISTANT_TEMPLATE_SLUG = "coo"
+STRATEGY_OWNER = G.STRATEGY_OWNER  # keeps the KPIs and sets goals' automatic colours (docs/goals-and-kpis.md)
+ASSISTANT_TEMPLATE_SLUG = "assistant"
 CARD_FILE = "card.yaml"
 INSTRUCTIONS_FILE = "AGENT.md"
 # Filled wherever a person reads a card: a template names itself after the assistant, and
@@ -1051,7 +1051,7 @@ class Onboarding:
         }
 
     def _arm_built_in_starter(self, c, who, slug):
-        """A starter card that is also built in (`bootstrap`, the Brand Owner) is never parked, so no Start setup arms its
+        """A starter card that is also built in (`bootstrap`, the Design Owner) is never parked, so no Start setup arms its
         first routine: its setup-done does, once (`arm_first_routine`; one a person turned off stays off). Its routine
         stays off until then, so it runs only once the setup it needs (the brand book) exists. Returns the key or None."""
         template = self._declared(c, slug).get("template")
@@ -1156,11 +1156,11 @@ class Onboarding:
 
     def turn_on_goal_manager(self, c, who):
         """The same for the built-in Strategy Owner (docs/strategy-bot.md)."""
-        return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
+        return self._turn_on(c, who, STRATEGY_OWNER, STRATEGY_OWNER, strategy_bot.name(c), "goal_manager.turned_on")
 
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
-        Librarian, the Strategy Owner, the Task Manager, Counsel, the Brand Owner, and the Bookkeeper once Finance is set
+        Librarian, the Strategy Owner, the Task Manager, the Rules Owner, the Design Owner, and the Finance Owner once Finance is set
         up), the Assistant's routines it never had, General's manager once the Task Manager exists
         (pipeline_settings.ensure_presets) and BotOps' daily "Sweep stuck tasks" once BotOps is active. Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import, the sample
@@ -1206,7 +1206,7 @@ class Onboarding:
 
     def ensure_goal_manager(self, c):
         """The same for the Strategy Owner: a company from before it was built in gets it once it can run it."""
-        return self._ensure_builtin(c, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
+        return self._ensure_builtin(c, STRATEGY_OWNER, strategy_bot.name(c), "goal_manager.turned_on")
 
     def ensure_task_manager(self, c):
         """The same for the Task Manager (docs/task-manager.md): a company from before it was built in gets it once it can
@@ -1214,21 +1214,21 @@ class Onboarding:
         return self._ensure_builtin(c, "task-manager", "Task Manager", "task_manager.turned_on")
 
     def ensure_bookkeeper(self, c):
-        """The same for the Bookkeeper (docs/bookkeeper.md), once Finance is set up (backend/bookkeeper.py `ensure`
+        """The same for the Finance Owner (docs/bookkeeper.md), once Finance is set up (backend/bookkeeper.py `ensure`
         checks that and adds its defaults). A helper outside the org chart, like the Task Manager."""
-        return self._ensure_builtin(c, "bookkeeper", "Bookkeeper", "bookkeeper.turned_on")
+        return self._ensure_builtin(c, "finance-owner", "Finance Owner", "bookkeeper.turned_on")
 
     def ensure_counsel(self, c):
-        """The same for Counsel (docs/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
+        """The same for the Rules Owner (docs/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
         was built in gets it once it can run it, and it is outside the org chart."""
-        return self._ensure_builtin(c, H.COUNSEL, "Counsel", "counsel.turned_on")
+        return self._ensure_builtin(c, H.RULES_OWNER, "Rules Owner", "counsel.turned_on")
 
     def ensure_brand_owner(self, c):
-        """The same for the Brand Owner: a company from before it was built in gets it once it can run it. It sits outside
+        """The same for the Design Owner: a company from before it was built in gets it once it can run it. It sits outside
         the org chart like the other built-ins. A company that already hired a bot
         under its slug (a Brand Manager) keeps that bot as it is and gets no second one (`_ensure_builtin`). Its monthly
         audit starts off and goes on when its setup is done (`onboarded`)."""
-        return self._ensure_builtin(c, H.BRAND_OWNER, "Brand Owner", "brand_owner.turned_on")
+        return self._ensure_builtin(c, H.DESIGN_OWNER, "Design Owner", "brand_owner.turned_on")
 
     def turn_on_task_manager(self, c, who):
         """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
@@ -1326,7 +1326,7 @@ class Onboarding:
                 M.BotDefinitionUpdate(status="active", expected_revision=self.admin._config(c, slug)["revision"]),
             )
         self._seed_routines(c, who, slug, template)
-        if slug == GOAL_MANAGER:
+        if slug == STRATEGY_OWNER:
             G.arm_pass(c)  # KPIs already exist: its daily pass may start
         H.event(c, who.actor, event, slug, {"restored": restored, "placed": placed})
         return {"bot": slug, "state": H.bot(c, slug)["state"], "restored": restored, "placed": placed}
@@ -1626,7 +1626,7 @@ class Onboarding:
         """Create the bot, or bring an existing definition up to the chosen name. A bot that
         is already running is never demoted back to planned."""
         summary = str(card.get("summary") or "")
-        if slug == GOAL_MANAGER:
+        if slug == STRATEGY_OWNER:
             # "Strategy Owner", or the owner's name for it: never back
             choice = {**choice, "display_name": strategy_bot.name(c)}
         found = H.resolve_bot(c, slug)

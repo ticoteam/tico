@@ -14,7 +14,7 @@ def seed(api, n, start):
                 "human:ana",
                 f"List task {k}",
                 "The body of a task. " * 150,
-                "bot:ops" if k % 2 else "bot:coo",
+                "bot:ops" if k % 2 else "bot:assistant",
                 labels=["area-a"] if k % 3 == 0 else None,
             )
 

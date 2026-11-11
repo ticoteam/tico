@@ -792,7 +792,7 @@ def ever_signed_in(c, person_id):
 
 
 def placeholders(c, people, configs):
-    """Roster entries that stand for a mailbox, not a person ("legal@ (mailbox)", read by Counsel): one with a message
+    """Roster entries that stand for a mailbox, not a person ("legal@ (mailbox)", read by the Rules Owner): one with a message
     bot that reads exactly their email, who has never signed in. Their mailbox is a shared inbox, linked to nobody.
     {person_id: address}."""
     from . import routines

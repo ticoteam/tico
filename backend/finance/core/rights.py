@@ -18,7 +18,7 @@ BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN, ATTRIBUTION = (
 RIGHTS = (BOOK, AP, AR, PAY, CARDS, BUDGETS, RULES, ADMIN, ATTRIBUTION)
 # System work posts usage and keeps budgets current; it never grants, pays or changes access.
 SYSTEM_RIGHTS = frozenset({BOOK, BUDGETS})
-# What a default Bookkeeper is set up with (spec §7.4). Rules is the right to propose a posting rule; a person still
+# What a default Finance Owner is set up with (spec §7.4). Rules is the right to propose a posting rule; a person still
 # approves each one (bots always need approval). Attribution (who a line counts for) is not in it: it is granted.
 BOOKKEEPER = (BOOK, AP, AR, PAY, CARDS, RULES)
 

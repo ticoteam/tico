@@ -48,25 +48,25 @@ def test_tico_fleet_snapshot_is_bound_to_the_initiating_human(api):
     post(
         api, "tasks", {"title": "Review product direction", "body": "Choose the next slice", "owner": "cpo"}, "ben-test"
     )
-    post(api, "tasks", {"title": "What is blocked?", "body": "List it", "owner": "coo"}, "ben-test")
+    post(api, "tasks", {"title": "What is blocked?", "body": "List it", "owner": "assistant"}, "ben-test")
     machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"])
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
     attempt = claim(api, machine)
     fleet = get(api, "tico/fleet", attempt["token"])
     assert fleet["actor"] == "human:ben"
     # The assistant is in the fleet (it still takes work) though nobody chats with it.
-    assert {bot["slug"] for bot in fleet["bots"]} == {"coo", "ops", "cpo", "product-design", "doc-updater"}
+    assert {bot["slug"] for bot in fleet["bots"]} == {"assistant", "ops", "cpo", "product-design", "doc-updater"}
     assert any(task["title"] == "Review product direction" for task in fleet["tasks"])
     assert "finance" not in {bot["slug"] for bot in fleet["bots"]}
 
 
 def test_tico_task_execution_cannot_assume_a_private_fleet_identity(api):
     with api.app.state.store.transaction() as c:
-        H.task_create(c, "human:ana", "Legacy isolated task", "Review the queue", "bot:coo")
+        H.task_create(c, "human:ana", "Legacy isolated task", "Review the queue", "bot:assistant")
     machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"])
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
     attempt = claim(api, machine)
     assert attempt["conversation"]["scope"] == "task"
     get(api, "tico/fleet", attempt["token"], expected=403)

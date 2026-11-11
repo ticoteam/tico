@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS cloud_machine_codes(
 MODES = ("cloud", "computer")
 PLACEMENTS = ("shared", "own")
 SHARED = "_shared"  # the shared machine's row and HQ key: no bot id has an underscore
-OWN_TEMPLATES = ("video-producer", "builder")  # heavy work (renders, encodes, builds) whatever department the bot is in
+OWN_TEMPLATES = ("video-owner", "builder")  # heavy work (renders, encodes, builds) whatever department the bot is in
 COPY_HOPS = 20  # how far back through copies of copies a template is looked for
 OWN_NAME = re.compile(r"builder(?: \(.*| \d+)?")  # a Builder by name: "Builder", "Builder 2", "Builder (Claude)"
 SIZES = ("small", "default", "large", "xlarge")  # the names before HQ has listed its own

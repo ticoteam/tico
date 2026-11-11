@@ -466,8 +466,8 @@ STAGE_FIELDS = {
     "tico_pipeline_create",
     "Make a pipeline: its id (lowercase words joined by dashes), name, manager and stages in order, each held by "
     "`assignee` (whoever the task is for) unless a holder is given. The company's owner and Admins. Add requirements "
-    'after with tico_requirement_add. Example: tico pipeline create support --name Support --manager support-lead '
-    '--stage Triage --stage "Doing:support-lead"',
+    'after with tico_requirement_add. Example: tico pipeline create support --name Support --manager success-team-manager '
+    '--stage Triage --stage "Doing:success-team-manager"',
     {
         "id": _s("The new pipeline's id: lowercase words joined by dashes (support, field-ops)"),
         "name": _s("Its name, as people read it"),

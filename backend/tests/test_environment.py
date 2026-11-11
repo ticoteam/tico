@@ -20,7 +20,7 @@ COMPANY = {
     "company_name": "Acme",
     "app_name": "Atlas",
     "assistant_name": "Morgan",
-    "assistant_bot": "coo",
+    "assistant_bot": "assistant",
     "github_owner": "AcmeCorp",
 }
 OWNER_EMAIL = "Morgan@ACME.example"
@@ -32,10 +32,10 @@ PEOPLE = {
     ],
 }
 BOTS = {
-    "coo": {"name": "coo", "runtime": "fake", "status": "active"},
+    "assistant": {"name": "assistant", "runtime": "fake", "status": "active"},
     "support": {"name": "support", "runtime": "fake", "status": "active"},
 }
-REPOS = {"coo": "emp-coo", "support": "OtherOrg/support-bot"}
+REPOS = {"assistant": "emp-coo", "support": "OtherOrg/support-bot"}
 TOKEN = "local-owner-secret-token-0123456789"
 
 

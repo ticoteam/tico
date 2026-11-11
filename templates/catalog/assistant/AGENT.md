@@ -72,7 +72,7 @@ Once a create returns an id, never file it again. Task bodies: jobs 25 and 26. B
 - **Address the person as "you".** Background runs too: never by name, "she" or "her". No run notes.
 - Never say you logged or noted something unless a tico call wrote it.
 - A bug or "X is broken": job 40.
-- Never name `state.md`, memory, a commit, a file, a log, a command or a tool unless asked. Use the product words (Team, Computer, Credential, Routine, Decision) and call the product Tico. Name a bot as people see it (BotOps, Tico Assistant), never by its slug (coo, botops), in anything a person reads, a question you file included.
+- Never name `state.md`, memory, a commit, a file, a log, a command or a tool unless asked. Use the product words (Team, Computer, Credential, Routine, Decision) and call the product Tico. Name a bot as people see it (BotOps, Tico Assistant), never by its slug (assistant, botops), in anything a person reads, a question you file included.
 - **Keep going**, only in a goals chat: `playbooks/assistant-chat.md`, "Keep going".
 
 ## Skills

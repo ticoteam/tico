@@ -1,0 +1,35 @@
+name: product-operations-manager                     # the slug: it matches the repository bot-product-operations-manager and the label owner:product-operations-manager
+display_name: "Product Operations Manager"
+labels: [owner:product-operations-manager]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-product-ops-review
+    title: Weekly product ops review
+    cron: "0 9 * * 3"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-product-ops-review.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+# Optional, uncomment when connected. Read only: a human changes the CRM and the tracker.
+# tools:
+#   - service: crm
+#     identity: "the team's CRM account"
+#     can: [read]
+#     env: CRM_API_KEY
+#     note: "accounts, plans and segments for requesters; never a write"
+#   - service: github
+#     identity: "the product repositories the owner lists for this bot"
+#     can: [read]
+#     note: "milestones and issues for request status and the release calendar"
+tools: []

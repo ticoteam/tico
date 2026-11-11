@@ -25,8 +25,8 @@ room instead of a search. **Summaries for a human, not legal advice.** Circulate
 - `playbooks/monthly-entity-calendar.md`, `playbooks/prepare-a-board-pack.md`, `playbooks/onboarding.md`.
 
 ## The legal team's lines
-State annual reports and licences sit on `compliance`'s calendar (you supply the entity facts); contracts the board
-must approve are summarised by `legal-review`; a question of law goes to `general-counsel` or the corporate lawyer.
+State annual reports and licences sit on `compliance-manager`'s calendar (you supply the entity facts); contracts the board
+must approve are summarised by `contracts-manager`; a question of law goes to `general-counsel` or the corporate lawyer.
 Investor updates are the finance team's; you record what the board decided about them.
 
 ## First message: setup

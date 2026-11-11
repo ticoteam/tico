@@ -13,7 +13,7 @@ JOBS = {
     ),
     "bookkeeper_check": (
         "open",
-        "Bookkeeper: read its Finance work queue; open one Books check task only when something is new.",
+        "Finance Owner: read its Finance work queue; open one Books check task only when something is new.",
     ),
 }
 WAKES = {"heartbeat"}

@@ -2260,12 +2260,15 @@ mod tests {
         let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
         let lanes = Arc::new(Lanes::new(Arc::new(Repositories::new(&dir, &dir, client))));
         let lost = Arc::new(AtomicBool::new(false));
-        let running = lanes.checkout("coo").try_lock_owned().unwrap(); // a main-lane turn holds it
+        let running = lanes.checkout("assistant").try_lock_owned().unwrap(); // a main-lane turn holds it
         let order = Arc::new(Mutex::new(vec![]));
         let wait = |who: &'static str, person: bool| {
             let (lanes, lost, order) = (lanes.clone(), lost.clone(), order.clone());
             tokio::spawn(async move {
-                let held = lanes.hold_checkout("coo", person, &lost).await.unwrap();
+                let held = lanes
+                    .hold_checkout("assistant", person, &lost)
+                    .await
+                    .unwrap();
                 order.lock().unwrap().push(who);
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 drop(held);
@@ -2275,11 +2278,11 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let person = wait("person", true);
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(lanes.person_waiting("bot:coo") && lanes.try_checkout("coo").is_none());
+        assert!(lanes.person_waiting("bot:assistant") && lanes.try_checkout("assistant").is_none());
         drop(running);
         let _ = tokio::join!(routine, person);
         assert_eq!(*order.lock().unwrap(), vec!["person", "routine"]);
-        assert!(!lanes.person_waiting("coo"));
+        assert!(!lanes.person_waiting("assistant"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

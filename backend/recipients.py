@@ -60,7 +60,7 @@ def _recipient_auth(c):
     from . import access
 
     policy = Auth.__new__(Auth)
-    policy.settings = getattr(c, "settings", SimpleNamespace(assistant_bot="coo", assistant_name="Assistant"))
+    policy.settings = getattr(c, "settings", SimpleNamespace(assistant_bot="assistant", assistant_name="Assistant"))
     policy.bot_admins = set(access.owner_and_admin_emails(c))
     policy.owner_email = (access._load_json(c, access.OWNER) or {}).get("email") or ""
     policy._owner_id = ""

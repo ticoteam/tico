@@ -25,15 +25,14 @@ PEOPLE = [
         "team": "leadership",
         "primary_for": [
             "*",
-            "finance-lead",
-            "bookkeeper",
-            "ar-followup",
-            "accounts-payable",
-            "spend-watcher",
-            "tax",
-            "pricing",
+            "finance-owner",
+            "accounts-receivable-specialist",
+            "accounts-payable-specialist",
+            "fpa-analyst",
+            "tax-specialist",
+            "pricing-analyst",
             "recruiter",
-            "legal-review",
+            "contracts-manager",
         ],
         "reports_to": None,
     },
@@ -44,20 +43,20 @@ PEOPLE = [
         "title": "Head of operations and customer care",
         "team": "leadership",
         "primary_for": [
-            "ops-manager",
-            "procurement",
-            "inventory",
-            "logistics",
+            "operations-manager",
+            "procurement-manager",
+            "inventory-planner",
+            "logistics-coordinator",
             "quality",
-            "compliance",
-            "returns",
-            "support-lead",
-            "support",
-            "support-qa",
-            "technical-support",
-            "escalations",
-            "reputation",
-            "inbox",
+            "compliance-manager",
+            "returns-and-refunds-specialist",
+            "success-team-manager",
+            "support-owner",
+            "support-quality-analyst",
+            "technical-support-engineer",
+            "escalations-manager",
+            "reputation-manager",
+            "inbox-manager",
         ],
         "reports_to": "ana",
     },
@@ -68,23 +67,23 @@ PEOPLE = [
         "title": "Head of growth",
         "team": "leadership",
         "primary_for": [
-            "marketing-lead",
-            "content",
+            "growth-team-manager",
+            "content-owner",
             "scene-designer",
-            "video-producer",
-            "paid-media",
-            "email-marketing",
+            "video-owner",
+            "search-ads-owner",
+            "email-owner",
             "seo",
-            "community",
+            "community-manager",
             "creators",
             "marketplace",
-            "sales-lead",
-            "sales",
+            "growth-team-manager",
+            "inbound-sales-owner",
             "sdr",
             "account-manager",
-            "customer-success",
+            "success-owner",
             "sales-engineer",
-            "sales-ops",
+            "sales-operations-manager",
             "retail",
             "partners",
             "bids",
@@ -99,14 +98,14 @@ PEOPLE = [
         "team": "leadership",
         "primary_for": [
             "product-manager",
-            "pr-reviewer",
-            "issue-triage",
+            "reviewer",
+            "qa-owner",
             "devops",
             "firmware",
             "mobile",
             "cloud",
             "product-analyst",
-            "release-notes",
+            "release-notes-writer",
             "botops",
         ],
         "reports_to": "ana",
@@ -114,69 +113,67 @@ PEOPLE = [
 ]
 
 # slug, catalog template, reports to. Each department has a lead bot under the person who runs it (a `human:` parent),
-# and the Assistant (coo) hangs under Ana.
+# and the Assistant (assistant) hangs under Ana.
 BOTS = [
-    ("coo", "assistant", None),
-    ("botops", "botops", "coo"),
+    ("assistant", "assistant", None),
+    ("botops", "botops", "assistant"),
     # Operations and supply chain
-    ("ops-manager", "ops-manager", "human:ben"),
-    ("procurement", "procurement", "ops-manager"),
-    ("inventory", "inventory", "ops-manager"),
-    ("logistics", "logistics", "ops-manager"),
-    ("quality", "quality-inspections", "ops-manager"),
-    ("compliance", "compliance", "ops-manager"),
-    ("returns", "returns", "ops-manager"),
+    ("operations-manager", "operations-manager", "human:ben"),
+    ("procurement-manager", "procurement-manager", "operations-manager"),
+    ("inventory-planner", "inventory-planner", "operations-manager"),
+    ("logistics-coordinator", "logistics-coordinator", "operations-manager"),
+    ("quality", "quality-inspections", "operations-manager"),
+    ("compliance-manager", "compliance-manager", "operations-manager"),
+    ("returns-and-refunds-specialist", "returns-and-refunds-specialist", "operations-manager"),
     # Engineering: calibration cloud, player, phone app
     ("product-manager", "segment-product-owner", "human:eli"),
-    ("pr-reviewer", "pr-reviewer", "product-manager"),
-    ("issue-triage", "issue-triage", "product-manager"),
+    ("reviewer", "reviewer", "product-manager"),
+    ("qa-owner", "qa-owner", "product-manager"),
     ("devops", "devops-engineer", "product-manager"),
-    ("release-notes", "release-notes", "product-manager"),
+    ("release-notes-writer", "release-notes-writer", "product-manager"),
     ("firmware", "software-architect", "product-manager"),
     ("mobile", "software-architect", "product-manager"),
     ("cloud", "software-architect", "product-manager"),
     ("product-analyst", "product-analyst", "product-manager"),
     # Marketing and content (consumer)
-    ("marketing-lead", "marketing-lead", "human:cara"),
-    ("content", "content", "marketing-lead"),
-    ("scene-designer", "content", "marketing-lead"),
-    ("creators", "partnerships", "marketing-lead"),
-    ("video-producer", "video-producer", "marketing-lead"),
-    ("paid-media", "paid-media", "marketing-lead"),
-    ("email-marketing", "email-marketing", "marketing-lead"),
-    ("seo", "seo-visibility", "marketing-lead"),
-    ("community", "community", "marketing-lead"),
-    ("marketplace", "partnerships", "marketing-lead"),
+    ("growth-team-manager", "growth-team-manager", "human:cara"),
+    ("content-owner", "content-owner", "growth-team-manager"),
+    ("scene-designer", "content-owner", "growth-team-manager"),
+    ("creators", "partnerships-owner", "growth-team-manager"),
+    ("video-owner", "video-owner", "growth-team-manager"),  # the Design Owner is built in, off this chart
+    ("search-ads-owner", "search-ads-owner", "growth-team-manager"),
+    ("email-owner", "email-owner", "growth-team-manager"),
+    ("seo", "seo-owner", "growth-team-manager"),
+    ("community-manager", "community-manager", "growth-team-manager"),
+    ("marketplace", "partnerships-owner", "growth-team-manager"),
     # Customer care
-    ("support-lead", "support-lead", "human:ben"),
-    ("support", "support", "support-lead"),
-    ("support-qa", "support-qa", "support-lead"),
-    ("technical-support", "technical-support", "support-lead"),
-    ("escalations", "escalations", "support-lead"),
-    ("reputation", "reputation", "support-lead"),
-    ("inbox", "inbox", "support-lead"),
+    ("success-team-manager", "success-team-manager", "human:ben"),
+    ("support-owner", "support-owner", "success-team-manager"),
+    ("support-quality-analyst", "support-quality-analyst", "success-team-manager"),
+    ("technical-support-engineer", "technical-support-engineer", "success-team-manager"),
+    ("escalations-manager", "escalations-manager", "success-team-manager"),
+    ("reputation-manager", "reputation-manager", "success-team-manager"),
+    ("inbox-manager", "inbox-manager", "success-team-manager"),
     # Business sales (B2B)
-    ("sales-lead", "sales-lead", "human:cara"),
-    ("sales", "sales", "sales-lead"),
-    ("sdr", "sdr-research", "sales-lead"),
-    ("account-manager", "account-manager", "sales-lead"),
-    ("customer-success", "customer-success", "sales-lead"),
-    ("sales-engineer", "sales-engineer", "sales-lead"),
-    ("sales-ops", "sales-ops", "sales-lead"),
-    ("retail", "partnerships", "sales-lead"),
-    ("partners", "partnerships", "sales-lead"),
-    ("bids", "sales", "sales-lead"),
+    ("inbound-sales-owner", "inbound-sales-owner", "growth-team-manager"),
+    ("sdr", "outbound-sales-owner", "growth-team-manager"),
+    ("account-manager", "account-manager", "growth-team-manager"),
+    ("success-owner", "success-owner", "growth-team-manager"),
+    ("sales-engineer", "sales-engineer", "growth-team-manager"),
+    ("sales-operations-manager", "sales-operations-manager", "growth-team-manager"),
+    ("retail", "partnerships-owner", "growth-team-manager"),
+    ("partners", "partnerships-owner", "growth-team-manager"),
+    ("bids", "inbound-sales-owner", "growth-team-manager"),
     # Finance
-    ("finance-lead", "finance-lead", "human:ana"),
-    ("bookkeeper", "bookkeeper", "finance-lead"),
-    ("ar-followup", "ar-followup", "finance-lead"),
-    ("spend-watcher", "spend-watcher", "finance-lead"),
-    ("tax", "tax", "finance-lead"),
-    ("accounts-payable", "accounts-payable", "finance-lead"),
-    ("pricing", "pricing", "finance-lead"),
+    ("finance-owner", "finance-owner", "human:ana"),
+    ("accounts-receivable-specialist", "accounts-receivable-specialist", "finance-owner"),
+    ("fpa-analyst", "fpa-analyst", "finance-owner"),
+    ("tax-specialist", "tax-specialist", "finance-owner"),
+    ("accounts-payable-specialist", "accounts-payable-specialist", "finance-owner"),
+    ("pricing-analyst", "pricing-analyst", "finance-owner"),
     # People and legal
-    ("recruiter", "recruiting", "human:ana"),
-    ("legal-review", "legal-review", "human:ana"),
+    ("recruiter", "recruiter", "human:ana"),
+    ("contracts-manager", "contracts-manager", "human:ana"),
 ]
 
 # The groups the team builder made from the templates, straightened so each bot sits with the bot it reports to and
@@ -185,13 +182,13 @@ BOTS = [
 # of its own and hangs under Product.
 GROUP_FIXES = [
     ("leadership", (), "person:ana"),
-    ("operations", ("returns", "compliance"), "bot:ops-manager"),
-    ("support", ("reputation",), "bot:support-lead"),
-    ("marketing", ("creators", "marketplace"), "bot:marketing-lead"),
-    ("sales", ("customer-success",), "bot:sales-lead"),
+    ("operations", ("returns-and-refunds-specialist", "compliance-manager"), "bot:operations-manager"),
+    ("support", ("reputation-manager", "success-team-manager"), "bot:success-team-manager"),
+    ("marketing", ("creators", "marketplace"), "bot:growth-team-manager"),
+    ("sales", ("success-owner",), "bot:inbound-sales-owner"),  # the Growth Team Manager leads Marketing
     ("product", (), "bot:product-manager"),
-    ("finance", ("pricing",), "bot:finance-lead"),
-    ("legal", ("legal-review",), "bot:legal-review"),
+    ("finance", ("pricing-analyst",), "bot:fpa-analyst"),  # the Finance Owner is built in, outside groups
+    ("legal", ("contracts-manager",), "bot:contracts-manager"),
     ("hr", (), "bot:recruiter"),
 ]
 
@@ -213,8 +210,8 @@ RUNNERS = (("Ana's MacBook", "darwin", ("claude", "codex")), ("acme-runner-1", "
 
 # The seven department leads and the bots that post a week's numbers beside their goal.
 WEEK_KPIS = {
-    "coo": [{"name": "Requests routed", "value": "31", "series": [22, 25, 27, 24, 31]}],
-    "ops-manager": [{"name": "Orders shipped this week", "value": "2,310", "series": [1900, 2050, 2310]}],
+    "assistant": [{"name": "Requests routed", "value": "31", "series": [22, 25, 27, 24, 31]}],
+    "operations-manager": [{"name": "Orders shipped this week", "value": "2,310", "series": [1900, 2050, 2310]}],
     "product-manager": [
         {
             "name": "First-try calibration",
@@ -224,10 +221,11 @@ WEEK_KPIS = {
             "note": "Target 95. Off track.",
         }
     ],
-    "marketing-lead": [{"name": "Home Pro share of home sales", "value": "38", "unit": "%", "series": [33, 35, 38]}],
-    "support-lead": [{"name": "Tickets handled", "value": "63", "series": [48, 55, 51, 60, 63]}],
-    "sales-lead": [{"name": "Quotes sent this week", "value": "9", "series": [4, 6, 5, 8, 9]}],
-    "finance-lead": [{"name": "Bills paid on time", "value": "100", "unit": "%", "series": [96, 98, 100]}],
+    "growth-team-manager": [
+        {"name": "Home Pro share of home sales", "value": "38", "unit": "%", "series": [33, 35, 38]}
+    ],
+    "success-team-manager": [{"name": "Tickets handled", "value": "63", "series": [48, 55, 51, 60, 63]}],
+    "finance-owner": [{"name": "Bills paid on time", "value": "100", "unit": "%", "series": [96, 98, 100]}],
 }
 
 # Each bot's week, as (week's goal, Day A bullets, Day B bullets, next week's focus, blockers). A daily update
@@ -235,7 +233,7 @@ WEEK_KPIS = {
 # week in review is built from the same lists: done is Day A plus the first line of Day B.
 # Leads summarise what their reports did. Bullets are plain lines with no labels.
 UPDATES = {
-    "coo": (
+    "assistant": (
         "Keep every bot moving and every decision with the right person; three decisions are open.",
         (
             "Routed five requests: two to Support, one to Sales, one to Finance and one to Eli's engineers.",
@@ -261,7 +259,7 @@ UPDATES = {
         ("Finish the holiday instructions for Marketplace.", "Add the Listening bot if Cara wants one."),
         (),
     ),
-    "ops-manager": (
+    "operations-manager": (
         "Ship 6,000 units this season; 4,450 are out, and the port hold is the one risk.",
         (
             "Orders are at 94 percent shipped within two days; the target is 95.",
@@ -274,7 +272,7 @@ UPDATES = {
         ("Clear the port hold before the next sailing.", "Lock the December restock order."),
         ("The port fee question waits on Ben's decision.",),
     ),
-    "procurement": (
+    "procurement-manager": (
         "Keep lenses and LED modules on order at least three weeks ahead of the peak.",
         (
             "Compared two lens suppliers; the second is 4 percent cheaper with the same spec.",
@@ -287,7 +285,7 @@ UPDATES = {
         ("Send the lens order once Ops approves it.", "Check the second supplier's sample lenses."),
         (),
     ),
-    "inventory": (
+    "inventory-planner": (
         "Stock matches open orders within three units every day through the season.",
         (
             "Counted the warehouse: 1,140 Home Starter kits and 220 Home Pro kits ready to ship.",
@@ -300,7 +298,7 @@ UPDATES = {
         ("Confirm the December restock with Procurement.", "Move the Home Pro hold to the marketplace count."),
         (),
     ),
-    "logistics": (
+    "logistics-coordinator": (
         "Every shipment arrives with its paperwork and inside the promised window.",
         (
             "Booked the Thursday truck for 800 LED modules to the warehouse.",
@@ -323,7 +321,7 @@ UPDATES = {
         ("Send the supplier report on batch 14.", "Repeat the 100-unit test on the December batch."),
         (),
     ),
-    "compliance": (
+    "compliance-manager": (
         "Every product and scene pack carries the paperwork and warning wording the rules require.",
         (
             "Checked the Home Pro 2 radio paperwork against the FCC rules; one signature is missing.",
@@ -336,7 +334,7 @@ UPDATES = {
         ("Get Ana's signature on the FCC filing.", "Check the Storefront sign safety notes."),
         ("The FCC filing waits on Ana's signature.",),
     ),
-    "returns": (
+    "returns-and-refunds-specialist": (
         "Returns are back in stock within three days of arriving.",
         (
             "Processed 38 returns; 27 were duplicate orders and went back into stock.",
@@ -362,7 +360,7 @@ UPDATES = {
         ("Get the lens-mount fix into ring 3.", "Review the calibration cohort with Eli on Monday."),
         ("Ring 3 waits on Eli's sign-off.",),
     ),
-    "pr-reviewer": (
+    "reviewer": (
         "Every pull request gets a review within a day, with tests that run on the build machines.",
         (
             "Reviewed nine pull requests; two calibration changes need a retry fix.",
@@ -375,7 +373,7 @@ UPDATES = {
         ("Clear the two open calibration reviews.", "Review the ring 3 release branch."),
         (),
     ),
-    "issue-triage": (
+    "qa-owner": (
         "Every bug report is linked, tagged and in the right queue within a day.",
         (
             "Triaged 14 bug reports; six are calibration failures with the same lens-mount cause.",
@@ -401,7 +399,7 @@ UPDATES = {
         ("Watch the render queue during Friday's scene launch.", "Add a second build machine for the release branch."),
         (),
     ),
-    "release-notes": (
+    "release-notes-writer": (
         "Every release ships with plain notes that Support can repeat.",
         (
             "Drafted the firmware 2.4 notes; the lens-mount fix is in them.",
@@ -466,7 +464,7 @@ UPDATES = {
         ("Finish the calibration cohort for Eli.", "Set up the holiday scene usage report."),
         (),
     ),
-    "marketing-lead": (
+    "growth-team-manager": (
         "Home Pro reaches 45 percent of home sales by the first week of December.",
         (
             "Home Pro is 38 percent of home sales, up from 35; the target is 45.",
@@ -479,7 +477,7 @@ UPDATES = {
         ("Launch the December Home Pro offer once the price is set.", "Review the holiday email results."),
         ("The December Home Pro price waits on Ana.",),
     ),
-    "content": (
+    "content-owner": (
         "Publish two useful holiday guides a month; one is out and the second is in review.",
         (
             "Drafted the holiday setup guide; it is in review with Cara.",
@@ -515,7 +513,7 @@ UPDATES = {
         ("Get the 12 contracts signed.", "Confirm the filming dates."),
         (),
     ),
-    "video-producer": (
+    "video-owner": (
         "The 30-second install video is cut and ready by the first week of December.",
         (
             "Cut the install video to 32 seconds; the hook lands in the first three seconds.",
@@ -528,7 +526,7 @@ UPDATES = {
         ("Get Cara's note on the 30-second cut.", "Shoot the Home Pro unboxing."),
         (),
     ),
-    "paid-media": (
+    "search-ads-owner": (
         "Keep the cost per Home Pro sale under $80 while spend stays inside the approved budget.",
         (
             "Spent $3,700 on search and social this week; cost per Home Pro sale is $71.",
@@ -541,7 +539,7 @@ UPDATES = {
         ("Raise the budget only once the cap is set.", "Test two new holiday ads."),
         ("The ad cap waits on Ana's decision.",),
     ),
-    "email-marketing": (
+    "email-owner": (
         "Every holiday email goes to the right segment, and only after Cara approves it.",
         (
             "Built the holiday segments: 3,800 owners, with 1,100 business leads kept apart.",
@@ -564,7 +562,7 @@ UPDATES = {
         ("Finish the alt text fixes.", "Track the store page rank weekly."),
         (),
     ),
-    "community": (
+    "community-manager": (
         "Forum questions get an answer within one day, and the good ones go to Support.",
         (
             "Answered 22 questions on the holiday light forums; six were calibration questions.",
@@ -590,7 +588,7 @@ UPDATES = {
         ("Move the marketplace hold to Inventory's count.", "Add the lens-mount guide to the Home Pro listing."),
         (),
     ),
-    "support-lead": (
+    "success-team-manager": (
         "Answer every ticket the same day; 88 percent do today, against a target of 95.",
         (
             "The queue is at nine open tickets; eight have a same-day draft.",
@@ -603,7 +601,7 @@ UPDATES = {
         ("Keep the queue under ten tickets.", "Set the calibration callback rule with Ben."),
         ("The lens replacement rule waits on Ben's decision.",),
     ),
-    "support": (
+    "support-owner": (
         "Draft a reply for every ticket the same day, and tag the ones that need a call.",
         (
             "Drafted replies for 14 tickets; 11 are ready for Ben to send.",
@@ -616,7 +614,7 @@ UPDATES = {
         ("Draft every ticket the same day.", "Write the holiday shipping answer once the port hold clears."),
         (),
     ),
-    "support-qa": (
+    "support-quality-analyst": (
         "Calibration help gets the first answer right; first-try is 84 percent today.",
         (
             "Reviewed 40 calibration transcripts; 14 failed on the lens-mount step.",
@@ -629,7 +627,7 @@ UPDATES = {
         ("Test the new lens-mount script on 20 transcripts.", "Share the callback rule with Ben."),
         (),
     ),
-    "technical-support": (
+    "technical-support-engineer": (
         "Every calibration call ends with a working projector or a clear swap decision.",
         (
             "Ran nine calibration calls; seven worked on the call and two need a unit swap.",
@@ -642,7 +640,7 @@ UPDATES = {
         ("Get the unit swap answer from Ben.", "Log the next five calibration calls."),
         ("The unit swap decision waits on Ben.",),
     ),
-    "escalations": (
+    "escalations-manager": (
         "No escalation waits longer than one business day for an owner.",
         (
             "Took three escalations: an installer dispute, a hotel complaint and a lost pallet.",
@@ -655,7 +653,7 @@ UPDATES = {
         ("Chase the hotel's answer on the credit.", "Track the carrier claim."),
         (),
     ),
-    "reputation": (
+    "reputation-manager": (
         "Every review gets a reply within two days, and factual problems reach the owner.",
         (
             "Read 180 new reviews across the store and marketplace; 4.6 stars overall.",
@@ -665,7 +663,7 @@ UPDATES = {
         ("Reply to the last 12 reviews.", "Send the setup-time note to Content."),
         (),
     ),
-    "inbox": (
+    "inbox-manager": (
         "Ben's inbox has nothing waiting on a reply for more than a day.",
         (
             "Sorted 42 emails: filed 30 and flagged six that need a reply.",
@@ -678,20 +676,7 @@ UPDATES = {
         ("Keep the flagged list under five.", "Draft replies the same morning."),
         (),
     ),
-    "sales-lead": (
-        "Install 40 business sites this season; 22 are booked or done.",
-        (
-            "Installs are at 22 of 40 for the season; two Facade quotes are out.",
-            "The Crown Hotel follow-up waits on Cara's approval to send.",
-        ),
-        (
-            "Fourteen shops and four hotels are in talks, and three towns are in bidding.",
-            "The Larkford bid price needs Ana's decision before Friday.",
-        ),
-        ("Get the Crown Hotel and Maple Mall quotes signed.", "Finish the downtown shop call list."),
-        ("The Larkford bid price waits on Ana.",),
-    ),
-    "sales": (
+    "inbound-sales-owner": (
         "Every business quote goes out within two days of the site survey.",
         (
             "Sent three Facade quotes; one hotel asked for a second site visit.",
@@ -724,7 +709,7 @@ UPDATES = {
         ("Book two January visits with hotel accounts.", "Ask Ana about the shop discount rule."),
         (),
     ),
-    "customer-success": (
+    "success-owner": (
         "Every installed site is playing its scenes within two days of install.",
         (
             "Checked 14 installs from last week; 13 are playing and one needs a re-aim.",
@@ -750,7 +735,7 @@ UPDATES = {
         ("Finish the Larkford survey before the bid is due.", "Book the Crown Hotel second visit."),
         (),
     ),
-    "sales-ops": (
+    "sales-operations-manager": (
         "The pipeline is clean and every quote has a next step with a date.",
         (
             "Pipeline: 22 installs booked or done, 14 quotes open, six towns in discussion.",
@@ -799,11 +784,11 @@ UPDATES = {
         ("Price the Larkford bid once Ana decides.", "Send the insurance proof before Friday."),
         ("The Larkford bid price waits on Ana.",),
     ),
-    "finance-lead": (
+    "finance-owner": (
         "Books close each week and no bill is paid before it is checked.",
         (
             "Bank lines are 97 percent matched within a day; three accounts need a receipt.",
-            "Ad spend is at 92 percent of the monthly cap; spend-watcher tracks it daily.",
+            "Ad spend is at 92 percent of the monthly cap; fpa-analyst tracks it daily.",
         ),
         (
             "Cash is healthy; December payroll is covered with room for the holiday stock.",
@@ -812,20 +797,7 @@ UPDATES = {
         ("Decide the ad cap with Ana on Monday.", "Close October with the tax team."),
         ("The December ad cap waits on Ana.",),
     ),
-    "bookkeeper": (
-        "Books close on time, and every bank line is matched within a day.",
-        (
-            "Matched 412 bank lines; nine need a receipt from a shop.",
-            "Closed the October card expenses; one transaction was a duplicate.",
-        ),
-        (
-            "Reconciled the Storefront deposits; the total matches the orders.",
-            "Sent the receipt list to Ben's team for the shops.",
-        ),
-        ("Close the week's receipts.", "Start the month-end reconciliation."),
-        (),
-    ),
-    "ar-followup": (
+    "accounts-receivable-specialist": (
         "Shop and hotel invoices are paid within 30 days.",
         (
             "Chased 14 unpaid shop invoices; six paid by the end of the day.",
@@ -835,7 +807,7 @@ UPDATES = {
         ("Chase the last overdue hotel invoice.", "Check the Maple Mall deposit."),
         (),
     ),
-    "spend-watcher": (
+    "fpa-analyst": (
         "No spend goes out above a cap without a person's approval.",
         (
             "Ad spend is $3,700 of the $4,000 weekly budget; no overspend.",
@@ -848,7 +820,7 @@ UPDATES = {
         ("Track the ad budget daily.", "Check the freight invoices against the port fee."),
         (),
     ),
-    "tax": (
+    "tax-specialist": (
         "Every filing goes in on time, and the workpapers are ready before each deadline.",
         (
             "Filed three state sales tax returns; two are due this month.",
@@ -861,7 +833,7 @@ UPDATES = {
         ("Get the resale certificate from the shop.", "Start the sales tax check."),
         (),
     ),
-    "accounts-payable": (
+    "accounts-payable-specialist": (
         "Every supplier bill is paid on time and matched to an order.",
         (
             "Paid 18 supplier bills after checks; two are held for a missing receipt.",
@@ -871,7 +843,7 @@ UPDATES = {
         ("Release the held freight invoice after the port fee is settled.", "Pay Friday's supplier bills."),
         (),
     ),
-    "pricing": (
+    "pricing-analyst": (
         "Price each product where it wins sales without giving margin away.",
         (
             "Home Pro is $449 for two projectors; December demand is 12 percent ahead of forecast.",
@@ -897,7 +869,7 @@ UPDATES = {
         ("Run Thursday's crew lead interviews.", "Send the offer once Ana approves the crew terms."),
         ("The crew lead offer waits on Ana.",),
     ),
-    "legal-review": (
+    "contracts-manager": (
         "Every contract and public claim is reviewed before it goes out.",
         (
             "Reviewed the Homeworks contract draft; the returns clause needs a change.",
@@ -1016,64 +988,62 @@ PEOPLE_UPDATES = {
 
 # Each bot's status focus right now, one short line.
 FOCUS = {
-    "coo": "Routing requests",
+    "assistant": "Routing requests",
     "botops": "Checking both computers",
-    "ops-manager": "Watching the port hold",
-    "procurement": "Lens order for December",
-    "inventory": "Counting stock for orders",
-    "logistics": "Freeing the held units",
+    "operations-manager": "Watching the port hold",
+    "procurement-manager": "Lens order for December",
+    "inventory-planner": "Counting stock for orders",
+    "logistics-coordinator": "Freeing the held units",
     "quality": "Batch 14 lens rejects",
-    "compliance": "FCC paperwork",
-    "returns": "Replacing warranty lenses",
+    "compliance-manager": "FCC paperwork",
+    "returns-and-refunds-specialist": "Replacing warranty lenses",
     "product-manager": "Calibration first-try rate",
-    "pr-reviewer": "Reviewing the calibration fix",
-    "issue-triage": "Linking calibration reports",
+    "reviewer": "Reviewing the calibration fix",
+    "qa-owner": "Linking calibration reports",
     "devops": "Watching the render queue",
-    "release-notes": "Firmware 2.4 notes",
+    "release-notes-writer": "Firmware 2.4 notes",
     "firmware": "Ring 3 waiting on sign-off",
     "mobile": "Calibration screen beta",
     "cloud": "Holiday scene load",
     "product-analyst": "Calibration cohort",
-    "marketing-lead": "Home Pro share",
-    "content": "Holiday setup guide review",
+    "growth-team-manager": "Home Pro share",
+    "content-owner": "Holiday setup guide review",
     "scene-designer": "Flashing-rule fixes",
     "creators": "Creator contracts",
-    "video-producer": "30-second install cut",
-    "paid-media": "Holiday ad spend",
-    "email-marketing": "Holiday owner list",
+    "video-owner": "30-second install cut",
+    "search-ads-owner": "Holiday ad spend",
+    "email-owner": "Holiday owner list",
     "seo": "Holiday search terms",
-    "community": "Forum answers",
+    "community-manager": "Forum answers",
     "marketplace": "Bigmarket stock",
-    "support-lead": "Same-day answers",
-    "support": "Ticket drafts",
-    "support-qa": "Lens-mount script",
-    "technical-support": "Calibration callbacks",
-    "escalations": "Hotel credit",
-    "reputation": "Store reviews",
-    "inbox": "Sorting Ben's mail",
-    "sales-lead": "Install pipeline",
-    "sales": "Crown Hotel follow-up",
+    "success-team-manager": "Same-day answers",
+    "support-owner": "Ticket drafts",
+    "support-quality-analyst": "Lens-mount script",
+    "technical-support-engineer": "Calibration callbacks",
+    "escalations-manager": "Hotel credit",
+    "reputation-manager": "Store reviews",
+    "inbox-manager": "Sorting Ben's mail",
+    "inbound-sales-owner": "Crown Hotel follow-up",
     "sdr": "Downtown shop list",
     "account-manager": "Repeat hotel accounts",
-    "customer-success": "Installed sites playing",
+    "success-owner": "Installed sites playing",
     "sales-engineer": "Larkford survey",
-    "sales-ops": "Stalled quotes",
+    "sales-operations-manager": "Stalled quotes",
     "retail": "Homeworks shelves",
     "partners": "Crane crew quote",
     "bids": "Larkford bid",
-    "finance-lead": "December ad cap",
-    "bookkeeper": "October books",
-    "ar-followup": "Overdue shop invoices",
-    "spend-watcher": "Daily ad budget",
-    "tax": "October sales tax",
-    "accounts-payable": "Holding the freight bill",
-    "pricing": "Home Pro December price",
+    "finance-owner": "December ad cap",
+    "accounts-receivable-specialist": "Overdue shop invoices",
+    "fpa-analyst": "Daily ad budget",
+    "tax-specialist": "October sales tax",
+    "accounts-payable-specialist": "Holding the freight bill",
+    "pricing-analyst": "Home Pro December price",
     "recruiter": "Crew lead interviews",
-    "legal-review": "Homeworks clause",
+    "contracts-manager": "Homeworks clause",
     "librarian": "Watching Lumenhaus",
-    "goal-manager": "Q4 bookings goal",
+    "strategy-owner": "Q4 bookings goal",
     "task-manager": "Open tasks by owner",
-    "tico-counsel": "Larkford bid terms",
+    "rules-owner": "Larkford bid terms",
 }
 
 # (slug, title, body, owner, requester, status at the end, days ago created, days ago last change, note, parent key)
@@ -1122,7 +1092,7 @@ TASKS = [
         "fw-review",
         "Review the lens-mount calibration fix",
         "Check the change and its tests before it goes into ring 3.",
-        "bot:pr-reviewer",
+        "bot:reviewer",
         "bot:firmware",
         "open",
         1.5,
@@ -1134,7 +1104,7 @@ TASKS = [
         "fw-notes",
         "Write the firmware 2.4 release notes",
         "Plain notes that Support can repeat. Final once ring 3 has a date.",
-        "bot:release-notes",
+        "bot:release-notes-writer",
         "bot:firmware",
         "open",
         1.2,
@@ -1159,7 +1129,7 @@ TASKS = [
         "cal-callbacks",
         "Call back owners whose calibration failed twice",
         "Ring each owner, run the last step with them, and log the result on the ticket.",
-        "bot:technical-support",
+        "bot:technical-support-engineer",
         "bot:product-analyst",
         "open",
         2,
@@ -1171,7 +1141,7 @@ TASKS = [
         "cal-script",
         "Add the lens-mount step to the support script",
         "Support answers calibration questions with the new steps, starting with the lens mount.",
-        "bot:support-qa",
+        "bot:support-quality-analyst",
         "bot:product-analyst",
         "done",
         2.8,
@@ -1257,8 +1227,8 @@ TASKS = [
         "port-ship",
         "Get the 300 held units through the port",
         "Customs is holding 300 units. Find the paperwork and a release date.",
-        "bot:logistics",
-        "bot:ops-manager",
+        "bot:logistics-coordinator",
+        "bot:operations-manager",
         "open",
         2.4,
         0.6,
@@ -1269,8 +1239,8 @@ TASKS = [
         "port-customs",
         "Send the broker the customs form",
         "The broker needs the signed form before the release. Send it and confirm receipt.",
-        "bot:logistics",
-        "bot:ops-manager",
+        "bot:logistics-coordinator",
+        "bot:operations-manager",
         "open",
         1.8,
         0.3,
@@ -1281,8 +1251,8 @@ TASKS = [
         "ap-freight",
         "Hold the freight invoice until the port fee is settled",
         "Do not pay the freight bill while the $310 port fee is in dispute.",
-        "bot:accounts-payable",
-        "bot:logistics",
+        "bot:accounts-payable-specialist",
+        "bot:logistics-coordinator",
         "open",
         1.2,
         0.6,
@@ -1294,8 +1264,8 @@ TASKS = [
         "procure-lens",
         "Order 1,200 lens sets for December",
         "Send the purchase order to the cheaper supplier once Ops approves the size.",
-        "bot:procurement",
-        "bot:ops-manager",
+        "bot:procurement-manager",
+        "bot:operations-manager",
         "open",
         2,
         0.5,
@@ -1306,8 +1276,8 @@ TASKS = [
         "reorder-mounts",
         "Set the reorder point for Storefront mounts",
         "Reorder when stock falls to 40 mounts.",
-        "bot:inventory",
-        "bot:ops-manager",
+        "bot:inventory-planner",
+        "bot:operations-manager",
         "done",
         2.6,
         2.2,
@@ -1319,7 +1289,7 @@ TASKS = [
         "Send the supplier the batch 14 report",
         "Six lens mounts came loose in the first 200 units. Send the report and ask for a fix date.",
         "bot:quality",
-        "bot:ops-manager",
+        "bot:operations-manager",
         "open",
         1,
         0.2,
@@ -1330,8 +1300,8 @@ TASKS = [
         "returns-ops",
         "Replace the lenses from last week's returns",
         "Four lenses are owed under warranty. Ship them and log each one.",
-        "bot:returns",
-        "bot:ops-manager",
+        "bot:returns-and-refunds-specialist",
+        "bot:operations-manager",
         "done",
         1.6,
         0.9,
@@ -1355,7 +1325,7 @@ TASKS = [
         "bigmarket-ship",
         "Ship the 60 held Home Pro units to bigmarket",
         "Pack the 60 units and hand them to bigmarket's carrier.",
-        "bot:inventory",
+        "bot:inventory-planner",
         "bot:marketplace",
         "done",
         1,
@@ -1380,7 +1350,7 @@ TASKS = [
         "shop-calls",
         "Call the scored downtown shops",
         "Call the high-score shops and book demos for the ones that want one.",
-        "bot:sales",
+        "bot:inbound-sales-owner",
         "bot:sdr",
         "open",
         2.6,
@@ -1392,7 +1362,7 @@ TASKS = [
         "crown-quote",
         "Send the Crown Hotel lobby and terrace quote",
         "Four projectors for the lobby and two for the terrace, with a yearly scene license.",
-        "bot:sales",
+        "bot:inbound-sales-owner",
         "human:cara",
         "open",
         2.3,
@@ -1404,7 +1374,7 @@ TASKS = [
         "pipeline-reminders",
         "Send reminders to quotes with no reply in ten days",
         "Four quotes have had no reply for ten days. Draft a reminder for each.",
-        "bot:sales-ops",
+        "bot:sales-operations-manager",
         "human:cara",
         "open",
         0.9,
@@ -1464,7 +1434,7 @@ TASKS = [
         "homeworks-contract",
         "Review the Homeworks retail contract",
         "Check the returns clause and the payment terms before Procurement signs.",
-        "bot:legal-review",
+        "bot:contracts-manager",
         "bot:retail",
         "open",
         2.1,
@@ -1489,7 +1459,7 @@ TASKS = [
         "pricing-check",
         "Compare the Home Pro price with three rivals",
         "Check Lumenhaus, Brightyard and Glowline prices for two-unit kits.",
-        "bot:pricing",
+        "bot:pricing-analyst",
         "human:ana",
         "done",
         2.4,
@@ -1501,7 +1471,7 @@ TASKS = [
         "paid-budget",
         "Keep holiday ad spend under the $4,000 weekly budget",
         "Spend across search and social, and move money to the channels that sell.",
-        "bot:paid-media",
+        "bot:search-ads-owner",
         "human:cara",
         "open",
         6,
@@ -1513,8 +1483,8 @@ TASKS = [
         "budget-cap",
         "Track the ad budget daily and flag any overspend",
         "Watch the budget each morning and flag any day over the cap.",
-        "bot:spend-watcher",
-        "bot:paid-media",
+        "bot:fpa-analyst",
+        "bot:search-ads-owner",
         "open",
         1.5,
         0.5,
@@ -1525,7 +1495,7 @@ TASKS = [
         "cancel-tool",
         "Cancel the unused software subscription",
         "A $45 tool has no users. Cancel it and confirm the refund date.",
-        "bot:spend-watcher",
+        "bot:fpa-analyst",
         "human:ana",
         "done",
         2.2,
@@ -1538,7 +1508,7 @@ TASKS = [
         "holiday-guide",
         "Write the holiday setup guide",
         "A 900-word guide for owners setting up their projector for the first time.",
-        "bot:content",
+        "bot:content-owner",
         "human:cara",
         "open",
         3,
@@ -1550,7 +1520,7 @@ TASKS = [
         "howtos",
         "Outline three how-to posts for the help centre",
         "Lens mount, unit swap and invoices. One outline each.",
-        "bot:content",
+        "bot:content-owner",
         "human:ben",
         "open",
         1.6,
@@ -1562,7 +1532,7 @@ TASKS = [
         "lens-how",
         "Write the lens-mount how-to",
         "Step by step with screenshots. Keep it under 300 words.",
-        "bot:content",
+        "bot:content-owner",
         "human:ben",
         "open",
         1.4,
@@ -1574,7 +1544,7 @@ TASKS = [
         "holiday-email",
         "Build the holiday email and its owner segments",
         "Segment owners, business leads and lapsed buyers, and test the send on the owner list.",
-        "bot:email-marketing",
+        "bot:email-owner",
         "human:cara",
         "done",
         2.2,
@@ -1586,7 +1556,7 @@ TASKS = [
         "sale-blast",
         "Email the whole mailing list about the holiday sale",
         "Send the sale email to everyone on the list at once.",
-        "bot:email-marketing",
+        "bot:email-owner",
         "human:cara",
         "closed",
         1.8,
@@ -1598,7 +1568,7 @@ TASKS = [
         "video-cut",
         "Get Cara's note on the 30-second install video",
         "The cut is ready. Cara's note decides whether it goes into the holiday ads.",
-        "bot:video-producer",
+        "bot:video-owner",
         "human:cara",
         "open",
         1.5,
@@ -1635,7 +1605,7 @@ TASKS = [
         "Fix the two scenes that break the flashing rule",
         "Two holiday scenes flash faster than the safety guide allows. Slow them down.",
         "bot:scene-designer",
-        "bot:compliance",
+        "bot:compliance-manager",
         "open",
         0.8,
         0.8,
@@ -1647,7 +1617,7 @@ TASKS = [
         "Fix the alt text on the store's product pages",
         "Two of the three pages are missing alt text. Fix all three.",
         "bot:seo",
-        "bot:marketing-lead",
+        "bot:growth-team-manager",
         "done",
         2,
         0.8,
@@ -1658,8 +1628,8 @@ TASKS = [
         "lens-forum",
         "Post the lens-mount guide to the two biggest forums",
         "Post the guide in the two largest holiday light forums and answer the replies.",
-        "bot:community",
-        "bot:marketing-lead",
+        "bot:community-manager",
+        "bot:growth-team-manager",
         "open",
         0.7,
         0.7,
@@ -1683,7 +1653,7 @@ TASKS = [
         "ticket-replies",
         "Draft replies for the open support tickets",
         "Draft a reply for every open ticket and tag the ones that need a call. Send nothing.",
-        "bot:support",
+        "bot:support-owner",
         "human:ben",
         "open",
         1.1,
@@ -1695,7 +1665,7 @@ TASKS = [
         "invoice-answer",
         "Write the standing answer for finding an invoice",
         "Where to find the invoice and the receipt, in plain words.",
-        "bot:support",
+        "bot:support-owner",
         "human:ben",
         "done",
         4,
@@ -1707,7 +1677,7 @@ TASKS = [
         "review-replies",
         "Reply to last week's store reviews",
         "Reply to each review in the house style. Send any factual problem to its owner.",
-        "bot:reputation",
+        "bot:reputation-manager",
         "human:ben",
         "done",
         2.8,
@@ -1719,7 +1689,7 @@ TASKS = [
         "inbox-sort",
         "Sort Ben's inbox and flag what needs a reply",
         "Sort today's mail, file the obvious, and flag what needs Ben.",
-        "bot:inbox",
+        "bot:inbox-manager",
         "human:ben",
         "open",
         0.5,
@@ -1731,7 +1701,7 @@ TASKS = [
         "hotel-escalation",
         "Settle the hotel complaint about the late install",
         "The hotel is angry about a late install. Propose a credit and get Ben's approval.",
-        "bot:escalations",
+        "bot:escalations-manager",
         "human:ben",
         "open",
         2.4,
@@ -1744,7 +1714,7 @@ TASKS = [
         "close-oct",
         "Close October's books",
         "Match every October bank line and bill, and list the receipts still missing.",
-        "bot:bookkeeper",
+        "bot:finance-owner",
         "human:ana",
         "done",
         6,
@@ -1756,7 +1726,7 @@ TASKS = [
         "tax-oct",
         "Prepare October's sales tax workpapers",
         "Workpapers for each state we sell in, ready for review.",
-        "bot:tax",
+        "bot:tax-specialist",
         "human:ana",
         "open",
         3,
@@ -1768,7 +1738,7 @@ TASKS = [
         "overdue-shops",
         "Chase the overdue shop invoices",
         "Reminders for the unpaid shop invoices, starting with the oldest.",
-        "bot:ar-followup",
+        "bot:accounts-receivable-specialist",
         "human:ana",
         "open",
         2,
@@ -1780,7 +1750,7 @@ TASKS = [
         "ap-bills",
         "Pay Friday's supplier bills after matching them",
         "Match each bill to its order, then schedule the payments.",
-        "bot:accounts-payable",
+        "bot:accounts-payable-specialist",
         "human:ana",
         "open",
         0.5,
@@ -1793,7 +1763,7 @@ TASKS = [
         "tag-refunds",
         "Tag last week's refund requests by reason",
         "Read last week's refund tickets and tag each with the reason. Count the reasons.",
-        "bot:support",
+        "bot:support-owner",
         "human:ana",
         "done",
         6.0,
@@ -1806,7 +1776,7 @@ TASKS = [
         "refund-policy",
         "Update the Support instructions with the refund policy",
         "Put the refund policy in Support's instructions, with the limit Ana chooses.",
-        "bot:support-lead",
+        "bot:success-team-manager",
         "human:ana",
         "open",
         6.0,
@@ -1843,7 +1813,7 @@ TASKS = [
         "pr-queue",
         "Review the render queue timeout change",
         "Check the timeout and the retry count before the change goes to the cloud build.",
-        "bot:pr-reviewer",
+        "bot:reviewer",
         "bot:devops",
         "open",
         0.9,
@@ -1855,7 +1825,7 @@ TASKS = [
         "pr-mobile-guide",
         "Review the lens-mount guide in the app",
         "Check the copy and the image links in the app's help screen.",
-        "bot:pr-reviewer",
+        "bot:reviewer",
         "bot:mobile",
         "done",
         2.4,
@@ -1867,7 +1837,7 @@ TASKS = [
         "pr-tests",
         "Fix the Linux-only test that flakes",
         "The test that fails only on Linux needs its timing made deterministic.",
-        "bot:pr-reviewer",
+        "bot:reviewer",
         "bot:firmware",
         "open",
         1.1,
@@ -1879,7 +1849,7 @@ TASKS = [
         "triage-week",
         "Triage this week's 14 bug reports",
         "Tag each report, link duplicates, and send it to the right queue.",
-        "bot:issue-triage",
+        "bot:qa-owner",
         "human:eli",
         "done",
         1,
@@ -1891,7 +1861,7 @@ TASKS = [
         "triage-pairing",
         "Group the Storefront pairing reports",
         "Find the reports that describe the same pairing failure and link them.",
-        "bot:issue-triage",
+        "bot:qa-owner",
         "bot:product-manager",
         "open",
         0.9,
@@ -1903,7 +1873,7 @@ TASKS = [
         "triage-app",
         "Label reports for the phone app's next version",
         "Tag each open app report as bug, question or request so Mobile can plan.",
-        "bot:issue-triage",
+        "bot:qa-owner",
         "bot:mobile",
         "open",
         0.7,
@@ -1939,7 +1909,7 @@ TASKS = [
         "notes-ring2",
         "Write the ring 2 notes for firmware 2.4",
         "Plain notes Support can repeat: what changed and what owners will notice.",
-        "bot:release-notes",
+        "bot:release-notes-writer",
         "bot:firmware",
         "done",
         2.5,
@@ -1951,7 +1921,7 @@ TASKS = [
         "notes-ring3",
         "Draft the ring 3 notes ahead of the date",
         "Keep the draft ready so the notes go out the day ring 3 starts.",
-        "bot:release-notes",
+        "bot:release-notes-writer",
         "bot:product-manager",
         "open",
         1,
@@ -1963,7 +1933,7 @@ TASKS = [
         "notes-app",
         "Write the calibration screen release note",
         "Two lines for the app store page and the help centre.",
-        "bot:release-notes",
+        "bot:release-notes-writer",
         "human:eli",
         "open",
         0.6,
@@ -2024,7 +1994,7 @@ TASKS = [
         "Check the calibration screen on older Android phones",
         "Test on the three oldest Android phones in the support list.",
         "bot:mobile",
-        "bot:issue-triage",
+        "bot:qa-owner",
         "open",
         0.8,
         0.8,
@@ -2096,7 +2066,7 @@ TASKS = [
         "Compare first-try rates for owners who read the guide",
         "Check whether owners who open the lens guide calibrate first time more often.",
         "bot:product-analyst",
-        "bot:marketing-lead",
+        "bot:growth-team-manager",
         "open",
         1.2,
         0.3,
@@ -2120,7 +2090,7 @@ TASKS = [
         "mkt-holiday-plan",
         "Draft the holiday plan for owners and shops",
         "One plan for each audience, with the channels, budget and the week each one starts.",
-        "bot:marketing-lead",
+        "bot:growth-team-manager",
         "human:cara",
         "open",
         3.5,
@@ -2132,7 +2102,7 @@ TASKS = [
         "mkt-weekly",
         "Post the holiday numbers for Monday",
         "Home Pro share, ad orders and mail opens, with one line of why for each.",
-        "bot:marketing-lead",
+        "bot:growth-team-manager",
         "human:cara",
         "open",
         0.8,
@@ -2144,7 +2114,7 @@ TASKS = [
         "content-faq",
         "Write the holiday FAQ for the product pages",
         "Ten questions owners ask most, in plain words, with links to the setup guide.",
-        "bot:content",
+        "bot:content-owner",
         "bot:seo",
         "open",
         1.6,
@@ -2156,7 +2126,7 @@ TASKS = [
         "content-scene-blurb",
         "Write the blurbs for the six new scene packs",
         "Two lines each: what the scene looks like and which house it suits.",
-        "bot:content",
+        "bot:content-owner",
         "bot:scene-designer",
         "open",
         1.1,
@@ -2169,7 +2139,7 @@ TASKS = [
         "Build the sleigh-bells scene pack",
         "Eight scenes timed to the sleigh-bell track, each checked at two heights.",
         "bot:scene-designer",
-        "bot:marketing-lead",
+        "bot:growth-team-manager",
         "open",
         2.1,
         0.4,
@@ -2181,7 +2151,7 @@ TASKS = [
         "Check every scene against the flashing rule",
         "Run each new scene through the flash check and send the failures back.",
         "bot:scene-designer",
-        "bot:compliance",
+        "bot:compliance-manager",
         "open",
         0.9,
         0.2,
@@ -2205,7 +2175,7 @@ TASKS = [
         "Write the holiday brief for creators",
         "What to show, what not to claim, and the two dates. One page.",
         "bot:creators",
-        "bot:marketing-lead",
+        "bot:growth-team-manager",
         "done",
         2.6,
         1.7,
@@ -2240,7 +2210,7 @@ TASKS = [
         "video-subtitles",
         "Add captions to the 30-second install video",
         "Captions in English and Spanish, checked against the script.",
-        "bot:video-producer",
+        "bot:video-owner",
         "human:cara",
         "open",
         1.3,
@@ -2252,8 +2222,8 @@ TASKS = [
         "video-shop-cut",
         "Cut a 15-second version for shop screens",
         "Same install, no voice-over, with the scene visible from across a street.",
-        "bot:video-producer",
-        "bot:marketing-lead",
+        "bot:video-owner",
+        "bot:growth-team-manager",
         "open",
         0.9,
         0.9,
@@ -2264,8 +2234,8 @@ TASKS = [
         "video-thumbs",
         "Pick four thumbnails for the install video",
         "Frames that show the lights on a house, not a close-up of the box.",
-        "bot:video-producer",
-        "bot:paid-media",
+        "bot:video-owner",
+        "bot:search-ads-owner",
         "open",
         1.7,
         0.6,
@@ -2276,7 +2246,7 @@ TASKS = [
         "ads-search-cap",
         "Cap search ads at $1,600 a week",
         "Keep search inside its share of the $4,000 weekly budget and move spare money to social.",
-        "bot:paid-media",
+        "bot:search-ads-owner",
         "human:cara",
         "open",
         1.4,
@@ -2288,8 +2258,8 @@ TASKS = [
         "ads-test-social",
         "Test two social ad cuts for a week",
         "Run the install cut and the scene cut side by side at equal budgets.",
-        "bot:paid-media",
-        "bot:marketing-lead",
+        "bot:search-ads-owner",
+        "bot:growth-team-manager",
         "open",
         1.2,
         0.5,
@@ -2300,8 +2270,8 @@ TASKS = [
         "ads-sale-price",
         "Update the ads for the December price",
         "Swap in the new price once Ana decides it, on every live ad.",
-        "bot:paid-media",
-        "bot:marketing-lead",
+        "bot:search-ads-owner",
+        "bot:growth-team-manager",
         "open",
         0.7,
         0.7,
@@ -2312,7 +2282,7 @@ TASKS = [
         "email-welcome",
         "Rewrite the welcome series for new owners",
         "Three emails over ten days: set up, calibrate, and the first scene.",
-        "bot:email-marketing",
+        "bot:email-owner",
         "human:cara",
         "open",
         2.6,
@@ -2324,8 +2294,8 @@ TASKS = [
         "email-sunset",
         "Move lapsed buyers off the holiday list",
         "Buyers who have not bought in over a year go to a quiet list; the holiday send stays with active owners.",
-        "bot:email-marketing",
-        "bot:marketing-lead",
+        "bot:email-owner",
+        "bot:growth-team-manager",
         "done",
         1.9,
         1.1,
@@ -2349,7 +2319,7 @@ TASKS = [
         "Add FAQ markup to the setup guide page",
         "Mark up the setup questions so search shows them under the link.",
         "bot:seo",
-        "bot:content",
+        "bot:content-owner",
         "open",
         1.1,
         0.4,
@@ -2361,7 +2331,7 @@ TASKS = [
         "Fix the broken links from the old holiday pages",
         "Find links to the retired holiday pages and point them to the current guide.",
         "bot:seo",
-        "bot:marketing-lead",
+        "bot:growth-team-manager",
         "open",
         0.9,
         0.2,
@@ -2372,8 +2342,8 @@ TASKS = [
         "community-faq-post",
         "Post the lens-mount FAQ in the owners' forum",
         "A short FAQ with the three fixes, posted by a team member, not a bot account.",
-        "bot:community",
-        "bot:marketing-lead",
+        "bot:community-manager",
+        "bot:growth-team-manager",
         "open",
         1.1,
         0.3,
@@ -2384,8 +2354,8 @@ TASKS = [
         "community-moderate",
         "Answer the forum's calibration questions today",
         "Answer each open calibration question in the forum, and link the guide.",
-        "bot:community",
-        "bot:support-lead",
+        "bot:community-manager",
+        "bot:success-team-manager",
         "open",
         0.8,
         0.2,
@@ -2396,7 +2366,7 @@ TASKS = [
         "community-ambassadors",
         "Find five owners to test the holiday scenes",
         "Pick owners who posted good photos and ask if they want early scenes.",
-        "bot:community",
+        "bot:community-manager",
         "human:cara",
         "open",
         0.6,
@@ -2433,7 +2403,7 @@ TASKS = [
         "ops-week-plan",
         "Plan the shipping week around the port hold",
         "Where each unit ships this week, and what goes first if the port stays shut.",
-        "bot:ops-manager",
+        "bot:operations-manager",
         "human:ben",
         "open",
         0.9,
@@ -2445,8 +2415,8 @@ TASKS = [
         "comp-warnings",
         "Move the warning text onto the first screen for two scenes",
         "Two scene packs put the safety warning on screen three. Move it to screen one.",
-        "bot:compliance",
-        "bot:ops-manager",
+        "bot:compliance-manager",
+        "bot:operations-manager",
         "open",
         1.3,
         0.3,
@@ -2457,7 +2427,7 @@ TASKS = [
         "comp-cert-files",
         "File the product safety certificates for Home Pro 2",
         "Collect the test reports and file them with the product record.",
-        "bot:compliance",
+        "bot:compliance-manager",
         "human:ben",
         "open",
         2.2,
@@ -2469,8 +2439,8 @@ TASKS = [
         "proc-led-quote",
         "Get a quote on the LED modules for January",
         "Two suppliers, same spec, with the lead time for 2,000 modules.",
-        "bot:procurement",
-        "bot:ops-manager",
+        "bot:procurement-manager",
+        "bot:operations-manager",
         "open",
         1.2,
         0.3,
@@ -2482,7 +2452,7 @@ TASKS = [
         "Set the sample plan for the December batches",
         "Set the sample size for each batch and the pass line for the lens mounts.",
         "bot:quality",
-        "bot:ops-manager",
+        "bot:operations-manager",
         "open",
         0.7,
         0.7,
@@ -2493,7 +2463,7 @@ TASKS = [
         "returns-rule",
         "Write the lens-replacement rule for Ben",
         "One page: what a warranty lens swap covers, and the proof we ask for.",
-        "bot:returns",
+        "bot:returns-and-refunds-specialist",
         "human:ben",
         "open",
         1.4,
@@ -2506,7 +2476,7 @@ TASKS = [
         "support-week-review",
         "Review the week's answer times for Ben",
         "Tickets answered the same day, the slowest three, and why each was slow.",
-        "bot:support-lead",
+        "bot:success-team-manager",
         "human:ben",
         "open",
         0.8,
@@ -2518,8 +2488,8 @@ TASKS = [
         "qa-scripts",
         "Check the new calibration script against ten real chats",
         "Replay ten chats from last week on the new script and mark each reply right or wrong.",
-        "bot:support-qa",
-        "bot:support-lead",
+        "bot:support-quality-analyst",
+        "bot:success-team-manager",
         "open",
         1.1,
         0.3,
@@ -2530,8 +2500,8 @@ TASKS = [
         "tech-unit-swaps",
         "Process the unit swaps for failed-twice calibrations",
         "Two owners asked for a swap. Book the swap and send the label.",
-        "bot:technical-support",
-        "bot:support-lead",
+        "bot:technical-support-engineer",
+        "bot:success-team-manager",
         "open",
         1.1,
         0.5,
@@ -2542,7 +2512,7 @@ TASKS = [
         "esc-repeat",
         "Log every repeat complaint from one site",
         "Count the complaints per site and flag any site with a second one this month.",
-        "bot:escalations",
+        "bot:escalations-manager",
         "human:ben",
         "open",
         0.6,
@@ -2554,7 +2524,7 @@ TASKS = [
         "rep-weekly",
         "Post the week's review score for Ben",
         "Average stars, the count of reviews, and the three that need a reply.",
-        "bot:reputation",
+        "bot:reputation-manager",
         "human:ben",
         "done",
         1.4,
@@ -2567,7 +2537,7 @@ TASKS = [
         "sales-pipeline-review",
         "Review the install pipeline with Cara on Monday",
         "Every open install, its stage, and the one next step for each.",
-        "bot:sales-lead",
+        "bot:growth-team-manager",
         "human:cara",
         "open",
         1.1,
@@ -2579,7 +2549,7 @@ TASKS = [
         "sales-hotel-renewal",
         "Plan the hotel renewal calls for January",
         "Which repeat hotels renew first, and who calls each one.",
-        "bot:sales-lead",
+        "bot:growth-team-manager",
         "human:cara",
         "open",
         0.7,
@@ -2592,7 +2562,7 @@ TASKS = [
         "List the towns with a holiday light contest",
         "Towns that run a light contest are likely buyers. Add the name, the contact and the date.",
         "bot:sdr",
-        "bot:sales-lead",
+        "bot:growth-team-manager",
         "open",
         1.6,
         0.4,
@@ -2604,7 +2574,7 @@ TASKS = [
         "Check how the two repeat hotels are doing",
         "Calibration fails, scene use and any complaints for each hotel install.",
         "bot:account-manager",
-        "bot:sales-lead",
+        "bot:growth-team-manager",
         "open",
         1.2,
         0.3,
@@ -2616,7 +2586,7 @@ TASKS = [
         "Put every hotel license renewal date on the account list",
         "Date, price and owner for each yearly scene license.",
         "bot:account-manager",
-        "bot:sales-lead",
+        "bot:growth-team-manager",
         "done",
         2.2,
         1.4,
@@ -2627,7 +2597,7 @@ TASKS = [
         "cs-site-check",
         "Check every installed site is playing tonight",
         "Each installed site should report a scene in the last 24 hours. Flag any that do not.",
-        "bot:customer-success",
+        "bot:success-owner",
         "human:cara",
         "open",
         0.9,
@@ -2639,8 +2609,8 @@ TASKS = [
         "cs-first-week",
         "Call the new sites after their first week",
         "Ask three questions per site and log the answers.",
-        "bot:customer-success",
-        "bot:sales-lead",
+        "bot:success-owner",
+        "bot:growth-team-manager",
         "open",
         0.6,
         0.6,
@@ -2663,7 +2633,7 @@ TASKS = [
         "so-quote-clean",
         "Clean up the quote list for the holiday quarter",
         "Close quotes older than 60 days that were never answered; keep the rest.",
-        "bot:sales-ops",
+        "bot:sales-operations-manager",
         "human:cara",
         "open",
         1.3,
@@ -2688,7 +2658,7 @@ TASKS = [
         "Put the public bid deadlines on one calendar",
         "Every open public bid, its deadline and who prepares it.",
         "bot:bids",
-        "bot:sales-lead",
+        "bot:growth-team-manager",
         "done",
         2.9,
         2.0,
@@ -2700,7 +2670,7 @@ TASKS = [
         "fin-oct-close",
         "Review October's close with Ana",
         "Read the close summary, the open receipts and the sales tax position in one sitting.",
-        "bot:finance-lead",
+        "bot:finance-owner",
         "human:ana",
         "open",
         2.5,
@@ -2712,7 +2682,7 @@ TASKS = [
         "fin-cash-week",
         "Post the weekly cash position for Ana",
         "Bank balance, bills due this week, and what the ad budget has left.",
-        "bot:finance-lead",
+        "bot:finance-owner",
         "human:ana",
         "open",
         0.7,
@@ -2724,8 +2694,8 @@ TASKS = [
         "books-receipts",
         "Chase the missing receipts for October",
         "Ask each vendor for the receipt on the open lines and log the reply.",
-        "bot:bookkeeper",
-        "bot:finance-lead",
+        "bot:finance-owner",
+        "bot:finance-owner",
         "open",
         1.8,
         0.4,
@@ -2736,8 +2706,8 @@ TASKS = [
         "ar-net-terms",
         "Check payment terms on the six shop invoices",
         "Confirm each shop's terms before the next reminder goes out.",
-        "bot:ar-followup",
-        "bot:finance-lead",
+        "bot:accounts-receivable-specialist",
+        "bot:finance-owner",
         "done",
         1.6,
         1.0,
@@ -2748,8 +2718,8 @@ TASKS = [
         "tax-resale",
         "Get the resale certificate for the one state",
         "The state needs a signed certificate from the Homeworks account before we can file.",
-        "bot:tax",
-        "bot:finance-lead",
+        "bot:tax-specialist",
+        "bot:finance-owner",
         "open",
         1.4,
         0.5,
@@ -2760,7 +2730,7 @@ TASKS = [
         "pricing-bundle",
         "Price the two-kit bundle for December",
         "Two Home Pro kits with one scene license. Show the margin at three prices.",
-        "bot:pricing",
+        "bot:pricing-analyst",
         "human:ana",
         "open",
         1.2,
@@ -2797,7 +2767,7 @@ TASKS = [
         "legal-redline",
         "Send Homeworks our returns-clause redline",
         "Our wording for the returns clause, with the one change Ana has agreed.",
-        "bot:legal-review",
+        "bot:contracts-manager",
         "human:ana",
         "open",
         1.4,
@@ -2809,8 +2779,8 @@ TASKS = [
         "inv-count-holiday",
         "Count the Home Starter stock before the Friday truck",
         "Count each Home Starter and Home Pro kit in the warehouse and post the count by noon.",
-        "bot:inventory",
-        "bot:ops-manager",
+        "bot:inventory-planner",
+        "bot:operations-manager",
         "open",
         0.8,
         0.2,
@@ -2821,7 +2791,7 @@ TASKS = [
         "rep-setup-replies",
         "Reply to the two reviews that got the setup wrong",
         "Answer each review with the right setup step and link the guide. Send any warranty claim to Ben.",
-        "bot:reputation",
+        "bot:reputation-manager",
         "human:ben",
         "open",
         0.9,
@@ -2862,7 +2832,7 @@ ASKS = [
     (
         "home-pro-price",
         "Raise Home Pro from $449 to $479 for December?",
-        "bot:pricing",
+        "bot:pricing-analyst",
         "human:ana",
         "Should Home Pro go from $449 to $479 for December? The three rivals sit $20 to $40 above us, so $479 still wins on "
         "price.\n\n"
@@ -2874,7 +2844,7 @@ ASKS = [
     (
         "cal-units",
         "Decide whether owners get a unit swap after two failed calibrations",
-        "bot:technical-support",
+        "bot:technical-support-engineer",
         "human:ben",
         "Can owners whose calibration fails twice get a new projector?\n\nFour owners are asking now, and a swap costs about $60 in "
         "parts and freight per unit.",
@@ -2884,7 +2854,7 @@ ASKS = [
     (
         "port-fee",
         "Decide whether to dispute the $310 port fee",
-        "bot:logistics",
+        "bot:logistics-coordinator",
         "human:ben",
         "Should we dispute the $310 port fee or pay it and recover it later?\n\nThe port charged it twice on the last sailing. The "
         "freight invoice waits on this.",
@@ -2894,7 +2864,7 @@ ASKS = [
     (
         "fcc-sign",
         "Sign the FCC filing for Home Pro 2",
-        "bot:compliance",
+        "bot:compliance-manager",
         "human:ana",
         "Can you sign the FCC filing for the Home Pro 2 radio?\n\nEverything else in the filing is checked. It needs your "
         "signature before the December units ship.",
@@ -2904,7 +2874,7 @@ ASKS = [
     (
         "approve-followup",
         "Approve the follow-up email to Tom Reid at Crown Hotel",
-        "bot:sales",
+        "bot:inbound-sales-owner",
         "human:cara",
         "Can I send this follow-up to Tom Reid at Crown Hotel from sales@acme.example?\n\nIt is the one email in this batch that "
         "needs you. It goes only if you approve.\n\n"
@@ -2916,7 +2886,7 @@ ASKS = [
     (
         "send-list",
         "Approve the holiday email to the owners list",
-        "bot:email-marketing",
+        "bot:email-owner",
         "human:cara",
         "Can the holiday email go to the 3,800 owners on Thursday at 10:00?\n\nThe list is segmented and tested. Business leads "
         "are kept on their own list and are not included.",
@@ -2936,7 +2906,7 @@ ASKS = [
     (
         "ad-cap",
         "Decide the ad cap for December",
-        "bot:finance-lead",
+        "bot:finance-owner",
         "human:ana",
         "Should the December ad cap go from $4,000 to $6,000 a week?\n\nPaid media can spend more only once the cap is set, and "
         "forum ads are converting better than search.",
@@ -2966,7 +2936,7 @@ ASKS = [
     (
         "legal-retail",
         "Decide the Homeworks returns clause",
-        "bot:legal-review",
+        "bot:contracts-manager",
         "human:ana",
         "Can we accept Homeworks' 60-day returns clause for shelf stock?\n\nWithout it, Homeworks will not sign before the holidays. "
         "With it, we take back unsold stock after January.",
@@ -2976,7 +2946,7 @@ ASKS = [
     (
         "lens-rule",
         "Decide the lens replacement rule for the holiday wave",
-        "bot:returns",
+        "bot:returns-and-refunds-specialist",
         "human:ben",
         "Should a second lens failure get a new lens set or a new projector?\n\nThe rule decides which parts we order for December.",
         2.0,
@@ -2990,36 +2960,36 @@ ASK_DUE = {"home-pro-price": 1.0}
 # (bot, [(from, text)...]), hours ago at the first message. Owners' names are the three people the tokens belong to.
 CHATS = {
     # The Assistant's own chat: its quick answer to "what's waiting" is the product's, read from the same queue.
-    "coo": (3, [("human:ana", "What's waiting on me?")]),
-    "support-qa": (
+    "assistant": (3, [("human:ana", "What's waiting on me?")]),
+    "support-quality-analyst": (
         30,
         [
             ("human:ben", "Which calibration failures should Firmware see first?"),
             (
-                "bot:support-qa",
+                "bot:support-quality-analyst",
                 "The 14 that fail on the lens-mount step. Eleven share one cause, and the other three are batch 14 units. "
                 "I have tagged all 14 and the callbacks are running.",
             ),
             ("human:ben", "Send Firmware the eleven first."),
             (
-                "bot:support-qa",
+                "bot:support-quality-analyst",
                 "Sent with the transcripts. The unit swap question is still open with you; I will hold the callbacks "
                 "that need it.",
             ),
         ],
     ),
-    "pricing": (
+    "pricing-analyst": (
         40,
         [
             ("human:ana", "What would Home Pro at $479 do to December units?"),
             (
-                "bot:pricing",
+                "bot:pricing-analyst",
                 "Our model says six to nine percent fewer units in December, about 300 kits. The margin on the rest is "
                 "higher than the volume we lose, so the price rise adds about $9,000. The rivals sit $20 to $40 above us, "
                 "so we still win on price.",
             ),
             ("human:ana", "Put it on my list with those numbers."),
-            ("bot:pricing", "Done. It is on your list. I will not change the public price until you answer."),
+            ("bot:pricing-analyst", "Done. It is on your list. I will not change the public price until you answer."),
         ],
     ),
     "firmware": (
@@ -3047,18 +3017,18 @@ CHATS = {
             ("bot:marketplace", "Holding. The listing says limited stock until then."),
         ],
     ),
-    "sales": (
+    "inbound-sales-owner": (
         52,
         [
             ("human:cara", "Can you compare the Crown Hotel quote with last year's lobby job?"),
             (
-                "bot:sales",
+                "bot:inbound-sales-owner",
                 "Yes. Last year's lobby was three projectors at $1,100 each. The quote is four at $1,050 with a yearly scene "
                 "license. The license is most of the difference.",
             ),
             ("human:cara", "Good. Add the terrace to the quote too."),
             (
-                "bot:sales",
+                "bot:inbound-sales-owner",
                 "Added. The terrace adds two projectors and a second license; the total is in the quote draft.",
             ),
         ],
@@ -3083,7 +3053,7 @@ CHATS = {
 # (bot, key, title, cron, text, three quiet days' summaries: a routine that found nothing new still runs)
 ROUTINES = [
     (
-        "support-qa",
+        "support-quality-analyst",
         "calibration",
         "Morning calibration check",
         "0 8 * * 1-5",
@@ -3107,7 +3077,7 @@ ROUTINES = [
         ),
     ),
     (
-        "inventory",
+        "inventory-planner",
         "stock",
         "Daily stock count",
         "0 9 * * 1-5",
@@ -3127,7 +3097,7 @@ ROUTINES = [
         ),
     ),
     (
-        "bookkeeper",
+        "finance-owner",
         "reconcile",
         "Weekday bank reconciliation",
         "30 7 * * 1-5",
@@ -3139,7 +3109,7 @@ ROUTINES = [
         ),
     ),
     (
-        "reputation",
+        "reputation-manager",
         "reviews",
         "Review sweep",
         "0 11 * * 1-5",
@@ -3151,7 +3121,7 @@ ROUTINES = [
         ),
     ),
     (
-        "inbox",
+        "inbox-manager",
         "sweep",
         "Weekday inbox sweep",
         "30 7 * * 1-5",
@@ -3175,7 +3145,7 @@ ROUTINES = [
         ),
     ),
     (
-        "sales-ops",
+        "sales-operations-manager",
         "pipeline",
         "Friday pipeline summary",
         "0 15 * * 5",
@@ -3187,7 +3157,7 @@ ROUTINES = [
         ),
     ),
     (
-        "email-marketing",
+        "email-owner",
         "list",
         "Holiday list hygiene",
         "0 6 * * 2",
@@ -3195,7 +3165,7 @@ ROUTINES = [
         ("Removed 210 bounced addresses.", "Open rate 41 percent on the last send.", "No new bounces this week."),
     ),
     (
-        "content",
+        "content-owner",
         "guide",
         "Weekly help post draft",
         "0 10 * * 3",
@@ -3211,31 +3181,38 @@ ROUTINES = [
 # The turns the runner would have recorded: (bot, hours ago, trigger, summary, tokens in, tokens out).
 # Each bot also gets two turns from its own week, and each routine its quiet days; both are built below.
 CURATED_TURNS = [
-    ("support-qa", 30, "routine", "Morning calibration check: 9 failures grouped.", 79200, 6400),
-    ("support", 55, "message", "Answered a question about the invoice page.", 33800, 2500),
-    ("sales", 52, "task", "Prepared the Crown Hotel lobby quote.", 74500, 6900),
-    ("content", 76, "task", "Outlined the holiday setup guide.", 48800, 5400),
-    ("inbox", 27, "routine", "Sorted the inbox: 31 filed, 4 flagged.", 35100, 2000),
+    ("support-quality-analyst", 30, "routine", "Morning calibration check: 9 failures grouped.", 79200, 6400),
+    ("support-owner", 55, "message", "Answered a question about the invoice page.", 33800, 2500),
+    ("inbound-sales-owner", 52, "task", "Prepared the Crown Hotel lobby quote.", 74500, 6900),
+    ("content-owner", 76, "task", "Outlined the holiday setup guide.", 48800, 5400),
+    ("inbox-manager", 27, "routine", "Sorted the inbox: 31 filed, 4 flagged.", 35100, 2000),
     ("botops", 100, "task", "Set up the Scene Designer from the catalog.", 91000, 8800),
-    ("ops-manager", 78, "task", "Routed four requests and set the port follow-up.", 61400, 4400),
-    ("coo", 78, "task", "Routed four requests.", 21400, 1400),
+    ("operations-manager", 78, "task", "Routed four requests and set the port follow-up.", 61400, 4400),
+    ("assistant", 78, "task", "Routed four requests.", 21400, 1400),
     ("librarian", 125, "task", "Summarised two competitor pages.", 58300, 4700),
     ("firmware", 40, "task", "Rolled firmware 2.4 to ring 2.", 84200, 7100),
-    ("pricing", 40.2, "message", "Drafted two December price options for Home Pro.", 52800, 4100),
-    ("sales", 9, "task", "Drafted the Crown Hotel follow-up; it waits for approval.", 61000, 4800),
-    ("support", 5, "message", "Drafted 11 replies from Ben's list.", 88400, 7200),
+    ("pricing-analyst", 40.2, "message", "Drafted two December price options for Home Pro.", 52800, 4100),
+    ("inbound-sales-owner", 9, "task", "Drafted the Crown Hotel follow-up; it waits for approval.", 61000, 4800),
+    ("support-owner", 5, "message", "Drafted 11 replies from Ben's list.", 88400, 7200),
     ("firmware", 3, "message", "Measured retries on the test build: 3 in 100.", 47100, 3900),
-    ("inbox", 2, "routine", "Sorted the morning inbox: 28 filed, 5 flagged.", 36400, 2100),
-    ("coo", 6, "task", "Routed six requests.", 22800, 1500),
+    ("inbox-manager", 2, "routine", "Sorted the morning inbox: 28 filed, 5 flagged.", 36400, 2100),
+    ("assistant", 6, "task", "Routed six requests.", 22800, 1500),
     ("librarian", 20, "task", "Mapped the Lumenhaus price change.", 30900, 2300),
 ]
 
 # What model each demo bot runs on and how it is billed. About two thirds of a turn's input is read from cache.
-_LEADS = {"coo", "ops-manager", "product-manager", "marketing-lead", "support-lead", "sales-lead", "finance-lead"}
+_LEADS = {
+    "assistant",
+    "operations-manager",
+    "product-manager",
+    "growth-team-manager",
+    "success-team-manager",
+    "finance-owner",
+}
 _ROUTINE_BOTS = {routine[0] for routine in ROUTINES}
 USAGE = {}
 for _slug, _template, _parent in BOTS:
-    if _slug in _LEADS or _slug == "coo":
+    if _slug in _LEADS or _slug == "assistant":
         USAGE[_slug] = ("claude-opus-5-5", "anthropic", "subscription")
     elif _slug in _ROUTINE_BOTS:
         USAGE[_slug] = ("claude-haiku-5-5", "anthropic", "api")
@@ -3243,23 +3220,23 @@ for _slug, _template, _parent in BOTS:
         USAGE[_slug] = ("claude-sonnet-5-5", "anthropic", "api")
 USAGE.update(
     {
-        "sales": ("gpt-6.1-sol", "openai", "api"),
+        "inbound-sales-owner": ("gpt-6.1-sol", "openai", "api"),
         "sdr": ("gpt-6-luna", "openai", "api"),
-        "pricing": ("gpt-6.1-sol", "openai", "api"),
+        "pricing-analyst": ("gpt-6.1-sol", "openai", "api"),
         "librarian": ("gpt-6.1-sol", "openai", "subscription"),
     }
 )
 # The built-in helpers (not on the team chart) that still run turns: goal checks, task sorting and counsel reads.
 USAGE.update(
     {
-        "goal-manager": ("claude-haiku-5-5", "anthropic", "api"),
+        "strategy-owner": ("claude-haiku-5-5", "anthropic", "api"),
         "task-manager": ("claude-haiku-5-5", "anthropic", "api"),
-        "tico-counsel": ("claude-sonnet-5-5", "anthropic", "api"),
+        "rules-owner": ("claude-sonnet-5-5", "anthropic", "api"),
     }
 )
 HELPER_TURNS = [
     (
-        "goal-manager",
+        "strategy-owner",
         30,
         "routine",
         "Checked the company goals. The calibration goal is red and its owner has the next step.",
@@ -3268,7 +3245,7 @@ HELPER_TURNS = [
     ),
     ("task-manager", 9, "routine", "Sorted 17 open tasks by owner. Two are waiting on Ana.", 18000, 1200),
     (
-        "tico-counsel",
+        "rules-owner",
         52,
         "message",
         "Read the Larkford bid terms and listed three questions for counsel before the bid goes in.",
@@ -3320,74 +3297,74 @@ PAST_DAILY = (
     ("botops", "Sweep stuck tasks"),
     ("librarian", "Curate the market"),
     ("librarian", "Refresh the map of the docs"),
-    ("goal-manager", "KPI pass"),
-    ("bookkeeper", "Post yesterday's orders to the ledger"),
+    ("strategy-owner", "KPI pass"),
+    ("finance-owner", "Post yesterday's orders to the ledger"),
 )
 # (bot, title): finished work, handed out in order and round again, so a title comes back a month or more later.
 PAST_TASKS = [
-    ("support", "Answer the setup questions from the weekend"),
+    ("support-owner", "Answer the setup questions from the weekend"),
     ("firmware", "Fix the pairing timeout on older routers"),
-    ("content", "Write the guide to mounting on brick"),
-    ("sales", "Quote 12 kits for Pinecrest Mall"),
-    ("procurement", "Get two quotes for lens covers"),
-    ("marketing-lead", "Plan the October email calendar"),
+    ("content-owner", "Write the guide to mounting on brick"),
+    ("inbound-sales-owner", "Quote 12 kits for Pinecrest Mall"),
+    ("procurement-manager", "Get two quotes for lens covers"),
+    ("growth-team-manager", "Plan the October email calendar"),
     ("cloud", "Move scene renders to the larger queue"),
-    ("bookkeeper", "Close September's books"),
-    ("logistics", "Book freight for container 2"),
+    ("finance-owner", "Close September's books"),
+    ("logistics-coordinator", "Book freight for container 2"),
     ("seo", "Fix titles on the scene library pages"),
-    ("technical-support", "Write the reset steps for the Home Pro"),
+    ("technical-support-engineer", "Write the reset steps for the Home Pro"),
     ("product-manager", "Write the spec for scene scheduling"),
     ("sdr", "Research 40 hotel groups for holiday installs"),
     ("quality", "Inspect the lens batch from Lumen"),
     ("mobile", "Ship the app's dark mode"),
     ("account-manager", "Renew the Crestview Library install"),
     ("scene-designer", "Design the Harvest Moon scene"),
-    ("returns", "Process 14 return requests"),
-    ("pr-reviewer", "Review the calibration retry change"),
-    ("finance-lead", "Draft the Q4 spending plan"),
-    ("community", "Answer the forum thread on outdoor use"),
-    ("inventory", "Recount the returns shelf"),
+    ("returns-and-refunds-specialist", "Process 14 return requests"),
+    ("reviewer", "Review the calibration retry change"),
+    ("finance-owner", "Draft the Q4 spending plan"),
+    ("community-manager", "Answer the forum thread on outdoor use"),
+    ("inventory-planner", "Recount the returns shelf"),
     ("devops", "Rotate the render service keys"),
-    ("customer-success", "Check in with the five newest business accounts"),
-    ("email-marketing", "Send the early-bird holiday email"),
-    ("ar-followup", "Chase three late invoices"),
-    ("release-notes", "Write the release notes for app 3.0"),
-    ("escalations", "Settle the cracked-lens complaint"),
-    ("paid-media", "Pause the low-performing search ads"),
-    ("compliance", "Check the battery shipping labels"),
+    ("success-owner", "Check in with the five newest business accounts"),
+    ("email-owner", "Send the early-bird holiday email"),
+    ("accounts-receivable-specialist", "Chase three late invoices"),
+    ("release-notes-writer", "Write the release notes for app 3.0"),
+    ("escalations-manager", "Settle the cracked-lens complaint"),
+    ("search-ads-owner", "Pause the low-performing search ads"),
+    ("compliance-manager", "Check the battery shipping labels"),
     ("sales-engineer", "Draw the lobby layout for Crown Hotel"),
     ("product-analyst", "Find why first-try calibration dropped"),
-    ("video-producer", "Cut the 30-second setup video"),
+    ("video-owner", "Cut the 30-second setup video"),
     ("partners", "Sign up two installer partners in Ohio"),
-    ("issue-triage", "Sort the week's 31 bug reports"),
-    ("support-qa", "Score 40 support replies"),
-    ("pricing", "Compare kit prices with three rivals"),
-    ("reputation", "Reply to the week's store reviews"),
+    ("qa-owner", "Sort the week's 31 bug reports"),
+    ("support-quality-analyst", "Score 40 support replies"),
+    ("pricing-analyst", "Compare kit prices with three rivals"),
+    ("reputation-manager", "Reply to the week's store reviews"),
     ("recruiter", "Screen candidates for the warehouse lead"),
-    ("accounts-payable", "Pay the freight and packaging bills"),
-    ("ops-manager", "Plan warehouse hours for November"),
+    ("accounts-payable-specialist", "Pay the freight and packaging bills"),
+    ("operations-manager", "Plan warehouse hours for November"),
     ("bids", "Answer the Larkford parks bid questions"),
     ("retail", "Send the retail restock order form"),
-    ("support-lead", "Update the support macros for the holidays"),
+    ("success-team-manager", "Update the support macros for the holidays"),
     ("creators", "Send kits to three holiday creators"),
-    ("sales-ops", "Clean up stale deals in the pipeline"),
-    ("legal-review", "Review the installer partner contract"),
-    ("tax", "File the September sales tax"),
+    ("sales-operations-manager", "Clean up stale deals in the pipeline"),
+    ("contracts-manager", "Review the installer partner contract"),
+    ("tax-specialist", "File the September sales tax"),
     ("marketplace", "Fix the marketplace listing photos"),
-    ("spend-watcher", "Flag the duplicate software charges"),
+    ("fpa-analyst", "Flag the duplicate software charges"),
     ("botops", "Watch the 2.3 rollout for crashes"),
-    ("sales-lead", "Review the business pipeline with Cara"),
-    ("support", "Write the standing answer for late deliveries"),
+    ("growth-team-manager", "Review the business pipeline with Cara"),
+    ("support-owner", "Write the standing answer for late deliveries"),
     ("firmware", "Cut firmware 2.3 for ring 1"),
-    ("content", "Write the holiday gift guide"),
+    ("content-owner", "Write the holiday gift guide"),
     ("cloud", "Clear the stuck render jobs"),
-    ("sales", "Send the Harbor & Vine install proposal"),
+    ("inbound-sales-owner", "Send the Harbor & Vine install proposal"),
     ("seo", "Write the outdoor projector comparison page"),
 ]
 
 # The status steps for the bots whose status history is worth showing: (hours ago, state, focus, why), oldest first.
 STATUS_STEPS = {
-    "support-qa": [
+    "support-quality-analyst": [
         (31, "running", "Morning calibration check", "routine"),
         (30, "waiting_human", "Lens-mount cause needs Ben's call", "asked Ben"),
         (26, "idle", "Queue clear", "turn finished"),
@@ -3517,15 +3494,15 @@ ROUTINE_DONE = {
     "owner": "bot:librarian",
     "note": "Read the two live meetings and updated market/customer-themes.",
 }
-# The Market briefing routine's bet review (goal-manager's playbook): it reads the briefing against the bets it touches.
+# The Market briefing routine's bet review (strategy-owner's playbook): it reads the briefing against the bets it touches.
 BRIEFING_DONE = {
     "title": "Market briefing",
-    "owner": "bot:goal-manager",
+    "owner": "bot:strategy-owner",
     "note": "Read the briefing against the bets it touches. No bet changes.",
 }
 
 # Task threads Ana still has to settle stay unread in her sidebar; the seed reads the rest of hers when it finishes.
-# "Let the Bookkeeper see the books" is the product's own ask, made when the app starts (backend/bookkeeper.py), so it
+# "Let the Finance Owner see the books" is the product's own ask, made when the app starts (backend/bookkeeper.py), so it
 # is not in the seed to be read: it is a decision she still owes, and it stays unread.
 KEEP_UNREAD = (
     "Raise Home Pro from $449 to $479 for December?",
@@ -3535,7 +3512,7 @@ KEEP_UNREAD = (
 
 # The holiday plan Marketing keeps as a page: Home's Latest pages shows it. The bot publishes it as its own page.
 PAGE = {
-    "bot": "marketing-lead",
+    "bot": "growth-team-manager",
     "name": "holiday-plan.html",
     "title": "Holiday season plan",
     "text": (
@@ -3654,7 +3631,7 @@ MEETINGS = [
         "title": "Maple Mall facade call",
         "source": "granola",
         "external_id": "granola-maple-1",
-        "send_to": "sales",
+        "send_to": "inbound-sales-owner",
         "send_note": "Reading the call for follow-ups.",
         "participants": [
             {"name": "Cara Mendes", "email": "cara@acme.example"},
@@ -3890,7 +3867,7 @@ ENTITY_UPDATES = [
 # (actor, kind, about, claim, source url, quote, confidence), one line each for the Insights page.
 INSIGHTS = [
     (
-        "bot:sales",
+        "bot:inbound-sales-owner",
         "edge",
         "Stringcraft",
         "Stringcraft says it will add a subscription for seasonal scenes this quarter, which overlaps our scene library.",
@@ -3899,7 +3876,7 @@ INSIGHTS = [
         "medium",
     ),
     (
-        "bot:support-qa",
+        "bot:support-quality-analyst",
         "other",
         "Glowline",
         "A customer told Support they switched to Glowline's installer because it booked a crew the same week.",
@@ -3934,7 +3911,7 @@ GOALS = [
     (
         "installs",
         "Install 40 business sites before the holidays",
-        "bot:sales-lead",
+        "bot:growth-team-manager",
         "season",
         None,
         "",
@@ -3952,7 +3929,7 @@ GOALS = [
     (
         "orders",
         "Ship 95 percent of orders within two days",
-        "bot:ops-manager",
+        "bot:operations-manager",
         "season",
         None,
         "",
@@ -3961,7 +3938,7 @@ GOALS = [
     (
         "home-pro",
         "Home Pro is 45 percent of home sales by December",
-        "bot:marketing-lead",
+        "bot:growth-team-manager",
         "season",
         "yellow",
         "Behind: 38 percent, and the December price is still open.",
@@ -3970,7 +3947,7 @@ GOALS = [
     (
         "tickets",
         "Answer every support ticket the same day",
-        "bot:support-lead",
+        "bot:success-team-manager",
         "season",
         None,
         "",
@@ -3979,7 +3956,7 @@ GOALS = [
     (
         "guides",
         "Publish two useful holiday guides a month",
-        "bot:content",
+        "bot:content-owner",
         "home-pro",
         None,
         "",
@@ -3988,7 +3965,7 @@ GOALS = [
     (
         "books",
         "Match 98 percent of bank lines within a day",
-        "bot:finance-lead",
+        "bot:finance-owner",
         "season",
         None,
         "",
@@ -3997,7 +3974,7 @@ GOALS = [
     (
         "contracts",
         "Review every business install contract within two days",
-        "bot:legal-review",
+        "bot:contracts-manager",
         "season",
         None,
         "",
@@ -4016,7 +3993,7 @@ GOALS = [
     (
         "lens-stock",
         "Keep 21 days of lens stock ahead of the December peak",
-        "bot:procurement",
+        "bot:procurement-manager",
         "orders",
         None,
         "",
@@ -4025,7 +4002,7 @@ GOALS = [
     (
         "stock-match",
         "Keep stock within three units of every open order",
-        "bot:inventory",
+        "bot:inventory-planner",
         "orders",
         None,
         "",
@@ -4034,7 +4011,7 @@ GOALS = [
     (
         "port-release",
         "Free the 300 held units before the next sailing",
-        "bot:logistics",
+        "bot:logistics-coordinator",
         "orders",
         "yellow",
         "Behind: 120 of 300 released; the broker still has the customs form.",
@@ -4052,7 +4029,7 @@ GOALS = [
     (
         "filings",
         "File every radio and safety paper on time",
-        "bot:compliance",
+        "bot:compliance-manager",
         "orders",
         None,
         "",
@@ -4061,7 +4038,7 @@ GOALS = [
     (
         "restock",
         "Put returned kits back on the shelf within three days",
-        "bot:returns",
+        "bot:returns-and-refunds-specialist",
         "orders",
         None,
         "",
@@ -4071,7 +4048,7 @@ GOALS = [
     (
         "pr-speed",
         "Review every pull request within one working day",
-        "bot:pr-reviewer",
+        "bot:reviewer",
         "calibration",
         None,
         "",
@@ -4089,7 +4066,7 @@ GOALS = [
     (
         "ring-notes",
         "Post release notes the day each firmware ring ships",
-        "bot:release-notes",
+        "bot:release-notes-writer",
         "calibration",
         None,
         "",
@@ -4144,7 +4121,7 @@ GOALS = [
     (
         "ad-cuts",
         "Get three approved video cuts into holiday ads",
-        "bot:video-producer",
+        "bot:video-owner",
         "home-pro",
         None,
         "",
@@ -4153,7 +4130,7 @@ GOALS = [
     (
         "ad-orders",
         "Get 400 holiday ad orders a week",
-        "bot:paid-media",
+        "bot:search-ads-owner",
         "home-pro",
         "yellow",
         "Behind: 345 a week against 400; the forum ads are at 80 percent of budget.",
@@ -4162,7 +4139,7 @@ GOALS = [
     (
         "mail-open",
         "Get 35 percent of owners to open the holiday mail",
-        "bot:email-marketing",
+        "bot:email-owner",
         "home-pro",
         None,
         "",
@@ -4181,7 +4158,7 @@ GOALS = [
     (
         "draft-ready",
         "Have a draft ready for 90 percent of new tickets",
-        "bot:support",
+        "bot:support-owner",
         "tickets",
         None,
         "",
@@ -4190,7 +4167,7 @@ GOALS = [
     (
         "callbacks",
         "Call back every owner whose calibration failed twice within a day",
-        "bot:technical-support",
+        "bot:technical-support-engineer",
         "tickets",
         None,
         "",
@@ -4200,7 +4177,7 @@ GOALS = [
     (
         "demos",
         "Book 12 shop demos before December",
-        "bot:sales",
+        "bot:inbound-sales-owner",
         "installs",
         None,
         "",
@@ -4227,7 +4204,7 @@ GOALS = [
     (
         "sites-live",
         "Keep 98 percent of installed sites playing each night",
-        "bot:customer-success",
+        "bot:success-owner",
         "installs",
         None,
         "",
@@ -4245,7 +4222,7 @@ GOALS = [
     (
         "quote-reply",
         "Answer 95 percent of quotes within two days",
-        "bot:sales-ops",
+        "bot:sales-operations-manager",
         "installs",
         None,
         "",
@@ -4264,7 +4241,7 @@ GOALS = [
     (
         "receipts",
         "Get a receipt for 95 percent of bills before close",
-        "bot:bookkeeper",
+        "bot:finance-owner",
         "books",
         None,
         "",
@@ -4273,7 +4250,7 @@ GOALS = [
     (
         "shop-collect",
         "Collect 90 percent of shop invoices within 30 days",
-        "bot:ar-followup",
+        "bot:accounts-receivable-specialist",
         "books",
         None,
         "",
@@ -4282,7 +4259,7 @@ GOALS = [
     (
         "tax-filed",
         "File every state's sales tax on time",
-        "bot:tax",
+        "bot:tax-specialist",
         "books",
         None,
         "",
@@ -4291,11 +4268,20 @@ GOALS = [
     (
         "rival-checks",
         "Check the price against three rivals every month",
-        "bot:pricing",
+        "bot:pricing-analyst",
         "books",
         None,
         "",
         [("Rival price checks this month", "checks", 3, [1, 2, 3], 30)],
+    ),
+    (
+        "spend-plan",
+        "Keep each month's spend within 5 percent of the plan",
+        "bot:fpa-analyst",
+        "books",
+        None,
+        "",
+        [("Months within 5 percent of plan", "%", 100, [67, 67, 100], 30)],
     ),
 ]
 
@@ -4396,22 +4382,27 @@ SLACK = {
 
 # Example files the bots have made, as (bot, path, type, text). The last two versions of one file show a draft and its edit.
 FILES = [
-    ("support", "reports/ticket-topics.csv", "text/csv", "topic,tickets\nCalibration,21\nShipping,9\nInvoices,6\n"),
     (
-        "content",
+        "support-owner",
+        "reports/ticket-topics.csv",
+        "text/csv",
+        "topic,tickets\nCalibration,21\nShipping,9\nInvoices,6\n",
+    ),
+    (
+        "content-owner",
         "guides/holiday-setup.md",
         "text/markdown",
         "# Holiday setup guide\n\nFirst draft: the first-time setup in six steps.\n",
     ),
     (
-        "content",
+        "content-owner",
         "guides/holiday-setup.md",
         "text/markdown",
         "# Holiday setup guide\n\nReviewed draft: added the lens-mount step and two screenshots.\n",
     ),
 ]
 FILE_LINK = {
-    "bot": "sales",
+    "bot": "inbound-sales-owner",
     "url": "https://sales.acme.example/holiday-deck",
     "title": "Holiday sales deck (sample link)",
 }

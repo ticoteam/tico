@@ -1,5 +1,5 @@
 name: cro-owner                     # the slug: it matches the repository bot-cro-owner and the label owner:cro-owner
-display_name: "Conversion Rate Optimization Owner"
+display_name: "CRO Owner"
 labels: [owner:cro-owner]
 reads: []                        # other bot repositories this one may clone read-only
 

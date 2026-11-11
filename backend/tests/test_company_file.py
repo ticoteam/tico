@@ -52,7 +52,7 @@ def depts(draft):
     return counts
 
 
-SPEC_COUNTS = {"everything": 72, "software": 50, "services": 37, "local": 40, "store": 37}
+SPEC_COUNTS = {"everything": 70, "software": 48, "services": 35, "local": 38, "store": 36}
 
 
 def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or_a_seat_to_build():
@@ -64,14 +64,14 @@ def test_1_each_model_has_its_spec_seat_count_and_every_seat_names_a_template_or
     assert not open_seats & real, "a seat to build that has a template is a real seat"
     for key, count in SPEC_COUNTS.items():
         model = C.MODELS[key]
-        assert model["model"] == key and [row["template"] for row in model["core"]] == ["coo", "botops"]
+        assert model["model"] == key and [row["template"] for row in model["core"]] == ["assistant", "botops"]
         seats = len(model["core"]) + len(model["seats"])
         assert abs(seats - count) <= 2, (key, seats)
         for row in model["seats"]:
             assert row["template"] in real | open_seats, (key, row)
             assert row["team"] in D.TEAMS and (
                 row["team"] == A.BY_SLUG[row["template"]]["department"]
-                or (key, row["template"]) == ("store", "pricing")
+                or (key, row["template"]) == ("store", "pricing-analyst")
             ), (key, row)
         titles = [row.get("title") or A.BY_SLUG[row["template"]]["name"] for row in model["seats"]]
         assert len(set(titles)) == len(titles), key
@@ -100,18 +100,19 @@ def test_the_first_chart_comes_from_the_model_the_company_s_signals_pick():
     assert {b["reason"] for b in draft["bots"] if b["title"] in model} == {"Part of the Services firm model."}
     # Services has no Support, Legal or Leadership head of its own: Everything's are added. No Product or Engineering.
     added = [b["title"] for b in draft["bots"] if b["reason"] == "Every chart has a head for each department."]
-    assert added == ["Head of Customer Support", "General Counsel"]
+    assert added == ["Success Team Manager", "General Counsel"]
     assert line == (
         "This looks like a services firm, so we started from the Services firm model and added the "
-        "Head of Customer Support and General Counsel."
+        "Success Team Manager and General Counsel."
     )
     assert not {"product", "engineering"} & set(depts(draft))
     assert "undo" not in draft, "the model is where the chart starts, not a change to undo"
-    # Finance reporting lines: the Controller under the Head of Finance, the books under the Controller.
+    # Finance reporting lines: Finance has no head on the chart (its Finance Owner is built in, off it), so the
+    # Controller and the FP&A Analyst answer to the owner, and the books to the Controller.
     by = {b["title"]: b for b in draft["bots"]}
-    assert D.manager_of(draft, by["Controller"]) == by["Head of Finance"]["id"]
+    assert D.manager_of(draft, by["Controller"]) == D.owner_id(draft)
     assert D.manager_of(draft, by["Billing Specialist"]) == by["Controller"]["id"]
-    assert D.manager_of(draft, by["FP&A Analyst"]) == by["Head of Finance"]["id"]
+    assert D.manager_of(draft, by["FP&A Analyst"]) == D.owner_id(draft)
     # A chart with bots on it is never seeded again, even after the visitor took most of them off.
     trimmed = {**draft, "bots": draft["bots"][:3]}
     assert len(C.Turn(trimmed, TODAY).finish()["bots"]) == 3
@@ -120,8 +121,8 @@ def test_the_first_chart_comes_from_the_model_the_company_s_signals_pick():
 def test_a_signal_about_how_the_company_works_adds_the_roles_that_do_that_work():
     draft, line = first_chart("An agency; clients email our support inbox.", ["sells_services", "has_support_inbox"])
     matched = [b["title"] for b in draft["bots"] if b["reason"] == "Fits what you said about how the company works."]
-    assert "Support Agent" in matched and "Returns and Refunds Specialist" in matched
-    assert "Support Agent" in line
+    assert "Support Owner" in matched and "Returns and Refunds Specialist" in matched
+    assert "Support Owner" in line
     # A who-we-sell-to signal adds nothing of its own: the model already answers it.
     plain, _ = first_chart("An agency.", ["sells_services", "sells_to_businesses", "small_team"])
     assert not [b for b in plain["bots"] if b["reason"] == "Fits what you said about how the company works."]
@@ -130,7 +131,7 @@ def test_a_signal_about_how_the_company_works_adds_the_roles_that_do_that_work()
 def test_2_a_saas_for_dentists_starts_from_the_software_company_model():
     draft, line = first_chart("We build a SaaS app for dentists.", ["sells_software", "sells_to_businesses"])
     assert line.startswith("This looks like a software company, so we started from the Software company model")
-    assert len(draft["bots"]) >= 50
+    assert len(draft["bots"]) >= 45
     counts = depts(draft)
     assert all(counts.get(team, 0) >= 1 for team in ("legal", "hr", "finance", "operations")), counts
     assert counts["engineering"] == 9 and "Product Lead" in titles(draft)
@@ -190,15 +191,15 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert not results[0]["ok"]
     # "cap table" names the Equity Manager role for bot_add.
     assert A.find_role("cap table")["slug"] == "equity-manager"
-    assert A.find_role("engineer")["slug"] == "builder" and A.find_role("reviewer")["slug"] == "pr-reviewer"
+    assert A.find_role("engineer")["slug"] == "builder" and A.find_role("reviewer")["slug"] == "reviewer"
     # The built-in's old name and its new one both name it; a bare "CEO" is a person's title, not the bot.
-    assert A.find_role("CEO Bot")["slug"] == A.find_role("Strategy Owner")["slug"] == "goal-manager"
+    assert A.find_role("CEO Bot")["slug"] == A.find_role("Strategy Owner")["slug"] == "strategy-owner"
     assert A.find_role("CEO") is None
     # "CRO" and "pipeline" are everyday words for other things; the templates answer to their full names.
     assert A.find_role("CRO") is None and A.find_role("cro bot") is None and A.find_role("the pipeline") is None
     assert A.find_role("sales pipeline") is None and A.find_role("pipeline") is None
-    assert A.find_role("Pipeline Owner")["slug"] == "pipeline"
-    assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro-owner"
+    assert A.find_role("Inbound Sales Owner")["slug"] == "inbound-sales-owner"
+    assert A.find_role("CRO Owner")["slug"] == "cro-owner"
     assert A.find_role("release manager")["slug"] == "release-owner"
 
 
@@ -211,8 +212,8 @@ def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
         ("model_use", {"model": "everything"}),
     )
     assert all(r["ok"] for r in results), results
-    assert results[2]["said"] == "The chart is now the Everything model (72 seats)."
-    assert len(draft["bots"]) == 72 and depts(draft)["finance"] == 12
+    assert results[2]["said"] == "The chart is now the Everything model (70 seats)."
+    assert len(draft["bots"]) == 70 and depts(draft)["finance"] == 11
     assert next(b for b in draft["bots"] if b["title"] == "Equity Manager")["person"] == "ana", "a held seat stays"
     assert "undo" in draft, "switching models is a change the visitor can undo"
     for key in ("software", "services", "local", "store"):
@@ -232,7 +233,7 @@ def test_a_held_seat_renamed_in_another_case_survives_a_model_switch_and_keeps_i
         ("model_use", {"model": "software"}),
     )
     assert all(r["ok"] for r in results), results
-    bookkeeper = seat(draft, "billing")
+    bookkeeper = seat(draft, "billing-specialist")
     draft, results = run(
         draft,
         ("seat_fill", {"seat": bookkeeper["title"], "name": "Ana"}),
@@ -244,10 +245,10 @@ def test_a_held_seat_renamed_in_another_case_survives_a_model_switch_and_keeps_i
     assert len(names) == len(set(names)), "no seat twice in another case"
     controller = seat(draft, "controller")
     assert controller["title"] == "controller" and controller["person"] == "ben"
-    assert seat(draft, "billing")["person"] == "ana"
+    assert seat(draft, "billing-specialist")["person"] == "ana"
     # The held lowercase Controller still heads the seats under it, kept and new alike.
-    assert seat(draft, "billing")["reports_to"] == controller["id"]
-    assert seat(draft, "accounts-payable")["reports_to"] == controller["id"]
+    assert seat(draft, "billing-specialist")["reports_to"] == controller["id"]
+    assert seat(draft, "accounts-payable-specialist")["reports_to"] == controller["id"]
 
 
 def test_filling_a_seat_on_an_empty_team_keeps_the_visitor_the_owner():
@@ -264,7 +265,7 @@ def test_filling_a_seat_on_an_empty_team_keeps_the_visitor_the_owner():
 
 def test_8_a_company_no_model_fits_starts_from_everything():
     draft, line = first_chart("We do a bit of everything.", ["small_team"])
-    assert len(draft["bots"]) == 72
+    assert len(draft["bots"]) == 70
     assert line == "Nothing you said points to one kind of company, so we started from the Everything model."
 
 
@@ -284,12 +285,12 @@ def test_9_the_cap_table_belongs_to_the_equity_manager_only():
 
 def test_5_the_visitor_s_own_edits_stand_and_a_removed_bot_stays_off():
     draft = started()
-    draft["bots"] = [b for b in draft["bots"] if b["template"] != "billing"]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] != "billing-specialist"]
     draft["bots"][4]["title"] = "Ada"
-    draft["removed"] = [{"template": "billing", "title": "Billing Specialist"}]
+    draft["removed"] = [{"template": "billing-specialist", "title": "Billing Specialist"}]
     after, results = run(draft, ("bot_set_start", {"bot": "Ada", "start": "now"}))
     assert results[0]["ok"] and "Billing Specialist" not in titles(after) and "Ada" in titles(after)
-    assert after["removed"] == [{"template": "billing", "title": "Billing Specialist"}]
+    assert after["removed"] == [{"template": "billing-specialist", "title": "Billing Specialist"}]
     after, results = run(after, ("bot_remove", {"bot": "Ada"}))
     assert [r["title"] for r in after["removed"]] == ["Billing Specialist", "Ada"]
     # Asked for again, it comes back and leaves the list.
@@ -347,7 +348,7 @@ def test_7_the_file_matches_the_draft_and_reads_back_after_any_edits():
                     (
                         "bot_add",
                         {
-                            "template": rng.choice(["billing", "SEO", "Recruiter"]),
+                            "template": rng.choice(["billing-specialist", "SEO", "Recruiter"]),
                             "reason": rng.choice(odd),
                             "title": rng.choice(odd) or "Helper",
                         },
@@ -510,7 +511,7 @@ def test_10_numbered_ids_from_titles_survive_a_turn_the_file_and_the_import():
         "B2B Enterprise Account Executive 3",
         "2nd Line Customer Support Specialist 4",
     ]
-    templates = ["ar-followup", "customer-success", "account-manager", "customer-success"]
+    templates = ["accounts-receivable-specialist", "success-owner", "account-manager", "success-owner"]
     turn = C.Turn(started(), TODAY)
     turn.apply("company_set", {"name": "Acme Collections"})
     for title, template in zip(titles, templates):
@@ -768,24 +769,24 @@ def test_10_scrubbing_copies_and_a_second_pass_finds_nothing():
 
 BAD = [
     ("nonsense", {}),
-    ("bot_add", {"template": "billing"}),
-    ("bot_add", {"template": "billing", "reason": ""}),
-    ("bot_add", {"template": "billing", "reason": "x", "colour": "red"}),
-    ("bot_add", {"template": "billing", "reason": "x", "title": "Builder"}),
+    ("bot_add", {"template": "billing-specialist"}),
+    ("bot_add", {"template": "billing-specialist", "reason": ""}),
+    ("bot_add", {"template": "billing-specialist", "reason": "x", "colour": "red"}),
+    ("bot_add", {"template": "billing-specialist", "reason": "x", "title": "Builder"}),
     ("bot_add", {"template": "botops", "reason": "a second one"}),
-    ("bot_add", {"template": "billing", "reason": "x" * 301}),
+    ("bot_add", {"template": "billing-specialist", "reason": "x" * 301}),
     ("bot_add", {"template": 7, "reason": "x"}),
     ("bot_remove", {"bot": "botops"}),
     ("bot_remove", {"bot": "ghost"}),
     ("bot_rename", {"bot": "builder", "title": "Reviewer 1"}),
     ("bot_rename", {"bot": "builder", "title": " "}),
-    ("bot_set_reports_to", {"bot": "engineering-lead", "to": "builder"}),
+    ("bot_set_reports_to", {"bot": "engineering-team-manager", "to": "builder"}),
     ("bot_set_reports_to", {"bot": "builder", "to": "builder"}),
     ("bot_set_reports_to", {"bot": "builder", "to": "Dispatcher"}),
     ("bot_set_reports_to", {"bot": "builder", "to": "Nobody Here"}),
     ("bot_set_start", {"bot": "builder", "start": "soon"}),
     ("bot_set_start", {"bot": "botops", "start": "later"}),
-    ("bot_set_first_job", {"bot": "coo", "job": "x"}),
+    ("bot_set_first_job", {"bot": "assistant", "job": "x"}),
     ("bot_set_routine", {"bot": "builder", "routine": "x" * 201}),
     ("team_remove", {"team": "core"}),
     ("team_remove", {"team": "kitchen"}),
@@ -900,7 +901,7 @@ def test_pending_rides_along_outside_the_file_and_the_undo_and_lets_go_of_a_team
 def test_one_bot_has_the_first_job_and_it_starts_now():
     draft, results = run(
         started(),
-        ("bot_set_first_job", {"bot": "billing", "job": "Chase last month's invoices"}),
+        ("bot_set_first_job", {"bot": "billing-specialist", "job": "Chase last month's invoices"}),
         ("bot_set_first_job", {"bot": "Builder", "job": "Fix the signup bug"}),
     )
     marked = [b for b in draft["bots"] if b.get("first_job")]
@@ -997,7 +998,7 @@ def test_a_reports_to_whose_target_left_the_chart_falls_back_to_the_line_the_fil
     out = C.Turn(sent, TODAY).finish()
     assert not any(b.get("reports_to") for b in out["bots"] if b["title"] in ("Builder", "Reviewer 1"))
     doc = yaml.safe_load(C.to_yaml(out, CREATED))
-    assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Builder"] == "engineering-lead"
+    assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Builder"] == "engineering-team-manager"
     assert C.to_yaml(C.from_yaml(C.to_yaml(out, CREATED)), CREATED) == C.to_yaml(out, CREATED)
 
 
@@ -1035,7 +1036,10 @@ def test_the_copy_tico_hq_serves_runs_the_same_engine(tmp_path):
 def test_4_the_chat_adds_a_61st_100th_and_300th_bot_with_no_limit_message(seat):
     draft, (result,) = run(
         chart(seat - 1),
-        ("bot_add", {"template": "billing", "title": "Extra Billing Specialist", "reason": "More invoices."}),
+        (
+            "bot_add",
+            {"template": "billing-specialist", "title": "Extra Billing Specialist", "reason": "More invoices."},
+        ),
     )
     assert result["ok"] and len(draft["bots"]) == seat and "Extra Billing Specialist" in titles(draft)
     assert not any(word in result["said"].lower() for word in ("limit", "most", "plan can hold"))
@@ -1045,7 +1049,7 @@ def test_4_the_chat_adds_a_61st_100th_and_300th_bot_with_no_limit_message(seat):
 def test_the_301st_seat_is_refused_with_a_plain_error_and_a_301_bot_draft_is_refused():
     full = chart(300)
     for name, args in (
-        ("bot_add", {"template": "billing", "title": "Extra Billing Specialist", "reason": "x"}),
+        ("bot_add", {"template": "billing-specialist", "title": "Extra Billing Specialist", "reason": "x"}),
         ("agent_set", {"runtime": "codex", "job": "Writes our code."}),
     ):
         turn = C.Turn(full, TODAY)
@@ -1073,7 +1077,7 @@ def test_a_41st_person_joins_and_the_301st_is_refused_plainly():
 
 
 def test_a_full_300_seat_chart_with_its_undo_and_chat_fits_the_draft_and_the_company_file():
-    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "billing", "title": "Books"}))
+    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "billing-specialist", "title": "Books"}))
     draft["chat"] = [
         {"who": "me" if i % 2 else "bot", "text": "x" * D.LIMITS["chat_text"]} for i in range(D.LIMITS["chat"])
     ]
@@ -1420,7 +1424,7 @@ def test_a_full_strategy_at_every_limit_beside_a_300_seat_chart_fits_the_starter
             ],
         },
     }
-    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "billing", "title": "Books"}))
+    draft, _ = run(chart(300, people=300), ("bot_rename", {"bot": "billing-specialist", "title": "Books"}))
     owner_only = {
         **draft,
         "company": {**draft["company"], "name": "Acme"},
@@ -1482,7 +1486,7 @@ def test_a_saved_draft_with_a_retired_template_loses_that_seat_and_keeps_the_res
     under = {
         **copy.deepcopy(controller),
         "id": "books-helper",
-        "template": "billing",
+        "template": "billing-specialist",
         "title": "Acme Billing",
         "lead": False,
         "reports_to": "books",
@@ -1496,7 +1500,7 @@ def test_a_saved_draft_with_a_retired_template_loses_that_seat_and_keeps_the_res
         "existing": True,
         "runtime": "hermes",
     }
-    draft["bots"] = [b for b in draft["bots"] if b["template"] != "billing"] + [old, under, built]
+    draft["bots"] = [b for b in draft["bots"] if b["template"] != "billing-specialist"] + [old, under, built]
     out = D.check(draft)
     by_id = {b["id"]: b for b in out["bots"]}
     assert "books" not in by_id and "old-books" in by_id

@@ -3,7 +3,7 @@ id: example-weekly-summary
 title: Write this week's engineering summary
 source: {task: 00000000-0000-0000-0000-000000000000, captured: "2026-10-16T06:00:00+00:00"}
 reviewed_by: Example Person
-bot: engineering-lead
+bot: engineering-team-manager
 prompt: {sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08, updated: "2026-10-15T09:00:00Z", exact: true}
 task:
   title: Write this week's engineering summary

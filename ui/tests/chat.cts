@@ -44,7 +44,7 @@ async function touchCopy(browser: Browser) {
   const page = await browser.newPage({viewport:{width:390,height:844},hasTouch:true,serviceWorkers:'block'});
   const errors: string[]=[];
   page.on('pageerror', (e: Error) =>errors.push(e.message));
-  const bots=[{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}];
+  const bots=[{name:'assistant',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}];
   const snapshot={messages:[{id:'m1',sender_id:'human:ana',body:'Hello there',created_at:new Date().toISOString()}],execution:null};
   await page.route('**/*',(route: Route)=>{
     const p=new URL(route.request().url()).pathname;
@@ -118,9 +118,9 @@ async function liveReply(browser: Browser) {
   const now=new Date().toISOString();
   const snapshot={messages:[{id:'m1',sender_id:'human:ana',body:'Plan the build',created_at:now,
                              run:{job_id:'j1',run_id:'a1',state:'started_run'}},
-                            {id:'m2',sender_id:'human:ana',recipient_id:'bot:coo',body:'Do April instead',created_at:now,
+                            {id:'m2',sender_id:'human:ana',recipient_id:'bot:assistant',body:'Do April instead',created_at:now,
                              delivery:{run_id:'a1',mode:'next_turn'}}],
-    execution:{job_id:'j1',message_id:'m1',bot:'coo',run_id:'a1',state:'running',label:'Working',
+    execution:{job_id:'j1',message_id:'m1',bot:'assistant',run_id:'a1',state:'running',label:'Working',
       text:'Keep the bot planned.\n\nI filed the build.',
       parts:[{kind:'progress',text:'Keep the bot planned.',at:now},{kind:'tool',text:'Ran hub task create',at:now},
              {kind:'reply',text:'I filed the build.',at:now}]}};
@@ -133,12 +133,12 @@ async function liveReply(browser: Browser) {
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
     if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
-    if(p==='/api/employees')return json([{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if(p==='/api/employees')return json([{name:'assistant',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
     if(p==='/api/issues')return json([]);
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot)+'\n\n'});
     if(p==='/api/v2/assistant')return json(assistantView('c-coo',snapshot));
     if(p.startsWith('/api/v2/conversations/c-')&&p.endsWith('/snapshot'))return json(snapshot);
-    if(p==='/api/v2/bots/coo/stop'){stops.push(route.request().postDataJSON());return json({run_id:'a1',stopping:true});}
+    if(p==='/api/v2/bots/assistant/stop'){stops.push(route.request().postDataJSON());return json({run_id:'a1',stopping:true});}
     // Support off: its load 3 s in would otherwise add Report this to the copy-error toasts matched below.
     if(p==='/api/v2/support/tickets')return json({enabled:false});
     return json(unrouted(p));
@@ -172,7 +172,7 @@ async function liveReply(browser: Browser) {
   assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector<HTMLElement>('#bot-top .av-shape')!).animationName==='none'),true,'reduced motion: no breath');
   assert.deepEqual(errors,[]);
   const pending = await page.evaluate(() => {
-    const state: Pending = {slug:'coo', messages:[{id:'queued',created_at:new Date(Date.now()-30*60000).toISOString()}],
+    const state: Pending = {slug:'assistant', messages:[{id:'queued',created_at:new Date(Date.now()-30*60000).toISOString()}],
       execution:{message_id:'queued',state:'queued',label:'Saved — no AI provider is chosen',readiness_reason:'missing_provider'}};
     const el = document.createElement('div');
     el.innerHTML = v2PendingHTML(state);
@@ -190,7 +190,7 @@ async function liveReply(browser: Browser) {
   assert.match(pending.legacy,/No reply after 20 minutes/);
   // A provider is chosen but the bot's computer is not signed in to its model: the same place says so, with Sign in and Health.
   const signIn = await page.evaluate(() => {
-    const state: Pending = {slug:'coo', messages:[{id:'queued',created_at:new Date(Date.now()-30*60000).toISOString()}],
+    const state: Pending = {slug:'assistant', messages:[{id:'queued',created_at:new Date(Date.now()-30*60000).toISOString()}],
       execution:{message_id:'queued',state:'queued',label:'Saved — Claude login required',readiness_reason:'model_sign_in'}};
     const el = document.createElement('div');
     el.innerHTML = v2PendingHTML(state);
@@ -243,7 +243,7 @@ async function outlineJump(browser: Browser) {
   const errors: string[]=[];
   page.on('pageerror', (e: Error) =>errors.push(e.message));
   const at=(n: number)=>new Date(Date.UTC(2026,9,5,9,n)).toISOString();
-  const pair=(n: number, text: string)=>[{id:'h'+n,sender_id:'human:ana',body:text,created_at:at(n*2)},{id:'b'+n,sender_id:'bot:coo',body:'Done: '+text,created_at:at(n*2+1)}];
+  const pair=(n: number, text: string)=>[{id:'h'+n,sender_id:'human:ana',body:text,created_at:at(n*2)},{id:'b'+n,sender_id:'bot:assistant',body:'Done: '+text,created_at:at(n*2+1)}];
   const older=[...pair(0,'Check the release notes'),...pair(1,'Draft the launch email')];
   const latest=[2,3,4,5,6,7,8].flatMap(n=>pair(n,'Prompt number '+n));
   const snapshot={messages:latest,next_before:'h2',execution:null};
@@ -258,7 +258,7 @@ async function outlineJump(browser: Browser) {
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
     if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
-    if(p==='/api/employees')return json([{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if(p==='/api/employees')return json([{name:'assistant',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
     if(p==='/api/issues')return json([]);
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot)+'\n\n'});
     if(p==='/api/v2/assistant')return json(assistantView('c-ops',snapshot));
@@ -298,7 +298,7 @@ async function outlineJump(browser: Browser) {
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#chat-outline').evaluate(d=>(d as HTMLDetailsElement).open),false,'Escape closes');
   // A source link to a message (jumpToMessage, from another page) opens the chat and pages back to it.
-  const link = (id: string) => page.evaluate((id: string) => { location.hash = '#/updates'; return new Promise(done => setTimeout(done, 100)).then(() => { CHAT_JUMP = {slug: 'coo', id}; location.hash = '#/assistant'; }); }, id);
+  const link = (id: string) => page.evaluate((id: string) => { location.hash = '#/updates'; return new Promise(done => setTimeout(done, 100)).then(() => { CHAT_JUMP = {slug: 'assistant', id}; location.hash = '#/assistant'; }); }, id);
   await link('h0');
   await page.locator('#conv-thread .jump-mark[data-message="h0"]').waitFor();
   // A message that is not in the chat says so.
@@ -316,21 +316,21 @@ async function activityFold(browser: Browser) {
   const at = (n: number)=> new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
   const activity = [
     {id:'task-created',kind:'notice',sender_id:'keeper',body:'New task from Head of Engineering: Review the next release',created_at:at(1),refs:{task:'task-1'}},
-    {id:'note-one',kind:'say',sender_id:'bot:coo',body:'Cloud transcript shows performance goal. https://example.test/audit',created_at:at(2),refs:{task:'task-1',note:true}},
+    {id:'note-one',kind:'say',sender_id:'bot:assistant',body:'Cloud transcript shows performance goal. https://example.test/audit',created_at:at(2),refs:{task:'task-1',note:true}},
     {id:'task-status',kind:'notice',sender_id:'keeper',body:'Open: Review the next release',created_at:at(3),refs:{task:'task-1'}},
-    {id:'note-two',kind:'say',sender_id:'bot:coo',body:'Reviewed the status note.',created_at:at(4),refs:{task:'task-1',note:true}},
+    {id:'note-two',kind:'say',sender_id:'bot:assistant',body:'Reviewed the status note.',created_at:at(4),refs:{task:'task-1',note:true}},
   ];
   // Similar words and even a note ref do not turn human-authored prose into generated activity.
   const latest = [
     ...activity,
     {id:'human-quote',kind:'say',sender_id:'human:ana',body:'New task from Head of Engineering is only a quote here.',created_at:at(5),refs:{}},
     {id:'human-note',kind:'say',sender_id:'human:ana',body:'Note Cloud transcript shows performance goal.',created_at:at(6),refs:{task:'task-1',note:true}},
-    {id:'bot-prose',kind:'say',sender_id:'bot:coo',body:'Note: I checked the release page.',created_at:at(7),refs:{task:'task-1'}},
-    ...Array.from({length:12}, (_, i) => ({id:`chat-${i}`,kind:'say',sender_id:i % 2 ? 'bot:coo' : 'human:ana',body:`Regular conversation ${i}`,created_at:at(8+i),refs:{}})),
+    {id:'bot-prose',kind:'say',sender_id:'bot:assistant',body:'Note: I checked the release page.',created_at:at(7),refs:{task:'task-1'}},
+    ...Array.from({length:12}, (_, i) => ({id:`chat-${i}`,kind:'say',sender_id:i % 2 ? 'bot:assistant' : 'human:ana',body:`Regular conversation ${i}`,created_at:at(8+i),refs:{}})),
     {id:'task-done',kind:'notice',sender_id:'keeper',body:'Done: Review the next release',created_at:at(20),refs:{task:'task-1'}},
     {id:'chat-last',kind:'say',sender_id:'human:ana',body:'Thanks',created_at:at(21),refs:{}},
   ];
-  const endedGoal = {id:'goal-ended',conversation_id:'c-ops',bot:'coo',objective:'Ship the finished update',status:'met',note:'Reviewed',ended_at:at(4.5),updated_at:at(4.5)};
+  const endedGoal = {id:'goal-ended',conversation_id:'c-ops',bot:'assistant',objective:'Ship the finished update',status:'met',note:'Reviewed',ended_at:at(4.5),updated_at:at(4.5)};
   const snapshot = {messages: latest, next_before: 'cursor-1', execution: null, goal: endedGoal};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
@@ -340,7 +340,7 @@ async function activityFold(browser: Browser) {
     if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType:ui[1]!.endsWith('.css')?'text/css':'application/javascript',body:fs.readFileSync(uiFile(ui[1]!),'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(uiFile('vendor/marked.min.js'),'utf8')});
     if (p === '/api/me') return json({id:'ana',name:'Ana',role:'owner',cloud:true});
-    if (p === '/api/employees') return json([{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if (p === '/api/employees') return json([{name:'assistant',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType:'text/event-stream',body:`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`});
     if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
@@ -349,7 +349,7 @@ async function activityFold(browser: Browser) {
       const cursor = url.searchParams.get('before'); pages.push(cursor);
       return json(cursor === 'cursor-1'
         ? {messages:[{id:'older-a',kind:'say',sender_id:'human:ana',body:'Earlier question',created_at:at(0),refs:{}}],next_before:'cursor-2'}
-        : {messages:[{id:'older-b',kind:'say',sender_id:'bot:coo',body:'Earlier answer',created_at:at(-1),refs:{}}],next_before:null});
+        : {messages:[{id:'older-b',kind:'say',sender_id:'bot:assistant',body:'Earlier answer',created_at:at(-1),refs:{}}],next_before:null});
     }
     if (p === '/api/v2/conversations/c-ops/goal') return json({goal:endedGoal,supported:true,commands:[]});
     return json(unrouted(p));
@@ -432,25 +432,25 @@ async function sideThreads(browser: Browser) {
   const say = (id: string, from: string, to: string, body: string, n: number, extra: Record<string, unknown> = {}) => ({id, conversation_id: 'c-cmo', kind: 'say', sender_id: from, recipient_id: to, body, created_at: at(n), refs: {}, ...extra});
   const long = 'From dot (Dots): the national continuation is delivered. ' + 'It adds reviewed records with samples in every provisional destination. '.repeat(6);
   const side = Array.from({length: 20}, (_, i) => i === 7
-    ? say('relay', 'bot:coo', 'human:ana', long, 10 + i, {prompted_by: 'bot'})
-    : i === 11 ? say('note', 'bot:coo', 'human:ana', 'Checked the census sources.', 10 + i, {refs: {task: 't1', note: true}})
-    : i % 3 === 0 ? say('side-' + i, 'keeper', 'bot:coo', `Open: census batch ${i}`, 10 + i, {kind: 'notice', refs: {task: 't1'}})
-    : say('side-' + i, i % 2 ? 'bot:dots' : 'bot:coo', i % 2 ? 'bot:coo' : 'bot:botops', `Batch ${i} is in.`, 10 + i));
+    ? say('relay', 'bot:assistant', 'human:ana', long, 10 + i, {prompted_by: 'bot'})
+    : i === 11 ? say('note', 'bot:assistant', 'human:ana', 'Checked the census sources.', 10 + i, {refs: {task: 't1', note: true}})
+    : i % 3 === 0 ? say('side-' + i, 'keeper', 'bot:assistant', `Open: census batch ${i}`, 10 + i, {kind: 'notice', refs: {task: 't1'}})
+    : say('side-' + i, i % 2 ? 'bot:dots' : 'bot:assistant', i % 2 ? 'bot:assistant' : 'bot:botops', `Batch ${i} is in.`, 10 + i));
   const messages = [
-    say('ask-1', 'human:ana', 'bot:coo', 'Get me a new customer a day.', 1),
-    say('reply-1', 'bot:coo', 'human:ana', 'On it.', 2, {in_reply_to: 'ask-1', refs: {turn_id: 'turn-1'}}),
+    say('ask-1', 'human:ana', 'bot:assistant', 'Get me a new customer a day.', 1),
+    say('reply-1', 'bot:assistant', 'human:ana', 'On it.', 2, {in_reply_to: 'ask-1', refs: {turn_id: 'turn-1'}}),
     ...side,
-    say('approval', 'bot:coo', 'human:ana', 'Approve this send: the first outreach batch', 40, {kind: 'notice', refs: {approval: 'ap-1', task: 't1'}}),
-    say('ask-2', 'human:ana', 'bot:coo', 'What did Dots find?', 41),
-    say('quote', 'bot:coo', 'human:ana', 'From dot (Dots): 198 records. My read: go with managed homes.', 42, {in_reply_to: 'ask-2', refs: {turn_id: 'turn-2'}}),
-    say('late-1', 'bot:dots', 'bot:coo', 'Switching the census to managed homes.', 43),
-    say('late-2', 'keeper', 'bot:coo', 'Done: census', 44, {kind: 'notice', refs: {task: 't1'}}),
+    say('approval', 'bot:assistant', 'human:ana', 'Approve this send: the first outreach batch', 40, {kind: 'notice', refs: {approval: 'ap-1', task: 't1'}}),
+    say('ask-2', 'human:ana', 'bot:assistant', 'What did Dots find?', 41),
+    say('quote', 'bot:assistant', 'human:ana', 'From dot (Dots): 198 records. My read: go with managed homes.', 42, {in_reply_to: 'ask-2', refs: {turn_id: 'turn-2'}}),
+    say('late-1', 'bot:dots', 'bot:assistant', 'Switching the census to managed homes.', 43),
+    say('late-2', 'keeper', 'bot:assistant', 'Done: census', 44, {kind: 'notice', refs: {task: 't1'}}),
   ];
   const snapshot = {messages, next_before: null, execution: null, goal: null};
-  const talk = [{id: 'b0', conversation_id: 'c-ask', kind: 'ask', sender_id: 'bot:coo', recipient_id: 'bot:seo', body: 'Who has Respona?', created_at: at(29), refs: {}},
-                {id: 'b1', conversation_id: 'c-ask', kind: 'ask', sender_id: 'bot:coo', recipient_id: 'bot:seo', body: 'Can SEO read Respona?', created_at: at(30), refs: {}},
-                {id: 'b2', conversation_id: 'c-ask', kind: 'answer', sender_id: 'bot:seo', recipient_id: 'bot:coo', body: 'Yes, read-only.', created_at: at(31), refs: {}}];
-  const bots = ['coo', 'dots', 'botops', 'seo'].map(name => ({name, display_name: name === 'coo' ? 'Assistant' : name[0]!.toUpperCase() + name.slice(1), host: 'keeper', status: 'active', can_chat: true, schedules: []}));
+  const talk = [{id: 'b0', conversation_id: 'c-ask', kind: 'ask', sender_id: 'bot:assistant', recipient_id: 'bot:seo', body: 'Who has Respona?', created_at: at(29), refs: {}},
+                {id: 'b1', conversation_id: 'c-ask', kind: 'ask', sender_id: 'bot:assistant', recipient_id: 'bot:seo', body: 'Can SEO read Respona?', created_at: at(30), refs: {}},
+                {id: 'b2', conversation_id: 'c-ask', kind: 'answer', sender_id: 'bot:seo', recipient_id: 'bot:assistant', body: 'Yes, read-only.', created_at: at(31), refs: {}}];
+  const bots = ['assistant', 'dots', 'botops', 'seo'].map(name => ({name, display_name: name === 'assistant' ? 'Assistant' : name[0]!.toUpperCase() + name.slice(1), host: 'keeper', status: 'active', can_chat: true, schedules: []}));
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = (body: unknown)=> route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -464,7 +464,7 @@ async function sideThreads(browser: Browser) {
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     if (p === '/api/v2/assistant') return json(assistantView('c-cmo', snapshot));
     if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('bot')
-      ? [{id: 'c-ask', kind: 'ask', participants: ['bot:coo', 'bot:seo'], subject: 'Respona access'}] : []});
+      ? [{id: 'c-ask', kind: 'ask', participants: ['bot:assistant', 'bot:seo'], subject: 'Respona access'}] : []});
     if (p === '/api/v2/conversations/c-cmo/snapshot' || p === '/api/v2/conversations/c-cmo/messages') return json(snapshot);
     if (p === '/api/v2/conversations/c-ask/messages') {
       asked.push(url.searchParams.get('limit') + (url.searchParams.get('before') ? ' before ' + url.searchParams.get('before') : ''));
@@ -478,10 +478,10 @@ async function sideThreads(browser: Browser) {
   await page.waitForFunction(() => V2C?.rendered && V2C.loaded && V2C.botTalk?.length);
 
   // Classified on fields, not words: the reply that quotes Dots is the conversation, the relay from Dots' run is not.
-  const kinds = await page.evaluate(() => Object.fromEntries(V2C.messages.map(m => [m.id, chatSideKind(m, 'coo')])));
+  const kinds = await page.evaluate(() => Object.fromEntries(V2C.messages.map(m => [m.id, chatSideKind(m, 'assistant')])));
   assert.deepEqual([kinds['ask-1'], kinds['reply-1'], kinds.quote, kinds.approval], ['', '', '', ''], 'the person, the bot\'s replies and an approval are the conversation');
   assert.deepEqual([kinds.relay, kinds.note, kinds['side-1'], kinds['side-2'], kinds['side-3'], kinds['late-2']], ['relay', 'note', 'bots', 'bots', 'notice', 'notice']);
-  assert.equal(await page.evaluate(() => chatSideKind({id: 'q', kind: 'ask', sender_id: 'bot:dots', recipient_id: 'human:ana', body: 'Which ranking?'}, 'coo')), '', 'a question to the person waits on them');
+  assert.equal(await page.evaluate(() => chatSideKind({id: 'q', kind: 'ask', sender_id: 'bot:dots', recipient_id: 'human:ana', body: 'Which ranking?'}, 'assistant')), '', 'a question to the person waits on them');
 
   const thread = page.locator('#conv-thread'), runs = thread.locator('details.chat-side');
   assert.equal(await page.locator('#conv-bots').count(), 0, 'no second strip for bot-to-bot talk');
@@ -535,11 +535,11 @@ async function sideThreads(browser: Browser) {
   // New side traffic while reading (the open line makes the thread scroll) joins a line; a new reply brings the pill.
   await thread.evaluate(el => { el.scrollTop = 0; el.dispatchEvent(new Event('scroll')); });
   await page.waitForFunction(() => !V2C.stick.atBottom);
-  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('late-3', 'bot:botops', 'bot:coo', 'Granted.', 45));
+  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('late-3', 'bot:botops', 'bot:assistant', 'Granted.', 45));
   assert.equal(await runs.count(), 2, 'no new line for it');
   assert.equal(await runs.nth(1).getAttribute('data-side-count'), '3');
   assert.equal(await page.locator('#conv-jump').isHidden(), true, 'side traffic is not a new reply');
-  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('reply-3', 'bot:coo', 'human:ana', 'First prospects are out.', 46, {in_reply_to: 'ask-2'}));
+  await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('reply-3', 'bot:assistant', 'human:ana', 'First prospects are out.', 46, {in_reply_to: 'ask-2'}));
   await page.locator('#conv-jump', {hasText: 'New reply'}).waitFor();
   await page.locator('#conv-jump').tap();
   await page.waitForFunction(() => { const t = document.querySelector<HTMLElement>('#conv-thread')!; return t.scrollTop + t.clientHeight >= t.scrollHeight - 2; });
@@ -560,8 +560,8 @@ async function stickToBottom(browser: Browser) {
   const at = (n: number)=> new Date(Date.UTC(2026, 9, 6, 9, n)).toISOString();
   const say = (id: string, from: string, to: string, body: string, n: number, extra: Record<string, unknown> = {}) => ({id, conversation_id: 'c-ops', kind: 'say', sender_id: from, recipient_id: to, body, created_at: at(n), refs: {}, ...extra});
   const messages = Array.from({length: 30}, (_, i) => i % 2
-    ? say('r' + i, 'bot:coo', 'human:ana', `Reply ${i}. ` + 'Here is what I found. '.repeat(12), i, {in_reply_to: 'q' + (i - 1)})
-    : say('q' + i, 'human:ana', 'bot:coo', `Question ${i}`, i));
+    ? say('r' + i, 'bot:assistant', 'human:ana', `Reply ${i}. ` + 'Here is what I found. '.repeat(12), i, {in_reply_to: 'q' + (i - 1)})
+    : say('q' + i, 'human:ana', 'bot:assistant', `Question ${i}`, i));
   const snapshot = {messages, next_before: null, execution: null, goal: null};
   await page.route('**/*', route => {
     const url = new URL(route.request().url()), p = url.pathname;
@@ -571,7 +571,7 @@ async function stickToBottom(browser: Browser) {
     if (ui && fs.existsSync(uiFile(ui[1]!))) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\/marked\.min\.js$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: fs.readFileSync(uiFile('vendor/marked.min.js'), 'utf8')});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     if (p === '/api/v2/assistant') return json(assistantView('c-ops', snapshot));
@@ -588,7 +588,7 @@ async function stickToBottom(browser: Browser) {
   assert.ok(await gap() <= 1, 'it opens at the newest line');
 
   // At the bottom: a new message, a reply streaming in and an image loading all keep the newest line in view.
-  await add(say('q30', 'human:ana', 'bot:coo', 'And the next step?', 30));
+  await add(say('q30', 'human:ana', 'bot:assistant', 'And the next step?', 30));
   assert.ok(await gap() <= 1, 'a new message stays pinned');
   await page.evaluate(() => { V2C.live = {text: 'Working on it.'}; v2ChatRender(V2C); });
   assert.ok(await gap() <= 1, 'the start of a reply stays pinned');
@@ -613,7 +613,7 @@ async function stickToBottom(browser: Browser) {
   await frames();
   assert.equal(await thread.evaluate(el => el.scrollTop), top, 'a streamed chunk does not move a reader who scrolled up');
   await page.evaluate(() => { V2C.live = null; });
-  await add(say('r31', 'bot:coo', 'human:ana', 'Here is the next step.', 31, {in_reply_to: 'q30'}));
+  await add(say('r31', 'bot:assistant', 'human:ana', 'Here is the next step.', 31, {in_reply_to: 'q30'}));
   await frames();
   assert.equal(await thread.evaluate(el => el.scrollTop), top, 'a new message does not move a reader who scrolled up');
   await pill.waitFor();
@@ -626,22 +626,22 @@ async function stickToBottom(browser: Browser) {
   assert.ok(await gap() <= 1, 'the pill goes to the bottom');
   assert.equal(await pill.isHidden(), true, 'and hides');
   assert.equal(await page.evaluate(() => V2C.stick.atBottom), true, 'and follows again');
-  await add(say('q32', 'human:ana', 'bot:coo', 'Thanks.', 32));
+  await add(say('q32', 'human:ana', 'bot:assistant', 'Thanks.', 32));
   assert.ok(await gap() <= 1, 'following again after the pill');
   assert.deepEqual(errors, []);
   console.log('chat stays at the bottom, or where you scrolled: ok');
 }
 
 // A message waiting on setup links to the Settings tab that fixes it, and the link lands on that tab, not on the last
-// one open (one listener for every data-gs-tab link, ui/getting-started.ts; the Goal Manager's is in goals.cts).
+// one open (one listener for every data-gs-tab link, ui/getting-started.ts; the Strategy Owner's is in goals.cts).
 async function settingsLinks(browser: Browser) {
   const page = await browser.newPage({viewport:{width:1200,height:800},serviceWorkers:'block'});
   const errors: string[]=[];
   page.on('pageerror', (e: Error) =>errors.push(e.message));
   const now=new Date().toISOString();
   let reason='missing_provider';
-  const snapshot=()=>({messages:[{id:'q1',sender_id:'human:ana',recipient_id:'bot:coo',body:'Plan the build',created_at:now}],
-    execution:{message_id:'q1',bot:'coo',state:'queued',label:'Saved',readiness_reason:reason}});
+  const snapshot=()=>({messages:[{id:'q1',sender_id:'human:ana',recipient_id:'bot:assistant',body:'Plan the build',created_at:now}],
+    execution:{message_id:'q1',bot:'assistant',state:'queued',label:'Saved',readiness_reason:reason}});
   await page.context().route('**/*',(route: Route)=>{
     const url=new URL(route.request().url()),p=url.pathname;
     const json=(body: unknown)=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
@@ -651,7 +651,7 @@ async function settingsLinks(browser: Browser) {
       if(fs.existsSync(file))return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript',body:fs.readFileSync(file,'utf8')});}
     if(/\/marked\.min\.js$/.test(p))return route.fulfill({contentType:'application/javascript',body:fs.readFileSync(path.join(__dirname,'../vendor/marked.min.js'),'utf8')});
     if(p==='/api/me')return json({id:'ana',name:'Ana',role:'owner',cloud:true});
-    if(p==='/api/employees')return json([{name:'coo',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
+    if(p==='/api/employees')return json([{name:'assistant',display_name:'Assistant',host:'keeper',status:'active',can_chat:true,schedules:[]}]);
     if(p==='/api/issues')return json([]);
     if(p.endsWith('/watch'))return route.fulfill({contentType:'text/event-stream',body:'event: snapshot\ndata: '+JSON.stringify(snapshot())+'\n\n'});
     if(p==='/api/v2/assistant')return json(assistantView('c-ops',snapshot()));

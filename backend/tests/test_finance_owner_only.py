@@ -88,7 +88,7 @@ def test_a_bot_always_sees_its_own_budget_and_nothing_else(owner_only_books: Sto
         listed = reads.budget_vs_actual(c, "bot:paid-rental-ads", "2026-10-01", "2026-10-31", at=AT)["budgets"]
         assert [b["name"] for b in listed] == ["Rental Google Ad Owner"]
         # Not another bot's, and not its reports' for the manager bot, which has no budget of its own here.
-        assert set(rows_by_name(c, "bot:rental-social-ad-owner")) == {"Rental Social Ad Owner"}
+        assert set(rows_by_name(c, "bot:rental-social-ad-owner")) == {"Rental Social Ads Owner"}
         assert rows_by_name(c, "bot:cmo") == {}
         with pytest.raises(FinanceError) as refused:
             reads.metric(c, "bot:rental-social-ad-owner", "budget_remaining", budget_id=w["google"], at=AT)

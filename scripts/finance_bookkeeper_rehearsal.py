@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bookkeeper rehearsal: the built-in Bookkeeper's checks 1-7, live on a local demo and in-process.
+"""Finance Owner rehearsal: the built-in Finance Owner's checks 1-7, live on a local demo and in-process.
 
 This is a rehearsal on synthetic data. It is not the Mercury run, and it never touches a real install, a real bank,
 a card processor, or a paid model.
@@ -10,7 +10,7 @@ a card processor, or a paid model.
   4 instructions vs code    code: test_c4_* (tico commands and kinds the playbooks name)
   5 approvals               code: test_c5_* (partial: the bot holds pay and cannot decide approvals)
   6 failures                code: test_c6_* (a failed sync tells its owner once per failure run, no BotOps)
-  7 demo identity           live: the demo serves the built Bookkeeper with its default rights
+  7 demo identity           live: the demo serves the built Finance Owner with its default rights
 
 Support tests (backend/tests/test_bookkeeper.py, test_finance_bookkeeper_turns.py) and the static gates
 (scripts/check_types.sh, scripts/finance_lint.py) must pass too. A strict xfail is a known gap and counts as not passed.
@@ -38,8 +38,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO = os.environ.get("BOOKKEEPER_REHEARSAL_DEMO", "http://127.0.0.1:18831")
-BOOKKEEPER = "bookkeeper"
-ACTOR = "bot:bookkeeper"
+FINANCE_OWNER = "finance-owner"
+ACTOR = "bot:finance-owner"
 DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.rules"}
 TESTS = [
     "backend/tests/test_finance_bookkeeper_rehearsal.py",
@@ -80,7 +80,7 @@ def live():
     except OSError as exc:
         return None, f"demo not reachable at {DEMO}: {exc}"
     out = {1: [], 7: []}
-    status, text = _request(opener, "GET", "/api/v2/bots/" + BOOKKEEPER)
+    status, text = _request(opener, "GET", "/api/v2/bots/" + FINANCE_OWNER)
     bot = json.loads(text) if status == 200 else {}
     active = status == 200 and bot.get("state") == "active"
     out[7].append((active, f"GET bot -> {status}, state {bot.get('state')!r}"))
@@ -88,11 +88,13 @@ def live():
     status, text = _request(
         opener,
         "POST",
-        "/api/v2/bots/" + BOOKKEEPER + "/archive",
+        "/api/v2/bots/" + FINANCE_OWNER + "/archive",
         {"expected_revision": revision, "successor": None, "revoke_agent": True},
     )
     out[1].append((status == 409 and "system_bot" in text, f"archive -> {status}"))
-    status, text = _request(opener, "PATCH", "/api/v2/groups/leadership", {"add": {"bots": [BOOKKEEPER], "people": []}})
+    status, text = _request(
+        opener, "PATCH", "/api/v2/groups/leadership", {"add": {"bots": [FINANCE_OWNER], "people": []}}
+    )
     out[1].append((status == 422 and "built_in" in text, f"group move -> {status}"))
     out[1].append((active, "bot still active after the refusals"))
     status, text = _request(opener, "GET", "/api/v2/finance/access")

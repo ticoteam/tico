@@ -92,7 +92,7 @@ def test_a_parents_turn_after_the_check_keeps_the_bots_own_session(api):
     "body, status, words",
     [
         ({"check_model": "cursor"}, 422, "enabled"),  # the company has not enabled that provider
-        ({"check_model": "grok", "owner": "coo"}, 422, "subtask it owns"),  # another bot's subtask
+        ({"check_model": "grok", "owner": "assistant"}, 422, "subtask it owns"),  # another bot's subtask
         ({"check_model": "grok", "parent": None}, 422, "under a task you own"),
     ],
 )
@@ -244,9 +244,9 @@ def test_a_check_handed_to_another_bot_is_that_bots_ordinary_task(api):
         },
         turn["token"],
     )
-    post(api, "tasks/" + sub["id"] + "/owner", {"owner": "coo", "version": sub["version"]}, turn["token"])
+    post(api, "tasks/" + sub["id"] + "/owner", {"owner": "assistant", "version": sub["version"]}, turn["token"])
     with api.app.state.store.read() as c:
-        assert H.check_model(c, sub["id"], "coo") is None and H.check_model(c, sub["id"], "ops") is None
+        assert H.check_model(c, sub["id"], "assistant") is None and H.check_model(c, sub["id"], "ops") is None
         assert H.check_model(c, sub["id"])["model"] == "grok-4.6", "the record itself stays"
 
 
@@ -274,7 +274,7 @@ def test_a_check_handed_to_another_bot_mid_turn_still_completes_as_the_check(api
     check = claim(api, machine)
     assert check["task"]["id"] == sub["id"]
     post(api, f"attempts/{check['id']}/started", {"thread_id": "grok-handoff"}, machine["token"])
-    post(api, "tasks/" + sub["id"] + "/owner", {"owner": "coo", "why": "Coo takes the review."})
+    post(api, "tasks/" + sub["id"] + "/owner", {"owner": "assistant", "why": "Coo takes the review."})
     post(
         api,
         f"attempts/{check['id']}/complete",
@@ -436,7 +436,7 @@ def test_a_moved_check_goes_back_to_its_first_model_once_that_login_works(api, m
             machine["runner_id"],
             {"outcome": "completed", "profile_used": None, "usage": {"runtime": "codex"}},
             -1,
-            bot="coo",
+            bot="assistant",
         )
         later(api, monkeypatch, machine, H.shift(start, minutes=31))
     else:

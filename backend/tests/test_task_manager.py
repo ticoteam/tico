@@ -61,7 +61,7 @@ def synthetic_report_items(count, *, why_size=180, fix_size=190):
             "kind": "paused",
             "task": f"synthetic-{i:02}",
             "title": f"Synthetic task {i:02}",
-            "owner_id": "bot:coo",
+            "owner_id": "bot:assistant",
             "why": "w" * why_size,
             "fix": "f" * fix_size,
             "stamp": f"stamp-{i:02}",

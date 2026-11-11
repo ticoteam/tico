@@ -17,7 +17,7 @@ def auto(owner="person:ana"):
     return {
         "id": "auto_t",
         "flow": {"name": "Test", "owner": owner, "trigger": {"type": "event", "name": "x.y"}},
-        "assistant_bot": "coo",
+        "assistant_bot": "assistant",
     }
 
 
@@ -37,9 +37,9 @@ def sql(api, query, args=()):
 
 
 def test_create_task_files_it_from_the_owner(api):
-    done = act(api, "create_task", {"title": "Follow up", "owner": "coo"})
+    done = act(api, "create_task", {"title": "Follow up", "owner": "assistant"})
     row = sql(api, "SELECT owner_id, requester_id FROM tasks WHERE id=?", (done["task"],))[0]
-    assert done["ok"] and row == {"owner_id": "bot:coo", "requester_id": "human:ana"}
+    assert done["ok"] and row == {"owner_id": "bot:assistant", "requester_id": "human:ana"}
     assert act(api, "create_task", {}) == {"ok": False, "detail": "create_task needs a title"}
 
 
@@ -48,8 +48,8 @@ def test_label_note_and_assign_work_on_the_runs_task(api):
     assert act(api, "label", {"tag": "billing"}, values)["detail"] == "labelled"
     assert act(api, "label", {"tag": "billing"}, values)["detail"] == "already labelled"
     assert act(api, "note", {"text": "Seen by the automation"}, values)["ok"]
-    assert act(api, "assign", {"owner": "coo"}, values)["ok"]
-    assert sql(api, "SELECT owner_id FROM tasks WHERE id=?", (values["task"]["id"],))[0]["owner_id"] == "bot:coo"
+    assert act(api, "assign", {"owner": "assistant"}, values)["ok"]
+    assert sql(api, "SELECT owner_id FROM tasks WHERE id=?", (values["task"]["id"],))[0]["owner_id"] == "bot:assistant"
     assert not act(api, "assign", {}, values)["ok"]
 
 

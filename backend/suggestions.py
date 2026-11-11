@@ -23,8 +23,8 @@ ID = re.compile(r"sg_[0-9a-f]{32}\Z")
 FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}\Z")
 ROLES = {
     "botops": ("botops",),
-    "goal_manager": ("goal-manager",),
-    "engineering_lead": ("engineering-lead", "engineering-team-manager"),
+    "goal_manager": ("strategy-owner",),
+    "engineering_lead": ("engineering-team-manager", "engineering-team-manager"),
 }
 OUTCOMES = {"delivered", "acted", "dismissed", "expired", "condition_false"}
 # This is the whole outbound dictionary. New local facts cannot silently become outbound fields.

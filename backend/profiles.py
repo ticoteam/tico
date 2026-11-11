@@ -543,17 +543,19 @@ def _wake(declared):
 
 # ---------------------------------------------------------------------------------------------------- the upgrade
 CUSTOM_SLUGS = ("botops", "health-monitor", "task-manager")
-RESPONDER_SLUGS = ("assistant",)
-MONITOR_SLUGS = ("*-monitor", "*-watch", "listening", "sentry-triage")
+# No bot is a Responder by its slug: `assistant` is the install's built-in Assistant, a Lead whose routines
+# open tasks; a bot on a synced harness still becomes one.
+RESPONDER_SLUGS = ()
+MONITOR_SLUGS = ("*-monitor", "*-watch", "social-media-manager", "sentry-triage")
 REVIEWER_SLUGS = ("*reviewer*", "qa-*", "security*", "pr-reviewer-sol", "reviewer-*")
 LEAD_SLUGS = (
-    "engineering-lead",
+    "engineering-team-manager",
     "product-lead",
-    "marketing-lead",
-    "support-lead",
+    "growth-team-manager",
+    "success-team-manager",
     "cmo",
     "cro",
-    "coo",
+    "assistant",
     "cto",
     "cpo",
     "*-manager",

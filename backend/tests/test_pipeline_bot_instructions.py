@@ -58,7 +58,7 @@ def test_no_pipeline_template_teaches_the_old_words(template):
     [
         ("builder", ["On deck", "Build", "Fixes 1", "Fixes 2"], ["tico task link", "tico task attach", "--req"]),
         (
-            "pr-reviewer",
+            "reviewer",
             ["Review 1 or Review 2", "New commits since the review"],
             ["headRefOid", "tico file publish", "tico task attach", "--req"],
         ),
@@ -87,7 +87,7 @@ def test_each_template_names_its_stages_and_how_to_leave_them(template, stages, 
         assert command in text, (template, command)
 
 
-@pytest.mark.parametrize("template", ["builder", "pr-reviewer", "release-owner"])
+@pytest.mark.parametrize("template", ["builder", "reviewer", "release-owner"])
 def test_no_github_bot_may_merge(template):
     rules = settings(template)
     assert "Bash(gh pr merge *)" in rules["deny"]
@@ -115,7 +115,7 @@ def test_only_the_release_manager_may_push_a_rebased_branch():
     # A bare force push stays denied, and the lease is not swallowed by a wider deny.
     assert "Bash(git push --" + "force *)" in rules["deny"]
     assert not any(rule.startswith("Bash(git push --" + "force*") for rule in rules["deny"])
-    for template in ("builder", "pr-reviewer"):
+    for template in ("builder", "reviewer"):
         assert lease not in settings(template)["allow"], template
 
 

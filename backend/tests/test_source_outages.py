@@ -17,9 +17,9 @@ def managers(c):
     """An Engineering pipeline managed by the COO: who an outage notice goes to. Uses the preset's pipeline when the
     company already has it."""
     if c.execute("SELECT 1 FROM pipelines WHERE preset='engineering'").fetchone():
-        c.execute("UPDATE pipelines SET manager_id='bot:coo' WHERE preset='engineering'")
+        c.execute("UPDATE pipelines SET manager_id='bot:assistant' WHERE preset='engineering'")
         return
-    X.pipeline(c, "engineering", "Engineering", manager="bot:coo")
+    X.pipeline(c, "engineering", "Engineering", manager="bot:assistant")
     c.execute("UPDATE pipelines SET preset='engineering' WHERE id='engineering'")
 
 
@@ -39,7 +39,7 @@ def test_source_start_and_end_are_once_across_repeated_observations_and_restarts
                 c, 'private-login-name', 'Claude subscription quota', waiting=count, until='2026-10-27T07:00:00.000000Z'
             )
         rows = notices(c)
-        assert len(rows) == 1 and {r['recipient_id'] for r in rows} == {'bot:coo'}
+        assert len(rows) == 1 and {r['recipient_id'] for r in rows} == {'bot:assistant'}
         assert not any('private-login-name' in r['body'] or 'private-login-name' in r['refs'] for r in rows)
         ids = [r['id'] for r in rows]
         assert not c.execute(f"SELECT 1 FROM jobs WHERE message_id IN ({','.join('?' * len(ids))})", ids).fetchone()

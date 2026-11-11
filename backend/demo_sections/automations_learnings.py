@@ -36,7 +36,7 @@ CONTENT = {
             "key": "calibration",
             "name": "Calibration failures to technical support",
             "owner": "person:ben",
-            "closer": "technical-support",
+            "closer": "technical-support-engineer",
             "note": "Redo done. The unit calibrated on the next try.",
             "trigger": {"type": "event", "name": "custom.calibration.failed"},
             "steps": [
@@ -47,7 +47,7 @@ CONTENT = {
                     "args": {
                         "title": "Redo calibration for {{event.data.unit}}",
                         "body": "The phone moved during calibration. Walk the customer through a redo.",
-                        "owner": "technical-support",
+                        "owner": "technical-support-engineer",
                     },
                 }
             ],
@@ -78,7 +78,7 @@ CONTENT = {
             "key": "orders",
             "name": "Marketplace orders to inventory",
             "owner": "person:ben",
-            "closer": "inventory",
+            "closer": "inventory-planner",
             "note": "Packed and shipped.",
             "trigger": {
                 "type": "message",
@@ -93,7 +93,7 @@ CONTENT = {
                     "args": {
                         "title": "Pick and ship {{message.subject}}",
                         "body": "Marketplace order. Check stock, pack it and mark it shipped.",
-                        "owner": "inventory",
+                        "owner": "inventory-planner",
                     },
                 }
             ],
@@ -115,7 +115,7 @@ CONTENT = {
                     "then": [
                         {
                             "do": "create_task",
-                            "args": {"title": "Pick and ship {{message.subject}}", "owner": "inventory"},
+                            "args": {"title": "Pick and ship {{message.subject}}", "owner": "inventory-planner"},
                         }
                     ],
                 },
@@ -126,7 +126,7 @@ CONTENT = {
                     "then": [
                         {
                             "do": "create_task",
-                            "args": {"title": "Answer {{message.subject}}", "owner": "technical-support"},
+                            "args": {"title": "Answer {{message.subject}}", "owner": "technical-support-engineer"},
                         }
                     ],
                 },
@@ -241,7 +241,7 @@ CONTENT = {
             "key": "reviews",
             "name": "1-star reviews to reputation",
             "owner": "person:ben",
-            "closer": "reputation",
+            "closer": "reputation-manager",
             "note": "Reply posted.",
             "trigger": {
                 "type": "event",
@@ -256,7 +256,7 @@ CONTENT = {
                     "args": {
                         "title": "Reply to a 1-star review of {{event.data.product}}",
                         "body": "Draft a reply in our voice. Do not promise a refund in a public reply.",
-                        "owner": "reputation",
+                        "owner": "reputation-manager",
                     },
                 },
                 {
@@ -275,7 +275,7 @@ CONTENT = {
             "key": "declined",
             "name": "Declined cards to accounts receivable",
             "owner": "person:ana",
-            "closer": "ar-followup",
+            "closer": "accounts-receivable-specialist",
             "note": "Retry paid.",
             "read_by": "human:ana",
             "trigger": {"type": "event", "name": "finance.card.declined"},
@@ -287,7 +287,7 @@ CONTENT = {
                     "args": {
                         "title": "Card declined for {{event.data.account}}",
                         "body": "Retry the charge once. If it fails again, email the account.",
-                        "owner": "ar-followup",
+                        "owner": "accounts-receivable-specialist",
                     },
                 }
             ],
@@ -296,7 +296,7 @@ CONTENT = {
             "key": "nightly",
             "name": "Nightly orders to bookkeeping",
             "owner": "person:ana",
-            "closer": "bookkeeper",
+            "closer": "finance-owner",
             "note": "Posted. Nothing to flag.",
             "read_by": "human:ana",
             "trigger": {"type": "schedule", "cron": "0 2 * * *", "tz": "America/Los_Angeles"},
@@ -308,7 +308,7 @@ CONTENT = {
                     "args": {
                         "title": "Post yesterday's orders to the ledger",
                         "body": "Check every marketplace and store order is posted, and flag any that do not match.",
-                        "owner": "bookkeeper",
+                        "owner": "finance-owner",
                     },
                 }
             ],
@@ -337,7 +337,7 @@ CONTENT = {
             "key": "deploys",
             "name": "Finished deploys to release notes",
             "owner": "person:eli",
-            "closer": "release-notes",
+            "closer": "release-notes-writer",
             "note": "Notes posted.",
             "trigger": {"type": "event", "name": "custom.deploy.finished"},
             "steps": [
@@ -348,7 +348,7 @@ CONTENT = {
                     "args": {
                         "title": "Write the release notes for {{event.data.version}}",
                         "body": "Use the merged pull requests since the last release.",
-                        "owner": "release-notes",
+                        "owner": "release-notes-writer",
                     },
                 }
             ],
@@ -361,7 +361,7 @@ CONTENT = {
             "at": [6, 6.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1042",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1042", "attempt": 1},
             "close": "calibration",
         },
@@ -369,7 +369,7 @@ CONTENT = {
             "at": [6, 2.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1057",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1057", "attempt": 1},
             "close": "calibration",
         },
@@ -377,7 +377,7 @@ CONTENT = {
             "at": [5, 7.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1061",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1061", "attempt": 1},
             "close": "calibration",
         },
@@ -385,7 +385,7 @@ CONTENT = {
             "at": [5, 1.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1073",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1073", "attempt": 1},
             "close": "calibration",
         },
@@ -393,7 +393,7 @@ CONTENT = {
             "at": [4, 4.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1088",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1088", "attempt": 1},
             "close": "calibration",
         },
@@ -401,7 +401,7 @@ CONTENT = {
             "at": [4, 0.7],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1093",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1093", "attempt": 2},
             "close": "calibration",
             "note": "Could not fix. Sent to Ben.",
@@ -410,7 +410,7 @@ CONTENT = {
             "at": [3, 6.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1104",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1104", "attempt": 1},
             "close": "calibration",
         },
@@ -418,7 +418,7 @@ CONTENT = {
             "at": [3, 3.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1110",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1110", "attempt": 1},
             "close": "calibration",
         },
@@ -426,7 +426,7 @@ CONTENT = {
             "at": [2, 5.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1126",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1126", "attempt": 1},
             "close": "calibration",
         },
@@ -434,7 +434,7 @@ CONTENT = {
             "at": [2, 0.4],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1131",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1131", "attempt": 1},
             "close": "calibration",
         },
@@ -442,7 +442,7 @@ CONTENT = {
             "at": [1, 8.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1140",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1140", "attempt": 1},
             "close": "calibration",
         },
@@ -450,7 +450,7 @@ CONTENT = {
             "at": [1, 4.0],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1152",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1152", "attempt": 1},
             "close": "calibration",
         },
@@ -458,7 +458,7 @@ CONTENT = {
             "at": [0, 0.6],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1158",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1158", "attempt": 2},
             "close": "calibration",
             "note": "Could not fix. Sent to Ben.",
@@ -467,7 +467,7 @@ CONTENT = {
             "at": [0, 0.2],
             "name": "custom.calibration.failed",
             "subject": "unit/U-1163",
-            "actor": "bot:support-qa",
+            "actor": "bot:support-quality-analyst",
             "data": {"unit": "U-1163", "attempt": 1},
             "close": "calibration",
         },
@@ -519,7 +519,7 @@ CONTENT = {
             "at": [4, 11.0],
             "name": "finance.card.declined",
             "subject": "charge/C-7781",
-            "actor": "bot:bookkeeper",
+            "actor": "bot:finance-owner",
             "data": {"account": "Harbor Lane Storefront", "amount": "$1,200.00"},
             "close": "declined",
         },
@@ -527,7 +527,7 @@ CONTENT = {
             "at": [1, 9.0],
             "name": "finance.card.declined",
             "subject": "charge/C-7830",
-            "actor": "bot:bookkeeper",
+            "actor": "bot:finance-owner",
             "data": {"account": "Pinecrest Hotel", "amount": "$449.00"},
             "close": "declined",
         },
@@ -658,7 +658,7 @@ CONTENT = {
                         "label": "Ana in Update the Support instructions",
                         "text": "Keep the refund wording short. Customers read it on their phones.",
                         "learnable": 0.8,
-                        "scores": {"support": 0.8, "support-lead": 0.7, "sales-lead": 0.2},
+                        "scores": {"support-owner": 0.8, "success-team-manager": 0.7, "growth-team-manager": 0.2},
                     }
                 ],
             },
@@ -673,7 +673,12 @@ CONTENT = {
                         "text": "Until Ana sets the refund limit, do not promise a refund over $100 in a reply. "
                         "Send anything bigger to me first.",
                         "learnable": 0.95,
-                        "scores": {"support": 0.95, "support-lead": 0.9, "escalations": 0.7, "reputation": 0.3},
+                        "scores": {
+                            "support-owner": 0.95,
+                            "success-team-manager": 0.9,
+                            "escalations-manager": 0.7,
+                            "reputation-manager": 0.3,
+                        },
                     }
                 ],
             },
@@ -687,7 +692,11 @@ CONTENT = {
                         "label": "Ben in Draft replies for the open support tickets",
                         "text": "Login problems: check the app version before you reply. Most are one old version.",
                         "learnable": 0.9,
-                        "scores": {"support": 0.9, "technical-support": 0.8, "support-qa": 0.7},
+                        "scores": {
+                            "support-owner": 0.9,
+                            "technical-support-engineer": 0.8,
+                            "support-quality-analyst": 0.7,
+                        },
                     },
                     {
                         "task": "creator-contracts",
@@ -696,7 +705,7 @@ CONTENT = {
                         "label": "Ana in Get the twelve creator contracts signed",
                         "text": "Creators get the Storefront demo a week before the launch post.",
                         "learnable": 0.85,
-                        "scores": {"creators": 0.9, "marketing-lead": 0.8, "content": 0.6},
+                        "scores": {"creators": 0.9, "growth-team-manager": 0.8, "content-owner": 0.6},
                     },
                 ],
             },
@@ -710,13 +719,13 @@ CONTENT = {
                         "label": "Ben in Call back owners whose calibration failed twice",
                         "text": "Calibration: hold the phone still at the wall, not panning. A moving phone is the usual cause.",
                         "learnable": 0.9,
-                        "scores": {"technical-support": 0.9, "support": 0.8, "content": 0.7},
+                        "scores": {"technical-support-engineer": 0.9, "support-owner": 0.8, "content-owner": 0.7},
                     }
                 ],
-                # The technical-support bot works its packet and saves one line (a smaller change).
+                # The technical-support-engineer bot works its packet and saves one line (a smaller change).
                 "learned": [
                     {
-                        "bot": "technical-support",
+                        "bot": "technical-support-engineer",
                         "subject": "Hold the phone still at the wall while calibrating",
                         "rule": "Calibration: hold the phone still at the wall, not panning.",
                         "source": 'task Ben in Call back owners whose calibration failed twice: "Calibration: hold the '
@@ -735,7 +744,11 @@ CONTENT = {
                         "label": "Ben in Decide whether owners get a unit swap after two failed calibrations",
                         "text": "After two failed calibrations, offer the owner a unit swap. Do not book a third redo.",
                         "learnable": 0.8,
-                        "scores": {"technical-support": 0.8, "support-lead": 0.6, "escalations": 0.5},
+                        "scores": {
+                            "technical-support-engineer": 0.8,
+                            "success-team-manager": 0.6,
+                            "escalations-manager": 0.5,
+                        },
                     }
                 ],
             },
@@ -749,7 +762,7 @@ CONTENT = {
                         "label": "Ben in Call back owners whose calibration failed twice",
                         "text": "Correction: ask customers to set the phone on a flat surface before calibrating.",
                         "learnable": 0.95,
-                        "scores": {"technical-support": 0.95},
+                        "scores": {"technical-support-engineer": 0.95},
                     },
                     {
                         "task": "ticket-replies",
@@ -758,13 +771,13 @@ CONTENT = {
                         "label": "Ben in Draft replies for the open support tickets",
                         "text": "Send login help in this order: version check, then the reset link, then the call.",
                         "learnable": 0.85,
-                        "scores": {"support-lead": 0.8, "support": 0.9},
+                        "scores": {"success-team-manager": 0.8, "support-owner": 0.9},
                     },
                 ],
-                # The technical-support bot works the correction in its packet and saves it as a working rule.
+                # The technical-support-engineer bot works the correction in its packet and saves it as a working rule.
                 "learned": [
                     {
-                        "bot": "technical-support",
+                        "bot": "technical-support-engineer",
                         "subject": "Learned from Ben: set the phone on a flat surface before calibrating",
                         "rule": "Before calibrating, ask the customer to set the phone on a flat surface.",
                         "source": 'task Ben in Call back owners whose calibration failed twice: "Correction: ask '

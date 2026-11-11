@@ -1001,7 +1001,7 @@ def bot_repos_set(api, args):
     "repository already exists on a computer. Answers with how to create it by hand when the team's "
     "GitHub App was not given permission to.",
     {
-        "slug": _s("The bot's name, e.g. sales for bot-sales"),
+        "slug": _s("The bot's name, e.g. inbound-sales-owner for bot-inbound-sales-owner"),
         "template": _s("Template repository as owner/name; default ticoteam/botops"),
         "empty": {
             "type": "boolean",

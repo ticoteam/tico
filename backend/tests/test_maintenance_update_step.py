@@ -483,7 +483,7 @@ def test_the_draft_is_metered_into_the_decision_spend_as_update_draft(api):
         return {"body": "- Shipped the pricing page"}
 
     write.model = "acme-draft-model"
-    updates.write_draft(store, "human:ana", write, "coo")
+    updates.write_draft(store, "human:ana", write, "assistant")
     with store.read() as c:
         spent = c.execute("SELECT target, detail FROM events WHERE action='judge.spend'").fetchall()
     assert [r["target"] for r in spent] == ["update-draft"]
@@ -604,7 +604,7 @@ def test_a_draft_that_is_not_json_is_still_metered_as_unusable_spend_and_asked_a
         "usage": {"prompt_tokens": 120, "completion_tokens": 40},
     }
     write = llm_writer("openai", "key", "acme-draft-model", opener=fake_answer(answer, []))
-    updates.write_draft(store, "human:ana", write, "coo")
+    updates.write_draft(store, "human:ana", write, "assistant")
     with store.read() as c:
         spend = c.execute("SELECT target, detail FROM events WHERE action='judge.spend'").fetchall()
         row = c.execute("SELECT state, tries FROM update_queue WHERE id='draft-bad'").fetchone()

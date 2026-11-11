@@ -1495,12 +1495,12 @@ def test_a_person_writing_or_try_now_lifts_a_usage_limit_cooldown_once(api):
     assert claim(api, machine) is None, "the new limit is later than the message: the cooldown holds"
     # Try now: only a person who manages the bot; it clears every bot limited on the same runtime and computer.
     post(api, "bots/ops/limit/retry", {}, token="cara-test", expected=403)
-    assign(api, machine, "coo")
+    assign(api, machine, "assistant")
     with api.app.state.store.transaction() as c:
-        H.status_set(c, H.KEEPER, "coo", state="limited", focus="fake usage limit")
+        H.status_set(c, H.KEEPER, "assistant", state="limited", focus="fake usage limit")
     assert post(api, "bots/ops/limit/retry", {})["cleared"] == 2
     with api.app.state.store.read() as c:
-        assert H.status(c, "ops")["state"] == H.status(c, "coo")["state"] == "idle"
+        assert H.status(c, "ops")["state"] == H.status(c, "assistant")["state"] == "idle"
         assert c.execute("SELECT count(*) FROM events WHERE action='limit.cleared'").fetchone()[0] == 2
     assert claim(api, machine)
     post(api, "bots/ops/limit/retry", {}, expected=409)

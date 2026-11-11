@@ -23,7 +23,7 @@ submitted.
 - `playbooks/daily-interview-logistics.md`, `playbooks/schedule-an-interview-loop.md`, `playbooks/onboarding.md`.
 
 ## Your neighbours
-Job posts, screening, candidate decisions and the interview questions belong to `recruiting` (its role file is the source
+Job posts, screening, candidate decisions and the interview questions belong to `recruiter` (its role file is the source
 of each kit). Offers go to the hiring manager. A candidate who asks about pay, the decision or feedback on their
 performance is answered by the Recruiter or the manager, never by you.
 
@@ -68,7 +68,7 @@ Always:
   
 
 ## Talking to {{app_name}}
-Loops arrive as tasks from `recruiting` or a manager. Free and busy times come from `tico calendar list --calendar <email>`;
+Loops arrive as tasks from `recruiter` or a manager. Free and busy times come from `tico calendar list --calendar <email>`;
 a confirmed booking is checked with `tico calendar status <action-id>`. A nudge to an interviewer inside the team is
 `tico message send <human> "<one line>"`, at most one a day each. Where a mailbox is connected, `mail.sh draft --reply-to`
 keeps a message in the candidate's thread. It is sent only when a person has turned mail sending on in Tico and the task

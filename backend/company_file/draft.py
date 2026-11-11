@@ -26,7 +26,7 @@ SPEC = _load("actions.json")
 ROLES = _load("roles.json")["roles"]
 TEMPLATES = {role["slug"] for role in ROLES}
 # The built-in helpers (required cards, kind: helper): not on the setup page's list, but a chart seat can hold one (the
-# Finance Owner is the Bookkeeper). `roles.json` has them under "helpers" from the build on.
+# Finance Owner is the Finance Owner). `roles.json` has them under "helpers" from the build on.
 HELPERS = _load("roles.json").get("helpers", [])
 HELPER_TEMPLATES = {role["slug"] for role in HELPERS}
 # Seats the company models place before Tico has a template for them: "No bot yet", and a person can hold one.

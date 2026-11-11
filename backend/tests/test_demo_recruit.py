@@ -39,8 +39,8 @@ def open_seats(api):
 def _open_seats_sit_under_their_managers(built):
     with owner_api(built) as api:
         seats = open_seats(api)
-        assert seats["Install Crew Coordinator"]["reports_to"] == "ops-manager"
-        assert seats["Warranty Claims"]["reports_to"] == "support-lead"
+        assert seats["Install Crew Coordinator"]["reports_to"] == "operations-manager"
+        assert seats["Warranty Claims"]["reports_to"] == "success-team-manager"
         assert seats["Install Crew Coordinator"]["request_state"] == ""
         assert seats["Devin"]["reports_to"] == "product-manager"
 
@@ -49,7 +49,7 @@ def _recruit_offers_templates_for_each_open_seat(built):
     with owner_api(built) as api:
         seats = open_seats(api)
         warranty = api.post(f"/api/v2/seats/{seats['Warranty Claims']['id']}/recruit", json={}).json()
-        assert warranty["candidates"][0]["template"] == "returns"
+        assert warranty["candidates"][0]["template"] == "returns-and-refunds-specialist"
         assert warranty["candidates"][0]["match"] == "good"
         install = api.post(f"/api/v2/seats/{seats['Install Crew Coordinator']['id']}/recruit", json={}).json()
         assert "dispatcher" in [row["template"] for row in install["candidates"]]

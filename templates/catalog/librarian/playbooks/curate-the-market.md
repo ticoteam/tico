@@ -31,7 +31,7 @@ day that is not Monday, stop at once.
    An insight that contradicts an active bet (`tico strategy show`: each bet's `why` and `wrong_if`) is still applied or closed on its
    own evidence: you curate the market, not the strategy. Say so in one line of the sweep report, and send the Strategy Owner one note naming
    the bet and the entity, so it can add the entity to that bet's `cites`:
-   `tico message send goal-manager "Bet <id> may be contradicted by <entity id>: <one line>. Worth citing."`
+   `tico message send strategy-owner "Bet <id> may be contradicted by <entity id>: <one line>. Worth citing."`
    You never write the strategy, and you do not judge whether the bet should change.
 6. Close the listening items you filed: an insight you applied or merged resolves its listening item
    `accepted` with `--ref <insight id>`; one you rejected resolves it `rejected` with the same
@@ -40,7 +40,7 @@ day that is not Monday, stop at once.
 7. File the run with `tico market sweep`. Every `needs-human` insight from this run becomes one task on the team owner, never one task each.
 8. On Mondays, run `tico market refresh --today <date>` to refresh the weekly delta page. The daily Market briefing is its
    own run (`playbooks/write-the-briefing.md`), not part of this one.
-9. Staleness: an entity past `last_verified_at` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`listening`) only for those. A date being old is not itself a task.
+9. Staleness: an entity past `last_verified_at` plus 60 days (core tier: 30) that you tried to check and could not verify is named in that same sweep, with what to look for. The server files a task on the Social Media Manager (`social-media-manager`) only for those. A date being old is not itself a task.
 
 Done when every insight you read is applied, merged, rejected or needs-human, each listening item you filed is resolved
 (or left `new` on purpose), and the sweep is filed.

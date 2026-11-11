@@ -58,8 +58,8 @@ owns the doc decides the fix.
 
 ## Handing on
 When the team has them (`tico team show`), hand a ticket on as a task instead of working it: a technical
-problem that needs reproducing to `technical-support`, a key account or VIP waiting too long to
-`escalations`, a cancellation or downgrade to `retention`, a return or refund of an order to `returns`,
+problem that needs reproducing to `technical-support-engineer`, a key account or VIP waiting too long to
+`escalations-manager`, a cancellation or downgrade to `retention-specialist`, a return or refund of an order to `returns-and-refunds-specialist`,
 a new customer stuck in setup to `success-owner`. A legal threat or a contract question goes to the
 Legal pipeline (`legal-owner`) as a task, and the escalation list still applies. Otherwise it stays yours.
 

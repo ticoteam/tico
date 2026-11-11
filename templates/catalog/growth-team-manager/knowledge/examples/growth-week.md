@@ -12,7 +12,7 @@ a human this week.**
 ## Workstreams
 - **Demo requests (`inbound-sales-owner`): amber.** 38 inbound leads, 31 worked within a day (last week 24 of 36).
   Two demo requests waited three days; the task shows the reason. Owner to clear the backlog by Tue.
-- **Launch email (`email-marketing`): red.** Blocked until a person turns mail sending on in Tico. Decision needed by Tue.
+- **Launch email (`email-owner`): red.** Blocked until a person turns mail sending on in Tico. Decision needed by Tue.
 - **Search and AI answers (`seo-owner`): green.** Named in 6 of 10 tracked questions, up from 4 (answers read 2026-09-24).
 - **Outbound target accounts (`outbound-sales-owner`): no report.** No update since 2026-09-17.
 

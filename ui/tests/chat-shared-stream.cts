@@ -31,7 +31,7 @@ const now = new Date().toISOString();
       return route.fulfill({contentType: ui[1].endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: false, registered: true});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/stream') { legacy.push(url.search); return route.abort(); }
@@ -64,7 +64,7 @@ const now = new Date().toISOString();
   assert.equal(subscribed.searchParams.get('conversation'), 'c-ops', 'a non-cloud chat follows its conversation on the shared stream');
 
   // A reply from the bot: one read of the snapshot for the change, and the reply shows.
-  snapshot = {messages: [...snapshot.messages, {id: 'm2', sender_id: 'bot:coo', body: 'The notes are in the doc.', created_at: now}], execution: null};
+  snapshot = {messages: [...snapshot.messages, {id: 'm2', sender_id: 'bot:assistant', body: 'The notes are in the doc.', created_at: now}], execution: null};
   await send(following, block(11, 'messages', {id: 'm2', conversation_id: 'c-ops', message: snapshot.messages[1]}));
   await page.getByText('The notes are in the doc.').waitFor();
   await page.waitForFunction(() => !LIVE_SOON.has('chat:c-ops') && !V2C.reading && !V2C.readAgain, null, {timeout: t(5000)});

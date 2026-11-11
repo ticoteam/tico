@@ -67,8 +67,8 @@ When the Assistant or BotOps reads for a person, both the person and the actual 
 a mail grant or the letter's existing access policy. A person's grant alone never grants the Assistant access.
 This applies to letters, hub/MCP reads, raw scan downloads and exact file-version downloads.
 
-The built-in Counsel also supports these tools inside its claimed runs. A grant permits only the letters and scans
-within its scope; without a grant, Counsel reads the legal letter handled by its current task. Its restrictions on
+The built-in Rules Owner also supports these tools inside its claimed runs. A grant permits only the letters and scans
+within its scope; without a grant, the Rules Owner reads the legal letter handled by its current task. Its restrictions on
 other files, document versions, credentials and outgoing actions still apply. Bots whose hosts only sync chat cannot
 use physical mail; both the API and pickers explain this restriction.
 

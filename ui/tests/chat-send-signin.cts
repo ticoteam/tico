@@ -97,7 +97,7 @@ async function scenario(browser: import('playwright').Browser, engine: string, m
       if (p === '/') return reply(html, 'text/html');
       if (p === '/api/v2/me' && expired) return identity();
       if (p === '/api/me' || p === '/api/v2/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: delivered}));
       if (p.endsWith('/snapshot')) return json({messages: delivered, execution: null});
@@ -122,7 +122,7 @@ async function scenario(browser: import('playwright').Browser, engine: string, m
     })().catch(error => { serverErrors.push(error.message); if (!response.headersSent) response.writeHead(500); response.end(); });
   });
   const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
-  const stored = () => step('read saved drafts and return snapshot', () => page.evaluate(() => ({draft: chatDrafts().coo, otherDraft: chatDrafts().other,
+  const stored = () => step('read saved drafts and return snapshot', () => page.evaluate(() => ({draft: chatDrafts().assistant, otherDraft: chatDrafts().other,
     fields: (JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null') as {fields?: Field[]} | null)?.fields || []})));
   const frames = (label: string) => step(label, () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))));
   const readsSettled = (label: string) => step(label, async () => {

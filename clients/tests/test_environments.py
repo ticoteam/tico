@@ -31,7 +31,7 @@ class Base(unittest.TestCase):
         seed = mock.patch.object(
             ENV,
             "seed_database",
-            lambda directory, workspace, values, **kw: self.seeded.append(values) or ["coo", "sales"],
+            lambda directory, workspace, values, **kw: self.seeded.append(values) or ["assistant", "sales"],
         )
         seed.start()
         self.addCleanup(seed.stop)

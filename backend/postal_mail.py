@@ -76,8 +76,7 @@ LISTED = 100
 GRANT_BYTES = 64 * 1024
 ALL_ADDRESSES = "all"
 SCANS_SQL = "SELECT * FROM mail_items WHERE blob_id=?"
-# `bookkeeper` is the built-in Bookkeeper; `bookkeeping` is the retired template, kept for the bots built from it.
-FINANCE_TEMPLATES = ("finance-lead", "controller", "bookkeeper", "bookkeeping", "accounts-payable", "tax")
+FINANCE_TEMPLATES = ("finance-owner", "controller", "accounts-payable-specialist", "tax-specialist")
 READABLE = {
     "application/pdf": "pdf",
     "image/png": "image",

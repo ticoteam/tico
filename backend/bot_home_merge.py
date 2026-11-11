@@ -312,7 +312,7 @@ def _excluded_bots(assistant=None):
     """The Assistant (no Home: its rooms are each person's own Assistant), and the Strategy Owner (no person chats with it)."""
     from .strategy_bot import SLUG
 
-    name = assistant or os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo"
+    name = assistant or os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "assistant"
     return {name, SLUG}
 
 

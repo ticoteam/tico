@@ -92,18 +92,18 @@ STOP = set(
 )
 # setup.js ALIASES: everyday words for a role, mapped to the template that does it.
 ALIASES = {
-    "seo": "seo-visibility",
+    "seo": "seo-owner",
     "social": "listening",
     "social media": "listening",
     "blog": "content",
     "writer": "content",
     "copywriter": "content",
-    "sdr": "sdr-research",
+    "sdr": "outbound-sales-owner",
     "recruiter": "recruiting",
-    "qa": "issue-triage",
-    "tester": "issue-triage",
-    "reviewer": "pr-reviewer",
-    "code reviewer": "pr-reviewer",
+    "qa": "qa-owner",
+    "tester": "qa-owner",
+    "reviewer": "reviewer",
+    "code reviewer": "reviewer",
     "engineer": "builder",
     "support": "support",
     "customer support": "support",
@@ -112,29 +112,29 @@ ALIASES = {
     "payroll": "payroll",
     "legal": "general-counsel",
     "lawyer": "general-counsel",
-    "contracts": "legal-review",
-    "hr": "people-hr",
+    "contracts": "contracts-manager",
+    "hr": "hr-generalist",
     "chief of staff": "chief-of-staff",
     "pr": "pr",
     "press": "pr",
-    "ads": "paid-media",
+    "ads": "search-ads-owner",
     "release manager": "release-owner",
     "release owner": "release-owner",
     "release notes": "release-notes",
-    "docs": "docs-writer",
-    "technical writer": "docs-writer",
+    "docs": "technical-writer",
+    "technical writer": "technical-writer",
     "note taker": "meeting-notes",
     "meeting notes": "meeting-notes",
-    "project manager": "meeting-notes",
-    "goal manager": "goal-manager",
-    "ceo bot": "goal-manager",
-    "strategy bot": "goal-manager",
+    "project manager": "project-coordinator",
+    "goal manager": "strategy-owner",
+    "ceo bot": "strategy-owner",
+    "strategy bot": "strategy-owner",
     "librarian": "librarian",
-    "assistant": "coo",
+    "assistant": "assistant",
     "botops": "botops",
-    "cfo": "finance-lead",
-    "cmo": "marketing-lead",
-    "cto": "engineering-lead",
+    "cfo": "finance-owner",
+    "cmo": "growth-team-manager",
+    "cto": "engineering-team-manager",
     "cap table": "equity-manager",
     "equity": "equity-manager",
     "fundraising": "fundraising-manager",
@@ -170,8 +170,8 @@ def score(role, text):
     return total
 
 
-# Slugs a bare word must never find: "CRO" is a chief revenue officer as often as a conversion owner, and "pipeline" is
-# the sales pipeline. Their templates are found by their full names ("Conversion Rate Optimization Owner", "Pipeline Owner").
+# Bare words that must never find a template: "CRO" is a chief revenue officer as often as a conversion owner, and
+# "pipeline" is the sales pipeline. The CRO Owner is found by its full name.
 NOT_BARE = {"cro", "pipeline"}
 
 
@@ -555,7 +555,7 @@ def bot_add(draft, args, today, notes):
             "Tico has no \"%s\" template.%s"
             % (str(args["template"])[:80], " The closest is %s (%s)." % (near["name"], near["slug"]) if near else "")
         )
-    if role["slug"] in ("botops", "coo") and any(b["template"] == role["slug"] for b in draft["bots"]):
+    if role["slug"] in ("botops", "assistant") and any(b["template"] == role["slug"] for b in draft["bots"]):
         raise Refusal("%s is already on the chart; there is only one." % role["name"])
     title = _text(args, "title", D.LIMITS["title"], needed=False) or role["name"]
     if _title_taken(draft, title):
@@ -1022,7 +1022,7 @@ class Turn:
     """One visitor turn over a draft.
 
         turn = Turn(draft_from_page, today=dt.date.today())    # D.DraftError when the draft breaks its shape
-        turn.apply("bot_add", {"template": "billing", "reason": "Invoices eat your Fridays."})
+        turn.apply("bot_add", {"template": "billing-specialist", "reason": "Invoices eat your Fridays."})
         turn.finish()                                          # the draft to send back
 
     `keys_removed` says a key-shaped string was cut from the draft or an action's input this turn; `seeded` says the

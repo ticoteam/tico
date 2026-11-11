@@ -135,7 +135,7 @@ const CATALOG: Card[] = [
    runtime: 'codex', model: 'gpt-6-sol', reasoning_effort: 'medium', recommend_when: ['uses_meetings'],
    instructions: '# Project Coordinator\n\nFollow up every meeting.\n'},
   // A message bot: it serves one person, so it is in no department and is offered on its own, off by default.
-  {template: 'inbox', slug: 'inbox', name: 'Inbox Manager', kind: 'helper', required: false, bootstrap: false, starter: true,
+  {template: 'inbox-manager', slug: 'inbox', name: 'Inbox Manager', kind: 'helper', required: false, bootstrap: false, starter: true,
    icon: 'inbox', pains: ['too much email'], prerequisites: [{tool: 'mail', why: 'A mailbox to read.', required: true}],
    first_routine: {title: 'Morning mail brief', cadence: 'Weekdays at 07:30'},
    summary: 'Reads one person mailbox on a cadence.',
@@ -1108,7 +1108,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catalog-picker')!.open);
     assert.equal(created.length, 2);
     assert.equal(created[1]!.slug, 'ana-inbox');
-    assert.equal(created[1]!.template, 'inbox');
+    assert.equal(created[1]!.template, 'inbox-manager');
     assert.equal(created[1]!.display_name, 'Ana Rivera message bot');
     assert.match(created[1]!.instructions, /Mailbox: ana@acme.example/);
 

@@ -13,7 +13,9 @@ def test_archiving_a_bot_gives_its_open_tasks_to_its_successor_through_the_engin
         X.bot(c, "builder")
         X.bot(c, "helper")
         owned = H.task_create(c, ANA, "Write the launch note", "Draft it.", "bot:builder", lint=False)["id"]
-        asked = H.task_create(c, "bot:builder", "Gather the numbers", "Collect them.", "bot:coo", lint=False)["id"]
+        asked = H.task_create(c, "bot:builder", "Gather the numbers", "Collect them.", "bot:assistant", lint=False)[
+            "id"
+        ]
         finished = H.task_create(c, ANA, "Old note", "Done already.", "bot:builder", lint=False)["id"]
         H.task_close(c, ANA, finished, "Not needed.")
         before = H.task(c, owned)["version"]

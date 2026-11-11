@@ -75,7 +75,7 @@ async function open(browser: Browser, {width = 390, theme = 'dark', tab = 'home'
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role, cloud: true});
     const bot = (name: string, display_name: string) => ({name, display_name, host: 'keeper', status: 'active', can_chat: true, schedules: [],
       resolved_runtime: 'codex', machine: {runner_id: 'r1'}, readiness: {ready: true, goals: supported}, my_access: {see: true, read: true, write}});
-    if (p === '/api/employees') return json([bot(BOT, 'Engineering Manager'), bot('designer', 'Designer'), bot('sales-lead', 'Sales Lead')]);
+    if (p === '/api/employees') return json([bot(BOT, 'Engineering Manager'), bot('designer', 'Designer'), bot('growth-team-manager', 'Sales Lead')]);
     // The thread's newest run (Stop), the stop itself, a harness command, a task and an archived DM (/new).
     const snap = p.match(/^\/api\/v2\/conversations\/([^/]+)\/snapshot$/) as [string, string] | null;
     if (snap) { api.snapshots.push(snap[1]); return json({messages: [], next_before: null, execution: api.execution, goal: null}); }
@@ -110,7 +110,7 @@ async function open(browser: Browser, {width = 390, theme = 'dark', tab = 'home'
       const bot = (actor: string) => ({actor, reason: 'follower', mode: way === 'defer' && q.defer_for === 'never' ? 'defer' : way, defer_for: way === 'defer' ? q.defer_for || null : null});
       const rows = reach[1] === CHAN ? [bot('bot:designer'), ...(way === 'defer' && q.defer_for === 'never' ? [] : [{actor: 'human:ben', reason: 'follower', mode: 'queue', defer_for: null}])]
         : [{...bot('bot:' + BOT), reason: 'home'}];
-      if ((q.text || '').includes('@sales-lead')) rows.unshift({actor: 'bot:sales-lead', reason: 'mention', mode: way, defer_for: null});
+      if ((q.text || '').includes('@growth-team-manager')) rows.unshift({actor: 'bot:growth-team-manager', reason: 'mention', mode: way, defer_for: null});
       return json({thread_id: reach[1], way, reaches: rows.map(r => ({...r, adds_reader: false})), outside: (q.text || '').includes('@zed') ? ['human:zed'] : []});
     }
     // #launch: a company chat Ana joined but does not follow (`me.follows`), until she does.
@@ -461,7 +461,7 @@ async function lines(browser: Browser) {
 // The bot's avatar: on a phone, at the bar's left edge before Attach, opening the switcher over the bar (recent bots,
 // the menu, Search) with aria-expanded in step; on a computer there is none.
 async function botSwitch(browser: Browser) {
-  let api = await open(browser, {width: 390, recent: ['designer', 'sales-lead']}), {page} = api;
+  let api = await open(browser, {width: 390, recent: ['designer', 'growth-team-manager']}), {page} = api;
   const avatar = page.locator('#bot-thread .p-bot'), fan = page.locator('#org-fan');
   await avatar.waitFor();
   const at = await page.locator('#bot-thread .thv-composer').evaluate(host => {
@@ -474,7 +474,7 @@ async function botSwitch(browser: Browser) {
   await avatar.tap();
   await fan.locator('[data-org-bot="designer"]').waitFor();
   assert.equal(await avatar.getAttribute('aria-expanded'), 'true');
-  assert.deepEqual(await fan.locator('[data-org-bot]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.orgBot)), ['designer', 'sales-lead'], 'the recent bots, not this one');
+  assert.deepEqual(await fan.locator('[data-org-bot]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.orgBot)), ['designer', 'growth-team-manager'], 'the recent bots, not this one');
   assert.equal(await fan.locator('[data-org-search]').count(), 1);
   // It rises from the bar: the lowest bot sits above the avatar.
   const [low, bar] = [await fan.locator('[data-org-bot="designer"]').boundingBox(), await avatar.boundingBox()];
@@ -615,13 +615,13 @@ async function followReach(browser: Browser) {
     // Typing asks after a pause, one read at a time, and only the @mentions go; then the line names who it reaches.
     const asked = api.reachReads.length;
     api.reachSlow = 400;
-    await home.locator('.p-text').pressSequentially('Plain words, then @sales-lead please', {delay: 15});
+    await home.locator('.p-text').pressSequentially('Plain words, then @growth-team-manager please', {delay: 15});
     await home.locator('.p-text').dispatchEvent('input');
     await reachBtn.filter({hasText: /^To Sales Lead and Engineering Manager$/}).waitFor();
     api.reachSlow = 0;
     assert.equal(api.reachMax, 1, 'one read at a time');
     assert.ok(api.reachReads.length - asked <= 3, `a pause between reads (${api.reachReads.length - asked})`);
-    assert.equal(api.reachReads.at(-1)!.text, '@sales-lead please', 'only what follows an @');
+    assert.equal(api.reachReads.at(-1)!.text, '@growth-team-manager please', 'only what follows an @');
     assert.ok(api.reachReads.slice(asked).every(r => r.text !== undefined), 'words with no @ ask nothing new');
     await reachBtn.click();
     assert.deepEqual(await said(pop), [['Sales Lead', 'After its turn'], ['Engineering Manager', 'After its turn']]);
@@ -648,7 +648,7 @@ async function followReach(browser: Browser) {
     assert.equal(await chan.locator('.p-follow').count(), 0, 'no Follow under the box');
     assert.equal('delivery' in api.reachReads.at(-1)!, false, 'a chat with no ways asks for the server\'s Steer');
     // @mentions: one reached, one who can't see #launch.
-    await chan.locator('.p-text').fill('@sales-lead and @zed, the deck is ready');
+    await chan.locator('.p-text').fill('@growth-team-manager and @zed, the deck is ready');
     await cReach.filter({hasText: /^To Sales Lead, Designer \+1$/}).waitFor();
     await cReach.click();
     const rows = await said(cPop);
@@ -664,7 +664,7 @@ async function followReach(browser: Browser) {
     // Send: posting never follows.
     await chan.locator('.p-send').click();
     await page.waitForFunction(() => !document.querySelector<HTMLElement>('#chan-thread .th-pending') && !document.querySelector<HTMLInputElement>('#chan-thread .p-text')!.value);
-    assert.equal(api.sent.at(-1)!.text, '@sales-lead and @zed, the deck is ready');
+    assert.equal(api.sent.at(-1)!.text, '@growth-team-manager and @zed, the deck is ready');
     assert.equal('follow' in api.sent.at(-1)!, false, 'posting itself never follows');
     assert.deepEqual(api.follows, [], 'a send follows nothing');
     assert.deepEqual(api.errors, []);

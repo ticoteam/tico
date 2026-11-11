@@ -82,19 +82,19 @@ def test_an_at_mention_wakes_and_follows_and_then_plain_comments_reach_it(api):
 
 def test_steer_wakes_every_live_bot_follower(api):
     row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
-    follow(api, row["id"], "bot:coo")
+    follow(api, row["id"], "bot:assistant")
     follow(api, row["id"], "bot:finance")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
     sent = comment(api, row["id"], "The bank feed is back; go ahead.")
     assert sent["comment"]["recipient_id"] == "bot:ops" and len(bot_jobs(api, "ops")) == 1
-    for bot in ("bot:coo", "bot:finance"):
+    for bot in ("bot:assistant", "bot:finance"):
         got = delivery(api, sent["comment"]["id"], bot)
         assert got["reason"] == "follower" and got["mode"] in ("steer", "queue") and got["carrier_id"], got
         assert [j["message_id"] for j in bot_jobs(api, H.actor_id(bot))] == [got["carrier_id"]]
     # A person woke each of them: each acts on the task with party rights for a day.
     delegates = {r["delegate"] for r in rows(api, "SELECT delegate FROM task_delegations WHERE task_id=?", row["id"])}
-    assert delegates == {"bot:ops", "bot:coo", "bot:finance"}
+    assert delegates == {"bot:ops", "bot:assistant", "bot:finance"}
 
 
 def test_defer_never_reaches_no_follower_but_queues_the_mentioned(api):
@@ -102,13 +102,15 @@ def test_defer_never_reaches_no_follower_but_queues_the_mentioned(api):
     follow(api, row["id"], "ben")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
-    sent = comment(api, row["id"], "@coo fyi, no rush", delivery="defer", defer_for="never")["comment"]
-    assert sent["recipient_id"] == "bot:coo" and len(bot_jobs(api, "coo")) == 1, "the @mention is reached, queued"
+    sent = comment(api, row["id"], "@assistant fyi, no rush", delivery="defer", defer_for="never")["comment"]
+    assert sent["recipient_id"] == "bot:assistant" and len(bot_jobs(api, "assistant")) == 1, (
+        "the @mention is reached, queued"
+    )
     assert bot_jobs(api, "ops") == [], "the owner bot waits for its next turn here"
     owner = delivery(api, sent["id"], "bot:ops")
     assert owner is not None and owner["mode"] == "defer"
     assert delivery(api, sent["id"], "human:ben") is None, "Defer never notifies no follower"
-    assert follows(api, row["id"], "bot:coo")[0] == 1
+    assert follows(api, row["id"], "bot:assistant")[0] == 1
 
 
 def test_muted_and_mentions_followers_get_only_what_names_them(api):
@@ -133,7 +135,7 @@ def test_a_live_person_follower_is_notified_of_a_bots_comment(api):
 def test_the_loop_guard_caps_bots_waking_each_other_on_a_task(api, monkeypatch):
     monkeypatch.setattr(threads, "LOOP_GUARD_PER_HOUR", 2)
     row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
-    follow(api, row["id"], "bot:coo")
+    follow(api, row["id"], "bot:assistant")
     follow(api, row["id"], "bot:finance")
     with api.app.state.store.transaction() as c:
         for n in range(4):
@@ -163,13 +165,13 @@ def test_a_bots_at_mention_of_a_bot_wakes_it_and_its_plain_post_to_a_bot_followe
     assert held["reason"] == "follower" and held["mode"] == "defer" and not held["carrier_id"], "the bot-to-bot hold"
     assert bot_jobs(api, "finance") == []
     with api.app.state.store.transaction() as c:
-        named = H.task_comment(c, "bot:ops", row["id"], "@coo can you sign off on the close?")
-    jobs = bot_jobs(api, "coo")
+        named = H.task_comment(c, "bot:ops", row["id"], "@assistant can you sign off on the close?")
+    jobs = bot_jobs(api, "assistant")
     assert len(jobs) == 1 and jobs[0]["message_id"] in (
         named["id"],
-        (delivery(api, named["id"], "bot:coo") or {}).get("carrier_id"),
+        (delivery(api, named["id"], "bot:assistant") or {}).get("carrier_id"),
     ), "an @mention wakes by the way"
-    assert follows(api, row["id"], "bot:coo")[:2] == (1, "live")
+    assert follows(api, row["id"], "bot:assistant")[:2] == (1, "live")
 
 
 def test_the_loop_guard_caps_bots_at_mentioning_each_other(api, monkeypatch):
@@ -178,12 +180,12 @@ def test_the_loop_guard_caps_bots_at_mentioning_each_other(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
         for n in range(4):
-            H.task_comment(c, "bot:ops", row["id"], f"@coo round {n}, over to you.")
+            H.task_comment(c, "bot:ops", row["id"], f"@assistant round {n}, over to you.")
     root = "(SELECT conversation_id FROM tasks WHERE id=?)"
     capped = rows(api, f"SELECT 1 FROM message_deliveries WHERE root_id={root} AND state='capped'", row["id"])
     woke = rows(
         api,
-        f"SELECT 1 FROM message_deliveries WHERE root_id={root} AND cause='bot' AND recipient='bot:coo' "
+        f"SELECT 1 FROM message_deliveries WHERE root_id={root} AND cause='bot' AND recipient='bot:assistant' "
         "AND mode IN ('steer','queue') AND state<>'capped'",
         row["id"],
     )
@@ -227,9 +229,9 @@ def test_the_reach_preview_answers_who_a_message_would_reach(api):
 
     plain = preview(text="Status update")
     assert plain["way"] == "steer" and [(x["actor"], x["mode"]) for x in plain["reaches"]] == [("bot:ops", "steer")]
-    named = preview(text="@coo and @ben, see this", delivery="defer", defer_for="never")
+    named = preview(text="@assistant and @ben, see this", delivery="defer", defer_for="never")
     assert {x["actor"]: (x["reason"], x["mode"]) for x in named["reaches"]} == {
-        "bot:coo": ("mention", "queue"),
+        "bot:assistant": ("mention", "queue"),
         "human:ben": ("mention", "queue"),
         "bot:ops": ("follower", "defer"),
     }
@@ -242,15 +244,15 @@ def test_a_readers_comment_reaches_the_person_owner_and_waits_for_the_bots(api):
     """A reader who may not direct the task defers to its bots by default (Defer never), but the people following it
     are notified as their level says: the person who owns it hears about it."""
     row = post(api, "tasks", {"owner": "human:cara", "title": "Call the venue", "body": "Ask about Friday."})
-    follow(api, row["id"], "bot:coo")
+    follow(api, row["id"], "bot:assistant")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
     assert follows(api, row["id"], "human:cara")[:2] == (1, "live")
     sent = comment(api, row["id"], "The venue called back: Friday works.", token="ben-test")
     assert delivery(api, sent["comment"]["id"], "human:cara")["reason"] == "follower"
     assert sent["delivered"] is True
-    coo = delivery(api, sent["comment"]["id"], "bot:coo")
-    assert coo["mode"] == "defer" and not coo["carrier_id"] and bot_jobs(api, "coo") == []
+    coo = delivery(api, sent["comment"]["id"], "bot:assistant")
+    assert coo["mode"] == "defer" and not coo["carrier_id"] and bot_jobs(api, "assistant") == []
     # Defer never the reader chose binds people too.
     chosen = comment(api, row["id"], "No need to reply.", token="ben-test", delivery="defer", defer_for="never")
     assert delivery(api, chosen["comment"]["id"], "human:cara") is None
@@ -261,8 +263,10 @@ def test_a_readers_mention_reaches_the_bot_but_delegates_nothing(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
         c.execute("DELETE FROM task_delegations")
-    sent = comment(api, row["id"], "@coo can you check the May totals?", token="ben-test")["comment"]
-    assert sent["recipient_id"] == "bot:coo" and len(bot_jobs(api, "coo")) == 1, "the @mention is reached, queued"
+    sent = comment(api, row["id"], "@assistant can you check the May totals?", token="ben-test")["comment"]
+    assert sent["recipient_id"] == "bot:assistant" and len(bot_jobs(api, "assistant")) == 1, (
+        "the @mention is reached, queued"
+    )
     assert rows(api, "SELECT delegate FROM task_delegations WHERE task_id=?", row["id"]) == [], (
         "only someone who may direct the task hands its bots party rights"
     )

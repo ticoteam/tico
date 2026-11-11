@@ -964,7 +964,7 @@ async fn a_stateless_task_lane_commits_no_memory_and_leaves_what_it_wrote_in_mem
         ],
     );
     let env = turn_env(&tmp.0, &[]);
-    let session = sessions::path_for(&projects, "tico-counsel", "t2");
+    let session = sessions::path_for(&projects, "rules-owner", "t2");
     assert_eq!(
         sessions::ensure(&main, &session, "t2", &env).await.unwrap(),
         ("origin/main".into(), "".into())
@@ -1677,8 +1677,11 @@ async fn a_bots_own_diverged_checkout_is_named_in_its_prompt() {
     let problem = sessions::divergence(&mine, &env).await;
     assert_eq!(problem, "it has 1 commits `origin/main` doesn't, and `origin/main` has 2 it doesn't; conflicting files: AGENT.md");
     assert_eq!(sh(&mine, &["rev-parse", "HEAD"]), before, "nothing moved");
-    let mut attempt = json!({"bot": "coo", "config": {}, "repo_sync_problem": sessions::own_sync_line(&mine, &problem)});
-    let mut lines = vec![(crate::prompt::Part::Standing, "You are coo.".to_string())];
+    let mut attempt = json!({"bot": "assistant", "config": {}, "repo_sync_problem": sessions::own_sync_line(&mine, &problem)});
+    let mut lines = vec![(
+        crate::prompt::Part::Standing,
+        "You are assistant.".to_string(),
+    )];
     sessions::prompt_head(&attempt, &mut lines);
     assert!(
         lines[0].1.starts_with(&format!(

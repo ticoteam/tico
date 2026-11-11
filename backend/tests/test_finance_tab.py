@@ -223,7 +223,7 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
             "human:cara",
             "human:eve",
             "human:fay",
-            "bot:bookkeeper",
+            "bot:finance-owner",
             "bot:coder",
         }
         assert not ben["can_view_as"]
@@ -388,7 +388,7 @@ def test_access_over_http_is_the_roster_for_admins_and_each_managers_own_teams_o
         "human:cara",
         "human:eve",
         "human:fay",
-        "bot:bookkeeper",
+        "bot:finance-owner",
         "bot:coder",
     }
     # Eve is a plain teammate: her own row only.

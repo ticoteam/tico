@@ -52,7 +52,7 @@
           "status_source": null
         },
         {
-          "actor": "bot:goal-manager",
+          "actor": "bot:strategy-owner",
           "created_at": "<time>",
           "field": "status",
           "goal_id": "<goal>",
@@ -60,7 +60,7 @@
           "new": "green",
           "note": "Activation 41% vs 40% needed on pace",
           "old": null,
-          "status_by": "bot:goal-manager",
+          "status_by": "bot:strategy-owner",
           "status_source": "auto"
         },
         {
@@ -143,7 +143,7 @@
       "rank": 0,
       "status": "green",
       "status_at": "<time>",
-      "status_by_id": "bot:goal-manager",
+      "status_by_id": "bot:strategy-owner",
       "status_note": "Activation 41% vs 40% needed on pace",
       "status_source": "auto",
       "suggest_at": null,

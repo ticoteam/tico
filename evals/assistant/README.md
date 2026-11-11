@@ -1,6 +1,6 @@
 # Assistant evals
 
-Scripted chats from one person (Dana, the owner) to the Assistant template (`templates/catalog/assistant`, slug `coo`),
+Scripted chats from one person (Dana, the owner) to the Assistant template (`templates/catalog/assistant`, slug `assistant`),
 scored with a real model. The CI test (`backend/tests/test_assistant_evals.py`) checks the cases without a model; the
 model run is on demand only and never in CI. The shape follows `evals/botops/`.
 

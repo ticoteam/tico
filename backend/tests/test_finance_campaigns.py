@@ -250,7 +250,7 @@ def test_the_campaign_visibility_matrix_across_owners_managers_teams_and_full_de
     with books.transaction() as c:
         assert act(c, OWNER, "campaign_owner_set", {"campaign_id": x, "team": "sales"}).status == "committed"
     assert x in visible_ids(books, "bot:ten-0")["ids"]
-    assert x not in visible_ids(books, "bot:bookkeeper")["ids"]
+    assert x not in visible_ids(books, "bot:finance-owner")["ids"]
 
 
 def test_a_list_read_checks_the_platform_lines_once_for_every_campaign(books: Store, monkeypatch):  # type: ignore[no-untyped-def]

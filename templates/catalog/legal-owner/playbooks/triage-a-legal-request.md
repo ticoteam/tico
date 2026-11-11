@@ -32,8 +32,8 @@ Log it in `knowledge/requests.md` and record its stage there: Intake until it is
    questions for counsel.
 4. **Answered by a documented position**: answer in three lines and cite the source and its date.
 5. **A rule check.** A question about what a rule allows (a contract term against the team's rules, or a "can we...?"
-   that the documented positions do not settle) goes to the Rules Owner (`tico-counsel`). Set the request to Rules check,
-   ask once with `tico task create --owner tico-counsel --parent <id> --title "Rule check: <request>" --body "<the rule,
+   that the documented positions do not settle) goes to the Rules Owner (`rules-owner`). Set the request to Rules check,
+   ask once with `tico task create --owner rules-owner --parent <id> --title "Rule check: <request>" --body "<the rule,
    the facts with dates, the question and the deadline>"`, and wait. You do not decide the rule check yourself.
 
 ## 4. Hand over

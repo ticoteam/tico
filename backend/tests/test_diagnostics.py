@@ -22,7 +22,7 @@ def own_server_log():
 def redactor():
     return D.Redactor(
         ["acme.example"],
-        [("coo", ["Morgan the assistant"]), ("botops", ["BotOps"])],
+        [("assistant", ["Morgan the assistant"]), ("botops", ["BotOps"])],
         [("morgan", ["Morgan Reed", "morgan@acme.example"]), ("riley", ["Riley Quinn", "riley@acme.example"])],
     )
 
@@ -51,10 +51,10 @@ def test_the_redactor_leaves_what_is_not_a_secret(raw):
 def test_names_become_labels_that_are_the_same_all_through_a_bundle():
     r = redactor()
     out = r.text(
-        "Morgan Reed (morgan@acme.example, morgan) asked bot:coo; BotOps and botops; Riley Quinn later; morgan again"
+        "Morgan Reed (morgan@acme.example, morgan) asked bot:assistant; BotOps and botops; Riley Quinn later; morgan again"
     )
-    assert out == "person-1 (person-1, person-1) asked bot-2; bot-1 and bot-1; person-2 later; person-1 again"
-    assert r.label("BOTOPS") == "bot-1" and r.label("Zed") is None
+    assert out == "person-1 (person-1, person-1) asked bot-1; bot-2 and bot-2; person-2 later; person-1 again"
+    assert r.label("BOTOPS") == "bot-2" and r.label("Zed") is None
     # Whole words only, and every string, however nested, goes through it.
     assert r.text("coordinator") == "coordinator"
     assert r.clean({"a": ["riley failed", {"b": "Morgan Reed"}], "n": 3, "ok": True, "x": None}) == {
@@ -101,10 +101,10 @@ def seed(api):
     owner = signed_in()
     api.post(
         "/api/v2/tasks",
-        json={"title": "CONTENT-task-title", "body": "CONTENT-task-body", "owner": "coo"},
+        json={"title": "CONTENT-task-title", "body": "CONTENT-task-body", "owner": "assistant"},
         headers=owner,
     )
-    api.post("/api/v2/chat/coo", json={"body": "CONTENT-chat-message"}, headers=owner)
+    api.post("/api/v2/chat/assistant", json={"body": "CONTENT-chat-message"}, headers=owner)
     api.post("/api/v2/docs", json={"title": "CONTENT-doc-title", "body": "CONTENT-doc-body"}, headers=owner)
     logging.getLogger("tico.test").warning(
         "Sync for riley@acme.example failed from 203.0.113.9 with sk-abcdEFGH1234567890xyz"
@@ -147,10 +147,11 @@ def test_the_bundle_holds_only_allowlisted_facts_and_never_content(environment, 
         "Atlas",
         "morgan",
         "riley",
-        "coo",
+        "assistant",
         "botops",
     ):
-        assert name not in text.replace("[company-domain]", ""), name
+        # The features block names the Assistant feature (`"assistant": false`), which is not the bot's slug.
+        assert name not in text.replace("[company-domain]", "").replace('"assistant":', ""), name
     assert bundle["versions"]["tico"] and bundle["counts"]["people"] == 3 and bundle["counts"]["bots"] >= 2
     assert bundle["database"]["migration"] >= 11 and set(bundle["features"]) <= set(D.FEATURES)
     assert all(set(x) == {"name", "status"} for x in bundle["health"]) and bundle["health"]

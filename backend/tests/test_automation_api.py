@@ -78,13 +78,13 @@ def test_a_bot_without_rights_proposes_and_a_bot_with_them_saves(api):
     aid = make(api, owner="bot:ops")["id"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot IN ('ops','finance')")
-        c.execute("UPDATE bot_config SET reports_to='bot:ops' WHERE bot='coo'")
-    peer, boss = as_bot(api, "finance"), as_bot(api, "coo")
+        c.execute("UPDATE bot_config SET reports_to='bot:ops' WHERE bot='assistant'")
+    peer, boss = as_bot(api, "finance"), as_bot(api, "assistant")
     get(api, f"automations/{aid}", peer, expected=403)
     assert patch(api, aid, {"trigger": EVENING}, peer) == {"id": aid, "pending": 2, "can_edit": False}
     patch(api, aid, {"name": "Mine now"}, peer, expected=403)
     assert patch(api, aid, {"trigger": EVENING}, as_bot(api, "ops"))["version"] == 3  # its own: saved, not proposed
-    assert patch(api, aid, {"trigger": EVENING}, boss)["pending"] == 4  # coo is under ops, not above
+    assert patch(api, aid, {"trigger": EVENING}, boss)["pending"] == 4  # assistant is under ops, not above
 
 
 def test_decide_steps_show_their_sets_questions_and_the_sets_are_listed(api):

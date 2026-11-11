@@ -29,8 +29,8 @@ STATUSES = COLOURS + ("done", "dropped")
 AUTO_STATUSES = COLOURS + ("gray",)  # what the arithmetic may say; gray is no data
 LIVE = ("red", "yellow", "green")  # statuses a goal is still worked under; None is unscored
 COMPANY = "company"  # the owner of a company goal
-GOAL_MANAGER = "goal-manager"  # the built-in bot that keeps the KPIs and sets the automatic colours
-AUTO_ACTOR = "bot:" + GOAL_MANAGER  # who an automatic status says set it
+STRATEGY_OWNER = "strategy-owner"  # the built-in bot that keeps the KPIs and sets the automatic colours
+AUTO_ACTOR = "bot:" + STRATEGY_OWNER  # who an automatic status says set it
 SIGNALS = ("on_track", "at_risk", "off_track")
 SIGNAL_COLOUR = {"on_track": "green", "at_risk": "yellow", "off_track": "red"}
 CHECKIN_DAYS = 21  # a check-in colours a goal for three weeks
@@ -669,7 +669,7 @@ def arm_pass(conn):
     KPI exists. Once: a person who pauses it afterwards is not overruled."""
     from . import routines
 
-    sid = f"{GOAL_MANAGER}:kpi-pass"
+    sid = f"{STRATEGY_OWNER}:kpi-pass"
     row = routines.row(conn, sid)
     if not row or row["deleted_at"] or row["enabled"] or not conn.execute("SELECT 1 FROM kpis LIMIT 1").fetchone():
         return False

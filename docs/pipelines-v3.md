@@ -681,7 +681,7 @@ there. The pipeline itself (name, goal, stages, manager, counts) is seen by ever
 - Legal: prefix LG, "Contracts and compliance questions answered before they hold up the business". Intake → Review →
   Rules check. Manager and every stage: the Legal Owner.
 - Finance: prefix F, "Money in, money out, and the books that show both". Intake → Doing → Review. Manager and every
-  stage: the Finance Owner (Bookkeeper). The Bookkeeper's own tasks (its checks, digests and routines) are filed here,
+  stage: the Finance Owner (Finance Owner). The Finance Owner's own tasks (its checks, digests and routines) are filed here,
   at Review: they are filed already taken in and done, so one done finishes each, as in General.
 
 ### General

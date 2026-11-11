@@ -22,7 +22,7 @@ async function shot(page: Page, name: string) {
 }
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
-  assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
+  assistant_bot: 'assistant', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   version: '0.3.62', runner_compat: {version: '0.3.62', min_runner: '0.1.0'}, providers_configured: true,
   changelog: {unread_count: 103}, usage_count_notice: true};
 const people = [{id: 'ana', name: 'Ana Rivera', email: 'ana@initech.test', org_parent: 'g:leadership', team: 'leadership'}];
@@ -37,9 +37,9 @@ const TEAM = [
   bot('head-of-engineering', 'Head of Engineering', 'engineering', 'human:ana'),
   bot('qa-engineer', 'QA Engineer', 'engineering', 'head-of-engineering'),
   bot('head-of-finance', 'Head of Finance', 'finance', 'human:ana'),
-  bot('bookkeeper', 'Bookkeeper', 'finance', 'head-of-finance'),
+  bot('finance-owner', 'Finance Owner', 'finance', 'head-of-finance'),
   bot('head-of-marketing', 'Head of Marketing', 'marketing', 'human:ana'),
-  bot('content', 'Content Marketer', 'marketing', 'head-of-marketing'),
+  bot('content', 'Content Owner', 'marketing', 'head-of-marketing'),
   bot('head-of-product', 'Head of Product', 'product', 'human:ana'),
   bot('insights', 'Customer Insights Analyst', 'product', 'head-of-product'),
 ];
@@ -173,9 +173,9 @@ async function created(browser: import('playwright').Browser, theme: string) {
   assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('tasks'));
   await expand(page);
   const team = await rows(page);
-  // Bookkeeper is a built-in helper, off the Team tree (it opens from Finance).
+  // The Finance Owner is a built-in helper, off the Team tree (it opens from Finance).
   assert.equal(team.length, TEAM.length - 1);
-  assert.ok(!team.some(row => row.name === 'Bookkeeper'));
+  assert.ok(!team.some(row => row.name === 'Finance Owner'));
   readable(team, 'at desktop width');
   const heads = team.filter(row => row.name.startsWith('Head of '));
   assert.deepEqual(heads.map(row => row.name), ['Head of Engineering', 'Head of Finance', 'Head of Marketing', 'Head of Product']);

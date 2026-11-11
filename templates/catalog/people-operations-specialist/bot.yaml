@@ -1,0 +1,32 @@
+name: people-operations-specialist                     # the slug: it matches the repository bot-people-operations-specialist and the label owner:people-operations-specialist
+display_name: "People Operations Specialist"
+labels: [owner:people-operations-specialist]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 45
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-records-check
+    title: Weekly people records check
+    cron: "0 10 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-records-check.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools: []
+# Optional, uncomment when connected. There is deliberately no HR-system or identity-provider entry: records are read
+# from exports on tasks and a human with admin rights changes the systems.
+# tools:
+#   - service: gmail
+#     identity: "people@example.com"
+#     can: [read, draft]          # never send: drafts only; each letter goes when a person has turned mail sending on in Tico
+#     env: GOOGLE_SA_KEY
+#     note: "reads verification requests and leaves the reply as a draft; never sends or files"

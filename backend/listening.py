@@ -44,7 +44,7 @@ from . import hubdb as H
 from .models import Contract
 from .store import Problem
 
-LISTENER = "bot:listening"
+LISTENER = "bot:social-media-manager"
 QUESTION_SET = "listening-item"
 RUN_STATUSES = ("ok", "blocked", "rate_limited", "error")
 INTAKE_STATUSES = ("new", "accepted", "rejected", "duplicate")

@@ -53,7 +53,7 @@
       out:
         people:
           - {id: dana, name: "Dana Okafor", title: "Founder", team: leadership, primary_for: ["*"], about: "Decides direction, hiring and approvals."}
-          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing, finance], about: "Signs off prices, discounts and any spend over $1,000."}
+          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing-analyst, finance], about: "Signs off prices, discounts and any spend over $1,000."}
         bots:
           - {id: analytics, display_name: Analytics, description: "Pulls numbers from the billing and CRM exports and keeps the metrics sheet current.", team: finance, reports_to: priya, template: analytics}
           - {id: copywriter, display_name: Copywriter, description: "Drafts launch emails, pages and posts for review.", team: marketing, reports_to: dana, template: copywriter}
@@ -89,7 +89,7 @@
       out:
         people:
           - {id: dana, name: "Dana Okafor", title: "Founder", team: leadership, primary_for: ["*"], about: "Decides direction, hiring and approvals."}
-          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing, finance], about: "Signs off prices, discounts and any spend over $1,000."}
+          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing-analyst, finance], about: "Signs off prices, discounts and any spend over $1,000."}
         bots:
           - {id: copywriter, display_name: Copywriter, description: "Drafts launch emails, pages and posts for review.", team: marketing, reports_to: dana, template: copywriter}
           - {id: analytics, display_name: Analytics, description: "Pulls numbers from the billing and CRM exports and keeps the metrics sheet current.", team: finance, reports_to: priya, template: analytics}
@@ -121,7 +121,7 @@
       out:
         people:
           - {id: dana, name: "Dana Okafor", title: "Founder", team: leadership, primary_for: ["*"], about: "Decides direction, hiring and approvals."}
-          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing, finance], about: "Signs off prices, discounts and any spend over $1,000."}
+          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing-analyst, finance], about: "Signs off prices, discounts and any spend over $1,000."}
         bots:
           - {id: analytics, display_name: Analytics, description: "Pulls numbers from the billing and CRM exports and keeps the metrics sheet current.", team: finance, reports_to: priya, template: analytics}
           - {id: copywriter, display_name: Copywriter, description: "Drafts launch emails, pages and posts for review.", team: marketing, reports_to: dana, template: copywriter}
@@ -235,7 +235,7 @@
       out:
         people:
           - {id: dana, name: "Dana Okafor", title: "Founder", team: leadership, primary_for: ["*"], about: "Decides direction, hiring and approvals."}
-          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing, finance], about: "Signs off prices, discounts and any spend over $1,000."}
+          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing-analyst, finance], about: "Signs off prices, discounts and any spend over $1,000."}
         bots: []
         org_groups:
           - {id: finance, name: Finance}

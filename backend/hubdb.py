@@ -227,7 +227,7 @@ def counts_for_person(conn, message, reason, conversation_id):
     return True
 
 
-REVIEW_OWNER = "coo"  # rule 8's first review task
+REVIEW_OWNER = "assistant"  # rule 8's first review task
 FLEET_MAINTAINER = "botops"  # the fleet's maintainer bot: reviews refused writes and may start any bot's task
 BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
@@ -2538,7 +2538,7 @@ def _message_writer(conn, actor, msg, conv):
 def resolve_actor(conn: object, value: object) -> "str | None":
     """`cmo`, `bot:cmo`, `ana`, `human:ana`, `keeper` -> the actor string, or None.
 
-    A bare name no bot or person answers to is the one live bot built from that template (`marketing-lead`), if there is
+    A bare name no bot or person answers to is the one live bot built from that template (`growth-team-manager`), if there is
     exactly one and no open seat is set up from that template (`_template_owner`).
 
     None is what rule 2 refuses on: an address that is not a bot, a human or the keeper.
@@ -2561,7 +2561,7 @@ def resolve_actor(conn: object, value: object) -> "str | None":
 
 
 def _template_owner(conn, name):
-    """The one live bot built from the template `name` (a template's own `--owner marketing-lead`), as its actor.
+    """The one live bot built from the template `name` (a template's own `--owner growth-team-manager`), as its actor.
     None when no live bot is, or two are: an ambiguous name is still refused. An archived bot is not live. An open seat
     set up from the template (lifecycle.py: its `template`, closed once a bot fills it) is one more claim on the name."""
     if not _has_table(conn, "bot_settings"):
@@ -2919,8 +2919,8 @@ def open_conversation(
     if scope is None:
         scope = "task" if task_id else "direct"
         humans = [p for p in people if is_human(p)]
-        if kind == "chat" and len(humans) == 1 and "bot:coo" in people:
-            scope, owner_actor, room_key = "personal", humans[0], "coo"
+        if kind == "chat" and len(humans) == 1 and "bot:assistant" in people:
+            scope, owner_actor, room_key = "personal", humans[0], "assistant"
     if scope not in CONVERSATION_SCOPES:
         refuse(conn, actor, "scope", f"a conversation scope is {'|'.join(CONVERSATION_SCOPES)}, not {scope}")
     if scope == "personal":
@@ -3485,7 +3485,7 @@ def task_private(conn, row):
 
 def task_private_readable(conn, actor, row):
     """Private tasks admit their parties, their readers (`tasks.readers`, a group's by its members), bot parties’
-    org-chart managers, meeting participants and Counsel page copies' readers."""
+    org-chart managers, meeting participants and the Rules Owner page copies' readers."""
     if not row:
         return False
     row = dict(row)
@@ -3533,7 +3533,7 @@ def assistant_turn_person(who):
 # bots and `group:<id>`s). A group reader names everyone in it and in the groups under it, decided at each check, so
 # leaving the group takes the access away. Anyone who may change the task changes the list (set_task_readers), and
 # each add and remove is in the task's history. The inherited readers (bot parties' managers, meeting participants,
-# Counsel page copies) are task_private_readable's and are never listed.
+# The Rules Owner page copies) are task_private_readable's and are never listed.
 
 
 def task_readers(row):
@@ -3756,33 +3756,32 @@ def private_tasks_default(conn, actor, declared=None):
     return config.get("private_tasks_default", config.get("template") in PRIVATE_BY_TEMPLATE) is True
 
 
-# The templates whose tasks are private unless their config says otherwise: a general counsel's, and Counsel's (a
+# The templates whose tasks are private unless their config says otherwise: a general counsel's, and the Rules Owner's (a
 # document's text and a can-I question are a company's own, so a teammate who cannot read the source cannot read them).
-PRIVATE_BY_TEMPLATE = ("general-counsel", "tico-counsel")
-# The built-in Counsel's slug (backend/counsel.py): reserved under Tico's own name, so a company's own bot named
+PRIVATE_BY_TEMPLATE = ("general-counsel", "rules-owner")
+# The built-in Rules Owner's slug (backend/counsel.py): reserved under Tico's own name, so a company's own bot named
 # "counsel" (a legal team's, say) is never taken for it.
-COUNSEL = "tico-counsel"
-# The built-in Brand Owner's slug (docs/onboarding.md): it keeps the brand book. A company that hired a Brand Manager
-# under this slug before it was built in keeps that bot (backend/onboarding.py `_ensure_builtin`).
-BRAND_OWNER = "brand"
+RULES_OWNER = "rules-owner"
+# The built-in Design Owner's slug (docs/onboarding.md): it owns design and keeps the brand book.
+DESIGN_OWNER = "design-owner"
 # Bots the product names in code and refers to by slug (the built-in helpers and the assistant). Their id is their
 # slug, so that the actor string the code builds from the constant, `bot:<slug>`, is still the bot's actor. A bot a
 # person creates gets a UUIDv7 id (new_bot_id).
 PRODUCT_BOT_SLUGS = frozenset(
     {
         FLEET_MAINTAINER,
-        COUNSEL,
-        BRAND_OWNER,
+        RULES_OWNER,
+        DESIGN_OWNER,
         "librarian",
-        "goal-manager",
+        "strategy-owner",
         "task-manager",
         "health-monitor",
-        "bookkeeper",
+        "finance-owner",
         "doc-updater",
-        "support",
-        "coo",
+        "support-owner",
+        "assistant",
         "market-analyst",
-        "listening",
+        "social-media-manager",
         "cpo",
         "updates-owner",
         "automations-owner",
@@ -4574,11 +4573,11 @@ def _demote_sessions(conn, task_id, owner=None):
             )
 
 
-# Bots that keep nothing from one task to the next (Counsel): each task is judged on its own. Their runner starts a
+# Bots that keep nothing from one task to the next (the Rules Owner): each task is judged on its own. Their runner starts a
 # session for every task and never resumes one across tasks, reads and keeps no memory/ or state.md, copies no harness
 # memory into the repository, and gets no nightly learnings (backend/learnings.py roster). A bot's config says
 # `stateless: true`; a template listed here makes its bots stateless too, so bots built before the flag are.
-STATELESS_BY_TEMPLATE = ("tico-counsel",)
+STATELESS_BY_TEMPLATE = ("rules-owner",)
 
 
 def stateless(config):

@@ -90,7 +90,7 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         aid = routines.create(
             c,
             H.KEEPER,
-            'coo',
+            'assistant',
             {
                 'title': 'Review daily work',
                 'cron': '0 9 * * *',
@@ -105,7 +105,7 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         return [
             r[0]
             for r in c.execute(
-                "SELECT id FROM tasks WHERE owner_id='bot:coo' AND title='Review daily work' ORDER BY created_at, rowid"
+                "SELECT id FROM tasks WHERE owner_id='bot:assistant' AND title='Review daily work' ORDER BY created_at, rowid"
             )
         ]
 
@@ -131,7 +131,7 @@ def test_schedule_survives_restart_without_duplicate_work(api):
     with store.transaction() as c:
         previous = H.task_update(
             c,
-            'bot:coo',
+            'bot:assistant',
             fired[0],
             status=finished_status,
             note='Daily work reviewed.',

@@ -7,7 +7,7 @@ pass). Plan only, no code. Read against ticoteam/tico `origin/main` c15ff9b04. M
 
 A rule is one sentence, **Internal** (how teammates, bots and people, treat each other) or **External** (what someone
 outside requires of us). Its **Followed by** line says who follows it; an internal rule can also say **With** whom. From then on the bots
-it applies to know it. Counsel reads contracts and suggests external rules. A rule can have a **due date** with a status (Upcoming, Due soon, Overdue, Satisfied); a routine that
+it applies to know it. The Rules Owner reads contracts and suggests external rules. A rule can have a **due date** with a status (Upcoming, Due soon, Overdue, Satisfied); a routine that
 opens a task before it is optional.
 
 ## Why
@@ -24,8 +24,8 @@ opens a task before it is optional.
 
 **Rules** are the one new thing, in two kinds. Internal comes first: it's what Chris will start adding.
 - **Internal:** between teammates. "Never tell anyone what color you like" (Followed by: Everyone). "Ask Chris before
-  assigning him a task" (Followed by: all bots, With: Chris). "Don't ask Bookkeeper to pay anything" (Followed by: Marketing, With:
-  Bookkeeper).
+  assigning him a task" (Followed by: all bots, With: Chris). "Don't ask Finance Owner to pay anything" (Followed by: Marketing, With:
+  Finance Owner).
 - **External:** someone outside requires it, with a **From** (Twilio, Acme Corp, City of Austin, FTC) of kind
   Vendor, Customer, Government or Other.
 - Each is one sentence (up to 1000 characters) plus an optional description.
@@ -84,9 +84,9 @@ lives on other pages; on this page the button is **+ Add document**.
 4. **Rules › External** (board 4): the page is **Rules** with tabs **Internal · External · Due · Suggested**. External
    is a flat list with filters for From, Followed by and Due. Buttons: **+ Add document**, **+ Add rule**. The From filter's list replaces a Sources tab. Clicking a
    rule opens a side panel: edit the rule, a description, Followed by (company, departments or bots; + add), From;
-   see its due date and the cited quote; Retire / Save. No "Counsel is reading" banner.
+   see its due date and the cited quote; Retire / Save. No "The Rules Owner is reading" banner.
 5. **Add document** (board 5): one file or link, a short description ("We just closed our deal with Twilio"), and
-   From (or a new one plus a kind). It starts a Counsel review. (Finding public terms on its own is Later #1.)
+   From (or a new one plus a kind). It starts a Rules Owner review. (Finding public terms on its own is Later #1.)
 6. **Suggested** (board 6): grouped by From ("Twilio"). Each row is the sentence, Followed by, and Skip / Add.
    **Add all** adds the group with the scopes shown. The quote is stored and shows in the rule's side panel, not here.
 7. **Add rule** (board 7): Internal or External first; Internal asks Followed by and With, External asks Followed by and From.
@@ -94,7 +94,7 @@ lives on other pages; on this page the button is **+ Add document**.
    optional ("30 days before" or —). Status is Overdue / Due soon / Upcoming / Satisfied. Clicking a row opens a
    side panel: Due, Repeats, Owner, Routine, the status with **Mark satisfied**, and a history of past due dates
    (task closed, or marked by a person). **+ Add due date** picks a rule, then the same fields.
-9. **Counsel**: no page of its own (§5). Board 9 is the Ask panel conversation.
+9. **The Rules Owner**: no page of its own (§5). Board 9 is the Ask panel conversation.
 
 ## Shape
 
@@ -141,16 +141,16 @@ rule_due_status(due_date_id, due_on, satisfied_by, via routine|person, task_id?,
   version for review. No new snapshot store.
 - Every change writes `audit_log` (`org_rule:<id>`) with actor and `via`.
 
-### 2. Counsel reads a document and suggests rules
+### 2. The Rules Owner reads a document and suggests rules
 
-Adding a document opens a task for Counsel (a hidden helper, §5) with its own budget.
+Adding a document opens a task for the Rules Owner (a hidden helper, §5) with its own budget.
 
 1. **Read.**
    - Upload: the Files version.
    - Link: fetched through `clients/doc_fetch.py` and saved as a Files version (the cite target).
    - "Find public terms": search, then fetch the vendor's ToS, AUP and privacy pages.
 
-   Text is fenced as untrusted data in Counsel's prompt, and Counsel has no outbound tools. That's the real
+   Text is fenced as untrusted data in the Rules Owner's prompt, and the Rules Owner has no outbound tools. That's the real
    control. A screening "door" over a 60-page contract would mostly be theater, since the model layer reads 20k
    characters and fails open.
 2. **Extract** only obligations that bind *us* and that a bot or person could break. Each one gets:
@@ -158,7 +158,7 @@ Adding a document opens a task for Counsel (a hidden helper, §5) with its own b
    - the section and quote;
    - a suggested Who: the departments of bots granted that vendor's credential (`backend/credentials.py`),
      else ask;
-   - if the text has a date, the date stays in the sentence ("…every year by Nov 15"). Counsel doesn't suggest a
+   - if the text has a date, the date stays in the sentence ("…every year by Nov 15"). The Rules Owner doesn't suggest a
      routine (Later #13); a person sets one on the Due tab.
 
    No cap on the count: each one that binds us gets a suggestion. A document with none gets a one-line "read, nothing
@@ -373,24 +373,24 @@ legal rules are one user of it.
   - The routine's task is own work (the automation acts as the due date's owner), and own work is never capped
     (`task_caps.py`), so caps don't apply.
   - Retiring the rule asks whether to remove its due dates and routines.
-- The weekly summary (overdue, due in 14 days, missing an owner) is a Counsel task linked from the Due tab.
+- The weekly summary (overdue, due in 14 days, missing an owner) is a Rules Owner task linked from the Due tab.
 
 ### 5. General Counsel
 
-- Counsel is a hidden helper next to BotOps, the Strategy Owner and the Librarian (`backend/assistant.py`
+- The Rules Owner is a hidden helper next to BotOps, the Strategy Owner and the Librarian (`backend/assistant.py`
   `HELPERS`), because of One Assistant (Oct 29): people have one chat.
 - What people see:
   - "Can I text this list?" or "We signed Gusto, contract's in Files" goes to the Ask panel, and the Assistant hands
-    it to Counsel.
-  - Counsel's reviews show on the Rules › External page.
+    it to the Rules Owner.
+  - The Rules Owner's reviews show on the Rules › External page.
   - Its questions land in the person's existing Needs-you queue.
 - **Jobs:** review documents, answer "can I?" with cited rules, the weekly due summary, and (phase 2) re-read
   changes.
 - **Adding rules from chat:** when a person says "add a rule: only Chris runs payroll" in their own Assistant chat,
   the rule is written as them, `via: assistant`. That's how org changes already work (`instructed_org`,
-  `on_behalf_of`, Team rule `assistant_direct`). Rules Counsel finds in documents still need a tap.
-- **Bots** (Counsel included) can read and suggest; they can't accept rules on their own.
-- **Swappable** (optional): Settings picks which bot sits behind the Counsel helper. Nothing else is swappable
+  `on_behalf_of`, Team rule `assistant_direct`). Rules the Rules Owner finds in documents still need a tap.
+- **Bots** (the Rules Owner included) can read and suggest; they can't accept rules on their own.
+- **Swappable** (optional): Settings picks which bot sits behind the Rules Owner helper. Nothing else is swappable
   today, so this waits until someone asks.
 - Answers carry one short line: "Not legal advice. For real exposure, ask a lawyer."
 
@@ -399,16 +399,16 @@ legal rules are one user of it.
 ```
 tico rules list [--internal | --external] [--bot X | --mine | --from F | --with W]
 tico rules due [--next 90d]                                                     # due dates + status
-tico rules due add <rule> --on 2027-01-31 --repeats yearly --owner bookkeeper [--task-days 30]
+tico rules due add <rule> --on 2027-01-31 --repeats yearly --owner finance-owner [--task-days 30]
 tico rules due satisfied <rule|due-id> [--on 2027-01-31]
 tico rules edit <id> [--text ...] [--description ...] [--who ...] [--with ...] [--if-broken ...] [--reviewer ...]
 tico rules add "<sentence>" --who all-bots --with chris [--if-broken escalate --reviewer chris]   # internal
 tico rules add "<sentence>" --from twilio --who marketing[,bot:x]               # external
-tico rules read <file-id|url> --from twilio [--kind vendor] [--note "..."]     # starts a Counsel review
+tico rules read <file-id|url> --from twilio [--kind vendor] [--note "..."]     # starts a Rules Owner review
 tico rules suggested [--from F]   tico rules accept <id> [--who ...]   tico rules skip <id>   tico rules retire <id>
 tico rules check "<draft>" --to <teammate> [--as message|comment|task|assign]  # same check Decide runs on send
 tico rules appeal <hold-id> "<why>"                                             # a blocked bot asks its reviewer
-tico rules ask "<question>"                                                     # Counsel answers with cites
+tico rules ask "<question>"                                                     # the Rules Owner answers with cites
 ```
 
 - MCP: `tico_rules_list`, `tico_rules_add`, `tico_rules_read`, `tico_rules_suggested`, `tico_rules_accept`,
@@ -420,18 +420,18 @@ tico rules ask "<question>"                                                     
   hiding them is Later #14 if bots start gaming them). The quote follows
   its file's own visibility (`backend/files.py`). That check runs in the list, the bot tab, CLI, MCP and
   `tico audit`. The table stays off the SQL page, as `learned` does. A private contract gets a vaguer sentence,
-  which Counsel suggests.
+  which the Rules Owner suggests.
 
 ### 6.5 Finance coordination (agreed with the Finance dev, Oct 30)
 
-- **Bookkeeper** is Finance's built-in bot (off the org chart, appears when Finance is set up). Never "Finance Bot".
-- **Due dates:** sales tax, 1099s and franchise tax are rule due dates owned by Bookkeeper, with an optional routine.
+- **Finance Owner** is Finance's built-in bot (off the org chart, appears when Finance is set up). Never "Finance Bot".
+- **Due dates:** sales tax, 1099s and franchise tax are rule due dates owned by Finance Owner, with an optional routine.
   Whichever side ships first builds the due-date piece. The **monthly close stays Finance's own** (internal, starts on
   `finance.period.ready`, ends when the owner approves `close_period`) and doesn't depend on Rules. Bill and invoice due
   dates stay Finance events.
 - **Money is gated by Finance, not Decide.** Decide's check fails open, so obligations that must hold before money
   moves (W-9 before payout, sanctions) are Finance gate rules (`fin_rules`), linked to the external rule by
-  `external_rule_id` (an `org_rules` id of kind external). Counsel can suggest these gate rules; Finance has no Rules tab.
+  `external_rule_id` (an `org_rules` id of kind external). The Rules Owner can suggest these gate rules; Finance has no Rules tab.
   Payouts aren't a Rules check point.
 - `rule_sources` → `fin_contacts` link: optional on our side.
 - No shared runner release: Rules no longer changes the prompt.
@@ -466,7 +466,7 @@ government rules with citations into the same Suggested tab. Tico works fully wi
 |---|---|
 | 0 | Routines with a due date (§4), as a general routine feature. Useful on its own and can ship first |
 | 1 | **Internal first**, in three PRs: (a) records + audit + visibility; Rules page (Internal, External, Due, Suggested); Add rule (Who, With, From); rule side panel; bot Rules tab (internal incl. settings as sentences, then external); nav item; due dates + status, optional routine; `tico rules` + MCP. (b) Decide checks on outputs, live with Block by default, plus Escalate / Warn, appeal and the rule-check eval |
-| 1b | External from documents: Add document → Counsel (hidden helper) suggests with quotes → Add/Skip/Add all; eval set. Can ship right after 1 |
+| 1b | External from documents: Add document → the Rules Owner (hidden helper) suggests with quotes → Add/Skip/Add all; eval set. Can ship right after 1 |
 
 ## Later (agreed Oct 30: not now, keep working through)
 
@@ -475,14 +475,14 @@ government rules with citations into the same Suggested tab. Tico works fully wi
 3. (dropped: send/publish approvals are optional, so they aren't check points, §3)
 4. **"When something happens" deadlines** (tell Acme before adding an AI vendor), via wake-rules `judge_event`.
 5. (moved to phase 1: Internal rules, with settings shown as sentences)
-6. **Swappable Counsel.**
+6. **Swappable the Rules Owner.**
 7. **Vendor API wrappers + hub-only credentials** (§7), with their own plan.
 8. **laws.sh** suggestions through the Gateway.
 9. **Calendar view and .ics** for the Due tab.
-10. **Counsel suggests internal changes** (a contract caps spend → suggest a limit).
-11. **Conflicts view** (a vendor says X, a customer says not-X); until then Counsel flags it as one Needs-you.
+10. **The Rules Owner suggests internal changes** (a contract caps spend → suggest a limit).
+11. **Conflicts view** (a vendor says X, a customer says not-X); until then the Rules Owner flags it as one Needs-you.
 12. **Proof on close** (a routine's task needs a file before it closes), if it turns out we want it.
-13. **Counsel suggests a routine** for a dated rule (pre-filled Due, Repeats, Owner).
+13. **The Rules Owner suggests a routine** for a dated rule (pre-filled Due, Repeats, Owner).
 14. **Hide rules from bots** (or some of them) if bots use what they read to work around rules.
 15. (moved to phase 1: the 3rd same-rule block in a day turns into Escalate, §3)
 16. **More check points:** Slack channel posts, public roadmap comments.
@@ -535,12 +535,12 @@ government rules with citations into the same Suggested tab. Tico works fully wi
     due date with no routine can be marked by hand.
   - Overdue flips at the end of the day in the due date's zone; an edited repeat keeps its history.
 - **Evals:**
-  - Counsel: missed-obligation rate and quote-not-in-source rate on the ~20-document set.
+  - The Rules Owner: missed-obligation rate and quote-not-in-source rate on the ~20-document set.
   - Rule check: about 30 outputs × 10 rules, hand-labeled, scored on false-block rate. It picks Low or Medium.
 
 ## Open questions
 
-1. Is Counsel hidden behind the Assistant (One Assistant), or a visible teammate with its own page (board 7)? v3
+1. Is the Rules Owner hidden behind the Assistant (One Assistant), or a visible teammate with its own page (board 7)? v3
    chooses hidden.
 
 ## Review log
@@ -551,7 +551,7 @@ own monthly budget and a per-bot draft-check cap; one gate helper over every bot
 fields, owner's ask, bulk note, notes, automation `_note` / `_wake_bot` / `_post_update`, Slack replies); mail With
 via roster addresses; too-large is held; Send anyway nonce, `why` stays on the hold, cache hits count toward
 repeats; BotOps writes are checked; Everyone wording, Later #3, `with.anyone` dropped. Not taken: a person must
-satisfy a bot-owned due date (Chris chose no proof, and it would ping him for every Bookkeeper filing; the Due tab
+satisfy a bot-owned due date (Chris chose no proof, and it would ping him for every Finance Owner filing; the Due tab
 shows who marked it); quotes on Suggested rows (Chris asked for sentence, Who and Skip/Add only).
 
 **Second pass (v4), Oct 30:** Fable 5.1 high (`2026-10-30-rules-plan-review-fable-2.md`) on the post-v3 changes, and
@@ -610,10 +610,10 @@ Not taken:
 - A new snapshot store.
 - An outbox for vendor calls.
 - Dropping Add all.
-- Putting Counsel last.
+- Putting the Rules Owner last.
 
 **Fable 5.1 (high)**, `2026-10-30-rules-plan-review-fable.md`, checked against code. Taken into v3:
-- Counsel is a hidden helper (One Assistant).
+- The Rules Owner is a hidden helper (One Assistant).
 - Suggestions-first phase 1.
 - Reuse `strategy_bets` shape, Files versions, `market_watch` re-reads, and task refs instead of an occurrence table.
 - Scheduler job, not a built-in automation.

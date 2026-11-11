@@ -749,5 +749,5 @@ def matrix_scenario(seed):
         f"All-pairs coverage matrix, seed {seed}: {len(rows_)} combinations",
         steps,
         checks,
-        bots={"coo": ("assistant", "claude")},
+        bots={"assistant": ("assistant", "claude")},
     )  # the team's Assistant bot, which assistant:<person> names

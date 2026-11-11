@@ -28,7 +28,7 @@ These sit alongside `handoffs.md` and `approvals.md`.
   complete on its own. Attach it with `--visual <file>` and `--title <caption>` on your reply or comment.
 - **Design and video come from their bots**. For brand assets, designed graphics (ad and social
   images, landing-page visuals, icons) or edited video (scripts, edits, cuts, captions), file a task
-  for `designer` (Design) or `video-producer` (Video Producer): `tico task create --owner bot:designer --title ... --body ...`.
+  for `designer` (Design) or `video-owner` (Video Owner): `tico task create --owner bot:designer --title ... --body ...`.
   Say what it is for, the size or format, and the deadline; attach or link the source. The result
   comes back under `<slug>/deliverables/<task>/`. Do not buy them.
 - **Keep live copy accurate.** Edit, test and publish requested copy with your Tools. Public copy stays a draft until your sending policy in Tico lets you send (Outbound sends, below). See `documentation.md`.

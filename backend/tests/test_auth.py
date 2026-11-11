@@ -37,11 +37,11 @@ def test_local_owner_bearer_rejected_when_token_wrong(api):
 # A bot's own question to a person, and the wall around it. A routine's turn is granted its own
 # task and nothing else, which left every routine-only bot unable to ask anybody anything: the
 # monitors fell back to filing tasks on Ben instead. (2026-09-22.)
-def _row(kind="ask", participants=("bot:coo", "human:ben"), task_id=None):
+def _row(kind="ask", participants=("bot:assistant", "human:ben"), task_id=None):
     return {"kind": kind, "participants": list(participants), "task_id": task_id}
 
 
-def _turn(actor="bot:coo"):
+def _turn(actor="bot:assistant"):
     return SimpleNamespace(actor=actor, role="bot", agent=None, attempt_id="att-1")
 
 

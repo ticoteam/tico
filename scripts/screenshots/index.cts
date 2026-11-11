@@ -141,7 +141,7 @@ const PAGES: PageSpec[] = [
       'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
       'ui/styles/org-factories.css']},
   // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
-  {name: 'bot-chat', route: '#/bot/support', ready: 'No messages yet', ui: BOT_CHAT_UI},
+  {name: 'bot-chat', route: '#/bot/support-owner', ready: 'No messages yet', ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
     const list = (await (await fetch('/api/meetings')).json()) as Meeting[];

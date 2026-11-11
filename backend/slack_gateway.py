@@ -20,7 +20,7 @@ so there is no public receiver and no signing secret. What it does, in order, fo
    reply to the bot that last asked here?", "does it ask for anything?" and "does it name a
    bot?". The rules (`docs/slack-gateway.md`): asks below `slack_ask_threshold` wakes nobody;
    every bot at or above `slack_route_threshold` is a recipient, best `slack_max_recipients` by
-   confidence; none means the assistant (`coo`) with the candidates named; a recipient paused or
+   confidence; none means the assistant (`assistant`) with the candidates named; a recipient paused or
    quarantined since the roster was read keeps the message for when it is back, and the person is told; one the
    write layer refuses (archived, planned) is dropped with the reason, and the assistant again if
    that empties the set. Every score and answer is stored on the event and on the message. A call

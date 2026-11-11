@@ -43,9 +43,9 @@ PLAN_KEY = "onboarding.company_file"
 FAILED_KEY = "onboarding.company_import_failed"
 
 
-# The built-ins the chart shows in a team rather than in the Built-in group: the Finance Owner is the Bookkeeper, in
+# The built-ins the chart shows in a team rather than in the Built-in group: the Finance Owner, in
 # Corporate. Every other built-in stays in the Built-in group whatever team a file names.
-IN_TEAM_BUILT_INS = ("bookkeeper",)
+IN_TEAM_BUILT_INS = ("finance-owner",)
 SOFTWARE_DEPARTMENTS = ("product", "engineering")  # the default chart's seats a company that makes no software skips
 SOFTWARE_TEAMS = ("Product", "Engineering")  # and its teams: their Pipeline Managers are in Operations
 
@@ -150,7 +150,7 @@ def plan(onboarding, c, who, text):
                 "team": bot.get("team", ""),
                 "live": bool(bot.get("live")),
             }
-        # A built-in that sits in a team (the Finance Owner is the Bookkeeper) keeps a seat on its line, filled by the
+        # A built-in that sits in a team (the Finance Owner is the Finance Owner) keeps a seat on its line, filled by the
         # built-in bot itself: a manager hired above it later takes it along (recruiting._follow_filled).
         for slug, (bot, card) in builtins.items():
             if slug in IN_TEAM_BUILT_INS:
@@ -724,7 +724,7 @@ def _go_live(onboarding, c, who, seats, made, teams):
         lifecycle.fill_seat(c, who, seat_id, bot_id)
 
 
-REVIEWER_TEMPLATE = "pr-reviewer"  # Reviewer 1 and Reviewer 2 (pipeline_seats.TEMPLATES)
+REVIEWER_TEMPLATE = "reviewer"  # Reviewer 1 and Reviewer 2 (pipeline_seats.TEMPLATES)
 
 
 def second_reviewer_model(onboarding, c, first_card):
@@ -747,7 +747,7 @@ def second_reviewer_model(onboarding, c, first_card):
 def lay_out_chart(onboarding, c, who, seats):
     """A chart's seats (plan()'s `seats` shape) laid out as Recruiting seats. A seat with a team goes in the group of that
     name, one per name, made if missing; one without goes in its template's group, as it always has. A built-in's seat
-    (`fills`: the Finance Owner's is the Bookkeeper's) is filled at once by that bot as it is, which goes in the seat's
+    (`fills`: the Finance Owner's is the Finance Owner's) is filled at once by that bot as it is, which goes in the seat's
     group: no second bot and no setup task. `placed_under` keeps the line it is on, so a manager hired above its seat
     later takes it along (recruiting._follow_filled). Returns ({key: seat id}, {key: group id})."""
     teams = Groups.seat_teams(
@@ -804,7 +804,7 @@ def default_chart(onboarding, c, home):
     site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
     install lacks is left out, and a seat under it reports to the owner. A company that said software is not its
     product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`). The
-    Finance Owner's seat is filled by the Bookkeeper, as on import."""
+    Finance Owner's seat is filled by the Finance Owner, as on import."""
     from .company_file import chart_formula as F
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}

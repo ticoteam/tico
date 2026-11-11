@@ -16,8 +16,8 @@ ANA = X.ANA
 SEATS = [
     ("pm", "segment-product-owner", "Product Owner"),
     ("builder", "builder", "Builder"),
-    ("rev-a", "pr-reviewer", "Reviewer 1"),
-    ("rev-b", "pr-reviewer", "Reviewer 2"),
+    ("rev-a", "reviewer", "Reviewer 1"),
+    ("rev-b", "reviewer", "Reviewer 2"),
     ("rm", "release-owner", None),
 ]
 

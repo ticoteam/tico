@@ -23,7 +23,7 @@ from backend.finance.core.errors import CONFLICT, DENIED, NOT_AVAILABLE, Finance
 from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 from backend.tests.helpers.finance_oks import give
 
-BOT = "bot:bookkeeper"
+BOT = "bot:finance-owner"
 EMAIL = "ap@acme-retail.example"
 NEW_EMAIL = "ap@acme-new.example"
 BOX = "books@acme.example"
@@ -35,9 +35,9 @@ LATER = "2026-10-16T13:00:00.000000Z"
 
 def _mailbox(c, can=("read", "send"), box=BOX) -> None:
     tools = [{"service": "gmail", "identity": box, "can": list(can)}]
-    BS.write(c, "bookkeeper", {"team": "eng", "tools": tools})
+    BS.write(c, "finance-owner", {"team": "eng", "tools": tools})
     row = MA.ensure_mailbox(c, box, kind="shared", created_by=OWNER)
-    MA.grant(c, OWNER, row["id"], "bot", "bookkeeper", "read_write" if "send" in can else "read")
+    MA.grant(c, OWNER, row["id"], "bot", "finance-owner", "read_write" if "send" in can else "read")
     MA.grant(c, OWNER, row["id"], "person", "ana", "read_write")
 
 

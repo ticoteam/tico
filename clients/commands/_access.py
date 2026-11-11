@@ -1,4 +1,4 @@
-"""Who sees which tool: AUDIENCE, the Assistant's and Counsel's lists, `offered_to` and `listing`.
+"""Who sees which tool: AUDIENCE, the Assistant's and the Rules Owner's lists, `offered_to` and `listing`.
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 

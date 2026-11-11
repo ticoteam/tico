@@ -29,7 +29,7 @@ from backend.tests.helpers.finance_fixtures import (
 PLAIN = "human:eve"
 PAYABLES = "human:dan"  # a teammate whose view covers their own expenses and payables
 TIN = "00-0000001"
-BOOKKEEPER = {"bookkeeper": {"name": "bookkeeper", "runtime": "fake", "status": "active"}}
+BOOKKEEPER = {"finance-owner": {"name": "finance-owner", "runtime": "fake", "status": "active"}}
 
 
 @pytest.fixture
@@ -333,9 +333,9 @@ def test_a_jurisdiction_needs_a_vendor_authority_and_a_remittance_needs_one(keep
 def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
     with store.transaction() as c:
         # the shared fixture registers the Bookkeeper; a new install has none until its own set-up
-        c.execute("DELETE FROM bot_settings WHERE bot_id IN (SELECT id FROM bots WHERE slug=?)", ("bookkeeper",))
-        c.execute("DELETE FROM bot_config WHERE bot=?", ("bookkeeper",))
-        c.execute("DELETE FROM bots WHERE slug=?", ("bookkeeper",))
+        c.execute("DELETE FROM bot_settings WHERE bot_id IN (SELECT id FROM bots WHERE slug=?)", ("finance-owner",))
+        c.execute("DELETE FROM bot_config WHERE bot=?", ("finance-owner",))
+        c.execute("DELETE FROM bots WHERE slug=?", ("finance-owner",))
         assert FT.seed_dues(c, AT) == []
         FA.setup(c, OWNER, AT)
         assert FT.seed_dues(c, AT) == []
@@ -378,7 +378,7 @@ def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
             assert rules == 1, key
             assert len(dues) == 1, key
             owner, repeats, first_due, routine_id = dues[0]
-            assert (owner, routine_id is not None) == ("bot:bookkeeper", True), key
+            assert (owner, routine_id is not None) == ("bot:finance-owner", True), key
             assert (repeats, first_due) == first[key], key
 
 

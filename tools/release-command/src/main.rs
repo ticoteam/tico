@@ -373,7 +373,7 @@ fn file_writer_task(
     let writer = options
         .get("writer")
         .map(String::as_str)
-        .unwrap_or("docs-writer");
+        .unwrap_or("technical-writer");
     let range = format!("{}..{}", state.previous, state.version);
     let body = format!(
         "{version} is published. Its release notes are on its release-approval issue (label release-approval), built \

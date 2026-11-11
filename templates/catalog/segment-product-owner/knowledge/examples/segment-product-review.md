@@ -19,7 +19,7 @@ Two cohorts of this size moved 2 points: too small to call a trend.
 ## Ranked problems (last 30 days, distinct accounts)
 1. **"I can't connect my calendar when it is a shared calendar."** 14 accounts, 3 sources (2 calls, 9 tickets, 1 feedback theme). Activation 21% for the 14 (3 of 14), against 44% for the other 103 (45 of 103). Brief filed: task 4187. Previous rank: new.
 2. **"The onboarding checklist does not say what to do after step 3."** 11 accounts, 2 sources (1 call, 1 feedback theme). Activation gap 9 points. Watching: one more source needed before a brief.
-3. **"Invites go to spam."** 8 accounts, 2 sources (tickets). Activation gap 4 points. Routed to `support` as a delivery issue; watching.
+3. **"Invites go to spam."** 8 accounts, 2 sources (tickets). Activation gap 4 points. Routed to `support-owner` as a delivery issue; watching.
 
 ## Requests (not ranked)
 - "Add a Notion export": 6 accounts, 2 sources.
@@ -31,8 +31,8 @@ Two cohorts of this size moved 2 points: too small to call a trend.
 - Your manager: approve, change or decline brief 4187. Asked on 2026-11-02.
 
 ## Left out
-- 6 tickets about invoices: billing, routed to `support`.
-- 2 calls about pricing for a team plan: routed to `pricing`.
+- 6 tickets about invoices: billing, routed to `support-owner`.
+- 2 calls about pricing for a team plan: routed to `pricing-analyst`.
 
 ## Could not read
 - The usage export has no 90-day column, so retention at day 90 is not read.

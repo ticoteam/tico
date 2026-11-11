@@ -106,8 +106,8 @@ def rules_get(api, args):
 
 @tool(
     "tico_rules_read",
-    "Add a document for Counsel to read: a file you can read, or a public link (fetched now, saved as a "
-    "file version). Counsel suggests the obligations in it as rules, each with its quote, for a person to add or skip. "
+    "Add a document for the Rules Owner to read: a file you can read, or a public link (fetched now, saved as a "
+    "file version). The Rules Owner suggests the obligations in it as rules, each with its quote, for a person to add or skip. "
     "The Assistant adds it as the person, citing their words (on_behalf_of).",
     {
         "id": _s("A file id, or a public link"),
@@ -140,7 +140,7 @@ def rules_read(api, args):
 @tool(
     "tico_rules_ask",
     "A can-I question about the company's rules: the active rules that share words with it, cited, "
-    "and Counsel's answer on a task. Counsel answers from the rules only, and says it is not legal advice. The "
+    "and the Rules Owner's answer on a task. The Rules Owner answers from the rules only, and says it is not legal advice. The "
     "Assistant asks as the person, citing their words (on_behalf_of).",
     {"question": _s("The question, in one sentence"), "on_behalf_of": ASKED},
     required=("question",),

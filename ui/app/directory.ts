@@ -20,7 +20,7 @@ const DIR_RELATIONS: Record<string, string> = {
 // Where a row is known from (entity_sources.source_type, entity_values.source_type).
 const DIR_SOURCES: Record<string, string> = {
   mailbox: 'Mail', meeting: 'Meetings', finance_book: 'Finance', note_me: 'My note', market: 'Market', hub: 'Tico',
-  system: 'Tico', counsel: 'Counsel', company_page: 'Company page', places: 'Shared',
+  system: 'Tico', counsel: 'Rules Owner', company_page: 'Company page', places: 'Shared',
 };
 
 interface DirOrgRef { id: string; name: string; links_to_us: string[] }

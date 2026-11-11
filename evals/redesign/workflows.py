@@ -1399,7 +1399,7 @@ def wf4_hour_three(f):
 
 
 # ================================================================================================ 5 Stripe failure
-COO = "coo"  # the Assistant bot (backend/config.py assistant_bot): every person's Assistant is this bot
+ASSISTANT = "assistant"  # the Assistant bot (backend/config.py assistant_bot): every person's Assistant is this bot
 BILLING = "billing"
 STRIPE_SECRET = "whsec_acmepaymentsdesk0001"
 EVENT5 = {
@@ -2081,7 +2081,7 @@ WORKFLOWS = [
             Check("drafts are written on Dana's Assistant", W3, wf1_assistant),
             Check("each Slack message runs its channel's automation once; #random none", W3, wf1_slack),
         ],
-        bots={COO: ("coo", "claude")},
+        bots={ASSISTANT: ("assistant", "claude")},
     ),
     Scenario(
         "2",

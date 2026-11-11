@@ -296,13 +296,13 @@ async function renderScreeningCard(): Promise<void> {
 // names or finds as its Release Owner. Each keeps the permissions it had in Settings: the server's answers decide.
 function botBuiltinCardsHTML(slug: string): string {
   if (slug === 'task-manager') return '<section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>';
-  if (slug === 'goal-manager' && settingsStrategyBotShown()) return `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span></header>
+  if (slug === 'strategy-owner' && settingsStrategyBotShown()) return `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span></header>
     <div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>`;
   return '';
 }
 async function botBuiltinCardsMount(slug: string): Promise<void> {
   if (slug === 'task-manager') void renderTaskManagerCard();
-  if (slug === 'goal-manager') void renderSettingsStrategyBot();
+  if (slug === 'strategy-owner') void renderSettingsStrategyBot();
   const host = document.querySelector<HTMLElement>('#bot-builtin-cards');
   try { await releaseScheduleLoad(); } catch { return; }   // a team with no schedule to read has no Releases card
   if (botPageView()?.slug !== slug || !host?.isConnected || (RELEASE_VIEW?.bot || RELEASE_VIEW?.release_manager) !== slug) return;

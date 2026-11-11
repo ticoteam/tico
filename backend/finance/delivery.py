@@ -3,7 +3,7 @@
 A reminder or invoice enters the shared frozen send queue when the finance action commits. Its exact MIME,
 recipients and invoice document hash are bound to a send approval which still needs an authorized preview and yes.
 The finance decision alone never approves unseen MIME. The shared connector dispatches after approval and undo;
-the Bookkeeper reports the delivery outcome. A failed send raises one Needs-you for the finance admin, and an
+the Finance Owner reports the delivery outcome. A failed send raises one Needs-you for the finance admin, and an
 unreported send raises another after a day. Operation retries preserve the original frozen send.
 
 The ask carries the email's intent (`intent`: addresses, subject, text, document and mailbox), resolved when the action is
@@ -25,9 +25,9 @@ from .. import bot_settings as BS
 from .store import ap as SAP
 from .store import tico
 
-BOOKKEEPER = "bookkeeper"  # the Bookkeeper's slug; its stored bot config names the mailbox
+FINANCE_OWNER = "finance-owner"  # the Finance Owner's slug; its stored bot config names the mailbox
 SEND = "send"  # the Tico approval kind a mail send is checked against
-GMAIL = "gmail"  # the connector the Bookkeeper sends from
+GMAIL = "gmail"  # the connector the Finance Owner sends from
 MAIL = "mail"  # the resolved key an invoice email's intent is kept under (documents.py, actions.py)
 
 
@@ -66,11 +66,11 @@ def subject_of(stage: int | None, number: str) -> str:
 
 
 def mailbox(c: Any) -> str:
-    """The address the Bookkeeper sends from: its gmail tool in the stored bot config, with `send` in its `can`. Empty
+    """The address the Finance Owner sends from: its gmail tool in the stored bot config, with `send` in its `can`. Empty
     when it has none; then a reminder is refused and an invoice is sent without an email."""
-    if c.execute("SELECT 1 FROM bot_config WHERE bot=?", (BOOKKEEPER,)).fetchone() is None:
+    if c.execute("SELECT 1 FROM bot_config WHERE bot=?", (FINANCE_OWNER,)).fetchone() is None:
         return ""
-    config = BS.read(c, BOOKKEEPER)
+    config = BS.read(c, FINANCE_OWNER)
     tools: Any = tools_of(config)
     entries: list[Any] = cast(list[Any], tools) if isinstance(tools, list) else []
     for raw in entries:
@@ -178,7 +178,7 @@ def report(c: Any, at: str, invoice_id: str, stage: int | None, delivered: bool,
 
 def outcome(c: Any, send: Mapping[str, Any], status: str, detail: str) -> None:
     """The email queue's answer for one of Finance's invoice emails (email_sending `_outcome`), reported as the
-    Bookkeeper would: delivered once the provider took it; otherwise failed with what happened. Its OK was used before
+    Finance Owner would: delivered once the provider took it; otherwise failed with what happened. Its OK was used before
     the provider was called, so a failed one is never sent again under it. An email that is not an invoice's, or whose
     invoice row is gone or already delivered, is left alone: the queue's own write never fails on Finance's account."""
     from .context import load
@@ -204,7 +204,7 @@ def outcome(c: Any, send: Mapping[str, Any], status: str, detail: str) -> None:
 
 
 def queue_items(c: Any) -> list[dict[str, str]]:
-    """The Bookkeeper's queue items for invoice emails waiting to send. The text itself is read through Finance's
+    """The Finance Owner's queue items for invoice emails waiting to send. The text itself is read through Finance's
     invoice search (its `emails` field), so the label names the search rather than carrying the text."""
     items: list[dict[str, str]] = []
     for row in pending(c):
@@ -235,7 +235,7 @@ def watch(ctx: Ctx) -> int:
             continue
         title = f"Invoice email has no delivery report: {row['number']}{_which(row['stage'])}"
         body = (
-            "The Bookkeeper has not reported whether this email was sent. Check the mailbox before anything is "
+            "The Finance Owner has not reported whether this email was sent. Check the mailbox before anything is "
             "resent; a retry uses the same approval and the same text."
         )
         if tico.needs_you(ctx.c, admin_person(ctx), title, body):
@@ -244,7 +244,7 @@ def watch(ctx: Ctx) -> int:
 
 
 __all__ = [
-    "BOOKKEEPER",
+    "FINANCE_OWNER",
     "MAIL",
     "SEND",
     "digest",

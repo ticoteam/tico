@@ -173,7 +173,7 @@ def test_thread_tools_reach_the_routes_of_the_contract():
     run = lambda name, args: hubtools.BY_NAME[name]["fn"](recorder, args)
     run("tico_thread_home", {"actor": "bot:ops"})
     run("tico_thread_list", {"with": "human:ben", "limit": 5})
-    run("tico_thread_dm_group", {"members": ["human:ana", "bot:coo"], "body": "Hi"})
+    run("tico_thread_dm_group", {"members": ["human:ana", "bot:assistant"], "body": "Hi"})
     run("tico_thread_dm_group", {"members": ["human:cara"]})
     run("tico_thread_react", {"message_id": "m7", "emoji": ":+1:"})
     run("tico_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
@@ -182,14 +182,14 @@ def test_thread_tools_reach_the_routes_of_the_contract():
     run("tico_thread_pin", {"thread": "th1"})
     run("tico_thread_unpin", {"thread": "th1"})
     run("tico_thread_catch_up", {"limit": 5})
-    run("tico_thread_dm_group", {"members": ["human:ana", "bot:coo"], "title": "Launch"})
+    run("tico_thread_dm_group", {"members": ["human:ana", "bot:assistant"], "title": "Launch"})
     run("tico_thread_post", {"thread": "th1", "text": "Yes", "reply_to": "m7", "operation_id": "op2"})
     run("tico_thread_show", {"thread": "th1", "flat": True})
     run("tico_thread_bot_status", {"thread": "th1"})
     assert recorder.calls == [
         ("GET", "threads/home/bot:ops", {}),
         ("GET", "threads", {"with": "human:ben", "limit": 5}),
-        ("POST", "threads/dm", {"members": ["human:ana", "bot:coo"], "body": "Hi"}),
+        ("POST", "threads/dm", {"members": ["human:ana", "bot:assistant"], "body": "Hi"}),
         ("POST", "threads/dm", {"members": ["human:cara"], "body": None}),
         ("PUT", "messages/m7/reactions/:+1:", None),
         ("DELETE", "messages/m7/reactions/:+1:", None),
@@ -198,7 +198,7 @@ def test_thread_tools_reach_the_routes_of_the_contract():
         ("PUT", "threads/th1/pin", None),
         ("DELETE", "threads/th1/pin", None),
         ("GET", "threads/catch-up", {"limit": 5}),
-        ("POST", "threads/dm", {"members": ["human:ana", "bot:coo"], "body": None, "title": "Launch"}),
+        ("POST", "threads/dm", {"members": ["human:ana", "bot:assistant"], "body": None, "title": "Launch"}),
         ("POST", "threads/th1/messages", {"text": "Yes", "kind": "say", "in_reply_to": "m7"}),
         ("GET", "threads/th1/timeline", {"flat": 1}),
         ("GET", "threads/th1/bot-status", {}),
@@ -578,10 +578,10 @@ def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summ
         c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (anas["runner_id"],))
         c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (shared["runner_id"],))
         restrict(c, "finance", people=["ana"])
-    assign(api, anas, "coo")
+    assign(api, anas, "assistant")
     for bot in ("ops", "finance"):
         assign(api, shared, bot)
-    heavy_heartbeat(api, anas, ["coo"], 1)
+    heavy_heartbeat(api, anas, ["assistant"], 1)
     heavy_heartbeat(api, shared, ["ops", "finance"], 1)
     raw = get(api, "computers", "ben-test")
     err, listing = call(api, "tico_computer_list", token="ben-test")

@@ -423,7 +423,9 @@ class SettingsAdmin:
     def pick_slug(self, c, name, fallback="bot"):
         """A free slug from the bot's name: never one in use, archived or reserved for the company's own bots."""
         return free_slug(
-            name, lambda slug: bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug == "coo", fallback
+            name,
+            lambda slug: bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug == "assistant",
+            fallback,
         )
 
     def template_name(self, template):
@@ -539,7 +541,7 @@ class SettingsAdmin:
         if existing:
             raise Problem("duplicate", "That bot slug already exists", 409)
         bot_id = H.new_bot_id(body.slug)
-        if not privileged and (self.auth.system_bot(body.slug) or body.slug == "coo"):
+        if not privileged and (self.auth.system_bot(body.slug) or body.slug == "assistant"):
             # The company's own bots (the Assistant, BotOps, the Librarian, the COO) are added by an owner or an Admin.
             raise Problem(
                 "forbidden", "That name is reserved for the company's own bots; ask an owner or an admin", 403
@@ -870,16 +872,16 @@ class SettingsAdmin:
 
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
-        # The assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Bookkeeper, the Brand Owner, the Updates
+        # The assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner, the Design Owner, the Updates
         # Owner and the Automations Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,
             "botops",
             "librarian",
-            "goal-manager",
+            "strategy-owner",
             "task-manager",
-            "bookkeeper",
-            H.BRAND_OWNER,
+            "finance-owner",
+            H.DESIGN_OWNER,
             "updates-owner",
             "automations-owner",
         ):
@@ -894,10 +896,10 @@ class SettingsAdmin:
                     if bot == "librarian"
                     else "The Task Manager"
                     if bot == "task-manager"
-                    else "The Bookkeeper"
-                    if bot == "bookkeeper"
-                    else "The Brand Owner"
-                    if bot == H.BRAND_OWNER
+                    else "The Finance Owner"
+                    if bot == "finance-owner"
+                    else "The Design Owner"
+                    if bot == H.DESIGN_OWNER
                     else "The Updates Owner"
                     if bot == "updates-owner"
                     else "The Automations Owner"

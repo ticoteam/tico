@@ -104,7 +104,7 @@ EMPTY = (
     "task_manager_seen",
     "task_manager_reports",  # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
     "bookkeeper_seen",
-    "bookkeeper_watch_listed",  # the Bookkeeper's ledgers: the copy starts its checks fresh
+    "bookkeeper_watch_listed",  # the Finance Owner's ledgers: the copy starts its checks fresh
     "org_rule_holds",  # org rules: a held output could still be sent anyway from the copy
     "org_rule_verdicts",  # org rule checks: the model's verdicts, a cache
     "watcher_pending",

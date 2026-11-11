@@ -73,13 +73,13 @@ async function scenario(browser: Browser, name: string, down: (route: Route, mod
       if (state.mode !== 'ok') return down(route, state.mode);
     }
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/events') return;          // held open, as the server does between changes
     const room = {
       messages: [{id: 'm1', sender_id: 'human:ana', body: 'Draft the release notes', created_at: now}],
-      execution: {id: 'x1', state: 'running', bot: 'coo', conversation_id: 'c-coo', text: 'Working on it', started_at: now}};
+      execution: {id: 'x1', state: 'running', bot: 'assistant', conversation_id: 'c-coo', text: 'Working on it', started_at: now}};
     if (p === '/api/v2/assistant') return json(assistantView('c-coo', room));
     if (p === '/api/v2/conversations/c-coo/snapshot') return json(room);
     if (p === '/api/v2/tasks') return json({tasks: [], next_offset: null, cursor: '1.a'});

@@ -77,7 +77,7 @@ def test_the_listening_api_answers_with_the_code_and_audits_it_not_the_echoed_po
     from backend.tests.helpers.listening import _bots, _post, _token
 
     _bots(api)
-    listening = _token(api, "listening")
+    listening = _token(api, "social-media-manager")
     saved = post(
         api,
         "listening/runs",
@@ -88,7 +88,7 @@ def test_the_listening_api_answers_with_the_code_and_audits_it_not_the_echoed_po
     out = post(api, "listening/judge", {}, token=listening)
     assert out["judged"] == 0 and out["errors"] == [{"item_id": saved["items"][0]["id"], "error": "invalid"}]
     assert "7Q4X" not in json.dumps(out)
-    ((_, detail),) = events(api, "bot:listening")
+    ((_, detail),) = events(api, "bot:social-media-manager")
     assert detail["error"] == "invalid" and "7Q4X" not in json.dumps(detail)
 
 

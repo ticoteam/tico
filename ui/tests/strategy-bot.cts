@@ -24,16 +24,16 @@ const bot = (name: string, display_name: string, org_parent: string, over?: Reco
 // What the server sends: the Heads, and the Head's department (Marketing), hang under the Strategy Owner. For a person who
 // once chose Hide from my chart (`hidden`), nothing is moved under it and its row says `chart_hidden` (backend/strategy_bot.py).
 const bots = (name: string, home: boolean, hidden?: boolean, analyst?: boolean) => [
-  bot('coo', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'b:coo'), bot('librarian', 'Librarian', 'p:ana'),
-  bot('goal-manager', name, 'p:ana', {reports_to: '', can_manage: true, ...(hidden ? {chart_hidden: true} : {})}),
-  bot('cmo', 'Head of Marketing', hidden ? 'g:marketing' : 'b:goal-manager', {reports_to: '', team: 'marketing'}),
+  bot('assistant', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'b:assistant'), bot('librarian', 'Librarian', 'p:ana'),
+  bot('strategy-owner', name, 'p:ana', {reports_to: '', can_manage: true, ...(hidden ? {chart_hidden: true} : {})}),
+  bot('cmo', 'Head of Marketing', hidden ? 'g:marketing' : 'b:strategy-owner', {reports_to: '', team: 'marketing'}),
   bot('seo', 'SEO', 'b:cmo', {reports_to: 'cmo', team: 'marketing'}),
-  bot('scribe', 'Scribe', hidden ? '' : 'b:goal-manager', {reports_to: '', owner_id: 'ana', ...(home ? {team: 'home'} : {})}),
+  bot('scribe', 'Scribe', hidden ? '' : 'b:strategy-owner', {reports_to: '', owner_id: 'ana', ...(home ? {team: 'home'} : {})}),
   // Reports to the Strategy Owner itself and runs on Bo's computer: it hangs from the next row up, the owner.
-  ...(analyst ? [bot('analyst', 'Analyst', 'b:goal-manager', {reports_to: 'goal-manager', owner_id: 'bo'})] : []),
+  ...(analyst ? [bot('analyst', 'Analyst', 'b:strategy-owner', {reports_to: 'strategy-owner', owner_id: 'bo'})] : []),
 ];
 // With `home`, the owner and Scribe are in a group of their own, which the server never hangs under the Strategy Owner.
-const groups = (home: boolean, hidden?: boolean) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: hidden ? '' : 'b:goal-manager', order: 0},
+const groups = (home: boolean, hidden?: boolean) => [{id: 'marketing', name: 'Marketing', reports_to: '', parent: '', org_parent: hidden ? '' : 'b:strategy-owner', order: 0},
   ...(home ? [{id: 'home', name: 'Home', reports_to: '', parent: '', org_parent: '', order: 1}] : [])];
 
 async function open(browser: import('playwright').Browser, server: Server, width = 1440) {
@@ -86,13 +86,13 @@ async function check(page: import('playwright').Page, name = 'Strategy Owner') {
   // Off the Team chart, as the other built-ins are; the Head's department, the Head, its report and the bot with no
   // manager the server hung under it report to the owner, who is the top of the chart: they sit beside the owner's row,
   // the department first.
-  assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, 'the Strategy Owner is not on the Team tree');
+  assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0, 'the Strategy Owner is not on the Team tree');
   assert.deepEqual(await above(page, 'g:marketing'), [], 'the group the server hangs under it shows at the top, beside the owner');
   assert.deepEqual(await above(page, 'b:cmo'), ['g:marketing']);
   assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing']);
   assert.deepEqual(await above(page, 'b:scribe'), []);
   assert.deepEqual(await topRows(page), ['p:ana', 'g:marketing', 'b:scribe']);
-  assert.equal(await page.locator('#tree a.node[data-org="b:coo"]').count(), 0, 'the Assistant stays off the chart');
+  assert.equal(await page.locator('#tree a.node[data-org="b:assistant"]').count(), 0, 'the Assistant stays off the chart');
   // The Goals tab's tree nests them the same way; Strategy has no chat with it, and where it is named it uses its name.
   assert.deepEqual(await goalLines(page), ['bot:scribe@1', 'group:Marketing@1', 'bot:cmo@2', 'bot:seo@3']);
   assert.equal(await page.locator('#sbot, .gm-form').count(), 0, 'no Strategy Owner chat');
@@ -115,7 +115,7 @@ async function check(page: import('playwright').Page, name = 'Strategy Owner') {
     for (const width of [1280, 390]) {
       const server = {home: true};
       const {page, errors} = await open(browser, server, width);
-      assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, `${width}: not on the Team tree`);
+      assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0, `${width}: not on the Team tree`);
       // The owner's own group is not drawn (orgOwnGroupDissolve): what is in it sits at the top, beside the owner.
       assert.deepEqual(await above(page, 'b:scribe'), [], `${width}: Scribe at the top beside the owner`);
       assert.deepEqual(await above(page, 'g:marketing'), [], `${width}: Marketing at the top beside the owner`);
@@ -132,7 +132,7 @@ async function check(page: import('playwright').Page, name = 'Strategy Owner') {
       const server: Server = {name: 'Atlas', analyst: true, hidden: true};
       const {page, errors} = await open(browser, server);
       await page.locator('#tree [data-org="b:cmo"]').waitFor();
-      assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0);
+      assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0);
       assert.deepEqual(await above(page, 'b:analyst'), [], 'a bot reporting to it hangs from the next row up, the owner at the top');
       assert.deepEqual(await topRows(page), ['p:ana', 'g:marketing', 'b:analyst', 'b:scribe']);
       assert.deepEqual(await above(page, 'b:cmo'), ['g:marketing']);
@@ -142,11 +142,11 @@ async function check(page: import('playwright').Page, name = 'Strategy Owner') {
       // The page change draws a frame later (its fade); Settings' data can already be loaded before it does.
       await page.waitForFunction(() => S.route === '#/settings' && typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.models);
       await page.evaluate(() => settingsShow('bots'));
-      const row = page.locator('[data-settings-bot="goal-manager"]');
+      const row = page.locator('[data-settings-bot="strategy-owner"]');
       await row.waitFor();
-      assert.equal(await row.locator('a.sb-name').getAttribute('href'), '#/bot/goal-manager');
+      assert.equal(await row.locator('a.sb-name').getAttribute('href'), '#/bot/strategy-owner');
       assert.doesNotMatch(await row.innerText(), /chart/i);
-      await page.evaluate(() => { settingsEditBot('goal-manager', true); ($('#bot-editor') as HTMLDialogElement).showModal(); });   // as its settings tab draws it
+      await page.evaluate(() => { settingsEditBot('strategy-owner', true); ($('#bot-editor') as HTMLDialogElement).showModal(); });   // as its settings tab draws it
       await page.locator('#bot-editor input[name="display_name"]').waitFor();
       assert.doesNotMatch(await page.locator('#bot-editor').innerText(), /on your chart|from your chart|my chart/i);
       assert.equal(await page.locator('body').getByText(/Hide from my chart|Show on my chart/).count(), 0);

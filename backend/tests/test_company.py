@@ -9,7 +9,7 @@ from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.goal_asks import raise_level
 from backend.tests.helpers.company import bot, propose_why, with_strategy_bot
 
-STRATEGY_BOT = "bot:goal-manager"
+STRATEGY_BOT = "bot:strategy-owner"
 
 
 def goal(api, goal_id):

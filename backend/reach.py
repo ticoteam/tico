@@ -495,20 +495,20 @@ def remove_line(c, auth, who, line_id, via=None, checked=True):
 HELPERS = (
     "botops",
     "task-manager",
-    "goal-manager",
+    "strategy-owner",
     "librarian",
-    "support",
+    "support-owner",
     "assistant",
-    "bookkeeper",
-    H.COUNSEL,
-    H.BRAND_OWNER,
+    "finance-owner",
+    H.RULES_OWNER,
+    H.DESIGN_OWNER,
 )
 SOLICITED_DAYS = 7  # how far back a teammate's message to a bot makes the bot's answer to them solicited
 NAMES_SHOWN = 6  # the teammates a refusal names as the ones the bot does reach
 
 
 def helpers():
-    return HELPERS + (os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo",)
+    return HELPERS + (os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "assistant",)
 
 
 def _bot_row(ctx, ident):

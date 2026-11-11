@@ -64,8 +64,8 @@ ROLE_TEMPLATES = {
     PPM: "pipeline-manager",
     EM: "pipeline-manager",
     BUILDER: "builder",
-    REVIEWER_1: "pr-reviewer",
-    REVIEWER_2: "pr-reviewer",
+    REVIEWER_1: "reviewer",
+    REVIEWER_2: "reviewer",
     RELEASE: "release-owner",
 }
 SOFTWARE_BOTS = (PM, PPM, EM, REVIEWER_1, REVIEWER_2, RELEASE)

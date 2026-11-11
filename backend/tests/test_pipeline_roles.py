@@ -98,7 +98,7 @@ def test_a_role_bot_that_appears_later_takes_its_stages_from_the_stand_in(enviro
     onboarding = api.app.state.onboarding
     who = Identity("human:owner", "owner", OWNER_EMAIL)
     with api.app.state.store.transaction() as c:
-        for slug, template in (("reviewer-1", "pr-reviewer"), ("engineering-pipeline-manager", "pipeline-manager")):
+        for slug, template in (("reviewer-1", "reviewer"), ("engineering-pipeline-manager", "pipeline-manager")):
             choice = {"template": template, "display_name": slug, "instructions": ""}
             onboarding._define(c, who, slug, choice, onboarding._template(template))
     staffed = _staffing(_restart(environment))["engineering"]

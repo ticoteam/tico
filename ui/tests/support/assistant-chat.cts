@@ -1,8 +1,8 @@
 // The Assistant page's chat for scripts that used to open a bot's Chat tab (gone: a bot page is Home and DM now).
 // The Assistant (#/assistant) still runs the old chat engine (ui/app/chat.ts, pill.js) on its own room: the page asks
 // GET /api/v2/assistant for the room and its newest messages, and sends to POST /api/v2/assistant/messages. A script
-// routes those two itself and uses assistantView to build the first from a conversation snapshot. Its bot is 'coo'.
-const BOT = 'coo';
+// routes those two itself and uses assistantView to build the first from a conversation snapshot. Its bot is 'assistant'.
+const BOT = 'assistant';
 // What a script passes as the conversation snapshot: its newest messages, the cursor for older ones, and an execution.
 export interface AssistantSnapshot {
   messages?: unknown[];

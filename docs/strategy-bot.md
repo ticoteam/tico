@@ -1,7 +1,7 @@
 # Your Strategy Owner
 
 Every Tico install has a **Strategy Owner**, beside the Strategy tabs; like the other built-ins it is not on the
-[team chart](org-chart.md). Its slug is `goal-manager`, which keeps its KPI readings, goal history and old messages its own.
+[team chart](org-chart.md). Its slug is `strategy-owner`, which keeps its KPI readings, goal history and old messages its own.
 It owns three things, in this order: the team's [strategy](strategy.md), the org changes that follow from it (suggested in its chat, made when you say so),
 and the [goals and KPIs](goals-and-kpis.md) that say whether it is working. This page says how much it does, who
 changes that, and what stays yours. There is no On/Off switch: you choose how much it does, from **Passive** up.

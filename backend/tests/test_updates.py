@@ -39,16 +39,16 @@ def test_update_requests_never_wake_counsel_which_cannot_publish(api, kind):
     counsel_on(api)
     with api.app.state.store.transaction() as c:
         # Older installs may have both switches on. The posting boundary still applies.
-        c.execute("INSERT OR REPLACE INTO update_settings(bot,daily,weekly) VALUES(?,1,1)", (H.COUNSEL,))
+        c.execute("INSERT OR REPLACE INTO update_settings(bot,daily,weekly) VALUES(?,1,1)", (H.RULES_OWNER,))
         updates.build_queue(c, "2026-09-29", kind)
-        assert not c.execute("SELECT 1 FROM update_queue WHERE bot=?", (H.COUNSEL,)).fetchone()
+        assert not c.execute("SELECT 1 FROM update_queue WHERE bot=?", (H.RULES_OWNER,)).fetchone()
         assert c.execute("SELECT 1 FROM update_queue WHERE bot='ops'").fetchone()
-        assert H.COUNSEL not in updates.redo(c, kind, "2026-09-29")
+        assert H.RULES_OWNER not in updates.redo(c, kind, "2026-09-29")
         with pytest.raises(Problem):
-            updates.redo(c, kind, "2026-09-29", [H.COUNSEL])
-        assert updates.settings(c, H.COUNSEL) == {"daily": False, "weekly": False}
+            updates.redo(c, kind, "2026-09-29", [H.RULES_OWNER])
+        assert updates.settings(c, H.RULES_OWNER) == {"daily": False, "weekly": False}
         with pytest.raises(Problem):
-            updates.set_settings(c, H.COUNSEL, **{kind: True})
+            updates.set_settings(c, H.RULES_OWNER, **{kind: True})
 
 
 def test_an_old_queued_counsel_update_is_skipped_without_sending_a_request(api):
@@ -58,12 +58,12 @@ def test_an_old_queued_counsel_update_is_skipped_without_sending_a_request(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO update_queue(id,bot,kind,day,rank,state) VALUES(?,?,'daily',?,0,'queued')",
-            ("old-counsel-update", H.COUNSEL, MORNING.date().isoformat()),
+            ("old-counsel-update", H.RULES_OWNER, MORNING.date().isoformat()),
         )
         assert updates.dispatch(c, MORNING) is None
         row = c.execute("SELECT state,message_id FROM update_queue WHERE id='old-counsel-update'").fetchone()
         assert tuple(row) == ("skipped", None)
-        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (H.COUNSEL,)).fetchone()
+        assert not c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (H.RULES_OWNER,)).fetchone()
 
 
 def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
@@ -221,18 +221,18 @@ def test_people_post_their_own_update_and_alerts_come_only_from_direct_reports(a
         boss, analyst = bot_id(c, "boss"), bot_id(c, "analyst")
         updates.post(c, boss, "- Planned the launch", day="2026-09-29")
         updates.post(c, analyst, "- Sized the market", day="2026-09-29")
-        updates.post(c, "human:ben", "- Met two customers", day="2026-09-29", drafted_by="coo")
+        updates.post(c, "human:ben", "- Met two customers", day="2026-09-29", drafted_by="assistant")
 
     def redraft():
         with store.transaction() as c:
             try:
-                updates.post(c, "human:ben", "- Redrafted", day="2026-09-29", drafted_by="coo")
+                updates.post(c, "human:ben", "- Redrafted", day="2026-09-29", drafted_by="assistant")
                 raise AssertionError("a draft landed over the person's own words")
             except Problem as e:
                 assert e.status == 409
 
     edited = post(api, "updates", {"body": "- Met three customers"}, token="ben-test")["update"]
-    assert edited["bot"] == "human:ben" and edited["drafted_by"] == "coo" and edited["edited_by"] == "human:ben"
+    assert edited["bot"] == "human:ben" and edited["drafted_by"] == "assistant" and edited["edited_by"] == "human:ben"
     redraft()  # over the words they edited
     own = post(api, "updates", {"body": "- Met three customers", "replace_draft": True}, token="ben-test")["update"]
     assert own["drafted_by"] is None and own["edited_by"] is None
@@ -421,23 +421,23 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot IN ('finance','ops')")
         updates.post(c, "ops", "- Ops shipped the runbook", day="2026-09-29")
         updates.post(c, "finance", "- Restricted numbers moved", day="2026-09-29")
-        updates.build_queue(c, "2026-09-29", "daily", "coo")
+        updates.build_queue(c, "2026-09-29", "daily", "assistant")
         people = [r["bot"] for r in c.execute("SELECT bot FROM update_queue WHERE bot LIKE 'human:%' ORDER BY rank")]
         assert "human:cara" not in people, "drafting turns off per person"
         assert people.index("human:ben") < people.index("human:ana"), "a person's reports are drafted first"
         c.execute("UPDATE update_queue SET state='posted' WHERE bot NOT LIKE 'human:%'")
     post(api, "updates", {"body": "- Met two customers"}, token="ben-test")
     with store.transaction() as c:
-        assert updates.dispatch(c, MORNING, "coo") == "human:ana", "ben wrote his own; ana's draft is next"
-        assert updates.dispatch(c, MORNING, "coo") is None, "one at a time: nothing more while her draft is out"
+        assert updates.dispatch(c, MORNING, "assistant") == "human:ana", "ben wrote his own; ana's draft is next"
+        assert updates.dispatch(c, MORNING, "assistant") is None, "one at a time: nothing more while her draft is out"
     seen = []
 
     def write(system, user):
         seen.append(system + "\n" + user)
         return {"body": "- Shipped the pricing page"}
 
-    draft = updates.write_draft(store, "human:ana", write, "coo")
-    assert draft["bot"] == "human:ana" and draft["drafted_by"] == "coo"
+    draft = updates.write_draft(store, "human:ana", write, "assistant")
+    assert draft["bot"] == "human:ana" and draft["drafted_by"] == "assistant"
     assert "Ship the pricing page" in seen[0] and "Ops shipped" in seen[0] and "Met two customers" in seen[0]
     for shared in (
         "Approve the ad budget: Done",
@@ -470,13 +470,13 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
 
     with store.transaction() as c:
         c.execute("UPDATE update_queue SET state='sent', sent_at=? WHERE bot='human:ana'", (H.now(),))
-    assert updates.write_draft(store, "human:ana", fails, "coo") is None
+    assert updates.write_draft(store, "human:ana", fails, "assistant") is None
     with store.transaction() as c:
         assert c.execute("SELECT state, tries FROM update_queue WHERE bot='human:ana'").fetchone()[:] == ("queued", 1)
     post(api, "updates", {"body": "- Signed the lease", "replace_draft": True})
     with store.transaction() as c:
         c.execute("UPDATE update_queue SET state='sent', sent_at=? WHERE bot='human:ana'", (H.now(),))
-    assert updates.write_draft(store, "human:ana", write, "coo") is None, "never over her own words"
+    assert updates.write_draft(store, "human:ana", write, "assistant") is None, "never over her own words"
     with store.read() as c:
         assert c.execute("SELECT body FROM updates WHERE bot='human:ana'").fetchone()[0] == "- Signed the lease"
 
@@ -484,13 +484,15 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     friday = "2026-10-02"
     monkeypatch.setattr(updates, "today", lambda at=None: friday)
     with store.transaction() as c:
-        updates.build_queue(c, friday, "weekly", "coo")
+        updates.build_queue(c, friday, "weekly", "assistant")
         c.execute("UPDATE update_queue SET state='posted' WHERE day=? AND bot NOT LIKE 'human:%'", (friday,))
     post(api, "updates", {"body": "- Met the auditors", "kind": "daily"}, token="ben-test")
     with store.transaction() as c:
         c.execute("UPDATE update_queue SET state='sent', sent_at=? WHERE bot='human:ben' AND day=?", (H.now(), friday))
     calls = len(seen)
-    assert updates.write_draft(store, "human:ben", write, "coo") is None and len(seen) == calls, "not even a model call"
+    assert updates.write_draft(store, "human:ben", write, "assistant") is None and len(seen) == calls, (
+        "not even a model call"
+    )
     with store.transaction() as c:
         assert c.execute(
             "SELECT state, reason FROM update_queue WHERE bot='human:ben' AND day=?", (friday,)
@@ -499,28 +501,28 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
             "no week in review is drafted beside his own daily"
         )
         try:
-            updates.post(c, "human:ben", None, kind="weekly", day=friday, slides=SLIDES, drafted_by="coo")
+            updates.post(c, "human:ben", None, kind="weekly", day=friday, slides=SLIDES, drafted_by="assistant")
             raise AssertionError("a draft landed beside his own words")
         except Problem as e:
             assert e.status == 409
         c.execute("UPDATE update_queue SET state='queued' WHERE bot='human:ben' AND day=?", (friday,))
-        assert updates.dispatch(c, FRIDAY, "coo") == "human:ana", "the queue closes his row the same way"
+        assert updates.dispatch(c, FRIDAY, "assistant") == "human:ana", "the queue closes his row the same way"
         assert (
             c.execute("SELECT reason FROM update_queue WHERE bot='human:ben' AND day=?", (friday,)).fetchone()[0]
             == updates.OWN
         )
     # With no words of her own, a model answer of any shape (slides as a string) is asked again...
-    assert updates.write_draft(store, "human:ana", lambda system, user: {"slides": "Shipped it"}, "coo") is None
+    assert updates.write_draft(store, "human:ana", lambda system, user: {"slides": "Shipped it"}, "assistant") is None
     with store.transaction() as c:
         assert c.execute("SELECT state, tries FROM update_queue WHERE bot='human:ana' AND day=?", (friday,)).fetchone()[
             :
         ] == ("queued", 1)
         c.execute("UPDATE update_queue SET state='sent', sent_at=? WHERE bot='human:ana' AND day=?", (H.now(), friday))
     # ...and her draft is a week in review she edits, then replaces with her own words.
-    week = updates.write_draft(store, "human:ana", lambda system, user: {"slides": SLIDES}, "coo")
-    assert week["kind"] == "weekly" and week["drafted_by"] == "coo" and week["slides"]["goal"] == SLIDES["goal"]
+    week = updates.write_draft(store, "human:ana", lambda system, user: {"slides": SLIDES}, "assistant")
+    assert week["kind"] == "weekly" and week["drafted_by"] == "assistant" and week["slides"]["goal"] == SLIDES["goal"]
     edited = post(api, "updates", {"kind": "weekly", "slides": {**SLIDES, "goal": "Grow signups; at 320."}})["update"]
-    assert edited["id"] == week["id"] and edited["drafted_by"] == "coo" and edited["edited_by"] == "human:ana"
+    assert edited["id"] == week["id"] and edited["drafted_by"] == "assistant" and edited["edited_by"] == "human:ana"
     own = post(api, "updates", {"kind": "weekly", "slides": SLIDES, "replace_draft": True})["update"]
     assert own["id"] == week["id"] and own["drafted_by"] is None and own["edited_by"] is None
 
@@ -533,7 +535,7 @@ def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (
         ("botops", "BotOps"),
-        ("goal-manager", "Strategy Owner"),
+        ("strategy-owner", "Strategy Owner"),
         ("librarian", "Librarian"),
         ("task-manager", "Task Manager"),
     ):
@@ -545,7 +547,7 @@ def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
     node = lambda slug: "b:" + bid(api, slug)
     for path in ("updates/tree", "updates/tree?scope=all", "updates/tree?kind=weekly&scope=all"):
         tree = get(api, path)
-        assert not {node("botops"), node("goal-manager"), node("librarian"), node("task-manager")} & set(
+        assert not {node("botops"), node("strategy-owner"), node("librarian"), node("task-manager")} & set(
             keys(tree["roots"])
         ), path
         assert node("scout") in [n["key"] for r in tree["roots"] for n in r["children"]], path + ": under the owner"
@@ -708,7 +710,7 @@ def test_a_persons_draft_with_nothing_real_to_say_posts_nothing(api):
             "VALUES('draft-skip','human:ana','daily','2026-09-29',0,'sent',?)",
             (H.now(),),
         )
-    assert updates.write_draft(store, "human:ana", lambda system, user: {"skip": True}, "coo") is None
+    assert updates.write_draft(store, "human:ana", lambda system, user: {"skip": True}, "assistant") is None
     with store.read() as c:
         assert tuple(c.execute("SELECT state, reason FROM update_queue WHERE id='draft-skip'").fetchone()) == (
             "skipped",

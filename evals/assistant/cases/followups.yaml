@@ -194,8 +194,8 @@
             line: "Should the staging banner stay on through the holiday week?"
             missing: ["Should the staging banner stay on through the holiday week?"]
             since: "2026-11-02T11:00:00Z"
-            task: {id: 0b7e4c19-8300-4000-8000-000000000001, number: 88, title: "Staging banner over the holiday week", status: open, version: 4, pipeline_id: engineering, stage_id: build, owner: "bot:engineering-lead"}
-            ask: {requirement_id: 2c8f4d10-8300-4000-8000-000000000001, kind: answer, line: "Should the staging banner stay on through the holiday week?", met: false, who: "human:dana", asked_by: "bot:engineering-lead", choices: ["Keep it", "Take it down on Nov 10"], shows: [], answer: null, may: [answer, give]}
+            task: {id: 0b7e4c19-8300-4000-8000-000000000001, number: 88, title: "Staging banner over the holiday week", status: open, version: 4, pipeline_id: engineering, stage_id: build, owner: "bot:engineering-team-manager"}
+            ask: {requirement_id: 2c8f4d10-8300-4000-8000-000000000001, kind: answer, line: "Should the staging banner stay on through the holiday week?", met: false, who: "human:dana", asked_by: "bot:engineering-team-manager", choices: ["Keep it", "Take it down on Nov 10"], shows: [], answer: null, may: [answer, give]}
           - kind: ask
             id: 9a3d5e21-8300-4000-8000-000000000002
             task_id: 6d2b8e17-8300-4000-8000-000000000002

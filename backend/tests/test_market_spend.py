@@ -306,7 +306,7 @@ def test_an_accepted_size_change_on_a_cited_segment_trips_the_bet_once_and_a_pro
     post(api, f"market/sizes/{two['id']}/accept", {})
     with api.app.state.store.read() as c:
         tasks = H._rows(c.execute("SELECT title, owner_id, body FROM tasks WHERE title LIKE 'Bet %'"))
-    assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:goal-manager")]
+    assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:strategy-owner")]
     assert first in tasks[0]["body"]
 
 

@@ -1,6 +1,6 @@
-name: coo                     # the slug: it matches the repository bot-coo and the label owner:coo
+name: assistant                     # the slug: it matches the repository bot-assistant and the label owner:assistant
 display_name: "{{assistant_name}}"
-labels: [owner:coo]
+labels: [owner:assistant]
 reads: []                        # other bot repositories this one may clone read-only
 
 # These must agree with the bot's settings on the server, or be left out of this file entirely.

@@ -47,7 +47,7 @@ def fill(c):
                 "on_track",
                 "at_risk",
                 "slipped",
-                "bot:coo",
+                "bot:assistant",
                 "check",
             ),
             ("g2", "goal-1", "2026-01-02T00:00:01Z", "human:ana", "title", "Old", "New", "", None, None),
@@ -65,7 +65,7 @@ def fill(c):
     )
     c.execute("INSERT INTO company_events VALUES('c1','2026-01-04T00:00:00Z','human:ana','mission','','Ship')")
     c.execute(
-        "INSERT INTO strategy_events VALUES('s1','thesis.set','bot:goal-manager','2026-01-05T00:00:00Z',"
+        "INSERT INTO strategy_events VALUES('s1','thesis.set','bot:strategy-owner','2026-01-05T00:00:00Z',"
         "'{\"thesis\":\"Acme wins\"}')"
     )
 
@@ -106,7 +106,7 @@ def test_the_five_logs_move_into_one_table_with_every_value_kept(tmp_path):
     ]
     goal = rows(c, "goal")
     assert [row[0] for row in goal] == ["g1", "g2", "goal:shared"]  # the clashing id keeps its row, with its type
-    assert json.loads(goal[0][9]) == {"status_by": "bot:coo", "status_source": "check"} and goal[1][9] is None
+    assert json.loads(goal[0][9]) == {"status_by": "bot:assistant", "status_source": "check"} and goal[1][9] is None
     assert goal[0][1:7] == ("goal-1", "human:ana", "status", "on_track", "at_risk", "slipped")
     assert [(row[0], row[3]) for row in rows(c, "market_entity")] == [("m1", "name")]
     assert json.loads(rows(c, "market_entity")[0][9]) == {"insight_id": "ins-1"}
@@ -119,7 +119,7 @@ def test_the_five_logs_move_into_one_table_with_every_value_kept(tmp_path):
         ("c1", "company", "human:ana", "mission", "", "Ship", None, None, None, None, "2026-01-04T00:00:00Z")
     ]
     strategy = rows(c, "strategy")
-    assert strategy[0][:4] == ("s1", "strategy", "bot:goal-manager", "thesis.set")
+    assert strategy[0][:4] == ("s1", "strategy", "bot:strategy-owner", "thesis.set")
     assert json.loads(strategy[0][9]) == {"thesis": "Acme wins"}
 
 
@@ -209,7 +209,7 @@ def test_the_readers_answer_what_the_old_tables_did(tmp_path):
     fill(c)
     c.execute("INSERT INTO company_events VALUES('c2','2026-01-04T00:00:01Z','human:ana','vision','Old','New')")
     c.execute(
-        "INSERT INTO strategy_events VALUES('s2','bet_tripped','bot:goal-manager','2026-01-06T00:00:00Z',"
+        "INSERT INTO strategy_events VALUES('s2','bet_tripped','bot:strategy-owner','2026-01-06T00:00:00Z',"
         "'{\"bet_id\":\"b1\",\"n\":3}')"
     )
     golden = {

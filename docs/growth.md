@@ -68,7 +68,7 @@ Tico computes the channel numbers from these inputs, so nobody types a computed 
 - **LTV:CAC** = LTV ÷ CAC.
 - **Payback** = CAC ÷ profit per month, in months.
 
-**Who enters them.** The Head of Marketing (the `marketing-lead` template) enters each month's rows and the KPI readings
+**Who enters them.** The Head of Marketing (the `growth-team-manager` template) enters each month's rows and the KPI readings
 it owns, or that a goal it owns uses, in its weekly numbers routine. The routine ships off like every template routine: the bot's onboarding turns it on. It
 runs on Mondays at 07:00, before the growth meeting. Turn it off or on with `tico automation update <id> --disable` or
 `--enable`.

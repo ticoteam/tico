@@ -34,7 +34,7 @@ from .store import Problem
 log = logging.getLogger("tico.lenses")
 
 LENSES_DIR = Path(__file__).resolve().parent / "lenses"
-STRATEGY_BOT = "bot:goal-manager"
+STRATEGY_BOT = "bot:strategy-owner"
 LIBRARIAN = "bot:librarian"
 STALE_S = 600  # a run going this long was cut off by a restart
 PROMPT_CHARS = 24_000  # the whole model input

@@ -39,7 +39,7 @@ Three quotes a week is about 13 in the last 30 days. That is under the 15-conver
 
 ## Needs a human
 
-- Microsoft Ads counts phone calls as repairs, and the export does not split them, so the 14 Microsoft repairs may include calls. Routed to `marketing-ops` to split call conversions from bookings.
+- Microsoft Ads counts phone calls as repairs, and the export does not split them, so the 14 Microsoft repairs may include calls. Routed to `marketing-operations-manager` to split call conversions from bookings.
 
 ## Could not read
 

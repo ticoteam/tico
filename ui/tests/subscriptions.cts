@@ -66,7 +66,7 @@ function fixtures(): Data {
         {version: '0.5.4', release: '0.5.19',
           turn_counts: {running: 1, starting: 0, waiting: 0, queued: 55, waits: []}, turn_summary: '1 running · 0 starting · 55 queued · 0 waiting'}),
       machine('r2', 'Cloud · shared', 'ana', ['scout'], {claude: missing, codex: missing}),
-      machine('r3', 'Cloud · Video Producer', 'ana', ['video'], {claude: missing, codex: missing},
+      machine('r3', 'Cloud · Video Owner', 'ana', ['video'], {claude: missing, codex: missing},
         {cloud_machine: {state: 'stopped'}, last_seen_at: new Date(Date.now() - 2 * 3600e3).toISOString()}),
       machine('r4', "Sam's Mac", 'sam', [], {claude: ready, codex: missing}, {version: '0.4.2',
         turn_counts: {running: 0, starting: 0, waiting: 3, queued: 0, waits: []},
@@ -283,7 +283,7 @@ async function modelsTab(browser: Browser) {
   assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
   assert.equal(await pane.locator('[data-subs-row=s6] .subs-bar').count(), 0);
   assert.equal(await pane.locator('[data-subs-row=s6] .subs-use .subs-usage.muted').count(), 1);
-  assert.equal(await pane.locator('[data-subs-row=s1] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Producer');
+  assert.equal(await pane.locator('[data-subs-row=s1] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Owner');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count .nav-icon').count(), 1);
   // The Gateway is one toggle; the key, address and spend wait behind Advanced. No four-way choice, no provider boxes.
   assert.equal(await pane.locator('[data-provider-preset], [data-provider]').count(), 0);

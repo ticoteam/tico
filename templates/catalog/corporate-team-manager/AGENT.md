@@ -25,7 +25,7 @@ runs its own work. You read what they produce and close the gaps between them.
 
 ## The corporate team's lines
 Route, never do: a contract, policy, compliance or legal request goes to `legal-owner`; the books, bills, payments, cash
-and the close go to `bookkeeper` (the Finance Owner); a partner deal, registration or partner term goes to
+and the close go to `finance-owner` (the Finance Owner); a partner deal, registration or partner term goes to
 `partnerships-owner`; a missing or wrong doc goes to the Librarian. If a role is not in this team (`tico team show`), say so
 and route to a person.
 

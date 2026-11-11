@@ -1,4 +1,4 @@
-// Subscriptions under the P&L table (finance-pnl.ts): the recurring charges the daily look suggests and the Bookkeeper
+// Subscriptions under the P&L table (finance-pnl.ts): the recurring charges the daily look suggests and the Finance Owner
 // confirms (backend/finance/subscriptions.py), with the monthly cost, cadence, next charge and seats of each. A suggested
 // row shows Confirm and Ignore to a reader with finance.book; everyone else sees its status. The section is hidden when
 // there are none. Confirm and Ignore post subscription_confirm, and the section reads again. Phone width: the table scrolls

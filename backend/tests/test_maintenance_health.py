@@ -491,7 +491,7 @@ def legacy_db(botops="active", health_monitor="active"):
     such bot), with its findings, its watcher links and its open tasks; the production checks have alerts open."""
     conn = sqlite3.connect(":memory:")
     conn.executescript(LEGACY_SCHEMA)
-    bots = [("coo", "active"), ("botops", botops)] + ([(HM_SLUG, health_monitor)] if health_monitor else [])
+    bots = [("assistant", "active"), ("botops", botops)] + ([(HM_SLUG, health_monitor)] if health_monitor else [])
     conn.executemany("INSERT INTO bots(id,slug,state) VALUES(?,?,?)", [(b, b, s) for b, s in bots])
     conn.execute(
         "INSERT INTO bot_config(bot,revision,definition_updated_at,definition_updated_by) VALUES(?,3,'t0','ana')",
@@ -532,7 +532,7 @@ def legacy_db(botops="active", health_monitor="active"):
             ("t3", "An old finding", "bot:health-monitor", "done"),  # not open: left alone
             ("t4", "Ana's own task", "human:ana", "open"),  # not the Health Monitor's: left alone
             ("t7", "Production check: Runs past their lease", "human:ana", "open"),
-            ("t8", "Production check: Tasks in progress with no run", "bot:coo", "open"),
+            ("t8", "Production check: Tasks in progress with no run", "bot:assistant", "open"),
             ("t9", "Production check: Write lock held too long", "bot:botops", "closed"),
         ],
     )
@@ -714,12 +714,12 @@ def test_a_paused_bots_routines_are_not_a_finding(environment):
         made = routines.create(
             c,
             H.KEEPER,
-            "coo",
+            "assistant",
             {"cron": "30 16 * * 5", "title": "Weekly backlog", "text": "Review the backlog."},
             key="weekly",
         )
         assert made["automation"] and made["enabled"]
-        c.execute("UPDATE bots SET state='paused' WHERE slug='coo'")
+        c.execute("UPDATE bots SET state='paused' WHERE slug='assistant'")
     assert keys(api) == []
 
 

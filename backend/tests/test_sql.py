@@ -1417,7 +1417,8 @@ def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner
     _, attempt = assistant_turn(api, "ana-test", "Summarize proposal outcomes for me")
     delegated = attempt["token"]
     assert (
-        api.put("/api/v2/outcome-stats/readers/coo", json={"read": True}, headers=headers(delegated)).status_code == 403
+        api.put("/api/v2/outcome-stats/readers/assistant", json={"read": True}, headers=headers(delegated)).status_code
+        == 403
     )
     # The HTTP Assistant policy refuses SQL first; also exercise the database boundary itself.
     for view in ("assistant_action_weekly", "mcp_call_weekly"):

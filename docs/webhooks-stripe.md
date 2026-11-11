@@ -3,7 +3,7 @@
 You will have Tico start an automation, and so a task for a bot, when Stripe sends the events you choose, for example a failed
 invoice payment. The background is on [Webhooks](webhooks.md).
 
-You need: a Stripe account where you can add webhook endpoints, a bot for the automation (this page uses `billing`), and a server
+You need: a Stripe account where you can add webhook endpoints, a bot for the automation (this page uses `billing-specialist`), and a server
 Stripe can reach. If yours is a laptop or sits behind a firewall, use an
 [address through Tico Gateway](webhooks.md#through-tico-gateway) in step 1.
 
@@ -48,24 +48,24 @@ whose time is more than 5 minutes off, with 401. The type of each call is read f
 
 ## 4. Make the automation
 
-On the Automations page, **New automation**, pick the Webhook trigger *Stripe* and add a Bot turn step for `billing`. Or:
+On the Automations page, **New automation**, pick the Webhook trigger *Stripe* and add a Bot turn step for `billing-specialist`. Or:
 
 ```
 tico automation create --file - <<'EOF'
-{"name": "Stripe event", "owner": "bot:billing", "enabled": true,
+{"name": "Stripe event", "owner": "bot:billing-specialist", "enabled": true,
  "trigger": {"type": "webhook", "id": "stripe"},
- "steps": [{"id": "handle", "type": "bot_turn", "enabled": true, "bot": "billing",
+ "steps": [{"id": "handle", "type": "bot_turn", "enabled": true, "bot": "billing-specialist",
             "prompt": "Stripe sent the event {{webhook.type}}. Read its data: {{webhook.data}}. For a failed payment, find the customer and draft a note to them. Do nothing for anything else."}]}
 EOF
 ```
 
-Each call opens one task for `billing` with the prompt; the type and the body come after it, fenced as data the bot did not
+Each call opens one task for `billing-specialist` with the prompt; the type and the body come after it, fenced as data the bot did not
 write. To act on some types only, add `filters` to the trigger (below).
 
 ## 5. Try it
 
 In Stripe, open the endpoint and use **Send test webhook**, or make a test payment. In Tico, **Recent calls** under *Stripe*
-shows the call with its type, and a task opens for `billing`.
+shows the call with its type, and a task opens for `billing-specialist`.
 
 If **Recent calls** shows nothing, Stripe could not reach Tico: look at the endpoint's attempts in Stripe. If it shows a refused
 call, the signing secret is wrong; run step 3 again. Stripe retries a failed delivery for days, so a call that was refused can
@@ -78,16 +78,16 @@ the same event again, even days later, nothing new starts.
 
 ## Act on one type without a task
 
-For a type that needs a quick nudge, not a task, use an automation with a filter and a `wake_bot` action. This wakes `billing`
+For a type that needs a quick nudge, not a task, use an automation with a filter and a `wake_bot` action. This wakes `billing-specialist`
 for a failed payment and for nothing else:
 
 ```
 tico automation create --file - <<'EOF'
-{"name": "Stripe payment failed", "owner": "bot:billing", "enabled": true,
+{"name": "Stripe payment failed", "owner": "bot:billing-specialist", "enabled": true,
  "trigger": {"type": "webhook", "id": "stripe",
              "filters": [{"field": "webhook.type", "op": "is", "value": "invoice.payment_failed"}]},
  "steps": [{"id": "wake", "type": "action", "enabled": true, "do": "wake_bot",
-            "args": {"bot": "billing", "text": "Payment failed: {{webhook.data.data.object.customer_email}} ({{webhook.data.data.object.amount_due}})"}}]}
+            "args": {"bot": "billing-specialist", "text": "Payment failed: {{webhook.data.data.object.customer_email}} ({{webhook.data.data.object.amount_due}})"}}]}
 EOF
 ```
 

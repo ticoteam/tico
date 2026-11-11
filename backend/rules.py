@@ -129,7 +129,7 @@ WAKE_EVENTS = {
     "update": "an update was requested",
     "background_done": "background work the bot waited for finished",
     "task_manager_report": "the Task Manager's report for a department",
-    "bookkeeper_check": "the Bookkeeper's Books check found new Finance work",
+    "bookkeeper_check": "the Finance Owner's Books check found new Finance work",
     "pr_checks_done": "every check on a pull request head finished",
     "pr_review": "a GitHub review or review comment on a pull request, not from a person",
     "subtask_finished": "a sub-task finished",

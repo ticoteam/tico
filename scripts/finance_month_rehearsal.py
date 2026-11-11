@@ -439,33 +439,35 @@ def run_step1(ctx: Context) -> None:
         and (pay[0].get("payments") or {}).get("mode") == "approval_queue",
         json.dumps(pay[0].get("payments") if pay else None)[:200],
     )
-    # The Bookkeeper: it appears off the org chart, with the rights the spec gives it by default.
+    # The Finance Owner: it appears off the org chart, with the rights the spec gives it by default.
     bots = {b["slug"]: b for b in api.get("bots")}
     ctx.check(
-        step, "the Bookkeeper appears as an active built-in bot", bots.get("bookkeeper", {}).get("state") == "active"
+        step,
+        "the Finance Owner appears as an active built-in bot",
+        bots.get("finance-owner", {}).get("state") == "active",
     )
     access = api.get("finance/access")
-    book = next((t for t in access["teammates"] if t["teammate"] == "bot:bookkeeper"), {})
+    book = next((t for t in access["teammates"] if t["teammate"] == "bot:finance-owner"), {})
     ctx.check(
         step,
-        "the Bookkeeper is off the org chart (no team, no manager)",
+        "the Finance Owner is off the org chart (no team, no manager)",
         book and book.get("team") is None and book.get("reports_to") is None,
         f"team={book.get('team')}, reports_to={book.get('reports_to')}",
     )
     ctx.check(
         step,
-        "the Bookkeeper holds book, ap, ar, pay and cards",
+        "the Finance Owner holds book, ap, ar, pay and cards",
         set(book.get("rights") or []) == BOOKKEEPER_RIGHTS,
         ", ".join(sorted(book.get("rights") or [])),
     )
-    # The owner grants the Bookkeeper Everything, as the spec asks at setup (its view is not granted by default).
+    # The owner grants the Finance Owner Everything, as the spec asks at setup (its view is not granted by default).
     grant = api.act(
         "view_grant",
-        {"subject_kind": "teammate", "subject": "bot:bookkeeper", "what": "everything", "whose": "company"},
+        {"subject_kind": "teammate", "subject": "bot:finance-owner", "what": "everything", "whose": "company"},
     )
     ctx.check(
         step,
-        "the owner grants the Bookkeeper Everything to see the books",
+        "the owner grants the Finance Owner Everything to see the books",
         committed(grant),
         f"{grant.get('status')} {grant.get('code')} {grant.get('reason')}"[:200],
     )
@@ -617,7 +619,7 @@ def run_step3(ctx: Context) -> None:
         "REH CARD 99" in json.dumps(ai_lines),
         f"AI services lines hold {len(json.dumps(ai_lines))} bytes of detail",
     )
-    # Everything else is categorized through the tool, as the Bookkeeper's queue asks. Vendors go to Software, money in
+    # Everything else is categorized through the tool, as the Finance Owner's queue asks. Vendors go to Software, money in
     # to Revenue. Some rows get no team tag, which is allowed and shows as Unattributed.
     items = api.get("finance/inbox", kind="uncategorized", limit=200).get("items", [])
     done, errors = 0, []
@@ -637,7 +639,7 @@ def run_step3(ctx: Context) -> None:
         f"{done} of {len(items)}; {errors[:3]}",
     )
     left = api.get("finance/inbox", kind="uncategorized", limit=200).get("items", [])
-    ctx.check(step, "no uncategorized rows remain in the Bookkeeper's queue", not left, f"{len(left)} left")
+    ctx.check(step, "no uncategorized rows remain in the Finance Owner's queue", not left, f"{len(left)} left")
     expenses = api.get("finance/expenses", by="team", start=f"{PAST_MONTH}-01", end=f"{PAST_MONTH}-31")
     ctx.check(
         step,
@@ -647,8 +649,8 @@ def run_step3(ctx: Context) -> None:
     )
     ctx.gap(
         step,
-        "categorized as the Bookkeeper bot",
-        "the demo has no bot credential: a bot's HTTP calls need an agent or runner token, and the Bookkeeper runs "
+        "categorized as the Finance Owner bot",
+        "the demo has no bot credential: a bot's HTTP calls need an agent or runner token, and the Finance Owner runs "
         "on a computer the demo does not have. Every write here is made as the owner (human:ana)",
     )
 
@@ -1021,7 +1023,7 @@ def run_step5(ctx: Context) -> None:
     item = wait_for(overdue_item, 60)
     ctx.check(
         step,
-        "the Bookkeeper's inbox holds an invoice_overdue item for the invoice (the hourly watch raises it)",
+        "the Finance Owner's inbox holds an invoice_overdue item for the invoice (the hourly watch raises it)",
         bool(item),
         f"item {json.dumps(item)[:200]}" if item else "no invoice_overdue row for the invoice within 60 s",
     )
@@ -1575,9 +1577,9 @@ def run_step11(ctx: Context) -> None:
     st, _ = api.request(
         "GET",
         "finance/pnl",
-        query={"start": f"{PAST_MONTH}-01", "end": f"{PAST_MONTH}-31", "view_as": "bot:bookkeeper"},
+        query={"start": f"{PAST_MONTH}-01", "end": f"{PAST_MONTH}-31", "view_as": "bot:finance-owner"},
     )
-    ctx.check(step, "the owner views the P&L as the Bookkeeper", st == 200, f"HTTP {st}")
+    ctx.check(step, "the owner views the P&L as the Finance Owner", st == 200, f"HTTP {st}")
     ctx.gap(
         step,
         "the manager, member and bot identities each see their own cut",

@@ -1,6 +1,6 @@
 # Equity practice
 
-The rules this bot checks grants and the cap table against, and the questions it sends to counsel. These are working rules, not legal or tax advice. Counsel and the
+The rules this bot checks grants and the cap table against, and the questions it sends to counsel. These are working rules, not legal or tax advice. The Rules Owner and the
 board decide. Figures came from search summaries on 2026-11-01 unless marked; the primary text was not opened.
 
 ## Grants
@@ -13,7 +13,7 @@ board decide. Figures came from search summaries on 2026-11-01 unless marked; th
   financing term sheet, a tender offer, or a large contract or change in direction. Any of these sends the grant to counsel before it is recorded as valid.
 - **Strike price.** At or above the fair market value on the grant date, which is the 409A value under the house rule. Below it, escalate.
 - **ISO post-termination window.** IRC §422(a)(2) requires an incentive stock option holder to be an employee from grant until three months before exercise. A longer
-  window after termination generally turns the option into a non-qualified one for tax. Counsel confirms the window in each plan.
+  window after termination generally turns the option into a non-qualified one for tax. The Rules Owner confirms the window in each plan.
 - **Term.** Option terms are limited under IRC §422(b). Record each grant's expiry date.
 
 ## Vesting

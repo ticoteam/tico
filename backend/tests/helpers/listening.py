@@ -6,7 +6,15 @@ from backend.tests.helpers.api import setup_attempt
 from backend import bot_settings as BS
 
 
-RECEIVERS = ("listening", "librarian", "content-social", "influencer", "sales-ops", "doc-updater", "recruiting")
+RECEIVERS = (
+    "social-media-manager",
+    "librarian",
+    "content-social",
+    "influencer",
+    "sales-operations-manager",
+    "doc-updater",
+    "recruiting",
+)
 
 
 # The destinations a company writes in registry/listening.yaml; the hub ships none.
@@ -16,7 +24,7 @@ destinations:
   content:  {category: content, threshold: 0.75, receiver: content-social, readers: [bot:doc-updater], what: a question a post could answer}
   creators: {category: creator, threshold: 0.75, receiver: bot:influencer, what: a creator the company may want to reach}
   partners: {category: partner, threshold: 0.75, receiver: bot:recruiting, what: a consultancy or trainer, a partner lead}
-  leads:    {category: lead, threshold: 0.75, receiver: bot:sales-ops, unless: {category: vendor_pitch, threshold: 0.70}, what: a team lead who might use the product}
+  leads:    {category: lead, threshold: 0.75, receiver: bot:sales-operations-manager, unless: {category: vendor_pitch, threshold: 0.70}, what: a team lead who might use the product}
 """
 
 

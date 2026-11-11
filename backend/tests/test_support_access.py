@@ -257,7 +257,7 @@ def test_app_access_reads_and_changes_setup_and_nothing_else(environment, hq):
     refused = [
         ("POST", "/api/v2/credentials/cred_1/reveal", {}),
         ("POST", "/api/v2/approvals/apr_1", {"decision": "approved"}),
-        ("POST", "/api/v2/messages", {"to": "bot:coo", "body": "hi"}),
+        ("POST", "/api/v2/messages", {"to": "bot:assistant", "body": "hi"}),
         ("POST", "/api/v2/tasks", {"title": "x"}),
         ("PUT", "/api/v2/access/rules", {"admin_sql": False}),
         ("GET", "/api/v2/me/tokens", None),
@@ -410,7 +410,7 @@ def test_the_worker_runs_what_hq_carries_as_the_session_and_logs_it(environment,
             "path": "/api/v2/messages",
             "query": "",
             "content_type": "application/json",
-            "body_b64": base64.b64encode(b'{"to":"bot:coo"}').decode(),
+            "body_b64": base64.b64encode(b'{"to":"bot:assistant"}').decode(),
         },
         {"rid": "r3", "by": "staff", "method": "GET", "path": "/download/latest.json"},
     ]

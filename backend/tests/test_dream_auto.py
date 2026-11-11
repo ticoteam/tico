@@ -102,10 +102,10 @@ def close(api, bot):
 
 
 def five_due(api):
-    """Five bots due at once: finance, product-design, cpo, ops and coo, with 500 to 900 changed lines in 10 turns. Ops
+    """Five bots due at once: finance, product-design, cpo, ops and assistant, with 500 to 900 changed lines in 10 turns. Ops
     reports to Ben."""
     aged(api)
-    for bot, lines in (("finance", 50), ("product-design", 60), ("cpo", 70), ("ops", 80), ("coo", 90)):
+    for bot, lines in (("finance", 50), ("product-design", 60), ("cpo", 70), ("ops", 80), ("assistant", 90)):
         remember(api, bot, 10, lines=lines)  # 500, 600, 700, 800, 900 lines in 10 turns
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='ops'")
@@ -153,11 +153,11 @@ def test_a_bot_that_never_dreamed_must_be_48_hours_old_and_an_inactive_one_is_no
 def test_the_thresholds_are_200_changed_lines_and_10_memory_turns(api):
     aged(api)
     remember(api, "ops", 10, lines=19)  # 190 lines in 10 turns
-    remember(api, "coo", 9, lines=30)  # 270 lines in 9 turns
+    remember(api, "assistant", 9, lines=30)  # 270 lines in 9 turns
     remember(api, "cpo", 10, lines=20)  # exactly 200 lines in 10 turns
     at = now()
     assert verdict(api, "ops", at).status == "quiet"
-    assert verdict(api, "coo", at).status == "quiet"
+    assert verdict(api, "assistant", at).status == "quiet"
     cpo = verdict(api, "cpo", at)
     assert (cpo.status, cpo.lines, cpo.turns) == ("due", 200, 10)
 
@@ -231,10 +231,10 @@ def test_the_cap_starts_three_most_changed_first_and_says_what_it_held(api):
     five_due(api)
     r = {}
     started = run(api, report=r)
-    assert started == [verdict(api, b, now()).name for b in ("coo", "ops", "cpo")], "most changed lines first"
-    assert [b for b in ("coo", "ops", "cpo") if dream_rows(api, b)] == ["coo", "ops", "cpo"]
+    assert started == [verdict(api, b, now()).name for b in ("assistant", "ops", "cpo")], "most changed lines first"
+    assert [b for b in ("assistant", "ops", "cpo") if dream_rows(api, b)] == ["assistant", "ops", "cpo"]
     assert not dream_rows(api, "product-design") and not dream_rows(api, "finance")
-    assert dream_rows(api, "coo")[0]["requester_id"] == "human:ana", "no manager: the company owner"
+    assert dream_rows(api, "assistant")[0]["requester_id"] == "human:ana", "no manager: the company owner"
     assert dream_rows(api, "ops")[0]["requester_id"] == "human:ben", "the nearest human manager"
     assert (r["started"], r["due"], r["over"], r["held"]) == (started, 5, 2, []), "two due bots over the cap, none held"
     assert "Started 3 dreams" in r["reason"] and "2 due past the 3 this run" in r["reason"], r
@@ -244,7 +244,7 @@ def test_the_cap_starts_three_most_changed_first_and_says_what_it_held(api):
 def test_a_per_step_limit_of_one_starts_only_the_most_changed(api):
     five_due(api)
     r = {}
-    assert run(api, limit=1, report=r) == [verdict(api, "coo", now()).name]
+    assert run(api, limit=1, report=r) == [verdict(api, "assistant", now()).name]
     assert (r["over"], r["held"]) == (4, []), r
     assert not any(dream_rows(api, b) for b in ("ops", "cpo", "product-design", "finance"))
 
@@ -328,13 +328,13 @@ def test_run_now_runs_the_dream_step_without_the_schedule_but_keeps_the_gates(ap
     aged(api)
     store, auth = api.app.state.store, api.app.state.auth
     remember(api, "ops", 10)  # due
-    remember(api, "coo", 10, lines=19)  # 190 lines: not due
+    remember(api, "assistant", 10, lines=19)  # 190 lines: not due
     with settings(store, test_identities={}):
         run_dict, started = M.run_now(store, auth, "human:ana", step="dream", wait=True)
     assert started and run_dict["trigger"] == "run_now" and run_dict["occurrence_key"].startswith("run_now:")
     row = steps_by_key(run_dict)["dream"]
     assert row["status"] == "ran" and row["details"]["started"] == [verdict(api, "ops", now()).name]
-    assert dream_rows(api, "coo") == [] and len(dream_rows(api, "ops")) == 1, "190 lines is not due"
+    assert dream_rows(api, "assistant") == [] and len(dream_rows(api, "ops")) == 1, "190 lines is not due"
 
 
 def test_the_scheduler_tick_hands_its_time_to_the_maintenance_run(api, monkeypatch):
@@ -418,11 +418,11 @@ def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api
         clock[0] = H.shift(first_at, hours=2)  # a later run, past the fleet's rolling hour
         second, _ = M.run_now(store, auth, "human:ana", wait=True)
         assert steps_by_key(second)["dream"]["woke"] == 1 and len(dream_rows(api, "ops")) == 1
-        remember(api, "coo", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
+        remember(api, "assistant", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
         clock[0] = H.shift(first_at, hours=4)
         third, _ = M.run_now(store, auth, "human:ana", wait=True)
     assert steps_by_key(third)["dream"]["reason"] == "not due", "a real start still uses the daily attempt"
-    assert dream_rows(api, "coo") == []
+    assert dream_rows(api, "assistant") == []
 
 
 @pytest.mark.parametrize("outcome", ["started", "failed"])
@@ -432,7 +432,7 @@ def test_a_limiter_refusal_beside_another_dream_attempt_still_counts_for_the_day
     first_at = clock[0]
     monkeypatch.setattr(H, "now", lambda: clock[0])
     aged(api)
-    for bot, lines in (("ops", 80), ("coo", 30)):
+    for bot, lines in (("ops", 80), ("assistant", 30)):
         remember(api, bot, 10, lines=lines, when=H.parse_ts(first_at) - timedelta(hours=1))
     with store.transaction() as c:
         c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key<>'dream'")
@@ -484,19 +484,19 @@ def test_a_bot_no_longer_due_at_its_start_does_not_use_up_a_slot(api, monkeypatc
     """A run judges every bot, then judges each due one again inside its own start's write transaction. A bot that is no
     longer due by then (a dream landed on it meanwhile) is passed over, and the next due bot takes its slot."""
     aged(api)
-    for bot, lines in (("coo", 900), ("ops", 800), ("cpo", 700)):
+    for bot, lines in (("assistant", 900), ("ops", 800), ("cpo", 700)):
         remember(api, bot, 10, lines=lines // 10)
     real = DA.verdict
 
     def busy_at_its_start(c, bot, at, owner=None):
-        if owner is not None and bot == "coo":
-            return DA.Verdict(bot, "coo", "busy")
+        if owner is not None and bot == "assistant":
+            return DA.Verdict(bot, "assistant", "busy")
         return real(c, bot, at, owner=owner)
 
     monkeypatch.setattr(DA, "verdict", busy_at_its_start)
     r = {}
     assert run(api, limit=2, report=r) == [verdict(api, "ops", now()).name, verdict(api, "cpo", now()).name]
-    assert dream_rows(api, "coo") == [] and r["held"] == [] and r["over"] == 0, r
+    assert dream_rows(api, "assistant") == [] and r["held"] == [] and r["over"] == 0, r
 
 
 def test_a_dream_that_lands_on_a_branch_is_judged_on_the_branch(api):
@@ -522,20 +522,20 @@ def test_a_dream_that_lands_on_a_branch_is_judged_on_the_branch(api):
 )
 def test_one_bot_refused_or_failing_holds_only_itself_and_the_night_goes_on(api, monkeypatch, failure):
     aged(api)
-    for bot, lines in (("coo", 900), ("ops", 800), ("cpo", 700)):
+    for bot, lines in (("assistant", 900), ("ops", 800), ("cpo", 700)):
         remember(api, bot, 10, lines=lines // 10)
     real = dream.start
 
     def flaky(c, who, owner, create, reason=None):
-        if owner == "bot:coo":
+        if owner == "bot:assistant":
             raise failure
         return real(c, who, owner, create, reason=reason)
 
     monkeypatch.setattr(dream, "start", flaky)
     r = {}
     assert run(api, report=r) == [verdict(api, "ops", now()).name, verdict(api, "cpo", now()).name]
-    assert dream_rows(api, "coo") == [] and len(dream_rows(api, "ops")) == 1 and len(dream_rows(api, "cpo")) == 1
-    assert r["held"] == [verdict(api, "coo", now()).name] and "1 not started" in r["reason"], r
+    assert dream_rows(api, "assistant") == [] and len(dream_rows(api, "ops")) == 1 and len(dream_rows(api, "cpo")) == 1
+    assert r["held"] == [verdict(api, "assistant", now()).name] and "1 not started" in r["reason"], r
 
 
 def test_a_switch_turned_off_while_a_run_waits_stops_its_dream_step(api, monkeypatch):

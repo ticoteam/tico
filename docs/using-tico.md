@@ -196,7 +196,7 @@ back into the same pop-up. See [Support](support.md).
 
 ## Updates
 
-Every bot that can publish updates reports in once a day, and on Friday with a week in review (five slides). Counsel
+Every bot that can publish updates reports in once a day, and on Friday with a week in review (five slides). The Rules Owner
 speaks only on its own private tasks and is not asked for updates. People report in the same shape.
 An update is three plain bullets: what you did, what you do next, and what waits on someone, plus a `Blocked:` bullet for each blocker and a `Suggestion:` bullet for each suggestion the bot acted on. An update posted before this shape stays as it was written.
 
@@ -322,8 +322,8 @@ The equivalent API calls are internal routes (subject to change); use your own r
 `Idempotency-Key` on writes:
 
 ```text
-POST /api/v2/notes                    {"to":"bot:content","text":"Use the revised tone guide.","defer_for":"4h"}
-GET  /api/v2/notes?to=bot:content&waiting=true
+POST /api/v2/notes                    {"to":"bot:content-owner","text":"Use the revised tone guide.","defer_for":"4h"}
+GET  /api/v2/notes?to=bot:content-owner&waiting=true
 POST /api/v2/notes/<note-id>/cancel    {}
 ```
 

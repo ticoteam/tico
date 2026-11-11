@@ -1655,7 +1655,7 @@ def sweep(conn, actor, unverified, *, today=None, owner_email=None):
         title = "Verify " + row["name"]
         body = f"Check {row['id']}.\n\nLook for: {look}\n"
         try:
-            listener = (H.resolve_bot(conn, "listening") or {}).get("id", "listening")
+            listener = (H.resolve_bot(conn, "social-media-manager") or {}).get("id", "social-media-manager")
             task = H.task_create(conn, actor, title, body, "bot:" + listener, deduplicate=True)
         except H.Refused:
             # A refusal here must not roll back the owner task already inserted in this sweep.

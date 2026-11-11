@@ -8,7 +8,7 @@ from pathlib import Path
 
 from clients.tico import APIError
 
-CONFIG = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "coo"}
+CONFIG = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "assistant"}
 ONBOARDING = {
     "names": CONFIG,
     "answers": {
@@ -44,7 +44,7 @@ def card(template, slug, bootstrap):
 def catalog(root):
     """A catalog with one bootstrap template and one the runner must leave to BotOps."""
     for template, slug, bootstrap in (
-        ("assistant", "coo", True),
+        ("assistant", "assistant", True),
         ("botops", "botops", True),
         ("specialist", "seo", False),
     ):
@@ -94,10 +94,10 @@ def test_the_catalog_job_sets_a_bot_up_and_answers_on_stdout(tmp_path, monkeypat
     monkeypatch.setenv("TICO_CATALOG_DIR", str(catalog(tmp_path / "catalog")))
     projects = tmp_path / "Companies/Acme"
     projects.mkdir(parents=True)
-    path = projects / "bot-coo"
+    path = projects / "bot-assistant"
     request = {
         "bots": [
-            {"bot": "coo", "entry": entry("coo", "assistant"), "path": str(path), "action": "bootstrap"},
+            {"bot": "assistant", "entry": entry("assistant", "assistant"), "path": str(path), "action": "bootstrap"},
             {
                 "bot": "botops",
                 "entry": entry("botops", "botops"),
@@ -110,7 +110,7 @@ def test_the_catalog_job_sets_a_bot_up_and_answers_on_stdout(tmp_path, monkeypat
     catalog_job.main({"projects_dir": str(projects)}, FakeClient(), io.StringIO(json.dumps(request)), out)
     answer = json.loads(out.getvalue())
     assert answer == {
-        "coo": {"materialized": "materialized from catalog: assistant", "problem": ""},
+        "assistant": {"materialized": "materialized from catalog: assistant", "problem": ""},
         "botops": {"changed": []},
     }
     assert "at Acme Ltd" in (path / "AGENT.md").read_text()

@@ -1,7 +1,7 @@
 {
   "id": "listening-card",
   "version": 2,
-  "owner": "listening",
+  "owner": "social-media-manager",
   "summary": "One already fetched public search card: rank it for a human competitor or owner-mention review. The caller never uses this to claim source coverage or publish a reply.",
   "state": [
     "source",

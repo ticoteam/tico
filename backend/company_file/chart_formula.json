@@ -24,7 +24,7 @@
     {
       "key": "cro",
       "id": "cro-owner",
-      "title": "Conversion Rate Optimization Owner",
+      "title": "CRO Owner",
       "template": "cro-owner",
       "department": "marketing",
       "reason": "Owns conversion: turning visitors into customers."
@@ -57,7 +57,7 @@
       "key": "email",
       "id": "email-owner",
       "title": "Email Owner",
-      "template": "email-marketing",
+      "template": "email-owner",
       "department": "marketing",
       "reason": "Owns email to customers and prospects."
     },
@@ -65,7 +65,7 @@
       "key": "content",
       "id": "content-owner",
       "title": "Content Owner",
-      "template": "content",
+      "template": "content-owner",
       "department": "marketing",
       "reason": "Owns articles, posts and pages."
     },
@@ -73,7 +73,7 @@
       "key": "community",
       "id": "community-owner",
       "title": "Community Owner",
-      "template": "community",
+      "template": "community-manager",
       "department": "marketing",
       "reason": "Owns the community and the people in it."
     },
@@ -81,7 +81,7 @@
       "key": "pr",
       "id": "pr-owner",
       "title": "PR Owner",
-      "template": "pr",
+      "template": "pr-manager",
       "department": "marketing",
       "reason": "Owns press and public relations."
     },
@@ -89,7 +89,7 @@
       "key": "app-store",
       "id": "app-store-owner",
       "title": "App Store Owner",
-      "template": "app-store",
+      "template": "app-store-owner",
       "department": "marketing",
       "reason": "Owns the app store listing, its updates and reviews."
     },
@@ -97,7 +97,7 @@
       "key": "affiliates",
       "id": "affiliates-owner",
       "title": "Affiliates Owner",
-      "template": "affiliates",
+      "template": "affiliates-owner",
       "department": "marketing",
       "reason": "Owns affiliate and referral partners."
     },
@@ -105,7 +105,7 @@
       "key": "events",
       "id": "events-owner",
       "title": "Events Owner",
-      "template": "events",
+      "template": "event-marketing-manager",
       "department": "marketing",
       "reason": "Owns events, webinars and trade shows."
     }
@@ -194,7 +194,7 @@
           "key": "reviewer-1",
           "id": "reviewer-1",
           "title": "Reviewer 1",
-          "template": "pr-reviewer",
+          "template": "reviewer",
           "department": "engineering",
           "reports_to": "engineering-team-manager",
           "reason": "Reviews each code change before it ships, as the first reviewer.",
@@ -204,7 +204,7 @@
           "key": "reviewer-2",
           "id": "reviewer-2",
           "title": "Reviewer 2",
-          "template": "pr-reviewer",
+          "template": "reviewer",
           "department": "engineering",
           "reports_to": "engineering-team-manager",
           "reason": "Reviews each code change before it ships, as the second reviewer.",
@@ -413,9 +413,9 @@
         },
         {
           "key": "finance-owner",
-          "id": "bookkeeper",
+          "id": "finance-owner",
           "title": "Finance Owner",
-          "template": "bookkeeper",
+          "template": "finance-owner",
           "department": "finance",
           "reports_to": "corporate-team-manager",
           "reason": "Owns finance: the books, bills, cash and the monthly close.",

@@ -16,7 +16,7 @@ the purchasing Tool; 2 visitors this week.**
 ## Open requests
 | Request | Raised | Age | Fixer | Promised | Status |
 |---|---|---|---|---|---|
-| Room 2 screen shows no input | Sofia, 2026-09-19 | 9 d | it-support | 2026-09-24 | late: chased 2026-09-28 |
+| Room 2 screen shows no input | Sofia, 2026-09-19 | 9 d | it-support-specialist | 2026-09-24 | late: chased 2026-09-28 |
 | Kitchen tap drips | Omar, 2026-09-23 | 5 d | building manager | 2026-09-30 | on time |
 | Desk and chair for new starter, 2026-10-05 | Lena, 2026-09-25 | 3 d | spare desk, floor 1 | 2026-10-02 | on time |
 | Blind stuck, room 4 | Kenji, 2026-09-26 | 2 d | building manager | not given | asked for a date |

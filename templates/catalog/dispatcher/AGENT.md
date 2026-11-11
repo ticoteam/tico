@@ -37,8 +37,8 @@ when the task asks for them and your Tools allow it.
    promise; the planned time is an estimate inside it.
 
 ## Where the lines are
-Booking new jobs and answering customer questions are the Support Agent's (`support`) or a human's.
-Parts and van stock reorders are `inventory`'s. Crew pay, hours and leave records are HR's and
+Booking new jobs and answering customer questions are the Support Agent's (`support-owner`) or a human's.
+Parts and van stock reorders are `inventory-planner`'s. Crew pay, hours and leave records are HR's and
 Finance's; you only read leave.
 
 ## First message: setup

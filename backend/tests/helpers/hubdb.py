@@ -9,7 +9,7 @@ from backend.tests.helpers.migrations import forget_from
 
 
 EMPLOYEES = {
-    "coo": {
+    "assistant": {
         "display_name": "COO",
         "status": "active",
         "host": "keeper",
