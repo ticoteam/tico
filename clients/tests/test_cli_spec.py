@@ -59,6 +59,13 @@ def test_a_flag_can_send_an_explicit_null_and_a_folded_flag_is_not_sent_itself(c
     assert calls == [{"id": "x", "limit": None, "scope": {"names": ["Ada"]}, "operation_id": "op-1"}]
 
 
+def test_a_command_may_run_its_own_function_with_the_tools_arguments(calls):
+    show = Command("fake list", run=lambda client, fields: {"ran": fields["id"]})
+    args = parse((Group("fake"), show), ["fake", "list", "x", "--limit", "2"])
+    assert show.call(None, args) == {"ran": "x"}
+    assert calls == []  # the tool itself was not called
+
+
 def test_a_command_with_a_renderer_takes_json_and_another_tool_by_its_arguments(calls):
     listing = Command(
         "fake list", render=lambda args, result: "text", tools=("tico_fake_find",), tool_for=lambda f: f["id"]

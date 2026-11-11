@@ -70,6 +70,7 @@
    [
     "tico_page_list",
     {
+     "archived": false,
      "operation_id": null
     }
    ]
@@ -321,7 +322,8 @@
     "tico_page_archive",
     {
      "id": "p1",
-     "operation_id": null
+     "operation_id": null,
+     "restore": false
     }
    ]
   ],

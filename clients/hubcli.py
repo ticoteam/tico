@@ -722,43 +722,8 @@ def parser():
     s.add_argument("--task", required=True, help="the task the review is for")
     s.add_argument("--note", help="what to change, or why it is approved")
     s.set_defaults(fn="file review")
-    page = sub.add_parser("page", help="pages: HTML a bot keeps up to date, with Tico's updated line").add_subparsers(
-        dest="sub"
-    )
-    s = page.add_parser("publish", help="publish an .html file from this checkout; again adds a version")
-    s.add_argument("path")
-    s.add_argument("--title")
-    s.add_argument("--cadence", choices=["none", "daily", "weekly", "monthly"])
-    s.add_argument("--as-of", dest="as_of", help="the date the data is from, YYYY-MM-DD")
-    s.add_argument("--task", help="the task it is for; it shows at the top of that task")
-    s.add_argument("--replaces", help="the id of an older page this one takes the place of")
-    s.add_argument("--scope", choices=["task", "bot"])
-    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
-    s.add_argument(
-        "--spec",
-        action="store_true",
-        help="a visual spec for the Product roadmap card named by --task; styles are inlined, tickets under it get its text",
-    )
-    s.set_defaults(fn="page publish")
-    s = page.add_parser("list", help="pages you may read, newest first")
-    s.add_argument("--bot")
-    s.add_argument("--task", help="pages filed on or pinned to this task")
-    s.add_argument("--archived", action="store_true", default=None)
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor")
-    s.set_defaults(fn="page list")
-    s = page.add_parser("show", help="one page's status")
-    s.add_argument("id")
-    s.set_defaults(fn="page show")
-    s = page.add_parser("access", help="show or change who can see a page")
-    s.add_argument("id")
-    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
-    s.set_defaults(fn="page access")
-    s = page.add_parser("archive", help="hide a page from lists and search, or --restore it")
-    s.add_argument("id")
-    s.add_argument("--restore", action="store_true", default=None)
-    s.set_defaults(fn="page archive")
-    cli_spec.add(sub, content_commands.CARD)  # tico card: clients/commands/content.py
+    cli_spec.add(sub, content_commands.PAGE)  # tico page: clients/commands/content.py
+    cli_spec.add(sub, content_commands.CARD)  # tico card
     cli_spec.add(sub, content_commands.PIN)  # tico pin
     docs = sub.add_parser(
         "doc", help="read and search team docs and external sources, write internal docs, ask the Librarian"

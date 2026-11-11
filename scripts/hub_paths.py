@@ -107,8 +107,6 @@ HAND_READ_PATHS = (
     "note list",
     "notes",
     "origin show",
-    "page list",
-    "page show",
     "recent",
     "replay show",
     "repo list",

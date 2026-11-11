@@ -512,14 +512,6 @@ def run(args, who=None):
         if fn == "file publish":
             return hubtools.files_publish_path(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
-    if args.cmd == "page":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn == "page publish":
-            return hubtools.pages_publish_path(client, fields)
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "doc":
         from clients import hubtools
 
