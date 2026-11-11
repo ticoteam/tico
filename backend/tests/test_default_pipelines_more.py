@@ -96,13 +96,13 @@ def test_a_new_company_gets_every_default_pipeline_in_its_factory(environment):
 
 
 def test_every_work_stage_has_an_owner_and_every_pipeline_a_manager(environment):
-    """The ladder: a role no bot fills goes to the pipeline's manager, a manager nobody fills to the Task Manager."""
+    """The ladder: a role no bot fills goes to the pipeline's manager, a manager nobody fills to the General Manager."""
     api = _new_company(environment)
-    task_manager = "bot:" + rows(api, "SELECT id FROM bots WHERE slug='task-manager'")[0]["id"]
+    general_manager = "bot:" + rows(api, "SELECT id FROM bots WHERE slug='general-manager'")[0]["id"]
     for pid in NEW:
         manager = rows(api, "SELECT manager_id FROM pipelines WHERE id=?", (pid,))[0]["manager_id"]
         seat = rows(api, "SELECT id FROM bots WHERE slug=? AND state<>'archived'", (M.manager_role(pid),))
-        assert manager == ("bot:" + seat[0]["id"] if seat else task_manager), pid
+        assert manager == ("bot:" + seat[0]["id"] if seat else general_manager), pid
         for stage in rows(api, "SELECT id,owner FROM stages WHERE pipeline_id=? AND kind='work'", (pid,)):
             assert stage["owner"], stage["id"]
             if "experiments" in pid or "monitoring" in pid:
@@ -155,7 +155,7 @@ def _page(c, title):
     c.execute(
         "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
         "last_activity_at, current_version) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?,1)",
-        (fid, "task-manager", "bot", fid, title, now, now),
+        (fid, "general-manager", "bot", fid, title, now, now),
     )
     c.execute(
         "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -177,7 +177,7 @@ def _verdict(c, page):
 def test_an_experiment_goes_live_only_once_a_person_oks_its_go_live_page(environment):
     """A person's idea rests in Ideas; Ideas -> Building by its bot owner, a Go-live page Jev passes and a person OKs, Running, a Results page, Done."""
     api = _new_company(environment)
-    assignee = "bot:" + rows(api, "SELECT id FROM bots WHERE slug='task-manager'")[0]["id"]
+    assignee = "bot:" + rows(api, "SELECT id FROM bots WHERE slug='general-manager'")[0]["id"]
     (go_live,) = rows(
         api, "SELECT id, person_id FROM requirements WHERE stage_id='growth-experiments-building' AND kind='page'"
     )

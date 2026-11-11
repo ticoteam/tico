@@ -1,6 +1,6 @@
 {
     "files": {
-        "./backend/task_manager.py": [
+        "./backend/general_manager.py": [
             {
                 "code": "reportCallIssue",
                 "range": {

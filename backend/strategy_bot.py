@@ -288,7 +288,7 @@ def _outside(slug, entry, assistant, helpers):
             H.RULES_OWNER,
             SLUG,
             "health-monitor",
-            "task-manager",
+            "general-manager",
             "finance-owner",
             H.DESIGN_OWNER,
         )

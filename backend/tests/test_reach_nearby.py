@@ -451,7 +451,7 @@ def test_a_message_in_a_tasks_thread_uses_the_task_and_a_send_anyway_replay_is_n
 def test_the_built_in_helpers_are_reached_and_the_health_monitor_is_not_exempt(api):
     chart(api)
     found = ctx(api)
-    for slug in ("botops", "rules-owner", "finance-owner", "task-manager"):
+    for slug in ("botops", "rules-owner", "finance-owner", "general-manager"):
         assert reach.decide(found, "bot:product-design", "bot:" + slug).why == "helper", slug
     assert not reach.decide(found, "bot:health-monitor", "human:cara").allowed
 

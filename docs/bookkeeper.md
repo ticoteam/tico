@@ -2,7 +2,7 @@
 
 The Finance Owner is a built-in helper bot that keeps the books: categorizing bank and card rows, entering bills,
 scheduling payments, chasing overdue invoices, matching receipts, reconciling, the month's close and a monthly report.
-Like the Task Manager it sits outside the org chart and is listed under Settings → Bots.
+Like the General Manager it sits outside the org chart and is listed under Settings → Bots.
 
 ## When it appears
 

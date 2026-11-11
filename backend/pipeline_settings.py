@@ -80,7 +80,7 @@ PRESETS: dict[str, Row] = {
         "name": "General",
         "goal": "Where every task goes unless it belongs to another pipeline.",
         "prefix": None,
-        "manager_id": None,  # the Task Manager bot, when the org has one (ensure_presets)
+        "manager_id": None,  # the General Manager bot, when the org has one (ensure_presets)
         "owner_id": None,
         "private": False,
         "factory_id": None,
@@ -104,7 +104,7 @@ PRESETS: dict[str, Row] = {
         "closed": {"id": "general-closed"},
     },
 }
-TASK_MANAGER = "task-manager"  # the built-in bot that manages General (backend/task_manager.py)
+GENERAL_MANAGER = "general-manager"  # the built-in bot that manages General (backend/general_manager.py)
 
 
 def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements: list[Row], **more: Any) -> Row:
@@ -874,7 +874,7 @@ def _has_tasks(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
 def _private_problems(conn: "sqlite3.Connection", record: Row, existing: Row | None) -> list[str]:
     """A private pipeline (backend/private_pipelines.py) makes every task in it private, read by its manager and the
     company's owner. So it is chosen as it is made (a preset, or a brand-new pipeline) or while it is still empty, never
-    changed on one that holds tasks, and its manager must be one who reads private tasks: never the Task Manager."""
+    changed on one that holds tasks, and its manager must be one who reads private tasks: never the General Manager."""
     problems: list[str] = []
     was = bool(existing and existing.get("private"))
     if existing and was != record["private"] and _has_tasks(conn, str(existing["id"])):
@@ -886,10 +886,10 @@ def _private_problems(conn: "sqlite3.Connection", record: Row, existing: Row | N
         if not manager:
             problems.append("A private pipeline needs a manager. Its tasks are read by its manager and the owner.")
         elif pipeline_rights.canonical(conn, manager) in {
-            pipeline_rights.canonical(conn, f"bot:{TASK_MANAGER}"),
-            pipeline_rights.canonical(conn, _task_manager(conn)),
+            pipeline_rights.canonical(conn, f"bot:{GENERAL_MANAGER}"),
+            pipeline_rights.canonical(conn, _general_manager(conn)),
         }:
-            problems.append("The Task Manager can't manage a private pipeline: it reads no private task.")
+            problems.append("The General Manager can't manage a private pipeline: it reads no private task.")
     return problems
 
 
@@ -1255,9 +1255,9 @@ def retire(conn: "sqlite3.Connection", by: str, pipeline_id: str, seen_version: 
 
 
 # ----------------------------------------------------------------------------- presets
-def _task_manager(conn: "sqlite3.Connection") -> str | None:
-    """The built-in Task Manager bot's actor, when the org has one that is not archived."""
-    found = _h().bot(conn, TASK_MANAGER)
+def _general_manager(conn: "sqlite3.Connection") -> str | None:
+    """The built-in General Manager bot's actor, when the org has one that is not archived."""
+    found = _h().bot(conn, GENERAL_MANAGER)
     if not found or str(found.get("state") or "active") == "archived":
         return None
     return f"bot:{found['id']}"
@@ -1284,18 +1284,18 @@ def _set_up(conn: "sqlite3.Connection") -> bool:
 def preset(conn: "sqlite3.Connection", key: str) -> Row:
     """A preset's record for this org, ready to save: its manager, its stage owners and the person on its people OKs
     filled in from the bots and people the org has (pipeline_seats). No work stage is left without an owner: a role
-    nobody fills goes up the ladder, a stage's to the pipeline's manager and a manager's to the Task Manager, until the
-    role's bot appears (`_fill`). A private preset's ladder stops at its manager: never the Task Manager."""
+    nobody fills goes up the ladder, a stage's to the pipeline's manager and a manager's to the General Manager, until the
+    role's bot appears (`_fill`). A private preset's ladder stops at its manager: never the General Manager."""
     record = copy.deepcopy(PRESETS[key])
     if key == "general":
-        record["manager_id"] = _task_manager(conn)
+        record["manager_id"] = _general_manager(conn)
     roles = ROLES.get(key)
     if not roles:
         return record
     who = {**S.resolve(conn), **more.resolve(conn)}
-    # A private preset never falls to the Task Manager, which reads no private task: no bot, no manager (and then
+    # A private preset never falls to the General Manager, which reads no private task: no bot, no manager (and then
     # ensure_presets does not make it).
-    stand_in = None if record["private"] else _task_manager(conn)
+    stand_in = None if record["private"] else _general_manager(conn)
     record["manager_id"] = who.get(roles["manager"]) or stand_in
     person = S.ok_person(conn, record["manager_id"])
     for stage in record["stages"]:
@@ -1318,14 +1318,14 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
     """An untouched preset made before its roles' bots existed gets them once they do: an empty manager, an empty
     stage owner, an empty person on a stage's people OK, and a people-only OK the preset now has. Nothing a person set
     is changed, and the settings version stays 1, so the next bot that appears is filled in too. A stand-in up the
-    ladder (`preset`: the Task Manager for a manager, the manager for a stage) gives way to the role's bot once it
+    ladder (`preset`: the General Manager for a manager, the manager for a stage) gives way to the role's bot once it
     exists."""
     record = preset(conn, key)
     ts = _h().now()
     found = conn.execute("SELECT manager_id, private FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
     if found and found[1] and not record.get("manager_id"):
         return  # a private pipeline whose owner bot is gone keeps its manager: nobody stands in
-    stand_ins = (found[0] if found else None, _task_manager(conn))
+    stand_ins = (found[0] if found else None, _general_manager(conn))
     if record.get("manager_id"):
         conn.execute(
             "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND (manager_id IS NULL OR manager_id=?)",
@@ -1531,7 +1531,7 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
       gets them at its next start. Growth and Success Monitoring are made with them, only where their factory's
       Experiments pipeline is (live).
     - Legal and Finance, private, in the Corporate factory, likewise, but only once their owner bot exists (the Legal
-      Owner, the Finance Owner): never with the Task Manager standing in. `ensure_private` makes them when that bot is
+      Owner, the Finance Owner): never with the General Manager standing in. `ensure_private` makes them when that bot is
       made.
     - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with two exceptions:
       while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is

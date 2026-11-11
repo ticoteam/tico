@@ -1042,7 +1042,7 @@ FOCUS = {
     "contracts-manager": "Homeworks clause",
     "librarian": "Watching Lumenhaus",
     "strategy-owner": "Q4 bookings goal",
-    "task-manager": "Open tasks by owner",
+    "general-manager": "Open tasks by owner",
     "rules-owner": "Larkford bid terms",
 }
 
@@ -3230,7 +3230,7 @@ USAGE.update(
 USAGE.update(
     {
         "strategy-owner": ("claude-haiku-5-5", "anthropic", "api"),
-        "task-manager": ("claude-haiku-5-5", "anthropic", "api"),
+        "general-manager": ("claude-haiku-5-5", "anthropic", "api"),
         "rules-owner": ("claude-sonnet-5-5", "anthropic", "api"),
     }
 )
@@ -3243,7 +3243,7 @@ HELPER_TURNS = [
         24000,
         1900,
     ),
-    ("task-manager", 9, "routine", "Sorted 17 open tasks by owner. Two are waiting on Ana.", 18000, 1200),
+    ("general-manager", 9, "routine", "Sorted 17 open tasks by owner. Two are waiting on Ana.", 18000, 1200),
     (
         "rules-owner",
         52,

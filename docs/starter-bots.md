@@ -48,7 +48,7 @@ themselves and never do their team's work.
 
 Five Team Managers (Product, Engineering, Growth, Success and Corporate) are also `lead: true`. Each runs its team's week and routes the team's work to its owners and pipeline managers; Product, Engineering and Growth take no group's head seat.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers

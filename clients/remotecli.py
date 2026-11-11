@@ -460,21 +460,21 @@ def run(args, who=None):
         return via_tool(client, args)
     if fn == "audit":
         return via_tool(client, args)
-    if fn and fn.startswith("task-manager "):
+    if fn and fn.startswith("general-manager "):
         from clients import hubtools
 
         op = os.environ.get("HUB_OPERATION_ID")
-        if fn == "task-manager status":
-            return hubtools.task_manager_status(client, {})
-        if fn == "task-manager run":
-            return hubtools.task_manager_run(client, {"operation_id": op})
+        if fn == "general-manager status":
+            return hubtools.general_manager_status(client, {})
+        if fn == "general-manager run":
+            return hubtools.general_manager_run(client, {"operation_id": op})
         change = {
-            "task-manager on": {"on": True},
-            "task-manager off": {"on": False},
-            "task-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
-            "task-manager bot": {"bot": getattr(args, "state", None)},
+            "general-manager on": {"on": True},
+            "general-manager off": {"on": False},
+            "general-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
+            "general-manager bot": {"bot": getattr(args, "state", None)},
         }[fn]
-        return hubtools.task_manager_set(client, {**change, "operation_id": op})
+        return hubtools.general_manager_set(client, {**change, "operation_id": op})
     if fn in ("support report", "support send"):
         from clients import hubtools
 
@@ -1206,7 +1206,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "strategy-owner", "task-manager", "finance-owner")
+    reserved = ("assistant", "botops", "librarian", "strategy-owner", "general-manager", "finance-owner")
     return catalog.free_slug(
         args.name or card.get("name") or args.template,
         lambda slug: (

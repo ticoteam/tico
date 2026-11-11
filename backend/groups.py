@@ -35,7 +35,7 @@ SYSTEM_BOTS = (
     "librarian",
     "strategy-owner",
     "health-monitor",
-    "task-manager",
+    "general-manager",
     "finance-owner",
     H.RULES_OWNER,
     H.DESIGN_OWNER,

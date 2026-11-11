@@ -2145,28 +2145,28 @@ STABLE = [
         None,
     ),
     (
-        "/api/v2/task-manager",
+        "/api/v2/general-manager",
         "get",
         "Health",
-        "getTaskManager",
-        "People and bots: whether the Task Manager is on, its hourly report's switch, schedule and last run, and each "
+        "getGeneralManager",
+        "People and bots: whether the General Manager is on, its hourly report's switch, schedule and last run, and each "
         "department's last check and open check task",
         None,
     ),
     (
-        "/api/v2/task-manager/turn-on",
+        "/api/v2/general-manager/turn-on",
         "post",
         "Health",
-        "turnOnTaskManager",
-        "Owner only: add the Task Manager from the catalog (or wake a paused one) and activate it",
+        "turnOnGeneralManager",
+        "Owner only: add the General Manager from the catalog (or wake a paused one) and activate it",
         None,
     ),
     (
-        "/api/v2/task-manager/turn-off",
+        "/api/v2/general-manager/turn-off",
         "post",
         "Health",
-        "turnOffTaskManager",
-        "Owner only: pause the Task Manager",
+        "turnOffGeneralManager",
+        "Owner only: pause the General Manager",
         None,
     ),
     (

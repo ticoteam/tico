@@ -8,7 +8,7 @@ JOBS = {
     ),
     "task_manager_report": (
         "open",
-        "Task Manager: per department, list tasks that say Paused, held bots, runs waiting for their owner's review, "
+        "General Manager: per department, list tasks that say Paused, held bots, runs waiting for their owner's review, "
         "and duplicate tasks.",
     ),
     "bookkeeper_check": (

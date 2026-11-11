@@ -5,7 +5,7 @@ Monitoring in the Success factory; Legal and Finance, both private, in the Corpo
 
 `pipeline_settings` takes PRESETS and ROLES into its own and makes these the way it makes Product and Engineering
 (`ensure_presets`): once, after setup finished, never again once the company has one under its id, and with the same
-ladder for a role no bot fills yet (a stage's owner goes to the pipeline's manager, a manager to the Task Manager).
+ladder for a role no bot fills yet (a stage's owner goes to the pipeline's manager, a manager to the General Manager).
 
 - A pipeline's manager is its own Pipeline Manager: the bot whose slug is `<pipeline>-pipeline-manager` (the default
   chart's seat; every Pipeline Manager shares the `pipeline-manager` template, so the template can't tell them apart).
@@ -18,7 +18,7 @@ ladder for a role no bot fills yet (a stage's owner goes to the pipeline's manag
 - Legal and Finance are private pipelines (backend/private_pipelines.py): every task in them is private, read by its
   requester, its owner, the pipeline's manager and the company's owner. Each is managed, and each stage owned, by its
   owner bot: the Legal Owner (template `legal-owner`, not the built-in Rules Owner) and the Finance Owner (built in,
-  template `finance-owner`). Nothing on them falls back to the Task Manager, which reads no private task: while the owner
+  template `finance-owner`). Nothing on them falls back to the General Manager, which reads no private task: while the owner
   bot does not exist the pipeline is not made (PRIVATE, `pipeline_settings.ensure_presets`). Their stages have no
   limit (a limit counts tasks a reader can't see) and no OK from a person.
 
@@ -390,7 +390,7 @@ PRESETS: dict[str, Row] = {
         private=True,
     ),
 }
-# The private presets: made only once their owner bot exists, never handed to the Task Manager.
+# The private presets: made only once their owner bot exists, never handed to the General Manager.
 PRIVATE = ("legal", "finance")
 # Each Monitoring pipeline goes with its factory's Experiments: made only where that one is, and managed by the same
 # seat (no Monitoring Pipeline Manager seat).

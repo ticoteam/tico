@@ -1,4 +1,4 @@
-"""Work on a task beside its lifecycle (comments, links, readers, runs, worktrees, caps), tags, feedback, replays, the roadmap and the Task Manager.
+"""Work on a task beside its lifecycle (comments, links, readers, runs, worktrees, caps), tags, feedback, replays, the roadmap and the General Manager.
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
@@ -603,32 +603,36 @@ def task_cap_set(api, args):
 
 
 @tool(
-    "tico_task_manager",
-    "The Task Manager: whether the helper bot is on, the hourly report's switch and schedule, its last run "
+    "tico_general_manager",
+    "The General Manager: whether the helper bot is on, the hourly report's switch and schedule, its last run "
     "(\"3 departments, 7 items\" or \"Nothing to do\"), and each department's last check and open check task.",
     {},
 )
-def task_manager_status(api, args):
-    return _as_person(api).get("task-manager")
+def general_manager_status(api, args):
+    return _as_person(api).get("general-manager")
 
 
 @tool(
-    "tico_task_manager_set",
-    "The Task Manager: switch its hourly report on or off, pick the schedule (business = hourly on "
+    "tico_general_manager_set",
+    "The General Manager: switch its hourly report on or off, pick the schedule (business = hourly on "
     "weekdays 08:00 to 18:00, hourly, 4h, daily; `at` is the daily time), or turn the helper bot itself on or off. The owner "
     "or an admin; the bot's own off switch is the owner's.",
     {
         "on": {"type": "boolean", "description": "The hourly report on or off"},
         "preset": {"type": "string", "enum": ["business", "hourly", "4h", "daily"]},
         "at": _s("HH:MM for the daily preset"),
-        "bot": {"type": "string", "enum": ["on", "off"], "description": "Turn the Task Manager bot itself on or off"},
+        "bot": {
+            "type": "string",
+            "enum": ["on", "off"],
+            "description": "Turn the General Manager bot itself on or off",
+        },
     },
     writes=True,
 )
-def task_manager_set(api, args):
+def general_manager_set(api, args):
     api, out = _as_person(api), {}
     if args.get("bot"):
-        out["bot"] = api.post("task-manager/turn-" + args["bot"], {}, key=_key(args, ":bot"))
+        out["bot"] = api.post("general-manager/turn-" + args["bot"], {}, key=_key(args, ":bot"))
     body = {k: args[k] for k in ("on", "preset", "at") if args.get(k) is not None}
     if body:
         out["job"] = api.call("PUT", "system-routines/task_manager_report", body, _key(args))["job"]
@@ -638,13 +642,13 @@ def task_manager_set(api, args):
 
 
 @tool(
-    "tico_task_manager_run",
-    "The Task Manager: run the department check once now (the owner or an admin). It opens a check task "
+    "tico_general_manager_run",
+    "The General Manager: run the department check once now (the owner or an admin). It opens a check task "
     "per department only when there is something to look at; 409 while the report is off.",
     {},
     writes=True,
 )
-def task_manager_run(api, args):
+def general_manager_run(api, args):
     return _as_person(api).call("POST", "system-routines/task_manager_report/run", {}, _key(args))
 
 

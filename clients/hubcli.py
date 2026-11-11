@@ -3075,21 +3075,21 @@ def parser():
     s.add_argument("--symmetric", action="store_true", help="stored once, both ways")
     s.set_defaults(fn="contacts link-type add")
     manager = sub.add_parser(
-        "task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)"
+        "general-manager", help="the General Manager's hourly department check (docs/general-manager.md)"
     ).add_subparsers(dest="sub")
     manager.add_parser(
         "status", help="bot, report switch and schedule, last run, each department's last check"
-    ).set_defaults(fn="task-manager status")
-    manager.add_parser("on", help="switch the hourly report on").set_defaults(fn="task-manager on")
-    manager.add_parser("off", help="switch the hourly report off").set_defaults(fn="task-manager off")
-    manager.add_parser("run", help="run the department check now").set_defaults(fn="task-manager run")
+    ).set_defaults(fn="general-manager status")
+    manager.add_parser("on", help="switch the hourly report on").set_defaults(fn="general-manager on")
+    manager.add_parser("off", help="switch the hourly report off").set_defaults(fn="general-manager off")
+    manager.add_parser("run", help="run the department check now").set_defaults(fn="general-manager run")
     s = manager.add_parser("schedule", help="pick when the report runs")
     s.add_argument("preset", choices=["business", "hourly", "4h", "daily"])
     s.add_argument("--at", help="HH:MM for the daily preset")
-    s.set_defaults(fn="task-manager schedule")
-    s = manager.add_parser("bot", help="turn the Task Manager bot itself on or off")
+    s.set_defaults(fn="general-manager schedule")
+    s = manager.add_parser("bot", help="turn the General Manager bot itself on or off")
     s.add_argument("state", choices=["on", "off"])
-    s.set_defaults(fn="task-manager bot")
+    s.set_defaults(fn="general-manager bot")
     cli_spec.add(sub, computers.MAINTENANCE)  # tico maintenance: clients/commands/computers.py
     roadmap = sub.add_parser(
         "roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)"

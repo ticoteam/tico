@@ -1,4 +1,4 @@
-"""The Task Manager (backend/task_manager.py, docs/task-manager.md): built in for every team, the manager of General,
+"""The General Manager (backend/general_manager.py, docs/general-manager.md): built in for every team, the manager of General,
 narrow task rights that never widen privacy, and an hourly weekday report built in code that opens one task per
 department only when it has something (no task, no model call otherwise), absorbs into a still-open one, and never
 lists a private task. Synthetic fixtures."""
@@ -12,14 +12,14 @@ import pytest
 
 from backend import bot_settings as BS
 from backend import system_routines as SR
-from backend import task_manager as TM
+from backend import general_manager as TM
 from backend.onboarding import helper_templates
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.goal_manager import BASE
 from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 
-TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "task-manager"
+TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "general-manager"
 SECRET = "Acme payroll for March"
 ANA = "human:ana"
 BUILDER, STALLED = "bot:builder", "bot:stalled"  # STALLED has no computer: its tasks say Paused
@@ -27,11 +27,11 @@ BUILDER, STALLED = "bot:builder", "bot:stalled"  # STALLED has no computer: its 
 
 @pytest.fixture
 def c(company):
-    """The company with the Task Manager built from its template and managing General, a bot that can run and one
+    """The company with the General Manager built from its template and managing General, a bot that can run and one
     that cannot."""
     with company.transaction() as conn:
         X.bot(conn, TM.SLUG)
-        BS.write(conn, TM.SLUG, {"name": TM.SLUG, "runtime": "fake", "status": "active", "template": "task-manager"})
+        BS.write(conn, TM.SLUG, {"name": TM.SLUG, "runtime": "fake", "status": "active", "template": "general-manager"})
         conn.execute("UPDATE pipelines SET manager_id=? WHERE id='general'", (TM.ACTOR,))
         X.bot(conn, "builder")
         X.bot(conn, "stalled", computer=False)
@@ -124,7 +124,7 @@ def test_a_task_in_a_pipeline_with_another_active_manager_is_left_to_that_manage
     _new(c, pipeline="leads")
     assert _report(c)["items"] == 0
     c.execute("UPDATE bots SET state='paused' WHERE id='lead-manager'")
-    assert _report(c)["items"] == 1  # a manager that cannot act covers nothing: the Task Manager does
+    assert _report(c)["items"] == 1  # a manager that cannot act covers nothing: the General Manager does
 
 
 def _twin(c, title):
@@ -191,10 +191,10 @@ def test_render_is_unchanged_under_cap_and_report_keeps_the_thirty_item_cap(c, m
     assert all(f"synthetic-{i:02}" not in body for i in range(30, 35))
 
 
-def test_with_the_task_manager_paused_the_report_opens_nothing(c):
+def test_with_the_general_manager_paused_the_report_opens_nothing(c):
     _new(c)
     c.execute("UPDATE bots SET state='paused' WHERE id=?", (TM.SLUG,))
-    assert _report(c)["words"] == "The Task Manager is off" and _checks(c) == []
+    assert _report(c)["words"] == "The General Manager is off" and _checks(c) == []
 
 
 # ----------------------------------------------------------------------------- its rights
@@ -232,7 +232,7 @@ def test_it_reassigns_only_within_the_owners_department(c):
 # ----------------------------------------------------------------------------- the app
 def built(environment):
     api = environment(seed={}, cards=BASE)
-    shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "task-manager")
+    shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "general-manager")
     machine(api)
     draft(api)
     api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
@@ -244,7 +244,7 @@ def test_it_is_built_in_active_and_outside_the_org_chart(environment):
     with api.app.state.store.read() as conn:
         assert H.bot(conn, TM.SLUG)["state"] == "active"
         assert api.app.state.auth.system_bot(TM.SLUG)
-    assert "task-manager" in helper_templates(api.app.state.store.settings)
+    assert "general-manager" in helper_templates(api.app.state.store.settings)
 
 
 def test_the_business_hours_preset_runs_hourly_on_weekdays_only():
@@ -260,7 +260,7 @@ def test_the_business_hours_preset_runs_hourly_on_weekdays_only():
 def test_the_switch_the_schedule_run_now_and_the_status_work_through_the_api(environment):
     api = built(environment)
     owner = signed_in  # a fresh Idempotency-Key per write
-    status = api.get("/api/v2/task-manager", headers=owner()).json()
+    status = api.get("/api/v2/general-manager", headers=owner()).json()
     assert status["on"] and status["routine"]["preset"] == "business"
     saved = api.put(
         "/api/v2/system-routines/task_manager_report", json={"preset": "daily", "at": "07:30"}, headers=owner()
@@ -271,9 +271,9 @@ def test_the_switch_the_schedule_run_now_and_the_status_work_through_the_api(env
     assert api.post("/api/v2/system-routines/task_manager_report/run", json={}, headers=owner()).status_code == 409
     api.put("/api/v2/system-routines/task_manager_report", json={"on": True, "preset": "business"}, headers=owner())
     assert api.post("/api/v2/system-routines/task_manager_report/run", json={}, headers=owner()).status_code == 200
-    assert api.post("/api/v2/task-manager/turn-off", json={}, headers=owner()).status_code == 200
+    assert api.post("/api/v2/general-manager/turn-off", json={}, headers=owner()).status_code == 200
     with api.app.state.store.transaction() as conn:
         assert TM.report(conn, api.app.state.auth, api.app.state.store.settings, H.now())["words"] == (
-            "The Task Manager is off"
+            "The General Manager is off"
         )
-    assert api.post("/api/v2/task-manager/turn-on", json={}, headers=owner()).status_code == 200
+    assert api.post("/api/v2/general-manager/turn-on", json={}, headers=owner()).status_code == 200

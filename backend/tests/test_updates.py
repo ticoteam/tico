@@ -528,7 +528,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
 
 
 def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
-    """BotOps, the Strategy Owner, the Librarian and the Task Manager get no node (so no empty "No update yet" row) in
+    """BotOps, the Strategy Owner, the Librarian and the General Manager get no node (so no empty "No update yet" row) in
     either kind or scope; a bot below one hangs from the next node up, and an update one posted stays in the feed."""
     from backend.tests.helpers.bot_contact import bot
 
@@ -537,7 +537,7 @@ def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
         ("botops", "BotOps"),
         ("strategy-owner", "Strategy Owner"),
         ("librarian", "Librarian"),
-        ("task-manager", "Task Manager"),
+        ("general-manager", "General Manager"),
     ):
         bot(api, slug, name, reports_to="human:ana")
     bot(api, "scout", "Scout", reports_to="librarian")
@@ -547,7 +547,7 @@ def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
     node = lambda slug: "b:" + bid(api, slug)
     for path in ("updates/tree", "updates/tree?scope=all", "updates/tree?kind=weekly&scope=all"):
         tree = get(api, path)
-        assert not {node("botops"), node("strategy-owner"), node("librarian"), node("task-manager")} & set(
+        assert not {node("botops"), node("strategy-owner"), node("librarian"), node("general-manager")} & set(
             keys(tree["roots"])
         ), path
         assert node("scout") in [n["key"] for r in tree["roots"] for n in r["children"]], path + ": under the owner"

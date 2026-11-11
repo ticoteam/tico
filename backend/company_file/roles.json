@@ -4054,6 +4054,22 @@
    "default": false
   },
   {
+   "slug": "general-manager",
+   "template": "general-manager",
+   "name": "General Manager",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Tidies tasks, never the work. Once an hour on weekdays Tico checks each department's tasks in plain code: stalled or overdue asks, merged work not yet shipped, held bots and duplicates. Nothing to report means no task and no model run. Otherwise the General Manager gets one task per department, fixes the obvious items and leaves one line in Needs you for anything it is unsure of.",
+   "when": "Built in: once an hour on weekdays it has the stalled, overdue and out-of-step tasks of each department checked, fixes the obvious ones and leaves one line per department for what it is unsure of.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
    "slug": "rules-owner",
    "template": "rules-owner",
    "name": "Rules Owner",
@@ -4067,22 +4083,6 @@
    "recommend_when": [
     "never"
    ],
-   "first_routine": "",
-   "tools": [],
-   "default": false
-  },
-  {
-   "slug": "task-manager",
-   "template": "task-manager",
-   "name": "Task Manager",
-   "department": "core",
-   "lead": false,
-   "core": true,
-   "summary": "Tidies tasks, never the work. Once an hour on weekdays Tico checks each department's tasks in plain code: stalled or overdue asks, merged work not yet shipped, held bots and duplicates. Nothing to report means no task and no model run. Otherwise the Task Manager gets one task per department, fixes the obvious items and leaves one line in Needs you for anything it is unsure of.",
-   "when": "Built in: once an hour on weekdays it has the stalled, overdue and out-of-step tasks of each department checked, fixes the obvious ones and leaves one line per department for what it is unsure of.",
-   "tags": [],
-   "pains": [],
-   "recommend_when": [],
    "first_routine": "",
    "tools": [],
    "default": false

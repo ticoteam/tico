@@ -542,7 +542,7 @@ def _wake(declared):
 
 
 # ---------------------------------------------------------------------------------------------------- the upgrade
-CUSTOM_SLUGS = ("botops", "health-monitor", "task-manager")
+CUSTOM_SLUGS = ("botops", "health-monitor", "general-manager")
 # No bot is a Responder by its slug: `assistant` is the install's built-in Assistant, a Lead whose routines
 # open tasks; a bot on a synced harness still becomes one.
 RESPONDER_SLUGS = ()

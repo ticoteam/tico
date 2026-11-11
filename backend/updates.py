@@ -2012,10 +2012,10 @@ def count_unread(c, actor, readable, kind=None, meetings=False):
 
 def off_tree():
     """The built-in bots the Updates tree leaves out: the Assistant's helpers (BotOps, the Strategy Owner, the
-    Librarian), the Task Manager and the Finance Owner. Nobody talks to them and they are not on the org chart."""
-    from . import assistant, bookkeeper, task_manager
+    Librarian), the General Manager and the Finance Owner. Nobody talks to them and they are not on the org chart."""
+    from . import assistant, bookkeeper, general_manager
 
-    return frozenset((*assistant.HELPERS, task_manager.SLUG, bookkeeper.SLUG))
+    return frozenset((*assistant.HELPERS, general_manager.SLUG, bookkeeper.SLUG))
 
 
 def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):

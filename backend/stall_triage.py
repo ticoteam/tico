@@ -1,4 +1,4 @@
-"""The stall verdicts a quiet task's last read left: the table, and the class the Task Manager shows for a task.
+"""The stall verdicts a quiet task's last read left: the table, and the class the General Manager shows for a task.
 
 Decide used to read a quiet task once per stand and record what it was (waiting on someone, finished but unmarked,
 stuck, or unsure). Nothing reads tasks that way now, and no verdict is written: the never-stuck check says what a
@@ -21,5 +21,5 @@ def verdict_of(c, task_id):
 
 def class_of(c, row):
     """None: a verdict was kept only while the task stood as it did when it was read, and the engine's tasks are never
-    read that way (the never-stuck check says what a quiet task waits on). Kept until the Task Manager stops asking."""
+    read that way (the never-stuck check says what a quiet task waits on). Kept until the General Manager stops asking."""
     return None

@@ -1,23 +1,23 @@
-# Task Manager
+# General Manager
 
-The Task Manager is a built-in helper that keeps tasks moving without anyone having to look. It sits outside the
+The General Manager is a built-in helper that keeps tasks moving without anyone having to look. It sits outside the
 org chart like the [Librarian](librarian.md), and runs on Haiku 5.5 at low
 effort. Every team has it: it is added when a team is set up, and an existing team gets it on upgrade. It is **on by
-default**. The owner can pause it (`POST /api/v2/task-manager/turn-off`, `tico task-manager bot off`); pausing keeps its
+default**. The owner can pause it (`POST /api/v2/general-manager/turn-off`, `tico general-manager bot off`); pausing keeps its
 history and `turn-on` wakes it again.
 
 It tidies tasks, never the work. It does not touch bots, credentials, computers, sends or spending.
 
 ## What it manages
 
-The Task Manager is the manager of the [General pipeline](tasks.md#pipelines-and-stages). The never-stuck check hands
+The General Manager is the manager of the [General pipeline](tasks.md#pipelines-and-stages). The never-stuck check hands
 it a General task whose owner bot tried three times, a General task that is Late, and one with no assignee. It decides:
 reassign, move back, move on, snooze or close. The owner stays the owner.
 
 ## What it checks
 
 Once an hour on weekdays, 08:00 to 18:00 in the team's time zone, the server looks for these in plain code
-(`backend/task_manager.py`). No model runs for the look.
+(`backend/general_manager.py`). No model runs for the look.
 
 | Item | What it means |
 |---|---|
@@ -34,13 +34,13 @@ items, and each report body is capped at 12,000 bytes. If either cap leaves item
 the next report. Only items included in the body are left out for a day unless their task changes, so items omitted by
 either cap remain eligible for the next report.
 
-A private task, or one of a bot the Task Manager has no access to, never appears in a report, and the bot cannot read
+A private task, or one of a bot the General Manager has no access to, never appears in a report, and the bot cannot read
 or write it: it meets the same privacy fence as any other bot.
 
 ## What happens next
 
 - **Nothing to report:** no task, no model call. The run record says "Nothing to do".
-- **Something to report:** one task per department, owned by the Task Manager, titled `Task check: <department> (<n>)`.
+- **Something to report:** one task per department, owned by the General Manager, titled `Task check: <department> (<n>)`.
   Each item has the task id, its title, its owner, why it is listed and the `tico` command that would fix it. The run
   record says "3 departments, 7 items".
 - **A check task is still open:** the next report replaces its body and wakes the bot only if the body changed, so
@@ -64,16 +64,16 @@ It cannot change a task's number or labels, and it is never a task mover.
 
 ## Switches and commands
 
-The hourly report is a [system routine](system-routines.md#task-manager-report) (key `task_manager_report`). The owner
+The hourly report is a [system routine](system-routines.md#general-manager-report) (key `task_manager_report`). The owner
 or an admin can switch it, pick its schedule and run it now.
 
 | Do | API | `tico` |
 |---|---|---|
-| See the bot, the report's switch, schedule, last run and each department's last check | `GET /api/v2/task-manager` | `tico task-manager status` |
-| Report on or off | `PUT /api/v2/system-routines/task_manager_report` `{"on": false}` | `tico task-manager on` / `off` |
-| Schedule: `business` (default), `hourly`, `4h`, `daily` with `at` | same, `{"preset": "daily", "at": "09:00"}` | `tico task-manager schedule daily --at 09:00` |
-| Run the check now | `POST /api/v2/system-routines/task_manager_report/run` | `tico task-manager run` |
-| Pause or wake the bot (owner) | `POST /api/v2/task-manager/turn-off` / `turn-on` | `tico task-manager bot off` / `on` |
+| See the bot, the report's switch, schedule, last run and each department's last check | `GET /api/v2/general-manager` | `tico general-manager status` |
+| Report on or off | `PUT /api/v2/system-routines/task_manager_report` `{"on": false}` | `tico general-manager on` / `off` |
+| Schedule: `business` (default), `hourly`, `4h`, `daily` with `at` | same, `{"preset": "daily", "at": "09:00"}` | `tico general-manager schedule daily --at 09:00` |
+| Run the check now | `POST /api/v2/system-routines/task_manager_report/run` | `tico general-manager run` |
+| Pause or wake the bot (owner) | `POST /api/v2/general-manager/turn-off` / `turn-on` | `tico general-manager bot off` / `on` |
 
-The same four actions are the MCP tools `tico_task_manager`, `tico_task_manager_set` and `tico_task_manager_run`.
+The same four actions are the MCP tools `tico_general_manager`, `tico_general_manager_set` and `tico_general_manager_run`.
 While the bot is paused the report finds nothing to wake and says so on its row.

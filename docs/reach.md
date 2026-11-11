@@ -97,7 +97,7 @@ Never refused (a person receiver follows the rule above):
   the hub, not through a bot's route;
 - the hub's own work in a bot's name: a runner's reply to the message that woke it, comments on a task;
 - a held write (a message, note or task) a person chose to Send anyway: it passed reach before it was held;
-- built-in helpers off the chart, as sender or receiver: BotOps, Task Manager, Strategy Owner, Librarian, the Assistant
+- built-in helpers off the chart, as sender or receiver: BotOps, General Manager, Strategy Owner, Librarian, the Assistant
   (`TICO_ASSISTANT_BOT`, `assistant` by default), the Finance Owner (`finance-owner`), the Rules Owner (`rules-owner`), the
   Design Owner (`design-owner`) and the Support Owner (`support-owner`). Anyone
   reaches them.

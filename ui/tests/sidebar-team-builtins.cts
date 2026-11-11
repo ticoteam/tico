@@ -11,11 +11,11 @@ const FULL = {see: true, read: true, write: true};
 const bot = (id: string, display_name: string, team: string, org_parent: string, reports_to: string | null = null, helper = false) =>
   ({id, name: id, slug: id, display_name, team, org_parent, reports_to, helper, host: 'cloud', status: 'active', state: 'active', can_chat: true,
     my_access: FULL, users: [{id: 'chris', name: 'Chris'}], owner_id: 'chris', revision: 1});
-const BUILT_INS = [['assistant', 'Assistant', 'p:chris'], ['botops', 'BotOps', 'b:assistant'], ['task-manager', 'Task Manager', 'p:chris'],
+const BUILT_INS = [['assistant', 'Assistant', 'p:chris'], ['botops', 'BotOps', 'b:assistant'], ['general-manager', 'General Manager', 'p:chris'],
   ['strategy-owner', 'Strategy Owner', 'p:chris'], ['librarian', 'Librarian', 'p:chris'], ['rules-owner', 'Rules Owner', 'p:chris'],
   ['design-owner', 'Design Owner', 'p:chris'], ['updates-owner', 'Updates Owner', 'p:chris'], ['automations-owner', 'Automations Owner', 'p:chris']] as const;
 const BOTS = [
-  ...BUILT_INS.map(([id, name, up]) => bot(id, name, 'built-in', up, null, ['task-manager', 'rules-owner', 'design-owner', 'updates-owner', 'automations-owner'].includes(id))),
+  ...BUILT_INS.map(([id, name, up]) => bot(id, name, 'built-in', up, null, ['general-manager', 'rules-owner', 'design-owner', 'updates-owner', 'automations-owner'].includes(id))),
   bot('hop', 'Head of Product', 'leadership', 'b:strategy-owner', 'human:chris'),
   bot('cm', 'Content Owner', 'leadership', 'p:chris', 'human:chris'),
   bot('sa', 'Support Agent', 'leadership', 'p:chris', 'human:chris'),

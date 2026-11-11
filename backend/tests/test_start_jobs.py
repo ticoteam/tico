@@ -37,7 +37,7 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
 
     monkeypatch.setattr(Onboarding, "ensure_librarian", job("librarian", wait=True))
     monkeypatch.setattr(Onboarding, "ensure_goal_manager", job("goal_manager"))
-    monkeypatch.setattr(Onboarding, "ensure_task_manager", job("task_manager"))
+    monkeypatch.setattr(Onboarding, "ensure_general_manager", job("general_manager"))
     monkeypatch.setattr(Onboarding, "ensure_counsel", job("counsel"))
     monkeypatch.setattr(Onboarding, "ensure_brand_owner", job("brand_owner"))
     monkeypatch.setattr(listening, "seed_market", job("market"))
@@ -70,7 +70,7 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
     assert ran == [
         "librarian",
         "goal_manager",
-        "task_manager",
+        "general_manager",
         "counsel",
         "brand_owner",
         "market",

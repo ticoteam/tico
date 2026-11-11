@@ -1167,8 +1167,8 @@ class Onboarding:
 
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
-        Librarian, the Strategy Owner, the Task Manager, the Rules Owner, the Design Owner, and the Finance Owner once Finance is set
-        up), the Assistant's routines it never had, General's manager once the Task Manager exists
+        Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, and the Finance Owner once Finance is set
+        up), the Assistant's routines it never had, General's manager once the General Manager exists
         (pipeline_settings.ensure_presets) and BotOps' daily "Sweep stuck tasks" once BotOps is active. Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import, the sample
         company) and a computer's enrollment, so none of it waits for the next start. Each step is idempotent and leaves
@@ -1178,11 +1178,11 @@ class Onboarding:
         `failed` the failure is raised (the caller's transaction then keeps nothing)."""
         from . import bookkeeper, pipeline_settings
 
-        # In order: a later step reads a bot an earlier one makes (General's manager is the Task Manager).
+        # In order: a later step reads a bot an earlier one makes (General's manager is the General Manager).
         steps = (
             ("librarian", self.ensure_librarian),
             ("goal_manager", self.ensure_goal_manager),
-            ("task_manager", self.ensure_task_manager),
+            ("general_manager", self.ensure_general_manager),
             ("counsel", self.ensure_counsel),
             ("brand_owner", self.ensure_brand_owner),
             ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),
@@ -1216,14 +1216,14 @@ class Onboarding:
         """The same for the Strategy Owner: a company from before it was built in gets it once it can run it."""
         return self._ensure_builtin(c, STRATEGY_OWNER, strategy_bot.name(c), "goal_manager.turned_on")
 
-    def ensure_task_manager(self, c):
-        """The same for the Task Manager (docs/task-manager.md): a company from before it was built in gets it once it can
+    def ensure_general_manager(self, c):
+        """The same for the General Manager (docs/general-manager.md): a company from before it was built in gets it once it can
         run it. It is a helper outside the org chart, so no chart or seat changes."""
-        return self._ensure_builtin(c, "task-manager", "Task Manager", "task_manager.turned_on")
+        return self._ensure_builtin(c, "general-manager", "General Manager", "task_manager.turned_on")
 
     def ensure_bookkeeper(self, c):
         """The same for the Finance Owner (docs/bookkeeper.md), once Finance is set up (backend/bookkeeper.py `ensure`
-        checks that and adds its defaults). A helper outside the org chart, like the Task Manager."""
+        checks that and adds its defaults). A helper outside the org chart, like the General Manager."""
         return self._ensure_builtin(c, "finance-owner", "Finance Owner", "bookkeeper.turned_on")
 
     def ensure_counsel(self, c):
@@ -1238,10 +1238,10 @@ class Onboarding:
         audit starts off and goes on when its setup is done (`onboarded`)."""
         return self._ensure_builtin(c, H.DESIGN_OWNER, "Design Owner", "brand_owner.turned_on")
 
-    def turn_on_task_manager(self, c, who):
-        """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
+    def turn_on_general_manager(self, c, who):
+        """Bring the General Manager back after it was paused or archived by an older version (its report is plain code and
         keeps running either way, but the tasks it opens need the bot to be active)."""
-        return self._turn_on(c, who, "task-manager", "task-manager", "Task Manager", "task_manager.turned_on")
+        return self._turn_on(c, who, "general-manager", "general-manager", "General Manager", "task_manager.turned_on")
 
     def _ensure_builtin(self, c, slug, name, event):
         if not load(c)["completed"] or not providers.configured(providers.load(c, self.settings)):

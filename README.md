@@ -32,7 +32,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Owner** (`content`) checked.
    With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
-   Ten built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner.
+   Ten built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.

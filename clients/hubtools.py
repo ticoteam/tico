@@ -17,9 +17,9 @@ from clients.commands.task_work import (
     task_attach,
     task_comment,
     task_label,
-    task_manager_run,
-    task_manager_set,
-    task_manager_status,
+    general_manager_run,
+    general_manager_set,
+    general_manager_status,
 )
 from clients.commands.assistant import needs_you_show, run_export, run_export_full, write_fixture
 from clients.commands.bots import bot_branch, bot_repos_get, bot_repos_set
@@ -181,9 +181,9 @@ __all__ = [
     "task_create",
     "task_label",
     "task_list",
-    "task_manager_run",
-    "task_manager_set",
-    "task_manager_status",
+    "general_manager_run",
+    "general_manager_set",
+    "general_manager_status",
     "task_relate",
     "task_show",
     "task_text",
