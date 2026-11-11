@@ -229,25 +229,25 @@ def _engine_github(ctx: Context) -> Any:
 
 
 def pr_facts(ctx: Context) -> tuple[str, bool]:
-    # The 5-minute re-read of the PRs and releases open tasks wait on (backend/task_facts.py `refresh`): a webhook
+    # The 5-minute re-read of the PRs and releases open tasks wait on (backend/item_sources/github.py `refresh`): a webhook
     # GitHub never sent, or one Tico missed, still reaches the task.
     github = _engine_github(ctx)
     if github is None:
         return "No GitHub app", True
-    from . import task_facts
+    from .item_sources import github as GS
 
-    changed = task_facts.refresh(ctx.store, github)
+    changed = GS.refresh(ctx.store, github)
     return (f"{changed} facts changed", False) if changed else ("Nothing due", True)
 
 
 def merge_queue_effects(ctx: Context) -> tuple[str, bool]:
-    # The Merge stage's owed queue and dequeue calls (backend/merge_queue.py `run`).
+    # The Merge stage's owed queue and dequeue calls (backend/item_sources/github.py `run`).
     github = _engine_github(ctx)
     if github is None:
         return "No GitHub app", True
-    from . import merge_queue
+    from .item_sources import github as GS
 
-    done = merge_queue.run(ctx.store, github)
+    done = GS.run(ctx.store, github)
     return (f"{done} merge queue calls", False) if done else ("Nothing due", True)
 
 

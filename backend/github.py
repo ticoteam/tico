@@ -470,19 +470,20 @@ def refresh_conflicts(service: Any) -> int:
 
 def _engine_speaks(c, task_id):
     """Whether the task is on a pipeline stage that waits on GitHub (a PR open, checks, a merge, a release) or queues
-    its PRs (backend/merge_queue.py). There the engine tells the stage's owner of a removal from the queue, a merge
+    its PRs (backend/item_sources/github.py). There the engine tells the stage's owner of a removal from the queue, a merge
     (the move on) and a close (the standing it leaves unmet): this module's wakes for those would be a second message
     about the same event, in other words. The webhook saves the engine's facts first (`_task_facts`), so a merge
     has already moved the task on to the stage after Merge when this is asked."""
-    from . import merge_queue, task_engine, task_facts
+    from . import task_engine
+    from .item_sources import github as GS
     from . import task_requirements as R
 
     row = task_engine.task(c, task_id)
     if not row or not row.get("visit"):
         return False
-    if merge_queue.queues_prs(row.get("stage")):
+    if GS.queues_prs(row.get("stage")):
         return True
-    return any(r["kind"] in task_facts.PR_KINDS for r in R.for_visit(c, row["visit"]))
+    return any(r["kind"] in GS.PR_KINDS for r in R.for_visit(c, row["visit"]))
 
 
 def _settle_removal(c, link_id, pr):
@@ -1899,16 +1900,16 @@ def ship_deployed(c, settings, *, ancestry=None):
 
 
 def _task_facts(c, github_app, event, payload):
-    """The engine's PR and release facts from a webhook (backend/task_facts.py), in a savepoint: a fault there is
+    """The engine's PR and release facts from a webhook (backend/item_sources/github.py), in a savepoint: a fault there is
     logged and the 5-minute re-read brings the fact, and what else the webhook does still happens."""
-    from . import task_facts
+    from .item_sources import github as GS
 
     if event not in ("pull_request", "check_run", "status", "release"):
         return []
     app = github_app.row(c) if github_app is not None else None
     c.execute("SAVEPOINT task_facts")
     try:
-        found = task_facts.webhook(c, event, payload, (app["slug"] if app else None) or None)
+        found = GS.webhook(c, event, payload, (app["slug"] if app else None) or None)
     except Exception:
         c.execute("ROLLBACK TO task_facts")
         logging.getLogger("tico.github").exception("Saving the facts of a %s webhook failed", event)
@@ -1944,10 +1945,10 @@ def install_github(app, settings, store):
             queue_sync(app.state.github_app, refresh=True)
             return {"ok": True}
         with store.transaction() as c:
-            from . import task_facts
+            from .item_sources import github as GS
 
             # A delivery GitHub sends again (a retry, a redelivery) is taken once (docs/pipelines-v3.md "GitHub").
-            if task_facts.seen_delivery(c, headers.get("x-github-delivery"), event):
+            if GS.seen_delivery(c, headers.get("x-github-delivery"), event):
                 return {"ok": True, "repeat": True}
             facts = _task_facts(c, app.state.github_app, event, payload)
             if event == "pull_request":
@@ -1975,7 +1976,7 @@ def install_github(app, settings, store):
         return {"ok": True, **result, **({"facts": facts} if facts else {})}
 
 
-# ----------------------------------------------------------------------------- the engine's GitHub (task_facts.GitHub)
+# ----------------------------------------------------------------------------- the engine's GitHub (item_sources.github.GitHub)
 FACT_READ = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
 mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed
 pullRequest(number:$number){id state merged isDraft headRefOid mergedAt mergeCommit{oid} isInMergeQueue
@@ -2001,7 +2002,7 @@ class GitHubRefused(RuntimeError):
 
 
 class AppGitHub:
-    """`task_facts.GitHub` through the company's GitHub App (backend/github_app.py `GitHubApp`): what the PR and release
+    """`item_sources.github.GitHub` through the company's GitHub App (backend/github_app.py `GitHubApp`): what the PR and release
     facts read, and the merge queue's enqueue and dequeue (GraphQL). Each call mints a token for the one repo. A failed
     call raises `GitHubRefused` (or the app's Problem) with GitHub's reason; the caller keeps the fact as it was."""
 
@@ -2045,7 +2046,7 @@ class AppGitHub:
 
     # ------------------------------------------------------------------ reads
     def read_pr(self, repo, number):
-        from . import task_facts
+        from .item_sources import github as GS
 
         _, found = self._pull(repo, number, {"pull_requests": "read", "metadata": "read"})
         if not found:
@@ -2074,10 +2075,10 @@ class AppGitHub:
             kind = last.get("__typename")
             reason = str(last.get("reasonCode") or last.get("reason") or "")
             if kind in ("RemovedFromMergeQueueEvent", "AutoMergeDisabledEvent") and (
-                reason.lower() not in task_facts.MERGED_REASONS
+                reason.lower() not in GS.MERGED_REASONS
             ):
                 fact["queue_state"] = "removed"
-                fact["removed_reason"] = task_facts.removal_words(reason)
+                fact["removed_reason"] = GS.removal_words(reason)
                 if kind == "RemovedFromMergeQueueEvent":
                     failed = self._queue_failure(repo, number, str(last.get("createdAt") or ""))
                     if failed:
@@ -2121,7 +2122,7 @@ class AppGitHub:
         return None
 
     def read_checks(self, repo, sha):
-        from . import task_facts
+        from .item_sources import github as GS
 
         slug = ""
         row = self.service.row()
@@ -2141,7 +2142,7 @@ class AppGitHub:
                     {
                         "name": name,
                         "app": app_slug,
-                        "state": task_facts.check_state(run.get("status"), run.get("conclusion")),
+                        "state": GS.check_state(run.get("status"), run.get("conclusion")),
                         "url": run.get("html_url") or run.get("details_url") or "",
                         "tico": bool(slug) and app_slug == slug,
                     },
@@ -2155,7 +2156,7 @@ class AppGitHub:
                 {
                     "name": name,
                     "app": "status",
-                    "state": task_facts.check_state(status.get("state"), status.get("state")),
+                    "state": GS.check_state(status.get("state"), status.get("state")),
                     "url": status.get("target_url") or "",
                     "tico": False,
                 },

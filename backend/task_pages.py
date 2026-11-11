@@ -7,7 +7,7 @@ or `POST /api/v2/tasks/{tid}/pages` {requirement, page, version}. With no versio
 
 - One page counts per requirement and visit: attaching again replaces the last one (`replaced_at`). A new version is a
   new attach, and it starts the verdict and any OK over.
-- A requirement `at_head` keeps `heads` (task_facts.heads) as they were when the page was attached.
+- A requirement `at_head` keeps `heads` (item_sources.github.heads) as they were when the page was attached.
 - Attaching owes Jev a verdict (page_verdicts.owe) and counts as progress (C4).
 
 Every function takes the caller's open write transaction and never commits.
@@ -85,7 +85,7 @@ def requirement_of(conn: "sqlite3.Connection", row: Row, requirement: str) -> Ro
 
 def release_tags(conn: "sqlite3.Connection", task_id: str) -> list[str]:
     """The release each task this task filed went out in: for every merged PR of a filed task, the oldest saved release
-    whose history holds its merge commit (task_facts.included). Sorted, each once. What a Validate page is checked
+    whose history holds its merge commit (item_sources.github.included). Sorted, each once. What a Validate page is checked
     against (`with_release`)."""
     cursor = conn.execute(
         "SELECT r.tag, MIN(r.published_at) FROM links l "
@@ -101,7 +101,7 @@ def release_tags(conn: "sqlite3.Connection", task_id: str) -> list[str]:
 def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tuple[str, Row]:
     """What a page attached now is judged against: the rubric (the requirement's `rubric`, else its line, else its
     kind's name) and the context Jev is shown beside it: `heads` (at_head), `release` (with_release)."""
-    from . import task_facts as F
+    from .item_sources import github as F
     from . import task_requirements as R
 
     settings: Row = requirement.get("settings") or {}

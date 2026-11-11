@@ -9,7 +9,7 @@ import pytest
 
 from backend import page_verdicts as PV
 from backend import pipeline_seats as Seats
-from backend import task_facts as F
+from backend.item_sources import github as F
 from backend import task_pages as P
 from backend import task_requirements as R
 from backend.store import H

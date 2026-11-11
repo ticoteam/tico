@@ -608,7 +608,7 @@ def queue_entry_vanishes(r: SoftRig) -> None:
     "A webhook sent before the merge arrives after it, its PR still open: merged stays merged",
 )
 def late_webhook_after_merge(r: SoftRig) -> None:
-    from backend import task_facts as TF
+    from backend.item_sources import github as TF
 
     r.preset(ENGINEERING)
     e = r.task(ANA, "Late hook", ENGINEERING)
@@ -718,7 +718,7 @@ def jev_unsure(r: SoftRig) -> None:
     "webhooks-out-of-order", "Webhooks repeated and out of order: the newest fact wins, each taken once", covers=(32,)
 )
 def webhooks_out_of_order(r: SoftRig) -> None:
-    from backend import task_facts as TF
+    from backend.item_sources import github as TF
 
     task = r.task(ANA, "Wire up the API", assignee=BUILDER)
     r.pr(task, 7)

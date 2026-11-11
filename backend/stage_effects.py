@@ -13,7 +13,7 @@ Manager is paused or still onboarding) the engine files it itself; one refused e
 files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed yet"), the
 owner's turn, and the owner may file one by hand. History: `handoff_filed` on the filing task.
 
-Queueing (`{"queue_prs": true}`): merge_queue.queue on enter, merge_queue.pull on undo (track C).
+Queueing (`{"queue_prs": true}`): GS.queue on enter, GS.pull on undo (track C).
 """
 
 from typing import TYPE_CHECKING, Any, cast
@@ -111,9 +111,9 @@ def enter(conn: "sqlite3.Connection", task: Row, by: str) -> None:
     if isinstance(target, str) and target and task.get("visit"):
         _file(conn, task, target, by)
     if action.get("queue_prs") is True:
-        from . import merge_queue
+        from .item_sources import github as GS
 
-        merge_queue.queue(conn, task, by)
+        GS.queue(conn, task, by)
 
 
 def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:
@@ -131,9 +131,9 @@ def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:
 def merged_work(conn: "sqlite3.Connection", task_id: str) -> bool:
     """Whether a filed task has a linked PR that merged: its work is in the code, so undoing the filing leaves it open
     (docs/pipelines-v3.md scenario 24) to reach a release or be closed by its owner."""
-    from . import task_facts
+    from .item_sources import github as GS
 
-    return any(link["fact"] and link["fact"]["state"] == "merged" for link in task_facts.prs_of(conn, task_id))
+    return any(link["fact"] and link["fact"]["state"] == "merged" for link in GS.prs_of(conn, task_id))
 
 
 def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
@@ -145,9 +145,9 @@ def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
     if not visit:
         return
     if _on_enter(task.get("stage")).get("queue_prs") is True:
-        from . import merge_queue
+        from .item_sources import github as GS
 
-        merge_queue.pull(conn, task, by)
+        GS.pull(conn, task, by)
     for filed in filed_open(conn, visit["id"]):
         if merged_work(conn, filed):
             continue

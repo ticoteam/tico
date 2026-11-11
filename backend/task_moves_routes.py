@@ -635,12 +635,12 @@ def register(
     @app.post("/api/v2/tasks/{tid}/queue")
     def task_queue(request: Request, tid: str, body: M.TaskQueue):
         """Queue again: after GitHub took a PR out of the merge queue (or refused it), put it back at its newest
-        commit (backend/merge_queue.py `requeue`). The stage owner, the pipeline's manager or any person."""
+        commit (backend/item_sources/github.py `requeue`). The stage owner, the pipeline's manager or any person."""
 
         def call(c: Any, who: Any, task_id: str) -> Any:
-            from . import merge_queue
+            from .item_sources import github as GS
 
-            owed = merge_queue.requeue(c, task_id, who.actor, seen_version=body.version)
+            owed = GS.requeue(c, task_id, who.actor, seen_version=body.version)
             return {"queued": [{"repo": e["repo"], "number": e["number"], "head": e["head_sha"]} for e in owed]}
 
         return work(request, tid, body, call)

@@ -196,7 +196,7 @@ def test_a_software_world_has_the_role_bots_with_their_templates() -> None:
 def test_a_stub_ends_the_case_as_not_built_yet() -> None:
     with pytest.raises(software.NotBuiltYet, match="track C"):
         with software.stubs_end_the_case():
-            raise NotImplementedError("merge_queue.run: track C")
+            raise NotImplementedError("GS.run: track C")
     with pytest.raises(SC.ScenarioFailed) as raised:
         with software.stubs_end_the_case():
             SC.expect(False, "a real failure")

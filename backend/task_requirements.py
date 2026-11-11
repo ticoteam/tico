@@ -276,7 +276,7 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
 
 
 # The five kinds the Product and Engineering pipelines bring. Each is its own function so each lands on its own:
-# `_page` with backend/task_pages.py and Jev's verdicts (page_verdicts), the four GitHub kinds with backend/task_facts.py.
+# `_page` with backend/task_pages.py and Jev's verdicts (page_verdicts), the four GitHub kinds with backend/item_sources/github.py.
 # The lines each one says are in docs/dev/pipelines-v3-build.md ("Standings of the Product and Engineering kinds").
 # A person already decided an earlier page of this requirement on this visit that Jev was unsure of or could not check.
 ASKED_ONCE_SQL = (
@@ -294,7 +294,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     unsure, or unable to check, is a person's to decide, once per visit: after a person decided one such page, the next
     one goes back to the owner, so a noisy rubric never fills a person's list."""
     from . import page_verdicts as V
-    from . import task_facts as F
+    from .item_sources import github as F
     from . import task_pages as P
 
     visit_id = task["visit"]["id"]
@@ -338,8 +338,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     return Standing(requirement, MET, line="Jev passed it")
 
 
-# The four GitHub kinds read saved facts only (backend/task_facts.py) and, for "PR merged", the Merge stage's effects
-# (backend/merge_queue.py). With many PRs, the first one not met, in link order, gives the line. A PR closed without
+# The four GitHub kinds read saved facts only (backend/item_sources/github.py) and, for "PR merged", the Merge stage's effects
+# (backend/item_sources/github.py). With many PRs, the first one not met, in link order, gives the line. A PR closed without
 # merging is left out while another is linked; when every one is, the owner is told. A wait on GitHub ends: when GitHub
 # has said nothing about the PR (or the releases it waits for) for 2 hours, it is the owner's turn (`_silent`).
 def _now() -> Any:
@@ -350,7 +350,7 @@ def _now() -> Any:
 
 def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[Row], Standing | None]:
     """The PRs a GitHub kind reads, each with `ref` and `fact`, or the standing when there are none to read."""
-    from . import task_facts as F
+    from .item_sources import github as F
 
     links: list[Row] = [
         {**link, "ref": F.pr_ref(str(link["repo"]), int(link["number"]))} for link in F.prs_of(conn, task["id"])
@@ -383,7 +383,7 @@ def _silent(task: Row, requirement: Row, link: Row, found: Standing, heard: obje
     no read of the PR got through (GitHub down or refusing, or the PR gone). `heard` is when GitHub last answered, when
     the caller knows better than the PR's fact (its releases' read); else the fact's last read, else when it was
     linked. Every wait on GitHub so ends in a bot's turn, whatever the stage's expected time."""
-    from . import task_facts as F
+    from .item_sources import github as F
 
     if found.state != WAITING or found.on != GITHUB:
         return found
@@ -414,8 +414,8 @@ def _open_one(task: Row, requirement: Row, link: Row) -> Standing:
 
 
 def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
-    from . import merge_queue
-    from . import task_facts as F
+    from .item_sources import github as GS
+    from .item_sources import github as F
 
     fact, ref = link["fact"], link["ref"]
     if not fact:
@@ -424,9 +424,7 @@ def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
         return Standing(requirement, MET, line="Checks pass")
     state = fact["checks_state"]
     if state == "failure":
-        return Standing(
-            requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {merge_queue.failing_names(fact)}"
-        )
+        return Standing(requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {GS.failing_names(fact)}")
     if state == "pending":
         running = _seconds_since(fact.get("checks_started_at"))
         if running is not None and running >= F.CHECKS_TOO_LONG_S:
@@ -451,7 +449,7 @@ def _checks_pass(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
 
 
 def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
-    from . import merge_queue
+    from .item_sources import github as GS
 
     fact, ref = link["fact"], link["ref"]
     if not fact:
@@ -459,8 +457,8 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     if fact["state"] == "merged":
         return Standing(requirement, MET, line="Merged")
     owner = task.get("owner_id")
-    queues = merge_queue.queues_prs(task.get("stage"))
-    effect = merge_queue.newest(conn, task["visit"]["id"], ref) if queues else None
+    queues = GS.queues_prs(task.get("stage"))
+    effect = GS.newest(conn, task["visit"]["id"], ref) if queues else None
     if fact["queue_state"] in ("queued", "auto_merge"):  # queued, by Tico or anyone: an owed queue_pr is then done
         return Standing(requirement, WAITING, GITHUB, "In the merge queue")
     if effect and effect["state"] == "owed":
@@ -468,7 +466,7 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     if effect and effect["state"] == "failed":
         return Standing(requirement, NOT_MET, owner, f"GitHub refused the merge: {effect.get('last_error') or ref}")
     if fact["queue_state"] == "removed":
-        return Standing(requirement, NOT_MET, owner, merge_queue.removed_line(fact))
+        return Standing(requirement, NOT_MET, owner, GS.removed_line(fact))
     if effect:
         return Standing(requirement, WAITING, GITHUB, "In the merge queue")
     if queues:
@@ -486,7 +484,7 @@ def _pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: 
 
 
 def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Standing:
-    from . import task_facts as F
+    from .item_sources import github as F
 
     fact = link["fact"]
     if not fact:
@@ -516,7 +514,7 @@ def _in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer:
 def _release_silent(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
     """In a release for one PR, with `_silent`: a merged PR is not read again, so once it merged GitHub's word is the
     read of the release repo's releases (never read yet: since it merged)."""
-    from . import task_facts as F
+    from .item_sources import github as F
 
     found = _release_one(conn, requirement, link)
     fact: Row = link.get("fact") or {}

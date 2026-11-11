@@ -33,9 +33,9 @@ from pathlib import Path
 
 import pytest
 
-from backend import merge_queue as MQ
+from backend.item_sources import github as MQ
 from backend import task_engine as E
-from backend import task_facts as F
+from backend.item_sources import github as F
 from backend import task_requirements as R
 from backend import waiting_on as WO
 from backend.store import H

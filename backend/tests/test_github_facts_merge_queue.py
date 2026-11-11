@@ -9,10 +9,10 @@ import json
 import pytest
 
 from backend import heartbeat as HB
-from backend import merge_queue as MQ
+from backend.item_sources import github as MQ
 from backend import never_stuck as NS
 from backend import task_engine as E
-from backend import task_facts as F
+from backend.item_sources import github as F
 from backend import task_requirements as R
 from backend.store import H
 from backend.tests.helpers import engine as X

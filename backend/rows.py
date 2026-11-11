@@ -1545,7 +1545,7 @@ class EffectRow(TypedDict):
 
 
 class PrFactRow(TypedDict):
-    """Tico's saved copy of one pull request (backend/task_facts.py). Newest `fact_version` wins."""
+    """Tico's saved copy of one pull request (backend/item_sources/github.py). Newest `fact_version` wins."""
 
     id: str
     repo: str
@@ -1572,7 +1572,7 @@ class PrFactRow(TypedDict):
 
 
 class ReleaseRow(TypedDict):
-    """A published release of a repo, never a draft (backend/task_facts.py)."""
+    """A published release of a repo, never a draft (backend/item_sources/github.py)."""
 
     id: str
     repo: str

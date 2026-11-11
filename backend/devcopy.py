@@ -555,7 +555,7 @@ KEEP = (
             "snoozes",
             "links",
             "task_move_guards",
-            # What Product and Engineering read (backend/task_facts.py, backend/task_pages.py): saved copies of PRs and
+            # What Product and Engineering read (backend/item_sources/github.py, backend/task_pages.py): saved copies of PRs and
             # releases, pages attached to a requirement and Jev's verdicts on them.
             "pr_facts",
             "releases",

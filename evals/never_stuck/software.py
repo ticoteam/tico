@@ -123,14 +123,14 @@ def jev_step(world: World) -> int:
 
 def reread_step(world: World, github: RigGitHub) -> int:
     """`pr_facts` (track C): the 5-minute re-read of the PRs and releases open tasks wait on."""
-    from backend import task_facts as TF
+    from backend.item_sources import github as TF
 
     return int(TF.refresh(world.store, github, world.now()))
 
 
 def effects_step(world: World, github: RigGitHub) -> int:
     """`merge_queue_effects` (track C): queue and take out PRs."""
-    from backend import merge_queue as MQ
+    from backend.item_sources import github as MQ
 
     return int(MQ.run(world.store, github, world.now()))
 
@@ -325,7 +325,7 @@ class SoftRig(Rig):
         return head
 
     def queue_again(self, task: str, by: str = RELEASE) -> Any:
-        from backend import merge_queue as MQ
+        from backend.item_sources import github as MQ
 
         version = self.version(task)
         return self.act(by, lambda c: MQ.requeue(c, task, by, seen_version=version))
