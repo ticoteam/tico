@@ -443,3 +443,20 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
     keys = [r[0] for r in c.execute("SELECT wake_key FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")]
     assert keys == [first, N.room_key("product-spec", left)]
     assert N.rules_hold(c) == []
+
+
+def test_the_software_factory_guide_and_routing_playbook_name_the_seats_templates():
+    """The guide and Engineering's route-a-request playbook send work to the seats the presets place (TEMPLATES),
+    not to the 0.5 chart's Head of Product, Head of Engineering or a release-notes Release Manager."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    guide = (root / "docs/software-factory.md").read_text()
+    playbook = (root / "templates/catalog/engineering-lead/playbooks/route-a-request.md").read_text()
+    for text in (guide, playbook):
+        assert "Head of Product" not in text and "Head of Engineering" not in text
+        assert "`product-lead`" not in text and "`engineering-lead`" not in text
+    for role in (S.PRODUCT_MANAGER, S.ENGINEERING_MANAGER, S.RELEASE_MANAGER):
+        assert f"`{S.TEMPLATES[role]}`" in guide
+    assert f"`{S.TEMPLATES[S.RELEASE_MANAGER]}` (Release Manager)" in playbook
+    assert f"`{S.TEMPLATES[S.PRODUCT_MANAGER]}` (Product Manager)" in playbook
