@@ -13,6 +13,7 @@ SPAN = re.compile(r"`((?:tico|hub) [^`]+)`")  # `tico` is the CLI; `hub` is its 
 STARTS = ("tico ", "hub ")
 PLACEHOLDER = re.compile(r"<[^<>]+>")
 COMMENT = re.compile(r"\s+#\s.*$")
+COLUMN = re.compile(r"\s{2,}")  # `tico growth numbers      the channel's numbers`: the command, then what it shows
 VERSION = re.compile(r"--version N\b")  # the version the bot was shown, written as the plan writes it
 
 
@@ -20,7 +21,8 @@ def commands_in(path):
     """(line number, command text) for each `hub` command written in the file.
 
     A backticked span is read across the lines of its paragraph, so a command that wraps is still checked. Whitespace inside
-    the span is collapsed. Fenced lines that start with `hub` are read one line at a time."""
+    the span is collapsed. Fenced lines that start with `hub`, and indented code lines (four spaces after a blank line or
+another code line), are read one line at a time."""
     found, paragraph, start, fenced, continued = [], [], 0, False, False
 
     def flush():
@@ -45,6 +47,16 @@ def commands_in(path):
         if not line.strip():
             flush()
             paragraph = []
+            continue
+        if continued:  # an indented code line ended in `\`: this one is the rest of its command
+            found[-1] = (found[-1][0], found[-1][1].rstrip("\\").rstrip() + " " + line.strip())
+            continued = line.rstrip().endswith("\\")
+            continue
+        if line.startswith("    ") and not paragraph and line.lstrip().startswith(STARTS):
+            # An indented code line (Markdown's other code block), read like a fenced one. A column of words after a
+            # wide gap is what the command shows, not part of it.
+            found.append((number, COLUMN.split(line.strip(), 1)[0]))
+            continued = line.rstrip().endswith("\\")
             continue
         if not paragraph:
             start = number
