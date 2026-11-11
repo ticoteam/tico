@@ -10,15 +10,14 @@
 default_user: {{owner_id}}
 developers: [{{owner_id}}]
 
-teams:
-  leadership: {root: coo}
+# The owner is in no group: bots that report straight to them sit at the top of the team list, beside them.
+teams: {}
 
 people:
   - id: {{owner_id}}
     name: {{owner_name}}
     email: {{owner_email}}
     title: Owner
-    team: leadership
     primary_for: ["*"]
     bot: null
     reports_to: null
