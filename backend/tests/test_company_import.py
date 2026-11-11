@@ -587,11 +587,10 @@ def test_install_bootstrap_lays_out_the_chosen_chart_once_and_never_falls_back_t
     with TestClient(create_app(settings)) as api:
         assert api.get("/api/v2/setup", headers=signed_in()).json()["company_import"] == initial
         assert rows(api, "SELECT id,title,reports_to FROM seats ORDER BY id") == initial_seats
-    # A changed file never replaces a set-up company. The server still starts, and the owner sees why.
+    # A changed file never replaces a set-up company, and a company whose team is in shows no company file failure.
     settings.company_file_data = starter.pack(company_text().replace("Acme Finance", "Another Company"))
     with TestClient(create_app(settings)) as api:
-        failed = api.get("/api/v2/setup", headers=signed_in()).json()["company_import_failed"]
-        assert "already set up" in failed["reason"]
+        assert api.get("/api/v2/setup", headers=signed_in()).json()["company_import_failed"] is None
         assert rows(api, "SELECT id,title,reports_to FROM seats ORDER BY id") == initial_seats
 
 
@@ -678,9 +677,24 @@ def test_a_missing_company_file_is_a_configured_chart_with_its_reason_kept(tmp_p
     assert "can't be read" in read.company_file_error
 
 
-def test_every_way_out_of_a_failed_setup_import_clears_it_on_a_company_already_set_up(tmp_path):
-    """Reverse state of the kept start failure: the applied file again (at start or imported), the file setting removed,
-    and the owner's Dismiss each end it, even once the company is set up and an import can't replace its team."""
+def packed_as_is(saved):
+    """A plan packed the way HQ hands it to a server (starter.pack), without this release checking it first: a plan an
+    older or newer chart wrote."""
+    import base64
+    import gzip
+
+    return base64.b64encode(gzip.compress(starter.canonical(saved).encode(), mtime=0)).decode("ascii")
+
+
+def unknown_role_plan(text):
+    """`text`'s plan with its Acme Payables role on a template this release doesn't have."""
+    saved = starter.load(text)
+    next(b for b in saved["bots"] if b["title"] == "Acme Payables")["template"] = "no-such-role"
+    return packed_as_is(saved)
+
+
+def starts(tmp_path):
+    """(start(data, configured, error) -> a client on a new app with that company file setting, failed(api))."""
     from clients.environments import seed_registry
 
     seed_registry(
@@ -689,12 +703,10 @@ def test_every_way_out_of_a_failed_setup_import_clears_it_on_a_company_already_s
         OWNER_EMAIL,
         {"company_name": "Acme Finance", "app_name": "Tico", "assistant_name": "Assistant"},
     )
-    good, settings = company_text(), settings_for(tmp_path)
+    settings = settings_for(tmp_path)
     app = create_app(settings)
     app.state.store.initialize()
     app.state.store.seed()
-    settings.company_file_data = starter.pack(good)
-    changed = starter.pack(good.replace("Acme Finance", "Another Company"))
 
     def start(data="", configured=True, error=""):
         settings.company_file_data, settings.company_file_configured, settings.company_file_error = (
@@ -707,33 +719,138 @@ def test_every_way_out_of_a_failed_setup_import_clears_it_on_a_company_already_s
     def failed(api):
         return api.get("/api/v2/setup", headers=signed_in()).json()["company_import_failed"]
 
-    with start(settings.company_file_data) as api:
-        assert failed(api) is None and api.get("/api/v2/setup", headers=signed_in()).json()["completed"]
-    with start(error="The company file setup copied to this server can't be read (no access)") as api:
-        assert "can't be read" in failed(api)["reason"]
-    with start(starter.pack(good)) as api:  # the file is fixed: it is the one already applied
-        assert failed(api) is None
-    with start(changed) as api:
-        assert "already set up" in failed(api)["reason"]
+    return start, failed
+
+
+def test_a_refused_start_file_names_the_role_for_the_owner_and_logs_the_field(tmp_path, caplog):
+    """The reason a start file was refused is the owner's words, naming the role by its title, on the welcome page, on
+    Health and in the event; the server log keeps the field the check refused, and neither holds the file's text."""
+    start, failed = starts(tmp_path)
+    good = company_text()
+    reason = "Acme Payables names a role template this version of Tico doesn't have: no-such-role"
+    with caplog.at_level("WARNING", logger="backend.company_import"), start(unknown_role_plan(good)) as api:
+        assert failed(api)["reason"] == reason
         checks = {row["id"]: row for row in api.get("/api/v2/health", headers=signed_in()).json()["checks"]}
-        assert "dismiss" in checks["company_import"]["summary"]
+        assert reason in checks["company_import"]["summary"]
+        event = rows(api, "SELECT detail FROM events WHERE action='onboarding.company_import_failed'")
+        assert [json.loads(e["detail"])["reason"] for e in event] == [reason]
+    logged = [r.getMessage() for r in caplog.records if r.name == "backend.company_import"]
+    assert any(".template is not one of Tico's role templates" in line for line in logged), logged
+    assert not any("Acme" in line or "We help small firms" in line for line in logged), logged
+
+
+def test_a_company_already_set_up_never_shows_a_company_file_failure_at_start(tmp_path):
+    """Tico Team's case: a failed start, then the owner uploads a fixed file, while the server's company file setting
+    still names the original plan. Later starts leave the team as it is, with no Health line, no event and no welcome
+    card, whether that file doesn't load (a template this release lacks), loads but differs from what was imported
+    (an older release's slugs, read as today's), or can't be read. A failure kept from before ends at the next start."""
+    start, failed = starts(tmp_path)
+    good = company_text()
+    broken = unknown_role_plan(good)
+    # The original plan, on an older release's slug and with one title the owner fixed in the upload: it loads (the
+    # old slug reads as today's), but it isn't the file imported.
+    older = starter.load(good.replace("Acme Payables", "Payables"))
+    next(b for b in older["bots"] if b["title"] == "Payables")["template"] = "accounts-payable"
+    older = packed_as_is(older)
+    assert starter.unpack(older) != starter.load(good)
+
+    def failures(api):
+        return rows(api, "SELECT count(*) AS n FROM events WHERE action='onboarding.company_import_failed'")[0]["n"]
+
+    with start(broken) as api:
+        assert "Acme Payables" in failed(api)["reason"]
         body = {"company_yaml": good}
         body["fingerprint"] = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in()).json()[
             "fingerprint"
         ]
         done = api.post("/api/v2/setup/company/import", json=body, headers=signed_in())
-        assert done.status_code == 200 and done.json()["company_import_failed"] is None
-    with start(changed) as api:
-        assert failed(api)
+        assert done.status_code == 200 and done.json()["company_import_failed"] is None and done.json()["completed"]
+        seats = rows(api, "SELECT id,title,reports_to FROM seats ORDER BY id")
+        kept = failures(api)
+    for data, error in (
+        (broken, ""),
+        (older, ""),
+        (starter.pack(good.replace("Acme Finance", "Another Company")), ""),
+        ("", "The company file setup copied to this server can't be read (no access)"),
+    ):
+        with start(data, error=error) as api:
+            assert failed(api) is None
+            assert "company_import" not in {
+                r["id"] for r in api.get("/api/v2/health", headers=signed_in()).json()["checks"]
+            }
+            assert rows(api, "SELECT id,title,reports_to FROM seats ORDER BY id") == seats
+            assert failures(api) == kept
+    with start(broken) as api:  # one kept from before (an older release kept them on set-up companies too)
+        with api.app.state.store.transaction() as c:
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?)",
+                ("onboarding.company_import_failed", encode({"at": "x", "reason": "old"})),
+            )
+    with start(broken) as api:
+        assert failed(api) is None
+
+
+def test_hqs_starting_chart_from_an_older_release_imports_at_first_start_on_its_renamed_templates(tmp_path):
+    """HQ plans with an older release's chart (rc.6 refused HQ's `pr-reviewer` and `bookkeeper`): the server reads each
+    old slug as the template that has the role now. Two old roles that fold into one built-in (the Bookkeeper and a
+    Finance Lead) are that one built-in, and a line to either ends at it."""
+    from backend.tests.helpers.template_renames import CHARTS, employees_file
+
+    chart = copy.deepcopy(CHARTS["0.6 hotmic"])
+    assert {"pr-reviewer", "bookkeeper"} <= {r["template"] for r in chart}
+    chart.append(
+        {
+            "id": "finance-lead",
+            "template": "finance-lead",
+            "title": "Finance Lead",
+            "department": "finance",
+            "reports_to": None,
+            "team": "Corporate",
+            "live": False,
+        }
+    )
+    chart.append(
+        {
+            "id": "controller",
+            "template": "controller",
+            "title": "Controller",
+            "department": "finance",
+            "reports_to": "finance-lead",
+            "team": "Corporate",
+            "live": False,
+        }
+    )
+    start, failed = starts(tmp_path)
+    with start(starter.pack(employees_file(chart), starter.MAX_PACKED)) as api:
+        assert failed(api) is None
+        seats = {r["title"]: r for r in rows(api, "SELECT title,template,reports_to FROM seats")}
+        assert seats["Reviewer 1"]["template"] == seats["Reviewer 2"]["template"] == "reviewer"
+        assert seats["Finance Owner"]["template"] == "finance-owner" and "Finance Lead" not in seats
+        assert seats["Controller"]["reports_to"] == "finance-owner"
+        assert {"reviewer-1", "reviewer-2", "finance-owner"} <= {r["slug"] for r in rows(api, "SELECT slug FROM bots")}
+        assert not {r["template"] for r in seats.values()} & {"pr-reviewer", "bookkeeper", "finance-lead"}
+
+
+def test_every_way_out_of_a_failed_setup_import_clears_it(tmp_path):
+    """Reverse state of the kept start failure, before setup is complete: the file setting removed and the owner's
+    Dismiss each end it; a start with the same broken file shows it again."""
+    start, failed = starts(tmp_path)
+    broken = unknown_role_plan(company_text())
+    with start(error="The company file setup copied to this server can't be read (no access)") as api:
+        assert "can't be read" in failed(api)["reason"]
+        checks = {row["id"]: row for row in api.get("/api/v2/health", headers=signed_in()).json()["checks"]}
+        assert "dismiss" in checks["company_import"]["summary"]
     with start(configured=False) as api:  # the file setting is removed
         assert failed(api) is None
-    with start(changed) as api:
+    with start(broken) as api:
         assert failed(api)
         dismissed = api.post("/api/v2/setup/company/import-failure/dismiss", json={}, headers=signed_in())
         assert dismissed.status_code == 200 and dismissed.json()["company_import_failed"] is None
         assert not {row["id"] for row in api.get("/api/v2/health", headers=signed_in()).json()["checks"]} & {
             "company_import"
         }
+    with start(broken) as api:
+        assert failed(api)
 
 
 def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(environment):

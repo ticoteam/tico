@@ -107,6 +107,13 @@ def unpack(data):
         raw = decoder.decompress(compressed, MAX_BYTES + 1)
         if len(raw) > MAX_BYTES or not decoder.eof or decoder.unused_data:
             raise ValueError()
-        return load(json.loads(raw))
+        plan = json.loads(raw)
     except (ValueError, TypeError, binascii.Error, zlib.error, RecursionError):
+        raise D.DraftError("the saved starter plan is invalid or too large; provide the company file again") from None
+    # A plan that unpacks but breaks a rule keeps its own reason (DraftError is a ValueError: never the generic one).
+    try:
+        return load(plan)
+    except D.DraftError:
+        raise
+    except (ValueError, TypeError, RecursionError):
         raise D.DraftError("the saved starter plan is invalid or too large; provide the company file again") from None

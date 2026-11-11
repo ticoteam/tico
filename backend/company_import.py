@@ -16,6 +16,7 @@ groups whatever its team says (backend/groups.py).
 
 import hashlib
 import json
+import logging
 from datetime import date, timedelta
 from urllib.parse import urlsplit
 
@@ -41,6 +42,7 @@ from .store import H, Problem, encode
 
 PLAN_KEY = "onboarding.company_file"
 FAILED_KEY = "onboarding.company_import_failed"
+log = logging.getLogger(__name__)
 
 
 # The built-ins the chart shows in a team rather than in the Built-in group: the Finance Owner, in
@@ -61,7 +63,7 @@ def plan(onboarding, c, who, text):
     try:
         saved = starter.load(text)
     except C.DraftError as exc:
-        raise Problem("company_file", str(exc), 422) from None
+        raise Problem("company_file", exc.plain, 422) from None
     draft = saved
     owner = onboarding.auth.owner_id(c)
     if not owner or not H.human(c, owner):
@@ -80,10 +82,10 @@ def plan(onboarding, c, who, text):
         card = by_name.get(bot["template"])
         if card is not None and card["required"]:
             slug = onboarding._bot_slug(card["slug"])
-            if slug in builtins:
-                raise Problem("company_file", "An employee ID conflicts with another employee or a built-in role", 422)
             ids[bot["id"]] = slug
-            builtins[slug] = (bot, card)
+            # There is one of each built-in. A second role on it (two roles an older release had that both fold into
+            # the Finance Owner, say) is that built-in too: the first keeps its place, and a line to either ends there.
+            builtins.setdefault(slug, (bot, card))
         elif onboarding._bot_slug(bot["id"]) in required or bot["id"] in required:
             raise Problem("company_file", "An employee ID conflicts with another employee or a built-in role", 422)
         else:
@@ -877,9 +879,15 @@ def add_invitee(onboarding, c, who, key, email):
 def load_on_start(onboarding, c):
     """The installer-configured plan is applied before any generic sample company.
 
-    A changed plan never replaces a configured company. An error raises, and the caller (`start`) keeps it for the
-    owner to see instead of stopping the server or installing a different team."""
+    A company whose setup is complete is left alone: no plan replaces its team, and nothing is kept against it. Until
+    then, an error raises, and the caller (`start`) keeps it for the owner to see instead of stopping the server or
+    installing a different team."""
     settings = onboarding.settings
+    if O.load(c).get("completed"):
+        # The team is in, and no file replaces it: a start never shows a company file failure to a set-up company (an
+        # owner who uploaded a fixed file after a failed start would otherwise see the old file's failure again).
+        clear_failure(c)
+        return None
     if settings.company_file_error:
         raise Problem("company_file", settings.company_file_error, 422)
     if not settings.company_file_data.strip():
@@ -905,8 +913,16 @@ def start(onboarding, store, telemetry=None):
     except Exception as exc:
         if isinstance(exc, Problem):
             reason = str(exc.detail)
+            log.warning("Company file from setup not imported: %s", reason)
+        elif isinstance(exc, C.DraftError):
+            # The owner reads the plain words (a role by its title); the log keeps the field the check refused.
+            reason = exc.plain
+            log.warning("Company file from setup not imported: %s", exc)
+            if telemetry:
+                telemetry.capture("company_import", exc)
         else:
             reason = "Tico couldn't read or apply it"
+            log.exception("Company file from setup not imported")
             if telemetry:
                 telemetry.capture("company_import", exc)
         failure = {"at": H.now(), "reason": reason[:500]}
@@ -935,8 +951,9 @@ def forget(store):
 
 
 def dismiss(onboarding, c, who):
-    """The owner's way out of a kept failure they will not fix by import (a changed file on a company already set up,
-    say): Health and the welcome page stop showing it. A server start with the same file records it again."""
+    """The owner's way out of a kept failure they will not fix by import (they will set the team up by hand, say): Health
+    and the welcome page stop showing it. A server start with the same file records it again while setup is not
+    complete."""
     onboarding._owner(who)
     clear_failure(c, who.actor)
     return onboarding.view(c, who)

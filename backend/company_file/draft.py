@@ -35,6 +35,102 @@ OPEN_SEATS = {seat["slug"] for seat in SEATS}
 # Retired templates a saved draft may still name. The built-in that replaced each one comes with every install, so a seat
 # for it that is not built yet leaves the draft quietly instead of refusing the whole draft (`check`).
 RETIRED = {"bookkeeping"}
+# Template slugs a released Tico shipped and a later one renamed or folded into another template: old slug -> the
+# template that has the role now. A file names whatever slug its release had (a file saved from the setup page last
+# week, or a plan HQ writes with an older release's chart), so `check` and `from_yaml` read an old slug as its new one.
+# Every slug any release shipped must stay readable: backend/tests/fixtures/shipped_template_slugs.json records them, and
+# backend/tests/test_template_renames.py fails when a slug leaves the catalog without an entry here.
+RENAMED = {
+    # Nov 10 (v0.6.0-rc.3): the Product and Engineering Managers became the Product Owner and the team manager.
+    "engineering-manager": "engineering-team-manager",
+    "product-manager": "segment-product-owner",
+    # Nov 11 (#3265, v0.6.0-rc.6): slugs match card names; a removed role goes to the template that has it now.
+    "accounts-payable": "accounts-payable-specialist",
+    "affiliates": "affiliates-owner",
+    "app-store": "app-store-owner",
+    "ar-followup": "accounts-receivable-specialist",
+    "benefits": "benefits-administrator",
+    "billing": "billing-specialist",
+    "board-updates": "investor-relations-manager",
+    "bookkeeper": "finance-owner",
+    "brand": "design-owner",
+    "community": "community-manager",
+    "compensation": "compensation-analyst",
+    "compliance": "compliance-manager",
+    "content": "content-owner",
+    "coo": "assistant",
+    "cro": "cro-owner",
+    "customer-success": "success-owner",
+    "docs-writer": "technical-writer",
+    "email-marketing": "email-owner",
+    "employee-experience": "employee-experience-manager",
+    "engineering-lead": "engineering-team-manager",
+    "escalations": "escalations-manager",
+    "events": "event-marketing-manager",
+    "feedback-analyst": "customer-insights-analyst",
+    "finance-lead": "finance-owner",
+    "goal-manager": "strategy-owner",
+    "incident-scribe": "site-reliability-engineer",
+    "inventory": "inventory-planner",
+    "issue-triage": "qa-owner",
+    "it-support": "it-support-specialist",
+    "lead-generation": "lead-generation-owner",
+    "learning": "learning-and-development-specialist",
+    "legal-ops": "legal-operations-manager",
+    "legal-review": "contracts-manager",
+    "listening": "social-media-manager",
+    "logistics": "logistics-coordinator",
+    "marketing-lead": "growth-team-manager",
+    "marketing-ops": "marketing-operations-manager",
+    "meeting-notes": "project-coordinator",
+    "onboarding-specialist": "customer-onboarding-specialist",
+    "ops-manager": "operations-manager",
+    "paid-media": "search-ads-owner",
+    "partnerships": "partnerships-owner",
+    "payroll": "payroll-specialist",
+    "people-hr": "hr-generalist",
+    "people-lead": "head-of-people",
+    "people-ops": "people-operations-specialist",
+    "pipeline": "release-owner",
+    "pr": "pr-manager",
+    "pr-reviewer": "reviewer",
+    "pricing": "pricing-analyst",
+    "privacy": "privacy-manager",
+    "procurement": "procurement-manager",
+    "product-marketing": "segment-marketing-owner",
+    "product-ops": "product-operations-manager",
+    "product-researcher": "ux-researcher",
+    "recruiting": "recruiter",
+    "release-notes": "release-notes-writer",
+    "reputation": "reputation-manager",
+    "retention": "retention-specialist",
+    "returns": "returns-and-refunds-specialist",
+    "sales": "inbound-sales-owner",
+    "sales-enablement": "sales-enablement-manager",
+    "sales-lead": "growth-team-manager",
+    "sales-ops": "sales-operations-manager",
+    "sdr-research": "outbound-sales-owner",
+    "security-compliance": "security-and-compliance-analyst",
+    "seo-visibility": "seo-owner",
+    "spend-watcher": "fpa-analyst",
+    "strategy-planning": "strategy-analyst",
+    "support": "support-owner",
+    "support-lead": "success-team-manager",
+    "support-ops": "support-operations-specialist",
+    "support-qa": "support-quality-analyst",
+    "tax": "tax-specialist",
+    "technical-support": "technical-support-engineer",
+    "tico-counsel": "rules-owner",
+    "travel": "travel-coordinator",
+    "video-producer": "video-owner",
+}
+
+
+def current(template):
+    """The template a file's slug names in this release: its new slug when a release renamed it, else itself."""
+    return RENAMED.get(template, template) if isinstance(template, str) else template
+
+
 # The company models a chart starts from (model_<key>.json), in the order the setup chat tries them: the first whose
 # `picks_when` signal the company has, else Everything. On-site work comes before services, so a cleaning company that
 # also sells its hours is a local service business.
@@ -111,7 +207,39 @@ HEAD = re.compile(r"\b(head|lead|director|vp|chief|manager|cto|cfo|cmo|coo|cpo)\
 
 
 class DraftError(ValueError):
-    """A draft that breaks its shape or limits. The message names the field, never the value sent."""
+    """A draft that breaks its shape or limits. The message names the field, never the value sent. `plain` says the same
+    for a company's owner (the reason a refused company file shows on the welcome page and on Health): a role by its
+    title, a person or goal by its place in the file."""
+
+    def __init__(self, message, plain=None):
+        super().__init__(message)
+        self.plain = plain or _plain(message)
+        self.said = plain is not None  # `plain` was written for the owner, not made from the message
+
+
+PLACES = (("bots", "Role"), ("people", "Person"), ("goals", "Goal"))
+
+
+def _plain(message):
+    """`bots[6].runtime is not ...` as "Role 7: runtime is not ...": a field path made readable."""
+    for part, word in PLACES:
+        found = re.match(r"%s\[(\d+)\]\.?" % part, message)
+        if found:
+            return "%s %d: %s" % (word, int(found.group(1)) + 1, message[found.end() :] or message)
+    return message
+
+
+def role_name(raw, at):
+    """How an owner knows a role in a file: its title, else its place in the file."""
+    title = raw.get("title") if isinstance(raw, dict) else None
+    if isinstance(title, str) and clean(title) and len(title) <= LIMITS["title"]:
+        return clean(title)
+    return "Role %d" % (at + 1)
+
+
+def unknown_template(name, template):
+    """The owner's words for a role whose template this release doesn't have."""
+    return "%s names a role template this version of Tico doesn't have: %s" % (name, str(template)[:40])
 
 
 def blank():
@@ -298,6 +426,17 @@ def date(value, field):
 
 
 def _bot(raw, at):
+    """A role's checked copy. Its DraftError's `plain` names the role by its title."""
+    try:
+        return _bot_fields(raw, at)
+    except DraftError as exc:
+        if not exc.said:
+            exc.plain = "%s: %s" % (role_name(raw, at), str(exc).removeprefix("bots[%d]." % at))
+            exc.said = True
+        raise
+
+
+def _bot_fields(raw, at):
     field = "bots[%d]" % at
     _keys(raw, field, BOT_FIELDS, BOT_OPTIONAL)
     bot = {
@@ -320,7 +459,10 @@ def _bot(raw, at):
     if bot["existing"] and bot["runtime"] not in HARNESSES:
         raise DraftError(field + ".runtime is not an agent Tico knows")
     if not bot["existing"] and bot["template"] not in TEMPLATES | OPEN_SEATS | HELPER_TEMPLATES:
-        raise DraftError(field + ".template is not one of Tico's role templates")
+        raise DraftError(
+            field + ".template is not one of Tico's role templates",
+            plain=unknown_template(role_name(raw, at), bot["template"]),
+        )
     if raw.get("reports_to") is not None:
         bot["reports_to"] = _id(raw["reports_to"], field + ".reports_to")
     if raw.get("person") is not None and not bot["existing"]:
@@ -682,6 +824,20 @@ def _unique(rows, field):
         raise DraftError("%s has two entries with the same id" % field)
 
 
+def _current_bots(rows):
+    """A file's roles as this release names them: a retired template's role leaves (its built-in comes with every
+    install), a renamed one takes its new slug. The rows sent are not changed."""
+    out = []
+    for b in rows:
+        if isinstance(b, dict) and not b.get("existing") and isinstance(b.get("template"), str):
+            if b["template"] in RETIRED:
+                continue
+            if current(b.get("template")) != b.get("template"):
+                b = {**b, "template": current(b["template"])}
+        out.append(b)
+    return out
+
+
 def check(raw, snapshot=False):
     """A valid copy of a draft, or DraftError. `snapshot` is an undo copy, which holds none of the server's lists but
     `removed`. Two quiet repairs keep the file well formed whatever the page did: with people but no owner the first
@@ -708,14 +864,7 @@ def check(raw, snapshot=False):
             "signals": _choices(company["signals"], "company.signals", SIGNALS),
         },
         "people": [_person(p, i) for i, p in enumerate(_list(raw["people"], "people", LIMITS["people"]))],
-        "bots": [
-            _bot(b, i)
-            for i, b in enumerate(
-                b
-                for b in _list(raw["bots"], "bots", LIMITS["bots"])
-                if not (isinstance(b, dict) and b.get("template") in RETIRED and not b.get("existing"))
-            )
-        ],
+        "bots": [_bot(b, i) for i, b in enumerate(_current_bots(_list(raw["bots"], "bots", LIMITS["bots"])))],
         "goals": [_goal(g, i) for i, g in enumerate(_list(raw["goals"], "goals", LIMITS["goals"]))],
         "rules": {
             "mode": rules["mode"],
@@ -773,7 +922,7 @@ def check(raw, snapshot=False):
             _keys(row, field, ("template", "title"))
             draft["removed"].append(
                 {
-                    "template": None if row["template"] is None else _id(row["template"], field + ".template"),
+                    "template": None if row["template"] is None else current(_id(row["template"], field + ".template")),
                     "title": _text(row["title"], field + ".title", LIMITS["title"]),
                 }
             )
