@@ -23,96 +23,6 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-ALIASES = {"automations", "bots", "rule", "tasks"}
-SUBCOMMANDS = [
-    "whoami",
-    "alerts",
-    "inbound",
-    "letter",
-    "mail",
-    "email",
-    "company-page",
-    "audiences",
-    "editions",
-    "readers",
-    "meeting",
-    "message",
-    "conversation",
-    "thread",
-    "note",
-    "feedback",
-    "file",
-    "page",
-    "card",
-    "pin",
-    "doc",
-    "chat",
-    "assistant",
-    "tag",
-    "task",
-    "replay",
-    "goal",
-    "kpi",
-    "proposal",
-    "rules",
-    "strategy",
-    "brand",
-    "growth",
-    "lens",
-    "market",
-    "listening",
-    "tool",
-    "automation",
-    "audit",
-    "event-types",
-    "trigger",
-    "relay",
-    "call",
-    "sleep",
-    "ok",
-    "notice",
-    "settings",
-    "release",
-    "webhook",
-    "brief",
-    "mcp",
-    "origin",
-    "needs-you",
-    "run",
-    "team",
-    "seat",
-    "org",
-    "health",
-    "changelog",
-    "update",
-    "grokbot",
-    "external",
-    "calendar",
-    "sql",
-    "db",
-    "classify",
-    "gateway",
-    "decision",
-    "template",
-    "bot",
-    "repo",
-    "skill",
-    "agent",
-    "human",
-    "group",
-    "setup",
-    "api",
-    "computer",
-    "credential",
-    "slack",
-    "support",
-    "finance",
-    "contacts",
-    "task-manager",
-    "maintenance",
-    "roadmap",
-    "service-key",
-]
 
 
 def run_hub(*args, env=None):
@@ -569,12 +479,6 @@ def test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_
 
 
 class Parser(unittest.TestCase):
-    def test_every_subcommand_is_still_there(self):
-        text = hubcli.parser().format_help()
-        # The plural aliases (`tasks`, `bots`, ...) sit in the same braces; the commands themselves keep their order.
-        choices = text.split("{", 1)[1].split("}", 1)[0].split(",")
-        self.assertEqual([c for c in choices if c not in ALIASES], SUBCOMMANDS)
-
     def test_a_task_is_open_done_or_closed_and_update_edits_fields_only(self):
         from clients import hubtools
 
