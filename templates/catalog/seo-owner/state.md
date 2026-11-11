@@ -7,7 +7,7 @@ Not started. The first message walks the human through `playbooks/onboarding.md`
 None yet. Record each setup answer here, one line each, dated. Record the site address and the tracked questions here.
 
 ## Routine
-`weekly-visibility-report`: declared off, and switched on when your setup starts.
+`watch` and `find-ideas`: declared off. Setup switches on `watch`; onboarding turns on `find-ideas`.
 
 ## Current focus
 None.
