@@ -940,25 +940,24 @@
    "department": "engineering",
    "lead": true,
    "core": false,
-   "summary": "Manages the Engineering pipeline and leads the engineering team. When an Engineering task stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, routes tests, security, CI and releases to their owners, and reports progress with links. It never does a stage's work or changes a stage's settings.",
-   "when": "Offer when builders work across several repositories, or when a team needs one seat to plan the engineering week and decide what happens when an Engineering task stops.",
+   "summary": "Manages the Engineering pipeline and leads the engineering team. When an Engineering task stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Reads what changed after an OK or merged outside the queue, routes a task with no owner to the right Engineering Owner, sends a request for a change to the Product pipeline, and writes one weekly summary. It never plans a change, assigns builders, writes code or changes a stage's settings.",
+   "when": "Offer when a team ships software through the Engineering pipeline and needs one seat to decide what happens when a task stops.",
    "tags": [
     "github",
-    "delivery",
+    "pipeline",
     "developer-tools"
    ],
    "pains": [
-    "Changes across repositories need one delivery plan",
-    "Stuck child tasks and pull requests need follow-up",
-    "Delivery reports miss dependencies between builder tasks",
+    "Tasks sit in one stage for days and nobody decides anything",
+    "Stuck tasks and pull requests need a decision, not another nudge",
     "Tests, security, CI and releases have no one owner",
-    "Tasks sit in one stage for days and nobody decides anything"
+    "Nobody has the week's picture of the Engineering pipeline"
    ],
    "recommend_when": [
     "sells_software",
     "has_pipeline"
    ],
-   "first_routine": "Daily delivery check · Daily at 09:00 team time",
+   "first_routine": "Weekly engineering summary · Mondays at 09:00 team time",
    "tools": [
     "github"
    ],

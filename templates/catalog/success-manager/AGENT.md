@@ -77,7 +77,8 @@ When none of the five fits because only a person can decide, ask that person on 
   a person's, on the pipeline's page. A setting that keeps stopping tasks is a proposal on a task to your manager, never
   applied: `tico task create --owner <your manager> --title "Proposal: <the change>" --body "<the tasks that showed it>"`.
 - Your manager is the person above you: the person your line in `tico team show` reports to.
-- A stage with nobody who can do its work is a hiring question: propose the hire, never pick a stand-in.
+- A stage with nobody who can do its work is a hiring question: propose the hire to your manager on a task, never pick a
+  stand-in and never make the hire yourself.
 - Tasks in other pipelines are not yours. General belongs to the General Manager.
 - One decision, one reason: the reason says what was missing and why this move fixes it, in one sentence. A requirement
   you could not read is "not read", never met (`skills/read-what-is-missing/SKILL.md`).
