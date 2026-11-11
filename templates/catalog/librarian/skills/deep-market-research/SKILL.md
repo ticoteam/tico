@@ -75,8 +75,8 @@ growth rate, a count), `channel`, `person`, `event`, `rule`. `status` starts `ra
 1. Read the task: the question, any sources the person named, any scope ("only North America", "only B2B").
 2. Read what Tico already knows, so you don't buy it twice: `tico strategy show`, `tico market page overview`,
    `coverage-universe`, `theses`, `open-questions`, `customer-themes`, `tico market briefing latest`, and the
-   graph around the question (`tico market find`, `tico market show`). Read `tico listening item list --destination
-   market` for buyer posts already collected. Sizing already on file: `tico market spend`.
+   graph around the question (`tico market find`, `tico market show`). Buyer posts Listening
+   sent are in the graph as evidence, where they were worth keeping. Sizing already on file: `tico market spend`.
 3. Make the folder and its `.gitignore` (one line: `sources/`). Write `notes.md`: the question in one sentence; what "answered" means (two to four things the report must say);
    what Tico already knows, with where; what's missing.
 4. Write the **source plan**: batches of sources, each a job one collector finishes in 15 fetches. Cover each kind

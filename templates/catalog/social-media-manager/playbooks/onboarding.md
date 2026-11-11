@@ -1,10 +1,10 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 25 minutes. The outcome is five recorded answers, one real digest on the task and the first routine checked.
+finished. Budget 25 minutes. The outcome is five recorded answers, the listening you propose on the task, one sweep and the first routine checked.
 
 Inputs: the setup task, the market page if the team has one, and the five questions in step 3.
-Done when: `state.md` holds five dated answers; `knowledge/watchlist.md`, `knowledge/sources.md` and `knowledge/social-calendar.md` are written; the first digest is on the task labelled as a draft; the routine is checked and the decision is logged.
+Done when: `state.md` holds five dated answers; `knowledge/sources.md` and `knowledge/social-calendar.md` are written; the proposed sources and rules are on the task; one sweep has run; the routine is checked and the decision is logged.
 
 ---
 
@@ -12,40 +12,50 @@ Done when: `state.md` holds five dated answers; `knowledge/watchlist.md`, `knowl
 
     tico task show <id>
     tico market show          # only if the team has a market page
+    tico listening sources    # the sources already set up and due for a read
 
 Note which competitors the market graph already names. Do not ask what it already answers.
 
 ## 2. Introduce yourself in three lines
 
-What you do (the social calendar with every post written, and a short digest of public mentions,
-questions and competitor moves), that public posts and replies stay drafts until a person turns mail sending on in Tico; actions happen only when the task asks for them and a granted Tool allows them, and nothing is invented.
+What you do (the social calendar with every post written, and a weekday read of the team's
+Listening sources, saved for Listening to sort and send), that public posts and replies stay drafts until a person turns mail sending on in Tico; actions happen only when the task asks for them and a granted Tool allows them, and nothing is invented.
 
 ## 3. Ask, in one message
 
 Numbered, each with its one-line why. Offer a default so a human can answer "fine".
 
-1. What names should I listen for, including misspellings, and which three to five competitors are you compared with in public?
+1. What names and topics should Listening hear about, including misspellings, and which three to five competitors are you compared with in public?
 2. Where do your buyers talk: which forums, review sites, social channels, newsletters?
-3. What would you want to know the same day, and what would you rather never see?
-4. Who receives findings, and should anything reach them other than the digest?
+3. What is worth hearing, and what would you rather never see?
+4. Who should get what Listening sends: a channel, a bot or a person?
 5. Which accounts do you post from, how often on each, and who owns each posting account?
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/watchlist.md` (names,
-queries with exclusions, sources), `knowledge/sources.md` and `knowledge/social-calendar.md`
-(accounts, cadence, owner).
+Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/sources.md` (each
+site: what it is good for and how it fails) and `knowledge/social-calendar.md` (accounts, cadence,
+owner).
+
+Then write the listening you propose, on the task, for a person to set under **Listening**:
+
+- Sources: one line each, the site and the search or community to read (answers 1 and 2).
+- Rules: a Keep sentence with a tag for each thing worth hearing, and a Drop sentence for what
+  they never want to see (answer 3).
+- Who gets it (answer 4). That is set in the listening's steps; sources and rules never name anyone.
+
+The ready-made "Market listening" already has rules and a step. It only needs sources.
 
 ## 5. Sweep now
 
-Follow `playbooks/weekday-sweep.md` once. Write the digest in the shape of
-`knowledge/examples/sweep-digest.md` and attach it to the task, labelled "First draft, not yet
-reviewed". Create no child tasks yet: list what you would create.
+Follow `playbooks/weekday-sweep.md` once. With no sources set up yet, `tico listening sources` is
+empty: say so on the task and go on. Otherwise put the sweep's one line on the task: sources read,
+posts saved, sources blocked.
 
 ## 6. Check the routine
 
 Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
-`tico automation update <id> --enable`) and tell the human in one line what it does: "I will sweep every weekday at 08:00 and send you one short digest. Quiet days are one line." They
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will read the Listening sources that are due every weekday at 08:00 and save what I find. What is sent, and to whom, is set under Listening." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a

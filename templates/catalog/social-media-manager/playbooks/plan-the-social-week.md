@@ -5,7 +5,7 @@ weekday sweep is running. Budget 30 minutes. The outcome is two weeks of posts i
 `knowledge/social-calendar.md`, each written for its channel and ready as one batch.
 Nothing is published by this playbook.
 
-Inputs: the task, `knowledge/social-calendar.md`, the last two weeks of sweep digests in `reports/sweeps/`, and the content plan if the team has one.
+Inputs: the task, `knowledge/social-calendar.md`, the latest Market briefing if the team has one, and the content plan if the team has one.
 Done when: two weeks of posts are in `knowledge/social-calendar.md`, each with its text, account, image brief and source; the batch is in `reports/social/`; the task note gives the count planned, published and still drafted.
 
 ---
@@ -15,15 +15,15 @@ Done when: two weeks of posts are in `knowledge/social-calendar.md`, each with i
     tico task show <id>
     tico calendar list
 
-Read `knowledge/social-calendar.md`, the last two weeks of sweep digests in `reports/sweeps/`, and
-the Content Owner's plan if the team has one (`tico update list --bot content-owner`). Launches, events
+Read `knowledge/social-calendar.md`, the latest Market briefing if the team has one
+(`tico market briefing latest`), and the Content Owner's plan if the team has one (`tico update list --bot content-owner`). Launches, events
 and announcements on the calendar come first; do not invent news.
 
 ## 2. Choose the posts
 
 Per account, the cadence in `knowledge/social-calendar.md` (default three a week on the main account).
 Mix, in this order of preference: something useful the audience asked in public this fortnight
-(from the digests), a piece the team published, a launch or event, a customer story whose subjects agreed to share it. At most one in five posts asks for anything (a sign-up, a demo, a purchase).
+(from the briefing), a piece the team published, a launch or event, a customer story whose subjects agreed to share it. At most one in five posts asks for anything (a sign-up, a demo, a purchase).
 
 ## 3. Write each post for its channel
 
