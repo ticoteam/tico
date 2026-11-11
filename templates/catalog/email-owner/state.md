@@ -4,10 +4,10 @@
 Not started. The first message walks the human through `playbooks/onboarding.md`.
 
 ## Answers
-None yet. Record each setup answer here, one line each, dated. Record the email tool, audiences and the unsubscribe wording here.
+None yet. Record each setup answer here, one line each, dated. Record the email platform, the lists and what each agreed to, and who puts emails live here.
 
 ## Routine
-`weekly-email-draft`: declared off, and switched on when your setup starts.
+`watch` and `find-ideas`: declared off. Setup switches on `watch`; onboarding turns on `find-ideas`.
 
 ## Current focus
 None.

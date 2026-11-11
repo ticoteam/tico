@@ -30,7 +30,7 @@ retired on 2026-09-01.**
 Sample: the home page, the pricing page and the top two emails by send, plus the rest of the items
 published that month. Two sales decks were not attached, so they are under "Could not check".
 
-## Gaps in the brand book (proposed rules, for the brand owner)
+## Gaps in the brand book (proposed rules, for the owner)
 - How to announce a price change: no rule. Proposed: say the new price and the date first, the reason
   second, never "we're excited". Example attached.
 

@@ -4,7 +4,7 @@ description: Write a search ad copy or landing page test before it starts (one q
 ---
 # Test ad copy and landing page fit
 
-When to use: before any new ad copy test starts, before a landing page is called a match for its search, and at each review while a test runs.
+When to use: before any new ad copy test starts, before a landing page is called a match for its search, and when a running test wakes to be measured.
 
 Steps:
 1. Write the question in one sentence that names the measure and one idea: "Does a price-first headline lower the cost per repair against the service-first headline in Commuter repairs?"

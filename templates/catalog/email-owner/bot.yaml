@@ -7,22 +7,30 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: medium
 max_run_minutes: 60
 
-# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# Declared off. Setup switches on only the first routine (Watch); the onboarding playbook switches on Find ideas with
+# `tico automation update <id> --enable`. `tico bot create` seeds them once; from then on Tico's rows are the routines
+# (docs/routines.md).
 routines:
-  - id: weekly-email-draft
-    title: Weekly email campaign draft
-    cron: "0 9 * * 2"
+  - id: watch
+    title: Watch Email
+    cron: "0 7 * * *"
     timezone: America/Los_Angeles     # set this to the team's own timezone
-    template: playbooks/weekly-email-draft.md
+    template: playbooks/watch.md
     labels: [priority:p2]
+    enabled: false
+  - id: find-ideas
+    title: Find Email ideas
+    cron: "0 8 * * 2"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/find-ideas.md
+    labels: [priority:p3]
     enabled: false
 
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
 # arrives in, never the value; declaring access here does not create it. Changing access is an
 # owner decision, so the bot files a task for the owner rather than editing this file.
-# Tico itself (tasks, files) needs no entry: every run has it. This bot has no access to the sending tool
-# and none is offered here: a human loads and sends every email.
+# Tico itself (tasks, files) needs no entry: every run has it. This bot has no access to the email platform until the
+# owner grants one: until then a person puts each OK'd email live.
 # Optional, uncomment when the owner wants replies to earlier campaigns readable:
 # tools:
 #   - service: gmail

@@ -4,7 +4,7 @@ description: Find a paid social ad whose frequency is rising while its link clic
 ---
 # Spot creative fatigue
 
-When to use: each weekly review, for every live ad with spend in the last seven days; and when a campaign's cost per result rises with no change to its audience or budget.
+When to use: each Monday's Watch, for every live ad in a kept campaign with spend in the last seven days; and when a campaign's cost per result rises with no change to its audience or budget.
 
 Steps:
 1. Pull the ad-level export for the last eight weeks, or since launch if the ad is newer: week, impressions, frequency, link clicks, link click-through rate and spend. Note the export's date range and any ad paused inside it.
@@ -12,8 +12,8 @@ Steps:
 3. For each later week, compare link click-through with the baseline, and read frequency beside it. Fatigue is two weeks running with frequency rising and link click-through below 80 per cent of baseline (a team default in `knowledge/targets.md`).
 4. Rule out the auction. Compare CPM over the same weeks with the other ads in the same ad set. A CPM rise shared by every ad is an auction or audience change. Name it, and do not rotate on that alone.
 5. Rule out the audience. If the audience shrank (a budget cut, a narrower targeting change, a new exclusion), a rising frequency may come from the audience. Check `knowledge/changes.md` for a change in the same weeks.
-6. Log each fatigued ad in `knowledge/creative.md`: its baseline week, the first week of the fall, its replacement status (none, in brief, in production with the named person and date, or in test).
-7. Prepare the replacement before the old ad goes. Each replacement tests one idea (the offer, the pain or the proof) and carries its claim check from `knowledge/paid-social-method.md`. Do not pause the only live ad in an ad set until a replacement is live.
+6. Log each fatigued ad in `knowledge/creative.md`: its baseline week, the first week of the fall, its replacement status (none, in brief, in production with the named person and date, OK'd and waiting, or in test).
+7. Swap or file the replacement. Creative a person already OK'd for that campaign is swapped in as upkeep (`knowledge/channel-playbook.md`). With none waiting, new creative is a bet: file it as an idea. Each replacement tests one idea (the offer, the pain or the proof) and carries its claim check from `knowledge/paid-social-method.md`. Do not pause the only live ad in an ad set until a replacement is live.
 8. Set the check: the replacement's link click-through against the old ad's baseline, read after its own count, on the date written in `knowledge/creative.md`.
 
 Checks before you finish:

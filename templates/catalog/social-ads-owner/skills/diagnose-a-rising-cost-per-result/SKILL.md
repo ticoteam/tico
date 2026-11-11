@@ -19,7 +19,7 @@ Steps:
    - Two factors moved: name both, and rank them by how far each moved.
 5. Check the tracking before you accept the conclusion. If the primary event count is off against the CRM for the same week and source (once that is read), the rise may be the tracking, not the performance. Route it to the tracking owner.
 6. Check the changes in the last 14 days in `knowledge/changes.md`. A budget or audience change in that window is a candidate cause. If one exists, the answer may be "wait until the date it can be read", not a new change.
-7. Write the diagnosis into the review: the three factors with their eight-week averages and this week's values, the cause named as likely, the check that would confirm it, and either the change proposed or "wait until <date>".
+7. Write the diagnosis on the task: the three factors with their eight-week averages and this week's values, the cause named as likely, the check that would confirm it, and either the fix (upkeep your channel playbook lists, or an idea filed) or "wait until <date>".
 
 Checks before you finish:
 - The three factors are on one base, and they reproduce the cost per result.

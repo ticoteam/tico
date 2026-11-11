@@ -4,13 +4,13 @@ description: Name the step that loses the most people in a conversion funnel, me
 ---
 # Find the leak in a funnel
 
-When to use: before you name a step as the leak, propose a change for it, or put a leak in a headline.
+When to use: before you name a step as the leak, file an idea for it, or put a leak in a headline.
 
 Steps:
 1. Name the export: its source, window, segment and the date it was pulled.
 2. Count each step for that window and segment. A step with no count is "not measured".
 3. Run the tracking checks: zero events on a day with traffic, a later step above an earlier one, or an event that changed
-   on a release date. Any hit is a tracking question. Write it in the report before any leak.
+   on a release date. Any hit is a tracking question. Write it on the task before any leak.
 4. Compute each rate: the people who did step B divided by the people who did step A, in the same window, segment and export.
 5. For each step, take its best weekly rate over the last 13 weeks from the same definition. If the definition changed,
    use only the weeks that match it, and say so.

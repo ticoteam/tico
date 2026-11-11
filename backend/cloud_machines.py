@@ -1,5 +1,5 @@
 """Tico cloud machines (phase B): the bots of a Tico Cloud company run on cloud machines, started when there is work
-and stopped when there is none. Light bots share one machine per company; heavy ones (developers, the video producer)
+and stopped when there is none. Light bots share one machine per company; heavy ones (developers, the Video Owner)
 each get their own.
 
 A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, billing, caps, the boat-side ttl and the
@@ -27,7 +27,7 @@ One row per bot (`cloud_machines`): where it runs (`mode` cloud, or computer: an
 machine (`placement` shared, the default, or own), its own machine's size, Always on and Pause after, and that machine
 as HQ last described it. The shared machine is one more row, keyed SHARED, with the company's size, Always on and Pause
 after for it. A bot's placement defaults by role when its row is made (`default_placement`): `own` for a bot from a
-template in OWN_TEMPLATES (the video producer) or a Builder (the `builder` template, a copy of one, or a bot named "Builder", "Builder 2" or "Builder (...)"), `shared`
+template in OWN_TEMPLATES (the Video Owner) or a Builder (the `builder` template, a copy of one, or a bot named "Builder", "Builder 2" or "Builder (...)"), `shared`
 for every other, the rest of Engineering included; a person switches it either way. Off a cloud company (cloud_access.state is None) there are no rows, the option
 is hidden and nothing here runs; on one, the same until HQ has listed its sizes (`offered`). On one, a bot with no
 computer defaults to a cloud machine (placement.auto_place; a setup that finished before HQ listed its sizes is placed
@@ -515,7 +515,7 @@ def _config_of(c, bot):
 
 
 def default_placement(c, bot):
-    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES (the video producer,
+    """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES (the Video Owner,
     the Builder), for a copy of one of those (back through `copied_from`, a copy of a copy included), or for a bot
     named as a Builder ("Builder", "Builder 2", "Builder (...)"); the shared one for every other bot, the rest of
     Engineering included (leads, reviewers and QA run short turns). Read once, when its row is made: renaming it later moves no machine."""

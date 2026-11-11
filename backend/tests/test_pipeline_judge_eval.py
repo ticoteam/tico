@@ -305,6 +305,28 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
     assert [c["id"] for c in run.load() if c.get("allow_unsure")] == ["live-c-fixes-2-v2"]
 
 
+def test_the_growth_pages_are_judged_with_the_shipped_rubrics_good_and_cut():
+    """Growth Experiments' two pages (docs/pipelines-v3.md "Growth and Success"): for each, an email, a page change and
+    an ad that meet it, and four cuts that do not (no prediction, no stop rule, no brand check, nothing shown; no dates
+    or source, watching with no Monitoring link, no result tag, called worked below 60% of the prediction)."""
+    from backend.pipeline_presets_more import GO_LIVE_RUBRIC, RESULTS_RUBRIC
+
+    grow = run.chosen(run.load(), "grow-*")
+    for name, rubric in (("Go-live page", GO_LIVE_RUBRIC), ("Results page", RESULTS_RUBRIC)):
+        cases = [c for c in grow if c["requirement"]["name"] == name]
+        assert all(adapter.state_for(c)["requirement"]["rubric"] == rubric for c in cases), name
+        assert sum(c["expected"] == "met" for c in cases) >= 3, name
+        cuts = [c for c in cases if c["expected"] == "not_met"]
+        assert len(cuts) >= 4 and all(c["trap"] for c in cuts), name
+    assert {c["trap"] for c in grow} >= {
+        "no_prediction",
+        "no_stop_rule",
+        "no_brand_check",
+        "no_dates_or_source",
+        "no_monitoring_link",
+    }
+
+
 def test_an_allowed_unsure_is_left_out_of_the_bar_but_a_wrong_answer_on_it_is_not():
     case = next(c for c in run.load() if c.get("allow_unsure"))
     others = [c for c in run.load() if c["id"].startswith("live-")][:3]

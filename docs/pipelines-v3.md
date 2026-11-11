@@ -779,6 +779,44 @@ Experiments pipeline's, so one seat manages both. A stage's owner is found by it
     number leaves its range.
   - **Slipping.** To leave: Owner says done. Fixed, the owner moves it back to Watching. Not fixable, the owner files
     an idea and closes this task with the reason. Expected time: 3 days.
+- **Growth channel packs.** Six Owners work Growth Experiments and Growth Monitoring, one per channel, each its own
+  template: `seo-owner`, `content-owner` (blog and social posts), `email-owner`, `cro-owner`, `search-ads-owner`,
+  `social-ads-owner`. A pack is the same in every channel:
+  - **The stage playbooks** (`playbooks/watch.md`, `find-ideas.md`, `build-a-bet.md`, `run-and-measure.md`,
+    `fix-a-slip.md`) and AGENT.md's "Your pipelines" are one text in all six; `backend/tests/test_growth_packs.py`
+    fails when a copy differs. Change all six together.
+  - **The channel playbook** (`knowledge/channel-playbook.md`) is what differs: the channel tag, the KPI, what Watch
+    checks, where ideas come from, the upkeep the Owner does by itself and what needs a person. The Owner publishes it at
+    setup as the page "<Channel> playbook" (`tico page publish --scope bot`); a person changes it by asking on a task.
+  - **Two routines**, both off until setup: **Watch** checks every Watching task with the channel's tag, does the
+    allowed upkeep, moves one whose number left its range to Slipping, and logs the KPI. **Find ideas**, Tuesdays,
+    files at most 3 ideas and skips one already in the pipeline (open, or tried in the last 90 days). Setup arms Watch;
+    the Owner turns Find ideas on in its setup.
+  - **One KPI** the Owner makes at setup (`tico kpi create`) and puts under the North Star as an input.
+  - **A channel tag** `channel:<key>` on every task, the keys of `backend/company_file/chart_formula.json`.
+  - **No Tool to make the change:** after the person's OK the Owner files `Apply: <change>` for the person the playbook
+    names, with the exact change. No pack ships an ads or email write Tool.
+  - **The brand check** is a sub-task to the Design Owner (`design-owner`), answered `Brand check: passed` or not; a
+    video goes from it to the Video Owner, who gets a person's OK (`tico task ask --kind ok`) on a brief with the
+    script, the shots and the cost before it makes anything. Writing for another channel's bet is a sub-task to the
+    Content Owner.
+
+  | Pack | Tag | KPI | Watch | Needs |
+  |---|---|---|---|---|
+  | SEO | `channel:seo` | Organic clicks, brand terms left out | Mondays: clicks and rank per page set, AI answers | A public website |
+  | Content | `channel:content` | Signups through a page or post | Mondays: each kept series on schedule, signups per series | A place to publish |
+  | Email | `channel:email` | Conversions from email | Daily: bounces and complaints; Mondays: conversions per flow | An email platform, a list with consent |
+  | CRO | `channel:cro` | Visits that become signups | Daily: conversion per funnel step | Product analytics; a test that can finish in 4 weeks, else known fixes, said so |
+  | Search Ads | `channel:search-ads` | Cost per new customer from search ads | Daily: spend, cost per result; Mondays: wasted search terms excluded | An ads account with spend |
+  | Social Ads | `channel:social-ads` | Cost per new customer from social ads | Daily: spend, cost per result; Mondays: tired creative swapped | An ads account with spend |
+
+  **Cutoffs.** Email pauses when the complaint rate passes N; ads pause when cost per new customer passes N times its
+  30-day average. Rules has no cutoff a template can ship switched off, so none is made: each paid pack's channel
+  playbook lists it under "Cutoffs: set these in Rules", and the Owner may suggest it (`tico rules add`) with the
+  number a person gives. An Owner may always pause; it never raises a budget outside an approved experiment.
+  **Offered at setup** in Marketing, never pre-checked: each pack is `suggest: common`, and Marketing's answer ("How do
+  customers find you today?") ranks the ones it names first. The picker cannot see whether a team has a website or a
+  connected tool; a pack's required tool shows as set up on hire.
 - **Lead** (L). Find leads and bring the qualified ones to Opportunity.
   Stages: Targets (Lead Generation Owner) → Outreach → Replies → Qualified (Outbound Sales Owner) → Done · Closed.
   Each of the first three: Owner says done. **Qualified** files an Opportunity on enter; to leave: Linked work done,

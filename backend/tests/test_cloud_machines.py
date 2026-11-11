@@ -1,5 +1,5 @@
 """Cloud machines (backend/cloud_machines.py): on a Tico Cloud company a bot with no computer runs on a cloud machine,
-the company's shared one or, for a developer or the video producer, its own. A machine is made on first work with a
+the company's shared one or, for a developer or the Video Owner, its own. A machine is made on first work with a
 one-time enrollment code and bound to the bots set to run there only; it is started for work, kept with a heartbeat,
 paused (stopped) after its Pause after minutes idle (30 unless a person sets another) unless Always on (the shared one
 once every member is idle), never started out of credit, and retried with backoff when HQ refuses. A size change applies at the next start. A stopped
@@ -2267,7 +2267,7 @@ def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     execution = cloud.api.app.state.execution
     with cloud.store.transaction() as c:
         # assistant is a Builder; ops is in Engineering on the team chart, which alone is no reason for its own machine;
-        # finance was made from the video producer's template.
+        # finance was made from the Video Owner's template.
         c.execute(
             "UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
             (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),),
