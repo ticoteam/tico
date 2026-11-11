@@ -639,9 +639,13 @@ the review arrived leaves them on. Logins are unique on the team: setting one so
 `409 github_taken`, and a login two people already share changes nobody. Unknown logins, people who
 cannot read a private task, and finished tasks are skipped. Unset, review requests change no roles.
 
-GitHub sends no event when the base branch moves under an open PR. Every few minutes Tico reads open PRs on open
-tasks whose mergeability is unknown (after five minutes) or last read over thirty minutes ago, at most 30 per
-pass, and wakes the owner once per head when one now conflicts.
+GitHub sends no event when the base branch moves under an open PR. So when a branch moves (a PR merged into it, the
+merge queue's merge, or any `push` to it; Tico's own merge call says so before the webhook does), Tico reads at once
+the open and draft PRs of open tasks in that repository whose base is that branch, one read per PR per move. Right
+after a move GitHub may answer that it does not know yet; such a PR is read again after 10, 20 and 30 seconds, then
+left to the reads below. Every few minutes Tico also reads open PRs on open tasks whose mergeability is unknown (after
+five minutes) or last read over thirty minutes ago. At most 30 PRs are read per 10-second pass, the moved ones first.
+A PR found conflicting wakes the owner once per head.
 
 Several PRs can belong to one task. A PR on a task is information only: GitHub events, release
 tags and deploys never move the task. When a linked PR merges, the bot that owns the open task is woken once to
