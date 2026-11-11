@@ -36,7 +36,9 @@ interface AuStep {
 /** A flow's trigger: its type, and the fields of each type. The type is missing only where auNormal (automations.ts)
  *  gave a row with no trigger an empty one. */
 interface AuFlowTrigger {
-  type?: string; name?: string; id?: string; inbox?: string; to?: string; cron?: string; tz?: string; destination?: string;
+  type?: string; name?: string; id?: string; inbox?: string; to?: string; cron?: string; tz?: string;
+  /** A listening's three parts (ui/app/listening.ts) and when a daily, weekly or monthly one sends. */
+  sources?: LstSource[]; rules?: LstRule[]; limits?: LstLimit[]; at?: string;
   first_due?: string; repeats?: string; open_days?: number | string; rule_due_id?: string; filters?: AuCond[];
 }
 /** A rule, a question or a destination as auBoardShape (automations-flow.ts) lists it: one shape for the three. */
@@ -73,7 +75,9 @@ interface AuStepEd {
   qs?: AuQRow[]; custom?: boolean;
 }
 /** The trigger's editor: the copy edited, the saved one (to go back to its kind), and whether the event is Custom. */
-interface AuTriggerEd { kind: 'trigger'; trigger: AuFlowTrigger; saved?: AuFlowTrigger; evCustom?: boolean | undefined }
+interface AuTriggerEd { kind: 'trigger'; trigger: AuFlowTrigger; saved?: AuFlowTrigger; evCustom?: boolean | undefined;
+  /** A listening's name, edited beside its parts and saved with them. */
+  name?: string }
 interface AuSpendEd { kind: 'spend'; value?: unknown }
 interface AuRunEd { kind: 'run'; text: string }
 interface AuVersionsEd { kind: 'versions'; rows?: AuVersion[] | null; props?: AuProp[]; error?: string }
@@ -104,7 +108,7 @@ interface AuFrameOpts {
 
 const AU_QTYPES: Array<[string, string]> = [['choice', 'Choice'], ['noul', 'Yes/no'], ['score', 'Score']];
 const AU_TRIGGER_FIELDS: Record<string, string[]> = {message: ['message.from', 'message.to', 'message.subject', 'message.body'],
-  task_received: ['task.title', 'task.body', 'task.from', 'task.tag'], listening: ['item.title', 'item.score', 'item.source'],
+  task_received: ['task.title', 'task.body', 'task.from', 'task.tag'], listening: ['item.tag', 'item.title', 'item.site', 'item.score'],
   event: ['event.name'], webhook: ['payload.type'], schedule: [], due: ['due.due_on', 'due.repeats']};
 
 function auEdOpen(ed: AuEd) {
@@ -127,7 +131,7 @@ function auEdOpen(ed: AuEd) {
 function auEdOpenStep(id: string, path?: string | null) {
   auHave(AU);
   if (!AU.cur) return;
-  if (id === 'trigger') { auEdOpen({kind: 'trigger', trigger: auClone(auCurTrigger())}); return; }
+  if (id === 'trigger') { auEdOpen({kind: 'trigger', trigger: auClone(auCurTrigger()), ...(lstIs() ? {name: AU.cur.name || ''} : {})}); return; }
   const hit = auFind(AU.cur.steps, id);
   if (hit) auEdOpen({kind: 'step', id, step: auClone(hit.step), path: path ?? null});
 }
@@ -204,7 +208,7 @@ function auEdHTML() {
   if (ed.kind === 'spend') return auFrame('Spend limit', auFld('$ per 30 min',
     `<input type="number" data-b="value" min="0" step="0.10" value="${esc(ed.value ?? '')}" placeholder="Bot’s limit" inputmode="decimal">`)
     + `<button class="linkish au-plus" type="button" data-op="nocap">Use the bot’s limit</button>`, {});
-  if (ed.kind === 'trigger') return auFrame('Trigger', auTriggerFields(ed.trigger, ed), {icon: AU_TRIGGER_ICONS[ed.trigger.type ?? '']});
+  if (ed.kind === 'trigger') return auFrame(ed.trigger.type === 'listening' ? 'Listening' : 'Trigger', auTriggerFields(ed.trigger, ed), {icon: AU_TRIGGER_ICONS[ed.trigger.type ?? '']});
   if (ed.kind === 'run') return auFrame('Test run', auFld('Sample input', auTa('text', ed.text, 9), 'au-mono'), {icon: 'play_arrow', label: 'Run'});
   if (ed.kind === 'board') return auBoardEdHTML(ed);
   const s = ed.step;
@@ -234,11 +238,11 @@ function auEventField(t: AuFlowTrigger, ed?: AuTriggerEd) {
   return auFld('Event', pick + (custom ? auIn('trigger.name', t.name, 'custom.name', 'aria-label="Custom event"') : ''));
 }
 function auTriggerFields(t: AuFlowTrigger, ed?: AuTriggerEd) {
+  if (t.type === 'listening') return lstFields(t, ed);   // no When and no filters: its rules are its filters
   const fields: Record<string, () => string> = {message: () => auFld('Inbox', auIn('trigger.inbox', t.inbox)),
     task_received: () => auFld('To', auSel('trigger.to', auWithCur([...auPeople(), ...auBots()], t.to, auActorName(t.to)), t.to)),
     schedule: () => auFld('Cron', auIn('trigger.cron', t.cron, '0 7 * * 1-5')) + auFld('Time zone', auIn('trigger.tz', t.tz)),
     webhook: () => auFld('Webhook', `<input type="text" value="${esc(t.name || t.id || '')}" disabled>`),
-    listening: () => auFld('Destination', auIn('trigger.destination', t.destination)),
     event: () => auEventField(t, ed),
     due: () => auFld('First due', `<input type="date" data-b="trigger.first_due" value="${esc(t.first_due || '')}"${auDis()}>`)
       + auFld('Repeats', auSel('trigger.repeats', AU_REPEATS, t.repeats || 'yearly'))
@@ -337,7 +341,7 @@ function auActionFields(s: AuStep) {
   return auFld('Action', auSel('step.do', Object.entries(AU_ACTIONS), s.do, 'data-redraw')) + (args ? args() : '');
 }
 function auPathsFields(s: AuStep, ed: AuStepEd) {
-  return auBox('Paths', (s.paths || []).map((p, i) => `<div class="au-rb${String(ed.path) === String(i) ? ' focus' : ''}" data-path-ed="${i}">
+  return (lstIs() ? lstPathsFields(s) : '') + auBox('Paths', (s.paths || []).map((p, i) => `<div class="au-rb${String(ed.path) === String(i) ? ' focus' : ''}" data-path-ed="${i}">
       <div class="au-ir">${auIn(`step.paths.${i}.name`, p.name, 'Name', 'aria-label="Path name"')}${(s.paths || []).length > 1 ? auX('step.paths', i, 'Remove path') : ''}</div>
       ${auCondRows(`step.paths.${i}.when`, p.when)}${auPlus(`step.paths.${i}.when`, 'cond', 'Condition')}</div>`).join('')
     + `<div class="au-rb fb"><div class="au-ir"><input type="text" value="Otherwise" disabled aria-label="Path name"></div><span class="muted">Nothing else</span></div>`
@@ -415,6 +419,7 @@ function auEdWire(box: HTMLElement) {
     if (op === 'bdel') { auEdIs(ed, 'board'); void auBoardDelete(ed, m); return; }
     if (op === 'bmode') { auEdIs(ed, 'board'); ed.item.mode = m.dataset.v ?? ''; auDrawSide(); return; }   // C: each bmode button has data-v
     if (op === 'nocap') { void auSpendSave(null); return; }
+    if (op.startsWith('lst-')) { lstEdOp(op, m, ed); return; }
     if (op === 'restore') { void auRestore(Number(m.dataset.n)); return; }
     if (['diff', 'prop-on', 'discard'].includes(op)) { void auPropAct(op, Number(m.dataset.n), m); return; }
     const at = m.dataset.at!, list = auPathGet<unknown[]>(ed, at) || [];   // rm and add carry data-at
@@ -423,7 +428,8 @@ function auEdWire(box: HTMLElement) {
       if (!auPathGet(ed, at)) auPathSet(ed, at, list);
       const tpls: AuBag = {cond: {field: '', op: 'is', value: ''}, then: {do: 'archive', args: {}}, bact: auBoardNewAct(), q: {id: 'question', type: 'noul', ask: '', opts: ''},
         rule: {when: [{field: '', op: 'is', value: ''}], match: 'all', then: [{do: 'archive', args: {}}], stop: true},
-        path: {name: 'Path ' + (list.length + 1), when: [], steps: []}};
+        path: {name: 'Path ' + (list.length + 1), when: [], steps: []},
+        lsrc: {id: lstNewId(), kind: 'search', site: '', target: ''}, lrule: {do: 'keep', tag: '', text: ''}, llimit: lstNextLimit(list as LstLimit[])};
       list.push(tpls[m.dataset.tpl!]);   // add carries data-tpl
     }
     if (at === 'qs') ed.custom = true;
@@ -442,7 +448,12 @@ async function auEdSave(button?: HTMLButtonElement) {
   if (ed.kind === 'board') { await auBoardEdSave(ed, button); return; }
   if (button) button.disabled = true;
   let body: { trigger: AuFlowTrigger } | { steps?: unknown; destinations?: unknown };
-  if (ed.kind === 'trigger') {
+  if (ed.kind === 'trigger' && ed.trigger.type === 'listening') {
+    const made = lstBody(ed);
+    if (typeof made === 'string') { toast(made, true); if (button) button.disabled = false; return; }
+    body = made;
+  }
+  else if (ed.kind === 'trigger') {
     body = {trigger: ed.trigger.type === 'event' ? {...ed.trigger, name: String(ed.trigger.name || '').trim()} : ed.trigger};
     if (ed.trigger.type === 'event' && !body.trigger.name) { toast('Name the event', true); if (button) button.disabled = false; return; }
     if (ed.trigger.type === 'due') {
@@ -481,6 +492,7 @@ async function auEdSave(button?: HTMLButtonElement) {
     body = auFlowBody(steps);
   }
   const out = await auWrite(body, (x: AuSaved) => `Saved · v${x.version}`);
+  if (out && ed.kind === 'trigger' && ed.trigger.type === 'listening') lstSaved(out);
   if (out && AU?.ed === ed) { AU.ed = null; auDrawPane(); auDrawSide(); }
   else if (button?.isConnected) button.disabled = false;
 }
@@ -644,7 +656,7 @@ function auSample(t: Partial<AuFlowTrigger> = {}, nextDue: string | null = '') {
     return JSON.stringify({due}, null, 2);
   }
   const samples: AuBag = {message: {message: {from: 'sam@acme.example', subject: '', body: ''}}, task_received: {task: {title: '', body: ''}},
-    listening: {item: {title: '', source: ''}}, event: {event: {name: t.name || ''}}, webhook: {body: {}}};
+    listening: {listening: lstSample(t)}, event: {event: {name: t.name || ''}}, webhook: {body: {}}};
   const sample = samples[String(t.type)];
   return sample ? JSON.stringify(sample, null, 2) : '';
 }

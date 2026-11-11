@@ -2,7 +2,7 @@
 // example): the header and its three tiles, then the five questions in order, each with the briefing's answer line
 // when it has one and none when it does not. What changed? lists the items by kind with the bets they touch, and Read
 // opens the whole briefing; Who are we up against? marks our row and opens a player's note; What are buyers saying?
-// draws posts per day by source over two weeks, the spike lighting its posts, with the destinations under Settings.
+// draws posts per day by source over two weeks, the spike lighting its posts, with a link to Listening (#/listening) for an admin.
 // An old view's address scrolls to its question. No briefing and no listening leave those questions out; an empty
 // market keeps its empty state. A phone first, then a computer.
 import type {Page} from 'playwright';
@@ -59,7 +59,8 @@ async function onePage(page: Page, tag: string) {
   assert.ok(await page.locator('.rdm-row').evaluateAll((rows: Element[]) => rows.every(r => r.getBoundingClientRect().height <= 44)), tag + ': one line each');
   await page.locator('.rdm-spk').click();
   assert.deepEqual(await page.locator('.rdm-row.hl').evaluateAll((r: Element[]) => r.map(x => (x as HTMLElement).dataset.rdmItem)), ['li_6', 'li_5'], tag + ': the spike lights its posts');
-  assert.equal(await page.locator('[data-listen-dest="leads"]').isVisible(), false, tag + ': destinations folded');
+  assert.equal(await page.locator('#mkt-q-saying a[href="#/listening"]').count(), 1, tag + ': Listening is a link to its page');
+  assert.equal(await page.locator('#set-listening, [data-rdm-settings]').count(), 0, tag + ': no settings form here');
   assert.equal(await sideways(page), false, tag + ': no sideways scroll');
 }
 
@@ -83,19 +84,15 @@ async function onePage(page: Page, tag: string) {
       await page.locator('dialog.mkt-note[open] h1', {hasText: 'Northwind'}).waitFor();
       assert.equal(await sideways(page), false, tag + ': the note open, no sideways scroll');
       await page.locator('dialog.mkt-note .tmodal-x').click();
-      await page.locator('[data-rdm-settings]').click();
-      await page.locator('[data-listen-dest="leads"]').waitFor();
-      assert.equal(await page.locator('[data-rdm-settings]').getAttribute('aria-expanded'), 'true');
-      assert.equal(await sideways(page), false, tag + ': settings open, no sideways scroll');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
-    // A computer, from an old Listening link: the same page, scrolled to its question; Briefing goes back up to its own.
+    // A computer, from an old Spend link: the same page, scrolled to its question; Briefing goes back up to its own.
     {
       const tag = 'desktop';
-      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market/listening'});
+      const {page, errors} = await openStrategy(browser, {viewport: DESKTOP, hash: '#/strategy/market/spend'});
       await onePage(page, tag);
-      assert.ok(await scrolledTo(page, 'saying'), tag + ': Listening scrolls to What are buyers saying?');
+      assert.ok(await scrolledTo(page, 'money'), tag + ': Spend scrolls to Where is the money going?');
       assert.equal(await page.locator('.mkt-two').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length), 2, tag + ': the treemap beside Size vs growth');
       assert.equal(await page.locator('.rdm-row').first().locator('.rdm-d').innerText(), 'leads', tag + ': where a post went');
       await page.evaluate(() => { location.hash = '#/strategy/market/briefing'; });

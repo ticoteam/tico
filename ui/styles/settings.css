@@ -744,16 +744,6 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .wh-call-ctl{grid-column:1/-1;justify-content:flex-start}
   .wh-call-ctl:empty{display:none}
 }
-/* Settings > Listening (ui/app/settings-listening.ts) */
-.listen-list{list-style:none;margin:0 0 12px;padding:0}
-.listen-list li{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:12px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line)}
-.listen-list li:last-child{border-bottom:0}
-.listen-main{display:flex;flex-direction:column;gap:2px;min-width:0;overflow-wrap:anywhere}
-.listen-actions{display:flex;gap:6px;white-space:nowrap}
-.listen-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;max-width:720px}
-.listen-form label{display:grid;gap:4px;min-width:0}.listen-form input,.listen-form select{min-width:0;width:100%}
-.listen-wide{grid-column:1/-1}
-@media (max-width:640px){.listen-list li{grid-template-columns:1fr}.listen-actions{justify-content:flex-start}}
 /* The Strategy Owner's card on its bot page's Settings (ui/app/settings-strategy-bot.ts): three levels, one sentence each, a Confirm before a
    change. */
 .strategy-levels{display:grid;gap:8px;margin:10px 0}

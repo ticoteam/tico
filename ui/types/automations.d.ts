@@ -86,6 +86,8 @@ interface AuStep {
   limit?: number;
   paths?: AuPath[];
   otherwise?: AuPath;
+  /** A Paths step in a listening: what each part of the send is, a tag's items together or one item. */
+  by?: string;
   do?: string;
   args?: AuArgs;
 }
@@ -119,6 +121,12 @@ type AuRow = Omit<import('./api').Automation, 'trigger' | 'hold' | 'last_run' | 
 };
 
 interface AutomationsState {
+  /** True on the Listening page (#/listening, ui/app/listening.ts): the list is the listenings and nothing else. */
+  lst?: boolean;
+  /** Every listening's sources and their health (GET /v2/listening/sources), by automation id; null until read. */
+  lstSources?: Map<string, LstSourceRow[]> | null;
+  /** A push source's address, shown once after the save that made it (source id to address). */
+  lstAddr?: Record<string, string>;
   // The list and its teams. automations.js auLoadList sets list, groups and listError; a row is an automation, or one
   // of the pseudo-rows the page adds (Maintenance, the Heartbeat, Sys jobs, Incoming webhooks), built to the same shape.
   /** Every automation the viewer may see, pseudo-rows first. null until the first read. */

@@ -8,7 +8,13 @@
 'use strict';
 
 const AUTOMATIONS = '#/automations';
-function isAutomationsRoute(r: string): boolean { return r === AUTOMATIONS || r.startsWith(AUTOMATIONS + '/') || r.startsWith(AUTOMATIONS + '?'); }
+// Listening (ui/app/listening.ts) is this page over the automations whose trigger is `listening`: its own sidebar row,
+// its own list, the same header, flow, editors and runs.
+const LISTENING = '#/listening';
+const auUnder = (r: string, base: string): boolean => r === base || r.startsWith(base + '/') || r.startsWith(base + '?');
+function isAutomationsRoute(r: string): boolean { return auUnder(r, AUTOMATIONS) || auUnder(r, LISTENING); }
+/** The page's own address: Listening's while its list is the one shown, else Automations'. */
+const auBase = (): string => AU?.lst ? LISTENING : AUTOMATIONS;
 const AU_BOT = 'botops';                             // builds automations for the Assistant; not offered as a step's bot
 const auPhone = () => matchMedia('(max-width:760px)').matches;
 const auClone = <T>(x: T): T => x == null ? x : JSON.parse(JSON.stringify(x));
@@ -50,18 +56,18 @@ function auEl<T extends Element = HTMLElement>(from: ParentNode, sel: string): T
 // Leaving keeps the list, its teams and its counts for the next visit (S.lastRead), which draws them at once.
 function automationsStop() {
   if (!AU) return;
-  if (AU.list && !AU.listError) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range, maint: AU.maint, heart: AU.heart};
+  if (AU.list && !AU.listError && !AU.lst) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range, maint: AU.maint, heart: AU.heart};
   clearTimeout(AU.hbPoll ?? undefined);
   AU = null;
 }
 
 // #/automations[/<id>[/runs]]; an old #/automations/bot or <id>/bot link opens the list or the flow.
 function auRouteParts(r: string): {id: string; view: AuView} {
-  const [id = '', view = ''] = r.slice(AUTOMATIONS.length + 1).split('?')[0]!.split('/').map(decodeURIComponent);
+  const [id = '', view = ''] = r.slice((auUnder(r, LISTENING) ? LISTENING : AUTOMATIONS).length + 1).split('?')[0]!.split('/').map(decodeURIComponent);
   if (id === 'bot') return {id: '', view: 'flow'};
   return {id, view: view === 'runs' ? view : 'flow'};
 }
-const auHref = (id: string | undefined, view?: string) => AUTOMATIONS + (id ? '/' + encodeURIComponent(id) : '') + (id && view && view !== 'flow' ? '/' + view : '');
+const auHref = (id: string | undefined, view?: string) => auBase() + (id ? '/' + encodeURIComponent(id) : '') + (id && view && view !== 'flow' ? '/' + view : '');
 
 // The hub writes people as person:<id> (CONTRACT); older rows say human:<id>.
 const auPersonId = (a: unknown) => /^(person|human):/.test(String(a || '')) ? String(a).split(':').slice(1).join(':') : '';
@@ -81,7 +87,7 @@ const auGroupName = (g: unknown): string => (AU?.groups || []).find(x => x.id ==
 const AU_TRIGGER_ICONS: Record<string, string> = {message: 'mail', task_received: 'task_alt', schedule: 'schedule', webhook: 'api', listening: 'travel_explore', event: 'campaign',
   due: 'event'};
 const AU_TRIGGER_WORDS: Record<string, string> = {message: 'Message received', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
-  listening: 'Listening match', event: 'Event', due: 'Before a due date'};
+  listening: 'Listening', event: 'Event', due: 'Before a due date'};
 // The triggers + New and the trigger editor offer; the others (a message, a webhook...) are made where they come from.
 const AU_WHEN: Array<[string, string]> = [['schedule', 'On a schedule'], ['event', 'When something happens'], ['due', 'Before a due date']];
 const AU_REPEATS: Array<[string, string]> = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['quarterly', 'Quarterly'], ['yearly', 'Yearly']];
@@ -140,7 +146,7 @@ function auSource(t: Partial<AuFlowTrigger> = {}) {
   if (t.type === 'task_received') return t.to ? 'Tasks to ' + auActorName(t.to) : 'Tasks';
   if (t.type === 'schedule') return auCap(auCronWords(t.cron));
   if (t.type === 'webhook') return t.name || t.id || '';
-  if (t.type === 'listening') return t.destination ? 'Listening · ' + t.destination : 'Listening';
+  if (t.type === 'listening') return lstLimitsWords(t.limits);
   if (t.type === 'event') return t.name ? auEventWords(t.name) : '';
   // A repeat reads as its day ("Due Mar 1 · yearly"); only a one-off says its year.
   if (t.type === 'due') return [`Due ${auDay(t.first_due, t.repeats === 'once')}`, t.repeats, `${t.open_days ?? 14}d before`].filter(Boolean).join(' · ');
@@ -149,14 +155,14 @@ function auSource(t: Partial<AuFlowTrigger> = {}) {
 const auSpendWords = (a: AuRow) => a.spend_cap?.per_30m != null ? `$${Number(a.spend_cap.per_30m).toFixed(2)} / 30 min` : 'Bot’s limit';
 
 async function pageAutomations() {
-  const {id, view} = auRouteParts(S.route);
+  const {id, view} = auRouteParts(S.route), lst = auUnder(S.route, LISTENING);
   $('#main').classList.add('au-layout');
-  if (!AU || !document.body.contains(AU.root)) {
+  if (!AU || !document.body.contains(AU.root) || !!AU.lst !== lst) {
     automationsStop();
-    AU = {list: null, groups: [], sets: null, cur: null, id: '', view: 'flow', ed: null, runs: null, menu: null, root: null,
+    AU = {lst, list: null, groups: [], sets: null, cur: null, id: '', view: 'flow', ed: null, runs: null, menu: null, root: null,
           maint: null, maintError: '', mtGen: 0, mtRuns: null, mtOpen: new Set(),
           heart: null, heartError: '', hbGen: 0, hbLog: null, hbPoll: null, ...auOverviewState()};
-    const kept = S.lastRead.automations;
+    const kept = lst ? null : S.lastRead.automations;
     if (kept) {
       Object.assign(AU, {list: kept.list, groups: kept.groups, maint: kept.maint || null, heart: kept.heart || null}, kept.range === AU.range ? {stats: kept.stats} : {});
       // Read again behind the kept copy; only an answer that differs draws the list again.
@@ -182,6 +188,7 @@ async function pageAutomations() {
   // The page opens on the list; an automation opens from its row.
   if (id !== state.id) {
     state.id = id; state.ed = null; state.runs = null; state.cur = null; state.lastRun = undefined; state.mtRuns = null;
+    state.lstAddr = {};   // a push source's address is shown once, on the visit that made it
     state.hbLog = null; clearTimeout(state.hbPoll ?? undefined); state.hbPoll = null;
     // Maintenance is its own screen (automations-maintenance.js), read from /v2/maintenance, not an automation.
     if (id === AU_MAINT) {
@@ -206,6 +213,8 @@ async function pageAutomations() {
       catch (e) { if (AU === state && state.id === id) { state.cur = null; auEl(state.root, '.au-pane').innerHTML = [403, 404].includes(errorStatus(e) ?? 0)
         ? '<p class="muted au-pad">Not shared with you</p>' : `<p class="err">${esc(errorMessage(e, ''))}</p>`; } return; }
       if (AU !== state || state.id !== id) return;
+      // A listening opened from an old Automations address is shown on its own page.
+      if (!lst && cur.trigger.type === 'listening') { location.replace(LISTENING + '/' + encodeURIComponent(id) + (view === 'runs' ? '/runs' : '')); return; }
       state.cur = cur;
     }
   }
@@ -219,13 +228,15 @@ type AuAnswer = (AuRow & {automation?: undefined}) | {automation: AuRow};
 const auNormal = (x: AuAnswer | null | undefined): AuAutomation => { const a: AuRow = x?.automation || x || ({} as AuRow); a.steps ||= []; a.trigger ||= {}; return a as AuAutomation; };
 
 function auShell() {
-  $('#main').innerHTML = `<div class="au" id="au-root">
-    <header class="au-ph"><div class="au-hrow"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div></div><span class="au-sp"></span>
-      <div class="au-hrow"><button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button><span class="au-newbox"><button class="primary add-ctl au-new" type="button" aria-label="New automation" aria-haspopup="menu" aria-expanded="false">${TL_ICON.plus}</button>
+  auHave(AU);
+  const lst = !!AU.lst;
+  $('#main').innerHTML = `<div class="au${lst ? ' au-lst' : ''}" id="au-root">
+    <header class="au-ph"><div class="au-hrow"><h1>${lst ? 'Listening' : 'Automations'}</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div></div><span class="au-sp"></span>
+      <div class="au-hrow"><button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button><span class="au-newbox"><button class="primary add-ctl au-new" type="button" ${lst ? 'aria-label="New listening"' : 'aria-label="New automation" aria-haspopup="menu" aria-expanded="false"'}>${TL_ICON.plus}</button>
       <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></div></header>
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
-        <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="Search automations"></div>
+        <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="${lst ? 'Search listening' : 'Search automations'}"></div>
         <div class="au-facets"></div>
       </aside>
       <section class="au-c" aria-live="polite">
@@ -237,11 +248,10 @@ function auShell() {
       <div class="au-scrim" hidden></div>
     </div>
   </div>`;
-  auHave(AU);
   const root = AU.root = $('#au-root');
   auPlace();
   auOverviewWire(root);
-  root.querySelector('.au-new').onclick = () => auNewMenu(root.querySelector('.au-newm').hidden);
+  root.querySelector('.au-new').onclick = () => lst ? void lstNew() : auNewMenu(root.querySelector('.au-newm').hidden);
   root.querySelector('.au-newm').onclick = (e: MouseEvent) => {
     const m = eventElement(e)?.closest<HTMLElement>('[data-new]');
     if (m?.dataset.new === 'inbox') auNewInbox(); else if (m) void auBlank(m.dataset.new);
@@ -304,13 +314,16 @@ async function auLoadList(state: AutomationsState) {
   const [found, groups, maint, hooks, heart] = await Promise.all([
     auAllAutomations().catch(e => ({error: e as Error})),
     get('/v2/groups').catch(() => ({groups: []})),
-    get('/v2/maintenance').catch(() => null),
-    get('/v2/triggers').catch(() => null),
-    get('/v2/heartbeat?limit=1').catch(() => null),   // the row needs no page of beats
+    state.lst ? null : get('/v2/maintenance').catch(() => null),
+    state.lst ? null : get('/v2/triggers').catch(() => null),
+    state.lst ? null : get('/v2/heartbeat?limit=1').catch(() => null),   // the row needs no page of beats
+    state.lst ? lstSourcesLoad(state) : null,
   ]);
   const m = state.mtGen === gen ? maint : state.maint;
   const h = state.hbGen === hbGen ? heart : state.heart;
-  const list = found.error ? found : auHeartList(auMaintList(auHooksList(found, hooks), m), h);
+  // A listening is listed on its own page only (ui/app/listening.ts), and that page lists nothing else.
+  const mine = (rows: AuRow[]): AuRow[] & {error?: undefined} => rows.filter(a => (a.trigger?.type === 'listening') === !!state.lst);
+  const list = found.error ? found : state.lst ? mine(found) : auHeartList(auMaintList(auHooksList(mine(found), hooks), m), h);
   // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
   if (AU !== state) {
     if (!list.error && !S.lastRead.automations) S.lastRead.automations = {list, groups: Array.isArray(groups) ? groups : groups.groups || [], maint: auMaintOk(m) ? m : null, heart: auHeartOk(h) ? h : null};
@@ -366,7 +379,7 @@ const auHeadLock = (a: AuRow) => a.builtin && !auMayPause(a)
 function auDrawHead() {
   auDrawn(AU);
   const hd = auEl(AU.root, '.au-hd'), a = AU.cur;
-  auEl(AU.root, '.au-crumb').innerHTML = AU.id ? `<a class="au-up" href="${AUTOMATIONS}"><span class="nav-icon" aria-hidden="true">chevron_left</span>Automations</a>` : '';
+  auEl(AU.root, '.au-crumb').innerHTML = AU.id ? `<a class="au-up" href="${auBase()}"><span class="nav-icon" aria-hidden="true">chevron_left</span>${AU.lst ? 'Listening' : 'Automations'}</a>` : '';
   if (!AU.id) { hd.innerHTML = ''; return; }
   if (AU.id === AU_MAINT) { auMaintHead(hd); return; }
   if (AU.id === AU_HEART) { auHeartHead(hd); return; }
@@ -485,6 +498,7 @@ function auOnClick(e: Event) {
   if ((m = t.closest<HTMLElement>('[data-spend]'))) { auEdOpen({kind: 'spend'}); return; }
   if ((m = t.closest<HTMLElement>('[data-versions]'))) { auEdOpen({kind: 'versions'}); return; }
   if ((m = t.closest<HTMLElement>('[data-dot]'))) { auPathsGo(m); return; }
+  if (lstClick(t)) return;
   if ((m = t.closest<HTMLElement>('[data-run]'))) { auRunToggle(m.dataset.run ?? ''); return; }
   if ((m = t.closest<HTMLElement>('[data-runs-more]'))) { void auRunsLoad(AU, true); return; }
   if ((m = t.closest<HTMLElement>('[data-hold]'))) { void auHoldAct(m.dataset.hold ?? ''); return; }
@@ -519,7 +533,7 @@ async function auMoreAct(what: string | undefined) {
     state.list = state.list.filter(x => x.id !== a.id);
     toast('Deleted');
     state.id = ''; state.cur = null;
-    location.hash = AUTOMATIONS;
+    location.hash = auBase();
     auDrawList();
   } catch (e) { toast(errorMessage(e, ''), true); }
 }

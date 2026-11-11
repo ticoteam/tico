@@ -39,10 +39,38 @@
     {"id": "au_tasks", "name": "Task triage", "owner_id": "bot:support", "enabled": true, "builtin": true, "version": 2,
      "trigger": {"type": "task_received", "to": "bot:support"},
      "steps": [{"id": "ta1", "type": "action", "enabled": true, "do": "assign", "args": {"to": "bot:support"}}]},
-    {"id": "au_listen", "name": "Pricing mentions", "owner_id": "person:omar", "enabled": false, "builtin": false, "version": 1,
+    {"id": "au_price", "name": "Pricing mentions", "owner_id": "person:omar", "enabled": false, "builtin": false, "version": 1,
      "can_edit": false,
-     "trigger": {"type": "listening", "destination": "pricing"},
-     "steps": [{"id": "n1", "type": "action", "enabled": true, "do": "note", "args": {"text": "Price talk"}}]}
+     "trigger": {"type": "event", "name": "market.insight.urgent"},
+     "steps": [{"id": "n1", "type": "action", "enabled": true, "do": "note", "args": {"text": "Price talk"}}]},
+    {"id": "au_market", "name": "Market listening", "owner_id": "person:dana", "enabled": true, "builtin": false, "version": 3,
+     "trigger": {"type": "listening", "at": "08:00", "tz": "America/Chicago",
+       "sources": [
+         {"id": "s_smb", "kind": "search", "site": "Reddit", "target": "r/smallbusiness"},
+         {"id": "s_agency", "kind": "search", "site": "Reddit", "target": "r/agency"},
+         {"id": "s_x", "kind": "search", "site": "X", "target": "\"team task tracker\""},
+         {"id": "s_nw", "kind": "page", "site": "northwind.com", "target": "https://northwind.com/pricing"},
+         {"id": "s_syften", "kind": "push", "site": "Syften"}],
+       "rules": [
+         {"do": "keep", "tag": "question", "text": "Someone asking how to plan or track work for a small team"},
+         {"do": "keep", "tag": "buyer", "text": "A buyer saying in their own words what they need or what hurts"},
+         {"do": "keep", "tag": "competitor", "text": "A competitor changed its price, plan or product"},
+         {"do": "drop", "text": "Vendors promoting themselves"},
+         {"do": "drop", "text": "Job posts"}],
+       "limits": [{"count": 3, "per": "hour"}, {"count": 10, "per": "day"}]},
+     "steps": [{"id": "lp1", "type": "paths", "enabled": true, "by": "tag",
+       "paths": [
+         {"name": "competitor", "when": [{"field": "item.tag", "op": "is", "value": "competitor"}],
+          "steps": [{"id": "lb1", "type": "bot_turn", "enabled": true, "bot": "support", "prompt": "Read these and say what changed."}]},
+         {"name": "question", "when": [{"field": "item.tag", "op": "is", "value": "question"}],
+          "steps": [{"id": "lt1", "type": "action", "enabled": true, "do": "create_task", "args": {"title": "Answer: {{item.title}}"}}]}],
+       "otherwise": {"steps": [{"id": "lu1", "type": "action", "enabled": true, "do": "post_update", "args": {"text": "{{item.text}}"}}]}}]},
+    {"id": "au_pricing", "name": "Pricing page watch", "owner_id": "person:omar", "enabled": false, "builtin": false, "version": 1,
+     "can_edit": false,
+     "trigger": {"type": "listening", "at": "08:00", "tz": "America/Chicago",
+       "sources": [{"id": "s_acme", "kind": "page", "site": "acme.example", "target": "https://acme.example/pricing"}],
+       "rules": [], "limits": [{"count": 10, "per": "day"}]},
+     "steps": [{"id": "pu1", "type": "action", "enabled": true, "do": "post_update", "args": {"text": "{{listening.text}}"}}]}
   ],
   "versions": {
     "au_inbox": [

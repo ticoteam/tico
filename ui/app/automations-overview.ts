@@ -98,9 +98,9 @@ interface AuRowT {
 const AU_RANGES: Record<string, string> = {'5m': '30 s', '1h': '5 min', '24h': 'hour', '7d': '6 hours'};
 const AU_RANGE_SECONDS: Record<string, number> = {'5m': 300, '1h': 3600, '24h': 86400, '7d': 604800};
 const AU_RANGE_KEY = 'tico.automations.range';
-const AU_KINDS: string[] = ['message', 'task_received', 'schedule', 'webhook', 'listening', 'event', 'due', 'system'];
+const AU_KINDS: string[] = ['message', 'task_received', 'schedule', 'webhook', 'event', 'due', 'system'];
 const AU_KIND_WORDS: Record<string, string> = {message: 'Message', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
-  listening: 'Listening', event: 'Event', due: 'Due date', system: 'System job'};
+  event: 'Event', due: 'Due date', system: 'System job'};
 const AU_KIND_ICONS: Record<string, string> = {...AU_TRIGGER_ICONS, system: 'settings'};
 const AU_STATES: [string, string, string][] = [['on', 'On', 'ok'], ['failing', 'Last run failed', 'fail'], ['hold', 'On hold', 'wait'], ['paused', 'Paused', 'wait'], ['off', 'Off', 'idle']];
 const AU_SORTS: [string, string][] = [['last', 'Last run'], ['fail', 'Most failures'], ['runs', 'Most runs'], ['cost', 'Cost'], ['name', 'Name']];
@@ -201,6 +201,7 @@ function auRangeDraw(): void {
 // The filters: every section open on a computer; on a phone each is a header that opens its list (AU.fopen).
 function auFacetsDraw(): void {
   auDrawn(AU);
+  if (AU.lst) return;   // Listening has a search and no filters
   const box = auEl(AU.root, '.au-facets'), list: AuItem[] = AU.list || [], f: AuFilters = AU.f, phone = auPhone();
   const count = (pred: (a: AuItem) => boolean): number => list.filter(pred).length;
   const btn = (attr: string, val: string, on: boolean, lead: string, label: string | undefined, n: number): string => `<button type="button" class="au-fb" ${attr}="${esc(val)}" aria-pressed="${on}">${lead}<span class="au-ft">${esc(label)}</span><span class="au-fn">${n}</span></button>`;
@@ -239,12 +240,14 @@ function auPlace(): void {
   auDrawn(AU);
   // G: the shell (auShell) always has these parts: two header rows, the tabs, the search, the bar and the rail.
   const r = AU.root, rows = r.querySelectorAll('.au-ph .au-hrow'), tabs = auEl(r, '.au-tabs'), s = auEl(r, '.au-s');
+  if (AU.lst) { auNeed(rows[1], '.au-hrow').prepend(s); return; }   // Listening: the search beside its +, at every width
   if (auPhone()) { auNeed(rows[0], '.au-hrow').insertBefore(tabs, r.querySelector('.au-range')); auNeed(rows[1], '.au-hrow').prepend(s); }
   else { auEl(r, '.au-ctl').prepend(tabs); auEl(r, '.au-rail').prepend(s); }
 }
 // The overview's parts: the filters, the bar above the table and the table (skipped while an automation is open).
 function auDrawList(): void {
   if (!AU?.root) return;
+  if (AU.lst) { auDrawTable(); return; }
   auFacetsDraw(); auCtlDraw(); auDrawTable();
 }
 
@@ -379,12 +382,13 @@ function auDrawTable(): void {
   const box = auEl(AU.root, '.au-tbl');
   if (AU.listError) { box.innerHTML = `<p class="err au-pad">${esc(AU.listError)}</p>`; return; }
   if (AU.list === null) { box.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
-  patchLiveHTML(box, AU.tab === 'runs' ? auAllHTML() : auTableHTML());   // a fresh read that changed nothing moves nothing
+  patchLiveHTML(box, AU.lst ? lstListHTML(AU) : AU.tab === 'runs' ? auAllHTML() : auTableHTML());   // a fresh read that changed nothing moves nothing
   box.scrollTop = AU.scroll[AU.tab] || 0;
 }
 
 // The list is shown: what it reads (the counts for the range, the Runs page) and where it was scrolled.
 function auOverviewShow(state: AuOverviewView): void {
+  if (auPage().lst) { auDrawTable(); return; }
   if (!state.stats || state.stats.range !== state.range || Date.now() - state.stats.at > 60000) void auStatsLoad(state);
   if (state.tab === 'runs') void auAllLoad(state);
   auRangeDraw(); auDrawList();
@@ -394,7 +398,7 @@ function auOverviewShow(state: AuOverviewView): void {
 function auFiltered(): void {
   auHave(AU);
   AU.scroll.list = AU.scroll.runs = 0;
-  if (AU.id) { location.hash = AUTOMATIONS; return; }   // a filter shows the list again
+  if (AU.id) { location.hash = auBase(); return; }   // a filter shows the list again
   auDrawList();
   if (AU.tab === 'runs') { clearTimeout(AU.allSoon); AU.allSoon = setTimeout(() => { if (AU) void auAllLoad(AU); }, 250); }
 }
