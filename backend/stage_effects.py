@@ -8,7 +8,8 @@ PRs leave the merge queue.
 
 Filing (`{"file_into": "<pipeline id>"}`, Product's In development into Engineering) files ONE task per visit,
 linked (`links.kind = handoff`). It has the filing task's title and body, and a line `Spec: page:<file id>@<version>` naming
-the page that counted on the nearest earlier stage with a page requirement (the Spec page as it was OK'd, D10). It is
+the page that counted on the nearest earlier stage with a page requirement (the Spec page as it was OK'd, D10), then
+what each person said with their OK of it, marked as their notes on the spec (`sign_off_notes`). It is
 filed by the filing task's owner (the Product Owner), who is its requester. When that is refused (the Product
 Owner is paused or still onboarding) the engine files it itself; one refused even then (the target was retired)
 files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed yet"), the
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     import sqlite3
 
 Row = dict[str, Any]
+FORWARD = ("met", "pushed_past")  # how a visit left that took the task on to the next stage (task_engine.move)
 
 
 def _h() -> Any:
@@ -41,9 +43,9 @@ def _on_enter(stage: Row | None) -> Row:
     return cast("Row", value) if isinstance(value, dict) else {}
 
 
-def _spec_line(conn: "sqlite3.Connection", task: Row) -> str:
-    """`page:<file>@<version>`: the page that counted on the task's newest visit to the nearest earlier stage with a
-    page requirement, or "" when there is none."""
+def _spec_page(conn: "sqlite3.Connection", task: Row) -> Row | None:
+    """The page that counted on the task's newest visit to the nearest earlier stage with a page requirement
+    (`requirement_pages` row: `file_id`, `version`, `visit_id`), or None when there is none."""
     from . import task_engine, task_pages
 
     work = [s for s in task_engine.stages(conn, task["pipeline_id"]) if s["kind"] == "work"]
@@ -55,8 +57,74 @@ def _spec_line(conn: "sqlite3.Connection", task: Row) -> str:
             continue
         page = task_pages.newest_for_task(conn, task["id"], stage["id"])
         if page:
-            return f"page:{page['file_id']}@{page['version']}"
-    return ""
+            return page
+    return None
+
+
+def _person_oks(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
+    """Each person's OK (of an OK or a page) on a visit, the newest answer per requirement, oldest first, as {by,
+    requirement, notes}. A send back, a question's answer and a bot's OK are not sign-offs."""
+    from . import task_requirements as R
+
+    H = _h()
+    out: list[Row] = []
+    for answer in R.newest_answers(conn, visit_id).values():
+        if answer.get("answer") != "ok" or not H.is_human(answer.get("by_id")):
+            continue
+        requirement = R.get(conn, str(answer["requirement_id"]))
+        if requirement and requirement.get("kind") in ("ok", "page"):
+            notes = str(answer.get("notes") or "").strip()
+            out.append({"by": str(answer["by_id"]), "requirement": R.name_of(requirement), "notes": notes})
+    return out
+
+
+def sign_off_notes(conn: "sqlite3.Connection", visit_id: str) -> list[Row]:
+    """What people said when they OK'd something on a visit: their OKs that came with notes (`_person_oks`)."""
+    return [said for said in _person_oks(conn, visit_id) if said["notes"]]
+
+
+def notes_on_the_way_in(conn: "sqlite3.Connection", task: Row) -> list[str]:
+    """What the person said with the newest sign-off the open task passed on its way into this stage, one line each,
+    marked as theirs: walking back over the visits it left forward, the first one a person OK'd. Nothing when that
+    OK came with no notes, or the task came back or was reopened since. Every wake in the stage carries it
+    (task_wakes.body), so whoever acts after a sign-off (the Builder after a Review OK, the Release Owner after the
+    pre-release OK) reads what the person said there."""
+    from . import task_engine
+
+    H = _h()
+    if not task.get("visit"):
+        return []
+    left = conn.execute(
+        "SELECT id, stage_id, how FROM visits WHERE task_id=? AND left_at IS NOT NULL "
+        "ORDER BY left_at DESC, entered_at DESC LIMIT 20",
+        (task["id"],),
+    ).fetchall()
+    for visit_id, stage_id, how in left:
+        if how not in FORWARD:
+            break  # left backwards (or closed and reopened): what was OK'd there is not on the way in
+        oks = _person_oks(conn, str(visit_id))
+        if oks:
+            stage_name = (task_engine.stage(conn, str(stage_id)) or {}).get("name") or "the stage before"
+            return [
+                f"{H.actor_name(conn, said['by'])}'s notes with their OK of {said['requirement']} in {stage_name}: "
+                f"{said['notes']}"
+                for said in oks
+                if said["notes"]
+            ]
+    return []
+
+
+def _handoff_body(conn: "sqlite3.Connection", task: Row) -> str:
+    """The filed task's body: the filing task's, the `Spec:` line, and what each person said with their OK of the
+    spec, marked as theirs, so whoever builds it does not ask again what was already answered there."""
+    H = _h()
+    parts = [str(task.get("body") or "").rstrip()]
+    page = _spec_page(conn, task)
+    if page:
+        parts.append(f"Spec: page:{page['file_id']}@{page['version']}")
+        for said in sign_off_notes(conn, str(page["visit_id"])):
+            parts.append(f"{H.actor_name(conn, said['by'])}'s notes on the spec, given with their OK:\n{said['notes']}")
+    return "\n\n".join(part for part in parts if part)
 
 
 def _filer(conn: "sqlite3.Connection", task: Row, by: str) -> str:
@@ -74,10 +142,7 @@ def _filer(conn: "sqlite3.Connection", task: Row, by: str) -> str:
 def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[str | None, str]:
     """File the handoff into pipeline `target`. Returns the filed task's id and "", or None and why it was refused."""
     H = _h()
-    body = str(task.get("body") or "").rstrip()
-    spec = _spec_line(conn, task)
-    if spec:
-        body = f"{body}\n\nSpec: {spec}" if body else f"Spec: {spec}"
+    body = _handoff_body(conn, task)
     last: Exception | None = None
     filer = _filer(conn, task, by)
     for actor in dict.fromkeys((filer, str(H.KEEPER))):

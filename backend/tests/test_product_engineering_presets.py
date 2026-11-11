@@ -22,6 +22,7 @@ from backend import pipeline_settings as PS
 from backend import task_calls as TC
 from backend import task_engine as E
 from backend import task_requirements as R
+from backend import task_wakes as TW
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -616,6 +617,60 @@ def test_a_people_only_page_that_names_nobody_waits_on_a_person_not_on_jev_alone
         A.answer(c, row["id"], rid, "bot:pm", "ok", seen_version=row["version"])
     A.answer(c, row["id"], rid, ANA, "ok")
     assert E.task(c, row["id"])["stage_id"] == "product-in-development"
+
+
+SPEC_NOTES = "Repo acme/calc, package acme_calc. -0.0 is fine."
+
+
+def test_the_engineering_task_carries_what_the_person_said_with_their_spec_ok(c):
+    """Acme rc.3 bug 11: the Builder asked again which repository to use, which the person had said with their OK."""
+    row, rid = _sign_off(c, "product-spec")
+    A.answer(c, row["id"], rid, ANA, "ok", SPEC_NOTES)
+    ((filed, kind),) = _filed(c, row["id"])
+    assert kind == "handoff"
+    name = H.actor_name(c, ANA)
+    assert E.task(c, filed)["body"] == (
+        f"Let a shopper keep a cart.\n\nSpec: page:f-page@1\n\n{name}'s notes on the spec, given with their OK:\n"
+        + SPEC_NOTES
+    )
+    # The Product task's own wakes in In development say it too, marked as the person's.
+    line = f"{name}'s notes with their OK of {R.name_of(R.get(c, rid))} in Spec: {SPEC_NOTES}"
+    assert line in TW.body(c, E.task(c, row["id"]), to="bot:pm").splitlines()
+
+
+def test_an_ok_with_no_notes_adds_nothing_to_the_engineering_task(c):
+    row, rid = _sign_off(c, "product-spec")
+    A.answer(c, row["id"], rid, ANA, "ok")
+    ((filed, _),) = _filed(c, row["id"])
+    assert E.task(c, filed)["body"] == "Let a shopper keep a cart.\n\nSpec: page:f-page@1"
+    assert "notes" not in TW.body(c, E.task(c, row["id"]), to="bot:pm")
+
+
+def test_what_the_person_says_with_the_pre_release_ok_reaches_whoever_acts_after_it(c):
+    """The other direction: the OK of what was built moves the task on to Merge and Release, and every wake there
+    carries the person's notes; moved back, it no longer does."""
+    row, rid = _sign_off(c, "engineering-fixes-2")
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id='engineering-fixes-2' AND kind='item'", (H.now(),))
+    said = "Say in the release notes that negate(-0.0) is 0.0"
+    A.answer(c, row["id"], rid, ANA, "ok", said)
+    merge = E.task(c, row["id"])
+    assert merge["stage_id"] == "engineering-merge"
+    line = f"{H.actor_name(c, ANA)}'s notes with their OK of {R.name_of(R.get(c, rid))} in Fixes 2: {said}"
+    assert line in TW.body(c, merge, to=merge["owner_id"]).splitlines()
+    told = c.execute(
+        "SELECT recipient_id, body FROM messages WHERE wake_key LIKE ? AND body LIKE ?",
+        (merge["id"] + ":%", f"%{said}%"),
+    ).fetchall()
+    assert [who for who, _ in told] == ["bot:rm"]  # the Release Owner, woken as Merge starts
+    # On to Release (Merge's PR check taken off: no PR here), it still reads them: no sign-off came in between.
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id='engineering-merge'", (H.now(),))
+    release = E.advance(c, row["id"])
+    assert release["stage_id"] == "engineering-release"
+    assert line in TW.body(c, release, to=release["owner_id"]).splitlines()
+    back = E.move(c, row["id"], "engineering-fixes-2", ANA, "The release notes are wrong")
+    again = E.move(c, back["id"], E.NEXT, ANA, "Fixed, no new OK needed", seen_version=back["version"])
+    assert again["stage_id"] == "engineering-merge"
+    assert line not in TW.body(c, again, to=again["owner_id"])
 
 
 def _at(stages, sid):

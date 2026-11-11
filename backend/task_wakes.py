@@ -44,14 +44,19 @@ def key(task_id: str, visit_id: str, level: str = "owner", try_n: int = 0) -> st
 
 
 def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | None) -> str:
-    """What a bot reads when it is woken for a task: the stage, what is missing, and how its run may end. Said to `to`,
+    """What a bot reads when it is woken for a task: the stage, the person's notes on the sign-off that let it in
+    (stage_effects.notes_on_the_way_in), what is missing, and how its run may end. Said to `to`,
     whom it wakes, in words kept in the task's thread: a task this one filed is named only as `told` allows."""
     from . import waiting_on as W
 
     stage: Row = task.get("stage") or {}
     pipeline: Row = task.get("pipeline") or {}
+    from . import stage_effects
+
     lines = [lead.strip()] if lead.strip() else []
     lines.append(f"{task.get('title') or 'A task'} is in {stage.get('name', '?')} ({pipeline.get('name', '?')}).")
+    # What the person said with the sign-off that let the task in here: theirs, for whoever acts on it next.
+    lines.extend(stage_effects.notes_on_the_way_in(conn, task))
     missing = [s for s in R.standings(conn, task) if not s.met]
     if missing:
         shown = told(conn, task, to)
