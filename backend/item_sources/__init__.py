@@ -9,7 +9,6 @@ its items.
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from importlib import import_module
 from types import ModuleType
 from typing import Any
 
@@ -40,10 +39,13 @@ class Condition:
 
 
 def source(source_id: object) -> ModuleType | None:
-    """A source's module, or None for an unknown source."""
-    if source_id not in SOURCES:
-        return None
-    return import_module(f"{__name__}.{source_id}")
+    """A source's module, or None for an unknown source. Each source is imported by name, not computed from its id, so
+    the test selection's import map (scripts/pr_checks.py) sees which modules a source reaches."""
+    if source_id == "github":
+        from . import github
+
+        return github
+    return None
 
 
 def condition(source_id: object, condition_id: object) -> Condition | None:
