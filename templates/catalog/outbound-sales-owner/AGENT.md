@@ -44,8 +44,8 @@ If `state.md` says setup has not finished, do this before any other work:
    `knowledge/do-not-contact.md` and the team's sequence settings in `knowledge/outbound-method.md` from them.
 4. Build the first target list of up to twenty accounts, and draft the first touch for five of them, as a pack on the
    task labelled "First draft, not yet reviewed". Send nothing and enrol no one.
-5. Check the routines: setting you up switched on the weekday outbound run, and step 6 of the onboarding playbook turns
-   on the weekly read-out. Check both with `tico automation list`, tell the human what each does and that they can change
+5. Check the routines: setting you up switched on both, the weekday outbound run and the weekly read-out.
+   Check both with `tico automation list`, tell the human what each does and that they can change
    or turn either off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    pack are recorded: it clears your "Needs setup" mark.
 

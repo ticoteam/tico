@@ -7,8 +7,8 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: medium
 max_run_minutes: 60
 
-# Declared off. Setup switches on only the first routine; the onboarding playbook (step 6) switches on the two growth
-# routines with `tico automation update <id> --enable`. `tico bot create` seeds them once; from then on Tico's automations
+# Declared off. Starting setup (or going live) switches on all three, once, unless a person changed one first
+# (Onboarding.arm_routines). `tico bot create` seeds them once; from then on Tico's automations
 # are the routines (docs/routines.md).
 routines:
   - id: weekly-growth-summary

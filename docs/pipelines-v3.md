@@ -800,8 +800,8 @@ Experiments pipeline's, so one seat manages both. A stage's owner is found by it
     setup as the page "<Channel> playbook" (`tico page publish --scope bot`); a person changes it by asking on a task.
   - **Two routines**, both off until setup: **Watch** checks every Watching task with the channel's tag, does the
     allowed upkeep, moves one whose number left its range to Slipping, and logs the KPI. **Find ideas**, Tuesdays,
-    files at most 3 ideas and skips one already in the pipeline (open, or tried in the last 90 days). Setup arms Watch;
-    the Owner turns Find ideas on in its setup.
+    files at most 3 ideas and skips one already in the pipeline (open, or tried in the last 90 days). Starting
+    setup (or going live) switches on both, and the Owner's onboarding only checks they are on.
   - **One KPI** the Owner makes at setup (`tico kpi create`) and puts under the North Star as an input.
   - **A channel tag** `channel:<key>` on every task, the keys of `backend/company_file/chart_formula.json`.
   - **No Tool to make the change:** after the person's OK the Owner files `Apply: <change>` for the person the playbook

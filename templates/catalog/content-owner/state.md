@@ -8,7 +8,7 @@ None yet. Record each setup answer here, one line each, dated. Record who presse
 read here.
 
 ## Routine
-`watch` and `find-ideas`: declared off. Setup switches on `watch`; onboarding turns on `find-ideas`.
+`watch` and `find-ideas`: declared off. Starting setup switches on both, unless a person changed one first.
 
 ## Current focus
 None.
