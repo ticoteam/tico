@@ -11,6 +11,7 @@ import json
 import uuid
 from pathlib import Path
 
+from backend import never_stuck
 from backend.store import H
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.sample_company import booted, environment, machine, rows, signed_in  # noqa: F401  (fixtures)
@@ -141,6 +142,85 @@ def test_botops_cannot_close_a_seat_bots_setup_task_until_the_bot_is_live(enviro
     finished = done("Built and live.")
     assert finished.status_code == 200, finished.text
     assert rows(api, "SELECT status FROM tasks WHERE id=?", (task,))[0]["status"] == "done"
+
+
+def _version(api, task_id):
+    return api.get(f"/api/v2/tasks/{task_id}", headers=signed_in()).json()["task"]["version"]
+
+
+def _open_snoozes(api, task_id):
+    return rows(api, "SELECT id FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,))
+
+
+def test_going_live_ends_the_wait_botops_set_on_the_setup_task_and_wakes_it_to_say_done(environment):
+    """BotOps snoozes a seat's setup task while the bot waits for its repository ("waiting to go live"). When the bot
+    goes live the wait ends at once, BotOps is woken on that task, and its done closes it."""
+    api, computer, seats = _company(environment)
+    attempt = _claim(api, computer, "botops")
+    builder, task = _seat(seats, "builder")
+    assert act(api, attempt, "POST", "bots/builder/go-live", {}).status_code == 202
+    snoozed = act(
+        api,
+        attempt,
+        "POST",
+        f"tasks/{task}/snooze",
+        {"why": "waiting to go live", "until": "2099-01-01T00:00:00Z", "version": _version(api, task)},
+    )
+    assert snoozed.status_code == 200, snoozed.text
+    assert len(_open_snoozes(api, task)) == 1
+    _report(api, computer, present=[builder])
+    assert _state(api, builder)["state"] == "active"
+    assert _open_snoozes(api, task) == []
+    with api.app.state.store.transaction() as c:
+        never_stuck.check(c)  # the pass that wakes whoever has the turn on a task that is due
+    woken = rows(api, "SELECT recipient_id FROM messages WHERE wake_key LIKE ?", (task + ":%",))
+    assert "bot:botops" in {row["recipient_id"] for row in woken}, woken
+    finished = act(
+        api, attempt, "POST", f"tasks/{task}/done", {"note": "Built and live.", "version": _version(api, task)}
+    )
+    assert finished.status_code == 200, finished.text
+    assert rows(api, "SELECT status FROM tasks WHERE id=?", (task,))[0]["status"] == "done"
+
+
+def test_botops_cannot_snooze_a_setup_task_once_its_bot_is_live(environment):
+    """BotOps read the Builder before it went live and snoozed its setup task afterwards. Nothing would end that wait,
+    so the snooze is refused, and BotOps marks the task done."""
+    api, computer, seats = _company(environment)
+    attempt = _claim(api, computer, "botops")
+    builder, task = _seat(seats, "builder")
+    assert act(api, attempt, "POST", "bots/builder/go-live", {}).status_code == 202
+    _report(api, computer, present=[builder])
+    assert _state(api, builder)["state"] == "active"
+    refused = act(
+        api,
+        attempt,
+        "POST",
+        f"tasks/{task}/snooze",
+        {"why": "waiting to go live", "until": "2099-01-01T00:00:00Z", "version": _version(api, task)},
+    )
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "bot_live", refused.text
+    assert _open_snoozes(api, task) == []
+    finished = act(
+        api, attempt, "POST", f"tasks/{task}/done", {"note": "Built and live.", "version": _version(api, task)}
+    )
+    assert finished.status_code == 200, finished.text
+
+
+def test_going_live_leaves_a_snooze_a_person_set_on_the_setup_task(environment):
+    """A snooze a person sets on the setup task is theirs to end: the bot going live does not end it."""
+    api, computer, seats = _company(environment)
+    attempt = _claim(api, computer, "botops")
+    builder, task = _seat(seats, "builder")
+    assert act(api, attempt, "POST", "bots/builder/go-live", {}).status_code == 202
+    mine = api.post(
+        f"/api/v2/tasks/{task}/snooze",
+        json={"why": "I will look first", "version": _version(api, task)},
+        headers=signed_in(),
+    )
+    assert mine.status_code == 200, mine.text
+    _report(api, computer, present=[builder])
+    assert _state(api, builder)["state"] == "active"
+    assert len(_open_snoozes(api, task)) == 1
 
 
 def test_a_go_live_for_a_template_bot_nothing_has_built_yet_ends_live_not_planned(environment):
