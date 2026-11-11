@@ -1046,6 +1046,11 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     _follow_filled(c, who, row["id"], slug, now)
     end_draft(c, row, "The seat was filled")
     H.event(c, who.actor, "seat.filled", row["id"], {"bot": slug, "template": card["template"], "model": model})
+    from . import repositories
+
+    # A seat's bot gets its template's repository access on every repository In use (the Builder writes, a reviewer
+    # reads), unless the person adding it already chose some.
+    repositories.seat_default(c, onboarding.settings.catalog_dir, slug, who.actor)
     if card["starter"]:
         onboarding._make_starter(c, who, slug, card["template"])
         return None

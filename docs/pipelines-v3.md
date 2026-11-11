@@ -590,7 +590,8 @@ your own tasks and one-tap fixes.
 - **Answer:** a question added to a task. Buttons are the choices, plus a box to type something else.
 - **Do:** a bot can't run and you can fix it, such as Connect Google. One per cause, not one per task. It goes when the
   cause goes. A stage reading PRs with no GitHub App installed is one: **Connect GitHub**, for the company's owner,
-  links to Tools, GitHub; its tasks wake nobody until then, and each bot is woken once after (docs/github-app.md).
+  links to Tools, GitHub (**Choose a repository** once installed with none In use); its tasks wake nobody until then,
+  and each bot is woken once after (docs/github-app.md).
 - **Yours:** a task you own. Buttons: Done, Snooze, Give to….
 - **Stuck:** the ladder or Late reached you. Buttons: Try again, Reassign, Move back, Close, Snooze.
 

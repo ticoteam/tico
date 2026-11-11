@@ -127,3 +127,18 @@ def test_needs_you_gives_the_row_a_link_to_the_github_page(api):
         X.new_task(c, ANA, "Fix the footer", "eng")
     items = [i for i in get(api, "needs-you")["items"] if i["kind"] == "paused"]
     assert [(i["line"], i["href"], len(i["task_ids"])) for i in items] == [(F.CONNECT, F.CONNECT_AT, 2)]
+
+
+def test_with_github_installed_but_no_repository_in_use_the_owner_is_asked_to_choose_one(c, eng, later):
+    X.github_installed(c, repository=None)
+    first = X.new_task(c, ANA, "Add a login page", "eng")["id"]
+    second = X.new_task(c, ANA, "Fix the footer", "eng")["id"]
+    assert [(n["line"], n["href"], sorted(n["tasks"])) for n in _connect(c)] == [
+        (F.CHOOSE, F.CHOOSE_AT, sorted([first, second]))
+    ]
+    assert later(minutes=5) == {} and X.wakes(c, first) == []
+    # A bot's own repository is not one a task can be built in.
+    c.execute("INSERT INTO repositories(id,full_name,enabled,bot_repo) VALUES('b','acme/bot-builder',1,1)")
+    assert [n["line"] for n in _connect(c)] == [F.CHOOSE]
+    X.github_installed(c)  # a person puts acme/app in use
+    assert _connect(c) == [] and later(seconds=10) == {"woken": 2}

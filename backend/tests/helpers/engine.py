@@ -105,12 +105,14 @@ def github(condition, **fields):
     return {"kind": "item", "source": "github", "condition": condition, **fields}
 
 
-def github_installed(c):
-    """The company's GitHub App, connected and installed: a task with no PR linked is its bot's to open one, not
-    Paused on Connect GitHub (item_sources.github.installed)."""
+def github_installed(c, repository="acme/app"):
+    """The company's GitHub App, connected and installed, with `repository` In use (None: none is): a task with no PR
+    linked is its bot's to open one, not Paused on Connect GitHub or Choose a repository (item_sources.github
+    first_fix)."""
     from backend.github_app import SCHEMA
+    from backend.repositories_schema import SCHEMA as REPOSITORIES
 
-    for statement in SCHEMA.split(";"):
+    for statement in (SCHEMA + ";" + REPOSITORIES).split(";"):
         if statement.strip():
             c.execute(statement)
     c.execute(
@@ -118,6 +120,12 @@ def github_installed(c):
         "ciphertext,nonce,created_at,created_by) VALUES('app',1,'tico','client','acme',0,1,'',x'00',x'00',?,?)",
         (H.now(), ANA),
     )
+    if repository:
+        c.execute(
+            "INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) "
+            "ON CONFLICT(full_name) DO UPDATE SET enabled=1",
+            (H.new_id(), repository, H.now()),
+        )
 
 
 def _general(c, manager):

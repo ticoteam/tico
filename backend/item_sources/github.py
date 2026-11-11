@@ -1319,20 +1319,38 @@ def _now() -> Any:
 # (waiting_on).
 CONNECT = "Connect GitHub"
 CONNECT_AT = "#/tools/github"
+CHOOSE = "Choose a repository"
+CHOOSE_AT = "#/settings/general/set-repos"
 _INSTALLED = "SELECT installation_id FROM github_app WHERE id='app'"
+_IN_USE = "SELECT 1 FROM repositories WHERE enabled=1 AND bot_repo=0 LIMIT 1"
 
 
-def installed(conn: "sqlite3.Connection") -> bool:
-    """Whether the company's GitHub App is connected and installed, as Health's GitHub check counts it."""
+def _one(conn: "sqlite3.Connection", statement: str) -> bool:
     import sqlite3
 
     from .. import read_cache
 
     try:
-        found = cast("Any", read_cache).one(conn, _INSTALLED)
+        found = cast("Any", read_cache).one(conn, statement)
     except sqlite3.OperationalError:
         return False  # no table: GitHub was never set up here
     return bool(found and found[0])
+
+
+def installed(conn: "sqlite3.Connection") -> bool:
+    """Whether the company's GitHub App is connected and installed, as Health's GitHub check counts it."""
+    return _one(conn, _INSTALLED)
+
+
+def first_fix(conn: "sqlite3.Connection") -> tuple[str, str] | None:
+    """What a person does before any bot can work on a repository, as (line, where), or None when nothing is missing:
+    connect GitHub (no App installed), then choose a repository (none is In use, docs/repositories.md). Bots reach only
+    the repositories In use, so with none a task's bot has nowhere to open a PR."""
+    if not installed(conn):
+        return CONNECT, CONNECT_AT
+    if not _one(conn, _IN_USE):
+        return CHOOSE, CHOOSE_AT
+    return None
 
 
 def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[Row], Standing | None]:
@@ -1340,8 +1358,9 @@ def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[
     links: list[Row] = [
         {**link, "ref": pr_ref(str(link["repo"]), int(link["number"]))} for link in prs_of(conn, task["id"])
     ]
-    if not links and not installed(conn):
-        return [], Standing(requirement, NOT_MET, task.get("owner_id"), CONNECT, fix=CONNECT_AT)
+    fix = None if links else first_fix(conn)
+    if fix:
+        return [], Standing(requirement, NOT_MET, task.get("owner_id"), fix[0], fix=fix[1])
     if not links:
         return [], Standing(requirement, NOT_MET, task.get("owner_id"), "No PR linked")
     live = [link for link in links if not (link["metadata"] and link["metadata"]["state"] == "closed")]
