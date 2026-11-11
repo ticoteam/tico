@@ -6,9 +6,8 @@ html.redesign #nav-inboxes-section{display:none!important}
 /* Rows and folds as this browser last left them, marked on <html> by ui/theme.ts before the first paint and kept with
    the rows by ui/app/redesign.ts (rdNavPaint, rdLibSync) after, so the app's code never moves a row. */
 html:not(.nav-finance) #nav-finance,html:not(.nav-welcome) #nav-welcome{display:none}
-html.nav-lib-shut #rd-lib,html.nav-co-shut #rd-co,html:not(.nav-rules-open) #rd-rules{display:none}
-html.nav-lib-shut .rd-lib-toggle:not(.rd-rules-toggle):not(.rd-co-toggle) .section-chev,html.nav-co-shut .rd-co-toggle .section-chev{transform:none}
-html.nav-rules-open .rd-rules-toggle .section-chev{transform:var(--chev-open)}
+html.nav-lib-shut #rd-lib,html.nav-co-shut #rd-co{display:none}
+html.nav-lib-shut .rd-lib-toggle:not(.rd-co-toggle) .section-chev,html.nav-co-shut .rd-co-toggle .section-chev{transform:none}
 .rd-lib{display:flex;flex-direction:column}
 .rd-lib[hidden]{display:none}
 /* Company and Library fold: the Team section's chevron, on a small square beside the link (the sidebar's other row buttons). */
