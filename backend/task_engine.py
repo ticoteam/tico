@@ -524,6 +524,11 @@ def enter(
     first = next((s for s in work if s["id"] == start), None) if start else (work[0] if work else None)
     if not pipe or pipe.get("retired_at") or not first:
         _refuse(conn, by, "task_no_such_stage", "No such pipeline", task_id)
+    if not is_human(by):
+        # Entering further in skips the stages before it, so a bot never starts a task past a person's OK.
+        for skipped in work[: work.index(first)]:
+            if any(R.people_only(r) for r in R.on_stage(conn, skipped["id"])):
+                _refuse(conn, by, "task_needs_person", f"{skipped['name']} needs a person's OK first", task_id)
     above: Row | None = None
     if parent:
         above = task(conn, parent)

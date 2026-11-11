@@ -618,26 +618,120 @@ def test_a_people_only_page_that_names_nobody_waits_on_a_person_not_on_jev_alone
     assert E.task(c, row["id"])["stage_id"] == "product-in-development"
 
 
-def test_a_manager_bot_cannot_loosen_a_sign_off_but_may_change_the_rest(c):
+def _at(stages, sid):
+    return next(i for i, s in enumerate(stages) if s["id"] == sid)
+
+
+def _sign_off_req(stages, sid):
+    return next(r for r in stages[_at(stages, sid)]["requirements"] if r["who_oks"] == "people_only")
+
+
+def _move_req(stages, sid, to):
+    req = _sign_off_req(stages, sid)
+    stages[_at(stages, sid)]["requirements"].remove(req)
+    stages[_at(stages, to)]["requirements"].append(req)
+
+
+def _swap(stages, a, b):
+    i, j = _at(stages, a), _at(stages, b)
+    stages[i], stages[j] = stages[j], stages[i]
+
+
+def _fresh(stages):
+    """The same stages written anew: no ids, so every stage and requirement is replaced."""
+    for stage in stages:
+        stage["id"] = None
+        for req in stage["requirements"]:
+            req["id"] = None
+
+
+def _early_queue(stages, before):
+    """A new stage that queues the PRs to merge, just before `before`."""
+    stages.insert(
+        _at(stages, before),
+        {
+            "name": "Ship early",
+            "purpose": "",
+            "on_enter": {"act": "github.queue"},
+            "requirements": [{"kind": "owner_done"}],
+        },
+    )
+
+
+# Every way a save could loosen a sign-off, on each preset: the sign-off's stage, a stage before it, one after it.
+LOOSENING = {
+    "who_oks": lambda st, sid, before, after: _sign_off_req(st, sid).update(who_oks="people_with_exceptions"),
+    "given to a bot": lambda st, sid, before, after: _sign_off_req(st, sid).update(person_id="bot:pm"),
+    "removed": lambda st, sid, before, after: st[_at(st, sid)].update(
+        requirements=[r for r in st[_at(st, sid)]["requirements"] if r["who_oks"] != "people_only"]
+    ),
+    "made another kind": lambda st, sid, before, after: _sign_off_req(st, sid).update(kind="owner_done", settings={}),
+    "moved to a later stage": lambda st, sid, before, after: _move_req(st, sid, after),
+    "its stage deleted": lambda st, sid, before, after: st.pop(_at(st, sid)),
+    "a later stage put before it": lambda st, sid, before, after: _swap(st, sid, after),
+    "stages replaced wholesale": lambda st, sid, before, after: _fresh(st),
+    "an action added before it": lambda st, sid, before, after: st[_at(st, before)].update(
+        on_enter={"act": "github.queue"}
+    ),
+    "a new stage with an action before it": lambda st, sid, before, after: _early_queue(st, sid),
+}
+SIGN_OFFS = [
+    ("product", "product-spec", "product-ideas", "product-in-development", PPM),
+    ("engineering", "engineering-fixes-2", "engineering-review-2", "engineering-merge", EPM),
+]
+
+
+@pytest.mark.parametrize(("pipeline", "sid", "before", "after", "seat"), SIGN_OFFS)
+def test_no_bot_loosens_a_sign_off_in_settings_but_a_person_may_and_bots_change_the_rest(
+    c, pipeline, sid, before, after, seat
+):
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
-    manager = "bot:" + PPM
+    bots = ("bot:" + seat, X.bot(c, "assistant"), X.bot(c, "botops"))
+    c.execute("UPDATE pipelines SET owner_id=? WHERE id=?", ("bot:assistant", pipeline))  # one bot as its owner too
 
-    def edit(change, by=manager):
-        record = PS.read(c, "product")
-        change(next(s for s in record["stages"] if s["id"] == "product-spec"))
+    def edit(change, by):
+        record = PS.read(c, pipeline)
+        change(record["stages"], sid, before, after)
         return PS.save(c, by, record, seen_version=record["settings_version"])
 
-    for change in (
-        lambda s: s["requirements"][0].update(who_oks="people_with_exceptions"),
-        lambda s: s["requirements"][0].update(person_id="bot:pm"),
-        lambda s: s.update(requirements=[]),
-    ):
-        with pytest.raises(H.Refused, match="Only a person changes or removes the people-only OK on Spec"):
-            edit(change)
-    edit(lambda s: s["requirements"][0]["settings"].update(rubric="Goal, scope, done, and what it costs"))
-    assert edit(lambda s: s["requirements"][0].update(who_oks="people_with_exceptions"), by=ANA)
+    name = PS.read(c, pipeline)["stages"][_at(PS.read(c, pipeline)["stages"], sid)]["name"]
+    for what, change in LOOSENING.items():
+        for bot in bots:
+            if not PS.may_change(c, bot, E.pipeline(c, pipeline)):
+                continue  # BotOps: it may not change the pipeline at all
+            with pytest.raises(
+                H.Refused, match=f"This change loosens the person's OK on {name}. A person must make it."
+            ):
+                edit(change, bot)
+    assert not PS.may_change(c, "bot:botops", E.pipeline(c, pipeline))
+    for bot in bots[:2]:
+        with pytest.raises(H.Refused, match="loosens the person's OK"):
+            PS.retire(c, bot, pipeline, PS.read(c, pipeline)["settings_version"])
+    # What does not loosen it a bot may change: the rubric, its push-past switch, a later stage.
+    manager = bots[0]
+    edit(lambda st, *_: _sign_off_req(st, sid)["settings"].update(rubric="Enough for a person to OK it."), manager)
+    edit(lambda st, *_: _sign_off_req(st, sid).update(can_push_past=False), manager)
+    edit(lambda st, *_: st[_at(st, after)].update(expected_minutes=90), manager)
+    # A person may make any of them.
+    assert edit(LOOSENING["a later stage put before it"], ANA)
+    assert edit(LOOSENING["who_oks"], ANA)
+
+
+def test_no_bot_starts_a_task_past_a_sign_off_or_moves_it_into_another_pipeline(c):
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    task = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="product", lint=False)
+    E.reassign(c, task["id"], "bot:builder", ANA)
+    for bot in ("bot:builder", "bot:" + PPM):
+        with pytest.raises(H.Refused, match="task_no_such_stage"):
+            TC.task_move(c, bot, task["id"], "engineering-merge", "Ship it", E.task(c, task["id"])["version"])
+    for pipeline, start in (("product", "product-in-development"), ("engineering", "engineering-merge")):
+        with pytest.raises(H.Refused, match="needs a person's OK first"):
+            H.task_create(c, "bot:builder", "Skip it", "", "bot:builder", pipeline=pipeline, stage=start, lint=False)
+    assert H.task_create(c, ANA, "Hotfix", "", ANA, pipeline="engineering", stage="engineering-merge", lint=False)
 
 
 def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_them(c):

@@ -965,22 +965,41 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
     return loosened
 
 
+LOOSENS = "This change loosens the person's OK on {}. A person must make it."
+
+
 def _loosens_people_only(conn: "sqlite3.Connection", pipeline_id: str, parsed: Row) -> str | None:
-    """The stage whose people-only OK the record would remove, open to bots, or give to a bot. None when it keeps every
-    one. A bot that manages a pipeline may change the rest of it, never a person's sign-off."""
-    kept: dict[str, Row] = {req["id"]: req for stage in parsed["stages"] for req in stage["requirements"] if req["id"]}
-    for stage in task_engine.stages(conn, pipeline_id):
-        if stage["kind"] != "work":
-            continue
+    """The stage whose people-only OK the record would loosen, or None when it keeps every one. Loosening is: removing
+    the OK (or its stage), moving it to another stage, changing what it checks, opening it to bots or giving it to a
+    bot, or letting work run ahead of it: a stage that came after it now before it, or an on-enter action (filing a
+    linked task, queueing the PRs) added or changed on its stage or one before it. A bot that manages a pipeline may
+    change the rest of it, never a person's sign-off."""
+    old = [s for s in task_engine.stages(conn, pipeline_id) if s["kind"] == "work"]
+    new: list[Row] = parsed["stages"]
+    placed = {req["id"]: (stage, req) for stage in new for req in stage["requirements"] if req["id"]}
+    was_enter: dict[str, object] = {str(s["id"]): _loads(s.get("on_enter")) or {} for s in old}
+    for at, stage in enumerate(old):
         for req in R.on_stage(conn, stage["id"]):
             if not R.people_only(req):
                 continue
-            new = kept.get(req["id"])
-            if not new or new["who_oks"] != "people_only":
+            found = placed.get(req["id"])
+            if not found or found[0]["id"] != stage["id"]:
                 return str(stage["name"])
-            person: object = new.get("person_id")
+            now = found[1]
+            if now["who_oks"] != "people_only" or any(
+                now.get(key) != req.get(key) for key in ("kind", "source", "condition")
+            ):
+                return str(stage["name"])
+            person: object = now.get("person_id")
             if person != req.get("person_id") and not is_human(person):
                 return str(stage["name"])
+            later = {s["id"] for s in old[at + 1 :]}
+            upto = new[: next(i for i, s in enumerate(new) if s["id"] == stage["id"]) + 1]
+            for ahead in upto:
+                if ahead["id"] in later:
+                    return str(stage["name"])
+                if ahead["on_enter"] and ahead["on_enter"] != was_enter.get(ahead["id"] or "", {}):
+                    return str(stage["name"])
     return None
 
 
@@ -996,7 +1015,7 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
     if existing and is_bot(by):
         sign_off = _loosens_people_only(conn, str(existing["id"]), parsed)
         if sign_off:
-            _refuse(conn, by, "task_settings", f"Only a person changes or removes the people-only OK on {sign_off}.")
+            _refuse(conn, by, "task_settings", LOOSENS.format(sign_off))
     problems += _problems(conn, parsed)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
@@ -1027,6 +1046,10 @@ def retire(conn: "sqlite3.Connection", by: str, pipeline_id: str, seen_version: 
     if not row:
         _refuse(conn, by, "not-found", "No such pipeline")
     _may_change(conn, by, row, seen_version)
+    if not row.get("retired_at") and is_bot(by):
+        for stage in task_engine.stages(conn, pipeline_id):
+            if any(R.people_only(r) for r in R.on_stage(conn, stage["id"])):
+                _refuse(conn, by, "task_settings", LOOSENS.format(stage["name"]))
     if not row.get("retired_at"):
         held = int(
             conn.execute(

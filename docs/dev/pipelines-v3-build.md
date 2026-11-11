@@ -611,8 +611,13 @@ With many PRs the first unmet one, in link order, gives the line.
 - **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset. A person's
   request in Ideas takes the room first, by itself (G5, Nov 10).
 - **The two sign-offs are people only** (Spec page, Fixes 2 Review page). A bot that may change a pipeline (its
-  manager) is refused when its save would remove a people-only OK, open it to bots, or name a bot on it
-  (`pipeline_settings._loosens_people_only`). An untouched preset made before is tightened by `_fill`.
+  manager or owner; BotOps may not) is refused, "This change loosens the person's OK on Spec. A person must make it.",
+  when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to
+  bots, name a bot on it, put a later stage before it, add or change an on-enter action at or before it, or replace
+  the stages wholesale (`pipeline_settings._loosens_people_only`); and when it retires a pipeline that has one. A
+  forward move counts every jumped stage as not met, so no bot jumps one; a task never moves into another pipeline;
+  and a bot never files a task straight into a stage past one (`task_engine.enter`'s `start`). The rubric, the push-
+  past switch and the stages after it stay a bot's to change. An untouched preset made before is tightened by `_fill`.
 - **Closing a Product task** closes the Engineering tasks it filed, except one whose PR merged: its work is in the code,
   so it stays open to reach a release or be closed by its owner (`stage_effects.merged_work`, scenario 24). Undoing a
   stage's filing skips it the same way.
