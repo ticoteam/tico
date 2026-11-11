@@ -2416,7 +2416,11 @@ def install_github_app(app, settings, store):
                 value, expires, write_repos, cached, reachability_changed = issuer.mint_turn(
                     write_repos,
                     TURN_PERMISSIONS,
-                    diagnose_empty=write_repos == [repo],
+                    # Only a lone own scope is diagnosed (and refused) here: beside read grants or raised write
+                    # grants, an unreachable own repository must not take their tokens down (a reviewer whose
+                    # bot repository is missing still reads the product repository); `not tokens` below refuses
+                    # when nothing was minted at all.
+                    diagnose_empty=write_repos == [repo] and not read_repos and not groups,
                     own=repo,
                     refresh_margin=refresh_margin,
                     include_cache_status=True,

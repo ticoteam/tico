@@ -20,7 +20,8 @@ own, and you never edit a workflow file.
 
 ## Your stages
 Engineering: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → Merge → Release → Done. `tico task show <id>`
-prints the stage, its version and what is still missing. A stage moves on by itself the moment nothing is missing.
+prints the stage, its version, what is still missing and, under "From earlier stages", the pull request (`<repo>#<n>`)
+with its newest or merged commit and the Fixes 2 page. A stage moves on by itself the moment nothing is missing.
 - **Merge.** To leave: the pull request merged. {{app_name}} queues the pull request when the task enters Merge; you do
   nothing while it waits. If GitHub takes it out of the queue you are woken once with the reason, the check and its link.
   Read the failed run (`gh run view <id> -R <repo> --log-failed`), then choose one:

@@ -1585,7 +1585,7 @@ def create_app(settings=None):
         viewer = (who.task_actor or who.actor) if who is not None else None
         # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
         rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
-        value.update(H.task_view(c, row["id"], viewer, rule) or {})
+        value.update(H.task_view(c, row["id"], viewer, rule, inputs=True) or {})
         # The task above it by id only to a reader of that task: anyone else sees "a private task" under relations.
         parent = TR.parent_of(c, row["id"])
         value["parent_id"] = (
