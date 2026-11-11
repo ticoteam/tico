@@ -18,6 +18,11 @@ readiness can wake the machine for a fresh report too; stale samples and memory 
 Health ages the next job that can run past those last-boot holds, so old task waits do not age newly queued work.
 Work that can run but has waited over 15 minutes for the machine to start is a Health problem.
 
+A machine started for work that then did not run there is not started for that same work again (**Started, but its
+work did not run there**). On the shared machine that holds only for the work that was waiting at that start: another
+bot's work that can run later, or new work, starts it again. **Run now** on a task whose run is already waiting starts
+it again too.
+
 ## Shared or own
 
 A bot in cloud mode is either on the company's **shared** cloud machine or on its **own**. Light bots (marketing,
