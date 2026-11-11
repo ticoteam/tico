@@ -1,0 +1,16 @@
+{
+ "answer": {
+  "started": true
+ },
+ "endpoint": "started",
+ "request": {
+  "load_snapshot": {
+   "at": 1767225600.0,
+   "cpu_pct": 12.5,
+   "mem_pct": 40.0,
+   "running_turns": 1
+  },
+  "thread_id": "thread-1"
+ },
+ "status": 200
+}
