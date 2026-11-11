@@ -3253,8 +3253,8 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Checks how the team shows up in search and in AI answers each week, then hands over the three page fixes worth doing first, drafted to apply in minutes. It never edits a live page itself.",
-   "when": "A team whose buyers search or ask an AI assistant before they talk to anyone, and that has a website with content on it.",
+   "summary": "Owns how the team is found in search and in AI answers. Files SEO ideas, builds each bet until a person OKs it to go live, measures it, and watches what worked so it keeps working. It never changes a live page itself unless a granted Tool allows it.",
+   "when": "A team with a public website whose buyers search or ask an AI assistant before they talk to anyone.",
    "tags": [
     "seo",
     "ai-search",
@@ -3275,7 +3275,7 @@
     "sells_to_businesses",
     "sells_software"
    ],
-   "first_routine": "Weekly search and AI visibility report · Mondays at 08:00 team time",
+   "first_routine": "Watch SEO · Mondays at 07:00 team time",
    "tools": [
     "docs",
     "github",

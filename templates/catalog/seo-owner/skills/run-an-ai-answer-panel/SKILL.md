@@ -4,7 +4,7 @@ description: Ask the tracked buyer questions in the AI assistants the owner uses
 ---
 # Run an AI answer panel
 
-When to use: each weekly visibility check, or when a person asks whether an assistant mentions the team.
+When to use: each Watch run, or when a person asks whether an assistant mentions the team.
 
 Steps:
 1. Open `knowledge/prompts.md`. Use its questions word for word, in the order given. Do not add, remove or reword a

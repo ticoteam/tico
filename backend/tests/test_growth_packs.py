@@ -1,0 +1,100 @@
+"""The growth channel packs (docs/pipelines-v3.md "Growth and Success"): each channel Owner works its tasks through Growth
+Experiments and Growth Monitoring with the same stage playbooks, runs exactly two routines (Watch and Find ideas) on its
+channel's cadence, and tags its tasks with the channel key the setup chart uses.
+
+The stage playbooks are one text shipped in every pack, so a fix to one is a fix to all: a copy that drifts would teach
+one Owner a different way out of a stage. A routine or requirement renamed in one place and not the other would leave a
+bot running a playbook that names a stage line nobody checks."""
+
+import re
+from pathlib import Path
+
+import pytest
+import yaml
+
+from backend import pipeline_presets_more as P
+from backend.company_file import chart_formula as F
+from clients import catalog
+from clients.routines import validate_schedules
+
+CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
+
+# Each pack's channel key (backend/company_file/chart_formula.json) and its routines' crons: Watch on the channel's
+# cadence (plan §6), Find ideas weekly.
+PACKS = {
+    "seo-owner": ("seo", {"watch": "0 7 * * 1", "find-ideas": "0 8 * * 2"}),
+}
+# One text in every pack: the stage playbooks and AGENT.md's "Your pipelines" section.
+SHARED = (
+    "playbooks/watch.md",
+    "playbooks/find-ideas.md",
+    "playbooks/build-a-bet.md",
+    "playbooks/run-and-measure.md",
+    "playbooks/fix-a-slip.md",
+)
+
+
+def manifest(template):
+    return yaml.safe_load((CATALOG / template / "bot.yaml").read_text())
+
+
+def section(template, heading):
+    text = (CATALOG / template / "AGENT.md").read_text()
+    found = re.search(rf"^## {re.escape(heading)}\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    assert found, f"{template}: no ## {heading}"
+    return found.group(1)
+
+
+@pytest.mark.parametrize("template", sorted(PACKS))
+def test_a_pack_runs_exactly_watch_and_find_ideas_on_its_cadence_off_until_setup(template):
+    folder = CATALOG / template
+    routines = validate_schedules(manifest(template)["routines"], lambda rel: (folder / rel).read_text())
+    assert {r["id"]: r["cron"] for r in routines} == PACKS[template][1]
+    assert [r["id"] for r in routines][0] == "watch", "setup arms the first routine: Watch"
+    assert all(r["enabled"] is False for r in routines)
+    assert {r["template"] for r in routines} == {"playbooks/watch.md", "playbooks/find-ideas.md"}
+
+
+@pytest.mark.parametrize("template", sorted(PACKS))
+def test_a_pack_tags_its_tasks_with_the_channel_key_the_setup_chart_uses(template):
+    key = PACKS[template][0]
+    assert F.CHANNELS[key]["template"] == template
+    playbook = (CATALOG / template / "knowledge" / "channel-playbook.md").read_text()
+    assert f"`channel:{key}`" in playbook
+    assert f"`channel:{key}`" in section(template, "Owns")
+
+
+def test_the_stage_playbooks_are_one_text_in_every_pack():
+    for path in SHARED:
+        texts = {template: (CATALOG / template / path).read_text() for template in PACKS}
+        first = next(iter(texts.values()))
+        assert all(text == first for text in texts.values()), (path, sorted(t for t, x in texts.items() if x != first))
+    pipelines = {template: section(template, "Your pipelines") for template in PACKS}
+    assert len(set(pipelines.values())) == 1, "AGENT.md's Your pipelines differs between packs"
+
+
+def test_the_playbooks_name_the_requirements_and_stages_the_presets_ship():
+    """A bot attaches its page with `--req "<line>"` and moves by stage name: both must be what the preset has."""
+    lines = {
+        r["line"]
+        for pid in ("growth-experiments", "growth-monitoring")
+        for s in P.PRESETS[pid]["stages"]
+        for r in s["requirements"]
+        if r.get("line")
+    }
+    stages = {s["name"] for pid in ("growth-experiments", "growth-monitoring") for s in P.PRESETS[pid]["stages"]}
+    text = "\n".join((CATALOG / next(iter(PACKS)) / path).read_text() for path in SHARED)
+    named = set(re.findall(r'--req "([^"]+)"', text))
+    assert named == lines == {"Go-live page", "Results page"}
+    moved = set(re.findall(r"tico task move <[^>]+> (\w+)", text))
+    assert moved and moved <= stages, moved - stages
+    assert set(re.findall(r"--pipeline (growth-[a-z]+)", text)) == {"growth-experiments", "growth-monitoring"}
+
+
+@pytest.mark.parametrize("template", sorted(PACKS))
+def test_a_pack_materializes_and_passes_the_preflight_checks(tmp_path, template):
+    card = catalog.card(template)
+    names = {"company_name": "Acme", "app_name": "Tico", "assistant_name": "Tico"}
+    repo = catalog.materialize(template, template, tmp_path, names, {}, display_name=card["name"])
+    assert catalog.check(repo, template) == []
+    assert "{{" not in (repo / "knowledge" / "channel-playbook.md").read_text()

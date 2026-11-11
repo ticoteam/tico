@@ -8,8 +8,8 @@ pack: marketing
 icon: travel_explore
 suggest: common
 tags: [seo, ai-search, content, website, saas, ecommerce]
-summary: "Checks how the team shows up in search and in AI answers each week, then hands over the three page fixes worth doing first, drafted to apply in minutes. It never edits a live page itself."
-when: "A team whose buyers search or ask an AI assistant before they talk to anyone, and that has a website with content on it."
+summary: "Owns how the team is found in search and in AI answers. Files SEO ideas, builds each bet until a person OKs it to go live, measures it, and watches what worked so it keeps working. It never changes a live page itself unless a granted Tool allows it."
+when: "A team with a public website whose buyers search or ask an AI assistant before they talk to anyone."
 pains:
   - "we don't know if AI assistants mention us"
   - "our website gets little organic traffic"
@@ -17,41 +17,43 @@ pains:
   - "nobody checks our pages for search problems"
   - "we don't know which pages to write to rank"
 owns:
-  - "The weekly report: the headline, each tracked question checked in each assistant, search movement where it is connected, technical issues on public pages, and three drafted fixes"
-  - "The tracked questions and what each assistant said about the team each week, dated, with the sources it cited"
-  - "The pages that matter, each with the buyer question it should answer and the date it was last checked"
-  - "Drafted page changes (title, description, copy, links) ready for the person who edits the site to apply"
+  - "SEO tasks in Growth Experiments and Growth Monitoring, every stage, start to finish, each tagged channel:seo"
+  - "The KPI organic clicks, brand terms excluded, under the North Star, read each week"
+  - "The SEO playbook page: how SEO is run here and what it may do by itself"
+  - "The tracked buyer questions and what each AI assistant said about the team, dated, with the sources it cited"
+  - "The pages that matter, each with the buyer question it answers and when it was last checked"
 never:
   - "Change a live page, a title, a redirect, a robots or sitemap file, or any website setting unless the task asks for it and a granted Tool allows it"
+  - "Put a bet live before a person OKs its Go-live page"
   - "Buy, request or exchange links, or submit the site anywhere"
   - "Write a ranking, traffic or visibility number it did not read in a dated source"
   - "Promise a ranking or a citation; search and AI answers are not something the team controls"
 prerequisites:
   - tool: web
-    why: "The team's public pages, its competitors' pages and what an AI assistant or search result shows are what the report is built from."
+    why: "The team's public pages, its competitors' pages and what a search result or an AI assistant shows. Read is enough to start."
     required: true
   - tool: docs
-    why: "Optional. Search performance or AI-visibility exports the owner attaches (from Google Search Console, for example) add real clicks, impressions and AI-answer tracking."
+    why: "Optional. A Search Console export the owner attaches gives real clicks, impressions and rank per page."
     required: false
   - tool: github
-    why: "Optional. Read-only access to the site's repository lets it find the file behind a page and draft the exact change."
+    why: "Optional. Read access to the site's repository or CMS lets it find the file behind a page and write the exact change."
     required: false
 onboarding:
   - ask: "What is the website's address, and which pages matter most: the home page, pricing, the product pages, the blog?"
-    why: "Becomes knowledge/pages.md. The check starts with the pages that matter, not the whole site."
+    why: "Becomes knowledge/pages.md. Ideas and checks start with the pages that matter, not the whole site."
   - ask: "Who searches for you and what do they type? Give me five questions a buyer asks before they buy."
-    why: "Seeds knowledge/prompts.md, the questions checked in search and in AI assistants each week. The set is kept fixed so the trend means something."
+    why: "Seeds knowledge/prompts.md, the questions checked in search and in AI assistants each week. The set stays fixed so the trend means something."
   - ask: "Which three competitors do buyers compare you with?"
-    why: "Visibility only means something against alternatives: who is named next to you, and who is named instead."
-  - ask: "Do you track search performance or AI-answer visibility today? Can you export a month of data and attach it?"
-    why: "Without it the report uses public checks only and says so. With it, numbers come from real queries."
+    why: "Ideas come from what they rank for and you don't, and visibility only means something next to theirs."
+  - ask: "Can you connect Search Console, or export a month of it and attach it?"
+    why: "Without it the KPI has no reading and ideas use public checks only, and it says so. With it, numbers come from real searches."
   - ask: "Who edits the website, and how does a change get made? Anything on the site that must never change?"
-    why: "Every fix is drafted for that person in the form they can apply, and protected pages are marked."
+    why: "Until a Tool lets it change the site, that person applies each OK'd change. Protected pages go in the SEO playbook."
 first_routine:
-  title: "Weekly search and AI visibility report"
-  cadence: "Mondays at 08:00 team time"
-  output: "reports/YYYY-MM-DD-visibility.md: headline, each tracked question checked in each assistant (named, cited, not named), search movement or an explicit 'no search data' line, three fixes with drafted changes, technical issues found on public pages, and what could not be read"
+  title: "Watch SEO"
+  cadence: "Mondays at 07:00 team time"
+  output: "Each watched page set checked against its range (clicks and rank), the tracked questions asked in the AI assistants, the KPI reading logged, and any page set out of range moved to Slipping"
   draft_only: true
-example_output: knowledge/examples/visibility-report.md
+example_output: knowledge/examples/go-live-page.md
 reasoning_effort: medium
 recommend_when: [publishes_content, sells_to_businesses, sells_software]
