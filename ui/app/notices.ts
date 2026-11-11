@@ -183,8 +183,8 @@ function renderFeedbackAsk() {
     catch (error) { toast(errorMessage(error, '') || 'Not sent. Try again.', true); buttons.forEach(b => { b.disabled = false; }); }
   };
 }
-// "Finish setup" tops the nav while the owner has not finished setup, and disappears the
-// moment the server stops asking for one. Everyone else never sees it. Setup is a modal over the whole app
+// "Finish setup" tops the nav while the owner has not finished setup, and after the team exists while a row on setup's
+// last step is still open (getting-started.ts gsSetupOpen); it opens that step again. Everyone else never sees it. Setup is a modal over the whole app
 // (ui/app/welcome.ts); while it is open the phone's tab bar and Ask's button stay away (html.in-setup). Until the
 // config is read, both stay as ui/theme.ts marked them from this browser's last answer; the in-setup mark waits for
 // the first route() too, since a new install's boot sends it to setup after its config is read. route() marks it
@@ -199,7 +199,7 @@ function setupMark() {
 }
 function renderOnboardingNav() {
   if (!CONFIG_READ) return;
-  rdNavShow('welcome', !!S.config.onboarding_needed);
+  rdNavShow('welcome', !!S.config.onboarding_needed || gsSetupOpen());
   setupMark();
   renderUsageNotice();
 }

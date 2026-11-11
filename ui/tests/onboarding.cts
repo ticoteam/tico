@@ -157,8 +157,10 @@ const DEFAULT_CHART = [
     {id: 'p2', title: 'Alpha Owner', live: true, reports_to: 'p1'}]},
   {team: 'Engineering', on: true, roles: [{id: 'e1', title: 'Beta Lead', live: true, reports_to: null},
     {id: 'e2', title: 'Beta Maker', live: true, reports_to: 'e1'}, {id: 'e3', title: 'Beta Checker', live: true, reports_to: 'e2'}]},
-  {team: 'Growth', on: true, roles: [{id: 'g1', title: 'Gamma Lead', live: true, reports_to: null},
-    {id: 'g2', title: 'Gamma Analyst', live: false, reports_to: 'g1'}]},
+  // Growth's head is an open seat and an open seat comes before a live report in the chart: the head stays first, then
+  // the live roles, then the open seats.
+  {team: 'Growth', on: true, roles: [{id: 'g1', title: 'Gamma Lead', live: false, reports_to: null},
+    {id: 'g2', title: 'Gamma Analyst', live: false, reports_to: 'g1'}, {id: 'g3', title: 'Gamma Writer', live: true, reports_to: 'g1'}]},
   {team: 'General', on: true, locked: true, roles: [{id: 'b1', title: 'Delta Lead', live: true, reports_to: null},
     {id: 'b2', title: 'Delta Helper', live: true, reports_to: 'b1'}]},
 ];
@@ -238,7 +240,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
       machine: {runners: [], enrolled: false}, needed: true, default_chart: DEFAULT_CHART.map(team => ({...team})),
     };
     const drafts: unknown[] = [], previews: unknown[] = [], imports: unknown[] = [];
-    let subscription = {id: 'subscription', done: false, skipped: false};
+    let subscription = {id: 'subscription', done: false, skipped: false}, dismissed = false;
     let machine: Machine = {runners: [], enrolled: false};
     let enrollCode = 'enroll-code';
     const me = {id: 'ana', name: 'Ana Rivera', role: 'owner', cloud: true,
@@ -297,7 +299,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
       // What are you building starts the strategy draft (backend/strategy_setup.py); nothing has run before.
       if (p === '/api/v2/strategy/draft-from/latest') return json(null);
       if (p === '/api/v2/strategy/draft-from') { drafts.push(request.postDataJSON()); return json({id: 'run-1', state: 'running', ...request.postDataJSON()}); }
-      if (p === '/api/v2/setup/getting-started') return json({items: [{id: 'first_bot', done: false}, subscription], can_build: true, tour_seen: false});
+      if (p === '/api/v2/setup/getting-started') return json({items: [{id: 'first_bot', done: false}, subscription], can_build: true, tour_seen: false, dismissed});
       // A company file: read, then applied with the fingerprint it was read with.
       if (p === '/api/v2/setup/company/preview') {
         previews.push(request.postDataJSON());
@@ -322,7 +324,12 @@ function recruitFor({department, briefing, share}: {department: string; briefing
                   bots: BOTS_AFTER.map(bot => ({...bot})), machine};
         return json({...record, home: 'human:ana'});
       }
-      if (p === '/api/v2/setup/getting-started/state') { tourPosts.push(request.postDataJSON()); return json({tour: true, checklist: false, cards: [], skipped: []}); }
+      if (p === '/api/v2/setup/getting-started/state') {
+        const body = request.postDataJSON();
+        tourPosts.push(body);
+        dismissed ||= !!body.checklist;
+        return json({tour: true, checklist: dismissed, cards: [], skipped: []});
+      }
       if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires_at: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
       if (p === '/api/v2/bots') return json(v2bots());
@@ -436,7 +443,8 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     // A team of built-ins only is always on.
     assert.equal(await page.locator('[data-onb-team=General]').isDisabled(), true);
     assert.equal(await page.locator('[data-onb-team=General]').isChecked(), true);
-    assert.equal(await page.locator('[data-onb-team-row=Growth] .onb-team-open').count(), 1, 'a seat to recruit is marked');
+    assert.deepEqual(await page.locator('[data-onb-team-row=Growth] .onb-team-roles > span').allTextContents(), ['Gamma Lead', 'Gamma Writer', 'Gamma Analyst']);
+    assert.equal(await page.locator('[data-onb-team-row=Growth] .onb-team-open').count(), 2, 'a seat to recruit is marked');
     assert.equal(await page.locator('#onb-import-failed').count(), 0);
     assert.deepEqual(await page.locator('#onb button.primary').evaluateAll(els => els.map(el => el.id)), ['onb-next']);
     await shot(page, 'desktop-1-team');
@@ -898,8 +906,15 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     // The owner starts caught up: no What's new count left over from before Create.
     assert.equal(await page.locator('#changelog-notice').isVisible(), false, "no What's new count after Create");
     assert.equal(await page.locator('#changelog-badge').isHidden(), true, 'nor its badge in the account menu');
-    // Finishing takes the setup entry out of the sidebar and puts the names on the app; the chart marks the parked bots.
+    // A row of the last step is still open (the subscription): Finish setup stays, opens that step again, and can be
+    // hidden for good from there. Finishing puts the names on the app; the chart marks the parked bots.
     await page.evaluate(() => refresh(true));
+    await page.locator('#nav-welcome:not([hidden])').waitFor();
+    await page.locator('#nav-welcome').click();
+    await page.locator('dialog#onb[open] #onb-run-lines').waitFor();
+    await page.locator('#onb-hide').click();
+    await page.locator('dialog#onb').waitFor({state: 'detached'});
+    assert.deepEqual(tourPosts.at(-1), {checklist: true});
     assert.equal(await page.locator('#nav-welcome').evaluate((el: HTMLElement) => el.hidden), true);
     await page.locator('#side .side-scroll > [data-nav="tasks"]').waitFor();
     assert.equal(await page.title(), 'Initech Hub');

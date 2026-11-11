@@ -57,6 +57,8 @@ interface OnbState {
   /** Getting started's `subscription` item (backend/getting_started.py), once read; null when the server has none. */
   subscription: GsItem | null;
   dialog: HTMLDialogElement | null;
+  /** Opened on a team that already exists (Finish setup in the sidebar): the last step, which may be hidden for good. */
+  reopened?: boolean;
   code?: string;
   otherOpen?: boolean;
   computerOpen?: boolean;
@@ -129,6 +131,9 @@ function onbOpen(state: OnbState) {
     if (!state.record.completed) { dialog.showModal(); return; }
     onbStop();
     location.hash = TASKS;
+    // Finish setup stays while a row of the last step is open; hidden for good, it goes now (a fresh read could land
+    // before the dismissal is saved).
+    if (GS?.dismissed) renderOnboardingNav(); else void gsRefresh();
   });
   dialog.querySelector<HTMLButtonElement>('#onb-close')!.onclick = () => dialog.close();
   dialog.showModal();
@@ -150,7 +155,7 @@ async function onbLoad(state: OnbState) {
     onbAdopt(state, record);
     // A returning draft that picked roles by hand opens on its chart.
     if (Object.keys(state.record.selected).some(slug => !catalogCard(state.catalog, slug)?.required)) state.mode = 'custom';
-    if (state.record.completed) state.step = ONB_STEPS.indexOf('run');
+    if (state.record.completed) { state.step = ONB_STEPS.indexOf('run'); state.reopened = true; }
     onbRender(state);
     if (state.record.completed) onbRunStarted(state);
   } catch (error) {
@@ -206,8 +211,8 @@ function onbRender(state: OnbState) {
   onbWire(state, key);
 }
 // A step's one row of buttons: Back when there is a step to go back to, the one primary, and the status between.
-function onbActions(state: OnbState, label: string, back = state.step > 0 && !state.record.completed): string {
-  return `<div class="onb-actions">${back ? '<button class="ghost" type="button" id="onb-back">Back</button>' : ''}
+function onbActions(state: OnbState, label: string, back = state.step > 0 && !state.record.completed, extra = ''): string {
+  return `<div class="onb-actions">${back ? '<button class="ghost" type="button" id="onb-back">Back</button>' : ''}${extra}
     <span class="spacer"></span><span class="muted" id="onb-status" role="status"></span><button class="primary" type="button" id="onb-next">${esc(label)}</button></div>`;
 }
 function onbStepHTML(state: OnbState, key: string): string {
@@ -257,7 +262,10 @@ function onbTeamRolesHTML(team: OnbTeam): string {
   const under = (id: string | null) => team.roles.filter(role => (role.reports_to && ids.has(role.reports_to) ? role.reports_to : null) === id);
   const tree = (id: string | null): OnbTeam['roles'] => under(id).flatMap(role => [role, ...(role.id ? tree(role.id) : [])]);
   const title = (role: OnbTeam['roles'][number]) => `<span${role.live ? '' : ' class="onb-team-open" title="Recruiting"'}>${esc(role.title)}</span>`;
-  return `<span class="onb-team-roles">${tree(null).map(title).join(' · ')}</span>`;
+  // The head (the first role at the top, live or not) stays first; after it the team that works today, then the open
+  // seats, each in chart order.
+  const [head, ...rest] = tree(null);
+  return `<span class="onb-team-roles">${[...(head ? [head] : []), ...rest.filter(role => role.live), ...rest.filter(role => !role.live)].map(title).join(' · ')}</span>`;
 }
 const onbImportPending = (fields: string[] | null | undefined): string => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
   first_jobs: 'first jobs', model_choices: 'model choices', routines: 'automations',
@@ -319,7 +327,7 @@ function onbRunHTML(state: OnbState): string {
       <a href="#/settings" data-gs-tab="devices">Add a Claude or Codex subscription</a>
       <small class="muted">Recommended. Use your own subscription for your own bots, within the provider's terms.</small></span></div>`;
   return `<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${subscription}</div>
-    ${onbActions(state, 'Done', false)}`;
+    ${onbActions(state, 'Done', false, state.reopened ? '<button class="ghost" type="button" id="onb-hide">Don\'t remind me</button>' : '')}`;
 }
 const ONB_CARET = '<span class="nav-icon onb-caret" aria-hidden="true">expand_more</span>';
 function onbComputerHTML(state: OnbState): string {
@@ -460,6 +468,9 @@ function onbWire(state: OnbState, key: string) {
     if (file) file.onchange = () => void onbReadCompanyFile(state, file.files?.[0]);
   }
   if (key === 'run') onbWireComputer(state);
+  const hide = $('#onb-hide');
+  // For good: Finish setup leaves the sidebar now and stays away (Getting started's dismissal, per person).
+  if (hide) hide.onclick = () => { if (GS) GS = {...GS, dismissed: true}; void gsState({checklist: true}); state.dialog?.close(); };
 }
 function onbWireComputer(state: OnbState) {
   const commands = onbCommands(state);

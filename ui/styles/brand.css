@@ -25,7 +25,7 @@
 .onb-team:has(input:not(:checked)) .onb-team-text{opacity:.5}
 .onb-team-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
 .onb-team-text strong{font-size:var(--t-base)}
-.onb-team-roles{color:var(--muted);font-size:var(--t-sm);overflow:hidden;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
+.onb-team-roles{display:block;color:var(--muted);font-size:var(--t-sm)}
 .onb-team-open{opacity:.6}
 .onb-team-n{flex:none;color:var(--muted);font-size:var(--t-sm);min-width:2ch;text-align:right}
 .onb-team-more{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;margin:var(--s3) 0 0;font-size:var(--t-sm);color:var(--muted)}
