@@ -476,6 +476,84 @@ def test_one_message_per_removal_merge_and_close_on_a_queueing_pipeline(company)
         assert len(added) <= 1 and not any("closed without merging" in m for m in added), added
 
 
+def owner_wakes(c, task_id, who):
+    """(wake key, body) of every wake the engine wrote for the task to `who`, oldest first."""
+    return [
+        (str(key), str(body or ""))
+        for key, body in c.execute(
+            "SELECT wake_key, body FROM messages WHERE wake_key LIKE ? AND recipient_id=? ORDER BY created_at, rowid",
+            (task_id + ":%", who),
+        ).fetchall()
+    ]
+
+
+@pytest.mark.parametrize("where", ["Build", "Merge"])
+def test_a_pr_closed_by_hand_is_the_stage_owner_s_turn_and_wakes_them_once(company, where):
+    """Spec "The ladder": a GitHub wait that turns Not met is the owner's turn; the never-stuck check wakes them once
+    with what is missing (after its first gap, as for a failed check), and not again before its next try."""
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        if where == "Merge":
+            task_id, owner, kind = in_merge(c, gh, 1), RM, "pr_merged"
+        else:
+            engineering(c)
+            task_id, owner, kind = new(c, 1), B, "pr_open"
+            gh.set_checks(REPO, gh.open_pr(REPO, 1), "pending")
+            seen(c, gh)
+    MQ.run(company, gh)
+    now = H.now()
+    with company.transaction() as c:
+        X.ran(c, task_id, owner)  # the Builder's entry wake had its run: it opened the PR, and checks are running
+        NS.check(c, now)
+        waiting = "pr_merged" if where == "Merge" else "checks_pass"
+        assert stage(c, task_id) == where and line(c, task_id, waiting)[:2] == (R.WAITING, R.GITHUB)
+        before = owner_wakes(c, task_id, owner)
+    gh.close(REPO, 1)
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, kind) == (R.NOT_MET, owner, f"{REF} was closed without merging")
+        for seconds in (10, 20, 30, 150, 160, 600):  # the check's passes, every 10 s, then up to 10 minutes on
+            NS.check(c, H.shift(now, seconds=seconds))
+        added = [w for w in owner_wakes(c, task_id, owner) if w not in before]
+        assert len(added) == 1, added
+        assert f"{REF} was closed without merging" in added[0][1]
+        from backend.repositories import metadata
+
+        assert not metadata(c, "github-task-wake:" + task_id).get("items")  # and nothing from the older link pass
+
+
+def test_a_merge_moves_the_task_to_release_where_github_s_wait_wakes_nobody(company):
+    """Spec "Entering a stage" wakes the owner with what is missing, and "It only wakes whoever has the turn": a bot is
+    never woken about a task that waits on GitHub. Release waits on GitHub for a release, so its owner hears nothing
+    until it is their turn."""
+    gh = FakeGitHub()
+    gh.history[REPO] = [gh.sha()]
+    gh.publish(REPO, "v0.9.0")  # the repo publishes releases; none holds the merge yet
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    now = H.now()
+    with company.transaction() as c:
+        NS.check(c, now)
+        before = owner_wakes(c, task_id, RM)
+    gh.merge(REPO, 1)
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release"
+        assert line(c, task_id, "in_release")[:2] == (R.WAITING, R.GITHUB)
+        for seconds in (10, 150, 600):
+            NS.check(c, H.shift(now, seconds=seconds))
+        assert stage(c, task_id) == "Release"
+        assert owner_wakes(c, task_id, RM) == before
+        from backend.repositories import metadata
+
+        assert not metadata(c, "github-task-wake:" + task_id).get("items")
+    gh.publish(REPO, "v1.0.0")
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Done" and owner_wakes(c, task_id, RM) == before
+
+
 def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
     gh = FakeGitHub()
     with company.transaction() as c:
