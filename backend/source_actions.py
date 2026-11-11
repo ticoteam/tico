@@ -189,6 +189,8 @@ def undo(conn: "sqlite3.Connection", visit_id: str, source: str, action: str) ->
 
 
 def _owe_undo(conn: "sqlite3.Connection", effect: Row) -> Row | None:
+    """The `undo` of one `act`, pinned to the same item version, so the source knows what it takes back (GitHub fails
+    its `tico/merge-ok` on that head)."""
     return owe(
         conn,
         str(effect["visit_id"]),
@@ -197,6 +199,7 @@ def _owe_undo(conn: "sqlite3.Connection", effect: Row) -> Row | None:
         str(effect["action"]),
         str(effect["item_type"]),
         str(effect["item_key"]),
+        effect.get("pinned"),
     )
 
 

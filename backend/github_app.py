@@ -88,10 +88,14 @@ WORKFLOW_EDITS_REFUSED = (
     "GitHub refused a token with Workflows: write although the installation reports it, so these "
     "repositories get the ordinary write token; it is asked again after a minute."
 )
-# The pipeline engine's check run on a pull request's commit (backend/pipeline_github_checks.py) needs Checks: write.
-# It is not in the manifest and no run token carries it: the server mints its own token for it, and only after the
-# installation reports Checks as read and write. Until an Owner accepts that, the check is withheld and nothing is posted.
+# The Merge stage's `tico/merge-ok` check run on a pull request's head (backend/github.py `AppGitHub.post_check`) needs
+# Checks: write. The manifest asks for it, but no turn token carries it (TURN_NEVER_WRITE): the server mints its own
+# token for it, and only after the installation reports Checks as read and write. An App made before it asks the Owner
+# to accept the change; until then nothing is posted.
 CHECKS_PERMISSIONS = {"checks": "write", "metadata": "read"}
+# What no bot's turn token ever writes, whatever a repository opts in to (RAISES): a bot that could post a check or a
+# commit status could pass `tico/merge-ok` itself and merge around the Merge stage.
+TURN_NEVER_WRITE = ("checks", "statuses", "administration")
 CHECKS_WITHHELD = (
     "Posting Tico's approval check on pull requests needs the GitHub App's Checks permission set to Read and write, "
     "accepted on the installation; until then no check is posted."
@@ -935,6 +939,8 @@ class GitHubApp:
         with self.lock:
             narrowed = self.live.get("turn-reads")
         reads = narrowed[1] if narrowed and narrowed[0] > time.time() else TURN_READS
+        if any(name in TURN_NEVER_WRITE and level != "read" for name, level in {**reads, **base}.items()):
+            raise Problem("github_turn_permissions", "A bot's token never writes checks, statuses or settings", 403)
         while True:
             try:
                 return self.mint_reachable(repos, {**reads, **base}, **kw)
@@ -1012,6 +1018,9 @@ class GitHubApp:
         return (*result, False) if include_cache_status else result
 
     def _mint(self, key, repos, permissions, diagnose):
+        if not permissions:
+            # GitHub gives a token that names no permission every one the App has, Checks: write among them.
+            raise Problem("github_app_permissions", "Name the permissions a GitHub token needs", 500)
         installation = self.installation()
         if not installation:
             current = self.row()
@@ -1612,6 +1621,7 @@ def rate_limited(response):
 def manifest(settings, name, administration, personal=False):
     public = settings.public_url
     permissions = {**TURN_READS, **TURN_PERMISSIONS}  # a write a bot needs wins over the same read
+    permissions.update(CHECKS_PERMISSIONS)  # the server's own tico/merge-ok check; no bot's token carries it
     if administration:
         permissions["administration"] = "write"
     body = {
@@ -1632,6 +1642,7 @@ def manifest(settings, name, administration, personal=False):
             "status",
             "push",
             "release",
+            "merge_group",  # the merge queue asks for tico/merge-ok on its group's commit (github.py `merge_group`)
         ],
     }
     if personal:

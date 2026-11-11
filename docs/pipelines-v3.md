@@ -248,11 +248,13 @@ The life of a task, in a line: First stage → Stage → Last stage → Done.
 - **Forward.** To the next stage, by the engine, the moment every requirement is met and the next stage has room.
 - **Push past.** Forward with requirements unmet. Anyone, with a reason. Refused only by a requirement whose switch is
   off, or by a people-only OK when a bot tries. The task shows "Pushed past" and the manager bot is told.
-- **Back.** To any earlier stage. Anyone. A bot gives a reason. Never refused by requirements or room.
+- **Back.** To any earlier stage. Anyone. A bot gives a reason. Never refused by requirements or room. One exception:
+  only a person moves a task back into a stage that queues PRs (Merge); a bot moves it back to the stage before.
 - **Done.** Leaving the last stage. Only Done counts as output.
 - **Close.** From any stage. A bot gives a reason. Never refused. Its open sub-tasks close with it. "Declined" is Closed
   with a reason.
-- **Reopen.** From Done or Closed back to a stage, with a note.
+- **Reopen.** From Done or Closed back to a stage, with a note. A reopen (or a restore from the trash) that would land
+  in a stage that queues PRs lands in the stage before it, so a new commit is reviewed before it is queued.
 - **Reassign.** Changes the owner for this visit. It goes through the same function, so it is logged and resets the
   tries. The old owner's queued wakes for the task are dropped.
 
@@ -887,6 +889,18 @@ late. Nothing depends on the exact 10 seconds.
   reason. A commit pushed in Merge keeps the task in Merge: the reviews of the earlier commit stand for this visit.
 - **A commit after the person's OK** still merges once it is green. The task shows "Changed after OK" and the manager bot
   is told once (C22).
+- **A PR linked in Merge.** While a task is in a stage that queues PRs, only a person links another PR to it: a bot is
+  told "Send the task back before linking another pull request.", and a bot's worktree branch PR is not linked there.
+- **`tico/merge-ok`.** Before queuing a PR, the server posts a check run `tico/merge-ok` = success on exactly the commit
+  it queues (from the queue action or a queue-again, never otherwise); taking the PR out turns it to failure on that
+  commit. When GitHub's merge queue asks for the checks on a group's commit (the `merge_group` webhook), Tico answers
+  success only if its Merge stage queues every PR in the group at its current head. Only the server's own token writes
+  checks; no bot's token does. A repo ruleset that requires the check, pinned to the company App, stops a bot merging
+  or queuing a PR around the Merge stage ([GitHub App](github-app.md#require-ticos-merge-check)). It means "Tico's Merge
+  stage queued this PR after the person's OK", not "every commit was reviewed": under C22 the owner's queue-again posts
+  it on a commit pushed after the OK. A post that fails queues nothing and is tried again like any failed call.
+- **Open question.** Should a commit pushed after the person's OK send the task back for review instead (C22 says no)?
+  Until it does, `tico/merge-ok` can't promise more than the line above.
 - **Leaving Merge backwards, or closing,** takes the PRs out of the queue. That call doesn't exist today and gets built.
   If GitHub merges one first, the task shows "PR merged anyway" and the manager bot is told once.
 - **In a release** means the merge commit is in the commit history of a published release of the release repo: not a

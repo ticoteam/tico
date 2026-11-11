@@ -94,6 +94,12 @@ def test_manifest_asks_for_administration_unless_the_owner_unticks_it(api, gh):
     assert "administration" not in manifest(api, administration="false")["manifest"]["default_permissions"]
 
 
+def test_manifest_asks_for_checks_write_and_the_merge_group_event_for_tico_merge_ok(api, gh):
+    asked = manifest(api)["manifest"]
+    assert asked["default_permissions"]["checks"] == "write"  # the server's own token; no turn token carries it
+    assert "merge_group" in asked["default_events"]  # the merge queue asks for tico/merge-ok on its group's commit
+
+
 def test_missing_repo_permission_is_refused_with_both_fixes_and_botops_creates_it_once_granted(api, gh):
     """BotOps' create without Administration: a refusal naming a person and both fixes, no task filed, the bot kept as
     planned; once GitHub reports the permission, BotOps's next try makes the repository."""
