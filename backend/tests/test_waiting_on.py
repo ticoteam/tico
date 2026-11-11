@@ -11,7 +11,7 @@ from backend.tests.helpers import engine as X
 
 ANA = X.ANA
 BUILD = (
-    {"name": "Ideas", "by_hand": True},
+    {"name": "Ideas", "by_hand": True, "requests_move_on": True},
     {"name": "On deck"},
     {"name": "Build", "owner": "bot:builder", "task_limit": 1, "requirements": [{"kind": "owner_done"}]},
     {

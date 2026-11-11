@@ -1,7 +1,7 @@
 """The default pipelines beyond Product and Engineering (backend/pipeline_presets_more.py, docs/pipelines-v3.md
-"Default pipelines"): a new company gets Growth Experiments, Lead and Opportunity in the Growth factory and Customer and
-Success Experiments in the Success factory, once; nothing it retired comes back; no stage is left without an owner; an
-experiment needs a person's OK only when it spends money or publishes. Legal and Finance (private, in the Corporate
+"Default pipelines"): a new company gets Growth Experiments, Growth Monitoring, Lead and Opportunity in the Growth factory
+and Customer, Success Experiments and Success Monitoring in the Success factory, once; nothing it retired comes back; no
+stage is left without an owner; an experiment goes live only once a person OKs its Go-live page. Legal and Finance (private, in the Corporate
 factory) are made once their owner bot is: the sample company has both, the Bookkeeper and the Legal Owner."""
 
 import pytest
@@ -22,11 +22,19 @@ from backend.tests.helpers.sample_company import (  # noqa: F401
 )
 
 OWNER = "human:owner"
-NEW = ("growth-experiments", "opportunity", "lead", "customer", "success-experiments")
+NEW = (
+    "growth-experiments",
+    "opportunity",
+    "lead",
+    "customer",
+    "success-experiments",
+    "growth-monitoring",
+    "success-monitoring",
+)
 FACTORIES = [
     ("product", ["product", "engineering"]),
-    ("growth", ["growth-experiments", "lead", "opportunity"]),
-    ("success", ["customer", "success-experiments"]),
+    ("growth", ["growth-experiments", "growth-monitoring", "lead", "opportunity"]),
+    ("success", ["customer", "success-experiments", "success-monitoring"]),
     ("corporate", ["finance", "legal"]),
 ]
 
@@ -78,9 +86,13 @@ def test_a_new_company_gets_every_default_pipeline_in_its_factory(environment):
     stages = [
         r["name"] for r in rows(api, "SELECT name FROM stages WHERE pipeline_id='growth-experiments' ORDER BY position")
     ]
-    assert stages == ["Ideas", "On deck", "Running", "Measuring", "Done", "Closed"]
+    assert stages == ["Ideas", "Building", "Running", "Done", "Closed"]
+    stages = [
+        r["name"] for r in rows(api, "SELECT name FROM stages WHERE pipeline_id='success-monitoring' ORDER BY position")
+    ]
+    assert stages == ["Watching", "Slipping", "Done", "Closed"]
     prefixes = {r["id"]: r["prefix"] for r in rows(api, "SELECT id,prefix FROM pipelines")}
-    assert [prefixes[p] for p in NEW] == ["GX", "O", "L", "C", "SX"]
+    assert [prefixes[p] for p in NEW] == ["GX", "O", "L", "C", "SX", "GM", "SM"]
 
 
 def test_every_work_stage_has_an_owner_and_every_pipeline_a_manager(environment):
@@ -93,7 +105,7 @@ def test_every_work_stage_has_an_owner_and_every_pipeline_a_manager(environment)
         assert manager == ("bot:" + seat[0]["id"] if seat else task_manager), pid
         for stage in rows(api, "SELECT id,owner FROM stages WHERE pipeline_id=? AND kind='work'", (pid,)):
             assert stage["owner"], stage["id"]
-            if "experiments" in pid:
+            if "experiments" in pid or "monitoring" in pid:
                 assert stage["owner"] == "assignee"
     # Opportunity's Proposal has a person on its OK.
     (proposal,) = rows(api, "SELECT person_id FROM requirements WHERE stage_id='opportunity-proposal' AND kind='page'")
@@ -157,45 +169,20 @@ def _page(c, title):
     return fid
 
 
-def _run(c, task_id, assignee, ok_from=None):
-    """Ideas → On deck by hand, then the assignee's own steps. With `ok_from`, the experiment spends money: the
-    assignee adds an OK from that person in On deck. Returns the stage ids the task passed through."""
-    seen = []
-
-    def at():
-        row = E.task(c, task_id)
-        seen.append(row["stage_id"])
-        return row
-
-    at()
-    E.move(c, task_id, "growth-experiments-on-deck", OWNER)
-    row = at()
-    assert row["owner_id"] == assignee
-    if ok_from:
-        added = E.add_requirement(
-            c, task_id, assignee, "ok", ok_from, "This spends $200 on ads", seen_version=row["version"]
-        )
-        H.task_done(c, assignee, task_id, "Planned", E.task(c, task_id)["version"])
-        assert at()["stage_id"] == "growth-experiments-on-deck"  # waits on the person
-        answer(c, task_id, added["requirement_id"], ok_from, "ok", own_click=True)
-    else:
-        H.task_done(c, assignee, task_id, "Planned", row["version"])
-    assert at()["stage_id"] == "growth-experiments-running"
-    H.task_done(c, assignee, task_id, "Ran a week", E.task(c, task_id)["version"])
-    row = at()
-    assert row["stage_id"] == "growth-experiments-measuring"
-    page = P.attach(c, task_id, "Results page", "page:" + _page(c, "Results"), assignee, seen_version=row["version"])
+def _verdict(c, page):
     owed = V.owe(c, page["file_id"], page["version"], page["rubric_hash"])
     V.record(c, owed["id"], {"verdict": "met", "p": 0.9, "reason": ""})
-    H.task_done(c, assignee, task_id, "Kept it", E.task(c, task_id)["version"])
-    at()
-    return seen
 
 
-@pytest.mark.parametrize("spends", [False, True])
-def test_an_experiment_needs_a_persons_ok_only_when_it_spends_or_publishes(environment, spends):
+def test_an_experiment_goes_live_only_once_a_person_oks_its_go_live_page(environment):
+    """A person's idea rests in Ideas; Ideas -> Building by its bot owner, a Go-live page Jev passes and a person OKs, Running, a Results page, Done."""
     api = _new_company(environment)
     assignee = "bot:" + rows(api, "SELECT id FROM bots WHERE slug='task-manager'")[0]["id"]
+    (go_live,) = rows(
+        api, "SELECT id, person_id FROM requirements WHERE stage_id='growth-experiments-building' AND kind='page'"
+    )
+    person = go_live["person_id"]
+    assert person and person.startswith("human:")
     with api.app.state.store.transaction() as c:
         row = H.task_create(
             c,
@@ -207,11 +194,25 @@ def test_an_experiment_needs_a_persons_ok_only_when_it_spends_or_publishes(envir
             lint=False,
             allow_planned=True,
         )
-        assert R.on_stage(c, "growth-experiments-on-deck")[0]["kind"] == "owner_done"
-        seen = _run(c, row["id"], assignee, OWNER if spends else None)
-    assert seen[0] == "growth-experiments-ideas"
-    assert seen[-1] == "growth-experiments-done"
-    assert "growth-experiments-measuring" in seen
+        assert E.task(c, row["id"])["stage_id"] == "growth-experiments-ideas"
+        row = E.move(c, row["id"], "growth-experiments-building", assignee, seen_version=row["version"])
+        assert row["owner_id"] == assignee
+        page = P.attach(
+            c, row["id"], "Go-live page", "page:" + _page(c, "Go live"), assignee, seen_version=row["version"]
+        )
+        _verdict(c, page)
+        row = E.task(c, row["id"])
+        assert row["stage_id"] == "growth-experiments-building"  # Jev passed it: it waits on the person
+        with pytest.raises(H.Refused, match="task_needs_person"):
+            E.move(c, row["id"], E.NEXT, assignee, "Looks fine", seen_version=row["version"])
+        answer(c, row["id"], go_live["id"], person, "ok", own_click=True)
+        row = E.task(c, row["id"])
+        assert (row["stage_id"], row["owner_id"]) == ("growth-experiments-running", assignee)
+        page = P.attach(
+            c, row["id"], "Results page", "page:" + _page(c, "Results"), assignee, seen_version=row["version"]
+        )
+        _verdict(c, page)
+        assert E.advance(c, row["id"])["stage_id"] == "growth-experiments-done"
 
 
 def test_a_qualified_lead_files_one_opportunity_on_an_owned_stage(environment):
