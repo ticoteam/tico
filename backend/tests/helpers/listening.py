@@ -9,7 +9,7 @@ SEARCH = {"id": "s1", "kind": "search", "site": "reddit", "target": "standup too
 MARK = re.compile(r"\[(r\d+)(?::([\d.]+))?\]")
 
 
-def listening(api, sources=(SEARCH,), rules=(), limits=({"count": 5, "per": "day"},), steps=(NOTE,), **extra):
+def listening(api, sources=(SEARCH,), rules=(), limits=({"count": 5, "per": "day"},), steps=(NOTE,), key=None, **extra):
     """A listening that is on, sending at 08:00 UTC."""
     trigger = {
         "type": "listening",
@@ -20,7 +20,7 @@ def listening(api, sources=(SEARCH,), rules=(), limits=({"count": 5, "per": "day
         "tz": "UTC",
     }
     body = {"name": "Standups", "owner": "person:ana", "trigger": trigger, "steps": list(steps), **extra}
-    return post(api, "automations", body)
+    return post(api, "automations", body, key=key)
 
 
 def source_id(api, aid, key="s1"):

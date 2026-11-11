@@ -82,20 +82,23 @@ _PUSH_LOCK = threading.Lock()
 
 
 # ----------------------------------------------------------------------------- small helpers
+LINK = re.compile(r"(?:https?://|www\.)\S+", re.I)  # the copy check ignores links: a tracking code is not a difference
+
+
 def normalize(text):
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
 def text_key(content):
-    """The words of a post, without the community tag or punctuation: equal for a cross-post. A long post's key ends
+    """The words of a post, without the community tag, links or punctuation: equal for a cross-post. A long post's key ends
     in a digest of all of it, so two that only start alike are not the same."""
-    text = re.sub(r"^\[[^\]]{1,80}\]\s*", "", str(content or ""))
+    text = LINK.sub(" ", re.sub(r"^\[[^\]]{1,80}\]\s*", "", str(content or "")))
     key = re.sub(r"[^a-z0-9]+", "", text.lower())
     return key if len(key) <= 400 else key[:336] + hashlib.sha256(key.encode()).hexdigest()
 
 
 def tokens(text):
-    return Counter(re.findall(r"[a-z0-9]+", str(text or "")[:COPY_TEXT].lower()))
+    return Counter(re.findall(r"[a-z0-9]+", LINK.sub(" ", str(text or "")).lower()))
 
 
 def alike(a, b):
@@ -501,14 +504,24 @@ def read_pages(store, aid, now, left=None):
 
 
 def _duplicate(c, item_id, original_id, now, claimed=None):
-    """Mark one `new` item a copy of `original_id`; False when another pass got to it first."""
+    """Mark one `new` item a copy of `original_id`; False when another pass got to it first. Copies never chain: a
+    copy of a copy points at that one's original, and what already pointed at this item moves, with its count, to
+    the original too."""
+    known = c.execute("SELECT status, duplicate_of_id FROM listening_items WHERE id=?", (original_id,)).fetchone()
+    if known and known["status"] == "duplicate" and known["duplicate_of_id"]:
+        original_id = known["duplicate_of_id"]
+    if original_id == item_id:
+        return False
     done = c.execute(
         "UPDATE listening_items SET status='duplicate',duplicate_of_id=?,claimed_at=NULL,updated_at=? "
         "WHERE id=? AND status='new'" + (" AND claimed_at=?" if claimed else ""),
         (original_id, now, item_id, *((claimed,) if claimed else ())),
     ).rowcount
     if done:
-        c.execute("UPDATE listening_items SET copies=copies+1,updated_at=? WHERE id=?", (now, original_id))
+        own = c.execute("SELECT copies FROM listening_items WHERE id=?", (item_id,)).fetchone()[0]
+        c.execute("UPDATE listening_items SET duplicate_of_id=? WHERE duplicate_of_id=?", (original_id, item_id))
+        c.execute("UPDATE listening_items SET copies=0 WHERE id=?", (item_id,))
+        c.execute("UPDATE listening_items SET copies=copies+1+?,updated_at=? WHERE id=?", (own, now, original_id))
     return bool(done)
 
 
@@ -630,9 +643,10 @@ def score(store, row, flow, now, primary=None, left=None):
         others = [
             dict(r)
             for r in c.execute(
-                "SELECT rowid AS n, id, substr(text,1,?) AS text, title FROM listening_items WHERE automation_id=? "
-                "AND status<>'duplicate' AND created_at>=? ORDER BY rowid DESC LIMIT ?",
-                (COPY_TEXT, aid, H.shift(now, days=-COPY_DAYS), COPY_COMPARISONS + MAX_SCORE),
+                "SELECT rowid AS n, id, substr(text,1,?) AS text, substr(text,-?) AS tail, length(text) AS size, title "
+                "FROM listening_items WHERE automation_id=? AND status<>'duplicate' AND created_at>=? "
+                "ORDER BY rowid DESC LIMIT ?",
+                (COPY_TEXT, COPY_TEXT, aid, H.shift(now, days=-COPY_DAYS), COPY_COMPARISONS + MAX_SCORE),
             )
         ]
         sources = {r["id"]: dict(r) for r in c.execute("SELECT * FROM listening_sources WHERE automation_id=?", (aid,))}
@@ -646,8 +660,12 @@ def score(store, row, flow, now, primary=None, left=None):
         return words[other["id"]]
 
     def copy_of(item):
-        mine = tokens(item["text"] or item["title"])
-        size = sum(mine.values())
+        """The earlier item this one is a near copy of. Two texts are alike when their first COPY_TEXT characters
+        are; a longer text also needs the whole lengths within the bar and its last COPY_TEXT characters alike, so
+        two long posts that only open the same are not copies."""
+        mine = tokens(item["text"][:COPY_TEXT] or item["title"])
+        size, length = sum(mine.values()), len(item["text"])
+        tail = None
         if size < COPY_TOKENS:
             return None
         compared = 0
@@ -662,9 +680,25 @@ def score(store, row, flow, now, primary=None, left=None):
             # Two texts whose lengths differ by more than the bar allows cannot clear it.
             if min(size, total) < COPY_ALIKE * max(size, total):
                 continue
-            if alike(mine, theirs) >= COPY_ALIKE:
-                return other["id"]
+            if alike(mine, theirs) < COPY_ALIKE:
+                continue
+            if max(length, other["size"]) > COPY_TEXT:
+                if min(length, other["size"]) < COPY_ALIKE * max(length, other["size"]):
+                    continue
+                tail = tail or tokens(item["text"][-COPY_TEXT:])
+                if alike(tail, tokens(other["tail"])) < COPY_ALIKE:
+                    continue
+            return other["id"]
         return None
+
+    def on(c):
+        return bool(
+            c.execute(
+                "SELECT 1 FROM automations WHERE id=? AND deleted_at IS NULL AND enabled=1 "
+                "AND trigger_type='listening'",
+                (aid,),
+            ).fetchone()
+        )
 
     def release(items):
         with store.transaction() as c:
@@ -675,7 +709,7 @@ def score(store, row, flow, now, primary=None, left=None):
                 )
 
     out = {"scored": 0, "duplicates": 0, "errors": 0}
-    ordered = sorted(claimed, key=lambda r: r["n"])  # oldest first: of two new copies the earlier is the original
+    ordered = sorted(claimed, key=lambda r: -r["n"])  # newest first: when time runs out the old ones wait
     for place, item in enumerate(ordered):
         original = copy_of(item)
         if original:
@@ -686,10 +720,17 @@ def score(store, row, flow, now, primary=None, left=None):
             continue
         if not rules:
             with store.transaction() as c:
-                _decided(c, item["id"], now, "kept", "", 1.0, 0.0, claimed=now)
+                if still := on(c):
+                    _decided(c, item["id"], now, "kept", "", 1.0, 0.0, claimed=now)
+            if not still:
+                release(ordered[place:])
+                break
             out["scored"] += 1
             continue
-        if left and not left():
+        # Before each paid call: time left, the listening still on, the cap not reached by what this pass spent.
+        with store.read() as c:
+            go = on(c) and not _capped(c, aid, flow, now)
+        if not go or (left and not left()):
             release(ordered[place:])
             out["cut"] = True
             break
@@ -732,7 +773,12 @@ def score(store, row, flow, now, primary=None, left=None):
                     "answers": J.summary(answers),
                 },
             )
-            _decided(c, item["id"], now, status, tag, value, float(result.get("cost_usd") or 0), claimed=now)
+            # Turned off or deleted while the call ran: no result is written, the post stays `new`.
+            if still := on(c):
+                _decided(c, item["id"], now, status, tag, value, float(result.get("cost_usd") or 0), claimed=now)
+        if not still:
+            release(ordered[place:])
+            break
         out["scored"] += 1
     return out
 
@@ -907,7 +953,7 @@ def run_pass(store, at=None, primary=None):
             dict(r)
             for r in c.execute(
                 "SELECT a.*, (SELECT min(i.created_at) FROM listening_items i WHERE i.automation_id=a.id "
-                "AND i.status='new') AS waiting_since FROM automations a WHERE a.deleted_at IS NULL AND a.enabled=1 "
+                "AND i.status='new') AS waiting_since FROM automations a WHERE a.deleted_at IS NULL "
                 "AND a.trigger_type='listening' ORDER BY waiting_since IS NULL, waiting_since, a.created_at"
             )
         ]
@@ -915,6 +961,8 @@ def run_pass(store, at=None, primary=None):
     for row in rows:
         if not left():
             break
+        if not row["enabled"]:  # off: nothing is read or scored
+            continue
         try:
             read_pages(store, row["id"], now, left)
             exact_copies(store, row["id"], now)
@@ -924,7 +972,7 @@ def run_pass(store, at=None, primary=None):
     for row in rows:
         try:
             with store.transaction() as c:
-                expire(c, row["id"], now)
+                expire(c, row["id"], now)  # on or off: what waits still grows too old
             send(store, row["id"], at, now)
         except Exception:
             log.exception("listening send failed for %s", row["id"])
@@ -1107,9 +1155,13 @@ def install(app, store, auth, mutate):
             if source["kind"] != "push":
                 raise Problem("validation", "Only a push source has an address", 422)
             address = _new_address(c, store.settings, source["id"])
-            return {"source": source["key"], "source_id": source["id"], "address": address}
+            return {"source": source["key"], "source_id": source["id"], "push_address": address}
 
-        return mutate(request, body, work)
+        # The address is shown once: the idempotency record keeps the answer without it (store.SHOWN_ONCE).
+        out = dict(mutate(request, body, work))
+        if "push_address" in out:
+            out["address"] = out.pop("push_address")
+        return out
 
     @app.post(PUSH_PATH + "{token}")
     def push(token: str, body: ListeningSave):

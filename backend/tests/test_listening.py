@@ -218,6 +218,88 @@ def test_a_pass_out_of_time_releases_its_claims_still_sends_and_the_next_pass_sc
     assert statuses(api, busy) == {"sent": 3, "kept": 7} and len(judge.calls) == 11
 
 
+def test_the_newest_posts_are_scored_first(api, monkeypatch):
+    clock = {"now": 0.0}
+    monkeypatch.setattr(L, "CLOCK", lambda: clock["now"])
+    judge = FakeJudge()
+
+    def slow(state, questions, label=None):
+        clock["now"] += 6.0
+        return judge(state, questions, label)
+
+    aid, source = started(api, rules=[KEEP])
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(10)])
+    run(api, at(0.1), slow)
+    assert [text.split()[2] for text in judge.calls] == ["9", "8", "7", "6"]
+
+
+def test_copies_of_a_copy_count_on_the_one_original(api):
+    aid, source = started(api)
+    base = " ".join(WORDS[:60])
+    saved(api, source, [item(n, f"{base} ending{n}") for n in (1, 2, 3)])  # near copies, none word for word
+    run(api, at(0.1))
+    rows = {r["native_id"]: r for r in sql(api, "SELECT * FROM listening_items WHERE automation_id=?", (aid,))}
+    assert [rows[n]["status"] for n in "123"] == ["kept", "duplicate", "duplicate"]
+    assert rows["2"]["duplicate_of_id"] == rows["3"]["duplicate_of_id"] == rows["1"]["id"]
+    assert [rows[n]["copies"] for n in "123"] == [2, 0, 0]
+
+
+def test_long_posts_that_only_open_alike_are_not_copies(api):
+    aid, source = started(api)
+    opening = " ".join(f"open{n}" for n in range(300))  # longer than what the first comparison reads
+    one = opening + " " + " ".join(f"alpha{n}" for n in range(400))
+    other = opening + " " + " ".join(f"bravo{n}" for n in range(400))
+    saved(api, source, [item(1, one), item(2, other), item(3, one + " and one more thing")])
+    run(api, at(0.1))
+    rows = {r["native_id"]: r for r in sql(api, "SELECT * FROM listening_items WHERE automation_id=?", (aid,))}
+    assert [rows[n]["status"] for n in "123"] == ["kept", "kept", "duplicate"]
+    assert rows["3"]["duplicate_of_id"] == rows["1"]["id"]
+
+
+def test_the_same_post_with_another_link_is_a_copy(api):
+    aid, source = started(api)
+    said = "Our team finally dropped the daily standup and nobody misses it"
+    links = ("https://acme.example/a/very/long/path?utm_source=one&ref=abcdef", "www.acme.example/other/long/path/2")
+    saved(api, source, [item(n, f"{said} {link} today") for n, link in enumerate(links)])
+    run(api, at(0.1))
+    assert statuses(api, aid) == {"kept": 1, "duplicate": 1}
+
+
+def test_scoring_stops_when_the_pass_itself_reaches_the_spend_cap(api):
+    judge = FakeJudge()
+
+    def paid(state, questions, label=None):
+        return {**judge(state, questions, label), "usage": {"cost_usd": 0.02}}
+
+    aid, source = started(api, rules=[KEEP], spend_cap={"per_30m": 0.05})
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(10)])
+    run(api, at(0.1), paid)
+    assert len(judge.calls) == 3 and statuses(api, aid) == {"kept": 3, "new": 7}
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE claimed_at IS NOT NULL")[0]["n"] == 0
+
+
+def test_a_listening_turned_off_while_a_call_runs_scores_no_more_and_keeps_no_result(api):
+    judge = FakeJudge()
+    aid, source = started(api, rules=[KEEP])
+
+    def off(state, questions, label=None):
+        patch(api, aid, {"enabled": False})
+        return judge(state, questions, label)
+
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(5)])
+    run(api, at(0.1), off)
+    assert len(judge.calls) == 1 and statuses(api, aid) == {"new": 5}
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE claimed_at IS NOT NULL")[0]["n"] == 0
+
+
+def test_posts_waiting_on_a_listening_that_is_off_still_expire(api):
+    aid, source = started(api)
+    saved(api, source, [item(1, story(1))])
+    patch(api, aid, {"enabled": False})
+    run(api, at(1, days=8))
+    assert statuses(api, aid) == {"expired": 1}
+
+
 def test_two_passes_at_once_score_no_post_twice(api):
     aid, source = started(api, rules=[KEEP])
     saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(5)])
@@ -296,6 +378,22 @@ def test_a_push_address_takes_posts_without_sign_in_and_shows_its_token_once(api
     again = post(api, f"listening/sources/{source_id(api, aid, 'in')}/address", {})["address"]
     assert again != address and api.post(path, json={"items": []}).status_code == 404
     assert api.post(again[again.index(L.PUSH_PATH) :], json={"items": []}).status_code == 200
+
+
+def test_a_replayed_save_answers_without_the_push_address(api):
+    body = {"id": "in", "kind": "push", "site": "syften"}
+    with time_machine.travel(START, tick=False):
+        made = listening(api, sources=[body], key="make-1")
+        again = listening(api, sources=[body], key="make-1")
+    assert made["push_addresses"]["in"] and again["id"] == made["id"] and "push_addresses" not in again
+    more = {"trigger": {**made["trigger"], "sources": [body, {**body, "id": "two"}]}}
+    first = api.patch(f"/api/v2/automations/{made['id']}", json=more, headers=headers("ana-test", "edit-1")).json()
+    replay = api.patch(f"/api/v2/automations/{made['id']}", json=more, headers=headers("ana-test", "edit-1")).json()
+    assert first["push_addresses"]["two"] and "push_addresses" not in replay
+    route = f"listening/sources/{source_id(api, made['id'], 'in')}/address"
+    new, same = post(api, route, {}, key="addr-1"), post(api, route, {}, key="addr-1")
+    assert L.PUSH_PATH in new["address"] and "address" not in same and same["source"] == "in"
+    assert L.PUSH_PATH not in str(sql(api, "SELECT response FROM idempotency"))
 
 
 # ---------------------------------------------------------------------------------------------- paths
@@ -453,7 +551,8 @@ def test_the_migration_drops_the_old_tables_and_the_automations_on_the_old_model
     for table in old:
         conn.execute(f"CREATE TABLE {table} (id TEXT)")
     conn.execute("CREATE TABLE automations (id TEXT, trigger_type TEXT, flow TEXT, enabled INTEGER)")
-    for table in ("automation_versions", "automation_runs", "automation_daily", "automation_holds"):
+    conn.execute("CREATE TABLE automation_versions (automation_id TEXT, n INTEGER, flow TEXT)")
+    for table in ("automation_runs", "automation_daily", "automation_holds"):
         conn.execute(f"CREATE TABLE {table} (automation_id TEXT)")
     find = {"id": "f", "type": "find", "source": "listening"}
     inner = {"id": "p", "type": "paths", "paths": [{"name": "b", "steps": [find]}], "otherwise": {"steps": [find]}}
@@ -480,3 +579,32 @@ def test_the_migration_drops_the_old_tables_and_the_automations_on_the_old_model
     assert rows["plain"] == (flows["plain"][1], 1)
     assert '"find"' not in json.dumps(rows["nested"][0]) and rows["nested"][1] == 0
     assert rows["nested"][0]["steps"][1]["paths"][0]["steps"][1] == NOTE
+
+
+def test_a_migrated_automation_runs_without_its_listening_find_when_turned_back_on(api):
+    import json
+
+    up = importlib.import_module("backend.migrations.20261111190425_listening_feed").up
+    say = {"id": "say", "type": "action", "do": "note", "args": {"text": "hello"}}
+    body = {
+        "name": "Daily",
+        "owner": "person:ana",
+        "trigger": {"type": "schedule", "cron": "0 9 * * *"},
+        "steps": [say],
+    }
+    aid = post(api, "automations", body)["id"]
+    find = {"id": "f", "type": "find", "source": "listening"}
+    with api.app.state.store.transaction() as c:  # as the old server saved it: the step in the flow and its version
+        for table, where in (("automations", "id"), ("automation_versions", "automation_id")):
+            for row in c.execute(f"SELECT rowid AS r, flow FROM {table} WHERE {where}=?", (aid,)).fetchall():
+                flow = json.loads(row["flow"])
+                flow["steps"] = [find, *flow["steps"]]
+                c.execute(f"UPDATE {table} SET flow=? WHERE rowid=?", (json.dumps(flow), row["r"]))
+        up(c)
+    assert '"find"' not in str(sql(api, "SELECT flow FROM automation_versions WHERE automation_id=?", (aid,)))
+    assert get(api, f"automations/{aid}")["enabled"] is False
+    patch(api, aid, {"enabled": True})
+    post(api, f"automations/{aid}/run", {})
+    api.app.state.store.automations.drain()
+    done = runs(api, aid)
+    assert len(done) == 1 and done[0]["status"] == "ok" and notes(done[0]) == ["hello"]

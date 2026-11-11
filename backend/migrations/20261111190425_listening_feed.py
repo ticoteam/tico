@@ -8,7 +8,8 @@
 - The old model goes, with its posts: `listen_runs`, `listen_items`, `listen_judgments`, `intake_items`,
   `listening_destinations` and the `listening.market_seeded` marker.
 - An automation whose trigger is the old `listening` (a destination) is deleted with its versions and runs. A flow
-  with a Find step reading `listening` loses that step and is turned off: it would no longer pass the check on save.
+  with a Find step reading `listening` loses that step, in every version of it, and is turned off: it would no longer
+  pass the check on save.
 """
 
 import json
@@ -79,6 +80,17 @@ def _old_automations(conn):
             if "enabled" in flow:
                 flow["enabled"] = False
             conn.execute("UPDATE automations SET flow=?, enabled=0 WHERE id=?", (json.dumps(flow), aid))
+        # A run reads its version's flow, not the automation's: every version loses the step too, so what the
+        # editor shows is what runs, and restoring an old version brings no such step back.
+        for n, kept in conn.execute("SELECT n, flow FROM automation_versions WHERE automation_id=?", (aid,)).fetchall():
+            try:
+                version = json.loads(kept)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(version, dict) and _without_find(version):
+                conn.execute(
+                    "UPDATE automation_versions SET flow=? WHERE automation_id=? AND n=?", (json.dumps(version), aid, n)
+                )
 
 
 def up(conn):
