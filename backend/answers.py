@@ -19,7 +19,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
-from . import hubdb_core
+from . import hubdb_core, pr_conflicts
 from . import task_engine as E
 from . import task_requirements as R
 from . import task_wakes
@@ -371,6 +371,16 @@ def _done_ends_own_snooze(conn: "sqlite3.Connection", task_id: str, by: str) -> 
         E.unsnooze(conn, task_id, by, "Done")
 
 
+def _answer_ends_bots_snooze(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """A person answering an ask on a task a bot snoozed: a bot's snooze leaves the ask in their list (waiting_on.needs),
+    and the answer is what that snooze waited for, so it ends now and the task goes on, not when the date comes. A
+    person's own snooze is theirs to end."""
+    row = E.task(conn, task_id)
+    snoozed = (row or {}).get("snooze")
+    if row and snoozed and is_human(by) and is_bot(snoozed["by_id"]):
+        E.unsnooze(conn, task_id, by, "Answered")
+
+
 def answer(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -413,12 +423,16 @@ def answer(
         task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
     if requirement["kind"] == "owner_done":
         _done_ends_own_snooze(conn, task_id, by)
+    else:
+        _answer_ends_bots_snooze(conn, task_id, by)
     out = E.advance(conn, task_id)
     if out is None:
         # The task changed and stays: the never-stuck ladder starts again, before any wake this answer sends.
         E.changed(conn, task_id, by)
         out = E.task(conn, task_id) or row
         _tell_bot(conn, out, requirement, by, value, notes, _wake_key(out, answer_id))
+        # A merge conflict held for this answer is the Builder's now, before the task moves on (pr_conflicts).
+        pr_conflicts.after_answer(conn, task_id)
     if requirement["kind"] == "answer" and requirement.get("visit_id"):
         from . import strategy_merge
 

@@ -87,11 +87,12 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
 
 def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standing]) -> str | None:
     """On a stage where a person OKs a page that is not a review (Fixes 2's Review page), the commits no bot reviewed
-    (task_requirements.unreviewed), so the page the bot writes says it. Not when the ask already says it."""
+    (task_requirements.unreviewed), so the page the bot writes says it. Not when the ask already says it, nor once the
+    page is OK'd: a rebase after the OK is not a new version of it, and a new page would ask the person again."""
     page: list[R.Standing] = []
     for s in standings:
         settings: Row = s.requirement.get("settings") or {}
-        if s.requirement.get("kind") != "page" or settings.get("at_head"):
+        if s.requirement.get("kind") != "page" or settings.get("at_head") or s.met:
             continue
         if s.requirement.get("person_id") or R.people_only(s.requirement):
             page.append(s)

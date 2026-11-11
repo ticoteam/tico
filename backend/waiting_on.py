@@ -390,8 +390,10 @@ def of(
             # its lists and briefs, so it only says that it waits on a person (task_asks.PRIVATE_LINE).
             line = _private_line()
         if requirement["kind"] == pr_conflicts.KIND:
-            # A PR that conflicts before Merge is the bot's that built it, whoever has the stage (pr_conflicts).
-            out.append(_turn(conn, row, standing.on or has, line, None, since, False, seen))
+            # A PR that conflicts before Merge is the bot's that built it, whoever has the stage (pr_conflicts). While
+            # the stage waits on a person's answer it is held for them: nobody's turn, and their ask says so (`needs`).
+            if not pr_conflicts.held(standing):
+                out.append(_turn(conn, row, standing.on or has, line, None, since, False, seen))
             continue
         if standing.state == R.WAITING and requirement["kind"] == "linked_done":
             if standing.on not in on_tasks:
@@ -599,8 +601,11 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     """Needs you, for one person, oldest first. A task whose work is theirs is listed once (`kind` "task"), however many
     requirements are missing. Each OK or answer that names them is its own entry (`kind` "ask"). A bot that cannot run
     is one entry per cause (`kind` "paused") for the person who can fix it, with the tasks it holds up, not one per
-    task. A read: nothing is stored, so nothing can fall out of step with the tasks. A snoozed task is set aside and
-    is not listed."""
+    task. A read: nothing is stored, so nothing can fall out of step with the tasks. A task a person snoozed is set
+    aside and is not listed. A bot's snooze hides no ask: each OK or answer still asked of a person stays in their
+    list (Acme rc.5, Nov 11: a manager bot's snooze took a people-only OK out of the person's list for two days); the
+    rest of the task is set aside. An ask the stage's merge conflict waits on says so in one more sentence
+    (pr_conflicts.held)."""
     return needs_by_person(conn).get(person, [])
 
 
@@ -614,14 +619,18 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
     fixers: dict[str, str | None] = {}
     rows = conn.execute(
         "SELECT t.id FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL) ORDER BY t.id"
+        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL "
+        "AND s.by_id NOT LIKE 'bot:%') ORDER BY t.id"
     ).fetchall()
     read = prime(conn, [str(found[0]) for found in rows])
     for (task_id,) in rows:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)
         if row is None:  # the query lists only tasks on the engine
             raise LookupError(f"task {task_id} is not on the engine")
-        waits = of(conn, row, seen)
+        standings = R.standings(conn, row) if row.get("visit") else []
+        waits = listed(of(conn, row, seen, standings), row)
+        held = next((s for s in standings if pr_conflicts.held(s)), None)
+        kinds = {str(s.requirement["id"]): str(s.requirement.get("kind")) for s in standings}
         people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who})
         for person in people:
             mine = [wait for wait in waits if wait.state == PERSON and wait.who == person]
@@ -630,6 +639,9 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
                 mine = [unnamed(wait, shown) for wait in mine]
             work = [wait for wait in mine if not wait.ask]
             for wait in [wait for wait in mine if wait.ask] + work[:1]:
+                line = wait.line
+                if held and wait.ask:
+                    line = R.sentences(line, pr_conflicts.ask_line(conn, held, kinds.get(str(wait.requirement_id), "")))
                 out.setdefault(person, []).append(
                     {
                         "kind": "ask" if wait.ask else "task",
@@ -640,7 +652,7 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
                         "stage_id": row["stage_id"],
                         "requirement_id": wait.requirement_id if wait.ask else None,
                         "visit_id": _visit_id(row) if wait.ask else None,
-                        "line": wait.line,
+                        "line": line,
                         "missing": [each.line for each in (work if not wait.ask else [wait])],
                         "since": min((each.since or "" for each in work), default="") if not wait.ask else wait.since,
                     }
@@ -674,6 +686,18 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
         person: sorted(items, key=lambda item: (item["since"] or "", item.get("task_id") or "", item["line"]))
         for person, items in out.items()
     }
+
+
+def listed(waits: list[Wait], row: Row) -> list[Wait]:
+    """The waits of a task that go in Needs you. A task a bot snoozed lists only the OKs and answers asked of a person:
+    a bot's snooze never hides an ask, and sets the rest aside. Any other task, all of them (a task a person snoozed
+    is not listed)."""
+    snooze: Row = row.get("snooze") or {}
+    if not snooze:
+        return waits
+    if not is_bot(snooze.get("by_id")):
+        return []
+    return [wait for wait in waits if wait.state == PERSON and wait.ask]
 
 
 def _botops_reviews(conn: "sqlite3.Connection", bot: str) -> bool:

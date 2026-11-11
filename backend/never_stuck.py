@@ -689,8 +689,19 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
                 f"{said} It waits on: {waits_on}. Look once: push past with a reason where that is allowed, "
                 "reassign it, snooze it or close it."
             )
+            if _asks_only(waits):
+                # It waits only on people's answers. The manager bot's one move is to push past an ask it may push
+                # past (docs/pipelines-v3.md "A task waits a day on you"); with none it is not woken. Never a snooze:
+                # the ask stays in the person's list, and Late at 3 times adds nothing to a person's turn.
+                lead = (
+                    f"{said} It waits on: {waits_on}. It stays in {_name(conn, head.who)}'s list. Look once: if the "
+                    "answer is not needed, push past it with a reason where that is allowed; otherwise leave the task "
+                    "as it is."
+                    if _pushable(conn, waits)
+                    else ""
+                )
             key = f"{row['id']}:{visit['id']}:late"
-            if task_wakes.add(
+            if lead and task_wakes.add(
                 conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead, to=manager), wake_key=key
             ):
                 done["woken"] += 1
@@ -721,6 +732,21 @@ def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, 
     conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
     _event(conn, row["id"], "late", None, None, {"due_at": row.get("due_at")})
     done["late"] += 1
+
+
+def _asks_only(waits: list[W.Wait]) -> bool:
+    """Whether all a task waits on is OKs and answers asked of people."""
+    return bool(waits) and all(wait.state == W.PERSON and wait.ask for wait in waits)
+
+
+def _pushable(conn: "sqlite3.Connection", waits: list[W.Wait]) -> bool:
+    """Whether a bot may push past any of these asks: its switch is on and it is not people only (task_engine
+    ._may_push_past refuses the rest)."""
+    for wait in waits:
+        requirement = R.get(conn, str(wait.requirement_id)) if wait.requirement_id else None
+        if requirement and R.can_push_past(requirement) and not R.people_only(requirement):
+            return True
+    return False
 
 
 def _looks(conn: "sqlite3.Connection", row: Row, waits: list[W.Wait], manager: str | None, head: str | None) -> bool:
@@ -800,10 +826,11 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
         if not waits:
             broken.append(Break(f"1: task {task_id} waits on nothing", [task_id]))
         if row.get("snooze"):
-            continue
+            # Set aside: nobody's turn is chased. A bot's snooze still hides no ask from the person it names (rule 3).
+            waits = W.listed(waits, row)
         visit = row["visit"]
         ladder = W.turn(conn, row, waits)  # the one bot a next try is for
-        for wait in waits:
+        for wait in [] if row.get("snooze") else waits:
             if wait.state == W.BOT and not (
                 (visit.get("level") or "owner") != "owner"
                 or task_wakes.live_run(conn, row, wait.who, now, live)
