@@ -4929,6 +4929,10 @@ def create_app(settings=None):
                 409,
             )
         options = [wanted] if wanted else [built] if built else placing.candidates(c, auth, bot)
+        from . import cloud_machines
+
+        if not options and (first := cloud_machines.first_home(c, bot)):
+            options = [first]  # a cloud-mode bot whose own machine is not made yet: the shared one first
         if not options:
             raise Problem(
                 "no_computer",

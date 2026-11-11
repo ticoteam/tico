@@ -173,6 +173,8 @@ DEAD = ("deleted", "failed")  # HQ's word for a machine that is gone or never go
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
 UPDATE_WANT = "update:"  # a stopped machine's want to update, keyed "update:" and this server's release
 UPDATE_STALE = 15 * 60  # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
+UPDATE_RETRY = 6 * 3600  # a runner tries a failed update again this long after it failed (runner-rs follow.rs)
+UPDATE_AGAIN = ":again"  # ends the want of a stopped machine's one more start to try a failed update again
 UPDATE_SPREAD_S = 600  # update wakes spread over this long after a release (`update_due`): no start storm
 GROW_FREE_PCT = 15  # a disk under this much free (percent), or under GROW_FREE_GB, grows (`low_disk`)
 GROW_FREE_GB = 10
@@ -585,6 +587,25 @@ def home(c, bot, current=None):
     if not current or current["mode"] != "cloud":
         return None
     return row(c, SHARED) if current["placement"] == "shared" else current
+
+
+def first_home(c, bot):
+    """The computer (`runners_with_state` row) a cloud-mode bot with no computer goes on first (place_now), or None:
+    its own machine's when that has enrolled, else the shared machine's. A bot set to its own machine has none until
+    it has work, and it has no work until it is live; BotOps builds its repository on the shared machine, so it
+    starts there, and its want to move (`bot_want`) makes its own machine and moves it once its history is on GitHub."""
+    current = row(c, bot)
+    if not current or current["mode"] != "cloud":
+        return None
+    machine, shared = home(c, bot, current), row(c, SHARED)
+    for found in (machine, shared):
+        if found and found["runner_id"] and not found.get("deleting"):
+            runner = c.execute(
+                "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (found["runner_id"],)
+            ).fetchone()
+            if runner:
+                return runner
+    return None
 
 
 def asked_again(c, bot):
@@ -1077,6 +1098,17 @@ def facts(c, settings, current, at):
         and at >= update_due(c, runner_id, releases.version())
     ):
         out["update"] = UPDATE_WANT + releases.version()
+    elif (
+        out["active"]
+        and runner_id
+        and current["state"] == "stopped"
+        and current["machine_id"]
+        and (failed := update_failed(c, runner_id))
+        and at - (epoch(failed["update_since"]) or at) >= UPDATE_RETRY
+    ):
+        # Its runner tries a failed update again after UPDATE_RETRY, but only while it runs: a stopped machine with no
+        # work would stay on the old release for good. One more start per release, under a key of its own.
+        out["update"] = UPDATE_WANT + releases.version() + UPDATE_AGAIN
     out["updating"] = bool(runner_id) and runner_updating(c, runner_id, at)
     return out
 
@@ -1097,6 +1129,19 @@ def runner_behind(c, runner_id):
     if found["update_state"] == "blocked":
         return bool(target and target < want)
     return not (found["update_state"] in ("failed", "rolled_back") and target == want)
+
+
+def update_failed(c, runner_id):
+    """Computer `runner_id`'s runner_versions row when it is behind this server's release and its update to that same
+    release failed or was rolled back, else None."""
+    found = c.execute(
+        "SELECT release,update_state,update_target,update_error,update_since FROM runner_versions WHERE runner_id=?",
+        (runner_id,),
+    ).fetchone()
+    have, want = releases.parse(found["release"]) if found else None, releases.parse(releases.version())
+    if not (have and want and have < want) or found["update_state"] not in ("failed", "rolled_back"):
+        return None
+    return found if releases.parse(found["update_target"]) == want else None
 
 
 def spread(runner_id, release):
@@ -2627,6 +2672,14 @@ def health(c, settings=None):
             lines.append(
                 f"{machine_name(c, key)}: waiting {int(now() - current['drain_started_at']) // 60} minutes for "
                 f"its turns to finish before it restarts at {cloud_size_name(current['size'])}."
+            )
+    for key, current in sorted(rows(c).items()):
+        failed = update_failed(c, current["runner_id"]) if current["runner_id"] and current["mode"] == "cloud" else None
+        if failed and (key == SHARED or key in active):
+            why = str(failed["update_error"] or "").strip()[:120]
+            lines.append(
+                f"{machine_name(c, key)}: still on Tico {failed['release']}; its update to {failed['update_target']} "
+                f"failed{' (' + why + ')' if why else ''}. It tries again when it next starts."
             )
     if not stuck and not old and not lines:
         return None

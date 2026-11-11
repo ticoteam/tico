@@ -32,6 +32,9 @@ Heavy bots get their own: a bot made from the `video-owner` template, or a Build
 bot first gets a cloud machine row; after that a person switches it in the bot editor ("Shared cloud machine" / "Own
 cloud machine" under Computer).
 
+- A bot set to its own machine that has no computer yet when it goes live (a new company's Builder) goes on the shared
+  machine first: its own is made for work, and it has none before it is live. It stays on the shared machine until a
+  person switches it to its own.
 - The shared machine is one row and one HQ machine, key `_shared` (a bot's own machine is keyed by the bot id, and no
   bot id has an underscore). It is on while any bot on it wants it (work, a move, a watcher's wake) and pauses once
   every bot on it has had no turn out and no activity for its Pause after (`pause_minutes`: 30 by default, whole
@@ -233,7 +236,9 @@ an older base updates on its first heartbeat. Refreshing the base per release on
 A stopped machine whose runner is behind the server's release is started once to update. That wake waits a fixed
 0-10 minutes per runner and release after the server first ran the release (`update_due`: a hash of the runner id and
 release, from `releases.history`), so a release on a shared host does not start every company's machines at once
-against boat's start limits. Work, watchers and Always on never wait. No stop (idle, paused, drained, last bot gone)
+against boat's start limits. Work, watchers and Always on never wait. A machine whose update to
+this release failed is started once more, six hours after it failed (its runner tries again only while it runs), and is
+on Health until it is on the server's release. No stop (idle, paused, drained, last bot gone)
 lands while the runner reports a fresh `updating`, except out of credit (HQ stops those itself, so a paused machine
 of a frozen company stops at once too) and a person's delete.
 
