@@ -4,10 +4,11 @@
 Not started. The first message walks the human through `playbooks/onboarding.md`.
 
 ## Answers
-None yet. Record each setup answer here, one line each, dated.
+None yet. Record each setup answer here, one line each, dated. Record who presses publish and where the signups are
+read here.
 
 ## Routine
-`weekly-content-plan`: declared off, and switched on when your setup starts.
+`watch` and `find-ideas`: declared off. Setup switches on `watch`; onboarding turns on `find-ideas`.
 
 ## Current focus
 None.

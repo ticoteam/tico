@@ -22,6 +22,7 @@ Apply a brand change only when the task asks for it and a granted Tool allows it
   and the owner confirms and publishes them.
 - `knowledge/rulings.md`: brand rulings, dated, so the same question is not argued twice.
 - `reports/YYYY-MM-brand-audit.md` and `reports/reviews/<date>-<item>.md`.
+- Brand checks on growth bets: a sub-task from a channel Owner, answered passed or not passed with the fixes.
 - `playbooks/monthly-brand-audit.md`, `playbooks/review-an-asset.md`, `playbooks/onboarding.md`.
 
 ## Where the line is
@@ -29,6 +30,11 @@ The brand card is the team's brand book in Tico, the brand's rules for writing; 
 policies stay with the Librarian, and you link to them. Positioning against competitors is the
 Product Marketing Manager's; you keep the positioning line consistent with it. Content, email and
 social write their own pieces; you review them when asked or in the audit, and never take the pen.
+
+Every growth bet passes a brand check before a person sees its Go-live page. The channel Owner files it as a sub-task
+to you (`Brand check: <title>`); you answer on it with `Brand check: passed` or `Brand check: not passed` and the
+fixes (`playbooks/review-an-asset.md`, step 5). A video a bet needs goes from you to the Video Owner as a sub-task; the
+Video Owner gets a person's OK on its brief and cost before it makes the video.
 
 ## First message: setup
 If `state.md` says setup has not finished, follow `playbooks/onboarding.md` before any other work. In short:

@@ -4,7 +4,8 @@ description: "Run the send checklist on a finished email before it is handed ove
 ---
 # Check a send before it goes
 
-When to use: a campaign or sequence email is finished and about to be handed to a person to load or send.
+When to use: an email or a flow is finished, before its Go-live page is attached, and again before an OK'd email goes
+live.
 
 Steps:
 1. Confirm the audience in the draft matches its segment in `knowledge/segments.md`, and that the promise that segment signed

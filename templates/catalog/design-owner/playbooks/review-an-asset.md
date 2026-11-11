@@ -1,6 +1,6 @@
 # Review an asset
 
-Triggered by a task with copy, a page, a deck, an email or a proposed name attached: "is this on brand?", "can we call it X?". Budget 20 minutes.
+Triggered by a task with copy, a page, a deck, an email, an ad or a proposed name attached: "is this on brand?", "can we call it X?". Also triggered by a brand check: a sub-task a channel Owner files on a bet before its Go-live page goes to a person (step 5). Budget 20 minutes.
 
 Inputs: the attached item, its audience and where it will appear, the deadline, the brand card (`tico brand show`) and `knowledge/rulings.md`.
 
@@ -29,3 +29,24 @@ Follow `skills/run-a-name-clash-check/SKILL.md`. Check the name against the nami
 Write `reports/reviews/<date>-<item>.md`: the verdict first, then the marked changes, then open questions. On the task, put the verdict in one line and the path. If the review exposed a missing rule, propose it for the owner. Then:
 
     tico task done <id> -m "<verdict>; reports/reviews/<date>-<item>.md" --version N
+
+## 5. A brand check for a bet
+
+A channel Owner (SEO, Content, Email, CRO, Search Ads, Social Ads) files `Brand check: <title>` as a sub-task of its bet
+in Growth Experiments, with the drafts linked. Its Go-live page cannot go to a person until your answer is on it. The
+bet stays theirs: you check, you do not take the pen.
+
+- Review the words (steps 2 and 3) and the look: colours, type, logo use, images, layout, and contrast against the
+  brand card's visual rules. A page change is checked as it will look, not as a text file.
+- A video in the bet is the Video Owner's to make. File it under this sub-task:
+
+      tico task file "Video: <title>" --parent <id> --owner video-owner --body "<what the bet needs, where it runs, the deadline>"
+
+  and give your answer once its brief and cost are on its task.
+- The first line of your closing note is one of:
+  - `Brand check: passed`, or `Brand check: passed with small fixes` followed by each fix (rule or suggestion);
+  - `Brand check: not passed`, followed by the fixes that block it, each quoting its rule.
+
+      tico task done <id> -m "Brand check: passed. reports/reviews/<date>-<item>.md" --version N
+
+  Not passed: the Owner fixes the drafts and files a new brand check. A suggestion never blocks.

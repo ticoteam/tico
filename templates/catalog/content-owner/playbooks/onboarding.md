@@ -1,57 +1,76 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is five recorded answers, one real draft on the task and the first routine checked.
+Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+The outcome is five recorded answers, the Content playbook page published, your KPI under the North Star, your first
+ideas filed, and both routines checked.
 
 ---
 
 ## 1. Read before you ask
 
     tico task show <id>
+    tico market show          # only if the team has a market page
 
-Read what the team already published if a link is given, and any voice or style notes attached.
-Do not ask what these already say.
+Read what the team already published if a link is given, and any voice or style notes attached. Do not ask what these
+already say.
 
 ## 2. Introduce yourself in three lines
 
-What you do (a rolling content plan and finished drafts with short versions), that publication happens only when the task asks for it, a granted Tool allows it and a person has turned mail sending on in Tico; otherwise the work stays a draft.
+What you do (find content ideas, build each bet until a person OKs it, measure it, and keep each kept series coming out
+on schedule); that nothing new goes live without a person's OK, and the person who presses publish puts it live until a
+Tool lets you; and that you never promise signups or readers.
 
 ## 3. Ask, in one message
 
-Numbered, each with its one-line why. Offer a default so a human can answer "fine".
+Numbered, each with its one-line why. Offer a default so a person can answer "fine".
 
 1. Who reads what you publish, and what should they do after reading it?
-2. Where do you publish, how often, and who presses publish?
+2. Where do you publish, and who presses publish? What must never appear in public?
 3. Can you paste or link two pieces you are proud of and one that missed?
 4. What do customers keep asking, and which three topics could you talk about for an hour?
-5. What must never appear in public?
+5. Where do you see signups, and can it tell which page or post each one came through?
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/voice.md` (with the two
-good examples), `knowledge/plan.md` (four weeks, seeded from answer four) and the never-say rules
-as present-tense statements.
+Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/voice.md` (with the two good examples and
+the miss), `knowledge/questions.md` (from answer four, each question with where it was asked) and an empty
+`knowledge/series.md`. Write the never list as present-tense statements.
 
-## 5. Draft now
+## 5. Publish the Content playbook
 
-Take the top idea and follow `playbooks/draft-a-post.md`. Attach the draft and its short versions to
-the task, labelled "First draft, not yet reviewed", in the shape of
-`knowledge/examples/content-plan.md`. Nothing is published.
+Fill the blanks in `knowledge/channel-playbook.md` (who puts pieces live, what must never appear or change) and publish
+it as the page "Content playbook", written as plain HTML from the file:
 
-## 6. Check the routine
+    tico page publish reports/content-playbook.html --title "Content playbook" --cadence none --scope bot
 
-Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
-`tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you the next four weeks and one finished draft every Monday at 09:00, and a human publishes." They
-can change it or turn it off any time; there is nothing to approve.
+Publish it again, the same way, whenever the file changes.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
-different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`tico automation update <id>`, with `--disable` to turn it off).
+## 6. Set up your KPI
 
-Last, run:
+Look for it first: `tico kpi list --owner me`. If it is not there, make it and put it under the North Star:
+
+    tico kpi create "Signups through a page or post" --owner me --direction up --cadence weekly --unit signups --source-note "Product analytics or signup records, with the page or post each signup came through"
+    tico kpi list                     # find the North Star's id
+    tico kpi update <kpi id> --parent <north star id> --role input --stage acquire
+
+With no North Star yet, leave the parent off and say so in the task. Log the first reading if you can read one. If the
+signups cannot be traced to a page or post, say so in the task: the KPI has no reading until they can.
+
+## 7. File your first ideas
+
+Follow `playbooks/find-ideas.md` now, with this task as its task: file up to 3 ideas from what you found. Start none:
+the person sees them first.
+
+## 8. Check the routines
+
+Setting you up switched on both routines, Watch and Find ideas. Check them with `tico automation list`; if one shows
+off and no person turned it off, run `tico automation update <id> --enable` with its id from that list. Tell the human in
+one line what each does: "Each Monday I check each kept series and the signups it brings; each Tuesday I file up to
+three content ideas." They can change or turn off either at any time; there is nothing to approve.
+
+Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. Last, run:
 
     tico bot setup-done
 
-It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
-routine run; until then nothing you have runs on its own. Run it once the answers and the first
-result are recorded, not before.
+It tells {{app_name}} that setup is done and clears your "Needs setup" mark. Run it once the answers, the playbook page
+and the first ideas are recorded, not before.

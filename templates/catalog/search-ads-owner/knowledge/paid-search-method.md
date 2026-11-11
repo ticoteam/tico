@@ -1,6 +1,6 @@
 # Paid search method
 
-The standing rules behind the weekly review, the structure and negatives, and every change proposal. Thresholds are platform guidance or dated third-party figures, and each line says which. Figures carried from the search-ads-owner template's method were read there on 2026-11-01; this file did not re-read them. Team rules (the step size for budget moves, the test count, the review thresholds) are this company's choices, set in `knowledge/targets.md`, and are not platform rules.
+The standing rules behind Watch, the structure and negatives, and every bet and change. Thresholds are platform guidance or dated third-party figures, and each line says which. Figures carried from the search-ads-owner template's method were read there on 2026-11-01; this file did not re-read them. Team rules (the ceilings, the ranges, the test count) are this company's choices, set in `knowledge/targets.md`, and are not platform rules.
 
 ## Measure the result, not the click
 
@@ -26,11 +26,11 @@ Cost per result = average cost per click ÷ conversion rate, where conversion ra
 
 ## Negatives
 
-- Read the search terms report every week (`skills/read-search-terms-for-waste/SKILL.md`).
+- Read the search terms report every Monday, in Watch (`skills/read-search-terms-for-waste/SKILL.md`).
 - Add a negative at the narrowest level that works: one campaign, or a shared list by class (learner, job seeker, free seeker, wrong product, wrong place). A list for the whole account only when the class fails in every campaign.
 - Check every negative against the converting terms in the same export before it is proposed. A word that blocks a converting term is replaced by the exact term.
 - Never block a brand or product term, or a term the price list uses. Team rule.
-- A competitor's name is bid on only where the target allows it and the platform's trademark rules are checked. Each such keyword is a change, prepared for review.
+- A competitor's name is bid on only where the target allows it and the platform's trademark rules are checked. Each such keyword is a bet, with a Go-live page a person OKs.
 
 ## Bidding for the volume
 
@@ -39,7 +39,7 @@ Cost per result = average cost per click ÷ conversion rate, where conversion ra
 - Under the minimum, keep a manual or enhanced bid with a cap on the cost per click, and read the result over 30 days, not one week. A target the volume cannot train starves delivery.
 - Set a target at the 90-day average cost per result, not below it. A target far below history starves delivery (third-party guidance, 2025-2026).
 - A bidding strategy change restarts learning. Do not change it inside a learning period unless something unusual shows.
-- A campaign that loses impression share to budget while under its target is a candidate for a budget move within the channel. A move between segments, or between search and social, is the marketing lead's decision (`growth-team-manager`).
+- A campaign that loses impression share to budget while under its target is a candidate for a budget raise, as a bet inside an approved experiment. A move between segments, or between search and social, is the Growth Team Manager's decision (`growth-team-manager`).
 
 ## Ad copy and landing pages
 

@@ -1,6 +1,6 @@
 # Email practice
 
-The standing method behind `playbooks/draft-a-campaign.md`, `playbooks/weekly-email-draft.md` and `playbooks/onboarding.md`.
+The standing method behind `playbooks/draft-a-campaign.md`, `playbooks/watch.md` and `playbooks/onboarding.md`.
 `voice.md` and `segments.md` hold the team's own voice and audiences. This file holds what is true about email in general.
 Sources were read on 2026-11-01 through search excerpts unless marked otherwise.
 

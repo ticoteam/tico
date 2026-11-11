@@ -1,7 +1,7 @@
 # Content practice
 
-The standing method behind `playbooks/draft-a-post.md` and `playbooks/weekly-content-plan.md`. `voice.md` holds the team's
-own voice and boundaries. This file holds what is true about publishing in general. Each source carries the year it was read.
+The standing method behind `playbooks/draft-a-post.md` and the Content playbook (`channel-playbook.md`). `voice.md`
+holds the team's own voice and boundaries. This file holds what is true about publishing in general. Each source carries the year it was read.
 
 ## Helpful and people-first
 

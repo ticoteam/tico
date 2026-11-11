@@ -1,7 +1,6 @@
 # Conversion method
 
-The standing rules behind `playbooks/weekly-conversion-check.md`, `playbooks/run-an-experiment.md` and the three skills
-in `skills/`. `funnel.md` holds the counts, `pages.md` the pages and the never-test list. This file holds how a rate, a
+The standing rules behind the Watch routine, `playbooks/run-an-experiment.md` and the three skills in `skills/`. `funnel.md` holds the counts, `pages.md` the pages and the never-test list. This file holds how a rate, a
 leak and a test result are computed, so each run does not re-derive them.
 
 ## Rates
@@ -26,12 +25,14 @@ leak and a test result are computed, so each run does not re-derive them.
 
 - Per arm, for a two-sided 5% test with 80% power:
   n = 7.849 × [p1(1 − p1) + p2(1 − p2)] ÷ (p2 − p1)². The constant is (1.96 + 0.8416)².
-- p1 is the control rate from a clean baseline window, with its count and dates in the brief. p2 is p1 plus the smallest
+- p1 is the control rate from a clean baseline window, with its count and dates in the experiment's file. p2 is p1 plus the smallest
   change worth shipping, written in points.
-- Run time in weeks = ceil(2 × n ÷ eligible entrants per week), at least 2 and at most 6. Eligible entrants are the
-  people who would see the test after the brief's exclusions, averaged over the last four full weeks.
-- If the run needs more than six weeks, the page is too small for that change. Say so, and propose a bigger change or a
-  different page. Do not run a test longer than six weeks.
+- Run time in weeks = ceil(2 × n ÷ eligible entrants per week), at least 2 and at most 4. Eligible entrants are the
+  people who would see the test after the experiment's exclusions, averaged over the last four full weeks.
+- If the run needs more than four weeks, the page is too small for that change. Say so, and propose a bigger change or a
+  different page. Do not run a test longer than four weeks. On a page too small for any test, make known fixes (a
+  broken form, a slow page, a missing price), each measured before and after over windows of the same length, and say
+  plainly that it is not an A/B test.
 
 ## Reading a result
 

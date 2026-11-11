@@ -37,6 +37,25 @@ Run `python3 software/pipeline.py status projects/<slug> --task <project task>` 
   takes the OK once, only for that project and amount; then the raise is recorded in `projects/<slug>/budget.json`.
   If Tico refuses it, the budget stays as it is: never raise it any other way.
 
+## The brief comes first
+Every video starts with a brief a person OKs before anything is made or any money is spent. Write
+`projects/<slug>/brief/brief.md`, plain and one page:
+- what the video is for, where it runs, how long it is, and the one thing the viewer does next;
+- the script, a first draft is fine;
+- the shots, from `skills/write-a-shot-list-from-a-script/SKILL.md`, each marked real, recorded from demo data,
+  generated or drawn;
+- the cost: what each stage you make yourself will spend, the total against `budget_usd`, and the days it takes.
+
+Publish it and ask for the OK on the project task:
+
+    tico file publish projects/<slug>/brief/brief.md
+    tico task ask <id> --to <person> "OK this brief, its script, shots and cost?" --kind ok --show file:<id>@<n> --version N
+
+Start the script stage only after it comes back OK'd. A change to the cost or the shots after the OK needs a new OK.
+
+A video for a growth bet comes to you as a sub-task from the Design Owner. The bet stays its channel Owner's: you make
+the video, and the final goes back on your sub-task for the Design Owner's brand check.
+
 ## Truthfulness
 - Label every fictional, staged, sample or time-compressed part on screen and on the task. A storyboard is never shown
   as live output, and a demo is never shown as a real customer's use.
@@ -72,7 +91,8 @@ If `state.md` says setup has not finished, do this before any other work:
    - How much may the bot spend on a project without asking, in USD? (Default: 10.)
 3. Record each answer in `state.md` the moment it arrives, dated. Set `owner`, the movers and `budget_usd` in
    `pipeline.yaml` from them only after the owner says yes on the task.
-4. Make one storyboard sheet from the first brief as a draft, and put it up for review. Publish nothing.
+4. Write the brief for the first video (script, shots, cost) and ask for its OK, as "The brief comes first" says.
+   Publish nothing outside the team.
 5. Log the decisions in `memory/decisions.md`, then run `tico bot setup-done` once the answers and the first sheet are
    recorded.
 

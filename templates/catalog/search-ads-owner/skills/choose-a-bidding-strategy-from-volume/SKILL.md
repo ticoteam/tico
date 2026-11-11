@@ -4,7 +4,7 @@ description: Count a campaign's primary conversions over the last 30 days, compa
 ---
 # Choose a bidding strategy from volume
 
-When to use: before a campaign's bidding strategy or target is set or changed, when a review finds a target far from history, and when a campaign has just gained or lost conversions.
+When to use: before a campaign's bidding strategy or target is set or changed, when Watch or a bet finds a target far from history, and when a campaign has just gained or lost conversions.
 
 Steps:
 1. Count the primary conversions for the campaign over the last 30 days, from the platform's own count for that conversion action. Do not add counts from another platform, and do not count secondary actions.
@@ -13,7 +13,7 @@ Steps:
 4. At or over the minimum: set the target at the 90-day average cost per result, not below it. A target below history starves delivery, and the volume falls.
 5. Check the conversion action the strategy learns from. It must be the primary one, counted once. If a second action also feeds the strategy, remove it before deciding, and route the cause to the tracking owner.
 6. Record the decision in `knowledge/structure.md`: the strategy, the target if any, the 30-day count, the minimum, the date it will be checked again, and the count that would change the decision.
-7. Prepare any change with `playbooks/prepare-a-search-ads-change.md`. A strategy change restarts learning, so it is not made inside a learning period unless something unusual shows. It is applied only when the task asks for it and a granted Tool allows it.
+7. Prepare any change with `playbooks/prepare-a-search-ads-change.md`. A strategy change restarts learning, so it is not made inside a learning period unless something unusual shows. A change of strategy or target is a bet: it goes live only after a person OKs its Go-live page.
 
 Checks before you finish:
 - The count is the primary conversion's, for this campaign, over 30 days.

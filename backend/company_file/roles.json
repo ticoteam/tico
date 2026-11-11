@@ -470,8 +470,8 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Plans four weeks of posts and articles and writes one finished piece a week in the team's voice, with its short versions and sources. Public messages stay drafts until a person turns mail sending on in Tico.",
-   "when": "A team that publishes posts or articles and has no one with the hours to plan and draft them.",
+   "summary": "Owns the team's blog and social posts and the signups they bring. Files content ideas, builds each bet until a person OKs it to go live, measures it, and keeps each kept series coming out on schedule. It publishes only what a person OK'd, and only through a granted Tool.",
+   "when": "A team that publishes posts or articles and has no one with the hours to plan and write them.",
    "tags": [
     "content",
     "blog",
@@ -486,20 +486,21 @@
     "nobody has time to write our blog posts",
     "we don't know what to write about",
     "our content sounds generic",
-    "content ideas never turn into published pieces"
+    "content ideas never turn into published pieces",
+    "we can't tell which posts bring signups"
    ],
    "recommend_when": [
     "publishes_content",
     "sells_to_consumers",
     "small_team"
    ],
-   "first_routine": "Weekly content plan · Mondays at 09:00 team time",
+   "first_routine": "Watch Content · Mondays at 07:00 team time",
    "tools": [
     "docs",
     "meetings",
     "web"
    ],
-   "default": true
+   "default": false
   },
   {
    "slug": "contracts-manager",
@@ -640,8 +641,8 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Owns the conversion rates on the pages that turn visitors into sign-ups, leads and buyers. Each week it maps the funnel with a count on every rate, ranks the leaks, and writes experiment briefs whose sample size and stop rules are worked out before launch. Page changes are drafted for the page's owner to apply.",
-   "when": "A team that sends traffic to landing, sign-up, pricing or checkout pages and cannot say which step loses the most people, or whether a page change really helped.",
+   "summary": "Owns how many visitors become signups. Files CRO ideas, builds each page change or test until a person OKs it to go live, measures it, and watches what worked so it keeps working. Every rate has its count, and no test is read before its planned end. It never changes a live page itself unless a granted Tool allows it.",
+   "when": "A team that sends visitors to landing, signup, pricing or checkout pages and cannot say which step loses the most people, or whether a page change really helped.",
    "tags": [
     "conversion",
     "cro",
@@ -655,7 +656,7 @@
     "ecommerce"
    ],
    "pains": [
-    "we get visitors but very few sign-ups",
+    "we get visitors but very few signups",
     "nobody knows which step of the funnel loses the most people",
     "we ended a test early because the numbers looked good",
     "page changes go live on opinion, not on a result",
@@ -666,8 +667,9 @@
     "sells_to_consumers",
     "sells_to_businesses"
    ],
-   "first_routine": "Weekly conversion check · Mondays at 08:30 team time",
+   "first_routine": "Watch CRO · Daily at 07:00 team time; the KPI on Mondays",
    "tools": [
+    "analytics",
     "docs",
     "web"
    ],
@@ -864,8 +866,8 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Writes the next campaign email or nurture sequence with three subject lines, a preview line and a send checklist, ready to load. Customer messages stay drafts until a person turns mail sending on in Tico; a requested schedule goes out only when a granted Tool allows it.",
-   "when": "A team that emails customers or a newsletter list and wants the drafts written in its own voice, on time.",
+   "summary": "Owns the email the team sends. Files email ideas, builds each bet until a person OKs it to go live, measures it, and watches each kept flow so it keeps working. It never mails anyone who did not agree to it, and sends nothing itself unless a granted Tool allows it.",
+   "when": "A team with a list of customers or subscribers who agreed to get its email, and an email platform that sends it.",
    "tags": [
     "email",
     "newsletter",
@@ -875,20 +877,21 @@
     "subscription"
    ],
    "pains": [
-    "writing campaign emails takes days",
-    "our newsletter goes out too rarely",
-    "launch emails go out late or not at all",
+    "we don't know which emails lead to a sale",
+    "nobody notices when a welcome email breaks",
     "we send one email to the whole list",
-    "our email open rates keep dropping"
+    "launch emails go out late or not at all",
+    "writing campaign emails takes days"
    ],
    "recommend_when": [
     "sells_to_consumers",
     "publishes_content",
     "uses_email"
    ],
-   "first_routine": "Weekly email campaign draft · Tuesdays at 09:00 team time",
+   "first_routine": "Watch Email · Daily at 07:00 team time",
    "tools": [
     "docs",
+    "email-platform",
     "mail"
    ],
    "default": false
@@ -3019,8 +3022,8 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Owns what paid search spend buys across every customer segment: reviews each campaign's cost per result against its target every week, cleans out the search terms that spend without converting, and sets bidding only where the conversion volume supports it. Every change is prepared for review and goes into an ad account only when a task asks for it and a granted Tool allows it.",
-   "when": "A team that spends on search ads every month for one or more customer segments, where nobody reads the search terms or the cost per result each week.",
+   "summary": "Owns what search ads spend buys. Files search ads ideas, builds each bet until a person OKs it to go live, measures it, and watches every kept campaign each day so it keeps working. It never changes an ads account unless a granted Tool allows it, and never raises a budget outside an approved experiment.",
+   "when": "A team that spends on search ads every month, where nobody reads the search terms or the cost per new customer each week.",
    "tags": [
     "paid-search",
     "google-ads",
@@ -3038,14 +3041,14 @@
     "the bidding target is set on a few conversions and the campaign never settles",
     "Google and Microsoft report different conversions and nobody knows which one is right",
     "the ad sends people to a page that does not match what they searched for",
-    "each segment wants its own keywords and they bid against each other"
+    "nobody notices when a campaign starts costing twice as much"
    ],
    "recommend_when": [
     "sells_to_consumers",
     "sells_to_businesses",
     "has_pipeline"
    ],
-   "first_routine": "Weekly search ads review · Mondays at 09:30 team time",
+   "first_routine": "Watch Search Ads · Daily at 07:00 team time",
    "tools": [
     "crm",
     "google-ads",
@@ -3323,8 +3326,8 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Owns what paid social spend buys across every customer segment: reviews each campaign's cost per result against its target every week, catches creative fatigue before results fall, and prepares each budget, creative and audience change for review. Changes go into an ad account only when a task asks for them and a granted Tool allows it.",
-   "when": "A team that spends on paid social every month for one or more customer segments, where nobody reads creative fatigue and cost per result each week.",
+   "summary": "Owns what paid social spend buys. Files social ads ideas, builds each bet until a person OKs it to go live, measures it, and watches each kept campaign every day so it keeps working. It never changes an ads account itself unless a granted Tool allows it, and never raises a budget outside an approved experiment.",
+   "when": "A team that spends on paid social every month, where nobody reads cost per new customer and tired creative every week.",
    "tags": [
     "paid-social",
     "meta-ads",
@@ -3341,14 +3344,14 @@
     "our social ads cost more every month for the same results",
     "the same ads have run for months and nobody has changed them",
     "we can't tell which audience or creative is working",
-    "each segment wants its own campaign and they compete for one budget",
-    "social ad reports show clicks and views, not what the ads bought"
+    "social ad reports show clicks and views, not what the ads bought",
+    "nobody notices when a campaign starts wasting money"
    ],
    "recommend_when": [
     "sells_to_consumers",
     "sells_to_businesses"
    ],
-   "first_routine": "Weekly paid social review · Mondays at 09:00 team time",
+   "first_routine": "Watch Social Ads · Every day at 07:00 team time",
    "tools": [
     "crm",
     "meta-ads",
@@ -3949,7 +3952,7 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Makes one video at a time from an approved brief: script, storyboard, shots, cut and final, each stage OK'd in Tico before the next starts. Nothing is published until the owner OKs the exact final file.",
+   "summary": "Makes one video at a time, starting from a brief a person OKs: the script, the shots and the cost. Then storyboard, shots, cut and final, each stage OK'd in Tico before the next starts. Reports to the Design Owner. Nothing is published until the owner OKs the exact final file.",
    "when": "A team that wants product explainers, demos, ads or social videos made and checked, and has no one with the hours to make them.",
    "tags": [
     "video",

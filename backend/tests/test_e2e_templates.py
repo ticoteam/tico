@@ -26,7 +26,8 @@ def jobs_for(api, bot):
 
 def test_the_core_set_is_the_default_suggestions_and_botops():
     assert "botops" in CORE
-    assert len(CORE) >= 16, f"only {len(CORE)} core templates: a card was lost or stopped suggesting by default"
+    # 15 since the Content Owner became a growth pack offered, not pre-checked (docs/pipelines-v3.md "Growth and Success").
+    assert len(CORE) >= 15, f"only {len(CORE)} core templates: a card was lost or stopped suggesting by default"
 
 
 @pytest.mark.parametrize("template", CORE)

@@ -1188,7 +1188,7 @@
   "backend/tests/test_usage_limits_30m.py": 5.09,
   "backend/tests/test_vendor_contracts.py": 0.02,
   "backend/tests/test_verdict_fields.py": 30.12,
-  "backend/tests/test_video_producer_pipeline.py": 0.07,
+  "backend/tests/test_video_owner_pipeline.py": 0.07,
   "backend/tests/test_views.py": 5.59,
   "backend/tests/test_visual_config_proof.py": 0.04,
   "backend/tests/test_visual_uploads.py": 3.25,

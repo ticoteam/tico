@@ -13,16 +13,24 @@ import pytest
 import yaml
 
 from backend import pipeline_presets_more as P
+from backend import recruit_rank as R
 from backend.company_file import chart_formula as F
 from clients import catalog
 from clients.routines import validate_schedules
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
+GROUPS = CATALOG.parent / "groups.yaml"
 
 # Each pack's channel key (backend/company_file/chart_formula.json) and its routines' crons: Watch on the channel's
 # cadence (plan §6), Find ideas weekly.
+DAILY, WEEKLY, FIND = "0 7 * * *", "0 7 * * 1", "0 8 * * 2"
 PACKS = {
-    "seo-owner": ("seo", {"watch": "0 7 * * 1", "find-ideas": "0 8 * * 2"}),
+    "seo-owner": ("seo", {"watch": WEEKLY, "find-ideas": FIND}),
+    "content-owner": ("content", {"watch": WEEKLY, "find-ideas": FIND}),
+    "email-owner": ("email", {"watch": DAILY, "find-ideas": FIND}),
+    "cro-owner": ("cro", {"watch": DAILY, "find-ideas": FIND}),
+    "search-ads-owner": ("search-ads", {"watch": DAILY, "find-ideas": FIND}),
+    "social-ads-owner": ("social-ads", {"watch": DAILY, "find-ideas": FIND}),
 }
 # One text in every pack: the stage playbooks and AGENT.md's "Your pipelines" section.
 SHARED = (
@@ -46,11 +54,10 @@ def section(template, heading):
 
 
 @pytest.mark.parametrize("template", sorted(PACKS))
-def test_a_pack_runs_exactly_watch_and_find_ideas_on_its_cadence_off_until_setup(template):
+def test_a_pack_runs_exactly_watch_and_find_ideas_on_its_cadence_off_until_setup_turns_both_on(template):
     folder = CATALOG / template
     routines = validate_schedules(manifest(template)["routines"], lambda rel: (folder / rel).read_text())
     assert {r["id"]: r["cron"] for r in routines} == PACKS[template][1]
-    assert [r["id"] for r in routines][0] == "watch", "setup arms the first routine: Watch"
     assert all(r["enabled"] is False for r in routines)
     assert {r["template"] for r in routines} == {"playbooks/watch.md", "playbooks/find-ideas.md"}
 
@@ -98,3 +105,16 @@ def test_a_pack_materializes_and_passes_the_preflight_checks(tmp_path, template)
     repo = catalog.materialize(template, template, tmp_path, names, {}, display_name=card["name"])
     assert catalog.check(repo, template) == []
     assert "{{" not in (repo / "knowledge" / "channel-playbook.md").read_text()
+
+
+def test_setup_offers_the_six_packs_in_marketing_and_checks_none_by_itself():
+    """Each pack is offered (`common`), never pre-checked: no Owner is hired without a person's pick. Marketing's
+    question is how customers find the team, and an answer naming the channels lists all six."""
+    built = R.build(yaml.safe_load(GROUPS.read_text()), catalog.cards())
+    cards = {card["template"]: card for card in built["cards"]}
+    assert all(cards[t]["department"] == "marketing" and cards[t]["suggest"] == "common" for t in PACKS)
+    assert set(PACKS) <= set(catalog.card("growth-team-manager")["team_templates"])
+    answer = "Search and our blog, a monthly newsletter, Google search ads and Meta ads; the signup page loses people"
+    offered = R.rank(built, "marketing", answer)
+    assert set(PACKS) <= {row["template_id"] for row in offered["bots"]}
+    assert not set(PACKS) & set(offered["suggested_default"])

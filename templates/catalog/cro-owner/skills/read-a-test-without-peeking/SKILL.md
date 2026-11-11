@@ -9,9 +9,9 @@ When to use: before you state any test's result, call it winning or losing, or r
 Steps:
 1. Check that the test has reached its planned n per arm and its planned end. If not, the read is "not yet", with the counts only.
 2. Run the sample ratio check: chi-square with 1 degree of freedom on the two arm counts against the planned split (an even
-   split unless the brief says otherwise). If p is below 0.001, stop and investigate how users were assigned before reading
+   split unless the experiment's file says otherwise). If p is below 0.001, stop and investigate how users were assigned before reading
    anything else.
-3. Check each guardrail against the limit in the brief.
+3. Check each guardrail against the limit in the experiment's file.
 4. Compute each arm's rate with its count. Difference = p_t − p_c.
 5. Interval = difference ± 1.96 × sqrt(p_c(1 − p_c) ÷ n_c + p_t(1 − p_t) ÷ n_t).
 6. Decide. Won: the whole interval is above zero and the guardrails hold. Lost: the whole interval is below zero. Anything
@@ -23,7 +23,7 @@ Checks before you finish:
 - Nothing about the primary metric was read before the planned end.
 - The sample ratio check is written, with its p value.
 - The interval, not the point difference, decides the call.
-- No winner is written from fewer people than the brief planned.
+- No winner is written from fewer people than the experiment's file planned.
 
 Example (invented numbers, for illustration only): control 1,001 of 4,004 (25.0%), variant 1,062 of 4,010 (26.5%). Difference
 +1.5 points, 95% interval −0.4 to +3.4 points. Sample ratio check p about 0.95. Inconclusive, because the interval includes zero.

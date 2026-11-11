@@ -1,6 +1,6 @@
 # Paid social method
 
-The standing rules behind the weekly review, the creative pipeline and every change proposal. Thresholds are platform guidance or dated third-party figures, and each line says which. Figures carried from the search-ads-owner template's method were read there on 2026-11-01; this file did not re-read them. Team rules (the step size for budget moves, the test count, the fatigue ratio) are this company's choices, set in `knowledge/targets.md`, and are not platform rules.
+The standing rules behind Watch, every bet and every change. Thresholds are platform guidance or dated third-party figures, and each line says which. Figures carried from the search-ads-owner template's method were read there on 2026-11-01; this file did not re-read them. Team rules (the step size for budget moves, the test count, the fatigue ratio) are this company's choices, set in `knowledge/targets.md`, and are not platform rules.
 
 ## Measure the result, not the click
 
