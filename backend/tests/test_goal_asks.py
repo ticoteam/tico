@@ -9,6 +9,7 @@ from backend.store import H
 from backend.tests.helpers.api import get, post  # noqa: F401
 from backend.tests.helpers.kpis import goal_with_kpi, log
 from backend.tests.helpers.goal_asks import MANAGER, asks, goal_manager, needs_tasks, raise_level, sync
+from backend.tests.helpers.strategy import add_bet, publish, write
 
 
 def manager_tasks(api, status):
@@ -276,3 +277,39 @@ def test_a_bots_id_never_reaches_the_text_people_read(api):
         )
     assert "Acme Planner proposed it" in body and bot_id not in body
     assert "ask Acme Planner to reopen it" in hint and bot_id not in hint
+
+
+def vision_asks(api):
+    return [a for a in asks(api, "human:ana") if a["kind"] == "vision"]
+
+
+def test_the_vision_ask_closes_once_a_vision_is_saved_not_at_the_next_hourly_pass(api):
+    """Acme rc.3 bug 6: "Tell your Strategy Owner what this team is for" stayed in Needs you for up to an hour after
+    the owner wrote the vision and published, until the hourly kpi_asks pass."""
+    goal_manager(api, level=2)
+    sync(api)
+    [ask] = vision_asks(api)
+    assert ask["status"] == "open"
+    write(api, sections={"not": "No enterprise deals."})  # the rest of the draft leaves it asked
+    assert [a["status"] for a in vision_asks(api)] == ["open"]
+    write(api, vision="Every small landlord runs on bots.")
+    with api.app.state.store.read() as c:
+        row = H.task(c, ask["id"])
+        assert (row["status"], row["closed_by_id"]) == ("closed", MANAGER)
+        assert close_note(c, ask["id"]) == GA._resolved(c, "vision", "company")
+    assert vision_asks(api) == [] and sync(api) == {"created": [], "closed": []}
+
+
+def test_publishing_a_strategy_with_a_vision_closes_the_vision_ask(api):
+    goal_manager(api, level=2)
+    sync(api)
+    [ask] = vision_asks(api)
+    add_bet(api)
+    write(api, sections={"not": "No enterprise deals."})
+    with api.app.state.store.transaction() as c:
+        # A vision the draft got without a draft save (an older release, a direct write): publishing settles it.
+        c.execute("UPDATE strategy_versions SET vision='Every small landlord runs on bots.' WHERE status='draft'")
+    publish(api)
+    with api.app.state.store.read() as c:
+        assert H.task(c, ask["id"])["status"] == "closed"
+    assert vision_asks(api) == []
