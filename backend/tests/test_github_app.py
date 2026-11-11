@@ -1012,7 +1012,7 @@ def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record
     assert _built_on(api) is None  # cmo's call is not a build
     botops_turn(api)
     _box(api)
-    gh.generate_status = 422
+    gh.generate_status = 500  # (a 422 is "already exists": cmo's repository, this company's own, is the answer)
     failed = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
     assert failed.status_code >= 400 and _built_on(api) is None  # GitHub refused: nothing recorded
     gh.generate_status = 201
