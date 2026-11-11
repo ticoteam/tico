@@ -1,0 +1,816 @@
+[
+ {
+  "argv": [
+   "trigger",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_trigger_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "triggers",
+    null
+   ]
+  ],
+  "stdout": "[\n  {\n    \"id\": \"stripe\",\n    \"name\": \"Stripe events\",\n    \"event\": \"webhook.stripe\",\n    \"signed\": null,\n    \"preset\": \"stripe\",\n    \"type_from\": null,\n    \"hourly\": 60,\n    \"keep_days\": null,\n    \"unheard\": null,\n    \"last_received\": null,\n    \"received_24h\": null,\n    \"refused_24h\": null,\n    \"automations\": null\n  }\n]\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "create",
+   "Stripe events"
+  ],
+  "tools": [
+   [
+    "tico_trigger_create",
+    {
+     "name": "Stripe events",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers",
+    {
+     "name": "Stripe events",
+     "id": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60,\n  \"url\": \"https://tico.example/hooks/stripe\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "create",
+   "Stripe events",
+   "--id",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_create",
+    {
+     "name": "Stripe events",
+     "id": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers",
+    {
+     "name": "Stripe events",
+     "id": "stripe"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60,\n  \"url\": \"https://tico.example/hooks/stripe\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "show",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_show",
+    {
+     "id": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "triggers/stripe",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "update",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_update",
+    {
+     "id": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "update",
+   "stripe",
+   "--name",
+   "Stripe",
+   "--preset",
+   "github",
+   "--type-from",
+   "/type",
+   "--hourly",
+   "10"
+  ],
+  "tools": [
+   [
+    "tico_trigger_update",
+    {
+     "id": "stripe",
+     "name": "Stripe",
+     "preset": "github",
+     "type_from": "/type",
+     "hourly": 10,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe",
+    {
+     "name": "Stripe",
+     "preset": "github",
+     "type_from": "/type",
+     "hourly": 10
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "update",
+   "stripe",
+   "--keep-days",
+   "3",
+   "--unheard",
+   "note",
+   "--type-from",
+   ""
+  ],
+  "tools": [
+   [
+    "tico_trigger_update",
+    {
+     "id": "stripe",
+     "type_from": "",
+     "keep_days": 3,
+     "unheard": "note",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe",
+    {
+     "type_from": "",
+     "keep_days": 3,
+     "unheard": "note"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "update",
+   "stripe",
+   "--preset",
+   "bogus"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico trigger update: error: argument --preset: invalid choice: 'bogus' (choose from none, hmac, github, standard, stripe, slack)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "trigger",
+   "update",
+   "stripe",
+   "--hourly",
+   "ten"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico trigger update: error: argument --hourly: invalid int value: 'ten'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "trigger",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico trigger update <id>\ntico trigger update: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "trigger",
+   "rotate",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_rotate",
+    {
+     "id": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/rotate",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60,\n  \"url\": \"https://tico.example/hooks/stripe\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "sign",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_sign",
+    {
+     "id": "stripe",
+     "off": false,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/signing",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60,\n  \"signed\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "sign",
+   "stripe",
+   "--preset",
+   "stripe",
+   "--secret",
+   "0123456789abcdef"
+  ],
+  "tools": [
+   [
+    "tico_trigger_sign",
+    {
+     "id": "stripe",
+     "preset": "stripe",
+     "secret": "0123456789abcdef",
+     "off": false,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/signing",
+    {
+     "secret": "0123456789abcdef",
+     "preset": "stripe"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60,\n  \"signed\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "sign",
+   "stripe",
+   "--off"
+  ],
+  "tools": [
+   [
+    "tico_trigger_sign",
+    {
+     "id": "stripe",
+     "off": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/signing",
+    {
+     "off": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60,\n  \"signed\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "sign",
+   "stripe",
+   "--preset",
+   "none"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico trigger sign: error: argument --preset: invalid choice: 'none' (choose from hmac, github, standard, stripe, slack)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "trigger",
+   "delete",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_delete",
+    {
+     "id": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/delete",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"deleted\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "deliveries",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_deliveries",
+    {
+     "id": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "triggers/stripe/deliveries",
+    null
+   ]
+  ],
+  "stdout": "[\n  {\n    \"delivery\": \"d1\",\n    \"type\": \"charge.paid\",\n    \"outcome\": \"accepted\"\n  }\n]\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "delivery",
+   "stripe",
+   "d1"
+  ],
+  "tools": [
+   [
+    "tico_trigger_delivery",
+    {
+     "id": "stripe",
+     "delivery": "d1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "triggers/stripe/deliveries/d1?part=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"delivery\": \"d1\",\n  \"part\": 1,\n  \"parts\": 2,\n  \"body\": \"{}\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "delivery",
+   "stripe",
+   "d1",
+   "--part",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_trigger_delivery",
+    {
+     "id": "stripe",
+     "delivery": "d1",
+     "part": 2,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "triggers/stripe/deliveries/d1?part=2",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"delivery\": \"d1\",\n  \"part\": 1,\n  \"parts\": 2,\n  \"body\": \"{}\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "replay",
+   "stripe",
+   "d1"
+  ],
+  "tools": [
+   [
+    "tico_trigger_replay",
+    {
+     "id": "stripe",
+     "delivery": "d1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/deliveries/d1/replay",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"delivery\": \"d1:replay:1\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "recover",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_recover",
+    {
+     "id": "stripe",
+     "since": 24,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/recover",
+    {
+     "since_hours": 24
+    }
+   ]
+  ],
+  "stdout": "{\n  \"found\": 2,\n  \"recovered\": 1,\n  \"duplicate\": 1,\n  \"still_refused\": 0\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "recover",
+   "stripe",
+   "--since",
+   "48"
+  ],
+  "tools": [
+   [
+    "tico_trigger_recover",
+    {
+     "id": "stripe",
+     "since": 48,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/recover",
+    {
+     "since_hours": 48
+    }
+   ]
+  ],
+  "stdout": "{\n  \"found\": 2,\n  \"recovered\": 1,\n  \"duplicate\": 1,\n  \"still_refused\": 0\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "relay",
+   "create",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_relay_create",
+    {
+     "trigger": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/relay",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"trigger\": \"stripe\",\n  \"address\": \"https://gateway.example/r/stripe\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "relay",
+   "rotate",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_relay_rotate",
+    {
+     "trigger": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/relay/rotate",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"trigger\": \"stripe\",\n  \"address\": \"https://gateway.example/r/stripe\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "relay",
+   "delete",
+   "stripe"
+  ],
+  "tools": [
+   [
+    "tico_trigger_relay_delete",
+    {
+     "trigger": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/relay/delete",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"trigger\": \"stripe\",\n  \"deleted\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "relay",
+   "delete"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico trigger relay delete <trigger>\ntico trigger relay delete: error: the following arguments are required: trigger",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "trigger",
+   "show",
+   "stripe",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_trigger_show",
+    {
+     "id": "stripe",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "triggers/stripe",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"stripe\",\n  \"name\": \"Stripe events\",\n  \"event\": \"webhook.stripe\",\n  \"preset\": \"stripe\",\n  \"hourly\": 60\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "trigger",
+   "shwo",
+   "stripe"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico trigger: error: argument sub: invalid choice: 'shwo' (choose from list, create, show, update, rotate, sign, delete, deliveries, delivery, replay, recover, relay) Did you mean: tico trigger show, tico trigger sign?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "trigger",
+   "list",
+   "--bogus"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico trigger list: error: unrecognized arguments: --bogus Did you mean: tico trigger list, tico trigger delete?",
+  "exit": 64
+ }
+]
