@@ -456,16 +456,7 @@ def run(args, who=None):
             "general-manager bot": {"bot": getattr(args, "state", None)},
         }[fn]
         return hubtools.general_manager_set(client, {**change, "operation_id": op})
-    if fn in ("support report", "support send"):
-        from clients import hubtools
-
-        key = os.environ.get("HUB_OPERATION_ID")
-        if fn == "support send":
-            return hubtools.support_send(client, {"ok": args.ok, "operation_id": key})
-        text = Path(args.file).read_text(encoding="utf-8") if args.file else args.message
-        report = {"message": text, "include_ids": not args.no_ids, "task": args.task, "operation_id": key}
-        return hubtools.support_report(client, report)
-    if args.cmd in ("api", "credential", "support") or fn == "message redact":
+    if args.cmd in ("api", "credential") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":
         from clients import hubtools
@@ -977,8 +968,7 @@ def run(args, who=None):
 
 
 def botops_tools(client, args):
-    """`tico api`, `tico credential ...`, `tico message redact`, `tico support file`: the
-    tool of the same name. A secret is read from standard input, never from the command line."""
+    """`tico api`, `tico credential ...`, `tico message redact`: the tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
 
     key = os.environ.get("HUB_OPERATION_ID")

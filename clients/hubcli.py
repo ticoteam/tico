@@ -2610,24 +2610,7 @@ def parser():
     chan.add_parser("import", help="store the channels of the old registry/slack-channels.yaml").set_defaults(
         fn="slack channel import"
     )
-    support = sub.add_parser("support", help="tell the Tico team about a gap or a fault").add_subparsers(dest="sub")
-    s = support.add_parser("file", help="a Confirm card shows the message; nothing is sent until the person confirms")
-    s.add_argument("message")
-    s.set_defaults(fn="support file")
-    s = support.add_parser(
-        "report", help="send a Tico bug report (a person OKs it first, unless the team lets bots send)"
-    )
-    text = s.add_mutually_exclusive_group(required=True)
-    text.add_argument("--message", help="the whole report: what failed, since when, the exact error, what you tried")
-    text.add_argument("--file", help="a file holding the report (UTF-8)")
-    s.add_argument(
-        "--no-ids", dest="no_ids", action="store_true", help="send only the message: not the version and install ID"
-    )
-    s.add_argument("--task", help="the task the report belongs to; the OK is asked on it")
-    s.set_defaults(fn="support report")
-    s = support.add_parser("send", help="send a report a person OK'd; filed as the person who OK'd it")
-    s.add_argument("--ok", required=True, help="the OK id `support report` printed")
-    s.set_defaults(fn="support send")
+    cli_spec.add(sub, computers.SUPPORT)  # tico support: clients/commands/computers.py
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
     contacts = sub.add_parser(
