@@ -39,7 +39,7 @@ def trigger_list(api, args):
     ]
 
 
-TRIGGER = {"id": _s("The trigger's id from tico_trigger_list")}
+TRIGGER = {"id": _s("The trigger's id, from `trigger list`")}
 
 
 def _delivery_path(delivery):
@@ -54,7 +54,10 @@ def _delivery_path(delivery):
     "Make a webhook trigger. The answer's `url` is the address a sender posts to; it carries "
     "the secret and is shown only now (tico_trigger_rotate makes a new one). An automation runs on it with "
     "the trigger {type: webhook, id}.",
-    {"name": _s("What it is for, e.g. Orders"), "id": _s("Optional id: lowercase letters, digits and dashes")},
+    {
+        "name": _s("What it is for, e.g. Orders"),
+        "id": _s("Lowercase letters, digits and dashes; made from the name by default"),
+    },
     required=("name",),
     writes=True,
 )
@@ -76,19 +79,33 @@ def trigger_show(api, args):
 
 @tool(
     "tico_trigger_update",
-    "Change a trigger: `name`; `preset` (none, hmac, github, standard, stripe, slack: how calls are "
-    "verified; needs a signing secret, see tico_trigger_sign); `type_from` (a header name or a JSON pointer such as "
-    "/type; empty uses the preset's default); `hourly` (1-600); `keep_days` (1-30: how long calls can be read and "
-    "run again); `unheard` (log, or note: tell the maker, at most hourly, when no routine or rule acted). The owner, "
-    "whoever made it, and BotOps for one of them.",
+    "Change a trigger's name or settings. The owner, whoever made it, and BotOps for one of them.",
     {
         **TRIGGER,
         "name": _s("New name"),
-        "preset": {"type": "string", "enum": list(("none", "hmac", "github", "standard", "stripe", "slack"))},
+        "preset": {
+            "type": "string",
+            "enum": ["none", "hmac", "github", "standard", "stripe", "slack"],
+            "description": "How calls are verified; needs a signing secret (`trigger sign`)",
+        },
         "type_from": _s("A header name or a JSON pointer starting with /; empty for the preset's default"),
-        "hourly": {"type": "integer", "minimum": 1, "maximum": 600},
-        "keep_days": {"type": "integer", "minimum": 1, "maximum": 30},
-        "unheard": {"type": "string", "enum": ["log", "note"]},
+        "hourly": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600,
+            "description": "Calls an hour, 1-600 (60 by default)",
+        },
+        "keep_days": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30,
+            "description": "Days calls stay readable and can run again, 1-30 (7 by default)",
+        },
+        "unheard": {
+            "type": "string",
+            "enum": ["log", "note"],
+            "description": "note: tell the maker, at most hourly, when no automation or rule acted; log: only log it",
+        },
     },
     required=("id",),
     writes=True,
@@ -113,15 +130,19 @@ def trigger_rotate(api, args):
 
 @tool(
     "tico_trigger_sign",
-    "Verify every call to a trigger. `preset`: hmac (GitHub's X-Hub-Signature-256 or X-Signature), "
-    "github, standard (Standard Webhooks; the secret is whsec_ and base64) or stripe; the current preset, else hmac, "
-    "when empty. `secret` is the one the sender gave you; empty makes a new one, returned once. `off` stops checking. "
+    "Verify every call to a trigger. `secret` is the one the sender gave you; empty makes a new one, returned once. "
+    "`off` stops checking. "
     "BotOps asked by a person can't pass a secret on: they type it in Automations › Incoming webhooks.",
     {
         **TRIGGER,
-        "preset": {"type": "string", "enum": ["hmac", "github", "standard", "stripe", "slack"]},
+        "preset": {
+            "type": "string",
+            "enum": ["hmac", "github", "standard", "stripe", "slack"],
+            "description": "hmac (GitHub's X-Hub-Signature-256 or X-Signature), github, standard (Standard Webhooks; "
+            "the secret is whsec_ and base64), stripe or slack; the current one, else hmac, when left out",
+        },
         "secret": _s("The sender's signing secret, 16+ characters; empty makes one"),
-        "off": {"type": "boolean", "description": "true stops checking signatures"},
+        "off": {"type": "boolean", "description": "Stop checking signatures"},
     },
     required=("id",),
     writes=True,
@@ -162,7 +183,7 @@ def trigger_deliveries(api, args):
     "a call that started one of your tasks or woke you, or one of your own triggers.",
     {
         **TRIGGER,
-        "delivery": _s("The delivery id from tico_trigger_deliveries"),
+        "delivery": _s("The delivery id, from `trigger deliveries`"),
         "part": {"type": "integer", "minimum": 1, "description": "Which part of a long body (default 1)"},
     },
     required=("id", "delivery"),
@@ -193,7 +214,7 @@ def trigger_recover(api, args):
     "tico_trigger_replay",
     "Run one stored call again: its automations and wake rules start as a new occurrence "
     "(`<delivery>:replay:<n>`). The call's body must still be kept (see `expires_at`).",
-    {**TRIGGER, "delivery": _s("The delivery id from tico_trigger_deliveries")},
+    {**TRIGGER, "delivery": _s("The delivery id, from `trigger deliveries`")},
     required=("id", "delivery"),
     writes=True,
 )
@@ -203,7 +224,7 @@ def trigger_replay(api, args):
     )["replay"]
 
 
-TRIGGER = _s("The trigger id (`id` in tico_trigger_list)")
+TRIGGER = _s("The trigger's id, from `trigger list`")
 
 
 @tool(
@@ -247,43 +268,59 @@ def trigger_relay_delete(api, args):
 # `tico trigger ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
 CLI = (
     Group("trigger", "webhooks that start automations (Automations › Incoming webhooks)"),
-    Command("trigger list"),
+    Command(
+        "trigger list",
+        "the triggers, with their addresses (no secrets) and 24-hour counts",
+        example="tico trigger list",
+    ),
     Command(
         "trigger create",
         "make a webhook trigger; the address with its secret is shown once",
-        args=(Arg("id", help="lowercase letters, digits and dashes; made from the name by default"),),
+        example="tico trigger create 'Stripe events' --id stripe",
     ),
-    Command("trigger show"),
+    Command("trigger show", "one trigger: its settings, counts and automations", example="tico trigger show stripe"),
     Command(
         "trigger update",
         "change a trigger's name or settings",
-        args=(
-            Arg("preset", help="how calls are verified (needs a signing secret)"),
-            Arg("hourly", help="calls an hour, 1-600 (60 by default)"),
-            Arg("keep_days", help="days calls stay readable and can run again, 1-30 (7 by default)"),
-            Arg("unheard", help="note: tell the maker, at most hourly, when no automation or rule acted"),
-        ),
+        example="tico trigger update stripe --preset stripe --hourly 120",
     ),
-    Command("trigger rotate", "a new secret; the old address stops working"),
+    Command("trigger rotate", "a new secret; the old address stops working", example="tico trigger rotate stripe"),
     Command(
         "trigger sign",
         "verify each call with a preset; the signing secret is shown once",
-        args=(Arg("preset", help="the current one, else hmac"), Arg("off", help="stop checking signatures")),
+        example="tico trigger sign stripe --preset stripe --secret whsec_...",
     ),
-    Command("trigger delete"),
-    Command("trigger deliveries", "the latest calls to a trigger"),
-    Command("trigger delivery", "one stored call: redacted headers and the body (long bodies in parts)"),
-    Command("trigger replay", "run a stored call again as a new occurrence"),
+    Command("trigger delete", "delete a trigger; its address stops at once", example="tico trigger delete stripe"),
+    Command("trigger deliveries", "the latest calls to a trigger", example="tico trigger deliveries stripe"),
+    Command(
+        "trigger delivery",
+        "one stored call: redacted headers and the body (long bodies in parts)",
+        example="tico trigger delivery stripe evt_1",
+    ),
+    Command(
+        "trigger replay", "run a stored call again as a new occurrence", example="tico trigger replay stripe evt_1"
+    ),
     Command(
         "trigger recover",
         "run again, under the current secret and preset, every call refused in the last hours whose body is kept; a "
         "sender's later retry of one is a duplicate",
         args=(Arg("since", default=24),),
+        example="tico trigger recover stripe --since 48",
     ),
     Group("trigger relay", "a second address through Tico Gateway, so nothing is lost while this server is off"),
-    Command("trigger relay create", "make the address; its secret is shown once"),
-    Command("trigger relay rotate", "replace the secret; the old address stops at once"),
-    Command("trigger relay delete", "remove the address; the trigger and its own address stay"),
+    Command(
+        "trigger relay create", "make the address; its secret is shown once", example="tico trigger relay create stripe"
+    ),
+    Command(
+        "trigger relay rotate",
+        "replace the secret; the old address stops at once",
+        example="tico trigger relay rotate stripe",
+    ),
+    Command(
+        "trigger relay delete",
+        "remove the address; the trigger and its own address stay",
+        example="tico trigger relay delete stripe",
+    ),
 )
 
 

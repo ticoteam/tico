@@ -61,7 +61,7 @@ RULE_WHERE = {
         "with": _s("A group, person or bot the rule's With names"),
         "source": _s("A From, by name or id"),
         "bot": _s("The rules that apply to this bot"),
-        "mine": {"type": "boolean"},
+        "mine": {"type": "boolean", "description": "The rules that apply to your bot, and its settings"},
         "cursor": _s("next_cursor from the last page"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 100},
     },
@@ -173,9 +173,13 @@ def rules_ask(api, args):
             "which must be in that file's version. A quote that is not there is dropped (the answer says so).",
             "properties": {
                 "file_id": _s("The document's file id"),
-                "version": {"type": "integer", "minimum": 1},
+                "version": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "The file's version the quote is in (the Rules Owner passes the one its task names)",
+                },
                 "section": _s("The section it is in"),
-                "quote": _s("The exact words"),
+                "quote": _s("The exact words, which must be in that version of the file"),
             },
             "required": ["file_id", "quote"],
         },
@@ -444,20 +448,18 @@ def _add(fields):
 
 
 WHO = (
-    Arg("who_names", "--who", action="append", metavar="NAME", into="who", help="a group, person or bot by id or name; repeatable"),
+    Arg("who_names", "--who", action="append", metavar="NAME", into="who", part="names"),
     Arg("everyone", "--everyone", action="store_true", into="who"),
     Arg("all_bots", "--all-bots", action="store_true", into="who"),
-    Arg("outside_editions", "--outside-editions", action="store_true", into="who", help="what the Company page sends outside (owner and admins only)"),
-)  # fmt: skip
-WITH = (
-    Arg("with_names", "--with", action="append", metavar="NAME", into="with", help="internal: a group, person or bot the rule is about; repeatable"),
-)  # fmt: skip
+    Arg("outside_editions", "--outside-editions", action="store_true", into="who"),
+)
+WITH = (Arg("with_names", "--with", action="append", metavar="NAME", into="with", part="names"),)
 CITE = (
-    Arg("file_id", "--file", metavar="FILE_ID", into="cite", help="external: the document the rule rests on"),
-    Arg("section", "--section", into="cite", help="external: the section of the document"),
-    Arg("quote", "--quote", into="cite", help="external: the words of the document the rule rests on (must be in the file)"),
-    Arg("file_version", "--version", type=int, metavar="N", into="cite", help="external: the version of --file the quote is in (the Rules Owner passes the one its task names)"),
-)  # fmt: skip
+    Arg("file_id", "--file", metavar="FILE_ID", into="cite"),
+    Arg("section", "--section", into="cite"),
+    Arg("quote", "--quote", into="cite"),
+    Arg("file_version", "--version", type=int, metavar="N", into="cite", part="version"),
+)
 FROM = Arg("source_id", "--from", metavar="SOURCE")
 DAY = "YYYY-MM-DD"
 
@@ -470,40 +472,59 @@ CLI = (
     Command(
         "rules list",
         "the rules in force; --mine: your bot's rules and its settings as sentences",
-        args=(Arg("mine", help="the rules that apply to your bot, and its settings"),),
+        example="tico rules list --kind external --status active",
     ),
     Command(
         "rules read",
         "one rule, with its due dates and the quote it cites; with --from, add a document for the Rules Owner to read "
         "(a file id or a link)",
-        args=(
-            Arg("id", help="a rule id, or with --from a file id or a link"),
-            Arg("source", "--from", required=False, metavar="SOURCE", help="document: the From, by name or id"),
-        ),
+        tool="tico_rules_get",
+        tools=("tico_rules_read",),
+        args=(Arg("source", "--from", metavar="SOURCE"),),
         tool_for=lambda fields: "tico_rules_read" if fields.get("source") else "tico_rules_get",
+        example="tico rules read https://acme.example/terms --from Acme --kind vendor",
     ),
-    Command("rules ask", "a can-I question: the rules that apply, cited, and the Rules Owner's answer on a task"),
-    Command("rules suggested", "the suggestions waiting for a person to accept or skip"),
+    Command(
+        "rules ask",
+        "a can-I question: the rules that apply, cited, and the Rules Owner's answer on a task",
+        example="tico rules ask 'Can I share the deck with Acme?'",
+    ),
+    Command(
+        "rules suggested",
+        "the suggestions waiting for a person to accept or skip",
+        example="tico rules suggested",
+    ),
     Command(
         "rules add",
         "add a rule: a bot's is a suggestion; only owners and admins add Everyone",
         args=(Arg("kind", positional=False), Arg("text", positional=False), FROM, *WHO, *WITH, *CITE),
         convert=_add,
+        example="tico rules add --kind internal --text 'Reply to customers within a day' --who Support",
     ),
     Command(
         "rules edit",
         "change a rule, only the fields given, against the version you read",
         args=(Arg("version", positional=False), FROM, *WHO, *WITH),
         convert=_who_with,
+        example="tico rules edit r1 --version 2 --text 'Reply within four hours'",
     ),
-    Command("rules accept", "a person accepts a suggestion, optionally changing its Who", args=WHO, convert=_who),
-    Command("rules skip", "set a suggestion aside"),
-    Command("rules retire", "retire a rule in force; its due dates come back"),
+    Command(
+        "rules accept",
+        "a person accepts a suggestion, optionally changing its Who",
+        args=WHO,
+        convert=_who,
+        example="tico rules accept r1 --who Support",
+    ),
+    Command("rules skip", "set a suggestion aside", example="tico rules skip r1"),
+    Command(
+        "rules retire", "retire a rule in force; its due dates come back", example="tico rules retire r1 --version 2"
+    ),
     Group("rules due", "due dates on rules: the next ones, add one, mark one satisfied", default="rules due list"),
     Command(
         "rules due list",
         "the due dates of rules in force: overdue first, then those due within --next days",
         tool="tico_rules_due",
+        example="tico rules due list --next 30d",
     ),
     Command(
         "rules due add",
@@ -514,27 +535,36 @@ CLI = (
             Arg("repeats", positional=False),
             Arg("owner", positional=False),
         ),
+        example="tico rules due add r1 --first 2026-12-01 --repeats monthly --owner Ada",
     ),
     Command(
         "rules due edit",
         "change a due date; a new first day or repeat starts a new one, history kept",
         args=(Arg("first_due", "--first", metavar=DAY), Arg("no_routine", default=None)),
         exclusive=(("task_days", "no_routine"),),
+        example="tico rules due edit d1 --task-days 3",
     ),
     Command(
         "rules due satisfied",
         "mark the current occurrence satisfied",
-        args=(Arg("due_on", "--on", metavar=DAY, help="which occurrence, when two are open"),),
+        args=(Arg("due_on", "--on", metavar=DAY),),
+        example="tico rules due satisfied d1",
     ),
     Command(
         "rules check",
         "check a draft against the rules that apply to you, as the write it will be",
         args=(Arg("to", positional=False), Arg("as", default="message")),
+        example="tico rules check 'Sending the deck now' --to Ada",
     ),
     Command(
         "rules appeal",
         "ask the reviewer to look at your held output",
-        args=(Arg("why", positional=True, nargs="?", default="", help="why you think the rule does not apply"),),
+        args=(Arg("why", positional=True, nargs="?", default=""),),
+        example="tico rules appeal h1 'The rule is about invoices, not decks'",
     ),
-    Command("rules withdraw", "take back your held write to edit it and send it again (nothing is sent)"),
+    Command(
+        "rules withdraw",
+        "take back your held write to edit it and send it again (nothing is sent)",
+        example="tico rules withdraw h1",
+    ),
 )
