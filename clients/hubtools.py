@@ -49,7 +49,6 @@ SERVER_INFO = {"name": "tico", "title": "Tico", "version": release_version()}
 ASK_WAIT_MAX = 300
 STATUSES = ("open", "done", "closed")  # a task's status; what it waits on is its `turn`, never a status
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")  # what a person or bot sets by hand
-GOAL_FILTERS = GOAL_STATUSES + ("gray",)  # gray is the automatic "no data"
 PROPOSAL_KINDS = (
     "goal_wording",
     "goal_kpi",
@@ -396,25 +395,6 @@ def thread_catchup(api, args):
         {"scope": args.get("scope") or "subtree"},
         key=_key(args),
     )
-
-
-@tool(
-    "tico_chat_send",
-    "Send a message or a headless slash command to a bot.",
-    {
-        "to": _s("The bot"),
-        "text": _s("The message or command"),
-        "conversation_id": _s("Continue this conversation"),
-        "command": {"type": "boolean", "default": False},
-        "visuals": VISUALS,
-        "delivery": DELIVERY,
-        "defer_for": DEFER_FOR,
-    },
-    required=("to", "text"),
-    writes=True,
-)
-def chat_send(api, args):
-    return message_send(api, args)
 
 
 @tool("tico_assistant_read", "Read your private Assistant chat and its pending Decisions. Uses only your own room.", {})
@@ -2865,17 +2845,6 @@ def strategy_versions(api, args):
 )
 def strategy_diff(api, args):
     return api.get("strategy/diff", **{"from": int(args["from_n"]), "to": int(args["to_n"])})
-
-
-@tool(
-    "tico_strategy_guides",
-    "Deprecated: the Strategy Owner's drafting questions (the "
-    "default guide only). The exercises "
-    "run against a strategy are lenses: tico_lens_list.",
-    {},
-)
-def strategy_guides(api, args):
-    return api.get("strategy/guides")
 
 
 @tool(
@@ -7332,34 +7301,6 @@ def bot_browser_exit(api, args):
     return who.get(f"bots/{args['bot']}/browser-exit")
 
 
-@tool(
-    "tico_bot_keep_tasks_going",
-    "Read or set automatic assigned-task starts for a bot you manage. "
-    "Default unlimited; 0 turns it off, N caps active work. Waiting work frees a place; review subtasks have no cap.",
-    {
-        "bot": _s("Bot slug"),
-        "limit": {
-            "type": ["integer", "null"],
-            "minimum": 0,
-            "maximum": 1000,
-            "description": "Omit to read, null for unlimited, 0 for off, N for an active-task cap",
-        },
-    },
-    ("bot",),
-    writes=True,
-)
-def bot_keep_tasks_going(api, args):
-    who = _as_person(api)
-    bot = who.get(f"bots/{args['bot']}")
-    if 'limit' not in args:
-        return {"bot": args['bot'], "keep_tasks_going": bot.get('keep_tasks_going'), "task_flow": bot.get('task_flow')}
-    return who.post(
-        f"bots/{args['bot']}/keep-tasks-going",
-        {"keep_tasks_going": args['limit'], "expected_revision": bot['revision']},
-        key=_key(args),
-    )
-
-
 BUDGET_VALUE = {
     "type": ["integer", "string"],
     "minimum": 0,
@@ -11304,28 +11245,6 @@ def task_requester_remove(api, args):
 
 
 @tool(
-    "tico_task_publication_preview",
-    "The exact content a person must OK before a bot publishes task edits or a public comment. "
-    "Once a person OKs exactly this, pass that OK's id as `ok` to the edit or comment.",
-    {
-        "id": TASK_ID,
-        "visibility": _s("Publication", enum=['public', 'private']),
-        "public_title": _s("Title"),
-        "public_summary": _s("Summary"),
-        "labels": {"type": "array", "items": {"type": "string"}},
-        "comment": _s("Public reply text"),
-    },
-    required=("id",),
-)
-def task_publication_preview(api, args):
-    return api.post(
-        f"tasks/{args['id']}/publication-preview",
-        {k: args[k] for k in ('visibility', 'public_title', 'public_summary', 'labels', 'comment') if k in args},
-        key=_key(args),
-    )
-
-
-@tool(
     "tico_task_comment_moderate",
     "Hide, restore or delete a public comment on a task you manage.",
     {"id": TASK_ID, "comment_id": _s("Public comment id"), "action": _s("Action", enum=['hide', 'show', 'delete'])},
@@ -13088,7 +13007,6 @@ AUDIENCE = {
             "tico_bot_place",
             "tico_bot_go_live",
             "tico_task_model",
-            "tico_bot_keep_tasks_going",
             "tico_bot_budget",
             "tico_bot_profile",
             "tico_bot_release",

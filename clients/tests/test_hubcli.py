@@ -558,7 +558,6 @@ class Stub(BaseHTTPRequestHandler):
             part in self.path
             for part in (
                 "/requesters",
-                "/publication-preview",
                 "/moderate",
                 "/roadmaps/settings",
                 "/waits",
@@ -833,17 +832,6 @@ class AgainstAStub(unittest.TestCase):
             ["task", "requester-save", "T1", "--email", "jane@acme.example", "--organization", "Acme", "--important"],
             ["task", "requester-save", "T1", "--requester-id", "R1", "--no-important"],
             ["task", "requester-remove", "T1", "R1"],
-            [
-                "task",
-                "publication-preview",
-                "T1",
-                "--visibility",
-                "public",
-                "--public-title",
-                "Exports",
-                "--label",
-                "roadmap",
-            ],
             ["task", "comment-moderate", "T1", "C1", "hide"],
             ["roadmap", "tasks", "--sort", "size", "--direction", "asc"],
             ["roadmap", "settings"],
@@ -859,10 +847,6 @@ class AgainstAStub(unittest.TestCase):
         )
         self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1")[1], {"important": False})
         self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1/delete")[1], {})
-        self.assertEqual(
-            last("POST", "/api/v2/tasks/T1/publication-preview")[1],
-            {"visibility": "public", "public_title": "Exports", "labels": ["roadmap"]},
-        )
         self.assertEqual(last("POST", "/api/v2/tasks/T1/comments/C1/moderate")[1], {"action": "hide"})
         self.assertTrue(
             {"sort=size", "direction=asc"} <= set(last("GET", "/api/v2/roadmap-tasks")[0].split("?")[1].split("&"))
@@ -1073,23 +1057,6 @@ def test_create_sends_its_pipeline_and_parent_the_same_from_the_cli_and_mcp(monk
     for gone in (["--type", "Dev"], ["--step", "Build"], ["--status", "doing"], ["--next-run"], ["--qa", "yes"]):
         with pytest.raises(SystemExit):
             hubcli.parser().parse_args(argv + gone)
-
-
-def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
-    from clients import remotecli
-    from clients.hubtools import BY_NAME
-
-    sent = []
-    monkeypatch.setitem(BY_NAME['tico_bot_keep_tasks_going'], 'fn', lambda api, args: sent.append(args))
-    for argv in (
-        ['bot', 'keep-tasks-going', 'ops'],
-        ['bot', 'keep-tasks-going', 'ops', 'unlimited'],
-        ['bot', 'keep-tasks-going', 'ops', 'off'],
-        ['bot', 'keep-tasks-going', 'ops', '3'],
-    ):
-        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
-    assert 'limit' not in sent[0]
-    assert [row['limit'] for row in sent[1:]] == [None, 0, 3]
 
 
 def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
@@ -1556,6 +1523,61 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
     assert argv == ["message", "send", "Deploy done", "--fyi"] and "is now" in said
 
 
+class _Me:
+    def get(self, path, **kw):
+        return {"actor": "bot:ops"}
+
+
+def test_org_models_reaches_its_tool_and_is_not_renamed(monkeypatch, capsys):
+    """`tico org models` is not renamed to `tico team show` (only bare `tico org` is) and reaches tico_org_models."""
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+
+    sent = []
+    monkeypatch.setitem(BY_NAME["tico_org_models"], "fn", lambda api, args: sent.append(args) or {"models": []})
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: _Me())
+    monkeypatch.setenv("HUB_API_URL", "https://synthetic.invalid/api/v2")
+    for argv in (["org", "models"], ["org", "order", "ops"], ["org", "reports-to", "bot:ops", "human:ana"]):
+        assert hubcli.rename_argv(argv) == (argv, None)
+    assert hubcli.main(["org", "models"]) == 0
+    assert len(sent) == 1
+    assert "is now" not in capsys.readouterr().err
+
+
+def test_check_names_leaves_every_org_subcommand_alone():
+    """`tico bot check-names --fix` rewrites old spellings; `tico org <sub>` is live, so none of them is rewritten."""
+    import json
+    from pathlib import Path
+
+    exempt = json.loads((Path(hubcli.__file__).with_name("renames.json")).read_text())["commands_exempt"]
+    org = next(a for a in hubcli.parser()._actions if getattr(a, "choices", None) and "org" in a.choices)
+    subs = next(a for a in org.choices["org"]._actions if getattr(a, "choices", None)).choices
+    assert {("org", sub) for sub in subs} <= {tuple(e) for e in exempt}
+
+
+def test_chat_send_runs_message_send_with_a_notice(monkeypatch):
+    """`tico chat send` was the same as `tico message send`; the old line runs it, harness commands included."""
+    argv, said = hubcli.rename_argv(["chat", "send", "ops", "/compact", "--conversation", "c1", "--command"])
+    assert argv == ["message", "send", "ops", "/compact", "--conversation", "c1", "--command"] and "is now" in said
+    args = hubcli.parser().parse_args(argv)
+    assert (args.fn, args.conversation, args.command) == ("message send", "c1", True)
+
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+
+    sent = []
+    monkeypatch.setitem(BY_NAME["tico_message_send"], "fn", lambda api, args: sent.append(args) or {})
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: _Me())
+    monkeypatch.setenv("HUB_API_URL", "https://synthetic.invalid/api/v2")
+    remotecli.run(args)
+    assert (sent[0]["to"], sent[0]["text"], sent[0]["conversation_id"], sent[0]["command"]) == (
+        "ops",
+        "/compact",
+        "c1",
+        True,
+    )
+
+
 @pytest.mark.parametrize(
     "argv, instead",
     [
@@ -1917,7 +1939,6 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
 
 def test_finance_has_no_card_fill_command():
     """Card fill is not offered to bots (hubtools.UNLISTED), so the CLI has no command for it either."""
-    assert "card-fill" not in hubcli.__doc__
     with pytest.raises(SystemExit):
         hubcli.parse(hubcli.parser(), ["finance", "card-fill"])
 

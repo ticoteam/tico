@@ -38,7 +38,14 @@ API_FIELDS_REMOVED = {
 # A command the CLI no longer has at all, and its replacement (the flags differ: `tico automation create --file`).
 COMMANDS_REMOVED = [{"old": ["routine"], "new": ["automation"]}]
 # New commands that share an old command's first word: `tico notice list` is not the old `tico notice <text>`.
-COMMANDS_EXEMPT = [["notice", "list"], ["org", "order"], ["org", "reports-to"]]
+# Live commands that start with an old spelling: `tico org` alone is the old `tico team show`, its subcommands are new.
+COMMANDS_EXEMPT = [
+    ["notice", "list"],
+    ["org", "order"],
+    ["org", "reports-to"],
+    ["org", "models"],
+    ["org", "show"],
+]
 
 
 def applied_rows(data):

@@ -98,7 +98,7 @@ Which formats play, and how full screen looks, depend on the browser or app you 
 
 ## Attach a visual
 
-**CLI.** Add `--visual PATH --title "…"` to `tico message send`, `tico chat send` or `tico task comment`. Repeat
+**CLI.** Add `--visual PATH --title "…"` to `tico message send` or `tico task comment`. Repeat
 `--visual` for more than one; each `--title` goes with the `--visual` in the same place in the list.
 
 ```
@@ -111,7 +111,7 @@ outside the checkout, no symbolic links, no credential-like names. `ID@VERSION` 
 already in Tico instead: a file on that task, or in that thread for a message. A `--title` with no
 `--visual` is refused. A visual with no title shows its file name.
 
-**MCP.** `tico_message_send`, `tico_chat_send` and `tico_task_comment` take `visuals`, a list of up to 10:
+**MCP.** `tico_message_send` and `tico_task_comment` take `visuals`, a list of up to 10:
 `{"path": "reports/signups.png", "title": "…"}` for a file in the checkout, or `{"file": "<file id>@<version>",
 "title": "…"}` for a file already in Tico. A `path` works only from the tico tools on your bot's Computer.
 
