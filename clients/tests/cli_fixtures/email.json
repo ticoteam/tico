@@ -1,0 +1,1791 @@
+[
+ {
+  "argv": [
+   "email"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "\nTico: tasks, messages, bots and the rest of your team's work\n\npositional arguments:\n  {whoami,auth,token,events,alerts,inbound,letter,mail,email,company-page,audiences,editions,readers,meeting,message,conversation,thread,note,feedback,file,page,card,pin,doc,chat,assistant,tag,task,tasks,replay,goal,kpi,proposal,rules,rule,strategy,brand,growth,lens,market,listening,tool,automation,automations,audit,event-types,trigger,relay,call,sleep,ok,notice,settings,release,webhook,brief,mcp,origin,needs-you,run,team,seat,org,health,changelog,update,grokbot,external,calendar,sql,db,classify,gateway,decision,template,bot,bots,repo,skill,agent,human,group,setup,api,computer,credential,slack,support,finance,contacts,task-manager,maintenance,roadmap,service-key,usage,billing,reach,github,upgrade,cloud,subscription,pipeline,stage,company,requirement}\n    whoami              who you are, to which company, and through which\n                        profile\n    auth                profiles: which company and token this shell talks to\n                        (--profile NAME on any command)\n    token               your personal API tokens (list, create, revoke)\n    events              the company's live event stream\n    alerts              your own phone and paid alert preferences\n    inbound             shared company email and SMS inboxes\n    letter              quote and send physical letters through the Gateway\n    mail                physical mail the company received (scanned letters)\n    email               read and organize email, set sending policy, and\n                        manage pending sends\n    company-page        the Company page: transparency, address, last update\n    audiences           the Company page's audiences\n    editions            the Company page's editions: drafts and published\n    readers             the Company page's readers (owners and admins)\n    meeting             search meetings, read transcripts, import a transcript\n                        from another tool\n    message             send a message, read what waits for you, mark one read\n    conversation        what was said in a conversation\n    thread              threads: list yours, read one, post, reply in a sub-\n                        thread, follow, search, catch up\n    note                a deferred message for a bot: no run now, its next run\n                        reads it\n    feedback            a person's 👍/👎 on a bot's work: give, list, make a\n                        rule\n    file                what you publish for people: reports, documents,\n                        imported objects\n    page                pages: HTML a bot keeps up to date, with Tico's\n                        updated line\n    card                Tico's built-in cards on the Dashboard, team pages,\n                        sidebars and tasks\n    pin                 pin a page or a card at a place\n    doc                 read and search team docs and external sources, write\n                        internal docs, ask the Librarian\n    chat                bot chat goals and commands\n    assistant           the Assistant's proposals for a person to confirm\n    tag                 tags and checklist templates\n    replay              what happened in a window, as you may see it\n    goal                goals: list, read-back, create and edit\n    kpi                 a measure on its own that goals link to, and its\n                        readings\n    proposal            a change you may not make yourself, for the owner to\n                        confirm\n    rules (rule)        org rules: what teammates follow (internal) and what\n                        someone outside requires (external), and their due\n                        dates\n    strategy            the team's strategy: its bets, its sections, the\n                        versions\n    brand               the brand: voice, words, names, claims\n    growth              growth: channels, sources, monthly cohorts, unit\n                        economics, the numbers\n    lens                thought exercises run against the strategy or the\n                        market\n    market              the shared market graph: read it, report into it,\n                        curate it\n    listening           Listening's saved posts: save a sweep, decide where\n                        each post goes, trace a post\n    tool                what the team uses: each tool, what a bot uses, its\n                        model, repository and declared tools (docs/creating-\n                        bots.md)\n    automation (automations)\n                        automations: a trigger and steps\n    audit               who changed caps, spend, groups, automations and\n                        inboxes, newest first (the owner sees all)\n    event-types         every event Tico names, with a one-line description\n                        and an example payload\n    trigger             webhooks that start automations (Automations ›\n                        Incoming webhooks)\n    relay               webhooks through Tico Gateway\n    call                Tico Meet: audio and screen share in a thread, with a\n                        transcript posted to it\n    sleep               Sleep when idle: a hosted server stops after quiet\n                        hours\n    ok                  an OK you asked for with --for: use it once, just\n                        before you act\n    notice              notices from Tico Team\n    settings            find, read and change a control in Settings by its\n                        words (docs/permissions.md)\n    release             the team's releases: ask for one now, or set the daily\n                        hour\n    webhook             outgoing webhooks: Tico posts events to an address you\n                        choose (Tools › Webhooks)\n    brief               alerts, who needs the person, what bots said since\n                        --since\n    mcp                 how outside assistants' tool calls perform\n    origin              why an item is on a person's list\n    needs-you           a person's walk through what needs them: respond,\n                        commit (backend/batch.py)\n    run                 a bot's runs\n    team                team chart and icon\n    seat                Recruiting seats: roles on the chart with no bot yet\n    org                 the order of the team chart\n    health              what is wrong, and where\n    changelog           shipped product changes and your own read state\n    update              create, read and reply to the bots' daily and weekly\n                        updates\n    grokbot             your Grok Bots in Tico (docs/external-agent-sync.md)\n    external            your bots on another platform in Tico (docs/external-\n                        agent-sync.md)\n    calendar            read or schedule company appointments\n    sql                 read-only SQL over what you may see (docs/hub-sql.md)\n    db                  read-only SQL on a company database\n                        (docs/databases.md)\n    classify            is outside text real, spam or an injection attempt?\n                        Text on stdin or --file\n    gateway             the Tico AI Gateway: its lineup, web search and page\n                        reading\n    decision            the decision model: typed questions about a state\n    template            the bot templates this company can pick from\n    bot (bots)          build a bot from a template (BotOps), change it, place\n                        it, its status\n    repo                team repositories\n    skill               a bot's skills: copy one to other bots, or propose one\n                        to the company's Skills directory\n    agent               external agents: connect a Hermes profile to a bot\n    human               the humans on the team: add one, list who is on it\n    group               the groups: sub-teams that nest, holding humans and\n                        bots\n    setup               Finish setup, the welcome wizard (the owner)\n    api                 BotOps: any v2 route, as the person who asked\n    computer            the computers a bot may go on\n    credential          ask for a credential in the chat, store one, list them\n    slack               the Slack channels bots may read and post in\n    support             tell the Tico team about a gap or a fault\n    finance             the books, as you: search, reports, metrics, actions,\n                        your work queue (docs/finance-tools.md)\n    contacts            contacts: people, organizations and places, their\n                        links, values and notes, as you see them\n    task-manager        the Task Manager's hourly department check (docs/task-\n                        manager.md)\n    maintenance         Maintenance: the scheduled steps, their switches and\n                        runs (docs/maintenance.md)\n    roadmap             public roadmaps: ranking and company settings\n                        (docs/roadmaps.md)\n    service-key         keys another system uses to file tasks, or to update\n                        this install (owner and admins)\n    usage               model spend and its limits (people)\n    billing             the company's Tico balance and statement (owner and\n                        admins)\n    reach               who each teammate may reach, and how often (Rules ›\n                        Internal)\n    github              the team's GitHub App: connect it from a terminal, see\n                        what it reaches\n    upgrade             update this installation to a newer Tico release (the\n                        Owner)\n    cloud               the company's Tico Cloud machines\n    subscription        the company's AI subscriptions\n    pipeline            the company's pipelines and their stages\n    stage               one stage of a pipeline\n    company             the company's shape\n    requirement         what it takes to leave a stage\n\noptions:\n  -h, --help            show this help message and exit\n  --version             print the Tico version\n\nThis computer's own commands: tico-computer help",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico email: error: argument sub: invalid choice: 'nope' (choose from policy, sends, cancel, mailboxes, inbox, search, thread, message, archive, unarchive, mark-read, mark-unread, label, unlabel) Did you mean: tico email inbox, tico email cancel?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "policy"
+  ],
+  "tools": [
+   [
+    "tico_email_policy",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "email/sending-policy",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "policy",
+   "--mailbox",
+   "ops@acme.test",
+   "--bot",
+   "ana",
+   "--settings",
+   "{\"mode\": \"ask_first\"}"
+  ],
+  "tools": [
+   [
+    "tico_email_policy",
+    {
+     "bot": "ana",
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "settings": {
+      "mode": "ask_first"
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "bots/ana/email-sending-policy",
+    {
+     "mode": "ask_first"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "sends",
+   "--mailbox",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_sends",
+    {
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "pending": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "email/sends?mailbox=ops%40acme.test&pending=False",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "sends",
+   "--mailbox",
+   "ops@acme.test",
+   "--pending",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_sends",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "pending": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "email/sends?mailbox=ops%40acme.test&pending=True&cursor=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "cancel",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_email_cancel",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "email/sends/id-1/cancel",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "cancel"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email cancel <id>\ntico email cancel: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "mailboxes"
+  ],
+  "tools": [
+   [
+    "tico_email_mailboxes",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/mailboxes",
+    null
+   ]
+  ],
+  "stdout": "# Email mailboxes\n\n- ops@acme.test\n- billing@acme.test\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mailboxes",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_mailboxes",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/mailboxes",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"mailboxes\": [\n    {\n      \"address\": \"ops@acme.test\"\n    },\n    {\n      \"address\": \"billing@acme.test\"\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "inbox",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_inbox",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": ""
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&label=INBOX&q=&limit=50",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "inbox",
+   "ops@acme.test",
+   "--limit",
+   "5",
+   "--cursor",
+   "cursor-1",
+   "--q",
+   "from:bank"
+  ],
+  "tools": [
+   [
+    "tico_email_inbox",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&label=INBOX&q=from%3Abank&limit=5&cursor=cursor-1",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "inbox",
+   "ops@acme.test",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_inbox",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": ""
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&label=INBOX&q=&limit=50",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"messages\": [\n    {\n      \"mailbox\": \"ops@acme.test\",\n      \"msg_id\": \"m1\",\n      \"thread_id\": \"t1\",\n      \"subject\": \"Statement\",\n      \"from_header\": \"Bank <bank@example.com>\",\n      \"to\": [\n        \"ops@acme.test\"\n      ],\n      \"date\": \"2026-11-01\",\n      \"labels\": [\n        \"INBOX\"\n      ],\n      \"snippet\": \"Your statement\"\n    }\n  ],\n  \"next_cursor\": \"c2\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "inbox"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email inbox <address>\ntico email inbox: error: the following arguments are required: address",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "search",
+   "ops@acme.test",
+   "from:bank"
+  ],
+  "tools": [
+   [
+    "tico_email_search",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&q=from%3Abank&limit=50",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "search",
+   "ops@acme.test",
+   "--limit",
+   "5",
+   "--cursor",
+   "cursor-1",
+   "from:bank"
+  ],
+  "tools": [
+   [
+    "tico_email_search",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&q=from%3Abank&limit=5&cursor=cursor-1",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "search",
+   "ops@acme.test",
+   "from:bank",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_search",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&q=from%3Abank&limit=50",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"messages\": [\n    {\n      \"mailbox\": \"ops@acme.test\",\n      \"msg_id\": \"m1\",\n      \"thread_id\": \"t1\",\n      \"subject\": \"Statement\",\n      \"from_header\": \"Bank <bank@example.com>\",\n      \"to\": [\n        \"ops@acme.test\"\n      ],\n      \"date\": \"2026-11-01\",\n      \"labels\": [\n        \"INBOX\"\n      ],\n      \"snippet\": \"Your statement\"\n    }\n  ],\n  \"next_cursor\": \"c2\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "search"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email search <address> <q>\ntico email search: error: the following arguments are required: address, q",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "thread",
+   "ops@acme.test",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_email_thread",
+    {
+     "id": "id-1",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/threads/id-1?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement is ready.\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "thread",
+   "ops@acme.test",
+   "id-1",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_thread",
+    {
+     "id": "id-1",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/threads/id-1?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"messages\": [\n    {\n      \"mailbox\": \"ops@acme.test\",\n      \"msg_id\": \"m1\",\n      \"thread_id\": \"t1\",\n      \"subject\": \"Statement\",\n      \"from_header\": \"Bank <bank@example.com>\",\n      \"to\": [\n        \"ops@acme.test\"\n      ],\n      \"date\": \"2026-11-01\",\n      \"labels\": [\n        \"INBOX\"\n      ],\n      \"snippet\": \"Your statement\",\n      \"body\": \"Your statement is ready.\"\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "thread"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email thread <address> <thread-id>\ntico email thread: error: the following arguments are required: address, thread-id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "message",
+   "ops@acme.test",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_email_message",
+    {
+     "id": "id-1",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages/id-1?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement is ready.\n\nAttachment: statement.pdf (application/pdf, 2048 bytes)\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "message",
+   "ops@acme.test",
+   "id-1",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_message",
+    {
+     "id": "id-1",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages/id-1?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"mailbox\": \"ops@acme.test\",\n  \"msg_id\": \"m1\",\n  \"thread_id\": \"t1\",\n  \"subject\": \"Statement\",\n  \"from_header\": \"Bank <bank@example.com>\",\n  \"to\": [\n    \"ops@acme.test\"\n  ],\n  \"date\": \"2026-11-01\",\n  \"labels\": [\n    \"INBOX\"\n  ],\n  \"snippet\": \"Your statement\",\n  \"body\": \"Your statement is ready.\",\n  \"attachments\": [\n    {\n      \"name\": \"statement.pdf\",\n      \"type\": \"application/pdf\",\n      \"size\": 2048\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "message"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email message <address> <message-id>\ntico email message: error: the following arguments are required: address, message-id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "archive",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_archive",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "archive"
+    }
+   ]
+  ],
+  "stdout": "Archived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "archive",
+   "ops@acme.test",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_archive",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "archive"
+    }
+   ]
+  ],
+  "stdout": "Archived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "archive",
+   "ops@acme.test",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_archive",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "archive"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "archive"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email archive <address> <message-id>\ntico email archive: error: the following arguments are required: address",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "unarchive",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_unarchive",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "unarchive"
+    }
+   ]
+  ],
+  "stdout": "Unarchived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unarchive",
+   "ops@acme.test",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_unarchive",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "unarchive"
+    }
+   ]
+  ],
+  "stdout": "Unarchived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unarchive",
+   "ops@acme.test",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_unarchive",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "unarchive"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unarchive"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email unarchive <address> <message-id>\ntico email unarchive: error: the following arguments are required: address",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "mark-read",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_read",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "mark_read"
+    }
+   ]
+  ],
+  "stdout": "Marked read 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-read",
+   "ops@acme.test",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_read",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "mark_read"
+    }
+   ]
+  ],
+  "stdout": "Marked read 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-read",
+   "ops@acme.test",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_read",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "mark_read"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-read"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email mark-read <address> <message-id>\ntico email mark-read: error: the following arguments are required: address",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "mark-unread",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_unread",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "mark_unread"
+    }
+   ]
+  ],
+  "stdout": "Marked unread 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-unread",
+   "ops@acme.test",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_unread",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "mark_unread"
+    }
+   ]
+  ],
+  "stdout": "Marked unread 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-unread",
+   "ops@acme.test",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_unread",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "mark_unread"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-unread"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email mark-unread <address> <message-id>\ntico email mark-unread: error: the following arguments are required: address",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "label",
+   "ops@acme.test",
+   "Receipts"
+  ],
+  "tools": [
+   [
+    "tico_email_label",
+    {
+     "ids": [],
+     "label": "Receipts",
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "label": "Receipts",
+     "action": "label"
+    }
+   ]
+  ],
+  "stdout": "Labeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label",
+   "ops@acme.test",
+   "Receipts",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_label",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "label": "Receipts",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "label": "Receipts",
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "label"
+    }
+   ]
+  ],
+  "stdout": "Labeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label",
+   "ops@acme.test",
+   "Receipts",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_label",
+    {
+     "ids": [],
+     "label": "Receipts",
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "label": "Receipts",
+     "action": "label"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email label <address> <label> <message-id>\ntico email label: error: the following arguments are required: address, label",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "unlabel",
+   "ops@acme.test",
+   "Receipts"
+  ],
+  "tools": [
+   [
+    "tico_email_unlabel",
+    {
+     "ids": [],
+     "label": "Receipts",
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "label": "Receipts",
+     "action": "unlabel"
+    }
+   ]
+  ],
+  "stdout": "Unlabeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unlabel",
+   "ops@acme.test",
+   "Receipts",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_unlabel",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "label": "Receipts",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "label": "Receipts",
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "unlabel"
+    }
+   ]
+  ],
+  "stdout": "Unlabeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unlabel",
+   "ops@acme.test",
+   "Receipts",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_unlabel",
+    {
+     "ids": [],
+     "label": "Receipts",
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "label": "Receipts",
+     "action": "unlabel"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"count\": 2,\n  \"mailbox\": \"ops@acme.test\",\n  \"ids\": [\n    \"m1\",\n    \"m2\"\n  ],\n  \"undo\": {\n    \"action\": \"unlabel\",\n    \"label\": \"Receipts\",\n    \"ids\": [\n      \"m1\",\n      \"m2\"\n    ]\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unlabel"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email unlabel <address> <label> <message-id>\ntico email unlabel: error: the following arguments are required: address, label",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "inbox",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_inbox",
+    {
+     "limit": 50,
+     "mailbox": "1",
+     "operation_id": null,
+     "q": ""
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=1&label=INBOX&q=&limit=50",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "search",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_search",
+    {
+     "limit": 50,
+     "mailbox": "1",
+     "operation_id": null,
+     "q": "1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=1&q=1&limit=50",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "thread",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_thread",
+    {
+     "id": "1",
+     "mailbox": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/threads/1?mailbox=1",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\nNo messages.\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "message",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_message",
+    {
+     "id": "1",
+     "mailbox": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages/1?mailbox=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'mailbox'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "email",
+   "archive",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_archive",
+    {
+     "ids": [
+      "1"
+     ],
+     "limit": 100,
+     "mailbox": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "1",
+     "limit": 100,
+     "ids": [
+      "1"
+     ],
+     "action": "archive"
+    }
+   ]
+  ],
+  "stdout": "Archived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label",
+   "1",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_label",
+    {
+     "ids": [
+      "1"
+     ],
+     "label": "1",
+     "limit": 100,
+     "mailbox": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "1",
+     "limit": 100,
+     "label": "1",
+     "ids": [
+      "1"
+     ],
+     "action": "label"
+    }
+   ]
+  ],
+  "stdout": "Labeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-read",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_read",
+    {
+     "ids": [
+      "1"
+     ],
+     "limit": 100,
+     "mailbox": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "1",
+     "limit": 100,
+     "ids": [
+      "1"
+     ],
+     "action": "mark_read"
+    }
+   ]
+  ],
+  "stdout": "Marked read 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unarchive",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_unarchive",
+    {
+     "ids": [
+      "1"
+     ],
+     "limit": 100,
+     "mailbox": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "1",
+     "limit": 100,
+     "ids": [
+      "1"
+     ],
+     "action": "unarchive"
+    }
+   ]
+  ],
+  "stdout": "Unarchived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unlabel",
+   "1",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_unlabel",
+    {
+     "ids": [
+      "1"
+     ],
+     "label": "1",
+     "limit": 100,
+     "mailbox": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "1",
+     "limit": 100,
+     "label": "1",
+     "ids": [
+      "1"
+     ],
+     "action": "unlabel"
+    }
+   ]
+  ],
+  "stdout": "Unlabeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-unread",
+   "1",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_unread",
+    {
+     "ids": [
+      "1"
+     ],
+     "limit": 100,
+     "mailbox": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "1",
+     "limit": 100,
+     "ids": [
+      "1"
+     ],
+     "action": "mark_unread"
+    }
+   ]
+  ],
+  "stdout": "Marked unread 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "policy",
+   "--bot",
+   "1",
+   "--settings",
+   "{\"mode\":\"on_their_own\"}"
+  ],
+  "tools": [
+   [
+    "tico_email_policy",
+    {
+     "bot": "1",
+     "operation_id": null,
+     "settings": {
+      "mode": "on_their_own"
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "bots/1/email-sending-policy",
+    {
+     "mode": "on_their_own"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "policy",
+   "--settings",
+   "not json"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico email policy: error: argument --settings: invalid loads value: 'not json'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "sends"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico email sends\ntico email sends: error: the following arguments are required: --mailbox",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "inbox",
+   "ops@acme.test",
+   "--limit",
+   "many"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico email inbox: error: argument --limit: invalid int value: 'many'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "email",
+   "archive",
+   "ops@acme.test",
+   "m1",
+   "--limit",
+   "5000"
+  ],
+  "tools": [
+   [
+    "tico_email_archive",
+    {
+     "ids": [
+      "m1"
+     ],
+     "limit": 5000,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 5000,
+     "ids": [
+      "m1"
+     ],
+     "action": "archive"
+    }
+   ]
+  ],
+  "stdout": "Archived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

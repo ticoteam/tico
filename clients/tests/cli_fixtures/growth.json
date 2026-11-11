@@ -1,0 +1,1934 @@
+[
+ {
+  "argv": [
+   "growth"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "\nTico: tasks, messages, bots and the rest of your team's work\n\npositional arguments:\n  {whoami,auth,token,events,alerts,inbound,letter,mail,email,company-page,audiences,editions,readers,meeting,message,conversation,thread,note,feedback,file,page,card,pin,doc,chat,assistant,tag,task,tasks,replay,goal,kpi,proposal,rules,rule,strategy,brand,growth,lens,market,listening,tool,automation,automations,audit,event-types,trigger,relay,call,sleep,ok,notice,settings,release,webhook,brief,mcp,origin,needs-you,run,team,seat,org,health,changelog,update,grokbot,external,calendar,sql,db,classify,gateway,decision,template,bot,bots,repo,skill,agent,human,group,setup,api,computer,credential,slack,support,finance,contacts,task-manager,maintenance,roadmap,service-key,usage,billing,reach,github,upgrade,cloud,subscription,pipeline,stage,company,requirement}\n    whoami              who you are, to which company, and through which\n                        profile\n    auth                profiles: which company and token this shell talks to\n                        (--profile NAME on any command)\n    token               your personal API tokens (list, create, revoke)\n    events              the company's live event stream\n    alerts              your own phone and paid alert preferences\n    inbound             shared company email and SMS inboxes\n    letter              quote and send physical letters through the Gateway\n    mail                physical mail the company received (scanned letters)\n    email               read and organize email, set sending policy, and\n                        manage pending sends\n    company-page        the Company page: transparency, address, last update\n    audiences           the Company page's audiences\n    editions            the Company page's editions: drafts and published\n    readers             the Company page's readers (owners and admins)\n    meeting             search meetings, read transcripts, import a transcript\n                        from another tool\n    message             send a message, read what waits for you, mark one read\n    conversation        what was said in a conversation\n    thread              threads: list yours, read one, post, reply in a sub-\n                        thread, follow, search, catch up\n    note                a deferred message for a bot: no run now, its next run\n                        reads it\n    feedback            a person's 👍/👎 on a bot's work: give, list, make a\n                        rule\n    file                what you publish for people: reports, documents,\n                        imported objects\n    page                pages: HTML a bot keeps up to date, with Tico's\n                        updated line\n    card                Tico's built-in cards on the Dashboard, team pages,\n                        sidebars and tasks\n    pin                 pin a page or a card at a place\n    doc                 read and search team docs and external sources, write\n                        internal docs, ask the Librarian\n    chat                bot chat goals and commands\n    assistant           the Assistant's proposals for a person to confirm\n    tag                 tags and checklist templates\n    replay              what happened in a window, as you may see it\n    goal                goals: list, read-back, create and edit\n    kpi                 a measure on its own that goals link to, and its\n                        readings\n    proposal            a change you may not make yourself, for the owner to\n                        confirm\n    rules (rule)        org rules: what teammates follow (internal) and what\n                        someone outside requires (external), and their due\n                        dates\n    strategy            the team's strategy: its bets, its sections, the\n                        versions\n    brand               the brand: voice, words, names, claims\n    growth              growth: channels, sources, monthly cohorts, unit\n                        economics, the numbers\n    lens                thought exercises run against the strategy or the\n                        market\n    market              the shared market graph: read it, report into it,\n                        curate it\n    listening           Listening's saved posts: save a sweep, decide where\n                        each post goes, trace a post\n    tool                what the team uses: each tool, what a bot uses, its\n                        model, repository and declared tools (docs/creating-\n                        bots.md)\n    automation (automations)\n                        automations: a trigger and steps\n    audit               who changed caps, spend, groups, automations and\n                        inboxes, newest first (the owner sees all)\n    event-types         every event Tico names, with a one-line description\n                        and an example payload\n    trigger             webhooks that start automations (Automations ›\n                        Incoming webhooks)\n    relay               webhooks through Tico Gateway\n    call                Tico Meet: audio and screen share in a thread, with a\n                        transcript posted to it\n    sleep               Sleep when idle: a hosted server stops after quiet\n                        hours\n    ok                  an OK you asked for with --for: use it once, just\n                        before you act\n    notice              notices from Tico Team\n    settings            find, read and change a control in Settings by its\n                        words (docs/permissions.md)\n    release             the team's releases: ask for one now, or set the daily\n                        hour\n    webhook             outgoing webhooks: Tico posts events to an address you\n                        choose (Tools › Webhooks)\n    brief               alerts, who needs the person, what bots said since\n                        --since\n    mcp                 how outside assistants' tool calls perform\n    origin              why an item is on a person's list\n    needs-you           a person's walk through what needs them: respond,\n                        commit (backend/batch.py)\n    run                 a bot's runs\n    team                team chart and icon\n    seat                Recruiting seats: roles on the chart with no bot yet\n    org                 the order of the team chart\n    health              what is wrong, and where\n    changelog           shipped product changes and your own read state\n    update              create, read and reply to the bots' daily and weekly\n                        updates\n    grokbot             your Grok Bots in Tico (docs/external-agent-sync.md)\n    external            your bots on another platform in Tico (docs/external-\n                        agent-sync.md)\n    calendar            read or schedule company appointments\n    sql                 read-only SQL over what you may see (docs/hub-sql.md)\n    db                  read-only SQL on a company database\n                        (docs/databases.md)\n    classify            is outside text real, spam or an injection attempt?\n                        Text on stdin or --file\n    gateway             the Tico AI Gateway: its lineup, web search and page\n                        reading\n    decision            the decision model: typed questions about a state\n    template            the bot templates this company can pick from\n    bot (bots)          build a bot from a template (BotOps), change it, place\n                        it, its status\n    repo                team repositories\n    skill               a bot's skills: copy one to other bots, or propose one\n                        to the company's Skills directory\n    agent               external agents: connect a Hermes profile to a bot\n    human               the humans on the team: add one, list who is on it\n    group               the groups: sub-teams that nest, holding humans and\n                        bots\n    setup               Finish setup, the welcome wizard (the owner)\n    api                 BotOps: any v2 route, as the person who asked\n    computer            the computers a bot may go on\n    credential          ask for a credential in the chat, store one, list them\n    slack               the Slack channels bots may read and post in\n    support             tell the Tico team about a gap or a fault\n    finance             the books, as you: search, reports, metrics, actions,\n                        your work queue (docs/finance-tools.md)\n    contacts            contacts: people, organizations and places, their\n                        links, values and notes, as you see them\n    task-manager        the Task Manager's hourly department check (docs/task-\n                        manager.md)\n    maintenance         Maintenance: the scheduled steps, their switches and\n                        runs (docs/maintenance.md)\n    roadmap             public roadmaps: ranking and company settings\n                        (docs/roadmaps.md)\n    service-key         keys another system uses to file tasks, or to update\n                        this install (owner and admins)\n    usage               model spend and its limits (people)\n    billing             the company's Tico balance and statement (owner and\n                        admins)\n    reach               who each teammate may reach, and how often (Rules ›\n                        Internal)\n    github              the team's GitHub App: connect it from a terminal, see\n                        what it reaches\n    upgrade             update this installation to a newer Tico release (the\n                        Owner)\n    cloud               the company's Tico Cloud machines\n    subscription        the company's AI subscriptions\n    pipeline            the company's pipelines and their stages\n    stage               one stage of a pipeline\n    company             the company's shape\n    requirement         what it takes to leave a stage\n\noptions:\n  -h, --help            show this help message and exit\n  --version             print the Tico version\n\nThis computer's own commands: tico-computer help",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico growth: error: argument sub: invalid choice: 'nope' (choose from channel, source, cohort, economics, numbers, kpis, settings) Did you mean: tico growth kpis, tico growth numbers?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/channels",
+    null
+   ]
+  ],
+  "stdout": "slug           name           stage    track        owner  budget/mo\ngoogle-search  Google search  testing  performance\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "list",
+   "--retired"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_list",
+    {
+     "include_retired": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/channels?include_retired=true",
+    null
+   ]
+  ],
+  "stdout": "slug           name           stage    track        owner  budget/mo\ngoogle-search  Google search  testing  performance\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "list",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/channels",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"channels\": [\n    {\n      \"slug\": \"google-search\",\n      \"name\": \"Google search\",\n      \"stage\": \"testing\",\n      \"track\": \"performance\"\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "show",
+   "google-search"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_show",
+    {
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/channels/google-search",
+    null
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "show",
+   "google-search",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_show",
+    {
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/channels/google-search",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth channel show <slug>\ntico growth channel show: error: the following arguments are required: slug",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "add",
+   "google-search",
+   "--name",
+   "name-1"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_add",
+    {
+     "name": "name-1",
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/channels",
+    {
+     "slug": "google-search",
+     "name": "name-1"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "add",
+   "google-search",
+   "--name",
+   "name-1",
+   "--track",
+   "performance",
+   "--stage",
+   "idea",
+   "--owner",
+   "me",
+   "--budget",
+   "2.5",
+   "--source",
+   "source-id-1",
+   "--why",
+   "why-1",
+   "--guardrail-kpi",
+   "guardrail-kpi-id-1",
+   "--guardrail-max",
+   "2.5",
+   "--sort",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_add",
+    {
+     "budget_month": 2.5,
+     "guardrail_kpi_id": "guardrail-kpi-id-1",
+     "guardrail_max": 2.5,
+     "name": "name-1",
+     "operation_id": null,
+     "owner": "me",
+     "slug": "google-search",
+     "sort": 5,
+     "source_id": "source-id-1",
+     "stage": "idea",
+     "track": "performance",
+     "why": "why-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/channels",
+    {
+     "slug": "google-search",
+     "name": "name-1",
+     "track": "performance",
+     "stage": "idea",
+     "budget_month": 2.5,
+     "source_id": "source-id-1",
+     "why": "why-1",
+     "guardrail_kpi_id": "guardrail-kpi-id-1",
+     "guardrail_max": 2.5,
+     "sort": 5,
+     "owner_ref": "bot:ana"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "add",
+   "google-search",
+   "--name",
+   "name-1",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_add",
+    {
+     "name": "name-1",
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/channels",
+    {
+     "slug": "google-search",
+     "name": "name-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "add"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth channel add <slug>\ntico growth channel add: error: the following arguments are required: slug, --name",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "update",
+   "google-search"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_update",
+    {
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/channels/google-search",
+    {}
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "update",
+   "google-search",
+   "--name",
+   "name-1",
+   "--track",
+   "performance",
+   "--stage",
+   "idea",
+   "--owner",
+   "me",
+   "--budget",
+   "2.5",
+   "--source",
+   "source-id-1",
+   "--why",
+   "why-1",
+   "--guardrail-kpi",
+   "guardrail-kpi-id-1",
+   "--guardrail-max",
+   "2.5",
+   "--sort",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_update",
+    {
+     "budget_month": 2.5,
+     "guardrail_kpi_id": "guardrail-kpi-id-1",
+     "guardrail_max": 2.5,
+     "name": "name-1",
+     "operation_id": null,
+     "owner": "me",
+     "slug": "google-search",
+     "sort": 5,
+     "source_id": "source-id-1",
+     "stage": "idea",
+     "track": "performance",
+     "why": "why-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/channels/google-search",
+    {
+     "name": "name-1",
+     "track": "performance",
+     "stage": "idea",
+     "budget_month": 2.5,
+     "source_id": "source-id-1",
+     "why": "why-1",
+     "guardrail_kpi_id": "guardrail-kpi-id-1",
+     "guardrail_max": 2.5,
+     "sort": 5,
+     "owner_ref": "bot:ana"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "update",
+   "google-search",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_update",
+    {
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/channels/google-search",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth channel update <slug>\ntico growth channel update: error: the following arguments are required: slug",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "retire",
+   "google-search"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_retire",
+    {
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/channels/google-search/retire",
+    {}
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "retire",
+   "google-search",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_retire",
+    {
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/channels/google-search/retire",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "retire"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth channel retire <slug>\ntico growth channel retire: error: the following arguments are required: slug",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/sources",
+    null
+   ]
+  ],
+  "stdout": "id  truth for  system      reach    may\ns1  ad spend   Google Ads  mcp:ads\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "list",
+   "--retired"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_list",
+    {
+     "include_retired": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/sources?include_retired=true",
+    null
+   ]
+  ],
+  "stdout": "id  truth for  system      reach    may\ns1  ad spend   Google Ads  mcp:ads\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "list",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/sources",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"sources\": [\n    {\n      \"id\": \"s1\",\n      \"truth_for\": \"ad spend\",\n      \"system\": \"Google Ads\",\n      \"reach_kind\": \"mcp\",\n      \"reach_ref\": \"ads\"\n    }\n  ],\n  \"conflicts\": [\n    {\n      \"truth_for\": \"bookings\",\n      \"sources\": [\n        \"s2\",\n        \"s3\"\n      ]\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "add",
+   "--truth-for",
+   "truth-for-1",
+   "--system",
+   "system-1",
+   "--reach-kind",
+   "mcp"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_add",
+    {
+     "operation_id": null,
+     "reach_kind": "mcp",
+     "system": "system-1",
+     "truth_for": "truth-for-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources",
+    {
+     "truth_for": "truth-for-1",
+     "system": "system-1",
+     "reach_kind": "mcp"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "add",
+   "--truth-for",
+   "truth-for-1",
+   "--system",
+   "system-1",
+   "--reach-kind",
+   "mcp",
+   "--reach-ref",
+   "reach-ref-1",
+   "--may",
+   "may-1",
+   "--owner",
+   "me"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_add",
+    {
+     "may": "may-1",
+     "operation_id": null,
+     "owner": "me",
+     "reach_kind": "mcp",
+     "reach_ref": "reach-ref-1",
+     "system": "system-1",
+     "truth_for": "truth-for-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources",
+    {
+     "truth_for": "truth-for-1",
+     "system": "system-1",
+     "reach_kind": "mcp",
+     "reach_ref": "reach-ref-1",
+     "may": "may-1",
+     "owner_ref": "bot:ana"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "add",
+   "--truth-for",
+   "truth-for-1",
+   "--system",
+   "system-1",
+   "--reach-kind",
+   "mcp",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_add",
+    {
+     "operation_id": null,
+     "reach_kind": "mcp",
+     "system": "system-1",
+     "truth_for": "truth-for-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources",
+    {
+     "truth_for": "truth-for-1",
+     "system": "system-1",
+     "reach_kind": "mcp"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "update",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_update",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/sources/id-1",
+    {}
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "update",
+   "id-1",
+   "--truth-for",
+   "truth-for-1",
+   "--system",
+   "system-1",
+   "--reach-kind",
+   "mcp",
+   "--reach-ref",
+   "reach-ref-1",
+   "--may",
+   "may-1",
+   "--owner",
+   "me"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_update",
+    {
+     "id": "id-1",
+     "may": "may-1",
+     "operation_id": null,
+     "owner": "me",
+     "reach_kind": "mcp",
+     "reach_ref": "reach-ref-1",
+     "system": "system-1",
+     "truth_for": "truth-for-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/sources/id-1",
+    {
+     "truth_for": "truth-for-1",
+     "system": "system-1",
+     "reach_kind": "mcp",
+     "reach_ref": "reach-ref-1",
+     "may": "may-1",
+     "owner_ref": "bot:ana"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "update",
+   "id-1",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_update",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/sources/id-1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth source update <id>\ntico growth source update: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "retire",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_retire",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources/id-1/retire",
+    {}
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "retire",
+   "id-1",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_retire",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources/id-1/retire",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "retire"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth source retire <id>\ntico growth source retire: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/cohorts",
+    null
+   ]
+  ],
+  "stdout": "month    channel  spend  bot  new  d30  d90  d180  quality\n2026-10  unknown  900         3\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--channel",
+   "google-search",
+   "--month",
+   "2026-10",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "channel": "google-search",
+     "limit": 5,
+     "month": "2026-10",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/cohorts?channel=google-search&month=2026-10&limit=5",
+    null
+   ]
+  ],
+  "stdout": "month    channel  spend  bot  new  d30  d90  d180  quality\n2026-10  unknown  900         3\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/cohorts",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"cohorts\": [\n    {\n      \"month\": \"2026-10\",\n      \"channel\": null,\n      \"spend\": 900,\n      \"new_customers\": 3\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "set",
+   "--channel",
+   "google-search",
+   "--month",
+   "2026-10"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_set",
+    {
+     "channel": "google-search",
+     "month": "2026-10",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "growth/cohorts",
+    {
+     "channel": "google-search",
+     "month": "2026-10"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "set",
+   "--channel",
+   "google-search",
+   "--month",
+   "2026-10",
+   "--spend",
+   "2.5",
+   "--bot-cost",
+   "2.5",
+   "--new",
+   "5",
+   "--d30",
+   "2.5",
+   "--d90",
+   "2.5",
+   "--d180",
+   "2.5",
+   "--revenue",
+   "2.5",
+   "--margin",
+   "2.5",
+   "--quality",
+   "actual",
+   "--source",
+   "spend=Google Ads",
+   "--source",
+   "spend=Google Adsb"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_set",
+    {
+     "bot_cost": 2.5,
+     "channel": "google-search",
+     "kept_d180": 2.5,
+     "kept_d30": 2.5,
+     "kept_d90": 2.5,
+     "margin_pct": 2.5,
+     "month": "2026-10",
+     "new_customers": 5,
+     "operation_id": null,
+     "quality": "actual",
+     "revenue_month": 2.5,
+     "source": [
+      "spend=Google Ads",
+      "spend=Google Adsb"
+     ],
+     "spend": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "growth/cohorts",
+    {
+     "channel": "google-search",
+     "month": "2026-10",
+     "spend": 2.5,
+     "bot_cost": 2.5,
+     "new_customers": 5,
+     "kept_d30": 2.5,
+     "kept_d90": 2.5,
+     "kept_d180": 2.5,
+     "revenue_month": 2.5,
+     "margin_pct": 2.5,
+     "quality": "actual",
+     "sources": {
+      "spend": "Google Adsb"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "set",
+   "--channel",
+   "google-search",
+   "--month",
+   "2026-10",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_set",
+    {
+     "channel": "google-search",
+     "month": "2026-10",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "growth/cohorts",
+    {
+     "channel": "google-search",
+     "month": "2026-10"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "economics"
+  ],
+  "tools": [
+   [
+    "tico_growth_economics",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/economics",
+    null
+   ]
+  ],
+  "stdout": "Month: 2026-10\nchannel        spend  bot  new  CAC  months  LTV   LTV:CAC  payback\nGoogle search  900         3    300          1200  4\ntotal          900         3    300\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "economics",
+   "--month",
+   "2026-10"
+  ],
+  "tools": [
+   [
+    "tico_growth_economics",
+    {
+     "month": "2026-10",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/economics?month=2026-10",
+    null
+   ]
+  ],
+  "stdout": "Month: 2026-10\nchannel        spend  bot  new  CAC  months  LTV   LTV:CAC  payback\nGoogle search  900         3    300          1200  4\ntotal          900         3    300\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "economics",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_economics",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/economics",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"month\": \"2026-10\",\n  \"rows\": [\n    {\n      \"name\": \"Google search\",\n      \"spend\": 900,\n      \"new_customers\": 3,\n      \"cac\": 300,\n      \"ltv\": 1200,\n      \"ltv_cac\": 4\n    }\n  ],\n  \"total\": {\n    \"name\": \"total\",\n    \"spend\": 900,\n    \"new_customers\": 3,\n    \"cac\": 300\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "numbers"
+  ],
+  "tools": [
+   [
+    "tico_growth_numbers",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/numbers",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "numbers",
+   "--months",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_growth_numbers",
+    {
+     "months": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/numbers?months=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "numbers",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_numbers",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/numbers",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "kpis"
+  ],
+  "tools": [
+   [
+    "tico_growth_kpis",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/kpis",
+    null
+   ]
+  ],
+  "stdout": "kpis:\n  - id: k1\n    name: Bookings\n    role: north_star\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "kpis",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_kpis",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/kpis",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"kpis\": [\n    {\n      \"id\": \"k1\",\n      \"name\": \"Bookings\",\n      \"role\": \"north_star\"\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "settings"
+  ],
+  "tools": [
+   [
+    "tico_growth_settings",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/settings",
+    null
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "settings",
+   "--set",
+   "unit=customer",
+   "--set",
+   "unit=customerb"
+  ],
+  "tools": [
+   [
+    "tico_growth_settings",
+    {
+     "operation_id": null,
+     "set": [
+      "unit=customer",
+      "unit=customerb"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "growth/settings",
+    {
+     "unit": "customerb"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "settings",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_settings",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/settings",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--month",
+   "YYYY-MM"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "month": "YYYY-MM",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/cohorts?month=YYYY-MM",
+    null
+   ]
+  ],
+  "stdout": "month    channel  spend  bot  new  d30  d90  d180  quality\n2026-10  unknown  900         3\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "set"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth cohort set\ntico growth cohort set: error: the following arguments are required: --channel, --month",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--month"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico growth cohort list: error: argument --month: expected one argument",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "update",
+   "--stage"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico growth channel update: error: argument --stage: expected one argument",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "show",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_show",
+    {
+     "operation_id": null,
+     "slug": "1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "growth/channels/1",
+    null
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "update",
+   "google-search",
+   "--owner",
+   ""
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_update",
+    {
+     "operation_id": null,
+     "owner": "",
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/channels/google-search",
+    {
+     "owner_ref": null
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "numbers",
+   "--months",
+   "x"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico growth numbers: error: argument --months: invalid int value: 'x'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "channel"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "\nTico: tasks, messages, bots and the rest of your team's work\n\npositional arguments:\n  {whoami,auth,token,events,alerts,inbound,letter,mail,email,company-page,audiences,editions,readers,meeting,message,conversation,thread,note,feedback,file,page,card,pin,doc,chat,assistant,tag,task,tasks,replay,goal,kpi,proposal,rules,rule,strategy,brand,growth,lens,market,listening,tool,automation,automations,audit,event-types,trigger,relay,call,sleep,ok,notice,settings,release,webhook,brief,mcp,origin,needs-you,run,team,seat,org,health,changelog,update,grokbot,external,calendar,sql,db,classify,gateway,decision,template,bot,bots,repo,skill,agent,human,group,setup,api,computer,credential,slack,support,finance,contacts,task-manager,maintenance,roadmap,service-key,usage,billing,reach,github,upgrade,cloud,subscription,pipeline,stage,company,requirement}\n    whoami              who you are, to which company, and through which\n                        profile\n    auth                profiles: which company and token this shell talks to\n                        (--profile NAME on any command)\n    token               your personal API tokens (list, create, revoke)\n    events              the company's live event stream\n    alerts              your own phone and paid alert preferences\n    inbound             shared company email and SMS inboxes\n    letter              quote and send physical letters through the Gateway\n    mail                physical mail the company received (scanned letters)\n    email               read and organize email, set sending policy, and\n                        manage pending sends\n    company-page        the Company page: transparency, address, last update\n    audiences           the Company page's audiences\n    editions            the Company page's editions: drafts and published\n    readers             the Company page's readers (owners and admins)\n    meeting             search meetings, read transcripts, import a transcript\n                        from another tool\n    message             send a message, read what waits for you, mark one read\n    conversation        what was said in a conversation\n    thread              threads: list yours, read one, post, reply in a sub-\n                        thread, follow, search, catch up\n    note                a deferred message for a bot: no run now, its next run\n                        reads it\n    feedback            a person's 👍/👎 on a bot's work: give, list, make a\n                        rule\n    file                what you publish for people: reports, documents,\n                        imported objects\n    page                pages: HTML a bot keeps up to date, with Tico's\n                        updated line\n    card                Tico's built-in cards on the Dashboard, team pages,\n                        sidebars and tasks\n    pin                 pin a page or a card at a place\n    doc                 read and search team docs and external sources, write\n                        internal docs, ask the Librarian\n    chat                bot chat goals and commands\n    assistant           the Assistant's proposals for a person to confirm\n    tag                 tags and checklist templates\n    replay              what happened in a window, as you may see it\n    goal                goals: list, read-back, create and edit\n    kpi                 a measure on its own that goals link to, and its\n                        readings\n    proposal            a change you may not make yourself, for the owner to\n                        confirm\n    rules (rule)        org rules: what teammates follow (internal) and what\n                        someone outside requires (external), and their due\n                        dates\n    strategy            the team's strategy: its bets, its sections, the\n                        versions\n    brand               the brand: voice, words, names, claims\n    growth              growth: channels, sources, monthly cohorts, unit\n                        economics, the numbers\n    lens                thought exercises run against the strategy or the\n                        market\n    market              the shared market graph: read it, report into it,\n                        curate it\n    listening           Listening's saved posts: save a sweep, decide where\n                        each post goes, trace a post\n    tool                what the team uses: each tool, what a bot uses, its\n                        model, repository and declared tools (docs/creating-\n                        bots.md)\n    automation (automations)\n                        automations: a trigger and steps\n    audit               who changed caps, spend, groups, automations and\n                        inboxes, newest first (the owner sees all)\n    event-types         every event Tico names, with a one-line description\n                        and an example payload\n    trigger             webhooks that start automations (Automations ›\n                        Incoming webhooks)\n    relay               webhooks through Tico Gateway\n    call                Tico Meet: audio and screen share in a thread, with a\n                        transcript posted to it\n    sleep               Sleep when idle: a hosted server stops after quiet\n                        hours\n    ok                  an OK you asked for with --for: use it once, just\n                        before you act\n    notice              notices from Tico Team\n    settings            find, read and change a control in Settings by its\n                        words (docs/permissions.md)\n    release             the team's releases: ask for one now, or set the daily\n                        hour\n    webhook             outgoing webhooks: Tico posts events to an address you\n                        choose (Tools › Webhooks)\n    brief               alerts, who needs the person, what bots said since\n                        --since\n    mcp                 how outside assistants' tool calls perform\n    origin              why an item is on a person's list\n    needs-you           a person's walk through what needs them: respond,\n                        commit (backend/batch.py)\n    run                 a bot's runs\n    team                team chart and icon\n    seat                Recruiting seats: roles on the chart with no bot yet\n    org                 the order of the team chart\n    health              what is wrong, and where\n    changelog           shipped product changes and your own read state\n    update              create, read and reply to the bots' daily and weekly\n                        updates\n    grokbot             your Grok Bots in Tico (docs/external-agent-sync.md)\n    external            your bots on another platform in Tico (docs/external-\n                        agent-sync.md)\n    calendar            read or schedule company appointments\n    sql                 read-only SQL over what you may see (docs/hub-sql.md)\n    db                  read-only SQL on a company database\n                        (docs/databases.md)\n    classify            is outside text real, spam or an injection attempt?\n                        Text on stdin or --file\n    gateway             the Tico AI Gateway: its lineup, web search and page\n                        reading\n    decision            the decision model: typed questions about a state\n    template            the bot templates this company can pick from\n    bot (bots)          build a bot from a template (BotOps), change it, place\n                        it, its status\n    repo                team repositories\n    skill               a bot's skills: copy one to other bots, or propose one\n                        to the company's Skills directory\n    agent               external agents: connect a Hermes profile to a bot\n    human               the humans on the team: add one, list who is on it\n    group               the groups: sub-teams that nest, holding humans and\n                        bots\n    setup               Finish setup, the welcome wizard (the owner)\n    api                 BotOps: any v2 route, as the person who asked\n    computer            the computers a bot may go on\n    credential          ask for a credential in the chat, store one, list them\n    slack               the Slack channels bots may read and post in\n    support             tell the Tico team about a gap or a fault\n    finance             the books, as you: search, reports, metrics, actions,\n                        your work queue (docs/finance-tools.md)\n    contacts            contacts: people, organizations and places, their\n                        links, values and notes, as you see them\n    task-manager        the Task Manager's hourly department check (docs/task-\n                        manager.md)\n    maintenance         Maintenance: the scheduled steps, their switches and\n                        runs (docs/maintenance.md)\n    roadmap             public roadmaps: ranking and company settings\n                        (docs/roadmaps.md)\n    service-key         keys another system uses to file tasks, or to update\n                        this install (owner and admins)\n    usage               model spend and its limits (people)\n    billing             the company's Tico balance and statement (owner and\n                        admins)\n    reach               who each teammate may reach, and how often (Rules ›\n                        Internal)\n    github              the team's GitHub App: connect it from a terminal, see\n                        what it reaches\n    upgrade             update this installation to a newer Tico release (the\n                        Owner)\n    cloud               the company's Tico Cloud machines\n    subscription        the company's AI subscriptions\n    pipeline            the company's pipelines and their stages\n    stage               one stage of a pipeline\n    company             the company's shape\n    requirement         what it takes to leave a stage\n\noptions:\n  -h, --help            show this help message and exit\n  --version             print the Tico version\n\nThis computer's own commands: tico-computer help",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "add",
+   "google-search"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth channel add <slug>\ntico growth channel add: error: the following arguments are required: --name",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "add",
+   "--truth-for",
+   "bookings"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico growth source add\ntico growth source add: error: the following arguments are required: --system, --reach-kind",
+  "exit": 64
+ }
+]

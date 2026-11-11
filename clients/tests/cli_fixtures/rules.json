@@ -79,12 +79,12 @@
     "tico_rules_list",
     {
      "kind": "internal",
+     "mine": false,
+     "operation_id": null,
+     "source": "Acme",
      "status": "active",
      "who": "Ops",
-     "with": "Ada",
-     "source": "Acme",
-     "mine": false,
-     "operation_id": null
+     "with": "Ada"
     }
    ]
   ],
@@ -121,9 +121,9 @@
     "tico_rules_list",
     {
      "bot": "writer",
-     "mine": true,
      "cursor": "c1",
      "limit": 5,
+     "mine": true,
      "operation_id": null
     }
    ]
@@ -231,10 +231,10 @@
     "tico_rules_read",
     {
      "id": "f1",
-     "source": "Acme",
      "kind": "vendor",
      "note": "the MSA",
-     "operation_id": null
+     "operation_id": null,
+     "source": "Acme"
     }
    ]
   ],
@@ -272,8 +272,8 @@
     "tico_rules_read",
     {
      "id": "https://acme.example/terms",
-     "source": "Acme",
-     "operation_id": null
+     "operation_id": null,
+     "source": "Acme"
     }
    ]
   ],
@@ -306,8 +306,8 @@
    [
     "tico_rules_ask",
     {
-     "question": "Can I share the deck with Acme?",
-     "operation_id": null
+     "operation_id": null,
+     "question": "Can I share the deck with Acme?"
     }
    ]
   ],
@@ -341,9 +341,9 @@
    [
     "tico_rules_ask",
     {
-     "question": "Can I share the deck with Acme?",
      "on_behalf_of": "turn",
-     "operation_id": null
+     "operation_id": null,
+     "question": "Can I share the deck with Acme?"
     }
    ]
   ],
@@ -438,8 +438,8 @@
     "tico_rules_add",
     {
      "kind": "internal",
-     "text": "Reply within a day",
-     "operation_id": null
+     "operation_id": null,
+     "text": "Reply within a day"
     }
    ]
   ],
@@ -494,23 +494,23 @@
    [
     "tico_rules_add",
     {
-     "kind": "internal",
-     "text": "Reply within a day",
      "description": "why",
      "if_broken": "warn",
+     "kind": "internal",
+     "operation_id": null,
+     "reviewer": "Ada",
+     "text": "Reply within a day",
      "where": [
       "thread:t1",
       "kind:dm"
      ],
-     "reviewer": "Ada",
-     "operation_id": null,
      "who": {
+      "all_bots": true,
+      "everyone": true,
       "names": [
        "Ops",
        "writer"
       ],
-      "everyone": true,
-      "all_bots": true,
       "outside_editions": true
      },
      "with": {
@@ -584,16 +584,16 @@
    [
     "tico_rules_add",
     {
-     "kind": "external",
-     "text": "Pay in 30 days",
-     "source_id": "Acme",
-     "operation_id": null,
      "cite": {
       "file_id": "f1",
-      "section": "4.2",
       "quote": "within thirty days",
+      "section": "4.2",
       "version": 3
-     }
+     },
+     "kind": "external",
+     "operation_id": null,
+     "source_id": "Acme",
+     "text": "Pay in 30 days"
     }
    ]
   ],
@@ -642,15 +642,15 @@
    [
     "tico_rules_add",
     {
-     "kind": "external",
-     "text": "Pay",
-     "source_id": "Acme",
-     "operation_id": null,
      "cite": {
       "file_id": "f1",
-      "section": "",
-      "quote": "thirty"
-     }
+      "quote": "thirty",
+      "section": ""
+     },
+     "kind": "external",
+     "operation_id": null,
+     "source_id": "Acme",
+     "text": "Pay"
     }
    ]
   ],
@@ -758,8 +758,8 @@
     "tico_rules_edit",
     {
      "id": "r1",
-     "version": 2,
-     "operation_id": null
+     "operation_id": null,
+     "version": 2
     }
    ]
   ],
@@ -812,23 +812,23 @@
    [
     "tico_rules_edit",
     {
-     "id": "r1",
-     "version": 2,
-     "text": "Reply in a day",
      "description": "d",
+     "id": "r1",
+     "if_broken": "block",
+     "operation_id": null,
+     "reviewer": "Ada",
      "source_id": "Acme",
+     "text": "Reply in a day",
+     "version": 2,
      "where": [
       "team:Ops"
      ],
-     "if_broken": "block",
-     "reviewer": "Ada",
-     "operation_id": null,
      "who": {
+      "all_bots": true,
+      "everyone": true,
       "names": [
        "Ops"
       ],
-      "everyone": true,
-      "all_bots": true,
       "outside_editions": true
      },
      "with": {
@@ -953,14 +953,14 @@
     "tico_rules_accept",
     {
      "id": "r1",
-     "version": 2,
      "operation_id": null,
+     "version": 2,
      "who": {
+      "everyone": true,
       "names": [
        "Ops",
        "writer"
-      ],
-      "everyone": true
+      ]
      }
     }
    ]
@@ -1076,8 +1076,8 @@
     "tico_rules_skip",
     {
      "id": "r1",
-     "version": 2,
-     "operation_id": null
+     "operation_id": null,
+     "version": 2
     }
    ]
   ],
@@ -1112,8 +1112,8 @@
     "tico_rules_retire",
     {
      "id": "r1",
-     "version": 2,
-     "operation_id": null
+     "operation_id": null,
+     "version": 2
     }
    ]
   ],
@@ -1181,11 +1181,11 @@
    [
     "tico_rules_due",
     {
-     "next": "30d",
-     "status": "overdue",
      "cursor": "c1",
      "limit": 3,
-     "operation_id": null
+     "next": "30d",
+     "operation_id": null,
+     "status": "overdue"
     }
    ]
   ],
@@ -1250,8 +1250,8 @@
     "tico_rules_due",
     {
      "next": "30d",
-     "status": "due_soon",
-     "operation_id": null
+     "operation_id": null,
+     "status": "due_soon"
     }
    ]
   ],
@@ -1286,8 +1286,8 @@
     "tico_rules_due",
     {
      "next": "10d",
-     "status": "upcoming",
-     "operation_id": null
+     "operation_id": null,
+     "status": "upcoming"
     }
    ]
   ],
@@ -1337,11 +1337,11 @@
    [
     "tico_rules_due_set",
     {
-     "id": "r1",
      "first_due": "2026-12-01",
-     "repeats": "monthly",
+     "id": "r1",
+     "operation_id": null,
      "owner": "Ada",
-     "operation_id": null
+     "repeats": "monthly"
     }
    ]
   ],
@@ -1386,13 +1386,13 @@
    [
     "tico_rules_due_set",
     {
-     "id": "r1",
      "first_due": "2026-12-01",
-     "repeats": "yearly",
+     "id": "r1",
+     "operation_id": null,
      "owner": "writer",
-     "timezone": "Europe/Lisbon",
+     "repeats": "yearly",
      "task_days": 3,
-     "operation_id": null
+     "timezone": "Europe/Lisbon"
     }
    ]
   ],
@@ -1486,12 +1486,12 @@
    [
     "tico_rules_due_edit",
     {
-     "id": "d1",
      "first_due": "2027-01-01",
-     "repeats": "once",
+     "id": "d1",
+     "operation_id": null,
      "owner": "Ada",
-     "timezone": "UTC",
-     "operation_id": null
+     "repeats": "once",
+     "timezone": "UTC"
     }
    ]
   ],
@@ -1530,8 +1530,8 @@
     "tico_rules_due_edit",
     {
      "id": "d1",
-     "task_days": 2,
-     "operation_id": null
+     "operation_id": null,
+     "task_days": 2
     }
    ]
   ],
@@ -1650,8 +1650,8 @@
    [
     "tico_rules_due_satisfied",
     {
-     "id": "d1",
      "due_on": "2026-12-01",
+     "id": "d1",
      "operation_id": null
     }
    ]
@@ -1686,10 +1686,10 @@
    [
     "tico_rules_check",
     {
-     "text": "Sending the deck now",
-     "to": "Ada",
      "as": "message",
-     "operation_id": null
+     "operation_id": null,
+     "text": "Sending the deck now",
+     "to": "Ada"
     }
    ]
   ],
@@ -1722,10 +1722,10 @@
    [
     "tico_rules_check",
     {
-     "text": "Done",
-     "to": "Ada",
      "as": "comment",
-     "operation_id": null
+     "operation_id": null,
+     "text": "Done",
+     "to": "Ada"
     }
    ]
   ],
@@ -1767,8 +1767,8 @@
     "tico_rules_appeal",
     {
      "id": "h1",
-     "why": "",
-     "operation_id": null
+     "operation_id": null,
+     "why": ""
     }
    ]
   ],
@@ -1797,8 +1797,8 @@
     "tico_rules_appeal",
     {
      "id": "h1",
-     "why": "the rule is about invoices",
-     "operation_id": null
+     "operation_id": null,
+     "why": "the rule is about invoices"
     }
    ]
   ],
@@ -1926,8 +1926,8 @@
     "tico_rules_add",
     {
      "kind": "internal",
-     "text": "1",
-     "operation_id": null
+     "operation_id": null,
+     "text": "1"
     }
    ]
   ],
@@ -1996,11 +1996,11 @@
    [
     "tico_rules_list",
     {
-     "status": "any",
-     "source": "1",
-     "mine": false,
      "limit": 100,
-     "operation_id": null
+     "mine": false,
+     "operation_id": null,
+     "source": "1",
+     "status": "any"
     }
    ]
   ],
@@ -2043,16 +2043,16 @@
    [
     "tico_rules_add",
     {
-     "kind": "external",
-     "text": "1",
-     "source_id": "1",
-     "operation_id": null,
      "cite": {
       "file_id": "1",
-      "section": "1",
       "quote": "1",
+      "section": "1",
       "version": 1
-     }
+     },
+     "kind": "external",
+     "operation_id": null,
+     "source_id": "1",
+     "text": "1"
     }
    ]
   ],

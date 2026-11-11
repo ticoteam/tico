@@ -124,7 +124,7 @@ def run_line(argv, monkeypatch):
             # Only the arguments the tool's schema names: what else a command line passes (the hand parser's `json`)
             # the tool never reads, and a read of one would show in `http`.
             given = {k: v for k, v in args.items() if k in properties or k == "operation_id"}
-            tools.append([name, json.loads(json.dumps(given, default=str))])
+            tools.append([name, json.loads(json.dumps(given, default=str, sort_keys=True))])  # order is noise
             return fn(api, args)
 
         return call

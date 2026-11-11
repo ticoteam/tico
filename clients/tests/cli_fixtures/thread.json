@@ -1,0 +1,2103 @@
+[
+ {
+  "argv": [
+   "thread"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "\nTico: tasks, messages, bots and the rest of your team's work\n\npositional arguments:\n  {whoami,auth,token,events,alerts,inbound,letter,mail,email,company-page,audiences,editions,readers,meeting,message,conversation,thread,note,feedback,file,page,card,pin,doc,chat,assistant,tag,task,tasks,replay,goal,kpi,proposal,rules,rule,strategy,brand,growth,lens,market,listening,tool,automation,automations,audit,event-types,trigger,relay,call,sleep,ok,notice,settings,release,webhook,brief,mcp,origin,needs-you,run,team,seat,org,health,changelog,update,grokbot,external,calendar,sql,db,classify,gateway,decision,template,bot,bots,repo,skill,agent,human,group,setup,api,computer,credential,slack,support,finance,contacts,task-manager,maintenance,roadmap,service-key,usage,billing,reach,github,upgrade,cloud,subscription,pipeline,stage,company,requirement}\n    whoami              who you are, to which company, and through which\n                        profile\n    auth                profiles: which company and token this shell talks to\n                        (--profile NAME on any command)\n    token               your personal API tokens (list, create, revoke)\n    events              the company's live event stream\n    alerts              your own phone and paid alert preferences\n    inbound             shared company email and SMS inboxes\n    letter              quote and send physical letters through the Gateway\n    mail                physical mail the company received (scanned letters)\n    email               read and organize email, set sending policy, and\n                        manage pending sends\n    company-page        the Company page: transparency, address, last update\n    audiences           the Company page's audiences\n    editions            the Company page's editions: drafts and published\n    readers             the Company page's readers (owners and admins)\n    meeting             search meetings, read transcripts, import a transcript\n                        from another tool\n    message             send a message, read what waits for you, mark one read\n    conversation        what was said in a conversation\n    thread              threads: list yours, read one, post, reply in a sub-\n                        thread, follow, search, catch up\n    note                a deferred message for a bot: no run now, its next run\n                        reads it\n    feedback            a person's 👍/👎 on a bot's work: give, list, make a\n                        rule\n    file                what you publish for people: reports, documents,\n                        imported objects\n    page                pages: HTML a bot keeps up to date, with Tico's\n                        updated line\n    card                Tico's built-in cards on the Dashboard, team pages,\n                        sidebars and tasks\n    pin                 pin a page or a card at a place\n    doc                 read and search team docs and external sources, write\n                        internal docs, ask the Librarian\n    chat                bot chat goals and commands\n    assistant           the Assistant's proposals for a person to confirm\n    tag                 tags and checklist templates\n    replay              what happened in a window, as you may see it\n    goal                goals: list, read-back, create and edit\n    kpi                 a measure on its own that goals link to, and its\n                        readings\n    proposal            a change you may not make yourself, for the owner to\n                        confirm\n    rules (rule)        org rules: what teammates follow (internal) and what\n                        someone outside requires (external), and their due\n                        dates\n    strategy            the team's strategy: its bets, its sections, the\n                        versions\n    brand               the brand: voice, words, names, claims\n    growth              growth: channels, sources, monthly cohorts, unit\n                        economics, the numbers\n    lens                thought exercises run against the strategy or the\n                        market\n    market              the shared market graph: read it, report into it,\n                        curate it\n    listening           Listening's saved posts: save a sweep, decide where\n                        each post goes, trace a post\n    tool                what the team uses: each tool, what a bot uses, its\n                        model, repository and declared tools (docs/creating-\n                        bots.md)\n    automation (automations)\n                        automations: a trigger and steps\n    audit               who changed caps, spend, groups, automations and\n                        inboxes, newest first (the owner sees all)\n    event-types         every event Tico names, with a one-line description\n                        and an example payload\n    trigger             webhooks that start automations (Automations ›\n                        Incoming webhooks)\n    relay               webhooks through Tico Gateway\n    call                Tico Meet: audio and screen share in a thread, with a\n                        transcript posted to it\n    sleep               Sleep when idle: a hosted server stops after quiet\n                        hours\n    ok                  an OK you asked for with --for: use it once, just\n                        before you act\n    notice              notices from Tico Team\n    settings            find, read and change a control in Settings by its\n                        words (docs/permissions.md)\n    release             the team's releases: ask for one now, or set the daily\n                        hour\n    webhook             outgoing webhooks: Tico posts events to an address you\n                        choose (Tools › Webhooks)\n    brief               alerts, who needs the person, what bots said since\n                        --since\n    mcp                 how outside assistants' tool calls perform\n    origin              why an item is on a person's list\n    needs-you           a person's walk through what needs them: respond,\n                        commit (backend/batch.py)\n    run                 a bot's runs\n    team                team chart and icon\n    seat                Recruiting seats: roles on the chart with no bot yet\n    org                 the order of the team chart\n    health              what is wrong, and where\n    changelog           shipped product changes and your own read state\n    update              create, read and reply to the bots' daily and weekly\n                        updates\n    grokbot             your Grok Bots in Tico (docs/external-agent-sync.md)\n    external            your bots on another platform in Tico (docs/external-\n                        agent-sync.md)\n    calendar            read or schedule company appointments\n    sql                 read-only SQL over what you may see (docs/hub-sql.md)\n    db                  read-only SQL on a company database\n                        (docs/databases.md)\n    classify            is outside text real, spam or an injection attempt?\n                        Text on stdin or --file\n    gateway             the Tico AI Gateway: its lineup, web search and page\n                        reading\n    decision            the decision model: typed questions about a state\n    template            the bot templates this company can pick from\n    bot (bots)          build a bot from a template (BotOps), change it, place\n                        it, its status\n    repo                team repositories\n    skill               a bot's skills: copy one to other bots, or propose one\n                        to the company's Skills directory\n    agent               external agents: connect a Hermes profile to a bot\n    human               the humans on the team: add one, list who is on it\n    group               the groups: sub-teams that nest, holding humans and\n                        bots\n    setup               Finish setup, the welcome wizard (the owner)\n    api                 BotOps: any v2 route, as the person who asked\n    computer            the computers a bot may go on\n    credential          ask for a credential in the chat, store one, list them\n    slack               the Slack channels bots may read and post in\n    support             tell the Tico team about a gap or a fault\n    finance             the books, as you: search, reports, metrics, actions,\n                        your work queue (docs/finance-tools.md)\n    contacts            contacts: people, organizations and places, their\n                        links, values and notes, as you see them\n    task-manager        the Task Manager's hourly department check (docs/task-\n                        manager.md)\n    maintenance         Maintenance: the scheduled steps, their switches and\n                        runs (docs/maintenance.md)\n    roadmap             public roadmaps: ranking and company settings\n                        (docs/roadmaps.md)\n    service-key         keys another system uses to file tasks, or to update\n                        this install (owner and admins)\n    usage               model spend and its limits (people)\n    billing             the company's Tico balance and statement (owner and\n                        admins)\n    reach               who each teammate may reach, and how often (Rules ›\n                        Internal)\n    github              the team's GitHub App: connect it from a terminal, see\n                        what it reaches\n    upgrade             update this installation to a newer Tico release (the\n                        Owner)\n    cloud               the company's Tico Cloud machines\n    subscription        the company's AI subscriptions\n    pipeline            the company's pipelines and their stages\n    stage               one stage of a pipeline\n    company             the company's shape\n    requirement         what it takes to leave a stage\n\noptions:\n  -h, --help            show this help message and exit\n  --version             print the Tico version\n\nThis computer's own commands: tico-computer help",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico thread: error: argument sub: invalid choice: 'nope' (choose from catchup, catch-up, pin, unpin, list, show, home, dm-group, dm, create, post, bot-status, reply, edit, sub, react, unreact, open-earlier, task, delete, upload, slack-resume, follow, unfollow, read, search, members, update, link-slack) Did you mean: tico thread home, tico thread unpin?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "catchup",
+   "thread-id-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_catchup",
+    {
+     "operation_id": null,
+     "scope": "subtree",
+     "thread_id": "thread-id-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-id-1/catch-up",
+    {
+     "scope": "subtree"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "catchup",
+   "thread-id-1",
+   "--thread-only"
+  ],
+  "tools": [
+   [
+    "tico_thread_catchup",
+    {
+     "operation_id": null,
+     "scope": "thread",
+     "thread_id": "thread-id-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-id-1/catch-up",
+    {
+     "scope": "thread"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "catchup"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread catchup <thread_id>\ntico thread catchup: error: the following arguments are required: thread_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "catch-up"
+  ],
+  "tools": [
+   [
+    "tico_thread_catch_up",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/catch-up",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "catch-up",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_thread_catch_up",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/catch-up?cursor=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "pin",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_pin",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "threads/thread-1/pin",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "pin"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread pin <thread>\ntico thread pin: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "unpin",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_unpin",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "threads/thread-1/pin",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "unpin"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread unpin <thread>\ntico thread unpin: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_thread_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "list",
+   "--with",
+   "human:7",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_thread_list",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "operation_id": null,
+     "with": "human:7"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads?with=human%3A7&cursor=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "show",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_show",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/timeline",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "show",
+   "thread-1",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5",
+   "--flat"
+  ],
+  "tools": [
+   [
+    "tico_thread_show",
+    {
+     "cursor": "cursor-1",
+     "flat": true,
+     "limit": 5,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/timeline?cursor=cursor-1&limit=5&flat=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread show <thread>\ntico thread show: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "home",
+   "bot:ana"
+  ],
+  "tools": [
+   [
+    "tico_thread_home",
+    {
+     "actor": "bot:ana",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/home/bot:ana",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "home"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread home <actor>\ntico thread home: error: the following arguments are required: actor",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "dm-group",
+   "bot:ana",
+   "bot:anab"
+  ],
+  "tools": [
+   [
+    "tico_thread_dm_group",
+    {
+     "members": [
+      "bot:ana",
+      "bot:anab"
+     ],
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/dm",
+    {
+     "members": [
+      "bot:ana",
+      "bot:anab"
+     ],
+     "body": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "dm-group",
+   "bot:ana",
+   "bot:anab",
+   "--body",
+   "Hello all",
+   "--title",
+   "Launch"
+  ],
+  "tools": [
+   [
+    "tico_thread_dm_group",
+    {
+     "body": "Hello all",
+     "members": [
+      "bot:ana",
+      "bot:anab"
+     ],
+     "operation_id": null,
+     "title": "Launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/dm",
+    {
+     "members": [
+      "bot:ana",
+      "bot:anab"
+     ],
+     "body": "Hello all",
+     "title": "Launch"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "dm-group"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread dm-group <ACTOR>\ntico thread dm-group: error: the following arguments are required: ACTOR",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "dm",
+   "bot:ana"
+  ],
+  "tools": [
+   [
+    "tico_thread_dm",
+    {
+     "actor": "bot:ana",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/dm?with=bot%3Aana",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "dm"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread dm <actor>\ntico thread dm: error: the following arguments are required: actor",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "create"
+  ],
+  "tools": [
+   [
+    "tico_thread_create",
+    {
+     "operation_id": null,
+     "pin_for_members": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "create",
+   "Launch",
+   "--audience",
+   "members",
+   "--group",
+   "audience-group-id-1",
+   "--member",
+   "bot:ana",
+   "--member",
+   "bot:anab",
+   "--body",
+   "Hello all",
+   "--pin-for-members"
+  ],
+  "tools": [
+   [
+    "tico_thread_create",
+    {
+     "audience": "members",
+     "audience_group_id": "audience-group-id-1",
+     "body": "Hello all",
+     "members": [
+      "bot:ana",
+      "bot:anab"
+     ],
+     "operation_id": null,
+     "pin_for_members": true,
+     "title": "Launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads",
+    {
+     "title": "Launch",
+     "audience": "members",
+     "audience_group_id": "audience-group-id-1",
+     "members": [
+      "bot:ana",
+      "bot:anab"
+     ],
+     "body": "Hello all",
+     "pin_for_members": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "post",
+   "thread-1",
+   "Shipped it"
+  ],
+  "tools": [
+   [
+    "tico_thread_post",
+    {
+     "operation_id": null,
+     "text": "Shipped it",
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/messages",
+    {
+     "text": "Shipped it",
+     "kind": "say"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "post",
+   "thread-1",
+   "Shipped it",
+   "--to",
+   "bot:ana",
+   "--reply-to",
+   "reply-to-1",
+   "--ref",
+   "task:42",
+   "--ref",
+   "task:42b"
+  ],
+  "tools": [
+   [
+    "tico_thread_post",
+    {
+     "operation_id": null,
+     "refs": [
+      "task:42",
+      "task:42b"
+     ],
+     "reply_to": "reply-to-1",
+     "text": "Shipped it",
+     "thread": "thread-1",
+     "to": "bot:ana"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/messages",
+    {
+     "text": "Shipped it",
+     "kind": "say",
+     "to": "bot:ana",
+     "in_reply_to": "reply-to-1",
+     "refs": {
+      "task": [
+       "42",
+       "42b"
+      ]
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "post"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread post <thread> <text>\ntico thread post: error: the following arguments are required: thread, text",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "bot-status",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_bot_status",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/bot-status",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "bot-status"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread bot-status <thread>\ntico thread bot-status: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "reply",
+   "thread-1",
+   "message-1",
+   "Shipped it"
+  ],
+  "tools": [
+   [
+    "tico_thread_reply",
+    {
+     "message": "message-1",
+     "operation_id": null,
+     "text": "Shipped it",
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/messages",
+    {
+     "text": "Shipped it",
+     "kind": "say",
+     "parent_message_id": "message-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "reply",
+   "thread-1",
+   "message-1",
+   "Shipped it",
+   "--ref",
+   "task:42",
+   "--ref",
+   "task:42b"
+  ],
+  "tools": [
+   [
+    "tico_thread_reply",
+    {
+     "message": "message-1",
+     "operation_id": null,
+     "refs": [
+      "task:42",
+      "task:42b"
+     ],
+     "text": "Shipped it",
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/messages",
+    {
+     "text": "Shipped it",
+     "kind": "say",
+     "parent_message_id": "message-1",
+     "refs": {
+      "task": [
+       "42",
+       "42b"
+      ]
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "reply"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread reply <thread> <message> <text>\ntico thread reply: error: the following arguments are required: thread, message, text",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "edit",
+   "message-1",
+   "Shipped it"
+  ],
+  "tools": [
+   [
+    "tico_thread_edit",
+    {
+     "message": "message-1",
+     "operation_id": null,
+     "text": "Shipped it"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "messages/message-1",
+    {
+     "text": "Shipped it"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "edit"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread edit <message> <text>\ntico thread edit: error: the following arguments are required: message, text",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "sub",
+   "message-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_sub",
+    {
+     "message": "message-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads",
+    {
+     "parent_message_id": "message-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "sub"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread sub <message>\ntico thread sub: error: the following arguments are required: message",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "react",
+   "message-id-1",
+   ":+1:"
+  ],
+  "tools": [
+   [
+    "tico_thread_react",
+    {
+     "emoji": ":+1:",
+     "message_id": "message-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "messages/message-id-1/reactions/:+1:",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "react"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread react <message_id> <emoji>\ntico thread react: error: the following arguments are required: message_id, emoji",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "unreact",
+   "message-id-1",
+   ":+1:"
+  ],
+  "tools": [
+   [
+    "tico_thread_unreact",
+    {
+     "emoji": ":+1:",
+     "message_id": "message-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "messages/message-id-1/reactions/:+1:",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "unreact"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread unreact <message_id> <emoji>\ntico thread unreact: error: the following arguments are required: message_id, emoji",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "open-earlier",
+   "thread-id-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_open_earlier",
+    {
+     "operation_id": null,
+     "thread_id": "thread-id-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-id-1/open-earlier",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "open-earlier"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread open-earlier <thread_id>\ntico thread open-earlier: error: the following arguments are required: thread_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "task",
+   "message-id-1",
+   "--title",
+   "Launch",
+   "--owner",
+   "me"
+  ],
+  "tools": [
+   [
+    "tico_thread_task",
+    {
+     "message_id": "message-id-1",
+     "operation_id": null,
+     "owner": "me",
+     "title": "Launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "threads/messages/message-id-1/task",
+    {
+     "title": "Launch",
+     "owner": "bot:ana"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "task"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread task <message_id>\ntico thread task: error: the following arguments are required: message_id, --title, --owner",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "delete",
+   "message-id-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_delete",
+    {
+     "message_id": "message-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "messages/message-id-1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "delete"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread delete <message_id>\ntico thread delete: error: the following arguments are required: message_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "upload",
+   "thread-1",
+   "missing-file.txt"
+  ],
+  "tools": [
+   [
+    "tico_thread_upload",
+    {
+     "operation_id": null,
+     "path": "missing-file.txt",
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"Refused: missing-file.txt is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "thread",
+   "upload",
+   "thread-1",
+   "missing-file.txt",
+   "--text",
+   "Shipped it",
+   "--to",
+   "bot:ana",
+   "--under",
+   "under-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_upload",
+    {
+     "operation_id": null,
+     "path": "missing-file.txt",
+     "text": "Shipped it",
+     "thread": "thread-1",
+     "to": "bot:ana",
+     "under": "under-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"Refused: missing-file.txt is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "thread",
+   "upload"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread upload <thread> <path>\ntico thread upload: error: the following arguments are required: thread, path",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "slack-resume",
+   "link-id-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_slack_resume",
+    {
+     "link_id": "link-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "slack/links/link-id-1/resume",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "slack-resume"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread slack-resume <link_id>\ntico thread slack-resume: error: the following arguments are required: link_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "follow",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_follow",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "threads/thread-1/follow",
+    {
+     "notify": "live"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "follow",
+   "thread-1",
+   "--notify",
+   "live"
+  ],
+  "tools": [
+   [
+    "tico_thread_follow",
+    {
+     "notify": "live",
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "threads/thread-1/follow",
+    {
+     "notify": "live"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "follow"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread follow <thread>\ntico thread follow: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "unfollow",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_unfollow",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "threads/thread-1/follow",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "unfollow"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread unfollow <thread>\ntico thread unfollow: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "read",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_read",
+    {
+     "all": false,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"invalid\",\n  \"detail\": \"Give seq, the seq of the last message read, or all\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "thread",
+   "read",
+   "thread-1",
+   "--seq",
+   "5",
+   "--all"
+  ],
+  "tools": [
+   [
+    "tico_thread_read",
+    {
+     "all": true,
+     "operation_id": null,
+     "seq": 5,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/read-all",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "read"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread read <thread>\ntico thread read: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "search",
+   "from:bank"
+  ],
+  "tools": [
+   [
+    "tico_thread_search",
+    {
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/search?q=from%3Abank",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "search",
+   "from:bank",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_thread_search",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/search?q=from%3Abank&before=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "search"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread search <q>\ntico thread search: error: the following arguments are required: q",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "list",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_members_list",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/members",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "list",
+   "thread-1",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_thread_members_list",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/members?cursor=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "list"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread members list <thread>\ntico thread members list: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "add",
+   "thread-1",
+   "bot:ana"
+  ],
+  "tools": [
+   [
+    "tico_thread_members_add",
+    {
+     "actor": "bot:ana",
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/members",
+    {
+     "actor": "bot:ana",
+     "role": "member"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "add",
+   "thread-1",
+   "bot:ana",
+   "--owner"
+  ],
+  "tools": [
+   [
+    "tico_thread_members_add",
+    {
+     "actor": "bot:ana",
+     "operation_id": null,
+     "role": "owner",
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/members",
+    {
+     "actor": "bot:ana",
+     "role": "owner"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "add"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread members add <thread> <actor>\ntico thread members add: error: the following arguments are required: thread, actor",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "remove",
+   "thread-1",
+   "bot:ana"
+  ],
+  "tools": [
+   [
+    "tico_thread_members_remove",
+    {
+     "actor": "bot:ana",
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "DELETE",
+    "threads/thread-1/members/bot:ana",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "remove"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread members remove <thread> <actor>\ntico thread members remove: error: the following arguments are required: thread, actor",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "update",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_update",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "threads/thread-1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "update",
+   "thread-1",
+   "--title",
+   "Launch",
+   "--archive",
+   "--audience",
+   "members",
+   "--group",
+   "audience-group-id-1",
+   "--keep-days",
+   "5",
+   "--keep-forever",
+   "--pin-for-everyone"
+  ],
+  "tools": [
+   [
+    "tico_thread_update",
+    {
+     "archived": true,
+     "audience": "members",
+     "audience_group_id": "audience-group-id-1",
+     "operation_id": null,
+     "pinned_for_everyone": true,
+     "retention_days": null,
+     "thread": "thread-1",
+     "title": "Launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "threads/thread-1",
+    {
+     "title": "Launch",
+     "archived": true,
+     "audience": "members",
+     "audience_group_id": "audience-group-id-1",
+     "pinned_for_everyone": true,
+     "retention_days": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread update <thread>\ntico thread update: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "link-slack",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_link_slack",
+    {
+     "history": false,
+     "off": false,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "slack/links?thread=thread-1&limit=100",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "link-slack",
+   "thread-1",
+   "google-search",
+   "--history",
+   "--off"
+  ],
+  "tools": [
+   [
+    "tico_thread_link_slack",
+    {
+     "channel": "google-search",
+     "history": true,
+     "off": true,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"usage\",\n  \"detail\": \"--off takes the thread's Slack link away: it takes no channel and no --history\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "thread",
+   "link-slack"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico thread link-slack <thread> <channel>\ntico thread link-slack: error: the following arguments are required: thread",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "show",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_thread_show",
+    {
+     "operation_id": null,
+     "thread": "1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/1/timeline",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "post",
+   "1",
+   "..."
+  ],
+  "tools": [
+   [
+    "tico_thread_post",
+    {
+     "operation_id": null,
+     "text": "...",
+     "thread": "1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/1/messages",
+    {
+     "text": "...",
+     "kind": "say"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "edit",
+   "1",
+   "..."
+  ],
+  "tools": [
+   [
+    "tico_thread_edit",
+    {
+     "message": "1",
+     "operation_id": null,
+     "text": "..."
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "messages/1",
+    {
+     "text": "..."
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "post",
+   "1",
+   "...",
+   "--reply-to",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_thread_post",
+    {
+     "operation_id": null,
+     "reply_to": "1",
+     "text": "...",
+     "thread": "1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/1/messages",
+    {
+     "text": "...",
+     "kind": "say",
+     "in_reply_to": "1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "reply",
+   "1",
+   "1",
+   "..."
+  ],
+  "tools": [
+   [
+    "tico_thread_reply",
+    {
+     "message": "1",
+     "operation_id": null,
+     "text": "...",
+     "thread": "1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/1/messages",
+    {
+     "text": "...",
+     "kind": "say",
+     "parent_message_id": "1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "update",
+   "thread-1",
+   "--unarchive",
+   "--unpin-for-everyone"
+  ],
+  "tools": [
+   [
+    "tico_thread_update",
+    {
+     "archived": false,
+     "operation_id": null,
+     "pinned_for_everyone": false,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "threads/thread-1",
+    {
+     "archived": false,
+     "pinned_for_everyone": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "follow",
+   "thread-1",
+   "--notify",
+   "loud"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico thread follow: error: argument --notify: invalid choice: 'loud' (choose from live, mentions, digest, muted)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "upload",
+   "thread-1",
+   "clients/tests/cli_fixtures/upload.txt",
+   "--text",
+   "See attached"
+  ],
+  "tools": [
+   [
+    "tico_thread_upload",
+    {
+     "operation_id": null,
+     "path": "clients/tests/cli_fixtures/upload.txt",
+     "text": "See attached",
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "uploads/threads/thread-1/messages",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "create",
+   "Launch",
+   "--audience",
+   "team",
+   "--group",
+   "g1"
+  ],
+  "tools": [
+   [
+    "tico_thread_create",
+    {
+     "audience": "team",
+     "audience_group_id": "g1",
+     "operation_id": null,
+     "pin_for_members": false,
+     "title": "Launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads",
+    {
+     "title": "Launch",
+     "audience": "team",
+     "audience_group_id": "g1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "members"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "\nTico: tasks, messages, bots and the rest of your team's work\n\npositional arguments:\n  {whoami,auth,token,events,alerts,inbound,letter,mail,email,company-page,audiences,editions,readers,meeting,message,conversation,thread,note,feedback,file,page,card,pin,doc,chat,assistant,tag,task,tasks,replay,goal,kpi,proposal,rules,rule,strategy,brand,growth,lens,market,listening,tool,automation,automations,audit,event-types,trigger,relay,call,sleep,ok,notice,settings,release,webhook,brief,mcp,origin,needs-you,run,team,seat,org,health,changelog,update,grokbot,external,calendar,sql,db,classify,gateway,decision,template,bot,bots,repo,skill,agent,human,group,setup,api,computer,credential,slack,support,finance,contacts,task-manager,maintenance,roadmap,service-key,usage,billing,reach,github,upgrade,cloud,subscription,pipeline,stage,company,requirement}\n    whoami              who you are, to which company, and through which\n                        profile\n    auth                profiles: which company and token this shell talks to\n                        (--profile NAME on any command)\n    token               your personal API tokens (list, create, revoke)\n    events              the company's live event stream\n    alerts              your own phone and paid alert preferences\n    inbound             shared company email and SMS inboxes\n    letter              quote and send physical letters through the Gateway\n    mail                physical mail the company received (scanned letters)\n    email               read and organize email, set sending policy, and\n                        manage pending sends\n    company-page        the Company page: transparency, address, last update\n    audiences           the Company page's audiences\n    editions            the Company page's editions: drafts and published\n    readers             the Company page's readers (owners and admins)\n    meeting             search meetings, read transcripts, import a transcript\n                        from another tool\n    message             send a message, read what waits for you, mark one read\n    conversation        what was said in a conversation\n    thread              threads: list yours, read one, post, reply in a sub-\n                        thread, follow, search, catch up\n    note                a deferred message for a bot: no run now, its next run\n                        reads it\n    feedback            a person's 👍/👎 on a bot's work: give, list, make a\n                        rule\n    file                what you publish for people: reports, documents,\n                        imported objects\n    page                pages: HTML a bot keeps up to date, with Tico's\n                        updated line\n    card                Tico's built-in cards on the Dashboard, team pages,\n                        sidebars and tasks\n    pin                 pin a page or a card at a place\n    doc                 read and search team docs and external sources, write\n                        internal docs, ask the Librarian\n    chat                bot chat goals and commands\n    assistant           the Assistant's proposals for a person to confirm\n    tag                 tags and checklist templates\n    replay              what happened in a window, as you may see it\n    goal                goals: list, read-back, create and edit\n    kpi                 a measure on its own that goals link to, and its\n                        readings\n    proposal            a change you may not make yourself, for the owner to\n                        confirm\n    rules (rule)        org rules: what teammates follow (internal) and what\n                        someone outside requires (external), and their due\n                        dates\n    strategy            the team's strategy: its bets, its sections, the\n                        versions\n    brand               the brand: voice, words, names, claims\n    growth              growth: channels, sources, monthly cohorts, unit\n                        economics, the numbers\n    lens                thought exercises run against the strategy or the\n                        market\n    market              the shared market graph: read it, report into it,\n                        curate it\n    listening           Listening's saved posts: save a sweep, decide where\n                        each post goes, trace a post\n    tool                what the team uses: each tool, what a bot uses, its\n                        model, repository and declared tools (docs/creating-\n                        bots.md)\n    automation (automations)\n                        automations: a trigger and steps\n    audit               who changed caps, spend, groups, automations and\n                        inboxes, newest first (the owner sees all)\n    event-types         every event Tico names, with a one-line description\n                        and an example payload\n    trigger             webhooks that start automations (Automations ›\n                        Incoming webhooks)\n    relay               webhooks through Tico Gateway\n    call                Tico Meet: audio and screen share in a thread, with a\n                        transcript posted to it\n    sleep               Sleep when idle: a hosted server stops after quiet\n                        hours\n    ok                  an OK you asked for with --for: use it once, just\n                        before you act\n    notice              notices from Tico Team\n    settings            find, read and change a control in Settings by its\n                        words (docs/permissions.md)\n    release             the team's releases: ask for one now, or set the daily\n                        hour\n    webhook             outgoing webhooks: Tico posts events to an address you\n                        choose (Tools › Webhooks)\n    brief               alerts, who needs the person, what bots said since\n                        --since\n    mcp                 how outside assistants' tool calls perform\n    origin              why an item is on a person's list\n    needs-you           a person's walk through what needs them: respond,\n                        commit (backend/batch.py)\n    run                 a bot's runs\n    team                team chart and icon\n    seat                Recruiting seats: roles on the chart with no bot yet\n    org                 the order of the team chart\n    health              what is wrong, and where\n    changelog           shipped product changes and your own read state\n    update              create, read and reply to the bots' daily and weekly\n                        updates\n    grokbot             your Grok Bots in Tico (docs/external-agent-sync.md)\n    external            your bots on another platform in Tico (docs/external-\n                        agent-sync.md)\n    calendar            read or schedule company appointments\n    sql                 read-only SQL over what you may see (docs/hub-sql.md)\n    db                  read-only SQL on a company database\n                        (docs/databases.md)\n    classify            is outside text real, spam or an injection attempt?\n                        Text on stdin or --file\n    gateway             the Tico AI Gateway: its lineup, web search and page\n                        reading\n    decision            the decision model: typed questions about a state\n    template            the bot templates this company can pick from\n    bot (bots)          build a bot from a template (BotOps), change it, place\n                        it, its status\n    repo                team repositories\n    skill               a bot's skills: copy one to other bots, or propose one\n                        to the company's Skills directory\n    agent               external agents: connect a Hermes profile to a bot\n    human               the humans on the team: add one, list who is on it\n    group               the groups: sub-teams that nest, holding humans and\n                        bots\n    setup               Finish setup, the welcome wizard (the owner)\n    api                 BotOps: any v2 route, as the person who asked\n    computer            the computers a bot may go on\n    credential          ask for a credential in the chat, store one, list them\n    slack               the Slack channels bots may read and post in\n    support             tell the Tico team about a gap or a fault\n    finance             the books, as you: search, reports, metrics, actions,\n                        your work queue (docs/finance-tools.md)\n    contacts            contacts: people, organizations and places, their\n                        links, values and notes, as you see them\n    task-manager        the Task Manager's hourly department check (docs/task-\n                        manager.md)\n    maintenance         Maintenance: the scheduled steps, their switches and\n                        runs (docs/maintenance.md)\n    roadmap             public roadmaps: ranking and company settings\n                        (docs/roadmaps.md)\n    service-key         keys another system uses to file tasks, or to update\n                        this install (owner and admins)\n    usage               model spend and its limits (people)\n    billing             the company's Tico balance and statement (owner and\n                        admins)\n    reach               who each teammate may reach, and how often (Rules ›\n                        Internal)\n    github              the team's GitHub App: connect it from a terminal, see\n                        what it reaches\n    upgrade             update this installation to a newer Tico release (the\n                        Owner)\n    cloud               the company's Tico Cloud machines\n    subscription        the company's AI subscriptions\n    pipeline            the company's pipelines and their stages\n    stage               one stage of a pipeline\n    company             the company's shape\n    requirement         what it takes to leave a stage\n\noptions:\n  -h, --help            show this help message and exit\n  --version             print the Tico version\n\nThis computer's own commands: tico-computer help",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "thread",
+   "show",
+   "thread-1",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_thread_show",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/timeline",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]
