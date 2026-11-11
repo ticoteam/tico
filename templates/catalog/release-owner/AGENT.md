@@ -35,7 +35,13 @@ with its newest or merged commit and the Fixes 2 page. A stage moves on by itsel
      `tico task move <id> "Fixes 2" -m "<what failed, with the run link>" --version N`.
   Say which you chose and why on the task. Never run `gh pr merge`.
 - **Release.** To leave: the merged commit is in a published release. {{app_name}} reads releases from GitHub itself and
-  moves the task on when one contains it. Getting releases out on their schedule is your work (`playbooks/cut-a-release.md`).
+  moves the task on when one contains it. You are woken when a task enters Release and no release has been asked for.
+  Cut it with `tico task release <id> --version N` (add `--tag <version>` where the repository releases from a tag):
+  {{app_name}} runs the repository's release workflow, or creates the tag, through its GitHub App. One release covers
+  every task waiting on that repository, so ask once and let the others follow. It is refused until a person signed the
+  task off in Fixes 2. If GitHub refuses it, or no release comes within an hour, you are woken with why: read the run,
+  then ask again or say on the task why you cannot. A second failure, or a permission only a person can grant, goes to
+  a person by itself. Getting releases out on their schedule is your work (`playbooks/cut-a-release.md`).
 
 {{app_name}} reads pull requests, checks, the queue and releases from GitHub itself: do not poll and do not snooze for them.
 
@@ -102,8 +108,8 @@ access on that repository, which the owner grants (`playbooks/onboarding.md`).
 
 Never, whatever the task asks:
 - **Merge a pull request.** The merge queue merges; `.claude/settings.json` denies `gh pr merge`.
-- **Any other action on GitHub that changes a run or a release** outside the rollout in `playbooks/rollout.md`: rerun, cancel,
-  trigger, enable, disable, deploy, roll back or release. A rollback is a drafted request on a task
+- **Any other action on GitHub that changes a run or a release** outside the rollout in `playbooks/rollout.md` and
+  `tico task release`: rerun, cancel, trigger, enable, disable, deploy, roll back or release. A rollback is a drafted request on a task
   (`playbooks/rollback.md`). If the owner approves an earlier version on the task, that is a rollout of that version under
   `playbooks/rollout.md`, with its own approval.
 
@@ -140,8 +146,8 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/versioning.md` with the last released version and its date when a release reached users, rewrite `state.md`,
    record durable decisions in `memory/decisions.md`, and commit this repository.
-3. In Merge or Release, leave the task in one of the ways `tico task show` lists: queued again, sent back, or waiting on
-   GitHub. For a report or a release task, finish with `tico task done <id> -m "..." --version N`. The headline comes first: for the report, the merge to production median
+3. In Merge or Release, leave the task in one of the ways `tico task show` lists: queued again, release asked for, sent
+   back, or waiting on GitHub. For a report or a release task, finish with `tico task done <id> -m "..." --version N`. The headline comes first: for the report, the merge to production median
    and the change; for a release, the suggested version and why, the changes in the draft, the changes unclassified, and any
    repository you could not read. Then the report path, the hand-offs you made and anything unreadable.
 

@@ -2292,3 +2292,59 @@ class AppGitHub:
         if errors:
             raise GitHubRefused(errors)
         return {"ok": True, "how": "dequeued", "reason": ""}
+
+    # ------------------------------------------------------------------ a release (item_sources/github_release.py)
+    def cut_release(self, repo, kind, name, sha):
+        """Run the release workflow `name` on the default branch, or create the tag `name` at `sha`. The token names
+        only the one permission it needs; an installation without it is a not-ok answer saying so (never retried:
+        only a person can grant it). A failed call raises, to be tried again."""
+        from .item_sources import github_release as GR
+
+        needed, missing = ("actions", GR.MISSING_ACTIONS) if kind == "workflow" else ("contents", GR.MISSING_CONTENTS)
+        permissions = {needed: "write", "metadata": "read"}
+        live = self.service.live_permissions()
+        if live is not None and live.get(needed) != "write":
+            return {"ok": False, "how": None, "reason": missing}
+        try:
+            headers = self._headers(repo, permissions)
+        except Problem as problem:
+            if problem.code == "github_app_permissions":
+                return {"ok": False, "how": None, "reason": missing}
+            raise
+        path = f"/repos/{quote(repo, safe='/')}"
+        if kind == "workflow":
+            branch = (self._get(repo, "", {"metadata": "read"}).json() or {}).get("default_branch") or "main"
+            response = self.service._call(
+                "POST",
+                f"{path}/actions/workflows/{quote(name, safe='')}/dispatches",
+                headers=headers,
+                json={"ref": branch},
+            )
+            if response.status_code == 204:
+                return {"ok": True, "how": f"workflow {name} on {branch}", "reason": ""}
+        else:
+            response = self.service._call(
+                "POST", f"{path}/git/refs", headers=headers, json={"ref": f"refs/tags/{name}", "sha": sha}
+            )
+            if response.status_code == 201:
+                return {"ok": True, "how": f"tag {name}", "reason": ""}
+            if response.status_code == 422:  # the tag is there: fine when it already names this commit
+                found = self._get(
+                    repo,
+                    f"/git/ref/tags/{quote(name, safe='')}",
+                    {"metadata": "read", "contents": "read"},
+                    ok=(200, 404),
+                )
+                target = ((found.json() or {}).get("object") or {}).get("sha") if found.status_code == 200 else None
+                if target and str(target).lower() == sha.lower():
+                    return {"ok": True, "how": f"tag {name}", "reason": ""}
+                return {"ok": False, "how": None, "reason": f"The tag {name} is already on another commit"}
+        try:
+            said = str((response.json() or {}).get("message") or "")[:200]
+        except (ValueError, AttributeError):
+            said = ""
+        if response.status_code == 403 and "not accessible" in said.lower():
+            return {"ok": False, "how": None, "reason": missing}
+        if response.status_code in (404, 422):  # no such workflow, or it has no workflow_dispatch trigger
+            return {"ok": False, "how": None, "reason": f"GitHub answered HTTP {response.status_code}: {said}"}
+        raise GitHubRefused(f"GitHub answered HTTP {response.status_code}: {said}")

@@ -27,6 +27,7 @@ from . import hubdb_core, pipeline_rights, source_actions, task_engine
 from . import pipeline_presets_more as more
 from . import pipeline_seats as S
 from . import task_requirements as R
+from .item_sources import github_release as GR
 from .hubdb_core import KEEPER as SYSTEM
 
 if TYPE_CHECKING:
@@ -568,6 +569,11 @@ def _check_settings(req: Row, label: str, problems: list[str]) -> None:
             not isinstance(value, str) or (value.strip() and not REPO.match(value.strip()))
         ):
             problems.append(f"The release repo on {label} is owner/name, or empty for the server's.")
+        elif key == "release_with" and not GR.valid(value):
+            problems.append(
+                f"Release with on {label} is workflow:<file>.yml (the workflow Tico runs), tag, or empty (the repo "
+                "releases on its own)."
+            )
 
 
 def _check_answer(req: Row, label: str, problems: list[str]) -> None:
