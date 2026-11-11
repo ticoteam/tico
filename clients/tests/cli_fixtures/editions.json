@@ -25,17 +25,24 @@
    "editions",
    "list"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_editions_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
   "http": [
    [
     "GET",
-    "me",
+    "editions",
     null
    ]
   ],
-  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
-  "exit": 2
+  "exit": 0
  },
  {
   "argv": [
@@ -50,17 +57,28 @@
    "--limit",
    "5"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_editions_list",
+    {
+     "audience": "audience-1",
+     "before": "before-1",
+     "limit": 5,
+     "operation_id": null,
+     "status": "status-1"
+    }
+   ]
+  ],
   "http": [
    [
     "GET",
-    "me",
+    "editions?audience=audience-1&status=status-1&before=before-1&limit=5",
     null
    ]
   ],
-  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
-  "exit": 2
+  "exit": 0
  },
  {
   "argv": [
@@ -68,17 +86,25 @@
    "show",
    "id-1"
   ],
-  "tools": [],
+  "tools": [
+   [
+    "tico_editions_show",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
   "http": [
    [
     "GET",
-    "me",
+    "editions/id-1",
     null
    ]
   ],
-  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
-  "exit": 2
+  "exit": 0
  },
  {
   "argv": [

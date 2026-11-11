@@ -1,8 +1,11 @@
 """The company page.
 
-Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
+Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together. `tico company-page`,
+`audiences`, `editions` and `readers` are made from these tools (clients/cli_spec.py), below them."""
 
 from urllib.parse import quote
+
+from clients.cli_spec import Command, Group
 
 from clients.commands._registry import tool
 from clients.commands._schemas import _s
@@ -62,3 +65,17 @@ def editions_show(api, args):
 )
 def readers_list(api, args):
     return api.get('readers', **{k: args[k] for k in ('limit', 'cursor') if args.get(k) is not None})
+
+
+CLI = (
+    Command("company-page", "the Company page: transparency, address, last update", example="tico company-page"),
+    Group("audiences", "the Company page's audiences"),
+    Command("audiences list", "the built-in audiences and any you added", example="tico audiences list"),
+    Group("editions", "the Company page's editions: drafts and published"),
+    Command(
+        "editions list", "each audience's edition per period, newest first", example="tico editions list --limit 10"
+    ),
+    Command("editions show", "one edition: its text, status, checks and approval", example="tico editions show ed_1"),
+    Group("readers", "the Company page's readers (owners and admins)"),
+    Command("readers list", "outside people who sign in to its private audiences", example="tico readers list"),
+)

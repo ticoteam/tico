@@ -1,6 +1,11 @@
 """Webhooks, triggers, relays, notices, sleeps and releases.
 
-Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
+Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together. The `tico relay`,
+`sleep`, `notice`, `release` and `webhook` command lines are made from these tools (clients/cli_spec.py), below them."""
+
+import argparse
+import json
+from pathlib import Path
 
 from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
@@ -472,7 +477,7 @@ def release_now(api, args):
 _WEBHOOK_EVENTS = {
     "type": "array",
     "items": {"type": "string"},
-    "description": "Event names (`task.done`), groups (`task.*`) or `*`; see tico_event_types",
+    "description": "Event names (`task.done`), groups (`task.*`) or `*`, from `event-types`",
 }
 
 
@@ -482,9 +487,17 @@ _WEBHOOK_FILTER = {
     "(slugs) and pipelines (ids or names), each a list; empty or missing means all. Applies to events about a "
     "task or a bot; the rest (a release, a health finding) always pass",
     "properties": {
-        "departments": {"type": "array", "items": {"type": "string"}},
-        "bots": {"type": "array", "items": {"type": "string"}},
-        "pipelines": {"type": "array", "items": {"type": "string"}},
+        "departments": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Only events about work in these departments",
+        },
+        "bots": {"type": "array", "items": {"type": "string"}, "description": "Only events that involve these bots"},
+        "pipelines": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Only events about tasks in these pipelines, by id or name",
+        },
     },
 }
 
@@ -503,33 +516,39 @@ _WEBHOOK_HEADERS = {
 }
 
 
-def webhook_options(fields):
-    """The CLI's flags as the tool's arguments: `--departments/--bots/--pipelines` become `filter`, `--header` and
-    `--secret-header` ("Name: value") become `headers`; `--no-filter` and `--no-headers` clear them."""
+def webhook_filter(fields):
+    """`--departments`, `--bots` and `--pipelines` folded into the tool's `filter`; `--no-filter` clears it."""
     picked = {k: fields.pop(k) for k in ("departments", "bots", "pipelines") if k in fields}
     if picked:
         fields["filter"] = picked
     if fields.pop("no_filter", False):
         fields["filter"] = {}
-    headers = []
-    for flag, secret in (("header", False), ("secret_header", True)):
-        for text in fields.pop(flag, None) or []:
-            name, colon, value = text.partition(":")
-            if not colon and not secret:
-                raise ValueError(f"--header is Name: value, not {text!r}")
-            # A plain header sends no `secret` key: BotOps' requests refuse any key named like a secret.
-            headers.append(
-                {
-                    "name": name.strip(),
-                    **({"secret": True} if secret else {}),
-                    **({"value": value.strip()} if colon else {}),
-                }
-            )
-    if headers:
-        fields["headers"] = headers
-    if fields.pop("no_headers", False):
-        fields["headers"] = []
     return fields
+
+
+def _header(secret):
+    """`--header "Name: value"` (or `--secret-header`, whose "Name" alone keeps the value it has) as one of `headers`.
+    A plain header sends no `secret` key: BotOps' requests refuse any key named like a secret."""
+
+    def parse(text):
+        name, colon, value = text.partition(":")
+        if not colon and not secret:
+            raise argparse.ArgumentTypeError(f"--header is Name: value, not {text!r}")
+        return {
+            "name": name.strip(),
+            **({"secret": True} if secret else {}),
+            **({"value": value.strip()} if colon else {}),
+        }
+
+    return parse
+
+
+def _data(raw):
+    """`--data`: JSON, or @file holding it."""
+    try:
+        return json.loads(Path(raw[1:]).read_text() if raw.startswith("@") else raw)
+    except (OSError, ValueError):
+        raise argparse.ArgumentTypeError("--data must be JSON, or @file holding JSON") from None
 
 
 def _hook_path(args, *tail):
@@ -604,8 +623,11 @@ def webhook_show(api, args):
         "name": _s("New name"),
         "url": _s("New https address"),
         "events": _WEBHOOK_EVENTS,
-        "rate_per_hour": {"type": "integer", "minimum": 1},
-        "allow_http": {"type": "boolean", "description": "Owner only"},
+        "rate_per_hour": {"type": "integer", "minimum": 1, "description": "Most sends an hour; more wait"},
+        "allow_http": {
+            "type": "boolean",
+            "description": "Owner only: allow plain http to this computer (localhost), for development",
+        },
         "filter": _WEBHOOK_FILTER,
         "headers": _WEBHOOK_HEADERS,
         "expected_revision": {
@@ -798,7 +820,11 @@ def webhook_enable(api, args):
 @tool(
     "tico_webhook_example",
     "Send an event type's example to one endpoint, to test the receiver (default `custom.example`).",
-    {"id": _s("The endpoint id"), "type": _s("An event name from tico_event_types"), "on_behalf_of": ON_BEHALF_OF},
+    {
+        "id": _s("The endpoint id"),
+        "type": _s("An event name, from `event-types` (default custom.example)"),
+        "on_behalf_of": ON_BEHALF_OF,
+    },
     required=("id",),
     writes=True,
 )
@@ -806,3 +832,189 @@ def webhook_example(api, args):
     return _as_person(api, args.get("on_behalf_of")).post(
         _hook_path(args, "example"), {"type": args.get("type") or ""}, key=_key(args)
     )
+
+
+# ----------------------------------------------------------------------------- the command lines (clients/cli_spec.py)
+def on_off(word):
+    """`on` or `off` as the boolean the tool takes."""
+    if word not in ("on", "off"):
+        raise argparse.ArgumentTypeError("use on or off")
+    return word == "on"
+
+
+def quiet_hours(word):
+    """0 to 24, whole hours."""
+    try:
+        hours = int(word)
+    except ValueError:
+        hours = -1
+    if not 0 <= hours <= 24:
+        raise argparse.ArgumentTypeError("use a whole number of hours from 0 to 24")
+    return hours
+
+
+RELAY = (
+    Group("relay", "webhooks through Tico Gateway"),
+    Command(
+        "relay status",
+        "the Gateway key, the addresses, the last pull and what waits at the Gateway",
+        example="tico relay status",
+    ),
+    Command(
+        "relay set",
+        "whether a delivery to a trigger's Gateway address starts a sleeping server",
+        args=(Arg("wake", "--wake", action="store", type=on_off, metavar="on|off"),),
+        example="tico relay set stripe --wake on",
+    ),
+    Group(
+        "relay wake-url",
+        "an address Tico Gateway knocks on to start a server you run when a webhook waits for it",
+    ),
+    Command("relay wake-url show", "the address, who set it and when", example="tico relay wake-url show"),
+    Command("relay wake-url off", "stop knocking", example="tico relay wake-url off"),
+    Command(
+        "relay wake-url set",
+        "set the address; the signing secret is shown once",
+        example="tico relay wake-url set https://wake.example.com/start",
+    ),
+)
+
+SLEEP = (
+    Group("sleep", "Sleep when idle: a hosted server stops after quiet hours"),
+    Command(
+        "sleep status",
+        "hosted or not, the hours, what keeps the server up and Tico's last answer",
+        example="tico sleep status",
+    ),
+    Command(
+        "sleep set",
+        "turn it on (1-24 quiet hours) or off (0); an owner or an admin",
+        args=(
+            Arg("hours", type=quiet_hours, metavar="N"),
+            Arg("runners", action="store", type=on_off, metavar="on|off"),
+        ),
+        example="tico sleep set --hours 2 --runners on",
+    ),
+)
+
+NOTICE = (
+    Group("notice", "notices from Tico Team"),
+    Command("notice list", "the notices Tico Team sent, newest first", example="tico notice list"),
+)
+
+RELEASE = (
+    Group("release", "the team's releases: ask for one now, or set the daily hour"),
+    Command(
+        "release now",
+        "ask the Release Owner to release what waits for a release now (hotfix, midday release); one task listing the "
+        "tasks",
+        example="tico release now --note 'login fix'",
+    ),
+    Command(
+        "release schedule",
+        "show the daily release, or change it",
+        args=(
+            Arg("on", "--on", action="store_const", const=True),
+            Arg("on", "--off", action="store_const", const=False),
+            Arg("times", "--time", metavar="HH:MM"),
+            Arg("bot", "--manager"),
+        ),
+        exclusive=(("on",),),
+        example="tico release schedule --on --time 09:00 --time 15:00",
+    ),
+)
+
+_FILTER = (
+    Arg("departments", action="store", nargs="+", into="filter"),
+    Arg("bots", action="store", nargs="+", into="filter"),
+    Arg("pipelines", action="store", nargs="+", into="filter"),
+)
+_HEADERS = (
+    Arg("headers", "--header", type=_header(secret=False), metavar="'NAME: VALUE'"),
+    Arg("headers", "--secret-header", type=_header(secret=True), metavar="'NAME[: VALUE]'"),
+)
+_EVENTS = Arg("events", action="store", nargs="+")
+
+WEBHOOK = (
+    Group("webhook", "outgoing webhooks: Tico posts events to an address you choose (Tools › Webhooks)"),
+    Command(
+        "webhook list",
+        "the endpoints you may see, with 7-day delivered and failed counts",
+        example="tico webhook list",
+    ),
+    Command(
+        "webhook create",
+        "make an endpoint; the signing secret is printed once. A bot asks a person to OK it first",
+        args=(
+            Arg("name", "--name"),
+            Arg("url", "--url"),
+            _EVENTS,
+            Arg("allow_http", default=None),
+            *_FILTER,
+            *_HEADERS,
+        ),
+        convert=webhook_filter,
+        example="tico webhook create --name CRM --url https://crm.example.com/tico --events task.done",
+    ),
+    Command("webhook show", "one endpoint and its last attempts", example="tico webhook show ep_1"),
+    Command(
+        "webhook update",
+        "change an endpoint",
+        args=(
+            _EVENTS,
+            Arg("allow_http", action=argparse.BooleanOptionalAction, default=None),
+            *_FILTER,
+            Arg("no_filter", "--no-filter", into="filter", action="store_true"),
+            *_HEADERS,
+            Arg("headers", "--no-headers", action="store_const", const=[]),
+        ),
+        convert=webhook_filter,
+        example="tico webhook update ep_1 --events task.done task.closed",
+    ),
+    Command(
+        "webhook rotate",
+        "a new signing secret, printed once; the old one signs for 24 more hours",
+        example="tico webhook rotate ep_1",
+    ),
+    Command("webhook pause", "stop sending; queued sends wait", example="tico webhook pause ep_1 --reason 'moving'"),
+    Command("webhook resume", "send again", example="tico webhook resume ep_1"),
+    Command("webhook delete", "delete the endpoint and cancel its queued sends", example="tico webhook delete ep_1"),
+    Command(
+        "webhook send",
+        "send a custom event (custom.<name>) to one endpoint",
+        args=(Arg("type", "--type"), Arg("data", type=_data, metavar="JSON|@FILE")),
+        example="""tico webhook send ep_1 --type custom.ping --data '{"ok": true}'""",
+    ),
+    Command(
+        "webhook sends",
+        "an endpoint's send log; --send ID shows one send with its attempts",
+        example="tico webhook sends ep_1 --state failed",
+    ),
+    Command(
+        "webhook retry",
+        "send a failed, canceled or delivered send again now",
+        example="tico webhook retry ep_1 wh_1",
+    ),
+    Command(
+        "webhook recover",
+        "send again every send that gave up since a date (same ids and bodies)",
+        args=(Arg("since", "--since"),),
+        example="tico webhook recover ep_1 --since 2026-10-20",
+    ),
+    Command(
+        "webhook replay",
+        "send the events since a date that the endpoint should have had and has no send for",
+        args=(Arg("since", "--since"),),
+        example="tico webhook replay ep_1 --since 2026-10-20",
+    ),
+    Command(
+        "webhook enable",
+        "turn an endpoint back on; after Tico turned it off for failing, it offers to send again what it held back",
+        example="tico webhook enable ep_1",
+    ),
+    Command(
+        "webhook example",
+        "send an event type's example to one endpoint",
+        example="tico webhook example ep_1 --type task.done",
+    ),
+)

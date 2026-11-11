@@ -152,9 +152,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"header\",\n  \"detail\": \"--header is Name: value, not 'header-1'\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
+  "stdout": "",
+  "stderr": "tico webhook create: error: argument --header: --header is Name: value, not 'header-1'",
+  "exit": 64
  },
  {
   "argv": [
@@ -266,9 +266,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"header\",\n  \"detail\": \"--header is Name: value, not 'header-1'\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
+  "stdout": "",
+  "stderr": "tico webhook update: error: argument --header: --header is Name: value, not 'header-1'",
+  "exit": 64
  },
  {
   "argv": [
@@ -499,7 +499,6 @@
    [
     "tico_webhook_send",
     {
-     "data": {},
      "id": "id-1",
      "operation_id": null,
      "type": "type-1"
@@ -540,9 +539,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"data\",\n  \"detail\": \"--data must be JSON, or @file holding JSON\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
+  "stdout": "",
+  "stderr": "tico webhook send: error: argument --data: --data must be JSON, or @file holding JSON",
+  "exit": 64
  },
  {
   "argv": [
@@ -1086,9 +1085,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"header\",\n  \"detail\": \"--header is Name: value, not 'no-colon'\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
+  "stdout": "",
+  "stderr": "tico webhook create: error: argument --header: --header is Name: value, not 'no-colon'",
+  "exit": 64
  },
  {
   "argv": [
@@ -1319,9 +1318,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"data\",\n  \"detail\": \"--data must be JSON, or @file holding JSON\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
+  "stdout": "",
+  "stderr": "tico webhook send: error: argument --data: --data must be JSON, or @file holding JSON",
+  "exit": 64
  },
  {
   "argv": [

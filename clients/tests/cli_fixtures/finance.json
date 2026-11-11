@@ -1743,7 +1743,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico finance report {pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close|sales_tax|1099}\ntico finance report: error: the following arguments are required: kind",
+  "stderr": "Example: tico finance report {pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|campaigns|subscriptions|close|sales_tax|1099}\ntico finance report: error: the following arguments are required: kind",
   "exit": 64
  },
  {
@@ -1827,7 +1827,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico finance metric {cash|burn|runway_months|revenue|spend|budget_remaining|budget_pct_used|ap_due|ar_overdue|uncategorized_count|unreconciled_days|duplicate_charges|price_increases}\ntico finance metric: error: the following arguments are required: name",
+  "stderr": "Example: tico finance metric {cash|burn|runway_months|revenue|spend|budget_remaining|budget_pct_used|ap_due|ar_overdue|uncategorized_count|unreconciled_days|duplicate_charges|price_increases|unattributed|ad_spend|per_conversion|subscriptions_monthly}\ntico finance metric: error: the following arguments are required: name",
   "exit": 64
  },
  {
@@ -2031,7 +2031,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico finance search: error: argument --kind: invalid choice: 'nope' (choose from entry, feed, bill, invoice, contact, rule, card, account)",
+  "stderr": "tico finance search: error: argument --kind: invalid choice: 'nope' (choose from entry, feed, bill, invoice, contact, rule, card, account, item, project, vendor, campaign, receipt, subscription)",
   "exit": 64
  },
  {
@@ -2043,7 +2043,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico finance report: error: argument kind: invalid choice: 'weird' (choose from pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, close, sales_tax, 1099)",
+  "stderr": "tico finance report: error: argument kind: invalid choice: 'weird' (choose from pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, campaigns, subscriptions, close, sales_tax, 1099)",
   "exit": 64
  },
  {
@@ -2087,7 +2087,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "tico finance metric: error: argument name: invalid choice: 'nope' (choose from cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, duplicate_charges, price_increases)",
+  "stderr": "tico finance metric: error: argument name: invalid choice: 'nope' (choose from cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days, duplicate_charges, price_increases, unattributed, ad_spend, per_conversion, subscriptions_monthly)",
   "exit": 64
  },
  {

@@ -296,10 +296,6 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "contacts":
         return via_tool(client, _contacts_args(args))
-    if args.cmd == "finance":
-        return via_tool(
-            client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {})
-        )
     if args.cmd == "settings":
         return via_tool(client, args)
     if fn in ("token list", "token create", "token revoke"):  # clients/cli_plumbing.py
@@ -310,10 +306,7 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):
         return via_tool(client, args)
-    if fn.startswith(("relay ", "sleep ")):
-        return via_tool(client, args)
-    # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
-    if fn.startswith("notice ") or fn == "event-types":
+    if fn == "event-types":
         return via_tool(client, args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -612,23 +605,6 @@ def run(args, who=None):
         return client.get("service-keys")["keys"]
     if args.cmd == "ok":
         return unwrap(via_tool(client, args))
-    if args.cmd == "webhook":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn in ("webhook create", "webhook update"):
-            try:
-                hubtools.webhook_options(fields)
-            except ValueError as exc:
-                raise APIError("header", str(exc), 422) from None
-        if fn == "webhook send":
-            raw = fields.pop("data", None) or "{}"
-            try:
-                fields["data"] = json.loads(Path(raw[1:]).read_text() if raw.startswith("@") else raw)
-            except (OSError, ValueError):
-                raise APIError("data", "--data must be JSON, or @file holding JSON") from None
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     identity = client.get("me")
     actor = identity["actor"]
     key = os.environ.get("HUB_OPERATION_ID")
@@ -1047,8 +1023,6 @@ def run(args, who=None):
         }
     if cmd == "automation":
         return automation(client, args)
-    if cmd == "release":
-        return via_tool(client, args)
     if fn.startswith("bot status"):
         if fn == "bot status set":
             bot = args.bot or actor.split(":", 1)[-1]

@@ -172,7 +172,7 @@ def test_one_huge_row_is_cut_inside_and_a_result_that_cannot_fit_says_so():
 
 
 def test_inbox_pages_one_kind_through_the_cli_and_the_tool_passing_its_cursor(monkeypatch):
-    from clients import hubcli, remotecli
+    from clients import cli_spec, hubcli
 
     class Inbox(_Api):
         def get(self, path, **query):
@@ -181,6 +181,6 @@ def test_inbox_pages_one_kind_through_the_cli_and_the_tool_passing_its_cursor(mo
 
     api = Inbox([{"id": f"fd_{i}", "kind": "uncategorized", "label": f"Row {i}"} for i in range(250)], key="items")
     args = hubcli.parser().parse_args(["finance", "inbox", "--kind", "uncategorized", "--cursor", "200"])
-    out = remotecli.via_tool(api, args)
+    out = cli_spec.of(args).call(api, args)
     assert [r["id"] for r in out["items"]][0] == "fd_200" and len(out["items"]) == 50 and out["next_cursor"] is None
     assert api.calls == [("finance/inbox", {"kind": "uncategorized", "cursor": "200"})]
