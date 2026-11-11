@@ -6978,6 +6978,14 @@ class Execution:
                         **({"check": check["runtime"]} if check else {}),
                         # A held reply's marker: its capture is never taken again (attempt_capture).
                         **({"held_reply": True} if held else {}),
+                        # The claim ran it on the Gateway, not the runtime the bot is set to, because that runtime
+                        # is not signed in on its computer (models_preset.on_gateway): the runner made no hop of its
+                        # own, so this is what tells Runs and Health that it ran on something else.
+                        **(
+                            {"waiting_for_sign_in": unsigned}
+                            if (unsigned := gateway_connection.handed(c, aid).get("waiting_for_sign_in"))
+                            else {}
+                        ),
                     }
                 ),
                 aid,

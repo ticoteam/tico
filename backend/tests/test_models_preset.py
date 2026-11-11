@@ -707,3 +707,52 @@ def test_a_task_turn_on_the_gateway_before_sign_in_names_the_gateways_harness_on
     with api.app.state.store.read() as c:
         sessions = [json.loads(link["detail"]) for link in H.task_links(c, task["id"]) if link["kind"] == "session"]
     assert [(s["harness"], s["primary"]) for s in sessions] == [("pi", True)]
+
+
+def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_bots_run_on(api, monkeypatch):
+    """Acme rc.4 B4: on a cloud machine with no Claude or Codex sign-in every bot ran on Tico Medium, its runs said no
+    fallback and Health's `on_fallback` stayed empty, so two reviewers set to different models were the same model."""
+    from backend import health
+    from backend.tests.helpers.api import get
+    from backend.usage_records import ran_on
+
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine, "ops", signed_in=False, isolated="cloud")
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    got = post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert got["config"]["waiting_for_sign_in"] == "claude"
+    post(api, f"attempts/{got['id']}/started", {"thread_id": "pi-thread"}, machine["token"])
+    done = {"outcome": "completed", "last_seq": 0, "text": "Done."}
+    post(api, f"attempts/{got['id']}/complete", done, machine["token"])
+    with api.app.state.store.read() as c:
+        assert ran_on(c, [got["id"]])[got["id"]]["fallback"] == "pi"
+    found = get(api, "health")
+    [row] = found["on_fallback"]
+    assert (row["bot"], row["harness"], row["waiting_for_sign_in"]) == ("ops", "pi", "claude")
+    assert row["set_to"] == {"runtime": "claude", "model": CLAUDE["model"]}
+    check = next(x for x in found["checks"] if x["id"] == "on_fallback")
+    assert check["status"] == "info" and check["summary"] == row["line"]
+    assert "claude-opus-5-5" in row["line"] and "no Claude subscription" in row["line"]
+
+    # Every bot that ran ran on the Gateway for want of a sign-in: one line, not one a bot.
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "cpo", {**BS.read(c, "cpo"), "runtime": "codex", "harness": "codex", "model": "gpt-6-luna"})
+    gateway = {"harness": "pi", "model": "tico-medium-1.0", "changed_at": None}
+    rows = [
+        {**gateway, "bot": "ops", "waiting_for_sign_in": "claude"},
+        {**gateway, "bot": "cpo", "waiting_for_sign_in": "codex"},
+    ]
+    settings = api.app.state.store.settings
+    with api.app.state.store.read() as c:
+        one = health._fallback_lines(c, settings, [dict(r) for r in rows], 2)
+        each = health._fallback_lines(c, settings, listed := [dict(r) for r in rows], 3)
+    assert "Tico Medium" in one and "Claude or Codex" in one and "gpt-6-luna" not in one
+    assert each == " ".join(row["line"] for row in listed) and "gpt-6-luna" in each
+    # A bot whose own hop ran it elsewhere keeps its own line, so the group is not claimed for it.
+    hop = [*rows, {"bot": "ops", "harness": "codex", "model": None, "waiting_for_sign_in": None, "changed_at": None}]
+    with api.app.state.store.read() as c:
+        assert "Every bot" not in health._fallback_lines(c, settings, [dict(r) for r in hop], 3)
