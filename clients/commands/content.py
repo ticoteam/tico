@@ -7,6 +7,7 @@ import json
 import os
 import re
 from urllib.parse import quote
+from clients.cli_spec import Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import tool
@@ -280,7 +281,7 @@ def card_add(api, args):
 @tool(
     "tico_card_update",
     "Change a card's heading or settings (only those sent change).",
-    {"card": _s("Card id"), "title": _s("Its heading"), **CARD_SETTINGS},
+    {"card": _s("Card id, from `card list`"), "title": _s("Its heading"), **CARD_SETTINGS},
     required=("card",),
     writes=True,
 )
@@ -321,7 +322,11 @@ def pin_add(api, args):
 @tool(
     "tico_pin_update",
     "Resize or move a pin.",
-    {"pin": _s("Pin id"), "size": SIZE, "position": {"type": "integer", "description": "0 is first"}},
+    {
+        "pin": _s("Pin id, from `card list --place`"),
+        "size": SIZE,
+        "position": {"type": "integer", "description": "0 is first"},
+    },
     required=("pin",),
     writes=True,
 )
@@ -837,3 +842,27 @@ def docs_fetch(api, args):
         return doc_fetch.fetch(args["url"], args.get("max_chars") or doc_fetch.DEFAULT_MAX_CHARS)
     except doc_fetch.FetchError as exc:
         return {"error": exc.code, "detail": exc.message, "retryable": exc.code in ("timeout", "network", "dns")}
+
+
+CARD = (
+    Group("card", "Tico's built-in cards on the Dashboard, team pages, sidebars and tasks"),
+    Command(
+        "card list",
+        "what is pinned at a place, with what each card shows you",
+        example="tico card list --place dashboard",
+    ),
+    Command(
+        "card add",
+        "add a built-in card, pinned at --place",
+        example="tico card add done_per_week --place dashboard",
+    ),
+    Command("card update", "change a card's heading or settings", example="tico card update c1 --title Shipped"),
+    Command("card remove", "remove a card and its pins", example="tico card remove c1"),
+)
+
+PIN = (
+    Group("pin", "pin a page or a card at a place"),
+    Command("pin add", "pin page:<file id> or card:<id> at a place", example="tico pin add dashboard card:c1"),
+    Command("pin update", "resize or move a pin", example="tico pin update p1 --size large"),
+    Command("pin remove", "unpin", example="tico pin remove p1"),
+)

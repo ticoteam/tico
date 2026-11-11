@@ -2,14 +2,17 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import argparse
 import base64
+import json
 from urllib.parse import quote
 from pathlib import Path
 from clients import s3links
+from clients.cli_spec import Arg, Command, Group
 
 from clients.commands._registry import tool
 from clients.commands._schemas import DEFER_FOR, TASK_ID, _delivery, _key, _s
-from clients.commands._shared import ASKED, VERSION, VISUALS, _seen, _uploaded, _visuals
+from clients.commands._shared import ASKED, VERSION, VISUALS, _seen, _uploaded, _visuals, text_file
 from clients.commands._requester import _as_person, _asked
 
 
@@ -160,7 +163,7 @@ def tag_list(api, args):
 @tool(
     "tico_tag_show",
     "A tag's metadata, markdown, version and the tasks you may read.",
-    {"id": _s("Tag id or key"), "offset": {"type": "integer"}},
+    {"id": _s("Tag id or key"), "offset": {"type": "integer", "description": "Skip this many of its tasks"}},
     required=("id",),
 )
 def tag_show(api, args):
@@ -172,11 +175,11 @@ def tag_show(api, args):
     "Create a tag or template. With template_id, copy its checklist and metadata defaults into an instance. "
     "The owner (default: you) and task movers may edit it; templates cannot go on tasks.",
     {
-        "key": _s("Unique key used by tico_task_label and --label"),
+        "key": _s("Unique key: the label string a task carries"),
         "label": _s("Display label"),
-        "metadata": {"type": "object", "description": "Metadata, or overrides of template defaults"},
-        "markdown": _s("Markdown checklist or notes"),
-        "is_template": {"type": "boolean"},
+        "metadata": {"type": "object", "description": "Metadata as a JSON object, or overrides of template defaults"},
+        "markdown": _s("Markdown checklist or notes; on a command line, --markdown-file names a file that holds it"),
+        "is_template": {"type": "boolean", "description": "Make it a template"},
         "template_id": _s("Template id or key"),
         "owner": _s("Owner actor or teammate id"),
     },
@@ -196,10 +199,10 @@ def tag_create(api, args):
     "Edit a tag's metadata, checklist, label or owner. Send its current version; stale edits are refused.",
     {
         "id": _s("Tag id or key"),
-        "version": {"type": "integer"},
+        "version": {"type": "integer", "description": "Its current version, from `tag show`"},
         "label": _s("Display label"),
-        "metadata": {"type": "object", "description": "Replace metadata"},
-        "markdown": _s("Replace Markdown"),
+        "metadata": {"type": "object", "description": "Replace metadata: a JSON object"},
+        "markdown": _s("Replace Markdown; on a command line, --markdown-file names a file that holds it"),
         "owner": _s("New owner; empty to clear"),
     },
     required=("id", "version"),
@@ -733,3 +736,52 @@ def roadmap_settings(api, args):
     if args.get('settings') is not None:
         return _as_person(api).post('roadmaps/settings', args['settings'], key=_key(args))
     return api.get('roadmaps/settings')
+
+
+def _metadata(text):
+    """A flag's type: tag metadata, a JSON object, or a usage error."""
+    try:
+        value = json.loads(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not JSON ({exc})") from None
+    if not isinstance(value, dict):
+        raise argparse.ArgumentTypeError("Tag metadata must be a JSON object")
+    return value
+
+
+_TAG_TEXT = (
+    Arg("metadata", type=_metadata, metavar="JSON"),
+    Arg("markdown", "--markdown"),
+    Arg("markdown", "--markdown-file", type=text_file),
+)
+
+# Tags keep the task --label key contract: a task's label string is a tag's key.
+TAG = (
+    Group("tag", "tags and checklist templates"),
+    Command(
+        "tag list",
+        "tags and checklist templates",
+        args=(
+            Arg("is_template", "--templates", action="store_const", const=True),
+            Arg("is_template", "--instances", action="store_const", const=False),
+        ),
+        example="tico tag list --templates",
+    ),
+    Command("tag show", "a tag with the tasks that carry it", example="tico tag show launch"),
+    Command(
+        "tag create",
+        "a tag, a checklist template, or an instance of a template",
+        args=(
+            *_TAG_TEXT,
+            Arg("is_template", "--template", action="store_const", const=True),
+            Arg("template_id", "--from-template"),
+        ),
+        example="tico tag create launch-q4 --from-template launch",
+    ),
+    Command(
+        "tag update",
+        "edit a tag's label, metadata, checklist or owner",
+        args=(Arg("version", "--version"), *_TAG_TEXT),
+        example="tico tag update launch --version 2 --label Launch",
+    ),
+)
