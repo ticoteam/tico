@@ -6,6 +6,7 @@
    Addresses:
      #/tools[?show=needs|api|mail|websites]          the list
      #/tools/api/<id>[/activity]                      one API tool (ui/app/tools-api.ts)
+     #/tools/website/<id>[/activity]                  one website tool (ui/app/tools-website.ts)
      #/tools/mailbox/<address or id>[/activity]       one mailbox  ┐
      #/tools/number/<id>                              one Tico address or phone number │ the inbox kinds' pages
      #/tools/address/<id>, #/tools/address/outbox     one mailing address, letters out  │ (ui/app/inboxes*.js)
@@ -139,11 +140,12 @@ function toolsDraw() {
 }
 
 // ----------------------------------------------------------------- Add tool
-// An API (POST /api-tools) for whoever manages keys, then each inbox kind's own Add (ui/app/inboxes*.js).
+// An API (POST /api-tools) and a website (POST /website-tools) for whoever manages keys, then each inbox kind's own
+// Add (ui/app/inboxes*.js).
 function toolsAddMenu(): string {
   const admin = settingsIsAdmin();
   const kinds: InboxKind[] = Object.values(INBOX_KINDS).filter((k: InboxKind) => k.add && (!k.add.admin || admin)).sort((a: InboxKind, b: InboxKind) => a.order - b.order);
-  const items = [...(S.me?.credential_access || admin ? [['api', 'API']] : []), ...kinds.map(k => ['kind:' + k.key, k.add?.label]),
+  const items = [...(S.me?.credential_access || admin ? [['api', 'API'], ['website', 'Website']] : []), ...kinds.map(k => ['kind:' + k.key, k.add?.label]),
     ['webhook', 'Outgoing webhook']];
   if (!items.length) return '';
   return `<details class="tt-add" data-tl-add><summary class="primary small">Add tool</summary><div class="tt-add-menu" role="menu">
@@ -155,6 +157,7 @@ function toolsAddBind(root: HTMLElement) {
     b.closest('details')?.removeAttribute('open');
     const item = b.dataset.tlAddItem ?? '';
     if (item === 'api') { toolsApiCreate(); return; }
+    if (item === 'website') { toolsWebsiteCreate(); return; }
     if (item === 'webhook') { location.hash = WH_HOOKS_ROUTE; void whHookDialog(null); return; }
     INBOX_KINDS[item.slice(5)]?.add?.open(inboxesCtx(IB.run));
   });
@@ -190,6 +193,7 @@ function toolsRoute(r: string): boolean {
   const parts = path.slice(TOOLS_ROUTE.length).split('/').filter(Boolean).map(p => { try { return decodeURIComponent(p); } catch { return p; } });
   if (!parts.length) { pageTools(); return true; }
   if (parts[0] === 'api' && parts[1]) { pageToolApi(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
+  if (parts[0] === 'website' && parts[1]) { void pageToolWebsite(parts[1], parts[2] === 'activity' ? 'activity' : ''); return true; }
   if (parts[0] === 'keys') { pageRdTools(); return true; }
   if (parts[0] === 'webhooks') { pageToolWebhooks(parts[1] || ''); return true; }
   const view = inboxesRoute(parts);
@@ -217,4 +221,4 @@ function toolsInboxPage(view: string) {
   void inboxesRender();
 }
 // Leaving Tools drops the list, so coming back reads the hub again.
-function toolsStop() { TL = null; INBOXES_VIEW = ''; rdToolsStop(); toolApiStop(); }
+function toolsStop() { TL = null; INBOXES_VIEW = ''; rdToolsStop(); toolApiStop(); toolWebsiteStop(); }

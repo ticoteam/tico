@@ -1490,6 +1490,8 @@ class Heartbeat(Contract):
             "memory_tidy_packets_v1",
             "harness_allocation_v1",
             "make_page",
+            "memory_tidy_keep_v1",
+            "browser_v1",  # website tools' browser commands (backend/browser_commands.py)
         ]
     ] = Field(default_factory=list, max_length=32)
     # The bool map remains accepted during runner rollout. The server normalizes both

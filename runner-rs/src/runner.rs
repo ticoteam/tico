@@ -671,6 +671,8 @@ impl Runner {
         if let Some(screen) = crate::screen::readiness() {
             readiness_doc["screen"] = screen; // only while turned on here (crate::screen)
         }
+        // Chrome for website tools, found or not: the browser host's Health check says when it is missing.
+        readiness_doc["browser"] = crate::browser::readiness();
         if let Some(apps) = crate::appdriver::readiness(&candidates) {
             readiness_doc["appdriver"] = apps; // only on a Mac with app delivery (crate::appdriver)
         }

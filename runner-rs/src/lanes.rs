@@ -110,10 +110,13 @@ pub fn release(name: &str) {
 pub fn capabilities() -> Vec<&'static str> {
     let screen = crate::screen::offers(crate::screen::readiness().as_ref())
         .then_some(crate::screen::CAPABILITY);
+    // Website tools' browser sessions run here only while Google Chrome can show a window (crate::browser).
+    let browser = crate::browser::offers().then_some(crate::browser::CAPABILITY);
     CAPABILITIES
         .iter()
         .copied()
         .chain(screen)
+        .chain(browser)
         .filter(|c| !held_back(c))
         .collect()
 }
@@ -179,12 +182,13 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
             .and_then(|m| m[1].parse::<usize>().ok())
         {
             if let Some(name) = caps.get(index) {
-                if CAPABILITIES.contains(&name.as_str()) {
+                if CAPABILITIES.contains(&name.as_str()) || name == crate::browser::CAPABILITY {
                     return Some(name.clone());
                 }
             }
         }
         for name in [
+            crate::browser::CAPABILITY,
             "make_page",
             "harness_allocation_v1",
             "memory_tidy_packets_v1",
@@ -365,6 +369,16 @@ mod tests {
     fn an_older_server_can_drop_make_page_without_losing_ordinary_work() {
         let mut body = json!({"capabilities": ["task_lanes_v2", "threads_v1", "make_page"]});
         assert!(CAPABILITIES.contains(&"make_page"));
+        // A server from before website tools refuses the browser first, by position or not.
+        let browser = json!({"capabilities": ["make_page", "browser_v1"]});
+        assert_eq!(
+            refused_field("body.capabilities: bad", &browser).as_deref(),
+            Some("browser_v1")
+        );
+        assert_eq!(
+            refused_field("body.capabilities.1: Input should be 'make_page'", &browser).as_deref(),
+            Some("browser_v1")
+        );
         assert_eq!(
             refused_field(
                 "body.capabilities.2: Input should be 'task_lanes_v2'",

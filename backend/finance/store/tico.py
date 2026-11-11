@@ -498,7 +498,8 @@ def gateway_target(c: sqlite3.Connection, vault: object, settings: object) -> tu
 def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) -> str:
     """A stored credential's secret, read at use time ("" when it is gone or holds none). Never logged or kept."""
     row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
-    if row is None or row["ciphertext"] is None or vault is None:
+    # A website login (backend/website_tools.py) is never a provider key: its value goes to a browser only.
+    if row is None or row["ciphertext"] is None or vault is None or row["kind"] == "login":
         return ""
     return str(cast(Any, vault).cipher.decrypt(c, row) or "")
 

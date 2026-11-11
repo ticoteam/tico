@@ -1014,7 +1014,9 @@
        "threads_v1",
        "memory_tidy_packets_v1",
        "harness_allocation_v1",
-       "make_page"
+       "make_page",
+       "memory_tidy_keep_v1",
+       "browser_v1"
       ],
       "type": "string"
      },

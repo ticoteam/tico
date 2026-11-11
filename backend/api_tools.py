@@ -268,7 +268,13 @@ def audience_of(tool):
 
 
 def _can_use(c, tool_id, actor):
-    return any(effective_grant(c, k["id"], actor) for k in _keys(c, tool_id))
+    """An effective grant on one of its keys, or (a website tool) an own account `actor` holds."""
+    return any(_field(k, "holder") == actor or effective_grant(c, k["id"], actor) for k in _keys(c, tool_id))
+
+
+def kind_of(tool):
+    """`api` or `website` (backend/website_tools.py): a row from before the column is an API tool."""
+    return _field(tool, "kind") or "api"
 
 
 def visible(c, who, tool, admins, auth=None):
@@ -280,6 +286,9 @@ def visible(c, who, tool, admins, auth=None):
         if tool is None:
             return False
     level = audience_of(tool)
+    if level is None and kind_of(tool) == "website":
+        # A website tool for Everyone is known to every person and bot; its accounts stay with those who use them.
+        return not getattr(who, "support", None) and getattr(who, "role", "") in ("owner", "human", "bot")
     if level is None:
         return may_read(c, who, tool["id"], admins)
     role = getattr(who, "role", "")
@@ -345,10 +354,11 @@ def key_hidden(c, who, credential_id, admins, auth=None):
     return tool is not None and not visible(c, who, tool, admins, auth)
 
 
-def _readable(c, who, tool_id, admins, auth=None):
-    """The tool's row, or a 404 "No such tool" when it does not exist or `who` may not see it."""
+def _readable(c, who, tool_id, admins, auth=None, kind="api"):
+    """The tool's row, or a 404 "No such tool" when it does not exist, is not of `kind` (an API tool's routes never
+    reach a website tool, nor the other way round) or `who` may not see it."""
     tool = c.execute("SELECT * FROM tools WHERE id=?", (str(tool_id or ""),)).fetchone()
-    if tool is None or not visible(c, who, tool, admins, auth):
+    if tool is None or kind_of(tool) != kind or not visible(c, who, tool, admins, auth):
         raise Problem("not_found", "No such tool", 404)
     return tool
 
@@ -512,6 +522,9 @@ def access_rows_all(c, tool_id):
                 level = "read" if key["access_level"] == "read" or grant["access_level"] == "read" else "read_write"
                 if RANK[level] > RANK.get(found.get(subject), 0):
                     found[subject] = level
+        holder = _field(key, "holder")
+        if holder and str(holder).startswith(("bot:", "human:")):
+            found[holder] = "read_write"  # a website tool's own account: its holder uses it
     return [{"subject": s, "level": lv} for s, lv in found.items()]
 
 
@@ -1060,10 +1073,11 @@ def forget_audience_member(c, actor, field, ident):
         H.event(c, actor, "tool.audience_changed", tool["id"], {"before": before, "after": after, "removed": ident})
 
 
-def delete_tool(c, who, tool_id, admins):
-    """The tool, its checks and calls, and its keys with their grants: a key belongs to its tool."""
+def delete_tool(c, who, tool_id, admins, kind="api"):
+    """The tool, its checks and calls, and its keys with their grants: a key belongs to its tool (a website tool's
+    accounts too)."""
     require_admin(c, who, admins)
-    tool = _readable(c, who, tool_id, admins)
+    tool = _readable(c, who, tool_id, admins, kind=kind)
     keys = [k["id"] for k in _keys(c, tool_id)]
     refuse_finance_key(c, keys)  # before anything goes
     for key_id in keys:
@@ -1146,7 +1160,7 @@ def ensure_tool(c, who, credential_id, from_computer=False):
     free = (
         service
         and c.execute(
-            "SELECT id FROM tools t WHERE service=? AND audience IS NULL AND NOT EXISTS (SELECT 1 FROM credentials k WHERE k.tool_id=t.id"
+            "SELECT id FROM tools t WHERE service=? AND audience IS NULL AND kind='api' AND NOT EXISTS (SELECT 1 FROM credentials k WHERE k.tool_id=t.id"
             " AND k.access_level='read_write')"
             + (" AND delivery='computer'" if from_computer else "")
             + " ORDER BY created_at, id LIMIT 1",
@@ -1304,7 +1318,7 @@ def _index_row(id, kind, name, status_, href, *, detail="", way="", who=(), who_
 def _api_rows(c, who, admins, view):
     admin = _admin(c, who, admins)
     out = []
-    for tool in c.execute("SELECT * FROM tools ORDER BY lower(name), id").fetchall():
+    for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
         if not (admin and tool["audience"] is None) and not visible(c, who, tool, admins, view.auth):
             continue
         keys = _keys(c, tool["id"])
@@ -1514,8 +1528,15 @@ def _declared_rows(c, who, view, covered_services, covered_envs):
     return out
 
 
+def _website_rows(c, who, auth, admins):
+    """Website tools the reader may see (backend/website_tools.py)."""
+    from . import website_tools
+
+    return website_tools.index_rows(c, who, auth, admins)
+
+
 def index_rows(c, who, auth, settings, admins):
-    """Every Tools row the reader may see, in list order: API tools, mail and numbers, the company's connections,
+    """Every Tools row the reader may see, in list order: API tools, website tools, mail and numbers, the company's connections,
     declared tools."""
     from . import connections as CN
 
@@ -1529,6 +1550,7 @@ def index_rows(c, who, auth, settings, admins):
         for r in c.execute("SELECT env, tool_id FROM credentials WHERE tool_id IS NOT NULL AND env<>''")
         if r[1] in shown
     }
+    rows += _website_rows(c, who, auth, admins)
     rows += _mailbox_rows(c, who, view)
     rows += _connection_rows(view)
     rows += _declared_rows(c, who, view, covered, envs)
@@ -1557,7 +1579,7 @@ def index_page(c, who, auth, settings, admins, limit=INDEX_LIMIT_MAX, cursor="")
         "needs_you": sum(1 for r in rows if r["needs_you"]),
         "api": sum(1 for r in rows if r["kind"] in ("api", "declared")),
         "mail": sum(1 for r in rows if r["kind"] in ("mailbox", "number", "address")),
-        "websites": 0,
+        "websites": sum(1 for r in rows if r["kind"] == "website"),
     }
     return {"rows": shown, "counts": counts, "next": str(end) if end < len(rows) else None}
 

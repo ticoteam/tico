@@ -1076,6 +1076,17 @@ pub async fn turn_proxy(bot: &str, attempt: &Value) -> Result<Option<Admission>,
     }))
 }
 
+/// The proxy `bot` browses through here, while a turn of it has one: for the Chrome the runner itself starts for the
+/// bot's own website session (crate::browser). That Chrome runs as the runner's user, which is let in.
+pub fn runner_proxy(bot: &str) -> Option<String> {
+    let proxy = proxies().lock().unwrap().get(bot).cloned()?;
+    // SAFETY: getuid cannot fail.
+    let uid = unsafe { libc::getuid() };
+    proxy.users.lock().unwrap().insert(uid, ALWAYS);
+    *proxy.used.lock().unwrap() = Instant::now();
+    Some(format!("http://127.0.0.1:{}", proxy.port))
+}
+
 async fn serve_proxy(listener: TcpListener, bot: String, proxy: Arc<Proxy>, client: Client) {
     loop {
         let Ok(permit) = proxy.room.clone().acquire_owned().await else {

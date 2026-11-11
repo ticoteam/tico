@@ -438,6 +438,28 @@ API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}
 `GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](api.md#the-contract)). Hub: `tico computer browser-exit` and
 `tico bot browser-exit`.
 
+## Browser host
+
+The browser host is the one computer that runs the company's website tools ([Website
+logins](credential-vault.md#website-logins)): a Chrome profile per account, kept signed in, which bots drive by verbs
+and people watch or take control of from the tool's page. An admin picks it with the **Browser host** switch in that
+computer's pop-up; one per company.
+
+- It needs Google Chrome installed. On Linux it also needs a display. Tico does not install Chrome.
+- It runs no bots of its own: placing a bot there is refused while it is the browser host.
+- It is online when it checked in within the last 90 seconds. Health shows "Browser host offline" or "Chrome missing
+  on <computer>" when it is not ready.
+- Each account's browser starts on its first command, closes after 15 minutes idle (the sign-in is kept) and at most 8
+  are open at once.
+
+Where a website command runs:
+
+1. On the browser host, when one is set, online and has Chrome.
+2. Otherwise on the bot's own computer, if it has Chrome, unless the site is **central only**.
+3. Otherwise it is refused, naming the browser host when it is the one that is offline.
+
+A person's view of a website always uses the browser host.
+
 ## Add a connection
 
 ### Subscription or API key?

@@ -1159,7 +1159,7 @@ class Onboarding:
             try:
                 self.execution.assign(c, who, row["bot"], SimpleNamespace(runner_id=runner_id, expected_generation=0))
             except Problem as refusal:
-                if refusal.code not in ("inbox_isolation", "shared_runner"):
+                if refusal.code not in ("inbox_isolation", "shared_runner", "browser_host"):
                     raise
                 continue  # an inbox or a shared checkout cannot take a second bot here
             placed.append(row["bot"])
@@ -1382,7 +1382,13 @@ class Onboarding:
                     self.execution.assign(c, who, slug, SimpleNamespace(runner_id=runner_id, expected_generation=0))
                     break
                 except Problem as problem:
-                    if problem.code not in ("inbox_isolation", "shared_runner", "forbidden", "computer_closed"):
+                    if problem.code not in (
+                        "inbox_isolation",
+                        "shared_runner",
+                        "forbidden",
+                        "computer_closed",
+                        "browser_host",
+                    ):
                         raise
                     refusal = refusal or problem
             else:

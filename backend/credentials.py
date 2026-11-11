@@ -25,6 +25,10 @@ from .bot_access import owner_ids
 from .store import H, Problem, encode
 
 CONTEXT = {'application': 'tico-credentials'}
+# A website tool's account (backend/website_tools.py): its sealed value is JSON {"password", "totp"?}. It never reaches a
+# run, a computer's environment or a list with a value: only a signed-in person's reveal (the password alone) and the
+# browser commands that type it. The 2FA key never leaves this process.
+LOGIN = 'login'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
@@ -169,6 +173,18 @@ def permitted(c, who, credential, admins):
     if who.role in ('human', 'owner', 'bot') and effective_grant(c, credential, who.actor) is not None:
         return True
     return administrator(c, who, admins) and not key_hidden(c, who, credential, admins)
+
+
+def signed_in_person(who):
+    """A person at their own session: not a bot, a computer, an agent token, a run, support, BotOps or the Assistant."""
+    return who.role in ('human', 'owner') and not (
+        who.via
+        or who.via_token
+        or who.attempt_id
+        or who.agent
+        or getattr(who, 'scope', None)
+        or getattr(who, 'support', None)
+    )
 
 
 def owned(c, who):
@@ -523,6 +539,18 @@ class Vault:
             raise Problem('not_found', 'Credential not found', 404)
         return row
 
+    def open_login(self, c, row):
+        """A login's sealed value: {"password", "totp"} (totp '' when it has none). Raises 503 vault_unavailable, never
+        the value, when it is not the JSON a website tool stored."""
+        plain = self.cipher.decrypt(c, row)
+        try:
+            value = json.loads(plain)
+        except ValueError:
+            value = None
+        if not isinstance(value, dict) or not isinstance(value.get('password'), str):
+            raise Problem('vault_unavailable', 'This account could not be decrypted', 503)
+        return {'password': value['password'], 'totp': str(value.get('totp') or '')}
+
     @staticmethod
     def brief(row):
         return {
@@ -566,6 +594,8 @@ class Vault:
         if cid and who.role in ('human', 'owner', 'bot'):
             require_seen(c, who, cid, self.admins)
         old = self.row(c, cid) if cid else None
+        if old and old['kind'] == LOGIN:
+            raise Problem('website_account', "This is a website tool's account: change it on that tool", 409)
         if old and body.expected_revision != old['revision']:
             raise Problem('version_conflict', 'Credential changed; refresh before saving', 409)
         if not old and body.expected_revision is not None:
@@ -693,6 +723,12 @@ class Vault:
         row = self.row(c, cid)
         if subject.startswith('bot:'):
             subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
+        if row['kind'] == LOGIN:
+            # A website account goes to a person or a bot, never every computer; an own account to no one else.
+            if row['holder']:
+                raise Problem('own_account', 'This account is its holder\'s own and is not shared', 409)
+            if not subject.startswith(('human:', 'bot:')):
+                raise Problem('subject', 'Choose a registered person or bot', 422)
         parent = self.grant_authority(c, who, cid, subject)
         inferred = model_env(row['name'], row['kind'], row['env'])
         if inferred and not row['env']:
@@ -771,8 +807,33 @@ class Vault:
             reconnects.secret_stored(c, H.actor_id(subject), row['env'])
         return {'id': gid, 'subject': subject, 'credential': row['name'], 'env': row['env']}
 
+    def reveal_login(self, c, who, row):
+        """A website account's password, to a signed-in person who uses it (its holder or a grant) or a credential
+        administrator: never a bot, a run, an agent or personal token, BotOps or the Assistant. Never the 2FA key."""
+        cid = row['id']
+        if not signed_in_person(who):
+            raise Problem('forbidden', 'Only a signed-in person can see a website password', 403)
+        require_seen(c, who, cid, self.admins)
+        if not (
+            row['holder'] == who.actor
+            or (not row['holder'] and effective_grant(c, cid, who.actor) is not None)
+            or administrator(c, who, self.admins)
+        ):
+            raise Problem('forbidden', 'You do not have access to this credential', 403)
+        if row['ciphertext'] is None:
+            raise Problem('not_connected', 'This connection has no stored password or key', 409)
+        from . import website_tools
+
+        website_tools.spend(cid)  # the same 20 an hour as fill, copy and code (429 slow_down)
+        value = self.open_login(c, row)['password']
+        H.event(c, who.actor, 'credential.revealed', cid, {'kind': LOGIN})
+        return {'id': cid, 'value': value}
+
     def reveal(self, c, who, cid):
         validate_identity(c, who)
+        found = c.execute('SELECT * FROM credentials WHERE id=?', (cid,)).fetchone()
+        if found is not None and found['kind'] == LOGIN:
+            return self.reveal_login(c, who, found)
         if who.role in ('human', 'owner', 'bot') and effective_grant(c, cid, who.actor) is None:
             require_seen(c, who, cid, self.admins)
         if not permitted(c, who, cid, self.admins):
@@ -870,7 +931,9 @@ def install_credentials(app, store, delegate=None, propose=None):
         with store.read() as c:
             migration_runner(c, who)
             bots = {r[0]: [] for r in c.execute('SELECT bot FROM assignments WHERE runner_id=?', (who.runner_id,))}
-            stored = c.execute('SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!=\'\'').fetchall()
+            stored = c.execute(
+                "SELECT id,env FROM credentials WHERE ciphertext IS NOT NULL AND env!='' AND kind!='login'"
+            ).fetchall()
             for bot, names in bots.items():
                 held = granted(c, 'bot:' + bot)
                 names.extend(r['env'] for r in stored if r['id'] in held)
@@ -983,7 +1046,7 @@ def install_credentials(app, store, delegate=None, propose=None):
                 ids = granted(c, who.actor)
                 mine = [
                     {k: v for k, v in vault.brief(row).items() if k != 'preview'} | {'can_reveal': False, 'grants': []}
-                    for row in c.execute('SELECT * FROM credentials ORDER BY lower(name),id')
+                    for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY lower(name),id")
                     if row['id'] in ids
                 ]
                 return {
@@ -1004,7 +1067,8 @@ def install_credentials(app, store, delegate=None, propose=None):
             from . import api_tools
 
             hidden = api_tools.hidden_keys(c, who, vault.admins)  # keys of tools this person may not see
-            for row in c.execute('SELECT * FROM credentials ORDER BY lower(name),id'):
+            # A website account is listed on its website tool (backend/website_tools.py), never here.
+            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY lower(name),id"):
                 if row['id'] in hidden:
                     continue
                 # A credential this person added is listed for sharing (its grants too), never revealed unless granted.
@@ -1170,7 +1234,8 @@ def install_credentials(app, store, delegate=None, propose=None):
             from . import tool_proxy
 
             proxied = tool_proxy.proxied_tools(c)
-            for row in c.execute('SELECT * FROM credentials ORDER BY id'):
+            # A website account never reaches a run: its browser commands type it (backend/website_tools.py).
+            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY id"):
                 if row['ciphertext'] is not None and row['id'] in held:
                     tool = proxied.get(row['tool_id'])
                     if tool is not None:
@@ -1259,7 +1324,9 @@ def install_credentials(app, store, delegate=None, propose=None):
             held = granted(c, 'bot:' + bot)
             if not any(
                 row['id'] in held
-                for row in c.execute("SELECT id FROM credentials WHERE ciphertext IS NOT NULL AND env!=''")
+                for row in c.execute(
+                    "SELECT id FROM credentials WHERE ciphertext IS NOT NULL AND env!='' AND kind!='login'"
+                )
             ):
                 return {'credentials': []}
         with store.transaction() as c:
@@ -1269,7 +1336,7 @@ def install_credentials(app, store, delegate=None, propose=None):
             from . import tool_proxy
 
             proxied = tool_proxy.proxied_tools(c)
-            for row in c.execute('SELECT * FROM credentials ORDER BY id'):
+            for row in c.execute("SELECT * FROM credentials WHERE kind!='login' ORDER BY id"):
                 if row['ciphertext'] is not None and row['env'] and row['id'] in held:
                     tool = proxied.get(row['tool_id'])
                     if tool is not None:

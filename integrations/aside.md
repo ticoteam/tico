@@ -15,7 +15,7 @@ declared_as: |
     can: [read]                       # [read] looks; [read, act] clicks, types, submits, runs `task`
 writes: allowed
 owner: owner
-aliases: [browser]
+aliases: [aside-browser]
 ---
 
 ## What it is
