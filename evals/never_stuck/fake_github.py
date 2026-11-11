@@ -194,6 +194,11 @@ class RigGitHub:
         self._queued.pop((repo, number), None)
         self._pr_hook(repo, number)
 
+    def vanish(self, number: int, repo: str = REPO) -> None:
+        """The PR leaves the merge queue unmerged with no webhook and no removal event: only a read shows it is out."""
+        self.gh.vanish(repo, number)
+        self._queued.pop((repo, number), None)
+
     def publish(self, tag: str, prerelease: bool = False, repo: str = REPO) -> dict[str, Any]:
         """A release of main's newest commit."""
         release = self.gh.publish(repo, tag, prerelease=prerelease, at=_h().now())

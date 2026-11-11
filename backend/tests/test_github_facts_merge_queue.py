@@ -323,6 +323,48 @@ def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_perso
         assert MQ.drops_in_visit(c, task_id, E.task(c, task_id)["visit"]["id"]) == 0  # a new visit counts afresh
 
 
+def test_a_queue_entry_that_vanishes_without_a_word_is_a_drop(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.vanish(REPO, 1)  # no webhook, no removal event: only a read shows it is out
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, "Dropped from the merge queue: GitHub gave no reason")
+        assert len([key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]) == 1
+        MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"])
+    assert gh.prs[(REPO, 1)]["queue_state"] == "none"  # only the owner's queue again queues it
+
+
+def test_a_wait_on_github_with_no_word_for_two_hours_is_the_owner_s(company):
+    gh = FakeGitHub()
+    hours_ago = H.shift(H.now(), hours=-3)
+    with company.transaction() as c:
+        merging = in_merge(c, gh, 2)
+        building = new(c, 1)  # PR 1 was never read: GitHub has been down since it was linked
+        c.execute("UPDATE task_links SET created_at=? WHERE task_id=?", (hours_ago, building))
+        assert line(c, building, "pr_open") == (R.NOT_MET, B, "GitHub hasn't answered about acme/app#1 for 2 hours")
+    MQ.run(company, gh)
+    with company.transaction() as c:
+        assert line(c, merging, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+        c.execute("UPDATE pr_facts SET read_at=? WHERE number=2", (hours_ago,))  # every read since failed
+        assert line(c, merging, "pr_merged") == (R.NOT_MET, RM, "GitHub hasn't answered about acme/app#2 for 2 hours")
+    gh.merge(REPO, 2)
+    with company.transaction() as c:
+        seen(c, gh, 2)
+        assert stage(c, merging) == "Release"
+        assert line(c, merging, "in_release") == (R.WAITING, R.GITHUB, "Reading releases")
+        c.execute("UPDATE pr_facts SET updated_at=? WHERE number=2", (hours_ago,))  # merged 3 hours ago, never read
+        assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
+        release = {"tag": "v1.0.0", "commit_sha": "0" * 40, "prerelease": False, "published_at": H.now()}
+        F.save_release(c, REPO, release, F.version_now())
+        F.saw_releases(c, REPO, F.version_now())  # the releases were read just now: GitHub answers again
+        assert line(c, merging, "in_release") == (R.WAITING, R.GITHUB, "Waiting for a release of acme/app")
+        c.execute("UPDATE release_reads SET read_at=?", (hours_ago,))
+        assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
+
+
 def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
     gh = FakeGitHub()
     with company.transaction() as c:

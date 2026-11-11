@@ -34,6 +34,7 @@ QUEUE_STATES = ("none", "queued", "auto_merge", "removed")
 QUEUED = ("queued", "auto_merge")  # in GitHub's merge queue, or auto-merge on where the repo has no queue
 NO_CHECKS_AFTER_S = 600  # C13: no checks for a commit 10 minutes after Tico saw it, and Checks pass is met
 CHECKS_TOO_LONG_S = 7200  # checks still running after 2 hours: the owner's turn
+SILENT_S = 7200  # a wait on GitHub with no word from GitHub for 2 hours (down, refusing, no such PR): the owner's turn
 REREAD_S = 300  # a PR a task waits on is read again when its fact is older than this
 REREAD_BATCH = 50  # at most this many PRs per re-read call
 DELIVERY_DAYS = 7  # how long a webhook delivery id is kept for de-dup
@@ -182,11 +183,12 @@ def _checks_state(checks: list[Row]) -> str:
 
 
 def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
-    """The PRs linked to a task, oldest link first: [{repo, number, url, fact}] where `fact` is `pr()` or None."""
+    """The PRs linked to a task, oldest link first: [{repo, number, url, created_at, fact}] where `fact` is `pr()` or
+    None."""
     out: list[Row] = []
     for link in _rows(
         conn,
-        "SELECT repo, number, url FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
+        "SELECT repo, number, url, created_at FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
         "AND number IS NOT NULL ORDER BY created_at, id",
         (task_id,),
     ):
@@ -462,9 +464,18 @@ def refresh(store: Any, github: GitHub, now: str | None = None) -> int:
         if fact is None:
             continue
         with store.transaction() as conn:
-            changed += save_and_settle(conn, repo, number, fact, version)
+            changed += save_and_settle(conn, repo, number, vanished(pr(conn, repo, number), fact), version)
     changed += _refresh_releases(store, github, at)
     return changed
+
+
+def vanished(old: Row | None, fact: Row) -> Row:
+    """A re-read that finds an open PR Tico saw queued now neither queued nor removed: it left the merge queue and no
+    webhook or timeline event said so. That is a removal, with no reason, so the Merge stage's owner hears of it at
+    once (merge_queue.removed) instead of "In the merge queue" waiting for ever."""
+    if old and old.get("queue_state") in QUEUED and fact.get("state") == "open" and fact.get("queue_state") == "none":
+        return {**fact, "queue_state": "removed", "removed_reason": removal_words(None)}
+    return fact
 
 
 def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
@@ -606,6 +617,12 @@ def releases(conn: "sqlite3.Connection", repo: str, *, prereleases: bool = False
         "ORDER BY published_at DESC, id",
         (repo, 1 if prereleases else 0),
     )
+
+
+def releases_read_at(conn: "sqlite3.Connection", repo: str) -> str | None:
+    """When a repo's releases were last read in full, or None when never."""
+    found = conn.execute("SELECT read_at FROM release_reads WHERE repo=?", (repo,)).fetchone()
+    return str(found[0]) if found and found[0] else None
 
 
 def publishes_releases(conn: "sqlite3.Connection", repo: str) -> bool | None:

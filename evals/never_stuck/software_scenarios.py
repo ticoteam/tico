@@ -551,6 +551,76 @@ def checks_run_too_long(r: SoftRig) -> None:
     expect(("bot", BUILDER) in r.waits(e), f"it waits on {r.waits(e)}, not the Builder")
 
 
+# ----------------------------------------------------------------------------- GitHub never answers
+def _no_expected_time(r: SoftRig, stage: str) -> None:
+    """The stage expects no time, so Late never backs up a GitHub wait there: the wait has to end by itself."""
+    with r.w.tx() as c:
+        c.execute("UPDATE stages SET expected_minutes=NULL WHERE pipeline_id=? AND name=?", (ENGINEERING, stage))
+
+
+@case("checks-never-report", "A check starts and its result never comes, by webhook or read: the owner's turn at 2 hours")
+def checks_never_report(r: SoftRig) -> None:
+    r.preset(ENGINEERING)
+    _no_expected_time(r, "Build")
+    e = r.task(ANA, "Flaky runner", ENGINEERING)
+    r.check()
+    r.pr(e, 1)
+    r.gh.ci(S.REPO, r.gh.head(1), "success", after=30 * 86400)  # the runner died: the check stays pending
+    r.settle()
+    r.says(e, "Checks running")
+    r.gh.lose_all()
+    r.gh.down_until = S._h().shift(r.w.now(), seconds=30 * 86400)  # and GitHub can't be read either
+    r.settle(3600)
+    r.says(e, "Checks running")
+    r.settle(3600 + 10)
+    r.says(e, "Checks still running after 2 hours")
+    expect(("bot", BUILDER) in r.waits(e), f"it waits on {r.waits(e)}, not the Builder")
+
+
+@case("queue-entry-vanishes", "The PR leaves the merge queue with no webhook and no reason: a drop, the owner's at once")
+def queue_entry_vanishes(r: SoftRig) -> None:
+    r.preset(ENGINEERING)
+    _no_expected_time(r, "Merge")
+    e = r.task(ANA, "Cache headers", ENGINEERING)
+    r.gh.land_after_s = 30 * 86400  # the queue holds it
+    r.to_merge(e)
+    r.says(e, "In the merge queue")
+    r.gh.vanish(1)
+    r.settle(310)  # the next 5-minute read
+    r.at(e, "Merge")
+    r.says(e, "Dropped from the merge queue: GitHub gave no reason")
+    expect(r.waits(e) == [("bot", RELEASE)], f"the vanished entry waits on {r.waits(e)}")
+    expect(len([w for w in r.wakes(e, RELEASE) if w[0].startswith("queue_removed")]) == 1, "the owner was not told")
+    expect(r.gh.state(1)["queue_state"] == "none", "Tico queued it again by itself")
+    expect(not isinstance(r.queue_again(e), Refusal), "queue again after the vanished entry was refused")
+    r.effects()
+    r.settle()
+    r.says(e, "In the merge queue")
+
+
+@case("github-5xx-for-hours", "GitHub answers 5xx for hours while a PR is in the merge queue: the owner's turn at 2 hours")
+def github_5xx_for_hours(r: SoftRig) -> None:
+    r.preset(ENGINEERING)
+    _no_expected_time(r, "Merge")
+    e = r.task(ANA, "Retry budget", ENGINEERING)
+    r.gh.land_after_s = 30 * 86400
+    r.to_merge(e)
+    r.says(e, "In the merge queue")
+    r.gh.down_until = S._h().shift(r.w.now(), seconds=6 * 3600)
+    r.settle(3600)
+    r.says(e, "In the merge queue")
+    expect(("github", None) in r.waits(e), f"an hour of 5xx waits on {r.waits(e)}, not GitHub")
+    r.settle(3600 + 10)
+    r.says(e, f"GitHub hasn't answered about {REF_1} for 2 hours")
+    expect(r.waits(e) == [("bot", RELEASE)], f"two hours of 5xx wait on {r.waits(e)}, not the Release Manager")
+    r.settle(4 * 3600)  # GitHub is back: the read gets through and the wait is GitHub's again
+    r.says(e, "In the merge queue")
+    r.gh.land_after_s = 0
+    for _ in range(3):
+        r.settle(300)
+    r.at(e, "Release")
+
+
 # ----------------------------------------------------------------------------- Jev
 @case("jev-fails-three-times", "Jev's call fails 3 times: a person decides, and their OK moves it")
 def jev_fails_three_times(r: SoftRig) -> None:
