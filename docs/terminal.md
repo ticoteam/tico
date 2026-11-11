@@ -86,6 +86,46 @@ tico needs-you show               # everything that waits on you, in one list
    Then the release ships it and Product's Validate stage asks for a check in production: wait for it with
    `--needs-me` again, or for the whole request with `tico task wait <id> --status done`.
 
+## Change a pipeline
+
+The company's owner and Admins, a pipeline's owner and its manager may change it; only the owner and Admins make one.
+Each change reads the pipeline's whole record, changes it and saves it whole with the `settings_version` it read: the
+server checks the whole record and refuses the first problem in a sentence, and a change someone made in between is
+refused, never overwritten (add `--version N` to pin the version you read yourself).
+
+```sh
+tico pipeline create support --name Support --manager support-lead --stage Triage --stage "Doing:support-lead"
+tico pipeline update product --goal "Specs a builder can build from" --manager product-manager
+tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2
+tico stage update product-ideas --no-by-hand --purpose "Ideas worth a spec"
+tico stage move engineering-review-2 --after engineering-review-1
+tico requirement list product-spec
+tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me
+tico requirement update <requirement id> --who-oks people_only
+```
+
+A holder (`--holder`, `--manager`, `--person`) is a bot's slug, `bot:<id>`, `human:<id>`, `me`, or `assignee` for
+whoever the task is for. Requirement kinds: `page` (a page someone OKs), `ok` (a named person's OK), `owner_done` (the
+holder says done), `linked_done` (the tasks it filed are done) and `item` (a source's condition: `--source github
+--condition pr_merged`). A requirement's kind never changes: remove it and add another.
+
+Removing takes the exact name of what goes, typed again; nothing is removed without it, and the server refuses while
+open tasks are in the way:
+
+```sh
+tico stage remove engineering-fixes-2 --confirm "Fixes 2"
+tico requirement remove <requirement id> --confirm "Spec page"   # its line, or its kind when it has none
+tico pipeline remove support --confirm Support                    # retired: its ended tasks stay
+```
+
+For many changes at once, save the whole record: stages and requirements with an id change in place, ones without an
+id are made, ones left out are retired (stages) or withdrawn (requirements).
+
+```sh
+tico pipeline show support --record > support.json   # carries its settings_version
+tico pipeline save support --file support.json        # or --file - to read stdin
+```
+
 ## `tico task wait`
 
 ```sh
@@ -120,6 +160,9 @@ bot's turn never waits: there it says how a task waits on a person or another ta
 ## Over MCP
 
 The same commands are tools on the company's MCP server (`/api/v2/mcp`): `tico_company_show`, `tico_pipeline_list`,
-`tico_pipeline_show`, `tico_pipeline_log`, `tico_stage_show`, `tico_task_request`, `tico_task_approve` and
-`tico_task_send_back`. `tico task wait` is a shell's only; an MCP client reads `tico_task_show_many` every half minute
+`tico_pipeline_show`, `tico_pipeline_log`, `tico_stage_show`, `tico_task_request`, `tico_task_approve`,
+`tico_task_send_back`, and the changes: `tico_pipeline_create`, `tico_pipeline_update`, `tico_pipeline_save`,
+`tico_pipeline_remove`, `tico_stage_add`, `tico_stage_update`, `tico_stage_move`, `tico_stage_remove`,
+`tico_requirement_list`, `tico_requirement_add`, `tico_requirement_update` and `tico_requirement_remove`. They are
+offered to people; the server decides what each person may change. `tico task wait` is a shell's only; an MCP client reads `tico_task_show_many` every half minute
 instead.

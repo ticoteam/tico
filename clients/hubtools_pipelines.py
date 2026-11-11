@@ -50,15 +50,20 @@ def _pipelines(api, bots=None):
     return (found.get("pipelines") or []), {**names, **(found.get("actors") or {})}
 
 
-def _pipeline(api, ref):
-    """One pipeline by id or name (any case), with the names map. Not found: the ids there are, in the refusal."""
-    rows, actors = _pipelines(api)
+def _find(rows, ref):
+    """One pipeline's record by id or name (any case). Not found: the ids there are, in the refusal."""
     wanted = str(ref or "").strip().casefold()
     for row in rows:
         if wanted in (str(row.get("id")).casefold(), str(row.get("name") or "").casefold()):
-            return row, actors
+            return row
     ids = ", ".join(str(r.get("id")) for r in rows if not r.get("retired_at"))
     raise APIError("not_found", f"No pipeline {ref!r}; the pipelines are: {ids}", 404)
+
+
+def _pipeline(api, ref):
+    """One pipeline by id or name, with the names map."""
+    rows, actors = _pipelines(api)
+    return _find(rows, ref), actors
 
 
 def _holder(stage, actors):
@@ -151,11 +156,17 @@ def pipeline_list(api, args):
     "tico_pipeline_show",
     "One pipeline, by id or name: its goal, manager, settings version and every stage in order, with who holds it, "
     "whether tasks leave it by hand, its task limit and what it takes to leave it (each requirement and who gives "
-    "its OK). Anyone on the team may read it. Example: tico pipeline show product",
-    {"pipeline": PIPELINE},
+    "its OK). `record` gives the whole settings record instead, as tico_pipeline_save takes it. Anyone on the team "
+    "may read it. Example: tico pipeline show product",
+    {
+        "pipeline": PIPELINE,
+        "record": {"type": "boolean", "description": "The whole settings record, to change and save whole"},
+    },
     required=("pipeline",),
 )
 def pipeline_show(api, args):
+    if args.get("record"):
+        return {"pipeline": _record(api, args["pipeline"])}
     row, actors = _pipeline(api, args["pipeline"])
     return {"pipeline": _shape(row, actors)}
 
@@ -339,6 +350,412 @@ def task_send_back(api, args):
     if not str(args.get("note") or "").strip():
         raise ValueError('Say what to change: -m "..."')
     return _answer(api, args, "no", args["note"])
+
+
+# ----------------------------------------------------------------------------- changing pipelines, stages, requirements
+# Each change reads the pipeline's whole record, changes it, and saves it whole with the settings version it read
+# (POST pipelines/{id}, backend/pipeline_settings.py): the server checks the record and refuses the first problem in a
+# sentence, and a change someone made since is refused, not overwritten. The company's owner and Admins, the
+# pipeline's owner and its manager may change a pipeline; only the owner and Admins make one.
+VERSION_SEEN = {
+    "type": "integer",
+    "minimum": 0,
+    "description": "The pipeline's settings_version you read (tico_pipeline_show); default the one read now",
+}
+CONFIRM = _s("The exact name of what is removed, typed again: nothing is removed without it")
+HOLDER = _s("Who holds it: a bot slug, bot:<id>, human:<id>, `me`, or `assignee` (whoever the task is for)")
+WHO_OKS = {
+    "type": "string",
+    "enum": ["people_only", "people_with_exceptions", "none"],
+    "description": "Who gives the OK on a page or an OK: people_only (never a bot), people_with_exceptions, none",
+}
+
+
+def _record(api, ref):
+    """The pipeline's whole settings record, by id or name (no names map: a write needs none)."""
+    return _find(api.get("pipelines").get("pipelines") or [], ref)
+
+
+def _where(api, stage_id=None, requirement_id=None):
+    """The record holding a stage (or a requirement), and the stage's place in it."""
+    for row in api.get("pipelines").get("pipelines") or []:
+        for at, stage in enumerate(row.get("stages") or []):
+            if stage.get("id") == stage_id or any(
+                r.get("id") == requirement_id for r in stage.get("requirements") or [] if requirement_id
+            ):
+                return row, at
+    what = f"stage {stage_id!r}" if stage_id else f"requirement {requirement_id!r}"
+    raise APIError("not_found", f"No {what}; tico pipeline show <pipeline> lists the stages and requirements", 404)
+
+
+def _actor(api, value):
+    """A holder, manager or person as the record names them."""
+    value = str(value or "").strip()
+    if value in ("me", "self"):
+        return api.get("me")["actor"]
+    if value in ("assignee", "whoever"):
+        return "assignee"
+    return value if ":" in value else f"bot:{value}"
+
+
+def _save(api, record, args, made=False):
+    """Save the whole record; the answer is the record as saved."""
+    body = {k: v for k, v in record.items() if k not in ("may_change", "retired_at", "settings_version")}
+    if not made:
+        body["settings_version"] = (
+            args.get("version") if args.get("version") is not None else record.get("settings_version")
+        )
+    return api.post(f"pipelines/{quote(str(record['id']), safe='')}", body, key=_key(args))
+
+
+def _taken(api, pipeline_id):
+    """Whether a pipeline of this id exists already (retired ones count: their ids are never reused)."""
+    return any(r.get("id") == pipeline_id for r in api.get("pipelines").get("pipelines") or [])
+
+
+def _confirmed(args, name):
+    if str(args.get("confirm") or "").strip() != str(name or "").strip():
+        raise APIError("usage", f"Nothing removed: add --confirm {json.dumps(name)} (its exact name) to remove it")
+
+
+def _stage_fields(api, args, stage):
+    """The stage fields a command line sets, onto `stage`."""
+    for arg, field in (("name", "name"), ("purpose", "purpose")):
+        if args.get(arg) is not None:
+            stage[field] = args[arg]
+    if args.get("holder"):
+        stage["owner"] = _actor(api, args["holder"])
+    if args.get("by_hand") is not None:
+        stage["by_hand"] = bool(args["by_hand"])
+    if args.get("no_limit"):
+        stage["task_limit"] = None
+    elif args.get("limit") is not None:
+        stage["task_limit"] = args["limit"]
+    if args.get("expected_minutes") is not None:
+        stage["expected_minutes"] = args["expected_minutes"] or None
+    return stage
+
+
+def _place(stages, stage, args):
+    """Put `stage` where --after or --first says, else last (a new one) or where it is (a moved one)."""
+    if args.get("first"):
+        return [stage, *stages]
+    after = args.get("after")
+    if after:
+        at = next((i for i, s in enumerate(stages) if after in (s.get("id"), s.get("name"))), None)
+        if at is None:
+            raise APIError("usage", f"No stage {after!r} in this pipeline to go after")
+        return [*stages[: at + 1], stage, *stages[at + 1 :]]
+    return [*stages, stage]
+
+
+STAGE_FIELDS = {
+    "purpose": _s("What the stage is for, in a sentence"),
+    "holder": HOLDER,
+    "by_hand": {"type": "boolean", "description": "Tasks leave it only when someone moves them"},
+    "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "At most this many open tasks in it (not the first stage)",
+    },
+    "expected_minutes": {"type": "integer", "minimum": 0, "description": "How long a task should take here; 0 clears"},
+}
+
+
+@tool(
+    "tico_pipeline_create",
+    "Make a pipeline: its id (lowercase words joined by dashes), name, manager and stages in order, each held by "
+    "`assignee` (whoever the task is for) unless a holder is given. The company's owner and Admins. Add requirements "
+    'after with tico_requirement_add. Example: tico pipeline create support --name Support --manager support-lead '
+    '--stage Triage --stage "Doing:support-lead"',
+    {
+        "id": _s("The new pipeline's id: lowercase words joined by dashes (support, field-ops)"),
+        "name": _s("Its name, as people read it"),
+        "goal": _s("What it is for, in a sentence"),
+        "manager": _s("Its manager: a bot slug, bot:<id> or human:<id>"),
+        "prefix": _s("One or two letters its task numbers start with"),
+        "private": {"type": "boolean", "description": "Its tasks are read only by its manager and the company's owner"},
+        "stages": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string"},
+            "description": "The stages in order, each `Name` or `Name:holder`",
+        },
+    },
+    required=("id", "name", "stages"),
+    writes=True,
+)
+def pipeline_create(api, args):
+    if _taken(api, args["id"]):
+        raise APIError("usage", f"A pipeline {args['id']!r} is there already: change it with tico pipeline update")
+    stages = []
+    for text in args["stages"]:
+        name, _, holder = str(text).partition(":")
+        stages.append({"name": name.strip(), "owner": _actor(api, holder) if holder.strip() else "assignee"})
+    record = {"id": args["id"], "name": args["name"], "goal": args.get("goal") or "", "stages": stages}
+    if args.get("manager"):
+        record["manager_id"] = _actor(api, args["manager"])
+    for field in ("prefix", "private"):
+        if args.get(field) is not None:
+            record[field] = args[field]
+    return _save(api, record, args, made=True)
+
+
+@tool(
+    "tico_pipeline_update",
+    "Change a pipeline's own fields: name, goal, manager, owner, prefix, private (only while it holds no task). Its "
+    "stages change with tico_stage_*. The company's owner and Admins, the pipeline's owner or its manager. "
+    'Example: tico pipeline update product --goal "Specs a builder can build from"',
+    {
+        "pipeline": PIPELINE,
+        "name": _s("A new name"),
+        "goal": _s("What it is for, in a sentence"),
+        "manager": _s("Its manager: a bot slug, bot:<id> or human:<id>"),
+        "owner": _s("Its owner: human:<id>, or a bot"),
+        "prefix": _s("One or two letters its task numbers start with"),
+        "private": {"type": "boolean", "description": "Its tasks are read only by its manager and the company's owner"},
+        "version": VERSION_SEEN,
+    },
+    required=("pipeline",),
+    writes=True,
+)
+def pipeline_update(api, args):
+    record = _record(api, args["pipeline"])
+    for arg, field in (("name", "name"), ("goal", "goal"), ("prefix", "prefix"), ("private", "private")):
+        if args.get(arg) is not None:
+            record[field] = args[arg]
+    for arg, field in (("manager", "manager_id"), ("owner", "owner_id")):
+        if args.get(arg):
+            record[field] = _actor(api, args[arg])
+    return _save(api, record, args)
+
+
+@tool(
+    "tico_pipeline_save",
+    "Make or replace a pipeline from its whole settings record, as tico_pipeline_show's `pipeline` or GET "
+    "pipelines/{id} gives it: stages and requirements with an id are changed in place, without one are made, left "
+    "out are retired. The company's owner and Admins, the pipeline's owner or its manager. "
+    "Example: tico pipeline save support --file support.json",
+    {
+        "id": _s("The pipeline's id"),
+        "record": {"type": "object", "description": "The whole record: name, goal, manager_id, stages, ..."},
+        "version": VERSION_SEEN,
+    },
+    required=("id", "record"),
+    writes=True,
+)
+def pipeline_save(api, args):
+    record = {**args["record"], "id": args["id"]}
+    seen = args.get("version", record.get("settings_version"))
+    if seen is None and _taken(api, args["id"]):
+        raise APIError("usage", "Add --version N (its settings_version, tico pipeline show): it is there already")
+    return _save(api, record, {**args, "version": seen}, made=seen is None)
+
+
+@tool(
+    "tico_pipeline_remove",
+    "Retire a pipeline: it takes no new task, and the tasks that ended in it stay. Refused while it holds an open "
+    "task or another pipeline files into it. `confirm` is its exact name. The company's owner and Admins, the "
+    "pipeline's owner or its manager. Example: tico pipeline remove support --confirm Support",
+    {"pipeline": PIPELINE, "confirm": CONFIRM, "version": VERSION_SEEN},
+    required=("pipeline", "confirm"),
+    writes=True,
+)
+def pipeline_remove(api, args):
+    record = _record(api, args["pipeline"])
+    _confirmed(args, record.get("name"))
+    seen = args.get("version") if args.get("version") is not None else record.get("settings_version")
+    return api.post(f"pipelines/{quote(str(record['id']), safe='')}/retire", {"settings_version": seen}, key=_key(args))
+
+
+@tool(
+    "tico_stage_add",
+    "Add a stage to a pipeline: last, first, or after a stage; held by `assignee` (whoever the task is for) unless "
+    "a holder is given. Who may change the pipeline. "
+    'Example: tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2',
+    {
+        "pipeline": PIPELINE,
+        "name": _s("The stage's name"),
+        "after": _s("The stage it comes after: its id or name"),
+        "first": {"type": "boolean", "description": "Make it the first stage"},
+        **STAGE_FIELDS,
+        "version": VERSION_SEEN,
+    },
+    required=("pipeline", "name"),
+    writes=True,
+)
+def stage_add(api, args):
+    record = _record(api, args["pipeline"])
+    stage = _stage_fields(api, {**args, "holder": args.get("holder") or "assignee"}, {"requirements": []})
+    record["stages"] = _place(record.get("stages") or [], stage, args)
+    return _save(api, record, args)
+
+
+@tool(
+    "tico_stage_update",
+    "Change a stage: its name, purpose, who holds it, whether tasks leave it by hand, its task limit, its expected "
+    "time. Who may change the pipeline. Example: tico stage update product-ideas --no-by-hand",
+    {
+        "stage": STAGE,
+        "name": _s("A new name"),
+        **STAGE_FIELDS,
+        "no_limit": {"type": "boolean", "description": "Take its task limit off"},
+        "version": VERSION_SEEN,
+    },
+    required=("stage",),
+    writes=True,
+)
+def stage_update(api, args):
+    record, at = _where(api, stage_id=args["stage"])
+    _stage_fields(api, args, record["stages"][at])
+    return _save(api, record, args)
+
+
+@tool(
+    "tico_stage_move",
+    "Put a stage in another place in its pipeline: first, or after another stage. Who may change the pipeline. "
+    "Example: tico stage move engineering-review-2 --after engineering-review-1",
+    {
+        "stage": STAGE,
+        "after": _s("The stage it comes after: its id or name"),
+        "first": {"type": "boolean", "description": "Make it the first stage"},
+        "version": VERSION_SEEN,
+    },
+    required=("stage",),
+    writes=True,
+)
+def stage_move(api, args):
+    if not args.get("after") and not args.get("first"):
+        raise APIError("usage", "Say where it goes: --after <stage> or --first")
+    record, at = _where(api, stage_id=args["stage"])
+    stages = list(record["stages"])
+    stage = stages.pop(at)
+    record["stages"] = _place(stages, stage, args)
+    return _save(api, record, args)
+
+
+@tool(
+    "tico_stage_remove",
+    "Take a stage out of its pipeline (it is retired; its history stays). Refused while it holds open tasks. "
+    "`confirm` is its exact name. Who may change the pipeline. "
+    'Example: tico stage remove engineering-fixes-2 --confirm "Fixes 2"',
+    {"stage": STAGE, "confirm": CONFIRM, "version": VERSION_SEEN},
+    required=("stage", "confirm"),
+    writes=True,
+)
+def stage_remove(api, args):
+    record, at = _where(api, stage_id=args["stage"])
+    _confirmed(args, record["stages"][at].get("name"))
+    record["stages"] = [s for i, s in enumerate(record["stages"]) if i != at]
+    return _save(api, record, args)
+
+
+REQUIREMENT_FIELDS = {
+    "line": _s("What people read: Spec page, Checked in production"),
+    "who_oks": WHO_OKS,
+    "person": _s("Who gives the OK (an OK or a page): human:<id>, a bot slug, or `me`"),
+    "can_push_past": {"type": "boolean", "description": "Whether a task may be moved on without it"},
+    "rubric": _s("A page: what Jev checks it against"),
+}
+
+
+def _requirement_fields(api, args, req):
+    if args.get("line") is not None:
+        req["line"] = args["line"]
+    if args.get("who_oks"):
+        req["who_oks"] = args["who_oks"]
+    if args.get("person"):
+        req["person_id"] = _actor(api, args["person"])
+    if args.get("can_push_past") is not None:
+        req["can_push_past"] = bool(args["can_push_past"])
+    if args.get("rubric") is not None:
+        req["settings"] = {**(req.get("settings") or {}), "rubric": args["rubric"]}
+    return req
+
+
+def _requirement_label(req):
+    return req.get("line") or req.get("kind")
+
+
+@tool(
+    "tico_requirement_list",
+    "What it takes to leave a stage: each requirement with its id, kind, line, who gives its OK and whether a task "
+    "may be moved on without it. Anyone on the team. Example: tico requirement list product-spec",
+    {"stage": STAGE},
+    required=("stage",),
+)
+def requirement_list(api, args):
+    record, at = _where(api, stage_id=args["stage"])
+    stage = record["stages"][at]
+    return {
+        "stage": stage.get("id"),
+        "pipeline": record.get("id"),
+        "settings_version": record.get("settings_version"),
+        "requirements": stage.get("requirements") or [],
+    }
+
+
+@tool(
+    "tico_requirement_add",
+    "Add a requirement to a stage. Kinds: page (a page someone OKs), ok (an OK from a named person), owner_done (its "
+    "holder says done), linked_done (the tasks it filed are done), item (a linked item's condition, with source and "
+    "condition, e.g. github pr_merged). `who_oks people_only` keeps the OK for people. Who may change the pipeline. "
+    'Example: tico requirement add product-spec --kind page --line "Spec page" --who-oks people_only --person me',
+    {
+        "stage": STAGE,
+        "kind": {"type": "string", "enum": ["page", "ok", "owner_done", "linked_done", "item"]},
+        "source": _s("An item: its source (github)"),
+        "condition": _s("An item: its source's condition (pr_open, checks_pass, pr_merged)"),
+        **REQUIREMENT_FIELDS,
+        "version": VERSION_SEEN,
+    },
+    required=("stage", "kind"),
+    writes=True,
+)
+def requirement_add(api, args):
+    record, at = _where(api, stage_id=args["stage"])
+    req = {"kind": args["kind"], "source": args.get("source"), "condition": args.get("condition")}
+    stage = record["stages"][at]
+    stage["requirements"] = [*(stage.get("requirements") or []), _requirement_fields(api, args, req)]
+    return _save(api, record, args)
+
+
+@tool(
+    "tico_requirement_update",
+    "Change a requirement on a stage: its line, who gives its OK (people_only keeps it for people), the person named, "
+    "whether a task may be moved on without it, a page's rubric. Its kind never changes: remove it and add another. "
+    "Who may change the pipeline. Example: tico requirement update 01e01f8d --who-oks people_only",
+    {
+        "requirement": _s("The requirement's id (tico requirement list <stage>)"),
+        **REQUIREMENT_FIELDS,
+        "version": VERSION_SEEN,
+    },
+    required=("requirement",),
+    writes=True,
+)
+def requirement_update(api, args):
+    record, at = _where(api, requirement_id=args["requirement"])
+    for req in record["stages"][at].get("requirements") or []:
+        if req.get("id") == args["requirement"]:
+            _requirement_fields(api, args, req)
+    return _save(api, record, args)
+
+
+@tool(
+    "tico_requirement_remove",
+    "Take a requirement off a stage (withdrawn; the answers given stay readable). `confirm` is its line (or its kind "
+    'when it has none). Who may change the pipeline. Example: tico requirement remove 01e01f8d --confirm "Spec page"',
+    {"requirement": _s("The requirement's id"), "confirm": CONFIRM, "version": VERSION_SEEN},
+    required=("requirement", "confirm"),
+    writes=True,
+)
+def requirement_remove(api, args):
+    record, at = _where(api, requirement_id=args["requirement"])
+    stage = record["stages"][at]
+    gone = next(r for r in stage.get("requirements") or [] if r.get("id") == args["requirement"])
+    _confirmed(args, _requirement_label(gone))
+    stage["requirements"] = [r for r in stage["requirements"] if r is not gone]
+    return _save(api, record, args)
 
 
 # ----------------------------------------------------------------------------- tico task wait (a shell's, not a tool)
@@ -561,6 +978,18 @@ AUDIENCE = {
         "tico_task_request",
         "tico_task_approve",
         "tico_task_send_back",
+        "tico_pipeline_create",
+        "tico_pipeline_update",
+        "tico_pipeline_save",
+        "tico_pipeline_remove",
+        "tico_stage_add",
+        "tico_stage_update",
+        "tico_stage_move",
+        "tico_stage_remove",
+        "tico_requirement_list",
+        "tico_requirement_add",
+        "tico_requirement_update",
+        "tico_requirement_remove",
     )
 }
 SHELL_ONLY = {"tico_task_wait"}
