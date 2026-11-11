@@ -682,6 +682,7 @@ def _command(group, words, help_, example):
     s = group.add_parser(
         words.split()[-1],
         help=help_,
+        description=help_[:1].upper() + help_[1:] + ".",  # `--help` says who may run it too
         epilog="Example: " + example,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
