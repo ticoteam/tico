@@ -28,8 +28,8 @@ WINDOW_DAYS = 7
 NOTE_EVERY = 3600  # a person's activity is written at most this often
 DOC_URL = "https://github.com/ticoteam/tico/blob/main/PRIVACY.md"
 NOTICE = (
-    "Tico counts active installs anonymously (a random ID, version, and three yes/no activity flags). "
-    "Turn off: Settings > General or TICO_TELEMETRY=off."
+    "Tico counts installs anonymously (no names, no content). "
+    "Turn off in Settings > General > Privacy."
 )
 FIELDS = ("install_id", "version", "active_people", "active_bots", "first_result")
 _OFF = ("off", "0", "false", "no", "disabled")
