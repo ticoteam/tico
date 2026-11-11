@@ -179,6 +179,7 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       if (signIn[2] === 'cancel') Object.assign(data.login!, {state: 'canceled', url: ''});
       return json(data.login);
     }
+    if (signIn) return json({detail: 'Not Found'}, 404);
     if (p === '/api/v2/model-subscriptions' && method === 'POST') {
       const body = req.postDataJSON() as Body; writes.push({p, method, body});
       const kind = KINDS.find(k => k.kind === body.kind)!;
@@ -342,6 +343,12 @@ async function clipboard(page: Page, text: string | null) {
   }, text);
 }
 
+// Taps the button that opens the provider, without the test opening that page.
+const tapOpen = (dialog: import('playwright').Locator) => dialog.locator('[data-plan-open]').evaluate((el: HTMLElement) => {
+  el.addEventListener('click', event => event.preventDefault(), {once: true});
+  el.click();
+});
+
 async function addSubscription(browser: Browser) {
   const {page, errors, writes, data} = await open(browser);
   await modelsReady(page);
@@ -363,7 +370,11 @@ async function addSubscription(browser: Browser) {
   assert.equal(await link.getAttribute('target'), '_blank');
   // One field, for the code the provider's page hands back; no place for a pasted value on this path.
   assert.deepEqual(await dialog.locator('input, textarea, select').evaluateAll(list => list.map(el => [(el as HTMLInputElement).name, el.getAttribute('autocomplete')])), [['code', 'one-time-code']]);
-  assert.equal(await dialog.locator('[data-plan-wait=tab]').count(), 1);
+  // Nothing is waited for until the provider's page was opened from here; then the line and its clock show.
+  assert.equal(await dialog.locator('[data-plan-wait=tab]').isVisible(), false);
+  await tapOpen(dialog);
+  assert.equal(await dialog.locator('[data-plan-wait=tab]').isVisible(), true);
+  assert.equal(await dialog.locator('[name=code]').count(), 1, 'the tap redraws nothing');
   assert.equal(await dialog.locator('[data-plan-elsewhere]').count(), 0);
   // A typed code waits for Sign in.
   await dialog.locator('[name=code]').fill('typed-code');
@@ -491,6 +502,12 @@ async function connectPlan(browser: Browser) {
   Object.assign(data.login!, {state: 'waiting', url: 'https://sign-in.example/device', code: 'WXYZ-9876'});
   await onStep(page, 'signin');
   assert.equal(await dialog.locator('[data-plan-code]').innerText(), 'WXYZ-9876');
+  // A sign-in the server no longer has (it restarted for a new release) has ended: the sheet says so and offers Try again.
+  data.login = undefined;
+  await onStep(page, 'failed');
+  assert.equal(await dialog.locator('[data-plan-retry]').count(), 1);
+  await dialog.locator('[data-plan-retry]').click();
+  await onStep(page, 'signin');
   // Out of time is a failure like any other.
   Object.assign(data.login!, {state: 'expired', url: '', code: ''});
   await onStep(page, 'failed');
@@ -816,6 +833,8 @@ async function sheetScreens(browser: Browser) {
       await onStep(page, 'signin');
       await above('[data-plan-entry] button[type=submit]', 'Claude');
       await view('claude');
+      await tapOpen(dialog);
+      await view('claude-opened');
       Object.assign(data.login!, {state: 'failed', url: '', message: 'Claude did not take that code.'});
       await onStep(page, 'failed');
       await above('[data-plan-retry]', 'failed');
@@ -831,6 +850,8 @@ async function sheetScreens(browser: Browser) {
       await onStep(page, 'signin');
       await above('[data-plan-open]', 'ChatGPT');
       await view('chatgpt');
+      await tapOpen(dialog);
+      await view('chatgpt-opened');
       await dialog.locator('[data-plan-cancel]').click();
       await dialog.waitFor({state: 'detached'});
       data.connectRefused = 'No computer is online to run the sign-in';

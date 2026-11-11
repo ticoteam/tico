@@ -745,6 +745,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     await page.locator('#onb-subscription [data-onb-subscription]').click();
     const plan = page.locator('dialog.plan-sheet[open]');
     await plan.locator('[data-plan-kind]').first().waitFor();
+    if (shots) { await page.setViewportSize({width: 400, height: 800}); await shot(page, 'phone-5-plan'); await page.setViewportSize({width: 1100, height: 800}); }
     await plan.locator('[data-plan-close]').click();
     await plan.waitFor({state: 'detached'});
     assert.equal(await page.locator('#onb-subscription [data-onb-subscription]').isVisible(), true);

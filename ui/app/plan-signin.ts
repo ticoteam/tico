@@ -15,6 +15,8 @@ type PlanStep = 'pick' | 'starting' | 'signin' | 'done' | 'failed' | 'none' | 'p
 interface PlanSheetOptions {sub?: SubsRow | null; kind?: string; onDone?: () => void}
 
 const PLAN_POLL_MS = 2000, PLAN_ASK_MS = 3000, PLAN_DONE_MS = 1400;
+// A sign-in lives fifteen minutes on the server; one the page cannot read for longer than that has ended.
+const PLAN_LIFE_MS = 16 * 60000;
 // What the provider's page is called on its button.
 const PLAN_PROVIDER: Record<string, string> = {claude: 'Claude', codex: 'ChatGPT'};
 // A code as the provider's page hands it back: long, one word. Shorter ones are typed and sent with Sign in.
@@ -39,6 +41,8 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
   let run = 0;
   // Said yes to restarting the runs once: the next write of this sheet carries it, and nobody is asked twice.
   let agreed = false;
+  // The provider's page was opened from here: only then is there something to wait for.
+  let opened = false, asked = Date.now();
   // The server's reference for a refusal, when it sends one: small, after its sentence, for whoever is asked to help.
   let ref = '';
 
@@ -52,7 +56,7 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
 
   const pasteLink = () => row().connect === false ? '' : '<button type="button" class="linkish plan-alt" data-plan-paste>Paste instead</button>';
-  const waitHTML = (words: string, what: string) => `<p class="plan-wait" role="status" data-plan-wait="${what}"><span class="plan-spin" aria-hidden="true"></span><span>${esc(words)}</span><span class="tnum muted" data-plan-clock>${planClock(since)}</span></p>`;
+  const waitHTML = (words: string, what: string, shown = true) => `<p class="plan-wait" role="status" data-plan-wait="${what}"${shown ? '' : ' hidden'}><span class="plan-spin" aria-hidden="true"></span><span>${esc(words)}</span><span class="tnum muted" data-plan-clock>${planClock(since)}</span></p>`;
   const html = (): string => {
     if (step === 'pick') {
       const rows = SUBS.kinds.length ? SUBS.kinds : SUBS_KINDS;
@@ -71,7 +75,7 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
           <p class="err plan-err" data-plan-err hidden></p>
           <button type="submit" class="ghost">Sign in</button></form>` : '';
       const finishing = login.state === 'finishing' || !!login.code_sent;
-      return `${code}${open}${field}${finishing ? waitHTML('Finishing', 'finish') : waitHTML('Waiting for you to finish in the other tab', 'tab')}
+      return `${code}${open}${field}${finishing ? waitHTML('Finishing', 'finish') : waitHTML('Waiting for you to finish in the other tab', 'tab', opened)}
         ${login.not_yours && login.computer ? `<p class="muted plan-note" data-plan-elsewhere>Signs in through ${esc(login.computer)}.</p>` : ''}
         <p class="muted plan-note">Only use your subscription on your own bots, not shared ones.</p>
         <div class="plan-foot">${pasteLink()}<span class="spacer"></span><button type="button" class="ghost" data-plan-cancel>Cancel</button></div>`;
@@ -123,12 +127,16 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
       const next: PlanLogin = await get<PlanLogin>(logins());
       if (mine !== run || !login) return;
       login = {...login, ...next};
-    } catch { /* the next look asks again */ }
+    } catch (error) {
+      if (mine !== run || !login) return;
+      // Gone from the server (a restart for a new release ends it), or unread for longer than it lives: it ended.
+      if (errorStatus(error) === 404 || Date.now() - asked > PLAN_LIFE_MS) return failed('The sign-in ended');
+      // Anything else is the server away for a moment: the next look asks again.
+    }
     const state = login.state;
     if (state === 'done') {
       login = null;
       show('done');
-      if (!sub) toast(`${name} added`); else toast(`${name} reconnected`);
       onDone?.();
       timer = setTimeout(close, PLAN_DONE_MS);
       return;
@@ -175,7 +183,7 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
   };
   const begin = () => {
     halt();
-    since = Date.now(); waking = false;
+    since = asked = Date.now(); waking = false; opened = false;
     show('starting');
     void ask(run);
   };
@@ -208,7 +216,6 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
       if (!saved) { button.disabled = false; return; }
       field.value = '';   // nothing on the page keeps the value once sent
       name = saved.name || name || given || row().label;
-      toast(sub ? `${name} reconnected` : `${name} added`);
       onDone?.();
       show('done');
       timer = setTimeout(close, PLAN_DONE_MS);
@@ -223,6 +230,14 @@ function planSignIn({sub = null, kind = '', onDone}: PlanSheetOptions = {}): HTM
     if (event.target === dialog || target?.closest('[data-plan-close], [data-plan-cancel], [data-plan-computer]')) { close(); return; }
     const pick = target?.closest<HTMLElement>('[data-plan-kind]');
     if (pick) { choose(pick.dataset.planKind || ''); return; }
+    if (target?.closest('[data-plan-open]')) {
+      // The link opens by itself; the line under it starts counting, in place, so the tap is not redrawn away.
+      const wait = body.querySelector<HTMLElement>('[data-plan-wait=tab]');
+      if (!opened) since = Date.now();
+      opened = true;
+      if (wait) { wait.hidden = false; const el = wait.querySelector('[data-plan-clock]'); if (el) el.textContent = planClock(since); }
+      return;
+    }
     if (target?.closest('[data-plan-retry]')) { begin(); return; }
     if (target?.closest('[data-plan-paste]')) { halt(); show('paste'); return; }
     if (target?.closest('[data-plan-back]')) { if (sub || kind) begin(); else show('pick'); return; }

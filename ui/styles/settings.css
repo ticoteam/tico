@@ -975,7 +975,7 @@ section.card>header .settings-head-act{margin-left:auto}
 .plan-entry-row{display:flex;gap:8px}
 .plan-entry-row input{flex:1;min-width:0;min-height:44px;box-sizing:border-box;font-family:var(--mono);font-size:16px}
 .plan-wait{display:flex;align-items:center;gap:8px;margin:0;color:var(--muted);font-size:var(--t-sm)}
-.plan-wait .tnum{margin-left:auto}
+.plan-wait .tnum{margin-left:auto}.plan-wait[hidden]{display:none}
 .plan-spin{flex:none;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:treespin .9s linear infinite}
 .plan-note,.plan-said,.plan-err{margin:0}.plan-note{font-size:var(--t-sm)}
 .plan-err[hidden]{display:none}.plan-err{font-size:var(--t-sm)}
