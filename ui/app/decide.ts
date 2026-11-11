@@ -1,7 +1,8 @@
 /* ui/app/decide.ts — the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A modal
    on a wide screen, the whole screen on a phone. The top bar is "2 of 7", then 👍 👎 ‹ › ✕. The thing asked about is on
    the left, shown in full (the page, the email, what an OK is for); the sentence asked, who asks, Notes and the buttons
-   are on the right.
+   are on the right. A stage's typed answer asks its question: a choice is its buttons, a number a whole-number box
+   with its range, text a box; a value the server refuses stays typed, under the server's line.
    An OK bound to what was shown: the content on screen is the preview GET /v2/oks/{id} (or the email's own preview)
    returned, held here and never read again behind the person's back. A letter shows its proof and a file its pinned
    version, read here before Approve is on; what does not load leaves Approve off. Approve sends the hash of exactly that preview. If
@@ -142,8 +143,8 @@ function decideDialog(): HTMLDialogElement {
   const root: HTMLElement = $('.decide', d)!;
   root.addEventListener('click', (ev: MouseEvent) => { if (DEC) void decideClick(DEC, ev); });
   root.addEventListener('input', (ev: Event) => {
-    const box = eventElement(ev) as HTMLTextAreaElement | null;
-    if (!DEC || !box?.matches('textarea')) return;
+    const box = eventElement(ev) as HTMLTextAreaElement | HTMLInputElement | null;
+    if (!DEC || !box?.matches('textarea, input')) return;
     if (DEC.sheet && box.matches('[data-dc-note]')) DEC.sheet.note = box.value;
     if (DEC.sheet && box.matches('[data-dc-rule]')) DEC.sheet.rule = box.value;
     decideNeedsText(root);
@@ -154,6 +155,10 @@ function decideDialog(): HTMLDialogElement {
     decideNeedsText(root);
   });
   d.addEventListener('keydown', (ev: KeyboardEvent) => {
+    // Enter in an answer's one-line box sends it.
+    if (DEC && ev.key === 'Enter' && eventElement(ev)?.matches('input#dc-other')) {
+      ev.preventDefault(); (d.querySelector<HTMLButtonElement>('[data-dc="other"]'))?.click(); return;
+    }
     if (!DEC || ev.metaKey || ev.ctrlKey || ev.altKey || eventElement(ev)?.closest('input, textarea, select')) return;
     if (ev.key === 'ArrowLeft') { ev.preventDefault(); decideStep(DEC, -1); }
     if (ev.key === 'ArrowRight') { ev.preventDefault(); decideStep(DEC, 1); }
@@ -166,7 +171,7 @@ function decideDialog(): HTMLDialogElement {
 /** A button that needs words (Send back, Something else, Add rule) is on once there are some. */
 function decideNeedsText(root: HTMLElement) {
   for (const b of root.querySelectorAll<HTMLButtonElement>('[data-dc-needs]')) {
-    const box = root.querySelector<HTMLTextAreaElement | HTMLSelectElement>(b.dataset.dcNeeds!);
+    const box = root.querySelector<HTMLTextAreaElement | HTMLInputElement | HTMLSelectElement>(b.dataset.dcNeeds!);
     b.disabled = !box?.value.trim() || !!DEC?.busy;
   }
 }
@@ -303,7 +308,8 @@ function decidePaintSide(st: DecState) {
   if (!it || !host) return;
   const kind = decideKind(it), asker = decideAsker(it);
   const stage = decideStageName(it.task?.stage_id);
-  const head = `<h3 class="dc-q">${esc(it.line)}</h3><p class="dc-sub">${[asker ? esc(actorLabel(asker)) : '', esc(stage)].filter(Boolean).join(' · ')}</p>`;
+  const typed = kind === 'question' ? it.ask?.typed : undefined;
+  const head = `<h3 class="dc-q">${esc(typed?.question || it.line)}</h3><p class="dc-sub">${[asker ? esc(actorLabel(asker)) : '', esc(stage)].filter(Boolean).join(' · ')}</p>`;
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
   const busy = st.busy ? ' disabled' : '';
   let body = '';
@@ -313,6 +319,8 @@ function decidePaintSide(st: DecState) {
     const ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
     body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" rows="3" maxlength="4000"></textarea></label>
       <div class="dc-acts">${decideBtn('approve', 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', 'Send back', false, ` data-dc-needs="#dc-notes" disabled`)}</div>`;
+  } else if (typed) {
+    body = decideTypedHTML(typed, it.ask?.choices || [], st.busy);
   } else if (kind === 'question') {
     const choices = it.ask?.choices || [];
     body = `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${busy}>${esc(c)}</button>`).join('')}</div>
@@ -325,8 +333,26 @@ function decidePaintSide(st: DecState) {
   } else {
     body = `<div class="dc-acts">${decideBtn('open', 'Open', true)}</div>`;
   }
+  // What was typed stays through a redraw of the same item (busy, then a refusal in the server's words).
+  const held = host.querySelector<HTMLElement>('[data-key]')?.dataset.key === it.id ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
   host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
+  const box = host.querySelector<HTMLInputElement>('#dc-other');
+  if (box && held) box.value = held;
   decideNeedsText($('.decide')!);
+}
+/** A stage's typed answer: a choice is its buttons; a number a whole-number box with its range; text a box. */
+function decideTypedHTML(typed: NonNullable<TaskReq['typed']>, choices: string[], busy: boolean): string {
+  const off = busy ? ' disabled' : '';
+  if (typed.type === 'choice')
+    return `<div class="dc-choices">${choices.map(c => `<button type="button" class="ghost" data-dc-choice="${esc(c)}"${off}>${esc(c)}</button>`).join('')}</div>`;
+  const send = `<div class="dc-acts">${decideBtn('other', 'Send', true, ' data-dc-needs="#dc-other" disabled')}</div>`;
+  if (typed.type === 'number') {
+    const {min, max} = typed;
+    const range = min != null && max != null ? `${min}–${max}` : min != null ? `≥ ${min}` : max != null ? `≤ ${max}` : '';
+    const bounds = (min != null ? ` min="${min}"` : '') + (max != null ? ` max="${max}"` : '');
+    return `<label class="dc-notes"><span>${esc(range)}</span><input id="dc-other" type="number" step="1" inputmode="numeric"${bounds} aria-label="${esc(typed.question || typed.name)}" autocomplete="off"></label>${send}`;
+  }
+  return `<textarea id="dc-other" rows="3" maxlength="4000" aria-label="${esc(typed.question || typed.name)}"></textarea>${send}`;
 }
 /** Snooze, Give to… and Move back open their choices under the buttons. */
 function decideMoreHTML(st: DecState, it: NeedsEntry): string {
