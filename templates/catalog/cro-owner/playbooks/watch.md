@@ -16,10 +16,10 @@ by yourself) is in `knowledge/channel-playbook.md`. Read it first.
 
     tico task show <id>
     tico pipeline show growth-monitoring
-    tico task list --pipeline growth-monitoring --label <your channel tag> --status open --brief
+    tico task list --pipeline growth-monitoring --stage Watching --label <your channel tag> --status open --brief
 
-Each Monitoring task says what the kept thing is (a link), its KPI and range, and the experiment it came from. A task
-in Slipping is already being fixed in its own task: leave it to that task.
+These are the tasks to check, by id. Each Monitoring task says what the kept thing is (a link), its KPI and range,
+and the experiment it came from. A task in Slipping is already being fixed in its own task: leave it to that task.
 
 ## 2. Check each Watching task
 
@@ -28,7 +28,8 @@ task, in one comment: the number, the period, the source and the range. A number
 with the reason, never a guess, and never out of range on its own: two weeks in a row not read is out of range.
 
 - **In range.** Nothing more. Do not move it.
-- **Out of range.** Move it to Slipping with the number, the range and the source in one line:
+- **Out of range.** Move it to Slipping yourself, now, with the number, the range and the source in one line. Do not
+  ask anyone first or wait for a fix: the move is how a person hears of it, and the fix comes after it.
 
       tico task move <monitoring id> Slipping -m "<number> for <period> is outside <range> (<source>)" --version N
 
@@ -41,7 +42,12 @@ running, small repairs that put a kept thing back the way a person OK'd it. Do o
 granted Tools. Where no Tool lets you make the change, file it for the person your playbook names, with the exact
 change:
 
-    tico task create --owner <person id> --label <your channel tag> --title "Apply: <the change>" --body "<exactly what to change, where, and why>"
+    tico task create --owner <person id> --label <your channel tag> --title "Apply: <the change>" --body-file <body file>
+
+Write the body to a file first. Its first paragraph is what the person reads first: one or two plain sentences, under 40
+words, saying what to change and where, with no links, ids or file paths. Below it, after a blank line: exactly what to
+change, where, and why. If the command is refused, nothing was filed: fix what the refusal says and run it again, in
+this run. Say you filed it only once the command printed the new task's id.
 
 Anything not on the list is an idea (`playbooks/find-ideas.md` says how to file one), never upkeep.
 
@@ -57,5 +63,6 @@ No source, no reading: say so in the closing note instead.
 
     tico task done <id> -m "..." --version N
 
-The note: how many Watching tasks were checked, which moved to Slipping and why, the upkeep done or filed, the KPI
-reading, and what could not be read. Finish even on a quiet week: an open routine task gets absorbed into the next run.
+The note: each Watching task checked, by id, with its reading; which moved to Slipping and why; the upkeep done or
+filed; the KPI reading; and what could not be read. Finish even on a quiet week: an open routine task gets absorbed into
+the next run.

@@ -251,19 +251,31 @@ def _told(c, child_id, parent_id):
     return [(r[0], "filed" if ":filed:" in r[1] else "result") for r in rows]
 
 
-@pytest.mark.parametrize("how", ["parent_closed", "parent_snoozed", "parent_told"])
-def test_a_bot_that_filed_a_sub_task_hears_once_how_it_ended(c, how):
+@pytest.mark.parametrize(
+    "how,heard",
+    [
+        ("parent_closed", "result"),
+        # A bot's snooze on the parent was a wait for what it filed: it ends, and the engine wakes the bot there.
+        ("bot_snoozed", "filed"),
+        # A person's snooze is theirs to end: the bot hears the result as news.
+        ("person_snoozed", "result"),
+        ("parent_told", "filed"),
+    ],
+)
+def test_a_bot_that_filed_a_sub_task_hears_once_how_it_ended(c, how, heard):
     parent = _new(c)
     child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=parent["id"])
     if how == "parent_closed":
         H.task_close(c, ANA, parent["id"], "The launch is off.")  # its sub-task closes with it
     else:
-        if how == "parent_snoozed":
-            H.task_snooze(c, BUILDER, parent["id"], "Waiting on the numbers.", None, _version(c, parent["id"]))
+        if how.endswith("_snoozed"):
+            by = BUILDER if how == "bot_snoozed" else ANA
+            H.task_snooze(c, by, parent["id"], "Waiting on the numbers.", None, _version(c, parent["id"]))
         H.task_done(c, HELPER, child["id"], "Here they are.", _version(c, child["id"]))
     assert H.task(c, child["id"])["status"] in ("done", "closed")
     # Once: the result, or the engine's wake on the parent when it gave one.
-    assert _told(c, child["id"], parent["id"]) == [(BUILDER, "filed" if how == "parent_told" else "result")]
+    assert _told(c, child["id"], parent["id"]) == [(BUILDER, heard)]
+    assert bool(E.task(c, parent["id"]).get("snooze")) == (how == "person_snoozed")
 
 
 def test_a_person_reopens_with_a_reason_and_a_bot_does_not_reopen_what_a_person_closed(c):

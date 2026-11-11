@@ -108,6 +108,7 @@ LINT_VERBS = {
     "analyze",
     "announce",
     "answer",
+    "apply",  # the growth packs' "Apply: <the change>" for the person who puts it live
     "appoint",
     "approve",
     "archive",

@@ -72,7 +72,11 @@ Commit, then attach the draft to its task.
 - **The next piece of a kept series:** where a granted Tool lets you, publish it on its date and record when. Where
   none does, file it for the person who puts pieces live, with the piece attached:
 
-      tico task create --owner <person id> --label channel:content --title "Apply: publish <piece> on <date>" --body "<where it goes, the date, and the path to the draft and its short versions>"
+      tico task create --owner <person id> --label channel:content --title "Apply: publish <piece> on <date>" --body-file <body file>
+
+  The body file's first paragraph is one or two plain sentences, under 40 words, with no links, ids or file paths.
+  Below it, after a blank line: where it goes, the date, and the path to the draft and its short versions. If it is
+  refused, nothing was filed: fix it and run it again.
 
 - **A writing sub-task:** `tico task done <id> -m "..." --version N`: what the piece says in one line, the path to the
   folder, and what is still missing.

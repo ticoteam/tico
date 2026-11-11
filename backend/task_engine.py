@@ -964,6 +964,8 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
         return
     if stage_effects.filed_open(conn, link["visit_id"]):
         return
+    # A bot that snoozed while it waited on what it filed is woken now, not on the snooze's date (Initech, Nov 11).
+    above = task_effects.filed_ended(conn, above, by)
     if advance(conn, above["id"]):
         return
     filed = conn.execute(

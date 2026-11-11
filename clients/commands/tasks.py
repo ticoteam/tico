@@ -643,7 +643,7 @@ def task_file(api, args):
         },
         "offset": {"type": "integer", "minimum": 0, "description": "Skip this many: a page's next_offset"},
         "pipeline": _s("Only this pipeline's tasks: its id"),
-        "stage": _s("Only the tasks in this stage: its id (engineering-build)"),
+        "stage": _s("Only the tasks in this stage: its id (engineering-build), or its name with pipeline"),
         "waiting_on": _s("Only open tasks waiting on this person or bot: `me`, a human id or a bot slug"),
     },
 )

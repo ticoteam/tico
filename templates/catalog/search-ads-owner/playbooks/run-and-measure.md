@@ -16,10 +16,17 @@ The same text is shipped to every channel Owner. Your tag and who applies change
     tico task show <id>
 
 Put live exactly what the person OK'd on the Go-live page, nothing more. Where a granted Tool lets you, make the change
-and record what you changed and when. Where none does, file the exact change for the person your playbook names. The
-task waits until they say it is done:
+and record what you changed and when. Where none does, file the exact change for the person your playbook
+names:
 
-    tico task file "Apply: <the change>" --parent <id> --owner <person id> --body "<exactly what to change, where, and the Go-live page link>"
+    tico task create --owner <person id> --parent <id> --title "Apply: <the change>" --body-file <body file>
+
+Write the body to a file first. Its first paragraph is what the person reads first: one or two plain sentences, under 40
+words, saying what to change and where, with no links, ids or file paths. Below it, after a blank line: exactly what to
+change, where, and the Go-live page link. If the command is refused, nothing was filed: fix what the refusal says and
+run it again, in this run. Say you filed it only once the command printed the new task's id.
+
+The task waits until they say it is done, and that wakes you. Do not snooze it while it waits.
 
 Once it is live, check it is live as OK'd (the page loads, the ad runs, the email is scheduled), then snooze the task
 to the end date the Go-live page names. It wakes you then:

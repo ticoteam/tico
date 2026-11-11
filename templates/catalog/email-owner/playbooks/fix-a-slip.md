@@ -23,7 +23,14 @@ range was wrong.
 A fix that puts the kept thing back the way a person OK'd it is upkeep: do it within your granted Tools, or file the
 exact change for the person your playbook names and wait for it:
 
-    tico task file "Apply: <the fix>" --parent <id> --owner <person id> --body "<exactly what to change, where, and why>"
+    tico task create --owner <person id> --parent <id> --title "Apply: <the fix>" --body-file <body file>
+
+Write the body to a file first. Its first paragraph is what the person reads first: one or two plain sentences, under 40
+words, saying what to change and where, with no links, ids or file paths. Below it, after a blank line: exactly what to
+change, where, and why. If the command is refused, nothing was filed: fix what the refusal says and run it again, in
+this run. Say you filed it only once the command printed the new task's id.
+
+Its done wakes you here.
 
 Then check the number is back in range, or that the cause is gone, and move the task back:
 

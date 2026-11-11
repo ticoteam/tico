@@ -272,7 +272,12 @@ def no_outside_network(monkeypatch):
 
 def run_as_owner(live_url, workspace, argv):
     """`hub <argv>` as the owner, the way the CLI runs in a turn: (exit code, stdout, stderr)."""
-    env = {"HUB_API_URL": live_url, "HUB_TOKEN": "ana-test", "HUB_WORKSPACE": str(workspace)}
+    return run_as(live_url, workspace, argv, "ana-test")
+
+
+def run_as(live_url, workspace, argv, token):
+    """`hub <argv>` with this token (a person's or a bot's): (exit code, stdout, stderr)."""
+    env = {"HUB_API_URL": live_url, "HUB_TOKEN": token, "HUB_WORKSPACE": str(workspace)}
     old = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     out, err = io.StringIO(), io.StringIO()
@@ -418,3 +423,63 @@ def test_every_hub_command_in_templates_and_skills_runs_or_is_its_recorded_refus
         "TICO_E2E_RECORD_REFUSALS=/tmp/cli-refusals.json python3 -m pytest -q -m slow backend/tests/test_e2e_cli.py. "
         "Review the diff before copying it over e2e/cli/expected-refusals.json."
     )
+
+
+# What a bot fills into a taught `Apply:` command, the way a channel Owner writes it: the title, and a body file with a
+# short ask first and the exact change, with its file names and links, below a blank line. A placeholder not named here
+# fails the test, so a new one gets a realistic value instead of a pass by default.
+APPLY_FILL = {
+    "<the change>": "add robots.txt and a sitemap to the site",
+    "<the fix>": "put the pricing table back on the plans page",
+    "<piece>": "the pricing post",
+    "<date>": "Monday",
+    "<person id>": "human:ana",
+    "<your channel tag>": "channel:seo",
+}
+APPLY_BODY = (
+    "Please add the two files below to the site root, then mark this done so I can check they are live.\n\n"
+    "robots.txt at https://acme.example/robots.txt:\nUser-agent: *\nAllow: /\nSitemap: https://acme.example/sitemap.xml\n\n"
+    'sitemap.xml lists the home page and "Plans". Search engines read both; today neither exists. The Go-live page: '
+    "https://acme.example/pages/go-live-1, and the draft is in content/sitemap/sitemap.xml.\n"
+)
+APPLY_COMMAND = re.compile(r'tico task (?:file|create) [^\n`]*"Apply: [^\n`]*')
+
+
+def test_every_apply_command_the_packs_teach_files_as_written_for_a_bot(api, live, workspace, tmp_path):
+    """Initech, Nov 11: the SEO Owner's `Apply:` task, written as the playbook showed it (`--body "<exactly what to
+    change, where, and why>"`), was refused (99 words in the ask) and its title was flagged ("start the title with a
+    verb"). Each taught command, filled the way a bot fills it, files the task: the title passes and the body's first
+    paragraph is the ask."""
+    import shlex
+
+    from backend.tests.helpers.task_moves_routes import as_bot
+
+    taught = [
+        (path.relative_to(ROOT), m.group(0))
+        for path in sorted(TEMPLATES.rglob("*.md"))
+        for m in APPLY_COMMAND.finditer(path.read_text())
+    ]
+    assert len(taught) >= 6 * 3, taught  # run-and-measure, fix-a-slip and watch in every channel pack
+    token = as_bot(api, "ops")
+    parent = post(api, "tasks", {"owner": "ops", "title": "Acme smoke bet", "body": "The bet the change is for."})
+    body = tmp_path / "apply-body.md"
+    body.write_text(APPLY_BODY)
+    problems, ran = [], set()
+    for where, command in taught:
+        filled = command.replace("<id>", parent["id"]).replace("<body file>", str(body))
+        for hole, value in APPLY_FILL.items():
+            filled = filled.replace(hole, value)
+        left = re.findall(r"<[^<>]+>", filled)
+        if left:
+            problems.append(f"{where}: no value for {left} in APPLY_FILL")
+            continue
+        argv = shlex.split(filled)[1:]
+        command_tree().parse_args(argv)
+        shape = re.sub(r"--label \S+ ", "", filled)
+        if shape in ran:
+            continue  # the same command in another pack: filing it again would be a duplicate ask
+        ran.add(shape)
+        code, out, err = run_as(live, workspace, argv, token)
+        if code != 0 or "verb" in out + err:
+            problems.append(f"{where}: {code} {(out + err)[:400]}")
+    assert not problems, "\n".join(problems)

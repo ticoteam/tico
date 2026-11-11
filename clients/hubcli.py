@@ -1303,7 +1303,10 @@ def parser():
     s.add_argument("--member", help="only tasks this person or bot is on in some role (me, a human id, a bot slug)")
     s.add_argument("--role", help="with --member: only tasks they are on in this role")
     s.add_argument("--pipeline", help="only this pipeline's tasks: its id (tico pipeline list)")
-    s.add_argument("--stage", help="only the tasks in this stage: its id (tico pipeline show <pipeline>)")
+    s.add_argument(
+        "--stage",
+        help="only the tasks in this stage: its id, or its name with --pipeline (tico pipeline show <pipeline>)",
+    )
     s.add_argument(
         "--waiting-on", help="only open tasks whose turn is this person's or bot's: me, a human id, a bot slug"
     )

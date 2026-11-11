@@ -1,6 +1,7 @@
 """A task waits on the sub-tasks it filed; when the last one ends its owner is woken once, in the parent's own lane,
 with how each ended (task_engine._ended). Nothing about a sub-task's progress wakes the parent or the task above it."""
 
+from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.task_lanes import task_bot
@@ -105,3 +106,48 @@ def test_private_child_results_stay_off_a_wider_parent_and_closed_parents_do_not
             "WHERE j.bot_id='ops' AND j.state='queued' AND m.rowid>?",
             (since,),
         ).fetchone()
+
+
+def test_a_bot_snoozed_on_what_it_filed_is_woken_when_that_ends_and_a_persons_snooze_stays(api):
+    """Initech, Nov 11: the SEO Owner filed "Apply: ..." for a person and snoozed its task for a week "or sooner if
+    Chris says he's done". The person's done ended nothing, so the task slept to its date."""
+    with api.app.state.store.transaction() as c:
+        bet = H.task_create(c, "human:ana", "Add a sitemap", "Ship it.", "bot:ops", lint=False)
+        apply = H.task_create(
+            c, "bot:ops", "Apply: add the sitemap", "Paste it.", "human:ana", parent_id=bet["id"], lint=False
+        )
+        H.task_snooze(
+            c,
+            "bot:ops",
+            bet["id"],
+            "Waiting for Ana to apply it",
+            "2099-01-01T08:00:00Z",
+            H.task(c, bet["id"])["version"],
+        )
+        since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+        H.task_done(c, "human:ana", apply["id"], "Applied.", H.task(c, apply["id"])["version"])
+        assert not E.task(c, bet["id"])["snooze"], "the bot's wait ended with what it waited on"
+        woke = [
+            dict(r)
+            for r in c.execute(
+                "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id "
+                "WHERE j.bot_id='ops' AND j.state='queued' AND m.rowid>?",
+                (since,),
+            )
+        ]
+        assert any("The tasks this one filed have ended: Apply: add the sitemap: Done" in r["body"] for r in woke), woke
+
+        held = H.task_create(c, "human:ana", "Add robots.txt", "Ship it.", "bot:ops", lint=False)
+        other = H.task_create(
+            c, "bot:ops", "Apply: add robots.txt", "Paste it.", "human:ana", parent_id=held["id"], lint=False
+        )
+        H.task_snooze(
+            c,
+            "human:ana",
+            held["id"],
+            "Hold this till Monday",
+            "2099-01-01T08:00:00Z",
+            H.task(c, held["id"])["version"],
+        )
+        H.task_done(c, "human:ana", other["id"], "Applied.", H.task(c, other["id"])["version"])
+        assert E.task(c, held["id"])["snooze"], "a snooze a person set is theirs to end"
