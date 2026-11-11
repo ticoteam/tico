@@ -320,7 +320,9 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Starts: A page is attached.
    - Bar: Jev answers a probability; 0.75 or more is met, 0.2 or less is not met, anything between is unsure. One
      bar for every company and pipeline (backend/pipeline_judges.py `MET_AT`). (Changed Nov 11 from 0.8.)
-   - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with reasons. Unsure: on a page a person OKs
+   - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with reasons; on a page a person OKs anyway,
+     a second fail in the same visit is that person's to decide, with Jev's reason (Changed Nov 11: a page Jev could
+     never pass left only a push-past). Unsure: on a page a person OKs
      anyway (people only, or naming someone), that person at once, every version, with Jev's reason; after a send
      back, the person who sent it back, with their words. On a stage a bot holds: back to that bot once, "not yet
      met: fix it or explain it on the page", with Jev's reason and the check; the next unsure in the same visit goes
@@ -781,7 +783,9 @@ Experiments pipeline's, so one seat manages both. A stage's owner is found by it
     room ("No room in Building. It holds 6: move it again when one leaves." when it has none); a person can start any.
   - **Building.** The real thing, not yet live: the email, the page change, the ad. Limit 6. To leave: a **Go-live
     page** (the thing that goes live, its copy or a picture of it; the metric, the prediction as a number, the cost,
-    how long it runs, when to stop early, the brand check passed). Jev checks it, then **a person OKs it** (people only). Expected time: 3 days.
+    how long it runs, when to stop early, and the brand check passed or, with no brand card published yet, a plain
+    "no brand card yet"). Jev checks it, then **a person OKs it** (people only); when Jev sends back a second version
+    in the same visit, the person decides it with Jev's reason. Expected time: 3 days.
   - **Running.** The owner puts it live and snoozes the task to its end date; it wakes then, to measure. To leave: a
     **Results page** (the number before and after with dates and sources, and the result: `result:failed` when it
     did not work; when it worked, `result:watching` if what was kept needs watching or `result:worked-once` if there

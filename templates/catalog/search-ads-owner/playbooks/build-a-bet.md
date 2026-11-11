@@ -29,12 +29,16 @@ yours: writing to the Content Owner, design to the Design Owner.
 
 ## 3. Pass the brand check
 
-Run `tico brand check -` on every outward word and fix each hit. Check each claim against
+Run `tico brand show`. When no brand card is published yet, there is nothing to check against: file no brand check,
+and say so on the Go-live page (step 4).
+
+Otherwise run `tico brand check -` on every outward word and fix each hit. Check each claim against
 `tico brand show --section claims`. Then ask the Design Owner for the brand check:
 
     tico task file "Brand check: <title>" --parent <id> --owner design-owner --body "<what goes live, where, and the links to the drafts>"
 
-The task waits on it. Fix what it sends back.
+The task waits on it. Fix what it sends back. Write that the brand check passed only once the Design Owner's task says
+so.
 
 ## 4. Write the Go-live page
 
@@ -47,7 +51,8 @@ One page a person can read in two minutes. It shows:
 - **The cost**: money, and a person's time if someone must apply it.
 - **How long it runs**, with its end date.
 - **When to stop early**: the number or event that stops it.
-- **Brand check: passed**, with the Design Owner's task.
+- **Brand**: how it fits the brand card, and "Brand check: passed" with the Design Owner's task. With no brand card
+  published: "No brand card is published yet, so there was no brand check."
 - **Who puts it live**: you, or the person your playbook names when no Tool lets you.
 
 Publish it on the task and attach it to the requirement:
