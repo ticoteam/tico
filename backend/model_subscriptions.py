@@ -943,9 +943,11 @@ def default_name(c, kind):
     return name
 
 
-def save(c, vault, settings, who, body, sid=None):
+def save(c, vault, settings, who, body, sid=None, signed_on=""):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
-    its usage-limit hold as Try now does, a name renames it, an `owner_id` gives it another owner. Returns its view."""
+    its usage-limit hold as Try now does, a name renames it, an `owner_id` gives it another owner. A plan added or given
+    a new secret goes on the computers that need it (`spread`; `signed_on`: the computer a Connect ran on). Returns its
+    view."""
     now = H.now()
     if sid:
         sub = row(c, sid)
@@ -985,6 +987,7 @@ def save(c, vault, settings, who, body, sid=None):
             login_holds.try_now(c, "", login_holds.subscription_login(sid), KINDS[sub["kind"]]["runtime"])
             stopped = sum(_restart(c, settings, runner_id, runtime)["stopped"] for runner_id, runtime in given)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
+            spread(c, settings, sid, who.actor, signed_on)  # one that needed reconnecting works again
             return view(c, row(c, sid))
         H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})
         return view(c, row(c, sid))
@@ -1003,6 +1006,7 @@ def save(c, vault, settings, who, body, sid=None):
     )
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
+    spread(c, settings, sid, who.actor, signed_on)
     return view(c, row(c, sid))
 
 
@@ -1132,15 +1136,17 @@ def may_grant(c, auth, actor):
     return bool(human) and not standing(c, pid) and str(human.get("email") or "").lower() in auth.bot_admins
 
 
-def lend(c, runner_id, runtime, actor, shared, others):
-    """Give a cloud machine's computer the company's plan for `runtime` when it has no plan and no sign-in of its own
-    there, so a bot placed on it is not left waiting for a sign-in nobody will make. Nothing is replaced, stopped or
-    reset: a computer with a plan, a sign-in reported (any state but missing), or a live run on that runtime, is left
-    as it is (returns None, and the next placement asks again). The plan is the first that works, preferring one already
-    given to the shared machine's computer (`shared`), then to another cloud machine's (`others`), then the lowest known
-    used percent, then the most recently added. Only subscription plans count (an API key bills per use, so it is never
-    chosen for a computer). Returns the subscription id given, or None when no plan fits."""
+def lend(c, runner_id, runtime, actor, shared, others, only=None):
+    """Give a computer the company's plan for `runtime` when it has no plan and no working sign-in of its own there, so
+    a bot on it is not left waiting for a sign-in nobody will make. Nothing is replaced, stopped or reset: a computer
+    with a plan, a sign-in that works or has not said (any state but missing, failed or rejected), or a live run on that
+    runtime, is left as it is (returns None, and the next placement asks again). The plan is the first that works,
+    preferring one already given to the shared machine's computer (`shared`), then to another cloud machine's
+    (`others`), then the lowest known used percent, then the most recently added; with `only`, that plan or none. Only
+    subscription plans count (an API key bills per use, so it is never chosen for a computer). Returns the subscription
+    id given, or None when no plan fits."""
     from . import login_holds
+    from .readiness import SIGNED_OUT
 
     runner = c.execute(
         "SELECT readiness FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)
@@ -1153,7 +1159,7 @@ def lend(c, runner_id, runtime, actor, shared, others):
     ):
         return None
     own = (readiness_document(runner["readiness"]).get("runtimes") or {}).get(runtime) or {}
-    if own.get("authenticated") not in (None, "missing") or _live(c, runner_id, runtime):
+    if own.get("authenticated") not in (None, *SIGNED_OUT) or _live(c, runner_id, runtime):
         return None
     kinds = [
         kind for kind, spec in KINDS.items() if spec["runtime"] == runtime and spec.get("billing") == "subscription"
@@ -1161,8 +1167,8 @@ def lend(c, runner_id, runtime, actor, shared, others):
     subs = H._rows(
         c.execute(
             f"SELECT * FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
-            "AND status<>'needs_reconnect' ORDER BY created_at DESC",
-            kinds,
+            "AND status<>'needs_reconnect'" + (" AND id=?" if only else "") + " ORDER BY created_at DESC",
+            [*kinds, *([only] if only else [])],
         )
     )
     cloud = {r: 0 if r == shared else 1 for r in [shared, *others] if r}
@@ -1191,6 +1197,33 @@ def lend(c, runner_id, runtime, actor, shared, others):
         {"runner": runner_id, "runtime": runtime, "stopped": 0, "sessions_reset": 0},
     )
     return chosen["id"]
+
+
+def spread(c, settings, sid, actor, signed_on=""):
+    """A plan just added, connected or reconnected goes on the computers that need it, by `lend`'s rules (nothing
+    replaced, stopped or reset): the computer a Connect signed it in on (`signed_on`), then on a Tico Cloud company each
+    cloud machine's computer, the shared one first; on a company with one computer, that one. With several computers of
+    its own, a company chooses where (Settings > Computers). A plan placed before the bots is otherwise never on a
+    computer, and they run on Tico Medium. Returns the computer ids given it."""
+    from . import cloud_machines
+
+    sub = row(c, sid)
+    if not sub or sub["status"] == "needs_reconnect":
+        return []
+    spec = KINDS.get(sub["kind"]) or {}
+    if spec.get("billing") != "subscription":
+        return []
+    shared, others = cloud_machines.lend_order(c)
+    if cloud_machines.cloud_company(c, settings):
+        computers = [signed_on, shared, *others]
+    else:
+        live = [r[0] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")]
+        computers = [signed_on, *(live if len(live) == 1 else [])]
+    return [
+        runner_id
+        for runner_id in dict.fromkeys(r for r in computers if r)
+        if lend(c, runner_id, spec["runtime"], actor, shared, others, only=sid)
+    ]
 
 
 # ------------------------------------------------------------------------------------------------ claim and run
@@ -1593,6 +1626,7 @@ def connected(c, vault, settings, who, login_id, body):
                 SimpleNamespace(actor=login["requested_by"]),
                 write,
                 target["subscription_id"] or None,
+                signed_on=who.runner_id,
             )
         except Problem as problem:
             # A fixed word for the history: never the value, nor what the provider said about it.

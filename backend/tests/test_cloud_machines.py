@@ -2758,11 +2758,12 @@ def test_with_no_plan_that_fits_nothing_changes_and_the_bot_still_waits(cloud):
     computer = own_computer(cloud, "ops")
     assert given(cloud, computer["runner_id"]) == {}
     sid = add(cloud.api, secret=OTHER, name="Broken Max")["id"]
+    assert given(cloud, computer["runner_id"]) == {"claude": sid}  # added: on the cloud machine that had none
     with cloud.store.transaction() as c:
         c.execute("UPDATE model_subscriptions SET status='needs_reconnect' WHERE id=?", (sid,))
     waiting = own_computer(cloud, "inbox")  # its only plan needs reconnecting: passed over
     assert given(cloud, waiting["runner_id"]) == {}
-    assert events(cloud, "subscription.given") == []
+    assert len(events(cloud, "subscription.given")) == 1
     sign_in_report(cloud, waiting, "missing")
     assert can_run(cloud, "inbox", waiting["runner_id"]) is not True
 
@@ -2778,7 +2779,8 @@ def test_a_bot_put_on_an_ordinary_computer_gets_no_plan(cloud):
 def test_a_member_moving_a_bot_gets_no_plan_on_a_computer_it_moves_to(cloud):
     plan_company(cloud, "cpo", "ops", saved=False)
     shared = shared_for(cloud, "cpo")["runner_id"]  # the owner's shared machine, with no plan yet
-    add(cloud.api)
+    add(cloud.api)  # goes on it; the owner takes it off
+    give(cloud.api, {"runner_id": shared}, "claude", None)
     with cloud.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     change_as(cloud, "ops", "cara-test", mode="cloud", placement="shared")
@@ -2786,7 +2788,7 @@ def test_a_member_moving_a_bot_gets_no_plan_on_a_computer_it_moves_to(cloud):
     change_as(cloud, "ops", "cara-test", mode="cloud", placement="own")  # a new machine, made and enrolled for her move
     work(cloud, "ops")
     computer = enroll_made(cloud, "ops")
-    assert given(cloud, computer["runner_id"]) == {} and events(cloud, "subscription.given") == []
+    assert given(cloud, computer["runner_id"]) == {} and len(events(cloud, "subscription.given")) == 1
 
 
 def test_an_admin_moving_a_bot_gets_the_plan_on_its_own_machine(cloud):
@@ -2902,6 +2904,49 @@ def test_a_look_never_gives_a_plan_back_after_a_bots_assignment_goes(cloud):
         c.execute("DELETE FROM assignments WHERE bot='ops'")
     cloud.tick()
     assert placed(cloud)["ops"] == own["runner_id"] and given(cloud, own["runner_id"]) == {}
+
+
+def test_a_plan_added_after_the_bots_were_placed_goes_on_every_cloud_machine_shared_first(cloud):
+    plan_company(cloud, "cpo", "ops", saved=False)
+    shared = shared_for(cloud, "cpo")["runner_id"]
+    own = own_computer(cloud, "ops")["runner_id"]
+    assert given(cloud, shared) == {} and given(cloud, own) == {}
+    csid = add(cloud.api, "codex_login", codex_file(), name="ChatGPT")["id"]  # pasted, as on a phone
+    assert given(cloud, shared) == {"codex": csid} and given(cloud, own) == {"codex": csid}
+    lent = events(cloud, "subscription.given")
+    assert [(e["actor"], json.loads(e["detail"])["runner"]) for e in lent] == [
+        ("human:ana", shared),
+        ("human:ana", own),
+    ]
+    assert get(cloud.api, "model-subscriptions")["subscriptions"][0]["computers"]
+
+
+def test_a_plan_connected_on_the_shared_machine_goes_on_it(cloud):
+    setup(cloud.api)
+    company(cloud.api)
+    computer, token = _shared_up(cloud)
+    login = _connect(cloud)
+    sent = post(cloud.api, f"runner-logins/{login['id']}/subscription", {"value": TOKEN}, token=token)
+    assert sent["state"] == "done"
+    [sid] = [s["id"] for s in get(cloud.api, "model-subscriptions")["subscriptions"]]
+    assert given(cloud, computer) == {"claude": sid}
+    [lent] = events(cloud, "subscription.given")
+    assert lent["actor"] == "human:ana" and json.loads(lent["detail"])["runner"] == computer
+
+
+def test_a_new_plan_leaves_a_cloud_machine_with_a_working_sign_in_or_another_plan_alone(cloud):
+    first = plan_company(cloud, "cpo", "ops", "inbox")
+    shared = shared_for(cloud, "cpo")["runner_id"]  # placed after the plan: it has that one
+    signed = own_computer(cloud, "ops")
+    give(cloud.api, signed, "claude", None)
+    sign_in_report(cloud, signed, "ready")  # its own login works
+    refused = own_computer(cloud, "inbox")
+    give(cloud.api, refused, "claude", None)
+    sign_in_report(cloud, refused, "rejected")  # its own login was refused: it needs a plan
+    newer = add(cloud.api, secret=OTHER, name="Newer Max")["id"]
+    assert given(cloud, shared) == {"claude": first}  # never replaced
+    assert given(cloud, signed["runner_id"]) == {}
+    assert given(cloud, refused["runner_id"]) == {"claude": newer}
 
 
 def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_does(api, monkeypatch):  # noqa: F811
