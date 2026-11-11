@@ -139,11 +139,27 @@ const ENTER_AFTER_CODE: Duration = Duration::from_millis(1200);
 
 /// The token `prefix` starts, from what a Connect's command has printed so far. Until the command has `ended` a token
 /// counts only once something follows it: the rest of it may still be arriving.
+///
+/// A renderer that repaints only the cells that changed steps over the others with cursor moves, so a token painted on
+/// a row that already had text can arrive with pieces missing from the stream. Once the command has ended, the rows as
+/// the terminal shows them (`screen`) are read too.
 fn printed_token(raw: &str, prefix: &str, ended: bool) -> Option<String> {
-    if !raw.contains(prefix) {
-        return None;
-    }
-    let text = plain(raw);
+    let direct = raw
+        .contains(prefix)
+        .then(|| token_in(&plain(raw), prefix, ended))
+        .flatten();
+    direct.or_else(|| {
+        ended
+            .then(|| {
+                screen(raw)
+                    .iter()
+                    .find_map(|row| token_in(row, prefix, true))
+            })
+            .flatten()
+    })
+}
+
+fn token_in(text: &str, prefix: &str, ended: bool) -> Option<String> {
     let part = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
     text.match_indices(prefix).find_map(|(at, _)| {
         let tail = &text[at..];
@@ -151,6 +167,96 @@ fn printed_token(raw: &str, prefix: &str, ended: bool) -> Option<String> {
         let token = &tail[..end.unwrap_or(tail.len())];
         (token.len() >= MIN_TOKEN && (end.is_some() || ended)).then(|| token.to_string())
     })
+}
+
+/// The pty's size (`spawn`).
+const SCREEN_ROWS: usize = 50;
+const SCREEN_COLS: usize = 500;
+
+/// A terminal's output as the rows it ends up showing: characters land where the cursor is, and cursor moves and
+/// erases are followed instead of dropped. Enough of a terminal for a CLI's repaints; colours and modes are ignored.
+fn screen(raw: &str) -> Vec<String> {
+    let raw = patterns().osc.replace_all(raw, "");
+    let mut rows: Vec<Vec<char>> = vec![vec![]];
+    let (mut row, mut col) = (0usize, 0usize);
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => match chars.next() {
+                Some('[') => {
+                    let mut params = String::new();
+                    let mut last = None;
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            last = Some(c);
+                            break;
+                        }
+                        params.push(c);
+                    }
+                    let mut nums = params.split(';').map(|n| n.parse::<usize>().ok());
+                    let first = nums.next().flatten();
+                    let n = first.unwrap_or(1).clamp(1, SCREEN_COLS);
+                    let top = rows.len().saturating_sub(SCREEN_ROWS);
+                    match last {
+                        Some('A') => row = row.saturating_sub(n),
+                        Some('B') => row += n.min(SCREEN_ROWS),
+                        Some('C') => col = (col + n).min(SCREEN_COLS - 1),
+                        Some('D') => col = col.saturating_sub(n),
+                        Some('E') => (row, col) = (row + n.min(SCREEN_ROWS), 0),
+                        Some('F') => (row, col) = (row.saturating_sub(n), 0),
+                        Some('G') => col = (n - 1).min(SCREEN_COLS - 1),
+                        Some('H') | Some('f') => {
+                            row = top + (n - 1).min(SCREEN_ROWS - 1);
+                            col = nums.next().flatten().unwrap_or(1).clamp(1, SCREEN_COLS) - 1;
+                        }
+                        Some('K') => {
+                            if let Some(line) = rows.get_mut(row) {
+                                match first.unwrap_or(0) {
+                                    0 => line.truncate(col),
+                                    1 => line.iter_mut().take(col + 1).for_each(|c| *c = ' '),
+                                    _ => line.clear(),
+                                }
+                            }
+                        }
+                        Some('J') => match first.unwrap_or(0) {
+                            0 => {
+                                rows.truncate(row + 1);
+                                if let Some(line) = rows.get_mut(row) {
+                                    line.truncate(col);
+                                }
+                            }
+                            2 | 3 => rows.iter_mut().skip(top).for_each(Vec::clear),
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
+                Some('(' | ')' | '#') => {
+                    chars.next();
+                }
+                _ => {}
+            },
+            '\r' => col = 0,
+            '\n' => (row, col) = (row + 1, 0),
+            '\x08' => col = col.saturating_sub(1),
+            c if c.is_control() => {}
+            c => {
+                if col >= SCREEN_COLS {
+                    (row, col) = (row + 1, 0);
+                }
+                if rows.len() <= row {
+                    rows.resize(row + 1, vec![]);
+                }
+                let line = &mut rows[row];
+                if line.len() <= col {
+                    line.resize(col + 1, ' ');
+                }
+                line[col] = c;
+                col += 1;
+            }
+        }
+    }
+    rows.iter().map(|r| r.iter().collect()).collect()
 }
 
 /// A CLI waiting for Enter after an OAuth error cannot finish without another interactive attempt. Never relay
@@ -166,12 +272,37 @@ fn oauth_retry(raw: &str) -> bool {
 
 /// Only an allowlisted category leaves the terminal. Provider errors can echo the code, URL or credential, and
 /// a rejected code's generic message does not distinguish expired, reused or incomplete codes.
+///
+/// A command that ends by itself after taking the code was refused by the provider: the token was made and then held
+/// back by the account's organization (`provider_refused`), or the account is on hold (`account_on_hold`).
 fn oauth_failure(raw: &str) -> &'static str {
-    let text: String = plain(raw)
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .flat_map(char::to_lowercase)
-        .collect();
+    let squeezed = |text: String| -> String {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let text = squeezed(plain(raw));
+    // A repaint can step over cells, so the rows as shown are read as well.
+    let shown = squeezed(screen(raw).join(" ")).replace('\u{2019}', "'");
+    let text = text.replace('\u{2019}', "'");
+    let says = |words: &[&str]| words.iter().any(|w| text.contains(w) || shown.contains(w));
+    if says(&[
+        "doesnotpermit",
+        "verifyyourorganization'ssettings",
+        "wasnotshown",
+        "reportedthetokenrevoked",
+    ]) {
+        return "provider_refused";
+    }
+    if says(&[
+        "account_on_hold",
+        "accountisonhold",
+        "accountonhold",
+        "accounthasbeenplacedonhold",
+    ]) {
+        return "account_on_hold";
+    }
     let Some((_, error)) = text.split_once("oautherror:") else {
         return "cli_stopped";
     };
@@ -191,6 +322,16 @@ fn oauth_failure(raw: &str) -> &'static str {
         "oauth_network_error"
     } else {
         "oauth_error"
+    }
+}
+
+/// What a person reads for a Connect that ended in `category` (`oauth_failure`). Never the CLI's own text.
+fn failure_message(category: &str, waiting: bool) -> &'static str {
+    match category {
+        "provider_refused" => "Claude did not give this account a token. Its organization's settings may not allow it.",
+        "account_on_hold" => "Claude did not give this account a token. The account is on hold.",
+        _ if waiting => "The sign-in could not finish. Choose Try again and use the code from the new sign-in page.",
+        _ => "The sign-in command stopped without signing in",
     }
 }
 
@@ -1123,7 +1264,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let reason = oauth_failure(&s.inner.lock().unwrap().raw);
             s.trace(reason, None);
             kill(&mut child);
-            break Some(("failed".into(), "The sign-in could not finish. Choose Try again and use the code from the new sign-in page.".into()));
+            break Some(("failed".into(), failure_message(reason, true).into()));
         }
         // The token is all a Connect wants. The command gets to end by itself, so a failure it reports still counts.
         if !token_prefix.is_empty()
@@ -1210,11 +1351,30 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                     (String::new(), String::new())
                 }
                 None => {
-                    s.trace(oauth_failure(&s.inner.lock().unwrap().raw), None);
-                    (
-                        "failed".into(),
-                        "The sign-in command stopped without signing in".into(),
-                    )
+                    // Why: the last screen, scrubbed, and its category. The category line reaches the server in the
+                    // heartbeat's `recent_errors`.
+                    let (reason, since, digest) = {
+                        let i = s.inner.lock().unwrap();
+                        let since = watch
+                            .as_ref()
+                            .map_or(i.seen, |w| i.seen.saturating_sub(w.seen_at));
+                        let mut from = i.raw.len().saturating_sub(since);
+                        while !i.raw.is_char_boundary(from) {
+                            from += 1;
+                        }
+                        (
+                            oauth_failure(&i.raw),
+                            since,
+                            screen_digest(&i.raw[from..], i.typed.as_deref().unwrap_or("")),
+                        )
+                    };
+                    crate::util::diagnostic(&format!(
+                        "Tico runner: model sign-in {}",
+                        json!({"login_id": s.id, "runtime": s.runtime, "phase": "final_screen", "reason": reason,
+                        "elapsed_ms": s.started.elapsed().as_millis(), "bytes": since, "screen": digest})
+                    ));
+                    s.trace(reason, None);
+                    ("failed".into(), failure_message(reason, false).into())
                 }
             }
         }
@@ -2519,6 +2679,33 @@ mod tests {
             None
         );
         assert_eq!(printed_token("no such thing\n", "sk-ant-oat", true), None);
+        // Painted over a row that had text: the renderer steps over each cell that already shows the right character
+        // (here the prompt's `a`, `e` and `d` land where the token has the same letters), so the stream has gaps.
+        let token = format!("sk-ant-oat01-{}", "paste-code-here_".repeat(6));
+        let old = "Paste code here if prompted > ";
+        let mut repaint = format!("{old}\r\n\x1b[1A\r");
+        let mut skipped = 0;
+        for (at, c) in token.chars().enumerate() {
+            if old.chars().nth(at) == Some(c) {
+                repaint.push_str("\x1b[1C");
+                skipped += 1;
+            } else {
+                repaint.push(c);
+            }
+        }
+        repaint.push_str("\x1b[K\r\n\x1b[2CStore this token securely.\r\n");
+        assert!(skipped > 0, "the case needs a stepped-over cell");
+        assert_eq!(token_in(&plain(&repaint), "sk-ant-oat", true), None);
+        assert_eq!(printed_token(&repaint, "sk-ant-oat", false), None);
+        assert_eq!(
+            printed_token(&repaint, "sk-ant-oat", true).as_deref(),
+            Some(token.as_str())
+        );
+        // Text a repaint erased is not on the screen.
+        assert_eq!(
+            screen("one\r\ntwo two\x1b[1A\r\x1b[2K\x1b[3Cup\x1b[1B\r\x1b[4C\x1b[K"),
+            vec!["   up", "two "]
+        );
         // Nor is a piece of one.
         assert_eq!(
             printed_token(&format!("{}\n", &token[..80]), "sk-ant-oat", true),
@@ -2552,6 +2739,26 @@ mod tests {
             oauth_failure("OAuth error: secret response sk-ant-oat01-never-log-this"),
             "oauth_error"
         );
+        // A command that ends by itself: the provider held the token back. Words arrive split by cursor moves.
+        for refused in [
+            "This\x1b[1Cstep creates a long-lived token, which this policy does\x1b[1Cnot\r\npermit \u{2014} use an API key instead.",
+            "Couldn\u{2019}t verify your organization\u{2019}s settings (timeout)",
+            "Anthropic reported the token revoked; it was not shown.",
+            "The token could not be confirmed revoked and was not shown",
+        ] {
+            assert_eq!(oauth_failure(refused), "provider_refused", "{refused}");
+        }
+        assert_eq!(oauth_failure("Your account is on hold."), "account_on_hold");
+        assert_eq!(oauth_failure("Opening browser to sign in"), "cli_stopped");
+        for category in ["provider_refused", "account_on_hold"] {
+            for waiting in [false, true] {
+                assert!(failure_message(category, waiting).starts_with("Claude did not give"));
+            }
+        }
+        assert_eq!(
+            failure_message("cli_stopped", false),
+            "The sign-in command stopped without signing in"
+        );
     }
 
     /// A Connect relays the link, leaves the login it does not need alone, and holds its one result for the server.
@@ -2583,6 +2790,12 @@ case "$*" in
       trap 'touch "$HOME/rejected-stopped"; exit 0' TERM
       printf "\033[31mOAuth error:\033[0m That code wasn't accepted. %s {token}\r\nPress\033[1GEnter to retry." "$code"
       while :; do sleep 0.1; done
+    fi
+    if test -e "$HOME/refuses"; then
+      # Like the real CLI when the account's organization holds the token back: no retry, it ends by itself.
+      printf "\033[2C%s https://claude.example/authorize?x=1 sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123\r\n" "$code"
+      printf "\033[2CThis\033[1Cstep creates a long-lived token, which this policy does\033[1Cnot permit.\r\n"
+      exit 0
     fi
     echo 'Your OAuth token:'; echo '{token}'; echo 'Store it safely.'
     test ! -e "$HOME/fails-after-token" || exit 7
@@ -2639,6 +2852,8 @@ esac
                 "code_written",
                 "enter_written",
                 "oauth_code_rejected",
+                "final_screen",
+                "provider_refused",
                 "credential_captured",
                 "cli_exited",
                 "canceled",
@@ -2651,8 +2866,21 @@ esac
             assert!(
                 !diagnostics.contains("pasted-code")
                     && !diagnostics.contains("sk-ant-oat")
+                    && !diagnostics.contains("abcdefghijklmnop")
                     && !diagnostics.contains("https://claude.example"),
                 "secret in diagnostics: {diagnostics}"
+            );
+            let last = diagnostics
+                .lines()
+                .find(|l| {
+                    l.contains("\"phase\":\"final_screen\"")
+                        && l.contains("\"login_id\":\"refused\"")
+                })
+                .expect("the refused sign-in's last screen is logged");
+            assert!(
+                last.contains("\"reason\":\"provider_refused\"")
+                    && last.contains("this policy does not permit"),
+                "{last}"
             );
             return;
         };
@@ -2769,6 +2997,43 @@ esac
         );
         assert!(!login.inner.lock().unwrap().message.is_empty());
         std::fs::remove_file(root.join("rejects-code")).unwrap();
+
+        // The code is taken, then the command ends by itself with no token and no error to retry: the person reads why,
+        // in Tico's words, and the runner's log keeps the scrubbed last screen.
+        std::fs::write(root.join("refuses"), "").unwrap();
+        let login = Session::new(&json!({"id": "refused", "runtime": "claude", "kind": "connect"}));
+        let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+        let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+        wait_for(|| !login.inner.lock().unwrap().url.is_empty());
+        login.submit("pasted-code");
+        running.join().unwrap();
+        assert_eq!(
+            state(&login),
+            (
+                "failed".to_string(),
+                "Claude did not give this account a token. Its organization's settings may not allow it."
+                    .to_string()
+            )
+        );
+        {
+            let i = login.inner.lock().unwrap();
+            assert!(i.captured.is_none() && i.finished && i.raw.is_empty() && i.lines.is_empty());
+        }
+        let recent = crate::util::recent_errors();
+        assert!(
+            recent
+                .iter()
+                .any(|l| l.contains("final_screen") && l.contains("provider_refused")),
+            "the heartbeat carries the category: {recent:?}"
+        );
+        let shown = login.report().unwrap().to_string();
+        assert!(
+            !shown.contains("pasted-code")
+                && !shown.contains("sk-ant")
+                && !shown.contains("policy"),
+            "{shown}"
+        );
+        std::fs::remove_file(root.join("refuses")).unwrap();
 
         // Cancelled: nothing is captured.
         let login = Session::new(&json!({"id": "c3", "runtime": "claude", "kind": "connect"}));
