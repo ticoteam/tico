@@ -4,8 +4,6 @@ Importing any module here runs this file first, which loads them all in one orde
   1. the base modules: `_registry` (TOOLS and `tool()`), `_schemas`, `_requester`, `_shared`; they import no tool module
   2. the tool modules, one per noun: each registers its tools with `_registry.tool` as it loads
   3. `_access` (who sees which tool), then `_mcp`, which builds BY_NAME from TOOLS as it loads, and the Protocol
-A module that imports clients.hubtools itself to join the table (`hubtools.tool`, then AUDIENCE and BY_NAME) is not
-listed here: clients/hubtools.py imports it at its end, once every name it reads there is bound.
 A new tool goes in its noun's module; a new noun gets a module and a line below, before `_access`. No module imports
 `_mcp`; the tool modules import only the base modules.
 """
@@ -38,6 +36,9 @@ from clients.commands import (
     finance,
     rules,
     org,
+    connections,
+    computer_upkeep,
+    pipelines,
     _access,
     _mcp,
 )
@@ -70,6 +71,9 @@ MODULES = (
     finance,
     rules,
     org,
+    connections,
+    computer_upkeep,
+    pipelines,
     _access,
     _mcp,
 )

@@ -1,6 +1,6 @@
 """Connection tools: the team's GitHub App, its repositories and which bot may use each, and whether the company can
 work right now. Each is a `tico` command and an MCP tool of the same name (`tico github status` is
-`tico_github_status`), registered into the one table in `clients/hubtools.py`, which imports this module at its end.
+`tico_github_status`), registered into the one table like any other module listed in clients/commands/__init__.py.
 
 Every tool composes the ordinary routes with the caller's own token, so it can do nothing the HTTP API refuses: the
 GitHub App routes are the Owner's, repository changes the Owner's or an admin's (backend/github_app.py,
@@ -13,17 +13,19 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from clients import hubtools as H
 from clients.tico import APIError
 
-tool, _s, _key = H.tool, H._s, H._key
-_FIRST = len(H.TOOLS)  # the tools below are H.TOOLS[_FIRST:]
+from clients.commands._registry import TOOLS, tool
+from clients.commands._requester import PEOPLE, REQUESTER, _as_person
+from clients.commands._schemas import _key, _s
+
+_FIRST = len(TOOLS)  # the tools below are TOOLS[_FIRST:]
 
 REDIRECTS = (301, 302, 303, 307, 308)
 # Owners and admins act; BotOps acts as the person who asked it. Not offered to the Assistant (its listing is near its
 # size cliff) nor to ordinary bots: connecting the company is an admin's job.
-ADMINS = H.REQUESTER
-OWNER_ONLY = H.PEOPLE  # the server admits only the Owner; a member or admin is told so by the route
+ADMINS = REQUESTER
+OWNER_ONLY = PEOPLE  # the server admits only the Owner; a member or admin is told so by the route
 
 
 def _bots(api):
@@ -354,7 +356,7 @@ def _grant_view(bot, access_row, name):
     required=("repository",),
 )
 def repo_show(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     listing = person.get("repositories")
     row = _repo_row(listing, args["repository"])
     if not row:
@@ -412,7 +414,7 @@ GRANT_FLAGS = {
     writes=True,
 )
 def repo_grant(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     bot, access = args["bot"], args.get("access") or "write"
     flags = {k: args[k] for k in GRANT_FLAGS if args.get(k) is not None}
     if access == "read" and any(flags.values()):
@@ -458,7 +460,7 @@ def repo_grant(api, args):
     writes=True,
 )
 def repo_revoke(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     bot, name = args["bot"], str(args["repository"]).strip()
     current = person.get(f"bots/{_path(bot)}/repositories")
     if current["mode"] == "all":
@@ -494,7 +496,7 @@ def repo_revoke(api, args):
     writes=True,
 )
 def repo_refresh(api, args):
-    listing = H._as_person(api).post("repositories/refresh", {}, key=_key(args))
+    listing = _as_person(api).post("repositories/refresh", {}, key=_key(args))
     rows = listing.get("repositories") or []
     return {
         "seen": len(rows),
@@ -512,7 +514,7 @@ def repo_refresh(api, args):
     writes=True,
 )
 def repo_default(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     if not args.get("mode"):
         return {"new_bot_default": person.get("repositories").get("new_bot_default")}
     return person.call("PUT", "repositories/settings", {"new_bot_default": args["mode"]}, key=_key(args))
@@ -527,7 +529,7 @@ def repo_default(api, args):
     writes=True,
 )
 def repo_setup_command(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     name = _listed(person, args["repository"])
     return person.call("PUT", "repositories/" + name, {"setup_command": args["command"]}, key=_key(args))
 
@@ -553,7 +555,7 @@ def _bot_line(bot):
     },
 )
 def health_ready(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     health = person.get("health")
     bots = [b for b in _bots(person) if b.get("state") != "archived"]
     only = {str(b).strip().lower() for b in args.get("bots") or []}
@@ -671,7 +673,7 @@ def health_ready(api, args):
 
 
 # ----------------------------------------------------------------------------- registration
-MINE = H.TOOLS[_FIRST:]
+MINE = TOOLS[_FIRST:]
 AUDIENCE = {
     **{t["name"]: ADMINS for t in MINE},
     **{
@@ -686,8 +688,6 @@ AUDIENCE = {
         )
     },
 }
-H.BY_NAME.update({t["name"]: t for t in MINE})
-H.AUDIENCE.update(AUDIENCE)
 
 
 # ----------------------------------------------------------------------------- the `tico` commands
@@ -864,7 +864,9 @@ def run_command(client, args):
     if not fields["operation_id"]:
         del fields["operation_id"]
     name = "tico_" + args.fn.replace(" ", "_").replace("-", "_")
-    result = H.BY_NAME[name]["fn"](client, fields)
+    from clients import hubtools
+
+    result = hubtools.BY_NAME[name]["fn"](client, fields)
     if args.fn == "github connect" and isinstance(result, dict):
         page = result.pop("page_html", "")
         if getattr(args, "html_file", None):
