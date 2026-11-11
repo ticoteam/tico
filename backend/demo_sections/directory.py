@@ -1,7 +1,7 @@
-"""Library › Directory: the people, organizations and places Acme Lights works with.
+"""Library › Contacts: the people, organizations and places Acme Lights works with.
 
 Places come from the shared places tree, as a hub writes the ones a record refers to (backend/entities/places). Everything
-else goes through the Directory's API as Ana, the way a bot's `tico contacts` calls would: customers, vendors, a law firm
+else goes through the Contacts API as Ana, the way a bot's `tico contacts` calls would: customers, vendors, a law firm
 and a regulator, a person at each, the links between them, a title that changed (so its history shows), two rules toward
 organizations, and notes. Nothing names a real company or person.
 """
