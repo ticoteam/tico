@@ -1,7 +1,7 @@
 """Goals agreed in words: the goal read-back (docs/goals-and-kpis.md; spec chat-first-goals.md).
 
 In the owner's own chat, their Assistant asks Tico to read back up to 20 changes to goals, their measures and the
-Strategy Bot's suggestions (`POST /api/v2/goals/read-back`). Tico writes the message itself, from the changes and what
+Strategy Owner's suggestions (`POST /api/v2/goals/read-back`). Tico writes the message itself, from the changes and what
 is stored now, posts it as the Assistant's reply and stores the exact saves it stands for (event `goal.read_back` on the
 message): each change is one or more steps, a route, a body. A change the owner could not make by their own click here
 (a colour, done or dropped, archiving, a reading, the company Vision) is refused before anything is posted.
@@ -45,7 +45,7 @@ _SAVING = [
     )
 ]
 
-# What stays the owner's click, in the one sentence the Strategy Bot passes on (criterion 12).
+# What stays the owner's click, in the one sentence the Strategy Owner passes on (criterion 12).
 CLICK = {
     "colour": "Nothing was saved: a goal's colour is set by you on the Goals page.",
     "status": "Nothing was saved: marking a goal done or dropped is done by you on the Goals page.",
@@ -243,7 +243,7 @@ def answered(c, who, cited):
 
 # The owner's "no" to a suggestion in their chat (`POST /api/v2/goal-proposals/turned-down`): no read-back and no second
 # yes. The cited message must open with a no; its words are the reason, unless they said only no.
-# A Why is left out: proposing one replaces the Strategy Bot's Why still waiting, which a "no" must not reject.
+# A Why is left out: proposing one replaces the Strategy Owner's Why still waiting, which a "no" must not reject.
 TURN_DOWN_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag")
 # A yes that opens with "no" (no problem, no worries) is not a turn-down; "no problem, leave it" still is.
 _NO_YES = (
@@ -382,7 +382,7 @@ def changed_since(c, back, change, done):
 
 
 def read_back_access(c, auth, raw):
-    """The owner's rights do not widen the Strategy Bot's read access in a read-back."""
+    """The owner's rights do not widen the Strategy Owner's read access in a read-back."""
     owners = []
 
     def goal(gid):
@@ -424,7 +424,7 @@ def read_back_owners(c, auth, owners):
     reader = Identity(G.AUTO_ACTOR, "bot")
     for owner in set(owners):
         if H.is_bot(owner) and not auth.bot_access(c, reader, H.actor_id(owner))["read"]:
-            raise Problem("forbidden", "The Strategy Bot can't see that bot's goals.", 403)
+            raise Problem("forbidden", "The Strategy Owner can't see that bot's goals.", 403)
 
 
 def read_back_access_stored(c, auth, changes, done):

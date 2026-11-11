@@ -2337,12 +2337,12 @@ class Store:
                 from . import groups as Groups
 
                 Groups.migrate(c, self.settings)
-                # The Goal Manager becomes the Strategy Bot on every install, once (backend/strategy_bot.py).
+                # The Goal Manager becomes the Strategy Owner on every install, once (backend/strategy_bot.py).
                 # Idempotent.
                 from . import strategy_bot as StrategyBot
 
                 StrategyBot.migrate(c)
-                # Cards waiting in the owner's earlier Strategy Bot chat move to their Assistant room
+                # Cards waiting in the owner's earlier Strategy Owner chat move to their Assistant room
                 # (backend/assistant.py: one Assistant for everyone). Idempotent.
                 from . import assistant as Assistant
 

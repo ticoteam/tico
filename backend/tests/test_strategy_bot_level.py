@@ -1,8 +1,8 @@
-"""How much the Strategy Bot does (backend/strategy_bot.py, backend/goal_asks.py; spec: Head of Product, Strategy Bot,
+"""How much the Strategy Owner does (backend/strategy_bot.py, backend/goal_asks.py; spec: Head of Product, Strategy Owner,
 tests 3, 4, 8, 14, 16 and 18; v3 10.11). Every install starts at Suggests actions until its owner chooses a level. At
-Passive the Strategy Bot keeps only the regular checks (the KPI pass and the automatic goal colours); only the owner
+Passive the Strategy Owner keeps only the regular checks (the KPI pass and the automatic goal colours); only the owner
 changes the level or turns the regular checks off, on their own click, and each change is kept with who and when. Above
-Passive the Strategy Bot asks for the vision first, asks for its proposed Why lines as one item, starts its Monday note,
+Passive the Strategy Owner asks for the vision first, asks for its proposed Why lines as one item, starts its Monday note,
 and puts at most 5 items a day in a person's Needs you."""
 
 from backend import strategy_bot, strategy_suggest, goals as G, routines
@@ -51,7 +51,7 @@ def test_every_install_starts_at_suggests_actions_and_says_what_each_level_does(
     with_strategy_bot(api, level=None)
     shown = get(api, "strategy-bot")
     assert "on" not in shown and shown["level"] == 2 and shown["level_history"] == []
-    assert shown["regular_checks"] is True and shown["name"] == "Strategy Bot"
+    assert shown["regular_checks"] is True and shown["name"] == "Strategy Owner"
     assert [(lv["level"], lv["name"], lv["ready"]) for lv in shown["levels"]] == [
         (1, "Passive", True),
         (2, "Suggests actions", True),
@@ -63,7 +63,7 @@ def test_every_install_starts_at_suggests_actions_and_says_what_each_level_does(
 
 
 def test_no_chosen_level_is_suggests_actions_and_a_passive_the_owner_chose_stays(api):
-    """With no level stored the Strategy Bot is at Suggests actions, and `proactive` is true. An owner who chose Passive
+    """With no level stored the Strategy Owner is at Suggests actions, and `proactive` is true. An owner who chose Passive
     keeps it: the startup `migrate`, which runs `reconcile`, does not raise it back, and the level it shows is the
     stored one."""
     store = api.app.state.store
@@ -95,7 +95,7 @@ def test_an_owner_who_picks_the_default_keeps_it_as_their_choice(api):
 
 def test_only_the_owner_changes_the_level_and_each_change_is_logged(api):
     """Spec test 18 (v3): the owner picks a level and the change is kept with who and when. No admin or member changes
-    it, no bot, the Strategy Bot included, nor the Assistant acting for the owner."""
+    it, no bot, the Strategy Owner included, nor the Assistant acting for the owner."""
     strategy_token = with_strategy_bot(api, level=None)
     other = bot(api, "ops")
     changed = level(api, 1)
@@ -169,7 +169,7 @@ def test_only_the_owner_turns_the_regular_checks_off_and_off_they_hold_still(api
 
 
 def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_closes_it(api):
-    """Spec test 3: with no vision, the Strategy Bot's first item above Passive asks for it, at the top of the owner's
+    """Spec test 3: with no vision, the Strategy Owner's first item above Passive asks for it, at the top of the owner's
     list, and it closes by itself once a vision is saved. At Passive it is never asked."""
     goal_manager(api)
     post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
@@ -178,7 +178,7 @@ def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_close
     raise_level(api, 2)
     sync(api)
     vision = [a for a in asks(api, OWNER) if a["kind"] == "vision"]
-    assert [(a["title"], a["status"]) for a in vision] == [("Tell your Strategy Bot what this team is for", "open")]
+    assert [(a["title"], a["status"]) for a in vision] == [("Tell your Strategy Owner what this team is for", "open")]
     with api.app.state.store.read() as c:
         mine = H.tasks(c, owner=OWNER, status=H.ACTIVE_STATUSES)
     assert mine[0]["id"] == vision[0]["id"]  # first in the owner's queue
@@ -190,7 +190,7 @@ def test_no_vision_is_the_first_thing_it_asks_above_passive_and_saving_one_close
 
 
 def test_why_proposals_reach_the_owner_as_one_item(api):
-    """Spec tests 4 and 14: the Strategy Bot's Why proposals for several goals are one "These goals need a Why line"
+    """Spec tests 4 and 14: the Strategy Owner's Why proposals for several goals are one "These goals need a Why line"
     item, never one per goal, above Passive; it closes once every one is settled."""
     strategy_token = with_strategy_bot(api, level=2)
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
@@ -216,7 +216,7 @@ def test_why_proposals_reach_the_owner_as_one_item(api):
 
 
 def test_no_daily_limit_in_one_persons_needs_you_most_important_first(api):
-    """Above Passive the Strategy Bot puts everything it has to ask in the person's Needs you at once, the vision first,
+    """Above Passive the Strategy Owner puts everything it has to ask in the person's Needs you at once, the vision first,
     and counts what it asked today per person."""
     strategy_token = with_strategy_bot(api, level=2)
     for n in range(7):

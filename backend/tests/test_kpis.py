@@ -1,5 +1,5 @@
-"""KPIs and the Strategy Bot (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
-arithmetic, a person's override, what the Strategy Bot may not do without a confirm, the migration of
+"""KPIs and the Strategy Owner (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
+arithmetic, a person's override, what the Strategy Owner may not do without a confirm, the migration of
 the old KPI rows and the automatic bot KPIs."""
 
 import sqlite3
@@ -251,7 +251,7 @@ def add_strategy_bot(api):
 
 def owners_chat(api):
     """An Assistant turn in the owner's chat, which is their Assistant like everyone's (backend/assistant.py chat_bot):
-    it acts as the owner, with the Assistant's rights. The Strategy Bot is a helper it hands work to, never this chat."""
+    it acts as the owner, with the Assistant's rights. The Strategy Owner is a helper it hands work to, never this chat."""
     add_strategy_bot(api)
     machine = runner(api)
     assign(api, machine, "coo")
@@ -261,7 +261,7 @@ def owners_chat(api):
 
 
 def goals_session(api):
-    """A Strategy Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
+    """A Strategy Owner turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
     add_strategy_bot(api)
     machine = runner(api)
     for bot in ("ops", "goal-manager"):

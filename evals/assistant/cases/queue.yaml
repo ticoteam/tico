@@ -377,7 +377,7 @@
           - "Release v0.5.20 shipped at 23:00 UTC; its docs task is finished but still open."
         waiting_on_you: {count: 11}
         bots_down: []
-        what_bots_said: "Technical Writer filed 3 docs tasks overnight. Release Manager is waiting on your OK to publish v0.5.0."
+        what_bots_said: "Technical Writer filed 3 docs tasks overnight. Release Owner is waiting on your OK to publish v0.5.0."
     - match: '^needs-you show'
       out: *q_needs
     - match: '^health check'

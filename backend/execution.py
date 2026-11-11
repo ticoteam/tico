@@ -5371,7 +5371,7 @@ class Execution:
                 # place "updates": the recent updates that person may read and open, read now as them
                 # (backend/updates_chat.py). None for every other turn.
                 "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
-                # The owner's earlier Strategy Bot chat is a session of its own (backend/rooms.py).
+                # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
                 "config": rooms.session_config(conv, row["bot_id"], config),
                 # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                 # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).

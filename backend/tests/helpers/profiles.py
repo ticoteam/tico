@@ -16,6 +16,6 @@ def profile_of(c, slug):
 
 
 def put(c, slug, name, **options):
-    """Give an existing bot a profile the way the API does (without the Strategy Bot gate or audit)."""
+    """Give an existing bot a profile the way the API does (without the Strategy Owner gate or audit)."""
     declared = profile_of(c, slug)
     BS.write(c, slug, P.apply(declared, name, options))

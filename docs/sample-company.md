@@ -6,12 +6,12 @@ instead of building a team first. Sample Co sells Brightbook, a small booking ap
 | Bot | Runs on | Its goal | Its first task |
 |---|---|---|---|
 | Assistant | Claude | The owner knows the team and what each bot does | Write a one-page welcome to Sample Co |
-| Head of Product | Claude | Text-message reminders are specified and agreed | Write a one-page brief for the reminders |
+| Product Lead | Claude | Text-message reminders are specified and agreed | Write a one-page brief for the reminders |
 | Builder | ChatGPT | Text-message reminders have a build plan | Plan how to build the reminders (there is no code) |
 | Support Agent | ChatGPT | Every customer question has a reply ready within a day | Draft replies to three made-up customer questions |
 | Content Marketer | ChatGPT | One useful post for salon owners drafted each week | Draft a short post on cutting no-shows |
 
-BotOps, the Librarian and the Strategy Bot are built in as on every Tico, and follow the company's default model.
+BotOps, the Librarian and the Strategy Owner are built in as on every Tico, and follow the company's default model.
 
 These are real bots on the person's own subscriptions, not [demo mode](demo.md). Each first task takes a few minutes,
 puts its result on the task as one comment, and then asks the owner one Yes/No question on the task, **Approve the

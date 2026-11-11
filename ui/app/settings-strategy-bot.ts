@@ -1,4 +1,4 @@
-/* ui/app/settings-strategy-bot.ts — the Strategy Bot's page, Settings tab: "Regular checks" and "How much your Strategy Bot does"
+/* ui/app/settings-strategy-bot.ts — the Strategy Owner's page, Settings tab: "Regular checks" and "How much your Strategy Owner does"
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -85,7 +85,7 @@ async function renderSettingsStrategyBot(): Promise<void> {
 }
 const strategyLevelName = (v: StrategyBotView, level: number): string => v.levels.find(lv => lv.level === level)?.name || 'Level ' + level;
 
-// The Strategy Bot log on its page (backend/strategy_acts.py): each decision it made alone at level 3 and each thing it proposed
+// The Strategy Owner log on its page (backend/strategy_acts.py): each decision it made alone at level 3 and each thing it proposed
 // because it stays the owner's, newest first, with the reason. Only the owner reads it (the page shows it to them
 // alone) and only the owner sees Undo, which asks once before it puts the tasks back. What Undo couldn't restore stays
 // on the entry in plain words. The entries loaded so far, every page of them, are kept on the host: asking to Undo an

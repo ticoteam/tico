@@ -143,7 +143,7 @@ def idea_to_done(r: SoftRig) -> None:
     expect(r.gh.state(1)["queue_state"] == "queued" and r.gh.state(2)["queue_state"] == "queued", "not both queued")
     r.says(e, "In the merge queue")
 
-    # 7. A commit after the OK (scenario 51): GitHub takes PR 2 out; the task stays in Merge, the Release Manager is
+    # 7. A commit after the OK (scenario 51): GitHub takes PR 2 out; the task stays in Merge, the Release Owner is
     # told once, the manager once. Queue again waits for the new commit's checks.
     r.gh.push(2)
     r.settle()
@@ -151,7 +151,7 @@ def idea_to_done(r: SoftRig) -> None:
     r.says(e, "Dropped from the merge queue: A new commit was pushed")
     expect(r.waits(e) == [("bot", RELEASE)], f"the drop waits on {r.waits(e)}")
     removed = [w for w in r.wakes(e, RELEASE) if w[0].startswith("queue_removed")]
-    expect(len(removed) == 1, f"the Release Manager was told {len(removed)} times: {removed}")
+    expect(len(removed) == 1, f"the Release Owner was told {len(removed)} times: {removed}")
     changed = [w for w in r.wakes(e, EM) if w[0].startswith("changed_after_ok")]
     expect(len(changed) == 1, f"the manager was told of the change after the OK {len(changed)} times")
     out = r.queue_again(e)
@@ -422,7 +422,7 @@ def handoff_loop(r: SoftRig) -> None:
 # ----------------------------------------------------------------------------- the merge queue
 @case(
     "queue-removed-three-choices",
-    "GitHub drops a PR: the Release Manager is told once; queue again (refused while red), fix it, or send it back",
+    "GitHub drops a PR: the Release Owner is told once; queue again (refused while red), fix it, or send it back",
     covers=(30,),
 )
 def queue_removed_three_choices(r: SoftRig) -> None:
@@ -447,7 +447,7 @@ def queue_removed_three_choices(r: SoftRig) -> None:
     out = r.queue_again(e)
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while red: {out!r}")
     expect(f"Checks failed on {REF_1}" in out.detail, out.detail)
-    # (b) the Release Manager pushes a fix; while its checks run, still refused; green, queued again.
+    # (b) the Release Owner pushes a fix; while its checks run, still refused; green, queued again.
     r.gh.push(1)
     r.settle()
     out = r.queue_again(e)
@@ -675,7 +675,7 @@ def github_5xx_for_hours(r: SoftRig) -> None:
     expect(("github", None) in r.waits(e), f"an hour of 5xx waits on {r.waits(e)}, not GitHub")
     r.settle(3600 + 10)
     r.says(e, f"GitHub hasn't answered about {REF_1} for 2 hours")
-    expect(r.waits(e) == [("bot", RELEASE)], f"two hours of 5xx wait on {r.waits(e)}, not the Release Manager")
+    expect(r.waits(e) == [("bot", RELEASE)], f"two hours of 5xx wait on {r.waits(e)}, not the Release Owner")
     r.settle(4 * 3600)  # GitHub is back: the read gets through and the wait is GitHub's again
     r.says(e, "In the merge queue")
     r.gh.land_after_s = 0

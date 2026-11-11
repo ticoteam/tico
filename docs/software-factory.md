@@ -19,7 +19,7 @@ those stages.
 | 3 | Builder | `builder` | Owns Build and the Fixes stages: opens the PR, makes every fix, shows what was built |
 | 4 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
 | 5 | Reviewer 2 | `pr-reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
-| 6 | Release Manager | `release-owner` | Owns Merge and Release: sees the PR through the merge queue and into a release |
+| 6 | Release Owner | `release-owner` | Owns Merge and Release: sees the PR through the merge queue and into a release |
 | 7 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
 | 8 | Technical Writer | `docs-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
 | 9 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
@@ -73,7 +73,7 @@ pass. Each review is a Review page for the PR's newest commit, attached to the t
 after a review needs a page for the new head. In Fixes 2 the Builder attaches a page showing what was built, Jev checks
 it and a person OKs it. On entering Merge, Tico queues the PRs in the repository's merge queue
 ([Merge queue](releasing.md#merge-queue)); no bot runs a merge command. If GitHub drops a PR from the queue, the
-Release Manager pushes a fix to the PR's branch or queues it again with `tico task queue <task> --version N`. The task
+Release Owner pushes a fix to the PR's branch or queues it again with `tico task queue <task> --version N`. The task
 leaves Release once the merge is in a published release (a repo that publishes no releases: once merged).
 
 ## Visual specs
@@ -98,7 +98,7 @@ release.
 
 ## What each release carries
 
-The Release Manager keeps one checklist per release:
+The Release Owner keeps one checklist per release:
 - a QA pass for each change people will see
 - the security result
 - the release notes

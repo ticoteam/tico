@@ -562,7 +562,7 @@ class PersonAskLint(HubCase):
             self.assertEqual(H.lint_person_ask(rewrite), [])
 
 
-# ----------------------------------------------------------------------------- the Strategy Bot's old names, dropped
+# ----------------------------------------------------------------------------- the Strategy Owner's old names, dropped
 
 
 class WalLeftForLitestream(unittest.TestCase):

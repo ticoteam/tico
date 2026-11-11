@@ -561,7 +561,7 @@ person). Tests and the rig use `backend/tests/helpers/fake_github.py`.
 
 ### Standings of the Product and Engineering kinds
 
-`owner` is the task's owner (for Merge, the stage owner: Release Manager). A requirement never calls GitHub or Jev.
+`owner` is the task's owner (for Merge, the stage owner: Release Owner). A requirement never calls GitHub or Jev.
 
 ```
 page          no page attached                          not_met  owner   No page attached
@@ -611,7 +611,7 @@ With many PRs the first unmet one, in link order, gives the line.
   "after 3 drops" step: the owner already has the turn.
 - **GitHub down for days:** the facts wait, the stage turns Late after its expected time and the manager bot looks once,
   then a person's list at 3 times the expected time (rig case `github-down-for-days`).
-- **The Release Manager** is the bot the release schedule names, else the first active bot made from `release-owner`.
+- **The Release Owner** is the bot the release schedule names, else the first active bot made from `release-owner`.
   `release-notes` is the Release Notes Writer and never stands in.
 
 ## Tests and the rig

@@ -132,7 +132,7 @@ def test_the_release_schedule_reads_and_changes_and_release_now_answers_why_noth
 
 
 def _releasing(api):
-    """A Delivery pipeline whose Ship stage waits for a release, and ops as the Release Manager."""
+    """A Delivery pipeline whose Ship stage waits for a release, and ops as the Release Owner."""
     stages = [
         {"id": "build", "name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
         {"id": "ship", "name": "Ship", "owner": "assignee", "requirements": [{"kind": "in_release"}]},
@@ -144,7 +144,7 @@ def _releasing(api):
 
 def test_release_now_files_a_task_that_names_no_waiting_work_and_answers_only_what_the_requester_reads(api):
     """Codex review 2, 4 and 9: the release task is company-visible, so it says who asked and their note, never which
-    tasks wait or how many; the Release Manager finds them itself. What a requester is answered, and what the schedule
+    tasks wait or how many; the Release Owner finds them itself. What a requester is answered, and what the schedule
     shows them, counts only the tasks they may read: no total, no "and N more"."""
     import json
 
@@ -173,14 +173,14 @@ def test_release_now_files_a_task_that_names_no_waiting_work_and_answers_only_wh
 
 def test_release_now_is_filed_whether_or_not_anything_waits(api):
     """Codex review 2, 9: "nothing waits" would tell a reader that no hidden task waits either. The request is filed;
-    the Release Manager closes it when nothing does."""
+    the Release Owner closes it when nothing does."""
     _releasing(api)
     answer = post(api, "release/now", {}, token="cara-test")
     assert answer == {"sent": True, "reason": None, "task": answer["task"], "tasks": 0}
 
 
 def test_release_now_names_an_open_release_task_only_to_who_may_read_it(api):
-    """Codex review 2, 8: the Release Manager's open Release task is private to Ana. Cara's Release now is not
+    """Codex review 2, 8: the Release Owner's open Release task is private to Ana. Cara's Release now is not
     filed again, and is not told that task's id."""
     import json
 

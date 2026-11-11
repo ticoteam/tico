@@ -1575,7 +1575,7 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     assert set(LIVE_DEFAULT) <= set(ids)
     seats = {r["title"]: r for r in rows(api, "SELECT id,title,filled_by,closed_at FROM seats")}
     assert seats["QA Owner"]["closed_at"] is None and not seats["QA Owner"]["filled_by"]
-    assert seats["Release Manager"]["filled_by"] == ids["release-manager"]
+    assert seats["Release Owner"]["filled_by"] == ids["release-manager"]
     assert not {"Product Team Manager", "Engineering Team Manager", "Product Owner", "Release Owner"} & set(seats)
     before = (len(rows(api, "SELECT id FROM seats")), len(ids))
     again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())

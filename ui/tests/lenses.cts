@@ -32,7 +32,7 @@ const PHONE = {width: 400, height: 844}, DESKTOP = {width: 1280, height: 900};
 interface Run { id: string; lens: string; name: string; applies_to: string; on_draft: boolean; strategy_n: number | null; status: string; answers: Record<string, unknown>; result: unknown; applied: unknown[]; sharpen_tasks: Record<string, string>; proposal_id: string | null; created_by: string; created_at: string; finished_at: string | null; error: unknown }
 type Sent = [string, string, Record<string, unknown>];
 const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
-const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''})];
+const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''), bot('goal-manager', 'Strategy Owner', 'p:ana', {reports_to: ''})];
 const bets = () => [
   {id: 'b-price', statement: 'Price at half the market and still make money.', why: '', rules_out: 'Premium add-ons.',
    wrong_if: {kind: 'text', text: 'Margin under 25%', check_by: '2027-01-31'}, cites: [], status: 'active', rank: 0, since_n: 1, until_n: null},
@@ -379,7 +379,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       const {page, errors} = await open(browser, {runs, route: '#/strategy/lenses/r-draft'});
       await page.locator('[data-lens-chart="matrix_2x2"]').waitFor();
       assert.match(await page.locator('.lens-meta').innerText(), /^draft\s+\d+ Oct/);
-      assert.match(await page.locator('.lens-meta').innerText(), /Strategy Bot/);
+      assert.match(await page.locator('.lens-meta').innerText(), /Strategy Owner/);
       assert.match(await page.locator('[data-lens-proposal]').innerText(), /^Sent to you as a proposal/);
       assert.equal(await page.locator('[data-lens-proposal] a').getAttribute('href'), '#/tasks?view=foryou');
       assert.equal(await page.locator('[data-lens-change]').count(), 2);

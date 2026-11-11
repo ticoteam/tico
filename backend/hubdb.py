@@ -786,7 +786,7 @@ CREATE TABLE IF NOT EXISTS task_check_models (
   harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', role TEXT NOT NULL, created_by TEXT, created_at TEXT);
 """
 
-# What the Strategy Bot has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
+# What the Strategy Owner has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
 # KPI or proposal, kind and person, naming the task that asks it; append to preserve existing installations.
 GOAL_ASKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS goal_asks (
@@ -834,8 +834,8 @@ CREATE TABLE IF NOT EXISTS compact_first(
   PRIMARY KEY(bot, conversation_id));
 """
 
-# The Strategy Bot's merged asks (backend/strategy_merge.py): each original item in a person's Needs you that one
-# Strategy Bot item stands for, and what became of it.
+# The Strategy Owner's merged asks (backend/strategy_merge.py): each original item in a person's Needs you that one
+# Strategy Owner item stands for, and what became of it.
 STRATEGY_MERGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_merges (
   merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
@@ -846,7 +846,7 @@ CREATE INDEX IF NOT EXISTS strategy_merges_original ON strategy_merges(original,
 CREATE INDEX IF NOT EXISTS strategy_merges_person ON strategy_merges(person, created_at);
 """
 
-# The Strategy Bot log (backend/strategy_acts.py): each decision it made alone at level 3, or each thing it proposed
+# The Strategy Owner log (backend/strategy_acts.py): each decision it made alone at level 3, or each thing it proposed
 # because it stays the owner's, and its Undo. Every task event one decision (or its Undo) wrote carries its action id.
 STRATEGY_ACTIONS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_actions (
@@ -6116,7 +6116,7 @@ def task_update(
     if rank is not None:
         sets.append("rank=:rank")
         args["rank"] = float(rank)
-        # A queue move writes no event of its own, except on a task a Strategy Bot decision changed: its Undo keeps a
+        # A queue move writes no event of its own, except on a task a Strategy Owner decision changed: its Undo keeps a
         # later move, even one back to the same place (backend/strategy_acts.py).
         if float(rank) != row.get("rank") and _strategy_changed(conn, task_id):
             _task_event(conn, task_id, actor, "rank", row.get("rank"), float(rank), note or "")
@@ -6362,7 +6362,7 @@ def history_event(
 
 def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None, data=None):
     """One row of a task's history; returns its id."""
-    # A Strategy Bot decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
+    # A Strategy Owner decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
     from .strategy_acts import ACTION
 
     return history_event(
@@ -6382,7 +6382,7 @@ def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None
 
 
 def _strategy_changed(conn, task_id):
-    """Whether a Strategy Bot decision (or its Undo) is writing this task now or has changed it before."""
+    """Whether a Strategy Owner decision (or its Undo) is writing this task now or has changed it before."""
     from .strategy_acts import ACTION
 
     return bool(ACTION.get()) or bool(

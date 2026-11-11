@@ -1,4 +1,4 @@
-"""What a person's chat bot has learned, in two layers (backend/learned.py; spec: Strategy Bot v3, sections 10.7 and
+"""What a person's chat bot has learned, in two layers (backend/learned.py; spec: Strategy Owner v3, sections 10.7 and
 10.9 test 29): the company layer only the owner reads and changes, and only their Assistant uses in the owner's chat; a
 personal layer per person that nobody else reads, the owner and admins included. Teaching happens in the person's own
 chat, and each turn there is handed both layers as they are when it starts, so an entry deleted now is gone from the
@@ -53,7 +53,7 @@ def test_only_the_owner_reads_and_changes_the_company_layer(api):
         learn(api, "Hiring news first", "company", token, expected=403)
         call(api, "PATCH", f"assistant/learned/{entry['id']}", {"text": "Hiring first"}, token, expected=404)
         call(api, "DELETE", f"assistant/learned/{entry['id']}", None, token, expected=404)
-    # Without its Strategy Bot there is no company layer, for the owner either.
+    # Without its Strategy Owner there is no company layer, for the owner either.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='archived' WHERE slug='goal-manager'")
     assert get(api, "assistant/learned")["company"] is None
@@ -164,7 +164,7 @@ def test_the_owners_assistant_learns_both_layers_in_the_owners_chat_and_nowhere_
     again = claim_turn(api, r, "coo", "ana-test", "What's the top update today?")
     assert again["learned"]["company"]["taught"] == ["Launches matter more than hiring news"]
     finish(api, r, again)
-    # The Strategy Bot's goals session (a bot's message) is handed neither layer, and it reads none on its own.
+    # The Strategy Owner's goals session (a bot's message) is handed neither layer, and it reads none on its own.
     post(api, "chat/ops", {"text": "Check the launch goal"})
     ops = post(api, "jobs/claim", {"bot": "ops"}, token=r["token"])["attempt"]
     post(
@@ -195,7 +195,7 @@ def test_an_owner_who_hands_ownership_on_keeps_their_layer_and_the_company_layer
 
 
 def test_without_the_strategy_bot_the_owners_assistant_has_no_company_layer(api):
-    # The company layer comes with the Strategy Bot: before it, the owner's Assistant turn is handed none and may not
+    # The company layer comes with the Strategy Owner: before it, the owner's Assistant turn is handed none and may not
     # add to it; her own layer is hers either way.
     r = runner(api)
     assign(api, r, "coo")

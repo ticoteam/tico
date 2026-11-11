@@ -377,7 +377,7 @@ legal rules are one user of it.
 
 ### 5. General Counsel
 
-- Counsel is a hidden helper next to BotOps, the Strategy Bot and the Librarian (`backend/assistant.py`
+- Counsel is a hidden helper next to BotOps, the Strategy Owner and the Librarian (`backend/assistant.py`
   `HELPERS`), because of One Assistant (Oct 29): people have one chat.
 - What people see:
   - "Can I text this list?" or "We signed Gusto, contract's in Files" goes to the Ask panel, and the Assistant hands

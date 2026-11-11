@@ -62,7 +62,7 @@ const assistantBot = (): string => S.config.assistant_bot || CONFIG_DEFAULTS.ass
 const COUNSEL_BOT = 'tico-counsel';
 // The group the server keeps the built-in bots in (backend/groups.py BUILT_IN): Tico's own, collapsed on the team chart.
 const BUILT_IN_GROUP = 'built-in';
-// The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, Counsel and the Brand Owner are built
+// The assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Bookkeeper, Counsel and the Brand Owner are built
 // in to every team: pause and rename them, never archive or delete. They sit in the Built-in group of the team chart, which
 // nobody drags them out of; their settings are Settings > Bots and their bot page's Settings.
 const isBuiltInBot = (slug: string): boolean => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager' || slug === 'bookkeeper' || slug === COUNSEL_BOT || slug === 'brand';
@@ -71,17 +71,18 @@ const isBuiltInBot = (slug: string): boolean => slug === assistantBot() || slug 
 const ASSISTANT_HELPERS = ['botops', 'goal-manager', 'librarian', COUNSEL_BOT];
 // The slug may be absent (thread-call.js passes an employee's name, which the type leaves optional): an absent one is no helper.
 const isAssistantHelper = (slug: string | undefined): boolean => slug !== undefined && ASSISTANT_HELPERS.includes(slug);
-// The Strategy Bot (backend/strategy_bot.py, slug goal-manager) is on every install, by the name the owner gave it,
+// The Strategy Owner (backend/strategy_bot.py, slug goal-manager) is on every install, by the name the owner gave it,
 // else
-// "Strategy Bot". An install that has not started the new server yet still stores its older default names ("CEO Bot",
-// "Goal Manager"), so those read as the default too.
-const strategyDefaultName = (): string => 'Strategy Bot';
-const strategyDefaultish = (name: string): boolean => !name || name === 'Goal Manager' || name === 'CEO Bot';
+// "Strategy Owner". An install that has not started the new server yet still stores its older default names ("CEO Bot",
+// "Goal Manager", "Strategy Bot"), so those read as the default too.
+const strategyDefaultName = (): string => 'Strategy Owner';
+const strategyDefaultish = (name: string): boolean =>
+  !name || name === 'Goal Manager' || name === 'CEO Bot' || name === 'Strategy Bot';
 const strategyBotName = (): string => {
   const name = String(botRow('goal-manager')?.display_name || '').trim();
   return strategyDefaultish(name) ? strategyDefaultName() : name;
 };
-// Everyone's chat is their Assistant, the owner's too (backend/assistant.py): the Strategy Bot is a helper it asks.
+// Everyone's chat is their Assistant, the owner's too (backend/assistant.py): the Strategy Owner is a helper it asks.
 const myChatBot = (): string => assistantBot();
 const myChatName = (): string => assistantName();
 const companyName = (): string => S.config.company_name || appName();

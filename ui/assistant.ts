@@ -136,7 +136,7 @@ interface Window {
     const shown = (v: unknown): string => { const t = typeof v === 'string' ? v : JSON.stringify(v); return t.length > 160
       ? `<details class="asst-long"><summary>${esc(t.slice(0, 120))}… <span>Show more</span></summary>${esc(t)}</details>` : esc(t); };
     const by = action.proposer || action.proposed_via || '';
-    // A card the Strategy Bot put in the owner's earlier chat with it names it (`by_name`), never "the Assistant".
+    // A card the Strategy Owner put in the owner's earlier chat with it names it (`by_name`), never "the Assistant".
     const names: Record<string, string> = {assistant: assistantName || 'The Assistant', botops: 'BotOps'};
     const name = action.by_name || names[by] || 'A bot';
     const what = String(action.description || '').trim(), plain = what && !RAW_TITLE.test(what);

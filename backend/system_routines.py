@@ -209,7 +209,7 @@ ACTIONS = {
     "tell_setup_stuck": ("tell a person about a bot stuck in setup", ("setup", "remind")),
     "check_release": ("check for a new Tico release", ("release", "update")),
     "ask_release": (
-        "ask the Release Manager for a release at the daily release hour",
+        "ask the Release Owner for a release at the daily release hour",
         ("release", "schedule", "daily"),
     ),
     "fetch_feeds": ("fetch subscribed updates", ("feeds", "updates")),
@@ -252,7 +252,7 @@ ACTIONS = {
         ("webhooks", "computers", "support", "screening", "deadline"),
     ),
     "start_strategy_note": (
-        "start or pause the Strategy Bot's Monday note to match its level",
+        "start or pause the Strategy Owner's Monday note to match its level",
         ("strategy", "note", "monday"),
     ),
     "read_cloud_access": (
@@ -345,7 +345,7 @@ def _pages_watched(c, settings):
 
 
 def _release_manager(c, settings):
-    # The daily release asks the Release Manager (release_schedule_routes.release_manager); with none, it has no one to ask.
+    # The daily release asks the Release Owner (release_schedule_routes.release_manager); with none, it has no one to ask.
     from . import release_schedule_routes
 
     return release_schedule_routes.release_manager(c) is not None
@@ -564,7 +564,7 @@ JOBS = [
     Job(
         "release_hour",
         "Daily release",
-        "At each hour the release schedule names, asks the Release Manager for a release as Release now does: one "
+        "At each hour the release schedule names, asks the Release Owner for a release as Release now does: one "
         "Release task, or its unfinished one. Each hour fires once.",
         HOUSEKEEPING,
         "At the release hours",
@@ -697,7 +697,7 @@ JOBS = [
     Job(
         "strategy_note",
         "Strategy note check",
-        "Starts the Strategy Bot's Monday note once its level is above Passive, and pauses it at Passive.",
+        "Starts the Strategy Owner's Monday note once its level is above Passive, and pauses it at Passive.",
         CHECKS,
         "Hourly",
         3600,

@@ -18,7 +18,7 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)",
+            "VALUES('goal-manager','goal-manager','Strategy Owner','','active',?)",
             (H.now(),),
         )
         if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('goal-manager','ana')").rowcount:

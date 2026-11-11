@@ -41,7 +41,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Arrange your own landing page | Company → Mine (`#/home`) ([Company](overview.md#my-dashboard)) |
 | See rules or goals on the team chart, by bot | Company → Graph (`#/overview/graph`, `?view=goals` for goals) ([Company](overview.md#graph)) |
 | Open a page full size | Tap its card, or `#/page/<id>` ([Pages](pages.md)) |
-| Read or write the team's strategy, publish a version | Company → Strategy (`#/strategy`); the owner writes and publishes, the Strategy Bot proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
+| Read or write the team's strategy, publish a version | Company → Strategy (`#/strategy`); the owner writes and publishes, the Strategy Owner proposes ([Strategy](strategy.md)); Lenses on that page run a framework against it ([Lenses](lenses.md)) |
 | See the market, its map, or ask the Librarian about it | Company → Strategy → Market (`#/strategy/market`; `#/market` redirects there); **Open map** for the graph |
 | See growth numbers and their sources, or marketing tasks | Company → Growth (`#/growth`; Sources is a link on the page, or in Settings for the owner and admins) ([Growth](growth.md)). Marketing tasks are on the Tasks page, type Marketing |
 | Review goals and KPIs | Goals; a goal's **Bet** picker links it to a strategy bet |
@@ -52,7 +52,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 All four system bots appear as **Built-in** in Settings > Bots. Neither Assistant nor BotOps has a rail entry: **Tico Assistant**
 (the sidebar's bottom row, ⌘J; **Assistant**, the phone's middle tab) opens your Assistant over any page except the Assistant page and setup, even while the signed-out banner shows, `#/assistant`
 opens it full page, and the Assistant hands BotOps what needs BotOps;
-the Strategy Bot is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The Strategy Bot is at the top of the team chart; the other three stay out of it.
+the Strategy Owner is on Goals and proposes Strategy, and Ask the Librarian is on Docs and on Strategy's Market tab. The Strategy Owner is at the top of the team chart; the other three stay out of it.
 Inbox Manager and other repeating message work appear under **Message bots**.
 An older app may show Instructions under the bot's Docs tab; the action is still **Edit Instructions**.
 Removing a Computer revokes its registration and leaves its local files and bots in place.

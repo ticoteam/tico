@@ -1,18 +1,18 @@
-"""The Strategy Bot's merged asks (docs/goals-and-kpis.md, "Your Strategy Bot"; spec: Head of Product, Strategy Bot,
+"""The Strategy Owner's merged asks (docs/goals-and-kpis.md, "Your Strategy Owner"; spec: Head of Product, Strategy Owner,
 test 13).
 
-At level 2 and 3, when several bots ask a person the same question, the Strategy Bot files one item for all of them: a
+At level 2 and 3, when several bots ask a person the same question, the Strategy Owner files one item for all of them: a
 task for the person in General, with one question on it (an answer from them, `H.task_ask`), that names every
 original. An original is a bot's open question to the person on its own task (a requirement of kind `answer` that
 names them; never an OK, which is the person's own click on what it lets go). The originals stay as they were for the
-bots that asked, but leave the person's Needs you (`hidden`) while the merged item is open. The Strategy Bot decides
+bots that asked, but leave the person's Needs you (`hidden`) while the merged item is open. The Strategy Owner decides
 what counts as the same question; the server checks only that each original is still asked of that person now.
 
 The person answers the merged item once, and `on_answer` passes the answer to every original that is still asked: as
 their answer to it (`H.task_answer`, as them), which wakes the bot that asked. Then the merged item is done.
 
 Nothing is dropped: an original whose answer can't be passed on, or every original of a merged item that ends without an
-answer, is back in the person's Needs you as it was. A merged item counts in what the Strategy Bot asked today
+answer, is back in the person's Needs you as it was. A merged item counts in what the Strategy Owner asked today
 (backend/strategy_bot.py `asked_today`)."""
 
 from . import strategy_bot
@@ -59,7 +59,7 @@ def _current(c, link):
 
 
 def hidden(c, person):
-    """The questions (requirement ids) the Strategy Bot merged for this person that stay out of their Needs you: while
+    """The questions (requirement ids) the Strategy Owner merged for this person that stay out of their Needs you: while
     the merged item is open and the original is still asked as it was when merged."""
     return {link["ask_id"] for link in _hidden_links(c, person)}
 
@@ -108,7 +108,7 @@ def originals(c, merged_into):
 
 def merge(c, actor, person, title, question, task_ids):
     """File one item for `person` standing for the bots' questions to them on the tasks in `task_ids`. Only the
-    Strategy Bot, only at level 2 or 3, and only within its 5 a day for that person."""
+    Strategy Owner, only at level 2 or 3, and only within its 5 a day for that person."""
     from . import strategy_suggest
 
     if actor != STRATEGY_BOT:
@@ -172,7 +172,7 @@ def _settle(c, merged_into, original, state, note):
 
 
 def on_answer(c, actor, task_id, value):
-    """The person answered the question on a merged item (after `H.task_answer` on a task the Strategy Bot filed):
+    """The person answered the question on a merged item (after `H.task_answer` on a task the Strategy Owner filed):
     their answer goes to every original still asked of them, as their own answer there, and the merged item is done.
     One that is not asked any more is back to how it was, with the reason kept. Anything else is left alone."""
     row = H.task(c, task_id)

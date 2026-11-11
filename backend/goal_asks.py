@@ -1,10 +1,10 @@
-"""What the Goals page needs from a person, as tasks the Strategy Bot asks (docs/goals-and-kpis.md, "Needs you").
+"""What the Goals page needs from a person, as tasks the Strategy Owner asks (docs/goals-and-kpis.md, "Needs you").
 
 Only above Passive (backend/strategy_bot.py `proactive`): at Passive, `sync` files nothing new and Needs you shows only
 what was already asked. A task filed before stays until it is resolved, as below.
 
 Three things wait on a person: a KPI off track (red) on a goal they own, the measures they keep whose reading is out of
-date (stale or missing), and a proposal to confirm or reject. Each is one task, requested by the Strategy Bot and owned
+date (stale or missing), and a proposal to confirm or reject. Each is one task, requested by the Strategy Owner and owned
 by the person who must act, so it shows in Tasks and Decide like any other ask. One per KPI off track or per proposal,
 kind and person (`goal_asks`), never two. A person's out-of-date measures are one ask for all of them, listing each, as
 their Why lines are. `sync` files what is new and closes what is resolved: a fresh reading, a KPI back on track, a
@@ -12,8 +12,8 @@ proposal decided, or the thing now someone else's. A task the person closed whil
 alone, and asked again only once the cause has cleared and come back.
 
 Two more wait on a person: the company's vision, while it is empty (one ask to the environment owner, first in their
-list), and the Why lines the Strategy Bot proposed (one bundled ask per person who decides them, never one per goal).
-Asks are filed most important first (`ORDER`). At level 2 and 3 a recovery the Strategy Bot proposes for a goal
+list), and the Why lines the Strategy Owner proposed (one bundled ask per person who decides them, never one per goal).
+Asks are filed most important first (`ORDER`). At level 2 and 3 a recovery the Strategy Owner proposes for a goal
 (backend/strategy_suggest.py) is its own item, with its options, and takes the place of asking that goal's owner why a
 KPI is off track.
 
@@ -204,7 +204,7 @@ def wanted(conn, owner_id, at=None, reads=None):
                 continue  # they may not add a measure they may not read (goal-proposals decide)
             if used:
                 item["measure_name"] = used["name"]  # an Add a KPI that reuses a measure names it
-            # A bot's goal or measure named in the ask is its activity: the ask is the person's and the Strategy Bot's.
+            # A bot's goal or measure named in the ask is its activity: the ask is the person's and the Strategy Owner's.
             if p["kind"] in GOAL_KINDS and any(H.is_bot(r["owner_id"]) for r in (goal, record, used) if r):
                 item["private"] = True
             items.append(item)
@@ -251,7 +251,7 @@ def _change(p, kpi_name):
 
 
 def urgent(item):
-    """A card a tripped bet or a publish brought: filed now, at every level, outside the Strategy Bot's 5 a day. Trips
+    """A card a tripped bet or a publish brought: filed now, at every level, outside the Strategy Owner's 5 a day. Trips
     are rare (once per bet per version) and a wrong bet should not wait a day."""
     p = item.get("proposal") or {}
     return item.get("kind") == "proposal" and (
@@ -424,7 +424,7 @@ def _relist(conn, task, item):
     changes = {}
     if task["body"] != body:
         changes["body"] = body
-    # The title the Strategy Bot wrote follows the list; a title a person wrote stays.
+    # The title the Strategy Owner wrote follows the list; a title a person wrote stays.
     ours = str(task["title"]).startswith(BUNDLED_TITLES)
     if ours and task["title"] != title and not (H.TITLE_LINT == "refuse" and H.lint_title(title)):
         changes["title"] = _free_title(conn, task["owner_id"], title)
@@ -489,7 +489,7 @@ def sync(conn, owner_id, at=None, reads=None):
         return {"created": [], "closed": []}
     # at Passive nothing new is filed; what was asked still closes when resolved
     asks = strategy_bot.proactive(conn)
-    # Only someone on the roster: a refused ask counts against the Strategy Bot (rule 8), every hour.
+    # Only someone on the roster: a refused ask counts against the Strategy Owner (rule 8), every hour.
     want = {
         (i["kind"], i["ref"], i["owner"]): i
         for i in wanted(conn, owner_id, at, reads)
@@ -499,7 +499,7 @@ def sync(conn, owner_id, at=None, reads=None):
     created, closed = [], []
     # A bundled ask is one person's: another person's ask of the same kind is not where this one went.
     moved = {(kind, ref): owner for kind, ref, owner in want if kind not in BUNDLED}
-    room = {}  # each person's room left today in the Strategy Bot's 5 a day
+    room = {}  # each person's room left today in the Strategy Owner's 5 a day
 
     def has_room(owner):
         if not asks:
@@ -547,7 +547,7 @@ def sync(conn, owner_id, at=None, reads=None):
         with isolated(conn, "goal_ask_file", ":".join(key)):
             title, body = _ask(conn, item, strategy_bot.name(conn))
             if H.TITLE_LINT == "refuse" and H.lint_title(title):
-                # A KPI name the title lint refuses would be refused, and counted against the Strategy Bot, every hour.
+                # A KPI name the title lint refuses would be refused, and counted against the Strategy Owner, every hour.
                 log.warning("Not asking %s: the title lint refuses its KPI's name", item["owner"])
                 continue
             made = H.task_create(

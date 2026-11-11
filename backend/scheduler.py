@@ -659,7 +659,7 @@ class Scheduler:
                     with locked("goal_colour:" + goal_id) as c:
                         G.refresh(c, [goal_id])
                 run.did("Done")
-            # The Strategy Bot's Monday note: started once above Passive, paused at Passive (backend/strategy_bot.py
+            # The Strategy Owner's Monday note: started once above Passive, paused at Passive (backend/strategy_bot.py
             # `reconcile`).
             with SR.recording(self.store, "strategy_note", failures, "strategy_bot") as run:
                 from . import strategy_bot
@@ -787,7 +787,7 @@ class Scheduler:
                 thread_rank.tick(self.store, stamp(at))
             except Exception as exc:
                 failures.append({"thread_rank": type(exc).__name__})
-        # The daily release hour (backend/release_hour.py): a routine on the Release Manager, once per slot. A read
+        # The daily release hour (backend/release_hour.py): a routine on the Release Owner, once per slot. A read
         # on every pass; the write lock only when a slot is due and has not fired.
         with SR.recording(self.store, "release_hour", failures) as run:
             from . import release_hour

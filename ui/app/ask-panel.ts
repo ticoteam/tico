@@ -3,7 +3,7 @@
 'use strict';
 
 // Ask (docs/assistant.md). The one way in to the Assistant ("Tico Assistant" here), to the helpers behind it (BotOps,
-// the Strategy Bot, the Librarian). The Tico team has its own chat (ui/support.ts), opened by the ? beside Search. On a computer the "Tico Assistant" row at the bottom of the sidebar
+// the Strategy Owner, the Librarian). The Tico team has its own chat (ui/support.ts), opened by the ? beside Search. On a computer the "Tico Assistant" row at the bottom of the sidebar
 // (or ⌘J) opens a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot in the middle of the tab bar opens it as a sheet over
 // the page, and closes it again. It is the same conversation as the Assistant page (#/assistant): GET /v2/assistant
 // reads it and POST /v2/assistant/messages sends with the page the person is on (`page`), so the turn knows what "this"

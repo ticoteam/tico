@@ -382,7 +382,7 @@ def answer(
         from . import strategy_merge
 
         merged: Any = strategy_merge
-        # A person's answer on an item the Strategy Bot merged is their answer to every original still asked of them,
+        # A person's answer on an item the Strategy Owner merged is their answer to every original still asked of them,
         # and the item is done. Any other task is left alone.
         if merged.on_answer(conn, by, task_id, value):
             out = E.task(conn, task_id) or out

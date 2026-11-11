@@ -584,7 +584,7 @@ def test_read_back_refuses_goals_measures_and_suggestions_the_strategy_bot_canno
     suggestion = propose(api, "goal_kpi", {"kpi_id": kpi["id"]}, public["id"])
     strategy_bot(api)
     as_bot(api, "goal-manager", "strategy-test")
-    # The Strategy Bot itself is refused the private bot's work; the owner's
+    # The Strategy Owner itself is refused the private bot's work; the owner's
     # Assistant must preserve that boundary when it asks Tico for a read-back.
     get(api, "status?bot=inbox", "strategy-test", expected=404)
     get(api, "status?bot=ops", "strategy-test")
@@ -599,7 +599,7 @@ def test_read_back_refuses_goals_measures_and_suggestions_the_strategy_bot_canno
     before = room_messages(api)
     for change in changes:
         refused = read_back(api, attempt, change, expected=403)
-        assert refused["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+        assert refused["error"]["detail"] == "The Strategy Owner can't see that bot's goals."
         assert "Private inbox" not in str(refused)
         assert room_messages(api) == before
     assert get(api, "goals/" + hidden["id"])["goal"]["title"] == "Private inbox objective"
@@ -664,7 +664,7 @@ def test_read_back_cannot_be_read_or_saved_after_strategy_bot_read_access_is_rev
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
     denied = get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403)
-    assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+    assert denied["error"]["detail"] == "The Strategy Owner can't see that bot's goals."
     save(api, attempt, back["changes"][0]["steps"][0], expected=403)
     assert get(api, "goals/" + row["id"])["goal"]["title"] == "Publish the guide"
 
@@ -683,7 +683,7 @@ def test_stored_read_back_keeps_access_checks_for_the_old_parent_it_named(api):
     with api.app.state.store.transaction() as c:
         restrict(c, "finance", people=["ana"])
     denied = get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403)
-    assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+    assert denied["error"]["detail"] == "The Strategy Owner can't see that bot's goals."
 
 
 def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
@@ -823,7 +823,7 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
     ):
         assert denied["error"] == {
             "code": "forbidden",
-            "detail": "The Strategy Bot can't see that bot's goals.",
+            "detail": "The Strategy Owner can't see that bot's goals.",
             "retryable": False,
         }
         assert "Private revised words" not in str(denied) and "inbox" not in str(denied)

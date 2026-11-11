@@ -2009,7 +2009,7 @@ def count_unread(c, actor, readable, kind=None, meetings=False):
 
 
 def off_tree():
-    """The built-in bots the Updates tree leaves out: the Assistant's helpers (BotOps, the Strategy Bot, the
+    """The built-in bots the Updates tree leaves out: the Assistant's helpers (BotOps, the Strategy Owner, the
     Librarian), the Task Manager and the Bookkeeper. Nobody talks to them and they are not on the org chart."""
     from . import assistant, bookkeeper, task_manager
 

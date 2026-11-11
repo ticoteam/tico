@@ -98,7 +98,7 @@ class World:
             release_repo=REPO,
             test_identities={
                 "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
-                # The Release Manager ships between its turns, signed in as an agent.
+                # The Release Owner ships between its turns, signed in as an agent.
                 "release-test": Identity("bot:release-manager", "bot", agent="hermes"),
             },
         )
@@ -117,7 +117,7 @@ class World:
             for slug, config in bots.items():
                 c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES(?,?,?)", (slug, "engineering", "ana"))
                 bot_settings.write(c, slug, config)
-            if "release-manager" in bots:  # signed in as an agent, as an external Release Manager is
+            if "release-manager" in bots:  # signed in as an agent, as an external Release Owner is
                 c.execute(
                     "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) "
                     "VALUES('release-manager','hermes','x-release',?,'human:ana')",

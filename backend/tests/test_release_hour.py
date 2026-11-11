@@ -1,4 +1,4 @@
-"""The daily release hour (backend/release_hour.py): a routine on the Release Manager that does what Release now does,
+"""The daily release hour (backend/release_hour.py): a routine on the Release Owner that does what Release now does,
 once per slot, across restarts and clock jumps."""
 
 import json
@@ -22,7 +22,7 @@ def zone_at(hour, minute=0, days=0):
 
 
 def setup(api, manager=True, waiting=True, on=True):
-    """A 10:00 release hour; `manager`: Release Manager ops; `waiting`: one task in a stage that waits for a release."""
+    """A 10:00 release hour; `manager`: Release Owner ops; `waiting`: one task in a stage that waits for a release."""
     with api.app.state.store.transaction() as c:
         X.bot(c, "ops")
         if waiting:
@@ -77,7 +77,7 @@ def test_the_hour_fires_once_and_a_restart_or_a_clock_jumped_back_does_not_fire_
 
 def test_with_nothing_waiting_the_slot_still_files_one_task(api):
     """The Release task is filed whether or not anything waits (request_now), so the hour never says whether hidden
-    work waits; the Release Manager closes it when nothing does."""
+    work waits; the Release Owner closes it when nothing does."""
     setup(api, waiting=False)
     tick(api, zone_at(10, 1))
     tick(api, zone_at(10, 2))
@@ -154,4 +154,4 @@ def test_the_release_manager_is_found_by_the_release_owner_template_never_the_no
             c.execute("UPDATE bot_settings SET template=? WHERE bot_id=?", (template, slug))
         assert RS.release_manager(c, {"bot": ""}) == "rm"
         c.execute("UPDATE bots SET state='archived' WHERE id='rm'")
-        assert RS.release_manager(c, {"bot": ""}) is None  # a Release Notes Writer is not the Release Manager (D1)
+        assert RS.release_manager(c, {"bot": ""}) is None  # a Release Notes Writer is not the Release Owner (D1)

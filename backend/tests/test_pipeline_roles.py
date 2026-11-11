@@ -101,13 +101,13 @@ def test_a_role_bot_that_appears_later_takes_its_stages_from_the_stand_in(enviro
     staffed = _staffing(_restart(environment))["engineering"]
     assert staffed[0] == "engineering-manager"
     assert staffed[1]["engineering-review-1"] == "reviewer-1"
-    # Still no second reviewer nor Release Manager: their stages go to the new manager.
+    # Still no second reviewer nor Release Owner: their stages go to the new manager.
     assert staffed[1]["engineering-review-2"] == staffed[1]["engineering-merge"] == "engineering-manager"
     assert all(staffed[1][stage] == "builder" for stage in BUILDER_STAGES)
 
 
 def test_a_new_company_on_the_default_chart_is_staffed_while_its_release_manager_is_planned(environment):
-    """The default chart's live seats start planned until BotOps sets them up; the Release Manager is found then too."""
+    """The default chart's live seats start planned until BotOps sets them up; the Release Owner is found then too."""
     api = environment()
     done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text

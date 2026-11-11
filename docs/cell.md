@@ -340,7 +340,7 @@ python3 -m setup cell route list --json
 
 A company updates through the same contract as a hosted install's updater sidecar (`docker/updater.py`): its server
 calls `POST /update` and `GET /status` at `TICO_UPDATER_URL` with the token in `/control/updater-token`. So Update now,
-an update service key (the Release Manager's rollout), Tico support's idle-time target, the `system.update` events and
+an update service key (the Release Owner's rollout), Tico support's idle-time target, the `system.update` events and
 Health's Version line work unchanged. The answers, states and 409s are the sidecar's; `GET /diagnostics` has
 `"mode": "cell"` and a `note` when the host's core lags. The reference implementation is `setup/cell_updater.py`.
 

@@ -597,7 +597,7 @@ Stages: To do → Done · Closed
 - **Done.** When the bot says done, it is Done. Nobody checks it. You can reopen it with a note.
 
 Roles are found by the seat's template, never by a name: Product Manager, Engineering Manager, Builder, Reviewer 1,
-Reviewer 2 and Release Manager. A software company has all six live. The person on a people OK is the first person
+Reviewer 2 and Release Owner. A software company has all six live. The person on a people OK is the first person
 above the pipeline's manager bot on the org chart, else the org owner. Product and Engineering are made for a company
 that answers yes to "Do you build software?" (a blank answer is yes); an untouched pair is retired when it answers no.
 
@@ -632,12 +632,12 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   hours.
 - **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built. Jev checks it, then **a
   person OKs it**. Expected time: 4 hours.
-- **Merge.** Owner: Release Manager. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
+- **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
   back to Fixes 2 when the fault needs the Builder. A commit pushed in Merge does not send the task back through Review:
   the merge queue's checks are the gate.
-- **Release.** Owner: Release Manager. To leave: In a release. Can't be pushed past. Expected time: 1 day.
+- **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day.
 
 Also:
 
@@ -809,7 +809,7 @@ late. Nothing depends on the exact 10 seconds.
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
   commit), Tico saves why and which check failed, PR merged says "Dropped from the merge queue: <reason>", and the
-  owner is told once. Tico never queues it again by itself. The owner (the Release Manager, who may push to PR
+  owner is told once. Tico never queues it again by itself. The owner (the Release Owner, who may push to PR
   branches) queues it again (`tico task queue`), after pushing its own fix if one is needed, or sends the task back to
   Fixes 2. Queuing again is refused while the PR's own checks on its newest commit are running or failing, with the
   reason. A commit pushed in Merge keeps the task in Merge: the reviews of the earlier commit stand for this visit.
@@ -1430,7 +1430,7 @@ Each feature that exists today, and where it goes.
 - **D10.** GitHub check runs that mirror a task's requirements on its PR.
 - **D11.** Factories and their output counts.
 - **D12.** Waiting for a free worktree. It shows as Paused, with that reason.
-- **D13.** The daily release hour and Release now. A routine on the Release Manager.
+- **D13.** The daily release hour and Release now. A routine on the Release Owner.
 
 ### Folded in: the engine or the check does it
 
@@ -1593,7 +1593,7 @@ Numbered in order so they can be cited (scenario 1 to 52).
 27. Production runs an older version than the release: Jev says "not yet". Nothing is filed.
 28. A new commit lands during Review: the review goes back to Waiting on the reviewer.
 29. A task has two PRs and one merges: it stays in Merge. Both merge: it moves.
-30. The merge queue drops a PR: the task stays in Merge, and it is the Release Manager's turn with the reason.
+30. The merge queue drops a PR: the task stays in Merge, and it is the Release Owner's turn with the reason.
 31. Close an Engineering task in Merge: its PRs leave the queue and never merge.
 32. A stale PR read arrives after a newer one: the recorded commit doesn't change.
 33. A PR merges after a release is cut: the task stays in Release until a release that contains the merge.

@@ -13,8 +13,8 @@ person on its people OKs from `resolve`, and `ensure_presets` fills a still-empt
   Reviewer 2 is then the second `pr-reviewer` bot.
 - Every pipeline's manager shares `pipeline-manager`, so a Pipeline Manager is the bot of that template whose slug is
   its chart id (`product-pipeline-manager`, `engineering-pipeline-manager`; a live seat's bot gets it at go-live).
-- Release Manager is `release_schedule_routes.release_manager`: the same bot the release hour runs on. That one must be
-  active, so until a Release Manager is set up (a live seat's bot starts planned) it is found like any other role.
+- Release Owner is `release_schedule_routes.release_manager`: the same bot the release hour runs on. That one must be
+  active, so until a Release Owner is set up (a live seat's bot starts planned) it is found like any other role.
 - `ok_person` (D5): the person on a stage's people OK is the first person above the pipeline's manager bot on the org
   chart, else the org owner (C16). None only when no person can sign in.
 

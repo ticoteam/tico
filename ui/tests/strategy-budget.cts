@@ -241,7 +241,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       const {page, errors, writes, usage} = await open(browser);
       assert.deepEqual(await keys(page), ['company', 'group:eng', 'group:web', 'bot:web-dev', 'bot:eng-lead', 'bot:builder', 'bot:reviewer',
         'person:cara', 'group:sales', 'bot:sales-lead', 'bot:sdr', 'person:ben', 'group:outbound', 'person:ana', 'bot:release', 'bot:coo',
-        'bot:goal-manager', 'bot:botops', 'bot:librarian', 'bot:mail-sorter'], tag + ': under each row, its rows by spend; helpers (the Strategy Bot too) in their branch');
+        'bot:goal-manager', 'bot:botops', 'bot:librarian', 'bot:mail-sorter'], tag + ': under each row, its rows by spend; helpers (the Strategy Owner too) in their branch');
       assert.ok(await bySpend(page), tag + ': most spend first');
       assert.equal(await page.locator('.bt-r:has([data-bt-fold="helpers"]) .bt-name').innerText(), 'Helpers', tag + ': helpers in a branch of their own');
       assert.equal(await page.locator('[data-bt-span][aria-selected="true"]').innerText(), '30 days', tag + ': 30 days to start');
@@ -260,7 +260,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       assert.equal(await amount(page, 'group:sales'), '$208', tag + ': what it spent');
       assert.equal(await limit(page, 'bot:sdr'), '', tag + ': a bot with no limit');
       assert.equal(await amount(page, 'person:cara'), '', tag + ': a person with no reports has no spend of its own');
-      assert.equal(await amount(page, 'person:ana'), '$100', tag + ': a person with reports adds them up (Release Manager; the Strategy Bot is a helper)');
+      assert.equal(await amount(page, 'person:ana'), '$100', tag + ': a person with reports adds them up (Release Owner; the Strategy Owner is a helper)');
       assert.equal(await limit(page, 'bot:release'), '100% · $4/30m', tag + ': a held bot at its limit');
       assert.ok(await page.locator(row('bot:release') + ' .bt-paused').isVisible(), tag + ': a held bot says Paused');
       assert.ok(await page.locator(row('bot:release')).evaluate(el => el.classList.contains('bad')), tag + ': in the fail tone');
@@ -358,7 +358,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       // A person: the caps it takes; change one, remove one.
       await edit(page, 'person:ana');
       assert.equal(await page.locator('dialog[open] [data-scope]').count(), 0, tag + ': a person has no spend limit');
-      assert.deepEqual(await page.locator('dialog[open] [data-caps="in"] .bt-who > span:last-child').allInnerTexts(), ['Engineering Lead', 'Release Manager', 'Builder'], tag + ': caps it takes');
+      assert.deepEqual(await page.locator('dialog[open] [data-caps="in"] .bt-who > span:last-child').allInnerTexts(), ['Engineering Lead', 'Release Owner', 'Builder'], tag + ': caps it takes');
       assert.deepEqual(await page.locator('dialog[open] [data-caps="in"] .bt-today').allInnerTexts(), ['10 today', '2 today', 'blocked'], tag + ': each with today\'s count');
       await shot(page, 'small-desktop-person');
       await page.fill('dialog[open] [data-cap="bot:release>person:ana"] input', '7');

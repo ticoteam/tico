@@ -44,7 +44,7 @@ tico-cell-wake, which `init` installs): its first request starts the server with
 starts the company when that time is due, rather than waiting for a request. Starting, waking or stopping a company
 clears it.
 
-Each company also has an updater, so its Update now, an update service key (the Release Manager's rollout) and Tico
+Each company also has an updater, so its Update now, an update service key (the Release Owner's rollout) and Tico
 support's idle-time target work as on any install: `init` runs one host service (setup/cell_updater.py, systemd unit
 tico-cell-updater) that speaks docker/updater.py's contract to each company on that company's own default-network
 gateway address only (`updater_url`), checks the token in that company's own control/updater-token, and does the work

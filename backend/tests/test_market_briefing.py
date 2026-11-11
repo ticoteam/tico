@@ -1,4 +1,4 @@
-"""The weekly briefing: who posts, one row a week, which bets an item touches, and the event the Strategy Bot waits
+"""The weekly briefing: who posts, one row a week, which bets an item touches, and the event the Strategy Owner waits
 on."""
 
 import json

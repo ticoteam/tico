@@ -1,6 +1,6 @@
-"""Goal suggestion cards say what yes does (spec "Clear Strategy Bot suggestion cards", Dev 530): each proposal the page
+"""Goal suggestion cards say what yes does (spec "Clear Strategy Owner suggestion cards", Dev 530): each proposal the page
 draws carries `card`, what the server read to say it plainly (backend/goals.py card); an Add a KPI suggestion may be
-confirmed with the person's own target; and the Strategy Bot's Needs you task uses the card's words, not "Confirm or
+confirmed with the person's own target; and the Strategy Owner's Needs you task uses the card's words, not "Confirm or
 reject"."""
 
 from backend import strategy_bot
@@ -150,7 +150,7 @@ def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_
     assert {ref: tasks[ref]["title"] for ref in made if ref in tasks} == {
         ref: t for ref, t in made.items() if ref in tasks
     }
-    assert tasks, "the Strategy Bot asked"
+    assert tasks, "the Strategy Owner asked"
     for task in tasks.values():
         assert "Confirm or reject" not in task["title"] + task["body"] and "existing KPI" not in task["body"]
         assert task["body"].endswith("Decide it under Needs you on the Goals page.")
@@ -188,7 +188,7 @@ def test_a_persons_target_replaces_the_one_proposed_and_none_clears_it(api):
     post(api, f"goal-proposals/{new['id']}/decide", {"decision": "confirm", "target": IMPROVE})
     link = links(api, goal["id"])["Weekly demos"]
     assert (link["target"], link["deadline"]) == (25, "2099-12-31")
-    # Reusing a measure, the person's "no target" clears the one the Strategy Bot proposed.
+    # Reusing a measure, the person's "no target" clears the one the Strategy Owner proposed.
     other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": kpi["id"], "target": IMPROVE}, other["id"])
     post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm", "target": {"kind": "none"}})
@@ -256,7 +256,7 @@ def test_task_filing_skips_a_hidden_goal_when_its_decider_cannot_read_the_owner_
 
 
 def sync_reading(api):
-    """The Strategy Bot's pass as the app runs it: told whose measures each person may read."""
+    """The Strategy Owner's pass as the app runs it: told whose measures each person may read."""
     from backend import goal_asks as GA
 
     with api.app.state.store.transaction() as c:
@@ -286,7 +286,7 @@ def test_reusing_a_hidden_bots_measure_on_her_goal_neither_names_nor_describes_i
 
 
 def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is_decided(api):
-    goal_manager(api, level=2)  # Needs you lists suggestions and the Strategy Bot's tasks
+    goal_manager(api, level=2)  # Needs you lists suggestions and the Strategy Owner's tasks
     hidden, secret = inbox_measure(api)
     post(api, f"goals/{hidden['id']}/kpis/{secret['id']}", {"kind": "maintain", "max": 3})
     hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]

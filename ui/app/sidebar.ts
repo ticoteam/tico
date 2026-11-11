@@ -39,7 +39,7 @@ document.querySelectorAll<HTMLElement>('[data-section-toggle]').forEach(button =
 });
 renderNavSections();
 // The built-ins stay out of the team chart. Each person's one chat is their Assistant (Ask, and its own page,
-// ui/app/assistant-page.ts); BotOps, the Strategy Bot, the Librarian and Counsel are its helpers (state.js ASSISTANT_HELPERS),
+// ui/app/assistant-page.ts); BotOps, the Strategy Owner, the Librarian and Counsel are its helpers (state.js ASSISTANT_HELPERS),
 // which nobody chats with. Search, bot pickers and a person's page list none of the four; Settings > Bots manages them,
 // and #/bot/<id> opens each for its settings, runs and logs.
 const isHiddenBot = (slug: string) => slug === assistantBot() || isAssistantHelper(slug);
@@ -62,16 +62,16 @@ function orgBossKey(n: OrgBossNode): string {
 }
 function orgHang(key: string, boss: string, groupOf: Record<string, string | undefined>): string {
   const group = groupOf[key] || '';
-  // The Strategy Bot hangs under the owner wherever the owner sits; it is a helper, off the chart, so what hangs under it
-  // shows under the owner (orgTreeWithHelpers). A bot the server hangs under the Strategy Bot (backend/strategy_bot.py)
+  // The Strategy Owner hangs under the owner wherever the owner sits; it is a helper, off the chart, so what hangs under it
+  // shows under the owner (orgTreeWithHelpers). A bot the server hangs under the Strategy Owner (backend/strategy_bot.py)
   // stays
-  // in its group only when that group hangs under the Strategy Bot too, else it leaves the group for the owner's branch:
+  // in its group only when that group hangs under the Strategy Owner too, else it leaves the group for the owner's branch:
   // the owner's own group never moves there, or the chart would loop.
   if (boss && (key === 'b:goal-manager' || (boss === 'b:goal-manager' && group && !orgGroupUnderStrategyBot(group)))) return boss;
   if (group) return boss && groupOf[boss] === group ? boss : 'g:' + group;
   return boss && !groupOf[boss] ? boss : '';
 }
-// Whether this group, through its top-level group, hangs under the Strategy Bot (orgGroupParent).
+// Whether this group, through its top-level group, hangs under the Strategy Owner (orgGroupParent).
 function orgGroupUnderStrategyBot(id: string): boolean {
   const byId = new Map((S.orgGroups || []).map(g => [g.id, g]));
   let g = byId.get(id);
@@ -106,7 +106,7 @@ function orgGroupHead(gid: string | undefined, lead = ''): string {
   return [...votes].sort((a, b) => b[1] - a[1])[0]?.[0] || '';
 }
 // Where a group hangs: in its parent group, else at the top. The server hangs the top-level group of a Head it puts under
-// the Strategy Bot there too (`org_parent`, backend/strategy_bot.py), and the chart lifts it to the owner with the
+// the Strategy Owner there too (`org_parent`, backend/strategy_bot.py), and the chart lifts it to the owner with the
 // Head.
 const orgGroupParent = (g: OrgGroup, keys: Set<string>): string => g.parent && keys.has('g:' + g.parent) ? 'g:' + g.parent
   : g.org_parent === 'b:goal-manager' && keys.has('b:goal-manager') ? 'b:goal-manager' : '';
@@ -754,7 +754,7 @@ $('#org-history').onclick = () => {
   renderTree();
 };
 // Built-ins and explicitly marked helpers are off the Team list; mailbox assignment does not make a bot a helper.
-// `reports_to` is untouched, and a helper's reports hang where it would have. The Strategy Bot is an Assistant helper.
+// `reports_to` is untouched, and a helper's reports hang where it would have. The Strategy Owner is an Assistant helper.
 const isHelperBot = (e: Employee) => isBuiltInBot(e.id) || !!e.helper;
 // The order here and on Goals: the Assistant, then the other built-ins, then other helpers.
 const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'brand', 'inbox'];

@@ -1,5 +1,5 @@
-"""What the Strategy Bot does at level 2, "Suggests actions" (backend/strategy_suggest.py; spec: Head of Product,
-Strategy Bot, tests 8, 15 and 19). A red goal gets a recovery the owner approves, applied exactly and in the Strategy
+"""What the Strategy Owner does at level 2, "Suggests actions" (backend/strategy_suggest.py; spec: Head of Product,
+Strategy Owner, tests 8, 15 and 19). A red goal gets a recovery the owner approves, applied exactly and in the Strategy
 Bot's name; what can't be done comes back saying why; after 10 approvals in a row the Monday note may offer level 3,
 once a month."""
 
@@ -54,8 +54,8 @@ def tasks_of(api, owner):
 
 def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api):
     """Spec test 8, level 2 half: a red goal is one proposal with options in Needs you, no task changes until the owner
-    approves, and approving applies exactly the option chosen, as the Strategy Bot. Level 1 makes no proposal (refused),
-    and nobody but the Strategy Bot proposes one."""
+    approves, and approving applies exactly the option chosen, as the Strategy Owner. Level 1 makes no proposal (refused),
+    and nobody but the Strategy Owner proposes one."""
     strategy_token = with_strategy_bot(api)
     post(api, "company", {"vision": "Every small landlord runs their rentals on Tico."})
     goal = red_goal(api)
@@ -63,7 +63,7 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     second = bot_task(api, "ops", "Clean up old reports")
     recovery(api, goal["id"], second, strategy_token, expected=422)  # level 1: it suggests nothing
     level(api, 2)
-    recovery(api, goal["id"], second, bot(api, "ops"), expected=403)  # only the Strategy Bot proposes one
+    recovery(api, goal["id"], second, bot(api, "ops"), expected=403)  # only the Strategy Owner proposes one
     # A task for a person stays the person's to make, at every level.
     post(
         api,
@@ -89,7 +89,7 @@ def test_at_level_2_a_red_goal_gets_one_recovery_the_owner_approves_exactly(api)
     [item] = [a for a in mine if a["kind"] == "recovery"]
     assert item["title"] == "Approve a recovery for Raise activation"
     assert "Activation fell" in item["body"]
-    assert "Option 1: Ops fixes setup first (the Strategy Bot's pick)" in item["body"]
+    assert "Option 1: Ops fixes setup first (the Strategy Owner's pick)" in item["body"]
     assert {t["id"]: t["rank"] for t in tasks_of(api, "bot:ops")} == before  # nothing yet
     assert [i["kind"] for i in get(api, "goals/needs-you")["items"]].count("recovery") == 1
     # Ben may not decide Ana's company goal; Ana approves the pick.
@@ -167,7 +167,7 @@ def test_a_retry_approved_while_still_blocked_comes_back_again_and_then_applies(
 
 def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
     """Spec test 19: at level 2, after 10 recoveries approved in a row with its pick unchanged, the Monday note may
-    offer level 3: the Strategy Bot records the offer, which is refused before it is due and again within 30 days. It
+    offer level 3: the Strategy Owner records the offer, which is refused before it is due and again within 30 days. It
     never raises its own level, and a rejection starts the count again."""
     strategy_token = with_strategy_bot(api)
     level(api, 2)
@@ -182,7 +182,7 @@ def test_ten_approvals_in_a_row_offer_level_3_once_a_month(api):
             post(api, "strategy-bot/level3-offer", {}, token=strategy_token, expected=422)  # not due yet
     offer = get(api, "strategy-bot", token=strategy_token)["level3_offer"]
     assert (offer["streak"], offer["due"]) == (10, True)
-    post(api, "strategy-bot/level3-offer", {}, token="ana-test", expected=403)  # the Strategy Bot's note only
+    post(api, "strategy-bot/level3-offer", {}, token="ana-test", expected=403)  # the Strategy Owner's note only
     made = post(api, "strategy-bot/level3-offer", {}, token=strategy_token)["level3_offer"]
     assert made["due"] is False and made["last_offered_at"]
     # not again this month

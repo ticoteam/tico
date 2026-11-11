@@ -335,7 +335,7 @@ class TaskRules:
             if rules:
                 H.refuse(c, who.actor, COVERS, not_asked(rules[0]))
 
-    # A task write that is not one route's move on one task (the Strategy Bot's merged ask and its decisions,
+    # A task write that is not one route's move on one task (the Strategy Owner's merged ask and its decisions,
     # backend/goal_routes.py): the same contract, checked outside the write and applied inside it, with the audience
     # the caller names (`reach(c)`, actors) read again inside. Its hold has no Send anyway replayer: the writer edits
     # and sends again.

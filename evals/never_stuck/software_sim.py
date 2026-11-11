@@ -124,7 +124,7 @@ class SoftwareSim:
                 r.gh.publish(f"v1.{self.tag}.0")
 
     def release_hour(self) -> bool:
-        """The daily release hour (D13, a routine on the Release Manager): once a day from 10:00, the Release Manager
+        """The daily release hour (D13, a routine on the Release Owner): once a day from 10:00, the Release Owner
         publishes a release of what merged since the last one. While GitHub is down it cannot; the next step tries."""
         gh, now = self.r.gh, self.r.w.now()
         day = now[:10]

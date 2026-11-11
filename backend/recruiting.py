@@ -337,7 +337,7 @@ def show(auth, c, who, seat_id):
 
 
 def end_draft(c, row, why):
-    """Close a draft task an earlier release asked the Strategy Bot for, once the seat is filled, closed or written by a
+    """Close a draft task an earlier release asked the Strategy Owner for, once the seat is filled, closed or written by a
     person: nothing drafts a seat's description in the background any more."""
     task = H.task(c, row["draft_task"]) if row["draft_task"] else None
     if task and task["status"] in H.ACTIVE_STATUSES:
