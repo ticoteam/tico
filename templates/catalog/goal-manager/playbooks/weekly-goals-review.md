@@ -24,10 +24,10 @@ interpretation, labelled:
    one was already waiting, or nothing new was found. At level 2, one line on
    the recoveries waiting and what the approved ones changed. At level 3, one
    line per decision you made this week (from `state.md`: the goal, what you did, why), and that each has an Undo in
-   the Strategy Bot log.
+   the Strategy Owner log.
 7. The level-3 offer, at level 2 only when `level3_offer.due` in `tico goal strategy-bot` is true (10 recoveries approved
    in a row with your pick unchanged, and none offered in the last 30 days): one sentence saying so, and that the owner
-   can raise the level in Settings > Strategy Bot if they want. Then record it with
+   can raise the level in Settings > Strategy Owner if they want. Then record it with
    `tico goal strategy-bot-level3-offer`, so it
    is offered once. Never raise the level yourself, never ask again before it is due, and never press.
    Also one line suggesting a lens (`tico lens list`; Scenarios, Pre-mortem, Blue Ocean, or Startup idea check for a young company) when no lens has run

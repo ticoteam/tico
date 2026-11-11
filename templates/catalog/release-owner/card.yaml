@@ -1,6 +1,6 @@
 template: release-owner
 slug: release-owner
-name: Release Manager
+name: Release Owner
 required: false
 bootstrap: false
 group: engineering

@@ -13,7 +13,7 @@ decision is not their answer.
 2. Ask the owner, a human or a bot, one question with the facts in it:
    "Activation is 52% against the 58% we need on pace this week (from 55% last week). What is going on?" Ask a
    human with `tico task create --owner <person>` when it needs their answer; ask a bot with `tico message send <bot> "<question>" --needs-action`.
-   Do not suggest an answer and do not argue with the one you get. Where the Strategy Bot is on, a question to a person
+   Do not suggest an answer and do not argue with the one you get. Where the Strategy Owner is on, a question to a person
    counts toward their 5 a day: read `asked_today` in `tico goal strategy-bot` first.
 3. When the answer arrives, record it in their words:
    `tico goal checkin <goal-id> "<their words>" --signal on_track|at_risk|off_track --from <owner> [--kpi <id>]`.

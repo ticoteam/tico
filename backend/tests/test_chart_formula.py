@@ -137,10 +137,11 @@ PIPELINE_MANAGERS = {
 }
 
 
-def test_the_live_seats_are_the_pipeline_managers_the_stage_owners_and_the_finance_owner():
+def test_the_live_seats_are_the_pipeline_managers_the_stage_owners_and_the_finance_and_legal_owners():
     # Every default pipeline starts with its Pipeline Manager live, and Product and Engineering with each stage owner:
-    # the first segment's Product Owner, the Builder, both reviewers and the Release Manager; plus the QA Owner.
-    expected = SOFTWARE_LIVE | PIPELINE_MANAGERS | {"bookkeeper", "creators-product-owner"}
+    # the first segment's Product Owner, the Builder, both reviewers and the Release Owner; plus the QA Owner. The
+    # Finance and Legal Owners run their own pipelines.
+    expected = SOFTWARE_LIVE | PIPELINE_MANAGERS | {"bookkeeper", "legal-owner", "creators-product-owner"}
     assert live_ids(F.build(HOTMIC)) == expected
 
 
@@ -163,7 +164,7 @@ def test_a_chart_with_no_segment_has_one_product_owner_and_no_segment_seats():
         ("product-owner", "Product Owner", "segment-product-owner", True),
     ]
     assert "segment-marketing-owner" not in {seat["template"] for seat in result["employees"]}
-    assert live_ids(result) == SOFTWARE_LIVE | PIPELINE_MANAGERS | {"bookkeeper", "product-owner"}
+    assert live_ids(result) == SOFTWARE_LIVE | PIPELINE_MANAGERS | {"bookkeeper", "legal-owner", "product-owner"}
 
 
 def test_the_six_pipeline_seats_use_the_templates_the_pipelines_find_them_by():
@@ -175,7 +176,7 @@ def test_the_six_pipeline_seats_use_the_templates_the_pipelines_find_them_by():
     }
     for role, chart_id in pipeline_seats.CHART_IDS.items():
         assert seats[chart_id]["template"] == pipeline_seats.TEMPLATES[role], role
-    assert seats["release-owner"]["title"] == "Release Manager"
+    assert seats["release-owner"]["title"] == "Release Owner"
     assert seats["qa-owner"]["live"] is True
     managers = {seat["id"]: seat["reports_to"] for seat in seats.values() if seat["team"] == "Engineering"}
     assert managers.pop("engineering-team-manager") is None
@@ -573,7 +574,8 @@ def test_the_read_back_gives_each_seat_its_manager():
     managers = {bot["title"]: D.manager_of(draft, bot) for bot in draft["bots"]}
     assert managers["Partnerships Owner"] == "corporate-team-manager"
     assert managers["Finance Owner"] == "corporate-team-manager"
-    assert managers["Creators Product Owner"] == "product-manager"
+    assert managers["Creators Product Owner"] == "product-team-manager"
+    assert managers["Product Pipeline Manager"] == "product-team-manager"
 
 
 @needs_cards

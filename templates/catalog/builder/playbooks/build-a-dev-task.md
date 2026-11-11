@@ -1,7 +1,7 @@
 # Build a task
 
 Triggered when a task you own enters Build. Budget as long as the change needs; the stage's expected time is a day, and
-past it the task is Late and the Engineering Manager looks at it.
+past it the task is Late and the Engineering Pipeline Manager looks at it.
 
 Inputs: the task and its conversation (`tico task show <id>`), the Spec page it links (`page:<file id>@<version>`,
 read with `tico file read <file id>`), `knowledge/standards.md` and `knowledge/patterns.md`.
@@ -54,8 +54,8 @@ task gives. Only then change the code.
 
 ## 4. Change
 
-Make the smallest change that makes the test pass. A refactor you noticed on the way goes into a note for the
-Engineering Manager on the task, not into this pull request.
+Make the smallest change that makes the test pass. A refactor you noticed on the way goes into a note on the task,
+for its requester, not into this pull request.
 
 ## 5. Check on your computer
 

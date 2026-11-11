@@ -21,9 +21,11 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 
 ANA, BEN = X.ANA, "human:ben"
+PPM, EPM = "product-pipeline-manager", "engineering-pipeline-manager"  # the chart ids pipeline_seats finds them by
 ROLE_BOTS = {
-    "pm": "product-manager",
-    "em": "engineering-manager",
+    PPM: "pipeline-manager",
+    "pm": "segment-product-owner",  # the Product Owner
+    EPM: "pipeline-manager",
     "builder": "builder",
     "rev-b": "pr-reviewer",
     "rev-a": "pr-reviewer",
@@ -62,11 +64,12 @@ def _seat(c, title, template, filled_by="", at=None):
 
 
 def _team(c):
-    """The six role bots, each seated as setup seats them. The reviewer seats are titled so `rev-a` is Reviewer 1."""
+    """The role bots, each seated as setup seats them. The reviewer seats are titled so `rev-a` is Reviewer 1."""
     for slug, template in ROLE_BOTS.items():
         _role_bot(c, slug, template)
-    _seat(c, "Product Manager", "product-manager", "pm")
-    _seat(c, "Engineering Manager", "engineering-manager", "em")
+    _seat(c, "Product Pipeline Manager", "pipeline-manager", PPM)
+    _seat(c, "Product Owner", "segment-product-owner", "pm")
+    _seat(c, "Engineering Pipeline Manager", "pipeline-manager", EPM)
     _seat(c, "Builder", "builder", "builder")
     _seat(c, "Reviewer 2", "pr-reviewer", "rev-b")
     _seat(c, "Reviewer 1", "pr-reviewer", "rev-a")
@@ -85,8 +88,9 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     assert S.resolve(c) == dict.fromkeys(S.ROLES)
     _team(c)
     assert S.resolve(c) == {
-        S.PRODUCT_MANAGER: "bot:pm",
-        S.ENGINEERING_MANAGER: "bot:em",
+        S.PRODUCT_PIPELINE_MANAGER: "bot:" + PPM,
+        S.PRODUCT_OWNER: "bot:pm",
+        S.ENGINEERING_PIPELINE_MANAGER: "bot:" + EPM,
         S.BUILDER: "bot:builder",
         S.REVIEWER_1: "bot:rev-a",  # its seat's title sorts first
         S.REVIEWER_2: "bot:rev-b",
@@ -94,21 +98,26 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     }
     # An archived bot fills no role; another bot from the template does, even with no seat.
     c.execute("UPDATE bots SET state='archived' WHERE id='pm'")
-    _role_bot(c, "zz-product", "product-manager")
-    assert S.resolve(c)[S.PRODUCT_MANAGER] == "bot:zz-product"
+    _role_bot(c, "zz-product", "segment-product-owner")
+    assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
     # A bot named like a role but from another template is not that role.
-    _role_bot(c, "product-manager-ish", "coo")
-    assert S.resolve(c)[S.PRODUCT_MANAGER] == "bot:zz-product"
+    _role_bot(c, "product-owner-ish", "coo")
+    assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
+    # Every pipeline's manager shares one template: each is the one whose slug is its chart id.
+    _role_bot(c, "growth-experiments-pipeline-manager", "pipeline-manager")
+    c.execute("UPDATE bots SET state='archived' WHERE id=?", (PPM,))
+    assert S.resolve(c)[S.PRODUCT_PIPELINE_MANAGER] is None
+    assert S.resolve(c)[S.ENGINEERING_PIPELINE_MANAGER] == "bot:" + EPM
 
 
 def test_the_ok_person_is_the_first_person_above_the_manager_else_the_owner(c):
     _team(c)
-    assert S.ok_person(c, "bot:pm") == ANA  # nobody above it: the company's owner
+    assert S.ok_person(c, "bot:" + PPM) == ANA  # nobody above it: the company's owner
     assert S.ok_person(c, None) == ANA
-    c.execute("UPDATE bot_config SET reports_to=? WHERE bot='pm'", (BEN,))
-    assert S.ok_person(c, "bot:pm") == BEN
+    c.execute("UPDATE bot_config SET reports_to=? WHERE bot=?", (BEN, PPM))
+    assert S.ok_person(c, "bot:" + PPM) == BEN
     X.left(c, BEN)
-    assert S.ok_person(c, "bot:pm") == ANA
+    assert S.ok_person(c, "bot:" + PPM) == ANA
 
 
 # ----------------------------------------------------------------------------- the presets
@@ -121,10 +130,10 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     assert (product["name"], product["prefix"], product["manager_id"], product["factory_id"]) == (
         "Product",
         "P",
-        "bot:pm",
+        "bot:" + PPM,
         "product",
     )
-    assert (engineering["name"], engineering["prefix"], engineering["manager_id"]) == ("Engineering", "E", "bot:em")
+    assert (engineering["name"], engineering["prefix"], engineering["manager_id"]) == ("Engineering", "E", "bot:" + EPM)
     assert c.execute("SELECT name FROM factories WHERE id='product'").fetchone()[0] == "Product"
     assert _owners(product) == {
         "product-ideas": "bot:pm",
@@ -366,7 +375,7 @@ def test_in_development_files_one_engineering_task_with_the_product_text_and_the
     assert len(_filed(c, row["id"])) == 2
 
 
-def test_a_handoff_the_product_manager_cannot_file_is_filed_by_the_engine(c):
+def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
     row = _product_task(c)
     c.execute("UPDATE bots SET state='paused' WHERE id='pm'")
     E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
@@ -447,16 +456,19 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
 
 def test_the_software_factory_guide_and_routing_playbook_name_the_seats_templates():
     """The guide and Engineering's route-a-request playbook send work to the seats the presets place (TEMPLATES),
-    not to the 0.5 chart's Head of Product, Head of Engineering or a release-notes Release Manager."""
+    not to the 0.5 chart's Head of Product, Head of Engineering, a Product or Engineering Manager, or a release-notes
+    Release Owner."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
     guide = (root / "docs/software-factory.md").read_text()
     playbook = (root / "templates/catalog/engineering-lead/playbooks/route-a-request.md").read_text()
     for text in (guide, playbook):
-        assert "Head of Product" not in text and "Head of Engineering" not in text
-        assert "`product-lead`" not in text and "`engineering-lead`" not in text
-    for role in (S.PRODUCT_MANAGER, S.ENGINEERING_MANAGER, S.RELEASE_MANAGER):
+        for old in ("Head of Product", "Head of Engineering", "Product Manager", "Engineering Manager"):
+            assert old not in text
+        for old in ("`product-lead`", "`engineering-lead`", "`product-manager`", "`engineering-manager`"):
+            assert old not in text
+    for role in (S.PRODUCT_PIPELINE_MANAGER, S.PRODUCT_OWNER, S.RELEASE_MANAGER):
         assert f"`{S.TEMPLATES[role]}`" in guide
-    assert f"`{S.TEMPLATES[S.RELEASE_MANAGER]}` (Release Manager)" in playbook
-    assert f"`{S.TEMPLATES[S.PRODUCT_MANAGER]}` (Product Manager)" in playbook
+    assert f"`{S.TEMPLATES[S.RELEASE_MANAGER]}` (Release Owner)" in playbook
+    assert f"`{S.TEMPLATES[S.PRODUCT_OWNER]}` (Product Owner)" in playbook

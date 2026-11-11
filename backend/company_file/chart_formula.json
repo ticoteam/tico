@@ -241,7 +241,7 @@
         {
           "key": "release-owner",
           "id": "release-owner",
-          "title": "Release Manager",
+          "title": "Release Owner",
           "template": "release-owner",
           "department": "engineering",
           "reports_to": "engineering-team-manager",
@@ -408,7 +408,8 @@
           "template": "legal-owner",
           "department": "corporate",
           "reports_to": "corporate-team-manager",
-          "reason": "Owns legal: contracts, terms and compliance."
+          "reason": "Owns legal: contracts, terms and compliance.",
+          "live": true
         },
         {
           "key": "finance-owner",

@@ -8,7 +8,7 @@ version: 0.2
 created: 2026-10-18T00:00:00.000Z
 company:
   name: "Sample Co"
-  about: "Sample Co is a made-up company for trying Tico. It sells Brightbook, a small online booking app that hair salons and barbers use to take appointments, send reminders and see the week ahead. Five people's worth of work is done by five bots: an Assistant, a Head of Product, a Builder, a Support Agent and a Content Marketer. Nothing here is real: there are no customers to email, no website to publish to and no payments."
+  about: "Sample Co is a made-up company for trying Tico. It sells Brightbook, a small online booking app that hair salons and barbers use to take appointments, send reminders and see the week ahead. Five people's worth of work is done by five bots: an Assistant, a Product Lead, a Builder, a Support Agent and a Content Marketer. Nothing here is real: there are no customers to email, no website to publish to and no payments."
   signals: [sells_software, sells_to_businesses, publishes_content, has_support_inbox, small_team]
 people:
   - id: you
@@ -36,7 +36,7 @@ employees:
           3. Put the note on this task as one comment, so the owner reads it where they answer.
   - id: head-of-product
     template: product-lead
-    title: "Head of Product"
+    title: "Product Lead"
     department: product
     reports_to: you
     start: now

@@ -36,7 +36,7 @@ onboarding:
     why: "Deploy frequency and failed deploys are read from that workflow; I count only what I can read."
   - ask: "What would you call too slow for the merge check? (Default: over 15 minutes.)"
     why: "Becomes knowledge/thresholds.md, so the report flags the same things you would."
-  - ask: "Who owns the CI configuration and the runners, and who should get a task when the main branch stays red? (Default: the Engineering Manager.)"
+  - ask: "Who owns the CI configuration and the runners, and who should get a task when the main branch stays red? (Default: the Engineering Team Manager.)"
     why: "Red-main tasks and fix plans go to a named owner; a flag without one is noise."
   - ask: "Which day and hour should the CI health report land, and who reads it? (Default: Tuesdays at 09:00, you.)"
     why: "Sets the first routine's schedule and recipient."

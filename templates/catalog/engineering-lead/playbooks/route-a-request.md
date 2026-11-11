@@ -19,13 +19,13 @@ the request and the Tools allow.
    1. `knowledge/routing.md`: has a request like this been routed before? Follow that.
    2. `knowledge/areas.md`: which repository or area does it touch, and who owns it?
    3. The team's lines: a task to build is `builder` (Builder), or a numbered copy such as `builder-2`; a pull request needing a look is `pr-reviewer` (Senior Software Engineer); a release, its
-      checklist or its notes is `pipeline` (Pipeline Owner) when the team has one, else `release-owner` (Release Manager); an outage or an on-call handoff is
+      checklist or its notes is `pipeline` (Pipeline Owner) when the team has one, else `release-owner` (Release Owner); an outage or an on-call handoff is
       `incident-scribe` (Site Reliability Engineer); an outdated README or API page is `docs-writer` (Technical
       Writer); an incoming bug or a test plan is `issue-triage` (QA Engineer); a vulnerable dependency or a leaked
       credential is `security-engineer`; a red or slow pipeline is `devops-engineer` (CI health), and a merge or deploy that waits or stalls is `pipeline` when the team has one; a design doc or an
       architecture decision is `software-architect`; a developer's public question or a sample app is
       `developer-advocate`. What users need, a spec or a roadmap question belongs to Product: route it to
-      `product-manager` (Product Manager).
+      `segment-product-owner` (Product Owner).
    If two owners fit equally, name both and say what decides it. If none fits, say so; never force a fit.
 3. **Check load and urgency.** Note how many open tasks the owner has and whether anything on it is older than a
    week. Say it as a fact, never as a judgement of the person. The team's starting limit is about four active items

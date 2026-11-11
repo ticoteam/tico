@@ -27,7 +27,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 2. Which three to five competitors do buyers compare you with? Sets the price book.
 3. Where do closed deals and discounts live, and who owns the discount rules? The analysis compares what was charged with the rule.
 4. Is a price or packaging change being considered now? The first impact note serves that decision.
-5. When should the monthly review land? (Default: the 1st at 09:00, the Head of Product.) Sets the routine.
+5. When should the monthly review land? (Default: the 1st at 09:00, your manager.) Sets the routine.
 
 ## 4. Record
 

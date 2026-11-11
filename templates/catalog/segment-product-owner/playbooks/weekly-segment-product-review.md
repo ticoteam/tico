@@ -1,9 +1,9 @@
 # Weekly segment product review
 
-Schedule: Mondays at 08:00 team time (routine `weekly-segment-product-review`), after setup. The hour is set so the
+Schedule: Mondays at 08:00 team time (routine `weekly-segment-product-review`), after setup. The hour is set so
 your manager reads it at its 09:00 summary. Also run by hand. Budget 40 minutes. The outcome is one page: the
-segment's number against target, its ranked problems, the briefs filed and the decisions waiting. Nothing is built,
-shared or changed.
+segment's number against target, its ranked problems, the briefs filed, the Product tasks in flight and the decisions
+waiting. Nothing is built, shared or changed by the review itself.
 
 ---
 
@@ -41,11 +41,13 @@ Apply `skills/rank-a-segment-problem-list/SKILL.md`. Rewrite `knowledge/problems
 status and its previous rank. Put every item read that is not this segment's product problem under "Left out", with its
 reason and where it went.
 
-## 5. Check the briefs already filed
+## 5. Check the briefs and Product tasks already filed
 
-For each brief in `knowledge/briefs.md`, read its task with `tico task show <id>`. Record each decision your manager
-made, with its date. A decline keeps its reason and its date to look again. A brief still waiting goes to the
-decisions list.
+For each brief in `knowledge/briefs.md`, read its task with `tico task show <id>`: its stage and what is missing to leave
+it. Record each decision your manager made, with its date. A decline keeps its reason and its date to look again. A
+brief still waiting goes to the decisions list. For each Product task in Spec, In development or Validate, write one line:
+its stage, what it waits on and who owes it, and the launch lines due within four weeks
+(`skills/run-a-launch-readiness-check/SKILL.md`).
 
 ## 6. File at most two briefs
 

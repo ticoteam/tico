@@ -1,4 +1,4 @@
-# Acting on your own (the Strategy Bot, level 3)
+# Acting on your own (the Strategy Owner, level 3)
 
 Only when `tico goal strategy-bot` says `level` 3 ("Acts on its own"), which only the owner chooses. Below it, the server
 refuses every decision: at level 2 a red goal gets a recovery proposal (`playbooks/recoveries.md`), at Passive a
@@ -13,7 +13,7 @@ A **decision** is one reason and 1 to 10 changes to bot tasks, made together and
 - `{"do": "reassign", "task_id": "...", "owner": "<bot slug>"}`: a bot's task to another bot;
 - `{"do": "close", "task_id": "...", "note": "why"}`: a bot's task closed.
 
-The reason is one sentence the owner reads in the Strategy Bot log: what you chose and the goal it serves. Always pass
+The reason is one sentence the owner reads in the Strategy Owner log: what you chose and the goal it serves. Always pass
 `--goal-id` when a goal is behind it. The answer is your receipt: what was `done`, and what was `left` and why. A part
 the server would not let you do alone (a person's task, a bot that is paused or offline, a private task, a bot you
 may not give work to) is not dropped: it is one proposal in the owner's Needs you, filed by the server. Don't file it
@@ -52,7 +52,7 @@ done or dropped, is not yours to rank: leave it to its Head.
    `"<first task> goes before <other task>: it serves <goal>, which is red"`. Usually one `reorder` of the first task;
    `close` the other only when it can no longer serve a current goal, with a note saying so.
 3. Tell both Heads, once each, with the same words: what you chose, the goal it serves, and that the owner can undo
-   it in the Strategy Bot log. `tico message send <head> "<text>" --ref task:<first> --ref task:<other>`. One message per
+   it in the Strategy Owner log. `tico message send <head> "<text>" --ref task:<first> --ref task:<other>`. One message per
    Head, never one per task, and none to a person: a person's task is never in a clash you settle.
 
 ## A bot's question to you

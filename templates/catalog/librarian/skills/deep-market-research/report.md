@@ -44,4 +44,4 @@ The one or two facts that, if wrong, flip the Answer, and how to check them (oft
 What we could not find or read, and who could tell us fastest.
 ```
 
-The Strategy Bot's Industry beliefs lens reads the beliefs, winners and pains sections, so keep their shape.
+The Strategy Owner's Industry beliefs lens reads the beliefs, winners and pains sections, so keep their shape.
