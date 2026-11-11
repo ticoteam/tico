@@ -10,7 +10,7 @@ from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import GOAL_STATUSES, PROPOSAL_KINDS, _key, _s, _target
 from clients.commands._requester import _asked
-from clients.commands._shared import json_file
+from clients.commands._shared import json_file, text_file
 from clients.tico import APIError
 
 
@@ -26,7 +26,15 @@ GOAL_YES = _s(
     "Saves nothing without a plain yes. "
     "Returns message_id, text and exact method/path/body steps; save agreed steps with tico_goal_save. "
     "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
-    {"changes": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 20}},
+    {
+        "changes": {
+            "type": "array",
+            "items": {"type": "object"},
+            "minItems": 1,
+            "maxItems": 20,
+            "description": "1 to 20 changes, each its kind and that change's fields (on a command line, as JSON)",
+        }
+    },
     required=("changes",),
     writes=True,
 )
@@ -121,7 +129,7 @@ def goal_show(api, args):
         "parent_id": _s("The goal this one supports, if any; leave it out when there is none"),
         "body": _s("What it means, what counts, what does not", default=""),
         "top": {"type": "boolean", "default": False, "description": "Put it first in the owner's order"},
-        "bet_id": _s("The strategy bet it serves (tico_strategy_show lists them)"),
+        "bet_id": _s("The strategy bet it serves (`strategy show` lists them)"),
         "on_behalf_of": GOAL_YES,
     },
     required=("owner", "title"),
@@ -310,7 +318,9 @@ def goal_strategy_bot_level3_offer(api, args):
                 },
                 "required": ["do"],
             },
-            "description": "1 to 10 changes",
+            "description": "1 to 10 changes (on a command line, as JSON): {\"do\": \"create\", \"owner\": \"<bot>\", "
+            '"title": "..."}, {"do": "reorder" or "close", "task_id": "..."}, {"do": "reassign", "task_id": "...", '
+            '"owner": "<bot>"}',
         },
         "goal_id": _s("The goal this serves, if any"),
     },
@@ -722,6 +732,102 @@ def proposal_decide(api, args):
     return _asked(api, args).post(f"{path}/{args['id']}/decide", body, key=_key(args))["proposal"]
 
 
+# ----------------------------------------------------------------------------- the `tico goal` commands
+_TO = Arg("goal_id", "--goal")
+_YES = Arg("on_behalf_of", metavar="MESSAGE_ID")
+
+_BODY = (Arg("body"), Arg("body", "--body-file", type=text_file, metavar="FILE"))
+_GOAL_FLAGS = (*_BODY, Arg("parent_id", "--parent"), Arg("bet_id", "--bet"))
+
+GOAL = (
+    Group("goal", "goals: list, read-back, create and edit"),
+    Command(
+        "goal read-back",
+        "Saves nothing without a plain yes: posts 1 to 20 changes as Tico's read-back in the owner's Strategy Owner "
+        "chat, with the exact method, path and body of each step to `goal save` after that yes. On not_agreed read back "
+        "again; never retry the save.",
+        args=(Arg("changes", action="store"),),
+        example="""tico goal read-back '[{"kind": "goal_create", "owner": "me", "title": "Ship 0.6"}]'""",
+    ),
+    Command(
+        "goal save",
+        "save one exact read-back step after the owner's plain yes, citing it with --on-behalf-of",
+        args=(Arg("on_behalf_of", "--on-behalf-of"),),
+        example="tico goal save POST goals '{\"title\": \"Ship 0.6\"}' --on-behalf-of turn",
+    ),
+    Command(
+        "goal list",
+        "what you are for: your goals, the chain above them, your reports' goals",
+        example="tico goal list --all --status red,yellow",
+    ),
+    Command("goal show", "one goal, its KPIs and check-ins", example="tico goal show g_1"),
+    Command(
+        "goal create",
+        "set a goal; a parent is optional, and it starts with no colour",
+        args=(Arg("owner", "--owner"), Arg("title", "--title"), *_GOAL_FLAGS, _YES),
+        example="tico goal create --owner me --title 'Ship 0.6' --parent g_1",
+    ),
+    Command(
+        "goal status",
+        "set the colour by hand; it sticks until a person hands it back (`auto`)",
+        args=(Arg("note", positional=True, nargs="?", default=""),),
+        example="tico goal status g_1 yellow 'two specs late'",
+    ),
+    Command(
+        "goal update",
+        "change a goal's title, body, parent, owner, order or bet",
+        args=(*_GOAL_FLAGS, _YES),
+        example="tico goal update g_1 --title 'Ship 0.6 by Friday'",
+    ),
+    Command(
+        "goal refresh",
+        "the Strategy Owner's status pass: work automatic colours out again",
+        args=(Arg("goal_ids", "--goal"),),
+        example="tico goal refresh --goal g_1",
+    ),
+    Command(
+        "goal checkin",
+        "how the owner says the goal is going, in their words",
+        args=(Arg("from_actor", "--from"), Arg("kpi_id", "--kpi")),
+        example="tico goal checkin g_1 'two customers live' --signal on_track",
+    ),
+    Command("goal checkin-list", "a goal's check-ins, newest first", example="tico goal checkin-list g_1"),
+    Command(
+        "goal needs-you",
+        "red KPIs on your goals, stale KPIs you own, proposals to confirm",
+        example="tico goal needs-you",
+    ),
+    Command("goal company", "the company's Vision and Description (read-only)", example="tico goal company"),
+    Command(
+        "goal strategy-bot",
+        "the Strategy Owner: its level, regular checks and today's Needs you count per person",
+        example="tico goal strategy-bot",
+    ),
+    Command(
+        "goal strategy-bot-merge",
+        "the Strategy Owner at level 2+: one item for several bots' same ask of a person",
+        args=(Arg("tasks", action="store", nargs="+"),),
+        example="tico goal strategy-bot-merge human:ana 'Pricing' 'Which plan first?' t_1 t_2",
+    ),
+    Command(
+        "goal strategy-bot-level3-offer",
+        "the Strategy Owner: record the level-3 offer its Monday note made",
+        example="tico goal strategy-bot-level3-offer",
+    ),
+    Command(
+        "goal strategy-bot-decide",
+        "the Strategy Owner at level 3: one decision alone on bot tasks, with Undo",
+        args=(Arg("changes", action="store"), Arg("goal_id", "--goal-id")),
+        example="""tico goal strategy-bot-decide 'stale' '[{"do": "close", "task_id": "t_1"}]'""",
+    ),
+    Command(
+        "goal strategy-bot-log",
+        "the Strategy Owner log (the owner only): what it decided alone and what it proposed instead",
+        example="tico goal strategy-bot-log --limit 20",
+    ),
+)
+
+
 # ----------------------------------------------------------------------------- the `tico kpi` and `tico proposal` commands
 def _json(text):
     """`--payload`: the proposed change, as JSON."""
@@ -730,9 +836,6 @@ def _json(text):
     except ValueError:
         raise argparse.ArgumentTypeError("--payload must be JSON") from None
 
-
-_TO = Arg("goal_id", "--goal")
-_YES = Arg("on_behalf_of", metavar="MESSAGE_ID")
 
 KPI = (
     Group("kpi", "a measure on its own that goals link to, and its readings"),

@@ -41,11 +41,6 @@
    ],
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "strategy",
     null
    ]
@@ -65,16 +60,12 @@
    [
     "tico_strategy_show",
     {
-     "operation_id": null
+     "operation_id": null,
+     "section": "serve"
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -112,11 +103,6 @@
    ],
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "strategy",
     null
    ]
@@ -141,11 +127,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "strategy/summary",
     null
    ]
@@ -163,17 +144,11 @@
    [
     "tico_strategy_draft",
     {
-     "operation_id": null,
-     "section": []
+     "operation_id": null
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -226,11 +201,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "PUT",
     "strategy/draft",
     {
@@ -259,17 +229,11 @@
    [
     "tico_strategy_publish",
     {
-     "note": "",
      "operation_id": null
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -311,11 +275,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "strategy/publish",
     {
@@ -344,11 +303,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "strategy/versions",
     null
    ]
@@ -373,11 +327,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "strategy/versions/5",
@@ -410,11 +359,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "strategy/diff?from=5&to=5",
     null
    ]
@@ -441,11 +385,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -525,11 +464,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "strategy/bets",
     {
@@ -573,11 +507,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -657,11 +586,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "strategy/bets/id-1",
     {
@@ -723,11 +647,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "strategy/bets/id-1",
     {
@@ -762,16 +681,12 @@
    [
     "tico_strategy_show",
     {
-     "operation_id": null
+     "operation_id": null,
+     "section": "how"
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -807,11 +722,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "strategy/diff?from=1&to=1",

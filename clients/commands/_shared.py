@@ -161,18 +161,24 @@ def _model_id(catalog, requested):
 _CHANNEL = _s("The channel: #customer_success, customer_success or its id (C0123456789)")
 
 
-def json_file(path):
-    """A flag's type: the JSON a file holds (`-` for standard input), or a usage error that says why not."""
+def text_file(path):
+    """A flag's type: the text a file holds (`-` for standard input), or a usage error that says why not."""
     import argparse
-    import json
     import sys
     from pathlib import Path
 
     try:
-        text = sys.stdin.read() if path == "-" else Path(path).expanduser().read_text(encoding="utf-8-sig")
+        return sys.stdin.read() if path == "-" else Path(path).expanduser().read_text(encoding="utf-8-sig")
     except OSError as exc:
-        raise argparse.ArgumentTypeError(f"cannot read {path} ({exc.strerror})") from None
+        raise argparse.ArgumentTypeError(f"cannot read {path} ({exc.strerror or exc})") from None
+
+
+def json_file(path):
+    """A flag's type: the JSON a file holds (`-` for standard input), or a usage error that says why not."""
+    import argparse
+    import json
+
     try:
-        return json.loads(text)
+        return json.loads(text_file(path))
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"{path} is not JSON ({exc})") from None

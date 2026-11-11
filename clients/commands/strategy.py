@@ -65,13 +65,17 @@ BET_PROPS = {
         "(YYYY-MM-DD) on any. An active bet needs one; {} clears it",
     },
     "wrong_if_kpi": _s("Instead of wrong_if: the KPI id"),
-    "wrong_if_direction": {"type": "string", "enum": ["above", "below"]},
-    "wrong_if_threshold": {"type": "number"},
+    "wrong_if_direction": {
+        "type": "string",
+        "enum": ["above", "below"],
+        "description": "Instead of wrong_if: wrong when the KPI goes above or below the threshold",
+    },
+    "wrong_if_threshold": {"type": "number", "description": "Instead of wrong_if: the KPI's value that would show it"},
     "wrong_if_thesis": _s("Instead of wrong_if: the market id it watches"),
     "wrong_if_text": _s("Instead of wrong_if: the observation, in words (needs check_by)"),
     "check_by": _s("YYYY-MM-DD: the day to look again"),
     "cites": {"type": "array", "items": {"type": "string"}, "description": "Market entity or page ids it rests on"},
-    "status": {"type": "string", "enum": ["proposed", "active", "retired"]},
+    "status": {"type": "string", "enum": ["proposed", "active", "retired"], "description": "Proposed by default"},
     "rank": {"type": "integer", "description": "Its place in the list"},
 }
 
@@ -92,11 +96,23 @@ def _bet_body(args):
     "tico_strategy_show",
     "The team's published strategy: summary, vision, the seven sections, the bets with their "
     "wrong-ifs, each bet's goals and colour, the team's website, and proof_since (when How we know they want it "
-    "last changed). The owner also gets the draft.",
-    {},
+    "last changed). The owner also gets the draft. With `section`, only that section of the published strategy.",
+    {
+        "section": {
+            "type": "string",
+            "enum": list(STRATEGY_SECTIONS),
+            "description": "Only this section of the published strategy, as text (proof: How we know they want it; "
+            "now: Why now; how: How we sell)",
+        }
+    },
 )
 def strategy_show(api, args):
-    return _as_person(api).get("strategy")
+    strategy = _as_person(api).get("strategy")
+    if not args.get("section"):
+        return strategy
+    current = strategy.get("current") if isinstance(strategy, dict) else None
+    text = (current.get("sections") or {}).get(args["section"]) or "" if current else None
+    return {"section": args["section"], "text": text}
 
 
 @tool(
@@ -120,7 +136,12 @@ def strategy_summary(api, args):
             "type": "object",
             "description": "{serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, any of them",
         },
-        "section": {"type": "array", "items": {"type": "string"}, "description": "KEY=TEXT, instead of sections"},
+        "section": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "KEY=TEXT, instead of sections: serve, sell, proof, now, know, how, not, or an extra "
+            "section's key; KEY= clears it",
+        },
         "revision": {"type": "integer", "description": "The draft's revision you read; default the current one"},
     },
     writes=True,
@@ -172,7 +193,10 @@ def strategy_versions(api, args):
 @tool(
     "tico_strategy_diff",
     "What changed between two published versions: fields, and bets added, retired or changed.",
-    {"from_n": {"type": "integer"}, "to_n": {"type": "integer"}},
+    {
+        "from_n": {"type": "integer", "description": "The older version's number"},
+        "to_n": {"type": "integer", "description": "The newer version's number"},
+    },
     required=("from_n", "to_n"),
 )
 def strategy_diff(api, args):
@@ -267,7 +291,7 @@ def _brand_sections(args):
     {
         "sections": {"type": "object", "description": "{section: value or null}: " + ", ".join(BRAND_SECTIONS)},
         "section": {"type": "string", "enum": list(BRAND_SECTIONS), "description": "One section, with body"},
-        "body": _s("That section's value as JSON text"),
+        "body": _s("That section's value as JSON text; null removes it"),
         "revision": {"type": "integer", "description": "The draft's revision you read; stale is refused"},
     },
     writes=True,
@@ -294,7 +318,7 @@ def brand_publish(api, args):
     "Check a draft (a post, an email, an ad) against the published brand: words to avoid, "
     "wrong spellings of names, claims the brand never makes. Each hit has kind, match, rule, level (block or warn) "
     "and index. Fix every block before it goes out.",
-    {"text": _s("The draft, whole")},
+    {"text": _s("The draft, whole (on a command line, a file holding it, or - for standard input)")},
     required=("text",),
 )
 def brand_check(api, args):
@@ -801,4 +825,121 @@ LENS = (
     ),
     Command("lens show", "one run: answers, result and changes", example="tico lens show lr_1"),
     Command("lens runs", "runs, newest first", example="tico lens runs --lens pre-mortem --limit 5"),
+)
+
+
+# ----------------------------------------------------------------------------- the `tico strategy` and `tico brand` commands
+def _strategy_text(args, result):
+    """`strategy show`: one section as text with `--section`, else the strategy as JSON."""
+    if not args.section:
+        return json.dumps(result, indent=2)
+    return "Nothing published yet." if result["text"] is None else result["text"]
+
+
+def _read_draft(fields):
+    """`brand check <file>`: the draft the file holds, or standard input for `-`, read as the command runs."""
+    import sys
+    from pathlib import Path
+
+    path = fields["text"]
+    return {**fields, "text": sys.stdin.read() if path == "-" else Path(path).read_text()}
+
+
+_WHOLE = Arg("wrong_if", type=json.loads, metavar="JSON")
+_BET = (
+    Arg("wrong_if_kpi", metavar="ID"),
+    Arg("wrong_if_threshold", metavar="N"),
+    Arg("wrong_if_thesis", metavar="MARKET_ID"),
+    Arg("wrong_if_text", metavar="TEXT"),
+    Arg("check_by", metavar="DATE"),
+    Arg("cites", "--cite", metavar="MARKET_ID"),
+    _WHOLE,
+)
+
+STRATEGY = (
+    Group("strategy", "the team's strategy: its bets, its sections, the versions"),
+    Command(
+        "strategy show",
+        "the published strategy, its bets and their goals; the owner also gets the draft",
+        render=_strategy_text,
+        example="tico strategy show --section serve",
+    ),
+    Command("strategy summary", "the text every run's context carries", example="tico strategy summary"),
+    Command(
+        "strategy draft",
+        "owner only: change the draft; a bot proposes instead (proposal create --kind strategy_draft)",
+        args=(Arg("sections", type=json.loads, metavar="JSON"), Arg("section", metavar="KEY=TEXT")),
+        example="tico strategy draft --section 'serve=Small offices with one IT person' --revision 4",
+    ),
+    Command(
+        "strategy publish",
+        "owner only: the draft becomes the next version",
+        example="tico strategy publish --note 'serve: small offices'",
+    ),
+    Command(
+        "strategy versions",
+        "the published versions, newest first; with N, that version whole",
+        args=(Arg("n", positional=True, nargs="?"),),
+        example="tico strategy versions 3",
+    ),
+    Command(
+        "strategy diff",
+        "what changed between two published versions",
+        args=(Arg("from_n", "--from"), Arg("to_n", "--to")),
+        example="tico strategy diff --from 2 --to 3",
+    ),
+    Group("strategy bet", "owner only: add, change or retire a bet"),
+    Command(
+        "strategy bet add",
+        "a new bet, proposed unless --status says otherwise",
+        args=(Arg("statement", "--statement"), *_BET),
+        example="tico strategy bet add --statement 'Small offices buy without a demo' --wrong-if-kpi k_1 "
+        "--wrong-if-direction below --wrong-if-threshold 5",
+    ),
+    Command(
+        "strategy bet update",
+        "change a bet; only the flags given change",
+        args=_BET,
+        example="tico strategy bet update b_1 --status active --rules-out 'enterprise deals'",
+    ),
+    Command("strategy bet retire", "retire a bet; its goals keep their link", example="tico strategy bet retire b_1"),
+)
+
+BRAND = (
+    Group("brand", "the brand: voice, words, names, claims"),
+    Command(
+        "brand show",
+        "the published page; owner and admins also get the draft",
+        args=(Arg("version", metavar="N"),),
+        render=_growth_text,
+        example="tico brand show --section voice",
+    ),
+    Command(
+        "brand summary",
+        "the text a growth-facing bot's turn carries",
+        render=_growth_text,
+        example="tico brand summary",
+    ),
+    Command(
+        "brand check",
+        "check a draft against the published brand",
+        args=(Arg("text", metavar="file"),),
+        convert=_read_draft,
+        render=_growth_text,
+        example="tico brand check post.md",
+    ),
+    Command(
+        "brand draft",
+        "owner or admin: change the draft, one section with --section and --body or several with --sections; a bot "
+        "proposes instead (proposal create --kind brand_draft)",
+        args=(Arg("sections", type=json.loads, metavar="JSON"),),
+        render=_growth_text,
+        example="""tico brand draft --section voice --body '"plain, warm, short"' --revision 2""",
+    ),
+    Command(
+        "brand publish",
+        "owner or admin: the draft becomes the next version",
+        render=_growth_text,
+        example="tico brand publish --note 'new claims'",
+    ),
 )

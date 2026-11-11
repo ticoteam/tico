@@ -41,11 +41,6 @@
    ],
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "brand",
     null
    ]
@@ -74,11 +69,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -116,11 +106,6 @@
    ],
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "brand",
     null
    ]
@@ -143,11 +128,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "brand/summary",
@@ -175,11 +155,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "brand/summary",
     null
    ]
@@ -195,13 +170,7 @@
    "file-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -214,13 +183,7 @@
    "--json"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -255,13 +218,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"body\",\n  \"detail\": \"--body must be JSON: a string in quotes, a list or an object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
@@ -288,13 +245,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"body\",\n  \"detail\": \"--body must be JSON: a string in quotes, a list or an object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
@@ -319,13 +270,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"body\",\n  \"detail\": \"--body must be JSON: a string in quotes, a list or an object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
@@ -339,17 +284,11 @@
    [
     "tico_brand_publish",
     {
-     "note": "",
      "operation_id": null
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -390,11 +329,6 @@
     null
    ],
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "brand/publish",
     {
@@ -416,17 +350,11 @@
    [
     "tico_brand_publish",
     {
-     "note": "",
      "operation_id": null
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -461,11 +389,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "brand/check",
     {
@@ -494,11 +417,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -538,11 +456,6 @@
    ],
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "brand",
     null
    ]
@@ -558,13 +471,7 @@
    "1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
   "stderr": "",
   "exit": 1

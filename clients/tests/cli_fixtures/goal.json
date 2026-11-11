@@ -35,13 +35,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"ValueError: changes must be a JSON array of 1 to 20 change objects\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -79,13 +73,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"ValueError: path must be a goal read-back save step\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -115,13 +103,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"ValueError: path must be a goal read-back save step\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -152,11 +134,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "goals",
@@ -191,11 +168,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "goals?all=1&status=status-1",
     null
    ]
@@ -220,11 +192,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "goals/id-1",
@@ -259,7 +226,6 @@
    [
     "tico_goal_create",
     {
-     "body": "",
      "operation_id": null,
      "owner": "me",
      "title": "Launch",
@@ -268,11 +234,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -316,16 +277,10 @@
    "on-behalf-of-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'body-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico goal create: error: argument --body-file: cannot read body-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -346,11 +301,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goals/id-1/status",
@@ -384,11 +334,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goals/id-1/status",
@@ -431,11 +376,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "goals/id-1",
     {
@@ -477,16 +417,10 @@
    "on-behalf-of-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'body-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico goal update: error: argument --body-file: cannot read body-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -513,11 +447,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goals/refresh",
@@ -553,11 +482,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "goals/refresh",
     {
@@ -590,11 +514,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goals/id-1/checkins",
@@ -637,11 +556,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goals/id-1/checkins",
@@ -686,11 +600,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "goals/id-1/checkins",
     null
    ]
@@ -726,11 +635,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "goals/needs-you",
     null
    ]
@@ -755,11 +659,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "company",
     null
    ]
@@ -782,11 +681,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "strategy-bot",
@@ -823,11 +717,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "strategy-bot/merge",
@@ -872,11 +761,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "strategy-bot/level3-offer",
     {}
@@ -903,13 +787,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"ValueError: changes is a JSON list of changes: Expecting value: line 1 column 1 (char 0)\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -934,13 +812,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"ValueError: changes is a JSON list of changes: Expecting value: line 1 column 1 (char 0)\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -970,11 +842,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "strategy-bot/log",
@@ -1007,11 +874,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "strategy-bot/log?before=before-1&limit=5",
     null
    ]
@@ -1042,13 +904,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"ValueError: path must be a goal read-back save step\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -1075,13 +931,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"ValueError: body must be a JSON object\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -1102,11 +952,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "goals/1",
@@ -1135,11 +980,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "goals?all=1",
     null
    ]
@@ -1166,11 +1006,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "goals?owner=human%3A1",
@@ -1202,11 +1037,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "goals?all=1&status=green%2Cyellow%2Cred%2Cdone%2Cdropped",
     null
    ]
@@ -1235,13 +1065,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"TypeError: 'int' object is not iterable\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -1264,11 +1088,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goals/1/checkins",
@@ -1300,11 +1119,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "goals/1/checkins",
@@ -1339,11 +1153,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goals/1/checkins",
@@ -1384,11 +1193,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "goals/1/checkins",
     {
@@ -1428,11 +1232,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "goals/1/checkins",
     {
@@ -1465,11 +1264,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "goals?owner=1",
@@ -1518,7 +1312,6 @@
    [
     "tico_goal_create",
     {
-     "body": "",
      "operation_id": null,
      "owner": "me",
      "title": "...",
@@ -1527,11 +1320,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "me",
@@ -1575,11 +1363,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "goals/1/status",
     {
@@ -1613,11 +1396,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "goals/1/status",
     {
@@ -1650,11 +1428,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goals/1/status",
