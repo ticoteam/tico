@@ -3,7 +3,7 @@
 import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from . import agents, go_live as pending_go_lives, models as M, setup_live
+from . import agents, go_live as pending_go_lives, models as M, routines, setup_live
 from .auth import Identity
 from .execution import bot_repository
 from .settings_admin import repository_present
@@ -29,7 +29,7 @@ def register(
 
     def finish_go_live(c, who, bot, setup):
         """What going live does once the bot's computer has its repository: active, its setup started with the
-        person, and its first routine on. Shared by the request itself and by the readiness report that completes a
+        person, and the routines its template came with on. Shared by the request itself and by the readiness report that completes a
         go-live that was waiting for the repository."""
         row = H.bot(c, bot)
         if row["state"] == "quarantined":
@@ -47,8 +47,10 @@ def register(
         if setup and config and is_parked(config["onboarding_state"]) and who.role in ("owner", "human"):
             send(c, who, M.MessageCreate(to="bot:" + bot, text="Let's set you up."))
             started = True
-        # Going live turns its first routine on too: nobody approves it separately.
-        armed = onboarding.arm_first_routine(c, who, bot)
+        # Going live turns its template's routines on too: nobody approves them separately. The answer and the
+        # go-live event name the ones this turned on, and `routines` says which are on now, so a report of them
+        # comes from this fact rather than from the template.
+        armed = [routine["name"] for routine in onboarding.arm_routines(c, who, bot)]
         # A seat bot nobody chats with runs the same setup on its own, with no person (backend/setup_live.py).
         own = setup_live.start_setup(c, onboarding, bot)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))
@@ -56,6 +58,7 @@ def register(
             "activated": activated,
             "setup_started": started,
             "routine_armed": armed,
+            "routines": routines.of_bot(c, bot),
             **({"own_setup_task_id": own} if own else {}),
         }
 

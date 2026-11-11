@@ -959,7 +959,7 @@ class Onboarding:
         """A starter template's bot, as first run creates it: it records the template and its version,
         waits for the computer to materialize its repository (`materialize`), seeds its first routine
         off, and is `needs_onboarding` until it says its setup is done. Starting the setup turns that
-        routine on (`arm_first_routine`). Nothing claims work for it before then except a message from
+        routine on (`arm_routines`). Nothing claims work for it before then except a message from
         a person (execution.candidate)."""
         declared = self._declared(c, slug)
         declared.update(template=template, template_version=releases.version(), materialize=True)
@@ -990,7 +990,7 @@ class Onboarding:
                     "onboarding_state": row["onboarding_state"] or "",
                     "stage": lifecycle.ACTIVE,
                     "changed": False,
-                    "routine": self._arm_built_in_starter(c, who, slug),
+                    "routine": self._arm_on_own_setup(c, who, slug),
                 }
             # Its own setup-done says no summary: the one it gave with `tico bot ready --summary` stays, as it was
             # (no new ready event, `at` unchanged).
@@ -1022,7 +1022,7 @@ class Onboarding:
                 "onboarding_state": row["onboarding_state"] or "",
                 "stage": lifecycle.ACTIVE,
                 "changed": False,
-                "routine": self._arm_built_in_starter(c, who, slug),
+                "routine": self._arm_on_own_setup(c, who, slug),
             }
         if self.auth.member_bot(c, slug):
             limit = Access.load_access(c, self.settings)["member_bot_limit"]
@@ -1039,26 +1039,33 @@ class Onboarding:
         c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (ONBOARDED, slug))
         H.event(c, who.actor, "bot.onboarded", slug, {})
         H.setup_finished(c, slug)
-        # A bot whose setup was never started (Finish with defaults on Overview) gets its first routine as Start setup
-        # would have given it; once only, so one already armed or turned off by a person is left alone.
-        routine = self.arm_first_routine(c, who, slug) if arm else None
+        # A bot whose setup was never started (Finish with defaults on Overview) gets its routines as Start setup
+        # would have given them; once only, so ones already armed or turned off by a person are left alone.
+        armed = self.arm_routines(c, who, slug) if arm else []
         return {
             "bot": slug,
             "onboarding_state": ONBOARDED,
             "stage": lifecycle.ACTIVE,
             "changed": True,
-            "routine": routine,
+            "routine": armed[0]["id"] if armed else None,
         }
 
-    def _arm_built_in_starter(self, c, who, slug):
-        """A starter card that is also built in (`bootstrap`, the Design Owner) is never parked, so no Start setup arms its
-        first routine: its setup-done does, once (`arm_first_routine`; one a person turned off stays off). Its routine
-        stays off until then, so it runs only once the setup it needs (the brand book) exists. Returns the key or None."""
-        template = self._declared(c, slug).get("template")
+    def _arm_on_own_setup(self, c, who, slug):
+        """A bot that is never parked arms its routines at its own setup-done when nothing armed them before
+        (`arm_routines`: once; one a person turned off stays off). A starter card that is also built in (`bootstrap`, the
+        Design Owner) waits for it, so its routine runs only once the setup it needs (the brand book) exists; a seat bot's
+        go-live armed them already, unless they were not built yet then. Returns the first armed routine's key or None."""
+        from .setup_live import GOES_LIVE
+
+        declared = self._declared(c, slug)
+        template = declared.get("template")
         card = next((card for card in read_cards(self.settings) if card["template"] == template), None)
-        if not template or not card or not (card.get("bootstrap") and card.get("starter")):
+        if not template or not card:
             return None
-        return self.arm_first_routine(c, who, slug)
+        if not (card.get("bootstrap") and card.get("starter")) and not declared.get(GOES_LIVE):
+            return None
+        armed = self.arm_routines(c, who, slug)
+        return armed[0]["id"] if armed else None
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""
@@ -1180,6 +1187,7 @@ class Onboarding:
             ("brand_owner", self.ensure_brand_owner),
             ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),
             ("builtin_routines", self.ensure_builtin_routines),
+            ("seat_routines", self.arm_live_seats),
             ("pipelines", pipeline_settings.ensure_presets),
             ("task_sweep", routines.ensure_task_sweep),
         )
@@ -1421,9 +1429,39 @@ class Onboarding:
                 c.execute("RELEASE builtin_routines")
         return made
 
+    def arm_live_seats(self, c):
+        """At startup (an update): a seat bot that went live while going live armed none of its routines (0.6 rc.4 and
+        before looked for them where only built-ins keep them) gets them on now, as `arm_routines` turns them on, once:
+        it records that, so the next start does nothing. Only a routine nobody changed since BotOps made it goes on
+        (routines.untouched: every switch or edit is on the automation's audit trail), so one a person turned off stays
+        off. A paused or archived bot is a person's stop and is left alone. Returns the (bot, key) pairs it turned on."""
+        from .setup_live import GOES_LIVE
+
+        try:
+            who = self.auth.owner_identity(c)
+        except Problem:
+            return []
+        armed = []
+        for bot in c.execute(
+            f"SELECT bc.bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+            "WHERE b.state='active'"
+        ).fetchall():
+            declared = _json(bot["config"], {}) or {}
+            if not declared.get(GOES_LIVE) or declared.get("routine_armed"):
+                continue
+            # Best effort per bot, as ensure_builtin_routines: one bot's failure does not stop the others.
+            c.execute("SAVEPOINT seat_routines")
+            try:
+                armed += [(bot["bot"], routine["id"]) for routine in self.arm_routines(c, who, bot["bot"])]
+                c.execute("RELEASE seat_routines")
+            except (Problem, ValueError):
+                c.execute("ROLLBACK TO seat_routines")
+                c.execute("RELEASE seat_routines")
+        return armed
+
     def start_setup(self, c, who, slug):
-        """A person who manages a parked starter says anything to it: its setup has begun, so its first routine
-        goes on (`arm_first_routine`). Anyone else's message to it changes nothing."""
+        """A person who manages a parked starter says anything to it: its setup has begun, so its routines go on
+        (`arm_routines`). Anyone else's message to it changes nothing. Returns the first armed routine's key or None."""
         slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         row = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if (
@@ -1432,37 +1470,43 @@ class Onboarding:
             and who.role in ("owner", "human")
             and (self.auth.bot_manager(c, who, slug) or self.auth.operator(c, who, slug))
         ):
-            return self.arm_first_routine(c, who, slug)
+            armed = self.arm_routines(c, who, slug)
+            return armed[0]["id"] if armed else None
         return None
 
-    def arm_first_routine(self, c, who, slug):
-        """Setting a bot up turns its first routine on: the template seeds it off, and starting the setup
-        (Start setup, go-live) is the go-ahead, so nobody approves it separately. Once only: a routine a
-        person explicitly turns off before or after activation stays off. Returns the routine's key, or None."""
+    def arm_routines(self, c, who, slug):
+        """Setting a bot up turns on the routines its template came with: the template seeds them off, and starting the
+        setup (Start setup, go-live) is the go-ahead, so nobody approves them separately. Once per bot, and only a
+        routine nobody has changed since it was made (routines.untouched): one a person turned off, edited or left as a
+        draft stays as it is. A built-in bot's routines are started by the server's own rules (the Strategy Owner's KPI
+        pass once a KPI exists), so going live starts none of them, unless it is a starter (the Design Owner). Returns the
+        routines it turned on, `{id, name}` each (the id is the template's key)."""
         declared = self._declared(c, slug)
-        if declared.get("routine_armed") or not declared.get("template"):
-            return None
-        first = next(iter(self._template_routines(c, declared["template"])), None)
-        sid = (
-            first
-            and c.execute("SELECT id FROM schedules WHERE bot=? AND routine_key=?", (slug, first["id"])).fetchone()
-        )
-        # The routine as it is now: its automation once it moved (backend/routines.py `row`).
-        found = sid and routines.row(c, sid["id"])
-        if not found or found["deleted_at"]:
-            return None
-        declared["routine_armed"] = first["id"]
+        template = declared.get("template")
+        if declared.get("routine_armed") or not template:
+            return []
+        card = next((card for card in read_cards(self.settings) if card["template"] == template), {})
+        if card.get("bootstrap") and not card.get("starter"):
+            return []
+        found = [
+            (entry, where)
+            for entry in self._template_routines(c, template)
+            if (where := routines.seeded(c, slug, entry))
+        ]
+        if not found:
+            return []  # not built yet: a later go-live or setup turns them on
+        declared["routine_armed"] = [entry["id"] for entry, _ in found]
         self._write_config(c, slug, declared)
-        explicitly_disabled = c.execute(
-            "SELECT 1 FROM events WHERE action='routine.updated' AND target=? "
-            "AND json_extract(detail,'$.enabled')=0 LIMIT 1",
-            (found["id"],),
-        ).fetchone()
-
-        if not found["enabled"] and not explicitly_disabled:
-            routines.update(c, who.actor, found["id"], {"enabled": True})
-            H.event(c, who.actor, "bot.routine_armed", slug, {"routine": first["id"]})
-        return first["id"]
+        armed = []
+        for entry, (sid, row) in found:
+            if row["enabled"] or not routines.untouched(c, sid, row):
+                continue
+            routines.switch_on(c, who.actor, sid, row)
+            H.event(
+                c, who.actor, "bot.routine_armed", slug, {"routine": entry["id"], "automation": row.get("automation")}
+            )
+            armed.append({"id": entry["id"], "name": row.get("name") or row.get("title") or entry["title"]})
+        return armed
 
     def on_runner_enrolled(self, c, runner_id, operator):
         """Enrolling the owner's Mac after the wizard finishes wires it up too, so the order

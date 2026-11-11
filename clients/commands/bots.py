@@ -918,7 +918,7 @@ def grokbot_sync(api, args):
 @tool(
     "tico_bot_show",
     "One bot: its profile (name, role, who runs it, who it reports to, who it works for), and for "
-    "one who may read it also its status, machine, queue and goals.",
+    "one who may read it also its status, machine, queue, goals and which routines are on.",
     {"slug": _s("The bot's slug")},
     required=("slug",),
 )

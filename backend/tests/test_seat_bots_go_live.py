@@ -7,7 +7,9 @@ template parked the Builder in Onboarding until a person marked it complete (bug
 doubles the suite has: BotOps' turn token, the computer's heartbeat readiness report and its claim.
 """
 
+import json
 import uuid
+from pathlib import Path
 
 from backend.store import H
 from backend.tests.helpers.botops_parity import act
@@ -217,6 +219,123 @@ SETUP_FILES = {
         "knowledge/requests.md",
     ],
 }
+
+
+CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
+
+
+class _Turn:
+    """BotOps' `tico` client in its setup turn, answered as the person it works for (`_as_person`)."""
+
+    def __init__(self, api, attempt):
+        self.api, self.attempt = api, attempt
+
+    def post(self, path, body):
+        done = act(self.api, self.attempt, "POST", path, body)
+        assert done.status_code == 200, done.text
+        return done.json()
+
+
+def _seed(api, attempt, seats):
+    """What `tico bot create` does on each seat's setup task: the template's routines become the bot's automations, off
+    (`clients/remotecli.py seed_automations`). Returns {automation id: bot id}."""
+    from clients.remotecli import seed_automations
+
+    made = {}
+    for bot, (slug, _) in seats.items():
+        template = rows(api, "SELECT template FROM bot_settings WHERE bot_id=?", (bot,))[0]["template"]
+        ids = seed_automations(_Turn(api, attempt), slug, CATALOG / template, bot)
+        assert isinstance(ids, list), (slug, ids)
+        made.update({aid: bot for aid in ids})
+    return made
+
+
+def _on(api, ids):
+    return {aid: bool(rows(api, "SELECT enabled FROM automations WHERE id=?", (aid,))[0]["enabled"]) for aid in ids}
+
+
+def test_going_live_turns_on_every_routine_its_template_seeded_and_says_which(environment):
+    """Globex on rc.4, bug 1: BotOps' `tico bot create` seeds a seat's routines off, straight into automations, and going
+    live looked for them in the old schedules table, so none was ever turned on, and BotOps told the owner one was.
+    Going live now turns on every routine the template seeded, says which on the go-live, and leaves alone one a person
+    turned off before it went live."""
+    api, computer, seats = _company(environment)
+    attempt = _claim(api, computer, "botops")
+    seeded = _seed(api, attempt, seats)
+    by_bot = {}
+    for aid, bot in seeded.items():
+        by_bot.setdefault(bot, []).append(aid)
+    release, _ = _seat(seats, "release-owner")
+    assert len(by_bot[release]) == 3  # its weekly report, release notes and merge queue watch
+    assert not any(_on(api, seeded).values())
+    # The cause: a seat's routines are automations only, with no schedules row for the old lookup to find.
+    assert not rows(api, f"SELECT 1 FROM schedules WHERE bot IN ({','.join('?' * len(seats))})", tuple(seats))
+    # The owner tries one of the Release Owner's and turns it off again before it goes live: that one stays off.
+    kept = by_bot[release][1]
+    for enabled in (True, False):
+        switched = api.patch(f"/api/v2/automations/{kept}", json={"enabled": enabled}, headers=signed_in())
+        assert switched.status_code == 200, switched.text
+
+    for slug, _ in seats.values():
+        assert act(api, attempt, "POST", f"bots/{slug}/go-live", {}).status_code == 202
+    _report(api, computer, present=list(seats))
+
+    on = _on(api, seeded)
+    assert {aid for aid, enabled in on.items() if not enabled} == {kept}, on
+    finished = {
+        row["target"]: json.loads(row["detail"])
+        for row in rows(api, "SELECT target, detail FROM events WHERE action='bot.go_live_finished'")
+    }
+    for bot, ids in by_bot.items():
+        armed = finished[bot]["routine_armed"]
+        names = {rows(api, "SELECT name FROM automations WHERE id=?", (aid,))[0]["name"] for aid in ids if aid != kept}
+        assert set(armed) == names, (bot, armed, names)
+        shown = act(api, attempt, "GET", f"bots/{seats[bot][0]}").json()["routines"]
+        assert {row["name"]: row["on"] for row in shown} == {
+            rows(api, "SELECT name FROM automations WHERE id=?", (aid,))[0]["name"]: aid != kept for aid in ids
+        }, shown
+    # Once: a later go-live arms nothing again, so the one the owner turns off afterwards stays off.
+    weekly = by_bot[release][0]
+    assert api.patch(f"/api/v2/automations/{weekly}", json={"enabled": False}, headers=signed_in()).status_code == 200
+    again = act(api, attempt, "POST", "bots/release-owner/go-live", {})
+    assert again.status_code == 200 and again.json()["routine_armed"] == [], again.text
+    assert not _on(api, [weekly])[weekly]
+
+
+def test_a_seat_that_went_live_with_its_routines_off_gets_them_on_at_start_once(environment, monkeypatch):
+    """Companies that went live on rc.4 have every seat routine off. The next start turns on the ones nobody has
+    touched since BotOps made them, once, and leaves off one a person turned off."""
+    from backend.onboarding import Onboarding
+
+    api, computer, seats = _company(environment)
+    attempt = _claim(api, computer, "botops")
+    seeded = _seed(api, attempt, seats)
+    with monkeypatch.context() as rc4:
+        rc4.setattr(Onboarding, "arm_routines", lambda self, c, who, slug: [])
+        for slug, _ in seats.values():
+            assert act(api, attempt, "POST", f"bots/{slug}/go-live", {}).status_code == 202
+        _report(api, computer, present=list(seats))
+    assert all(_state(api, bot)["state"] == "active" for bot in seats)
+    assert not any(_on(api, seeded).values())
+    kept = next(iter(seeded))
+    for enabled in (True, False):
+        assert (
+            api.patch(f"/api/v2/automations/{kept}", json={"enabled": enabled}, headers=signed_in()).status_code == 200
+        )
+
+    onboarding = api.app.state.onboarding
+    with api.app.state.store.transaction() as c:
+        first = onboarding.arm_live_seats(c)
+    assert sorted(bot for bot, _ in first) == sorted(bot for aid, bot in seeded.items() if aid != kept)
+    on = _on(api, seeded)
+    assert {aid for aid, enabled in on.items() if not enabled} == {kept}, on
+    assert len(rows(api, "SELECT 1 FROM events WHERE action='bot.routine_armed'")) == len(seeded) - 1
+    # Idempotent: the next start turns nothing on, even one a person turned off since.
+    other = next(aid for aid in seeded if aid != kept)
+    assert api.patch(f"/api/v2/automations/{other}", json={"enabled": False}, headers=signed_in()).status_code == 200
+    with api.app.state.store.transaction() as c:
+        assert onboarding.arm_live_seats(c) == []
+    assert not _on(api, [other])[other]
 
 
 def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_live(environment):

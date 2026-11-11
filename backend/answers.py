@@ -358,6 +358,19 @@ def _tell_bot(
         _wake(conn, row, target, lead, key, requirement.get("shows"))
 
 
+def _done_ends_own_snooze(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """Saying done on a snoozed task: the snooze was a wait (for a repository, for an answer) that the done says is
+    over. When nothing else is missing, the snooze ends and the task moves now, not when the snooze runs out. Only the
+    one who set it ends it this way, and a person's done ends a bot's; a bot never ends a snooze a person set."""
+    row = E.task(conn, task_id)
+    snoozed = (row or {}).get("snooze")
+    if not row or not snoozed or R.unmet(conn, row):
+        return
+    setter = str(snoozed["by_id"])
+    if setter == str(by) or (is_human(by) and is_bot(setter)):
+        E.unsnooze(conn, task_id, by, "Done")
+
+
 def answer(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -398,6 +411,8 @@ def answer(
         from . import task_asks
 
         task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
+    if requirement["kind"] == "owner_done":
+        _done_ends_own_snooze(conn, task_id, by)
     out = E.advance(conn, task_id)
     if out is None:
         # The task changed and stays: the never-stuck ladder starts again, before any wake this answer sends.

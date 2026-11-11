@@ -51,20 +51,21 @@ def pending(c: sqlite3.Connection, bot: str) -> dict[str, Any] | None:
     return _object(found["value"]) if found else None
 
 
-def require_live(c: sqlite3.Connection, task_id: str) -> None:
-    """Refuse marking a seat bot's setup task done while the bot cannot take work yet, saying what finishes it."""
+def require_live(c: sqlite3.Connection, task_id: str) -> str | None:
+    """Refuse marking a seat bot's setup task done while the bot cannot take work yet, saying what finishes it. Returns
+    the seat bot when it is live, so its routines go on with it however it went live, else None."""
     bot, declared = bot_of(c, task_id)
     if not bot or not declared.get(GOES_LIVE):
-        return
+        return None
     row = cast("dict[str, Any] | None", cast("Any", H).bot(c, bot))
     if not row or row["state"] == "archived":
-        return
+        return None
     if row["state"] == "active":
-        return  # live; an onboarding hold is a person's step, not one BotOps can finish
+        return bot  # live; an onboarding hold is a person's step, not one BotOps can finish
     name, slug = row.get("display_name") or row["slug"], row["slug"]
     waiting = pending(c, bot)
     if waiting and waiting.get("failed"):
-        return  # the person who asked was told why it could not go live; the note says the rest
+        return None  # the person who asked was told why it could not go live; the note says the rest
     if waiting:
         where = waiting.get("computer") or "its computer"
         raise Problem(

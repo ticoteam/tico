@@ -2914,6 +2914,15 @@ SCHEMAS = {
             "goals": "s",
             "turns_at_once": {"type": ["integer", "null"]},
             "task_flow": ref("TaskFlow"),
+            "routines": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "on": {"type": "boolean"}},
+                },
+                "description": "For a caller who can read it: the bot's routines (its automations, the first 20) and "
+                "whether each is on now",
+            },
             "cant_run": {
                 "type": ["object", "null"],
                 "properties": {
@@ -3103,8 +3112,8 @@ SCHEMAS = {
             },
             "routine": {
                 "type": ["string", "null"],
-                "description": "The template's first routine when this call "
-                "armed it (on, unless a person turned it off); null when setup had armed it already",
+                "description": "The first of the template's routines this call turned on (one a person "
+                "turned off stays off); null when it turned none on",
             },
         },
         required=["bot", "onboarding_state", "changed"],

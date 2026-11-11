@@ -236,8 +236,16 @@ def register(
             org_rule_check.replayer(operation, audience=audience)(replay)
 
     # ------------------------------------------------------------------ where it is
+    def setup_finished(c: Any, who: Any, task_id: str) -> None:
+        """A seat bot's "Set up" task is done once the bot is live, and its template's routines are on by then: go-live
+        turned them on, and one made active another way (its Settings switch) gets them here, once."""
+        bot = setup_live.require_live(c, task_id)
+        onboarding = getattr(app.state, "onboarding", None)
+        if bot and onboarding:
+            onboarding.arm_routines(c, who, bot)
+
     def done_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
-        setup_live.require_live(c, task_id)  # a seat bot's "Set up" task is done once the bot is live
+        setup_finished(c, who, task_id)
         note, version = carry(c, who, task_id, gate, body.note or "", body.version)
         H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None)
 
@@ -251,7 +259,7 @@ def register(
 
     def move_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
         if str(body.to).strip().lower() == "done":
-            setup_live.require_live(c, task_id)
+            setup_finished(c, who, task_id)
         why, version = carry(c, who, task_id, gate, body.why, body.version)
         H.task_move(c, who.actor, task_id, body.to, why, version, mover=mover(c, who) or None)
 

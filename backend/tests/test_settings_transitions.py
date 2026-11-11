@@ -251,7 +251,7 @@ def test_a_go_live_that_breaks_while_finishing_never_fails_the_heartbeat(api, mo
     def broken(self, c, who, slug):  # a fault in Tico while it finishes
         raise ValueError("bogus validation error")
 
-    monkeypatch.setattr(Onboarding, "arm_first_routine", broken)
+    monkeypatch.setattr(Onboarding, "arm_routines", broken)
     ready(api, machine, ["cpo"])  # 200, not a failed heartbeat
     ready(api, machine, ["cpo"])
     assert _record(api)["failed"]["code"] == "finish_error"

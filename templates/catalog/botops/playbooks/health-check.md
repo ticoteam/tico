@@ -49,7 +49,8 @@ Only when the requester asked you to take it live (`AGENT.md`: turning a bot on 
 2. Otherwise run `tico bot go-live <bot>` as the requester, and read the answer:
    - `state` active: it is live. `placed` true: it is on a computer. `setup_started`: its setup has begun.
    - `state` `waiting_for_repository`: its computer is fetching the repository, and Tico turns it on by itself once the computer has it. Do not run go-live again.
-3. If `routine_armed` is set, say which routine is now on: going live turns the bot's first routine on.
+3. Name the routines that are on from `routines` in the answer (`on` true), and only those: going live turns on the routines
+   its template came with, except one a person turned off or changed. Say none is on when none is.
 
 ### A computer low on disk
 

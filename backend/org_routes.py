@@ -9,6 +9,7 @@ from . import (
     profiles,
     report_managers,
     rooms,
+    routines,
     start_places,
     task_models,
     task_privacy as privacy,
@@ -232,7 +233,8 @@ def register(app, auth, settings, settings_admin, store):
     @app.get("/api/v2/bots/{bot}")
     def bot_detail(request: Request, bot: str):
         """One bot: the profile a caller who can see it gets (name, role, who runs it, who it reports
-        to, who it works for), and for one who can read it also its status, machine, queue and goals."""
+        to, who it works for), and for one who can read it also its status, machine, queue, goals and
+        which of its routines are on."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -259,6 +261,7 @@ def register(app, auth, settings, settings_admin, store):
                 value["goals"] = config["goals"] or ""
             if level["read"]:
                 value["cant_run"] = cant_run(c, bot)
+                value["routines"] = routines.of_bot(c, bot)
             reports = value.get("reports_to") or ""
             if reports.startswith("human:"):
                 person = H.human(c, reports[6:])
