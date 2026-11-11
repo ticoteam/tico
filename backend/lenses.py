@@ -8,10 +8,10 @@ tied to bets, the assumptions the model made for skipped steps, proposed changes
 sharpen it. The model's JSON is never trusted: every part is clipped and checked, and a part that fails is dropped, not
 kept.
 
-Who: the owner starts a run on the published version or, on their own click, on the draft. The Strategy Bot may start
+Who: the owner starts a run on the published version or, on their own click, on the draft. The Strategy Owner may start
 one; the Librarian may start a market one. A run on the draft is the owner's alone (like the draft); every other run is
 readable by every signed-in reader, bots included, since it only discusses what is published. Changes go to the draft
-through the owner's click (`apply`, the code path of accepting a `strategy_draft` proposal); when the Strategy Bot ran
+through the owner's click (`apply`, the code path of accepting a `strategy_draft` proposal); when the Strategy Owner ran
 the lens, the changes are filed as one `strategy_draft` proposal (source `lens`) and the owner decides it on the usual
 card. A lens never publishes. Unversioned and idempotent (`ensure`), like the strategy tables."""
 
@@ -330,7 +330,7 @@ def read(c, who, run_id):
 # ----------------------------------------------------------------------------- starting a run
 def start(c, who, settings, store, lens_id, answers, on="published"):
     """A new run, `running` (the caller spawns `run` once this commits) or `no_model` at once, with the answers saved.
-    The owner starts any; the Strategy Bot any strategy or market lens on the published version; the Librarian a market
+    The owner starts any; the Strategy Owner any strategy or market lens on the published version; the Librarian a market
     one."""
     from . import goal_routes
 
@@ -341,7 +341,7 @@ def start(c, who, settings, store, lens_id, answers, on="published"):
     market = the["applies_to"] == "market"
     if not (owner or who.actor == STRATEGY_BOT or (market and who.actor == LIBRARIAN)):
         raise Problem(
-            "forbidden", "Only the owner, the Strategy Bot and, for a market lens, the Librarian run a lens", 403
+            "forbidden", "Only the owner, the Strategy Owner and, for a market lens, the Librarian run a lens", 403
         )
     on_draft = on == "draft" and not market
     if on_draft and not owner:
@@ -859,7 +859,7 @@ def run(store, run_id):
 
 
 def finish(c, run_id, raw):
-    """Check what the model said and save it. A run cut off before it answered writes nothing. A Strategy Bot run with
+    """Check what the model said and save it. A run cut off before it answered writes nothing. A Strategy Owner run with
     at least one change files one `strategy_draft` proposal; an owner's never does."""
     row = _row(c, run_id)
     if not row or row["status"] != "running":
@@ -909,7 +909,7 @@ def merged(c, changes):
 
 
 def _propose(c, row, result):
-    """The Strategy Bot's run: its changes, merged, as one `strategy_draft` proposal for the owner to decide. None when
+    """The Strategy Owner's run: its changes, merged, as one `strategy_draft` proposal for the owner to decide. None when
     the proposal is refused (the run is kept without one)."""
     from . import goals as G
 
@@ -1022,7 +1022,7 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/lenses/{lens_id}/runs", status_code=202)
     def lens_run_start(request: Request, lens_id: str, body: M.LensRun):
-        """The owner, the Strategy Bot and, for a market lens, the Librarian start a run. `on: draft` is the owner's.
+        """The owner, the Strategy Owner and, for a market lens, the Librarian start a run. `on: draft` is the owner's.
         Answers at once with the run (`running`; `no_model` when no model provider is set up, the answers saved)."""
         who = request.state.identity
         reader(who)

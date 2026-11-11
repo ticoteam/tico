@@ -43,7 +43,7 @@ def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_st
     assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "builder", "support", "content"]
     assert [b["title"] for b in draft["bots"]] == [
         "Assistant",
-        "Head of Product",
+        "Product Lead",
         "Builder",
         "Support Agent",
         "Content Marketer",

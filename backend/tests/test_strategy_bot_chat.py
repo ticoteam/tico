@@ -1,6 +1,6 @@
 """One Assistant for everyone (backend/assistant.py, docs/assistant.md): the owner's chat is their Assistant like
-everyone else's, and the Strategy Bot, the Librarian and BotOps are helpers it hands cited work to. The owner's earlier
-chat with the Strategy Bot (room_key "ceo") is read-only history under "Earlier chats", and the cards waiting in it
+everyone else's, and the Strategy Owner, the Librarian and BotOps are helpers it hands cited work to. The owner's earlier
+chat with the Strategy Owner (room_key "ceo") is read-only history under "Earlier chats", and the cards waiting in it
 move to the owner's Assistant room once."""
 
 import uuid
@@ -27,7 +27,7 @@ def helper(api, slug, name):
 
 
 def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "Here is a plan for that.")):
-    """The owner's chat with the Strategy Bot from before it became a helper: room_key "ceo", the owner's words and its
+    """The owner's chat with the Strategy Owner from before it became a helper: room_key "ceo", the owner's words and its
     reply."""
     with api.app.state.store.transaction() as c:
         room = H.open_conversation(
@@ -35,7 +35,7 @@ def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "He
             owner,
             [owner, "bot:goal-manager"],
             kind="chat",
-            subject="Strategy Bot",
+            subject="Strategy Owner",
             scope=rooms.PERSONAL,
             owner_actor=owner,
             room_key=rooms.STRATEGY_ROOM,
@@ -64,7 +64,7 @@ def test_the_owners_chat_is_the_assistant_like_everyone_elses(api):
         rooms.ASSISTANT_ROOM,
         ["human:ana", "bot:coo"],
     )
-    # Its turn acts as the owner, through the Assistant, never the Strategy Bot.
+    # Its turn acts as the owner, through the Assistant, never the Strategy Owner.
     r = runner(api)
     assign(api, r, "coo")
     ready(api, r, ["coo"])
@@ -96,12 +96,12 @@ def test_nobody_chats_with_the_strategy_bot_a_post_to_it_reaches_their_assistant
             room,
             True,
         )
-        # Into a room, it is refused: their Assistant hands the Strategy Bot work.
+        # Into a room, it is refused: their Assistant hands the Strategy Owner work.
         post(
             api, "messages", {"to": "goal-manager", "text": "Hello", "conversation_id": room}, token=token, expected=403
         )
     # An Assistant's turn cannot chat with it in the person's name either.
-    r, attempt = turn(api, "coo", "cara-test", "Tell the Strategy Bot to change the plan")
+    r, attempt = turn(api, "coo", "cara-test", "Tell the Strategy Owner to change the plan")
     post(api, "chat/goal-manager", {"text": "Change the plan"}, token=attempt["token"], expected=403)
     post(api, "messages", {"to": "goal-manager", "text": "Change the plan"}, token=attempt["token"], expected=403)
 
@@ -110,7 +110,7 @@ def test_the_owners_earlier_strategy_bot_chat_is_read_only_history_under_earlier
     strategy_bot(api)
     old = earlier_chat(api)
     mine = get(api, "assistant")
-    assert mine["earlier"] == {"room_id": old, "bot": "goal-manager", "name": "Strategy Bot"}
+    assert mine["earlier"] == {"room_id": old, "bot": "goal-manager", "name": "Strategy Owner"}
     assert mine["room_id"] != old
     assert [m["body"] for m in get(api, f"conversations/{old}/messages")] == [
         "Grow revenue 20% this year",
@@ -124,7 +124,7 @@ def test_the_owners_earlier_strategy_bot_chat_is_read_only_history_under_earlier
     for token in ("ben-test", "cara-test"):
         assert get(api, "assistant", token)["earlier"] is None
         get(api, f"conversations/{old}/messages", token, expected=404)  # unreadable looks missing
-    # A turn queued there before is the Strategy Bot's own, never the owner's.
+    # A turn queued there before is the Strategy Owner's own, never the owner's.
     r = runner(api)
     assign(api, r, "goal-manager")
     ready(api, r, ["goal-manager"])
@@ -314,7 +314,7 @@ def test_a_members_cited_strategy_change_is_refused_and_the_strategy_bot_cannot_
         "turn",
         expected=422,
     )
-    # The Strategy Bot works her task as itself: the owner's strategy stays the owner's to change.
+    # The Strategy Owner works her task as itself: the owner's strategy stays the owner's to change.
     done(api, r, coo)
     attempt = post(api, "jobs/claim", {"bot": "goal-manager"}, token=r["token"])["attempt"]
     assert attempt["task"]["id"] == task["id"] and attempt["task"]["requester"] == "human:cara"
@@ -330,7 +330,7 @@ def test_the_strategy_bots_other_work_stays_its_own_in_the_goals_session(api):
     ready(api, r, ["ops", "goal-manager"], capabilities=["threads_v1"])
     post(api, "chat/ops", {"text": "Check the launch goal"})
     ops = post(api, "jobs/claim", {"bot": "ops"}, token=r["token"])["attempt"]
-    # A bot still messages the Strategy Bot: that is its goals session, never the owner's chat.
+    # A bot still messages the Strategy Owner: that is its goals session, never the owner's chat.
     post(
         api,
         "messages",

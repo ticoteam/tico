@@ -1,6 +1,6 @@
 // The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot, ui/app/state.ts myChatBot): the
 // page and their own page's tab read the Assistant, the composer takes words and files, and their earlier chat with the
-// Strategy Bot stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
+// Strategy Owner stays readable, read-only, under "Earlier chats". An admin keeps the Assistant, with no Earlier chats,
 // and a helper's own page (#/bot/botops, #/bot/goal-manager) opens for them with no composer.
 // Fixtures only.
 import type {Browser, Page} from 'playwright';
@@ -83,7 +83,7 @@ const view = (over: Partial<View>): View => ({available: true, state: 'active', 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
   try {
-    // The owner: the Assistant, by name, and the earlier Strategy Bot chat under Earlier chats.
+    // The owner: the Assistant, by name, and the earlier Strategy Owner chat under Earlier chats.
     const owner: Person = {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@example.test', cloud: true};
     const mine = view({bot: 'coo', name: 'Assistant', room_id: 'assistant1', messages: [msg('c1', 'bot:coo', 'Revenue is on track.')],
       earlier: {room_id: 'old1', bot: 'goal-manager', name: 'Chief'}});
@@ -128,7 +128,7 @@ const view = (over: Partial<View>): View => ({available: true, state: 'active', 
     // An admin is not the owner: the Assistant, as before, and no Earlier chats.
     {
       const admin: Person = {id: 'ben', role: 'human', bot_admin: true, name: 'Ben', email: 'ben@example.test', cloud: true};
-      const {page, errors, sent} = await open(browser, admin, view({bot: 'coo', name: 'Assistant'}), 'Strategy Bot');
+      const {page, errors, sent} = await open(browser, admin, view({bot: 'coo', name: 'Assistant'}), 'Strategy Owner');
       await page.goto('https://tico-ui.test/#/assistant');
       await page.locator('#chat-composer .p-text').waitFor();
       assert.equal(await page.locator('#main .asst-top h1').innerText(), 'Assistant', 'admin: the Assistant page');

@@ -776,7 +776,7 @@ def reconcile(c, start, end):
 
 def on_reply(c, actor, task_id, text, *, text_sources=()):
     """A person's comment on an open item the gate merged repeats into (hubdb.task_comment): passed once to each bot
-    that asked the same thing, on its own task (waking it) or, for an old question outside any task, as a message. The Strategy Bot's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
+    that asked the same thing, on its own task (waking it) or, for an old question outside any task, as a message. The Strategy Owner's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
     if not H.is_human(actor) or not task_id or not str(text or "").strip():
         return
     try:

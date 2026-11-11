@@ -153,6 +153,7 @@ ALIASES = tuple(
         (r"\bsoftware development\b", "software"),
         (r"\b(?<!qa )test(?:ing|ers?)?\b", "qa \\g<0>"),
         (r"\bappsec\b", "application security"),
+        (r"\brelease (?:engineer|manager)s?\b", "release owner"),
         (r"\b(?:developer relations|devrel)(?:\s+(?:engineer|manager|lead|specialist)s?)?\b", "developer advocate"),
         (
             r"\b(?:ppc|sem|paid search|paid social|paid acquisition|user acquisition|performance marketing)\b",
@@ -337,7 +338,7 @@ def show(auth, c, who, seat_id):
 
 
 def end_draft(c, row, why):
-    """Close a draft task an earlier release asked the Strategy Bot for, once the seat is filled, closed or written by a
+    """Close a draft task an earlier release asked the Strategy Owner for, once the seat is filled, closed or written by a
     person: nothing drafts a seat's description in the background any more."""
     task = H.task(c, row["draft_task"]) if row["draft_task"] else None
     if task and task["status"] in H.ACTIVE_STATUSES:
@@ -400,7 +401,7 @@ def _fit(card, t):
     )
     if kind and not SAME_KIND.get(kind, {kind}) & name and not ranked_here:
         # A designer is not the UX Writer, an engineer not a specialist; a job of one kind may be a template named by
-        # rank on the work itself ("Release Engineer" is the Release Manager, "Social Media Coordinator" the Social
+        # rank on the work itself ("Release Engineer" is the Release Owner, "Social Media Coordinator" the Social
         # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's, and only in the
         # departments its words name ("Software Development Engineer" is not the Learning and Development Specialist;
         # "Brand Designer" may be Marketing's Brand Owner).

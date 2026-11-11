@@ -32,7 +32,7 @@ exception with who should fix it.
 
 Beta participants whose feedback is overdue, and betas at or past their exit date. For each of those, follow
 `skills/decide-a-beta-exit/SKILL.md` and record the recommendation; the owner decides. The next eight weeks of
-releases from milestones, the calendar and the Release Manager's tasks; flag weeks with two launches and launches
+releases from milestones, the calendar and the Release Owner's tasks; flag weeks with two launches and launches
 without a support briefing or release notes owner.
 
 ## 6. Ship notices

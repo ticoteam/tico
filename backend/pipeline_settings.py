@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import access as Access
 from . import hubdb_core, pipeline_rights, source_actions, task_engine
+from . import pipeline_presets_more as more
 from . import pipeline_seats as S
 from . import task_requirements as R
 from .hubdb_core import KEEPER as SYSTEM
@@ -255,7 +256,7 @@ FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to somethin
 # Who fills each preset's manager, its stage owners, and which stages' page requirement a person OKs (D5, D9).
 ROLES: dict[str, Row] = {
     "engineering": {
-        "manager": S.ENGINEERING_MANAGER,
+        "manager": S.ENGINEERING_PIPELINE_MANAGER,
         "stages": {
             "engineering-on-deck": S.BUILDER,
             "engineering-build": S.BUILDER,
@@ -269,16 +270,19 @@ ROLES: dict[str, Row] = {
         "ok": ("engineering-fixes-2",),
     },
     "product": {
-        "manager": S.PRODUCT_MANAGER,
+        "manager": S.PRODUCT_PIPELINE_MANAGER,
         "stages": {
-            "product-ideas": S.PRODUCT_MANAGER,
-            "product-spec": S.PRODUCT_MANAGER,
-            "product-in-development": S.PRODUCT_MANAGER,
-            "product-validate": S.PRODUCT_MANAGER,
+            "product-ideas": S.PRODUCT_OWNER,
+            "product-spec": S.PRODUCT_OWNER,
+            "product-in-development": S.PRODUCT_OWNER,
+            "product-validate": S.PRODUCT_OWNER,
         },
         "ok": ("product-spec",),
     },
 }
+# Growth Experiments, Lead, Opportunity, Customer and Success Experiments, with their Growth and Success factories.
+PRESETS.update(more.PRESETS)
+ROLES.update(more.ROLES)
 
 
 def _h() -> Any:
@@ -632,11 +636,7 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
     existing = task_engine.pipeline(conn, pid) if pid else None
     if existing and existing.get("retired_at"):
         problems.append("This pipeline is retired.")
-    if record["private"]:
-        # docs/pipelines-v3.md lists `pipelines.private` and an editor switch but says nothing of who may then see the
-        # pipeline or its tasks, and nothing reads it: a private pipeline would promise privacy it does not give. Who
-        # reads a task is the task's own privacy (Who can see), whatever pipeline it is in.
-        problems.append("A pipeline can't be private yet. Make its tasks private instead, and choose who can see each.")
+    problems.extend(_private_problems(conn, record, existing))
     name = record["name"]
     if not name:
         problems.append("A pipeline needs a name.")
@@ -708,6 +708,38 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
     loop = _loop(conn, record)
     if loop:
         problems.append(loop)
+    return problems
+
+
+def _has_tasks(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
+    """Whether any task, open or ended, is in the pipeline. A deleted one is not: a restore into a private pipeline
+    makes it private (task_engine.restore)."""
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM tasks WHERE pipeline_id IS NOT NULL AND pipeline_id=? LIMIT 1", (pipeline_id,)
+        ).fetchone()
+    )
+
+
+def _private_problems(conn: "sqlite3.Connection", record: Row, existing: Row | None) -> list[str]:
+    """A private pipeline (backend/private_pipelines.py) makes every task in it private, read by its manager and the
+    company's owner. So it is chosen as it is made (a preset, or a brand-new pipeline) or while it is still empty, never
+    changed on one that holds tasks, and its manager must be one who reads private tasks: never the Task Manager."""
+    problems: list[str] = []
+    was = bool(existing and existing.get("private"))
+    if existing and was != record["private"] and _has_tasks(conn, str(existing["id"])):
+        problems.append(
+            "A pipeline that holds tasks can't be made private or company-wide. Make a new pipeline instead."
+        )
+    if record["private"]:
+        manager = record["manager_id"]
+        if not manager:
+            problems.append("A private pipeline needs a manager. Its tasks are read by its manager and the owner.")
+        elif pipeline_rights.canonical(conn, manager) in {
+            pipeline_rights.canonical(conn, f"bot:{TASK_MANAGER}"),
+            pipeline_rights.canonical(conn, _task_manager(conn)),
+        }:
+            problems.append("The Task Manager can't manage a private pipeline: it reads no private task.")
     return problems
 
 
@@ -931,6 +963,8 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
     parsed, problems = _parse(record)
     existing = task_engine.pipeline(conn, parsed["id"]) if parsed["id"] else None
     _may_change(conn, by, existing, seen_version)
+    if existing and existing.get("private") and not parsed["private"] and is_bot(by):
+        _refuse(conn, by, "task_settings", "Only a person makes a private pipeline company-wide.")
     problems += _problems(conn, parsed)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
@@ -1014,18 +1048,24 @@ def _set_up(conn: "sqlite3.Connection") -> bool:
 
 def preset(conn: "sqlite3.Connection", key: str) -> Row:
     """A preset's record for this org, ready to save: its manager, its stage owners and the person on its people OKs
-    filled in from the bots and people the org has (pipeline_seats). A role nobody fills is left empty."""
+    filled in from the bots and people the org has (pipeline_seats). No work stage is left without an owner: a role
+    nobody fills goes up the ladder, a stage's to the pipeline's manager and a manager's to the Task Manager, until the
+    role's bot appears (`_fill`). A private preset's ladder stops at its manager: never the Task Manager."""
     record = copy.deepcopy(PRESETS[key])
     if key == "general":
         record["manager_id"] = _task_manager(conn)
     roles = ROLES.get(key)
     if not roles:
         return record
-    who = S.resolve(conn)
-    record["manager_id"] = who.get(roles["manager"])
+    who = {**S.resolve(conn), **more.resolve(conn)}
+    # A private preset never falls to the Task Manager, which reads no private task: no bot, no manager (and then
+    # ensure_presets does not make it).
+    stand_in = None if record["private"] else _task_manager(conn)
+    record["manager_id"] = who.get(roles["manager"]) or stand_in
     person = S.ok_person(conn, record["manager_id"])
     for stage in record["stages"]:
-        stage["owner"] = who.get(roles["stages"].get(stage["id"], ""))
+        role = roles["stages"].get(stage["id"])
+        stage["owner"] = (who.get(role) or record["manager_id"]) if role else stage["owner"]
         if stage["id"] in roles["ok"]:
             for req in stage["requirements"]:
                 if req["kind"] == "page":
@@ -1042,19 +1082,25 @@ def _untouched(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
 def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
     """An untouched preset made before its roles' bots existed gets them once they do: an empty manager, an empty
     stage owner, an empty person on a stage's people OK. Nothing a person set is changed, and the settings version
-    stays 1, so the next bot that appears is filled in too."""
+    stays 1, so the next bot that appears is filled in too. A stand-in up the ladder (`preset`: the Task Manager for
+    a manager, the manager for a stage) gives way to the role's bot once it exists."""
     record = preset(conn, key)
     ts = _h().now()
+    found = conn.execute("SELECT manager_id, private FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
+    if found and found[1] and not record.get("manager_id"):
+        return  # a private pipeline whose owner bot is gone keeps its manager: nobody stands in
+    stand_ins = (found[0] if found else None, _task_manager(conn))
     if record.get("manager_id"):
         conn.execute(
-            "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND manager_id IS NULL",
-            (record["manager_id"], ts, pipeline_id),
+            "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND (manager_id IS NULL OR manager_id=?)",
+            (record["manager_id"], ts, pipeline_id, stand_ins[1]),
         )
     for stage in record["stages"] if key in ROLES else ():
         if stage.get("owner"):
             conn.execute(
-                "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? AND owner IS NULL",
-                (stage["owner"], ts, stage["id"], pipeline_id),
+                "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? "
+                "AND (owner IS NULL OR owner=? OR owner=?)",
+                (stage["owner"], ts, stage["id"], pipeline_id, *stand_ins),
             )
         for req in stage["requirements"]:
             if req.get("person_id"):
@@ -1129,6 +1175,12 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     - Product and Engineering are made for a company that builds software (`makes_software`: a blank answer is yes),
       once its setup finished, so their roles find the bots setup made. With them comes the Product factory. A company
       that says no gets its untouched pair retired; saying yes again brings that pair back.
+    - Growth Experiments, Lead, Opportunity, Customer and Success Experiments (pipeline_presets_more) are made for every
+      company once its setup finished, each with its Growth or Success factory. A company set up before they existed
+      gets them at its next start.
+    - Legal and Finance, private, in the Corporate factory, likewise, but only once their owner bot exists (the Legal
+      Owner, the Bookkeeper): never with the Task Manager standing in. `ensure_private` makes them when that bot is
+      made.
     - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with one exception:
       while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is
       filled in once the bot or person for it exists.
@@ -1151,11 +1203,25 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
             if not _set_up(conn):
                 continue
             _ensure_factory(conn)
+        elif key in more.PRESETS:
+            if not _set_up(conn):
+                continue
+            if key in more.PRIVATE and not preset(conn, key)["manager_id"]:
+                continue  # made once its owner bot exists (ensure_private), its factory with it
+            more.ensure_factory(conn, PRESETS[key]["factory_id"], _h().now())
         record = preset(conn, key)
         if check(conn, record):
             continue
         made.append(save(conn, SYSTEM, record)["id"])
     return made
+
+
+def ensure_private(conn: "sqlite3.Connection") -> list[str]:
+    """Legal and Finance (pipeline_presets_more.PRIVATE), made the moment their owner bot is: a bot made
+    (settings_admin.create_bot) and the Bookkeeper's ensure call this. It is the whole `ensure_presets` pass, the same
+    one every start runs, so the factories keep their order (Corporate after the others). Returns the private ids it
+    made."""
+    return [pid for pid in ensure_presets(conn) if pid in more.PRIVATE]
 
 
 def from_preset(conn: "sqlite3.Connection") -> list[str]:

@@ -397,7 +397,7 @@ fn parts(
         lines.push((Part::Standing, tools));
     }
     crate::sessions::prompt_head(attempt, &mut lines);
-    // The Assistant's room: every person's one chat, the owner's included. The Strategy Bot, the Librarian and BotOps
+    // The Assistant's room: every person's one chat, the owner's included. The Strategy Owner, the Librarian and BotOps
     // are helpers it hands work to (backend/assistant.py HELPERS); none of them has a person's chat.
     if !make_page && bot == "coo" && conversation["scope"] == "personal" {
         let owner = if truthy(&conversation["owner_actor"]) {
@@ -410,7 +410,7 @@ fn parts(
             "This provider session and its conversation history belong only to that person. Never copy personal preferences, messages, or attachments into shared repository files.".into(),
             "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `tico health check`. Its response is already filtered to the signed-in person you represent.".into(),
             format!("You act as {owner}, with their rights, on what they ask in this chat. Answer an ask addressed to them only when they ask, as them (`tico task answer`). An OK that lets something go (send, spend, publish) is their own click on its preview in Tico: link it, never answer it."),
-            "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Bot: `tico task create --owner goal-manager --request-id turn`.".into(),
+            "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: `tico task create --owner goal-manager --request-id turn`.".into(),
             "For research, Market and Docs setup or library work ask the Librarian: `tico task create --owner librarian --request-id turn`.".into(),
             "To create a new bot, or change a bot's instructions or code, ask BotOps: `tico task create --owner botops --request-id turn`, so BotOps acts with the person's own rights, then report its result when the task returns. Pausing or resuming a bot, its model, its routines and automations, and rules: make the change yourself, as the person.".into(),
             "Replies in this chat follow AGENT.md: short, with links, what changed and how to undo it. Never mention your repository, state.md, memory or commits to the person.".into(),
@@ -1089,7 +1089,7 @@ mod tests {
         ] {
             assert!(owner.contains(helper), "{helper}");
         }
-        // The owner's earlier Strategy Bot chat (room_key "ceo") is history: a turn queued there has no person's authority.
+        // The owner's earlier Strategy Owner chat (room_key "ceo") is history: a turn queued there has no person's authority.
         for key in ["ceo", "strategy", "goal-manager"] {
             assert!(
                 !prompt(&turn("goal-manager", key), &names, None, false)

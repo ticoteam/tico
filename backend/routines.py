@@ -1,7 +1,7 @@
 """Routines are automations now (backend/automations.py). What is left here:
 
 - `create`, `row`, `update` and `remove` for what Tico still seeds the old way (a template's first routines, the
-  Librarian's market routines, the fleet's task sweep, the Strategy Bot's passes): `create` writes the `schedules` row
+  Librarian's market routines, the fleet's task sweep, the Strategy Owner's passes): `create` writes the `schedules` row
   and, once the install's cutover ran, moves it to a schedule or event automation in the same write
   (backend/redesign_migration.py `adopt`). `row`, `update` and `remove` of a moved routine read and change its
   automation (on/off; removing deletes it). Nothing fires a `schedules` row any more.
@@ -248,7 +248,7 @@ def no_input(c, settings, schedule, local):
     from . import strategy_bot, market
 
     if held := strategy_bot.held_routine(c, schedule):
-        return held  # the Strategy Bot's KPI pass, while the owner has its regular checks off
+        return held  # the Strategy Owner's KPI pass, while the owner has its regular checks off
     # Only the routine as shipped: a team that changed its text may have given it other work.
     if (
         schedule["bot"] == market.CURATOR.split(":", 1)[1]

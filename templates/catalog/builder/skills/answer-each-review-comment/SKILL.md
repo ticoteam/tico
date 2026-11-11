@@ -11,7 +11,7 @@ Steps:
    on, or declined in writing with a reason the owner accepts.
 2. For each comment, decide: act on it, or decline it with one line of reason. The reason names the fact that makes it
    wrong or out of scope: "This path is not reachable: the caller checks the list is non-empty on line 40." "Out of scope
-   for this task; logged for the Engineering Manager as a follow-up."
+   for this task; noted on the task as a follow-up."
 3. Act on it in a commit whose message names the comment: "Round the refund total once, per review on refund.py:88."
 4. Reply to each comment on the pull request with the action or the reason. One reply per comment.
 5. Do not argue a blocking bug away on taste. A declined blocking comment goes to the task's owner as a question

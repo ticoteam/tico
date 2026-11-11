@@ -27,7 +27,7 @@ declare var SETTINGS_TAB: string;
 const SPECIAL = ['models', 'providers', 'tags', 'types', 'runs', 'roadmap', 'subscriptions',
   'storage', 'team', 'company', 'assistant', 'privacy'];
 // Old names that leave Settings: Listening moved to Strategy › Market (ui/app/redesign.ts; redesign-shell.cts checks it),
-// the old Strategy Bot address only redirects to its tab (ui/app/router.ts), so no link is drawn to it, and Inboxes'
+// the old Strategy Owner address only redirects to its tab (ui/app/router.ts), so no link is drawn to it, and Inboxes'
 // old addresses redirect to Tools (ui/app/tools.ts toolsRoute; checked below), System's (Rules and Routines before it)
 // leave for Automations (ui/app/settings.ts settingsMovedOut; checked below), and Webhooks (once Triggers) went to
 // Automations, Tools and Models (ui/app/settings-webhooks.ts whOldAddress; settings-webhooks.cts checks them).

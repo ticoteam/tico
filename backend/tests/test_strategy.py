@@ -160,7 +160,7 @@ def test_proof_since_is_when_the_published_proof_last_changed_and_every_reader_s
     ready(api)
     publish(api)
     assert get(api, "strategy", token=strategy_token)["proof_since"] is None  # published, but proof is empty
-    # The Strategy Bot proposes proof from the evidence; the owner confirms; publishing dates it.
+    # The Strategy Owner proposes proof from the evidence; the owner confirms; publishing dates it.
     proposal = post(
         api,
         "goal-proposals",
@@ -454,7 +454,7 @@ def test_a_text_wrong_if_trips_after_its_check_by_and_nothing_trips_with_checks_
     ready(api)
     publish(api)
     with api.app.state.store.transaction() as c:
-        assert S.watch(c, today="2099-01-02") == []  # no Strategy Bot yet
+        assert S.watch(c, today="2099-01-02") == []  # no Strategy Owner yet
     with_strategy_bot(api)
     with api.app.state.store.transaction() as c:
         assert S.watch(c, today="2098-12-31") == []

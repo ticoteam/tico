@@ -40,7 +40,7 @@ which shows you only what you may see; tables and examples in Tico `docs/hub-sql
 `tico message send <bot> "<question>" --needs-action`. A person hears about your work through the task: an ask on it, or
 the task in their Needs you (see "Tasks"). Keep `tico bot status set` to one factual line as you work.
 Set a goal of your own with `tico goal create --owner me --title "..."`; it needs no parent, so never ask a
-human for one. A goal's colour is set automatically by the Strategy Bot from its KPIs, so leave it; a colour you
+human for one. A goal's colour is set automatically by the Strategy Owner from its KPIs, so leave it; a colour you
 set by hand with `tico goal status <id> red|yellow|green "<one sentence>"` sticks until a human hands it back. Log a
 number you measured, with the period it describes, using `tico kpi log <kpi-id> <value> --period-end <date>`; a
 guess is `--quality estimate`, never a measurement. A

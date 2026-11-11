@@ -252,7 +252,7 @@ async function chart(page: Page, tag: string) {
       await shot(page, 'desktop-org-sheet');
       await page.locator('dialog[open] [data-close]').first().click();
       await shot(page, 'desktop-org');
-      assert.equal(await page.locator('#sbot').count(), 0, tag + ': no Strategy Bot beside the chart');
+      assert.equal(await page.locator('#sbot').count(), 0, tag + ': no Strategy Owner beside the chart');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

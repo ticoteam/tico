@@ -1,4 +1,4 @@
-"""What a person's chat bot has learned (docs/assistant.md, docs/strategy-bot.md; spec: Strategy Bot v3, section 10.7),
+"""What a person's chat bot has learned (docs/assistant.md, docs/strategy-bot.md; spec: Strategy Owner v3, section 10.7),
 in two layers.
 
 - The personal layer: how one person likes things ranked and summarised. One per person, kept by their Assistant, so it
@@ -65,7 +65,7 @@ def _person(who, settings):
 
 
 def company_reader(c, who, settings):
-    """The owner, once the company has its Strategy Bot: on their own, or in their own Assistant chat. Nobody else's
+    """The owner, once the company has its Strategy Owner: on their own, or in their own Assistant chat. Nobody else's
     Assistant, and no borrowed rights (BotOps acting for the owner)."""
     if who.role != "owner" or not H.is_human(who.actor):
         return False
@@ -131,7 +131,7 @@ def view(c, who, settings):
 
 def for_turn(c, settings, conversation, bot):
     """What a turn in a person's own chat is handed, read now: their personal layer, and in the owner's own Assistant
-    chat the company layer too. Neither for any other turn (a task, a shared room, the Strategy Bot's goals session).
+    chat the company layer too. Neither for any other turn (a task, a shared room, the Strategy Owner's goals session).
     Every turn, whoever it is for, also carries the team's published strategy as `strategy` (the text of GET
     /api/v2/strategy/summary, backend/strategy.py) once one is published; None when there is nothing to hand over."""
     from . import strategy
@@ -195,7 +195,7 @@ def _layers(c, settings, conversation, bot):
 
 
 def _is_owner(c, settings, actor):
-    """Whether this person is the owner now, with the Strategy Bot there (the company layer's reader, `company_reader`):
+    """Whether this person is the owner now, with the Strategy Owner there (the company layer's reader, `company_reader`):
     a turn in a former owner's chat is handed no company layer."""
     from . import access
 

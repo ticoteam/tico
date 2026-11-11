@@ -9,8 +9,8 @@ PRs leave the merge queue.
 Filing (`{"file_into": "<pipeline id>"}`, Product's In development into Engineering) files ONE task per visit,
 linked (`links.kind = handoff`). It has the filing task's title and body, and a line `Spec: page:<file id>@<version>` naming
 the page that counted on the nearest earlier stage with a page requirement (the Spec page as it was OK'd, D10). It is
-filed by the filing task's owner (the Product Manager), who is its requester. When that is refused (the Product
-Manager is paused or still onboarding) the engine files it itself; one refused even then (the target was retired)
+filed by the filing task's owner (the Product Owner), who is its requester. When that is refused (the Product
+Owner is paused or still onboarding) the engine files it itself; one refused even then (the target was retired)
 files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed yet"), the
 owner's turn, and the owner may file one by hand. The owner's one wake for the stage opens with why (a private task:
 the first stage's owner there cannot read it; the engine never adds a reader). History: `handoff_filed` on the
@@ -60,7 +60,7 @@ def _spec_line(conn: "sqlite3.Connection", task: Row) -> str:
 
 
 def _filer(conn: "sqlite3.Connection", task: Row, by: str) -> str:
-    """Who files the handoff: the filing task's owner (the Product Manager), else its pipeline's manager, else whoever
+    """Who files the handoff: the filing task's owner (the Product Owner), else its pipeline's manager, else whoever
     moved it."""
     H = _h()
     pipeline: Row = task.get("pipeline") or {}

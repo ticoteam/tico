@@ -47,7 +47,7 @@ from . import bot_settings as BS
 
 MIN_RUNNER_VERSION = (0, 2, 0)
 DOC_BOT = "doc-updater"  # the documentation agent: docs questions and doc PR reviews
-# the Strategy Bot (backend/strategy_bot.py SLUG): of people, only the owner chats with it
+# the Strategy Owner (backend/strategy_bot.py SLUG): of people, only the owner chats with it
 STRATEGY_BOT = "goal-manager"
 
 
@@ -424,7 +424,7 @@ def may_chat(c, auth, who, bot):
         return True
     # The assistant is chatted with in one place only: each person's own Assistant room, through
     # /api/v2/assistant (backend/assistant.py). It has no chat with anyone else and no shared or
-    # per-bot chat, so every other route that asks "may I chat with it" says no. The Strategy Bot the
+    # per-bot chat, so every other route that asks "may I chat with it" says no. The Strategy Owner the
     # same: no person chats with it, their Assistant hands it work; an earlier chat with it anyone had
     # stays readable, read-only.
     return bot not in (auth.settings.assistant_bot, STRATEGY_BOT)
@@ -432,7 +432,7 @@ def may_chat(c, auth, who, bot):
 
 def require_chat(c, auth, who, bot):
     """Write on the bot, and a bot that has a chat of its own (the Assistant has only the room
-    /api/v2/assistant gives each person, and no person chats with the Strategy Bot)."""
+    /api/v2/assistant gives each person, and no person chats with the Strategy Owner)."""
     auth.require_write(c, who, bot)
     if not may_chat(c, auth, who, bot):
         if bot == STRATEGY_BOT:
@@ -2053,7 +2053,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
     if not H.is_human(who.actor):
         return []
     visible = auth.task_sql(c, who)
-    # The asks the Strategy Bot merged into one item stay out while that item is open; the item names them (`merged`).
+    # The asks the Strategy Owner merged into one item stay out while that item is open; the item names them (`merged`).
     merged = strategy_merge.hidden_by_item(c, who.actor)
     hidden = {rid for ids in merged.values() for rid in ids}
     raw = [i for i in waiting_on.needs(c, who.actor) if i.get("requirement_id") not in hidden]
@@ -2530,8 +2530,8 @@ def install_views(app, store, auth, mutate, task_view):
         from .onboarding import helper_templates, template_icons
 
         icons, helpers = template_icons(store.settings), helper_templates(store.settings)
-        # Where each bot hangs on the chart; the Strategy Bot switch moves it there and nowhere else
-        # (backend/strategy_bot.py). A person who hid the Strategy Bot from their chart sees nothing moved, and its row
+        # Where each bot hangs on the chart; the Strategy Owner switch moves it there and nowhere else
+        # (backend/strategy_bot.py). A person who hid the Strategy Owner from their chart sees nothing moved, and its row
         # says so (`chart_hidden`).
         from . import strategy_bot
 
@@ -2763,7 +2763,7 @@ def install_views(app, store, auth, mutate, task_view):
             archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
             bare = True  # a bot's bare person id in reports_to is that person (backend/people.py)
             view = P.org_view(r, configs, archived, bare_people=bare)
-            # The Strategy Bot switch hangs the Heads' groups under it on the chart (backend/strategy_bot.py).
+            # The Strategy Owner switch hangs the Heads' groups under it on the chart (backend/strategy_bot.py).
             from . import strategy_bot
 
             # this person hid it from their chart: nothing moves

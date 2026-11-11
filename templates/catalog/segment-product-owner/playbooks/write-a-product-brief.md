@@ -1,8 +1,8 @@
 # Write a product brief
 
-Triggered by the weekly review when a problem meets the brief threshold in `knowledge/product-practice.md`, or when the
-your manager asks for a brief on a named problem. Budget 30 minutes. The outcome is one page, filed as a task
-owned by your manager, that can be approved, changed or declined from the page alone.
+Triggered by the weekly review when a problem meets the brief threshold in `knowledge/product-practice.md`, or when your
+manager asks for a brief on a named problem. Budget 30 minutes. The outcome is one page, filed as an idea in the Product
+pipeline's Ideas stage, that can be chosen, changed or declined from the page alone.
 
 ---
 
@@ -20,7 +20,7 @@ reason did not cover.
 One page, plain words, in this shape:
 
     Title: Product brief: <the problem, in the customer's words, under ten words>
-    Segment: <name> (segment:<slug>)
+    Segment: <name> (segment:<slug>), or "all customers"
     Problem: <one or two sentences: what the customer tries to do, and where it fails>
     Who has it: <distinct accounts in the window, out of the segment's accounts in the cohort, with the window>
     Evidence: <three to five items, each with its source, its date and one line>
@@ -39,16 +39,18 @@ One page, plain words, in this shape:
 - No customer's name, email address or other personal detail appears. Name an account by its id in the export.
 - It fits on one page.
 
-## 4. File it
+## 4. File it in Ideas
 
-Save the page to a file in your checkout, then file it:
+Save the page to a file in your checkout, then file it in the Product pipeline. It starts in Ideas, which you own:
 
-    tico task create --owner <your manager> --title "Product brief: <problem>" --body-file <file> --label segment:<slug>
+    tico task create --owner <your slug> --pipeline product --title "Product brief: <problem>" --body-file <file> --label segment:<slug>
 
-If the problem is already a Product roadmap item, comment the brief on that item instead of filing a new task. Record the
-brief in `knowledge/briefs.md`: the date, the problem, the task id, and "filed".
+Leave out the label when you own the whole product. If the problem is already a Product task, comment the brief on that
+task instead of filing a new one. Record the brief in `knowledge/briefs.md`: the date, the problem, the task id, and
+"in Ideas". The weekly review lists it for your manager.
 
 ## 5. Stop there
 
-Do not tell a customer, a salesperson or a marketer that the problem will be fixed. Your manager's decision
-comes back on the task, and the next weekly review records it.
+Do not tell a customer, a salesperson or a marketer that the problem will be fixed. Your manager's decision comes back
+on the task, and the next weekly review records it. An idea moves to Spec only when Spec has room and it is the one you
+pick (the one your manager approved, else the one the evidence supports most).

@@ -96,7 +96,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/updates.md](docs/updates.md) | Updating the server and its computers |
 | [docs/assistant.md](docs/assistant.md) | The built-in Assistant: what it does at once and what it proposes |
 | [docs/librarian.md](docs/librarian.md) | The built-in Librarian: answers from the team's docs, with citations |
-| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in Strategy Bot: automatic colours, a human's override, readings with evidence |
+| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in Strategy Owner: automatic colours, a human's override, readings with evidence |
 | [docs/connect-an-agent.md](docs/connect-an-agent.md) | Connecting an external agent (Grok, Muse, Claude, Cursor, Codex, any MCP client) with a personal token |
 | [PRIVACY.md](PRIVACY.md), [docs/telemetry.md](docs/telemetry.md) | The anonymous usage count: exactly what is sent, and how to turn it off |
 

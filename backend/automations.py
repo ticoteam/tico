@@ -1393,7 +1393,7 @@ def _bot_away(c, row):
 
 def _no_input(c, row, settings, at, zone):
     """Why a converted routine's scheduled run would have nothing to work on (backend/routines.py `no_input`: the
-    Strategy Bot's KPI pass with the regular checks off, the Librarian's curate run with nothing new), or None."""
+    Strategy Owner's KPI pass with the regular checks off, the Librarian's curate run with nothing new), or None."""
     flow = flow_of(row)
     source = flow.get("source")
     if not isinstance(source, dict) or source.get("kind") != "routine" or settings is None:

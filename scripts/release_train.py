@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tico's own release train (docs/releasing.md#the-release-train). The canary (Tico Team) takes each green candidate
-automatically. Stable (TIDY) takes a canary release once it is approved: by a person, or by the Release Manager when no
+automatically. Stable (TIDY) takes a canary release once it is approved: by a person, or by the Release Owner when no
 person is needed (docs/releasing.md#approval).
 
     python3 scripts/release_train.py guard              should the release job run for this event (read-only)
@@ -32,7 +32,7 @@ The workflows (.github/workflows/train.yml, hotfix.yml) call it. Environment:
 
 Approval: each candidate that reaches the canary gets an open issue, "Release vX.Y.Z: awaiting approval" (label
 release-approval), whose body is its release notes. A person with write access approves it by adding the `approved` label
-or commenting `/approve` (a bot or app never counts). With RELEASE_NEEDS_PERSON not `on`, the Release Manager approves a
+or commenting `/approve` (a bot or app never counts). With RELEASE_NEEDS_PERSON not `on`, the Release Owner approves a
 release whose notes list no High risk item and were not cut short. The `hold` label keeps it from stable. Promotion takes
 the canary's release to stable on each job run, only when it is approved, not held and healthy, and then closes its
 issue, saying who approved it. A newer release on the canary closes the older issues, with a link to the new one.
@@ -43,7 +43,7 @@ and the images' `latest` tags) only once the canary runs it healthy, so new inst
 never get a release the canary has not run. The image tags move with `docker buildx imagetools` (the workflow logs in to
 ghcr.io first). Nothing is stored: every run works the state out from GitHub. Installs are read and updated only through
 the routes an update key reaches (GET and POST /api/v2/system/update, POST /api/v2/system/update/check;
-backend/service_keys.py), never /healthz, which a proxy may not route. The HTTP helper is the Release Manager's
+backend/service_keys.py), never /healthz, which a proxy may not route. The HTTP helper is the Release Owner's
 (templates/catalog/release-notes/software/rollout.py). Standard library only.
 """
 

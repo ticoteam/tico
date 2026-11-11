@@ -359,7 +359,7 @@ def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_perso
 
     assert drop(1) == ("owner", 1, 1)
     assert drop(2) == ("owner", 2, 2)
-    assert drop(3, by=EM) == ("manager", 2, 3)  # the Release Manager is not told a third time: its manager has it
+    assert drop(3, by=EM) == ("manager", 2, 3)  # the Release Owner is not told a third time: its manager has it
     with company.transaction() as c:
         assert any(":manager:1:" in key for key, _ in X.wakes(c, task_id, EM))
         assert stage(c, task_id) == "Merge" and F.pr(c, REPO, 1)["queue_state"] == "queued"  # EM queued it again
@@ -477,7 +477,7 @@ def test_one_message_per_removal_merge_and_close_on_a_queueing_pipeline(company)
         hooked(c, "closed", gh, 2)
         assert stage(c, merged) == "Release"
         added = [m for m in told(c, merged) if m not in before]
-        # The Release Manager owns Release too and waits on GitHub there: no "carry this task on" wake on top.
+        # The Release Owner owns Release too and waits on GitHub there: no "carry this task on" wake on top.
         assert len(added) <= 1 and not any("Carry this task on" in m for m in added), added
 
     with company.transaction() as c:

@@ -462,7 +462,7 @@ def drop_materialised(c, bot):
 
 
 def set_profile(admin, c, who, bot, body, undo_change_id=None):
-    """Set the bot's profile (SettingsAdmin's pattern: Strategy Bot gate, manager check, revision check, audit row,
+    """Set the bot's profile (SettingsAdmin's pattern: Strategy Owner gate, manager check, revision check, audit row,
     undo)."""
     from . import strategy_acts as CA
     from .store import Problem, encode

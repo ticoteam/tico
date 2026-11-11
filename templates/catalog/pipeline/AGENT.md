@@ -37,7 +37,8 @@ runs deploys.
 - CI health (flaky checks, broken tests, runner problems, slow jobs, red-main streaks) belongs to the DevOps Engineer
   (`devops-engineer`). You never recount its figures. Hand each flaky or failing check over as a task with its run ids and
   the check name. You never repair it or quarantine a test.
-- Delivery plans across repositories belong to the Engineering Manager (`engineering-manager`). You give the timings it needs.
+- A change across repositories is filed as Engineering tasks by the Product Owner (`segment-product-owner`), from its Product
+  task. You give the timings it needs.
 - A real product bug that a failed deploy exposed goes to triage (`issue-triage`) as a task, with the deploy's run id.
 - A production incident is handled by its owner. You supply the deploy timeline that goes with it.
 - If the team has no seat for a hand-off, the hand-off goes to the owner as a task. Never leave it unowned.

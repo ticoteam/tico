@@ -314,10 +314,10 @@ def test_a_visuals_line_link_to_a_private_task_message_opens_only_for_its_reader
         assert ('revenue up' in response.text) == readable and (said['id'] in response.text) == readable
 
 
-def test_a_pipeline_cannot_be_made_private_so_none_promises_privacy_it_does_not_give(api):
-    """docs/pipelines-v3.md lists `pipelines.private` but defines no reader rule for it, and nothing reads it: who
-    reads a task is the task's own privacy. A private pipeline is refused, by the route and by the record's one writer,
-    on a new pipeline and on General; nothing is saved."""
+def test_a_pipeline_without_a_manager_cannot_be_made_private(api):
+    """A private pipeline's tasks are read by its manager and the company's owner (backend/private_pipelines.py), so
+    one with no manager would promise readers it does not have: refused, by the route and by the record's one writer,
+    on a new pipeline and on General; nothing is saved. backend/tests/test_private_pipelines.py has the rest."""
     from backend import pipeline_settings as PS
 
     with api.app.state.store.transaction() as c:  # Ana owns General here, so she may change it
@@ -334,12 +334,12 @@ def test_a_pipeline_cannot_be_made_private_so_none_promises_privacy_it_does_not_
     with api.app.state.store.read() as c:
         assert PS.check(c, {**legal, 'private': False}) == []
     r = api.post('/api/v2/pipelines/general', json={**record, 'private': True}, headers=headers())
-    assert r.status_code == 409 and "A pipeline can't be private yet" in r.text, r.text
+    assert r.status_code == 409 and "A private pipeline needs a manager" in r.text, r.text
     with api.app.state.store.transaction() as c:
         for body in ({**PS.read(c, 'general'), 'private': True}, {**legal, 'id': 'legal'}):
             with pytest.raises(H.Refused) as refused:
                 PS.save(c, H.KEEPER, body)
-            assert "A pipeline can't be private yet" in str(refused.value)
+            assert "A private pipeline needs a manager" in str(refused.value)
         assert not c.execute('SELECT 1 FROM pipelines WHERE private<>0').fetchone()
         assert not c.execute("SELECT 1 FROM pipelines WHERE id='legal'").fetchone()
     assert get(api, 'pipelines/general')['pipeline']['private'] is False

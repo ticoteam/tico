@@ -337,7 +337,7 @@ FAILING: dict[int, str] = {}
 LATER: dict[int, tuple[str, str]] = {
     14: ("2", "pages and their OK (send back, version 2) arrive with Product"),
     19: ("2 and 3", "only the General preset exists; Product and Engineering presets arrive with their phases"),
-    20: ("2", "waking the Product Manager when Spec empties (C10) arrives with Product"),
+    20: ("2", "waking the Product Owner when Spec empties (C10) arrives with Product"),
     22: ("2", "factories and the Done count arrive with Product"),
     26: ("2", "on-enter filing into a pipeline arrives with Product (pipeline_settings refuses it until then)"),
     27: ("2", "Jev and the production version check arrive with Product"),

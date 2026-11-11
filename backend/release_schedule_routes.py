@@ -3,9 +3,9 @@
 /api/v2/release/now, the paths and methods the CLI calls.
 
 The setting (`release-schedule`, a team setting in registry_metadata) is what it was: on or off, one or two hours in
-company time (`updates.ZONE`), and the Release Manager and Technical Writer, named or found by starter template. What
+company time (`updates.ZONE`), and the Release Owner and Technical Writer, named or found by starter template. What
 waits for a release is now the open tasks in a stage that has an "In a release" requirement. Release now gives the
-Release Manager ONE task, naming no waiting work, or answers with its unfinished one. Firing the daily hour is a routine on the Release Manager
+Release Owner ONE task, naming no waiting work, or answers with its unfinished one. Firing the daily hour is a routine on the Release Owner
 (D13); this module only reads the next hour.
 """
 
@@ -31,8 +31,8 @@ DEFAULT_TIMES = ["10:00"]
 MAX_TIMES = 2
 AT = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 TITLE = "Release: "
-# Starter templates (templates/catalog): the Release Manager comes from release-owner. release-notes is a writer, not
-# the Release Manager (D1).
+# Starter templates (templates/catalog): the Release Owner comes from release-owner. release-notes is a writer, not
+# the Release Owner (D1).
 RELEASE_OWNER, WRITER = "release-owner", "docs-writer"
 
 
@@ -62,7 +62,7 @@ def load(c: Any) -> dict[str, Any]:
 
 
 def save(c: Any, actor: str, changes: dict[str, Any]) -> dict[str, Any]:
-    """Set what `changes` names: `on`, `times` (one or two HH:MM in company time), `bot` (the Release Manager) and
+    """Set what `changes` names: `on`, `times` (one or two HH:MM in company time), `bot` (the Release Owner) and
     `writer` (the Technical Writer), the last two a bot or "" to go back to finding it by template."""
     before = load(c)
     after = dict(before)
@@ -139,7 +139,7 @@ def next_at(cfg: dict[str, Any], at: datetime) -> datetime | None:
 
 
 def may_release(c: Any, who: Any) -> bool:
-    """Any person on the team; of the bots, the Release Manager and the manager of a pipeline a release moves on."""
+    """Any person on the team; of the bots, the Release Owner and the manager of a pipeline a release moves on."""
     if who.role in ("owner", "human"):
         return True
     if who.role != "bot":
@@ -178,8 +178,8 @@ def view(c: Any, who: Any, auth: Any) -> dict[str, Any]:
 
 
 def request_now(c: Any, actor: str, note: str = "", visible_sql: str | None = None) -> dict[str, Any]:
-    """ONE task for the Release Manager, or its unfinished Release task. Anyone may read that task, so it says who
-    asked and their note, never which tasks wait or how many: the Release Manager finds what waits itself, and closes
+    """ONE task for the Release Owner, or its unfinished Release task. Anyone may read that task, so it says who
+    asked and their note, never which tasks wait or how many: the Release Owner finds what waits itself, and closes
     the task when nothing does. It is filed whether or not anything waits, so the answer never tells a requester that
     hidden work waits. The answer's `tasks` counts only the waiting tasks the requester may read (`visible_sql`).
     `sent` is false, with a `reason` (no_release_manager, already_open), when no new task was filed; the unfinished
@@ -212,7 +212,7 @@ def request_now(c: Any, actor: str, note: str = "", visible_sql: str | None = No
 def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) -> None:
     @app.get("/api/v2/release-schedule")
     def release_schedule(request: Request):
-        """The team's release schedule, the Release Manager and Technical Writer found, the next hour, how many
+        """The team's release schedule, the Release Owner and Technical Writer found, the next hour, how many
         tasks wait for a release, and what this viewer may do (`can_change`, `can_release`)."""
         who = request.state.identity
         auth.domain(who)
@@ -221,7 +221,7 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
 
     @app.patch("/api/v2/release-schedule")
     def release_schedule_save(request: Request, body: M.ReleaseScheduleUpdate):
-        """Turn the daily release on or off, set its hours, or name the Release Manager and Technical Writer. An
+        """Turn the daily release on or off, set its hours, or name the Release Owner and Technical Writer. An
         owner or an admin; only what is sent changes."""
         who = request.state.identity
         auth.domain(who)
@@ -237,12 +237,12 @@ def register(app: FastAPI, auth: Any, mutate: Callable[..., Any], store: Any) ->
 
     @app.post("/api/v2/release/now")
     def release_now(request: Request, body: M.ReleaseNow):
-        """Ask the Release Manager for a release now, without waiting for the daily hour."""
+        """Ask the Release Owner for a release now, without waiting for the daily hour."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
             if not may_release(c, who):
-                raise Problem("forbidden", "Only a person, the Release Manager or a releasing pipeline's manager", 403)
+                raise Problem("forbidden", "Only a person, the Release Owner or a releasing pipeline's manager", 403)
 
         def write(c: Any) -> dict[str, Any]:
             return request_now(c, who.actor, body.note or "", auth.task_sql(c, who))

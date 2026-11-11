@@ -9,11 +9,18 @@ import copy
 
 import pytest
 
+from backend import pipeline_presets_more as more
 from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend.store import H
 from backend.tests.helpers import engine as X
+
+
+def _made(c):
+    """What ensure_presets made, leaving out the Growth and Success pipelines (test_default_pipelines_more.py)."""
+    return [p for p in PS.ensure_presets(c) if p not in more.PRESETS]
+
 
 ANA, BEN, CARA = X.ANA, "human:ben", "human:cara"
 
@@ -110,7 +117,7 @@ def test_general_from_its_preset_has_the_fixed_ids_and_a_task_goes_from_to_do_to
     # The first start made General before the company had a bot. Once the Task Manager exists it manages it.
     assert PS.read(c, "general")["manager_id"] is None
     X.bot(c, "task-manager")
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     general = PS.read(c, "general")
     assert (general["name"], general["preset"], general["manager_id"]) == ("General", "general", "bot:task-manager")
     assert [s["id"] for s in general["stages"]] == ["general-todo"]
@@ -127,25 +134,27 @@ def test_general_from_its_preset_has_the_fixed_ids_and_a_task_goes_from_to_do_to
 
 def test_presets_run_on_every_boot_make_general_once_and_never_change_it_again(c):
     assert [row[0] for row in c.execute("SELECT id FROM pipelines")] == ["general"]  # the first start made it
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     c.execute("DELETE FROM requirements WHERE stage_id IN (SELECT id FROM stages WHERE pipeline_id='general')")
     c.execute("DELETE FROM stages WHERE pipeline_id='general'")
     c.execute("DELETE FROM pipelines WHERE id='general'")
-    assert PS.ensure_presets(c) == ["general"]  # a database without it gets it at the next start
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == ["general"]  # a database without it gets it at the next start
+    assert _made(c) == []
     changed = PS.read(c, "general")
     changed["goal"] = "Everything that has no other home"
     changed["stages"][0]["expected_minutes"] = 600
     PS.save(c, ANA, changed)
     X.bot(c, "task-manager")  # a Task Manager that arrives later does not change General either
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     after = PS.read(c, "general")
     assert (after["goal"], after["stages"][0]["expected_minutes"], after["manager_id"]) == (
         "Everything that has no other home",
         600,
         None,
     )
-    assert c.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0] == 1
+    assert c.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0] == 1 + len(more.PRESETS) - len(
+        more.PRIVATE
+    )  # Legal and Finance wait for their bots
 
 
 def test_a_saved_pipeline_reads_back_as_it_was_saved_with_done_and_closed_after_its_stages(c):

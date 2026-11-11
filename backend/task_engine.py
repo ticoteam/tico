@@ -506,11 +506,13 @@ def enter(
     wake: Row | None = None,
     trigger: str | None = None,
     source: str | None = None,
+    start: str | None = None,
 ) -> Row:
     """New. Put a task that is not on the engine yet into its pipeline's first stage, open its visit and wake the
     owner. `parent` links it to the task that filed it, on that task's open visit. `wake` (what the owner bot's run
     should know: the other work to reconcile with, an automation's run and step), `trigger` and `source` go on the
-    owner's wake."""
+    owner's wake. `start`, a work stage of the pipeline, enters it there instead: the Bookkeeper's own checks, which
+    it files already taken in and done, wait only on Finance's last stage (bookkeeper.filing)."""
     H = _h()
     row = H._one(conn, "SELECT * FROM tasks WHERE id=?", (task_id,))
     if not row:
@@ -518,7 +520,8 @@ def enter(
     if row.get("pipeline_id"):
         _refuse(conn, by, "task_changed", "The task is already in a pipeline", task_id)
     pipe = pipeline(conn, pipeline_id)
-    first = next((s for s in stages(conn, pipeline_id) if s["kind"] == "work"), None) if pipe else None
+    work = [s for s in stages(conn, pipeline_id) if s["kind"] == "work"] if pipe else []
+    first = next((s for s in work if s["id"] == start), None) if start else (work[0] if work else None)
     if not pipe or pipe.get("retired_at") or not first:
         _refuse(conn, by, "task_no_such_stage", "No such pipeline", task_id)
     above: Row | None = None
@@ -1225,6 +1228,12 @@ def restore(conn: "sqlite3.Connection", task_id: str, by: str, was: Row) -> Row:
     pipe = pipeline(conn, str(was.get("pipeline_id") or "")) if was.get("pipeline_id") else None
     if not pipe or pipe.get("retired_at"):
         pipe = pipeline(conn, H.GENERAL_PIPELINE)
+    if pipe and pipe.get("private"):
+        # Back into a private pipeline: private, with its readers, before a stage is judged (backend/private_pipelines.py).
+        from . import private_pipelines
+
+        private_pipelines.admit(conn, task_id, pipe)
+        row = H._one(conn, "SELECT * FROM tasks WHERE id=?", (task_id,))
     order = stages(conn, pipe["id"]) if pipe else []
     work = [s for s in order if s["kind"] == "work"]
     status = str(was.get("status") or "open")

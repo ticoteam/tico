@@ -29,7 +29,7 @@ Nothing was changed on GitHub and nothing has been shared.
 - Failed deploys: 0 of 3. Time to restore: not measurable, no failures.
 
 ## Team reports
-- QA Engineer: 22 new issues, 5 need a human (digest 2026-09-28). Release Manager: notes for 2.14.0 ready on
+- QA Engineer: 22 new issues, 5 need a human (digest 2026-09-28). Release Owner: notes for 2.14.0 ready on
   2026-09-24, unreviewed. Technical Writer: 2 pages drifted. Senior Software Engineer and Site Reliability
   Engineer: not running.
 

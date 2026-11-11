@@ -27,7 +27,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 2. Which betas are running, and who is in them? Seeds the beta roster.
 3. Who owns the roadmap and each release, and where do dates live? Flags go to a named owner.
 4. When a request ships, who tells the customers who asked? I prepare the list; a human sends it.
-5. When should the weekly review land? (Default: Wednesdays at 09:00, the Head of Product.) Sets the routine.
+5. When should the weekly review land? (Default: Wednesdays at 09:00, your manager.) Sets the routine.
 
 ## 4. Record
 

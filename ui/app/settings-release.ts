@@ -1,5 +1,5 @@
-/* ui/app/settings-release.ts — The built-in bots' cards on their bot page's Settings (Releases on the Release Manager's,
-   Task Manager's and the Strategy Bot's), Settings > Security's Screening card, and the board's Release now
+/* ui/app/settings-release.ts — The built-in bots' cards on their bot page's Settings (Releases on the Release Owner's,
+   Task Manager's and the Strategy Owner's), Settings > Security's Screening card, and the board's Release now
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -23,13 +23,13 @@ interface SettingsReleaseSchedule {
 // waiting tasks the caller may read; an open Release task's id (`already_open`) comes only to someone who may read it.
 interface SettingsReleaseNowAnswer { sent?: boolean; tasks?: number; reason?: string | null; task?: string | null; }
 
-// The daily release (docs/pipelines-v3.md D13): on or off, one or two company times, the Release Manager and
+// The daily release (docs/pipelines-v3.md D13): on or off, one or two company times, the Release Owner and
 // Technical Writer ("" finds each by its starter template), the next and last hour, and how many tasks wait for a
 // release. Owners and admins change it (`can_change`); `can_release` may ask for a release now.
 let RELEASE_VIEW: SettingsReleaseSchedule | null = null, RELEASE_AT = 0;
 // The last answer under the card (Saved, or what Release now did) survives the repaint the fresh schedule causes.
 let RELEASE_NOTE: {text: string; failed: boolean; task?: string | null} = {text: '', failed: false};
-const RELEASE_REASONS: Record<string, string> = {already_open: 'A release task is open', no_release_manager: 'No Release Manager'};
+const RELEASE_REASONS: Record<string, string> = {already_open: 'A release task is open', no_release_manager: 'No Release Owner'};
 const releaseTasks = (n: number | undefined) => `${n ?? 0} task${n === 1 ? '' : 's'}`;
 async function releaseScheduleLoad(force?: boolean): Promise<SettingsReleaseSchedule> {
   if (!force && RELEASE_VIEW && Date.now() - RELEASE_AT < 60000) return RELEASE_VIEW;
@@ -55,7 +55,7 @@ function releaseNowButtonHTML(v: SettingsReleaseSchedule): string {
   return '<button type="button" class="ghost" data-release-now>Release now</button>';
 }
 // The request is filed whether or not anything waits (the count shows only what the caller may read, so it never
-// decides the button); the Release Manager closes it when nothing does. The note goes with it.
+// decides the button); the Release Owner closes it when nothing does. The note goes with it.
 function releaseNoteHTML(v: SettingsReleaseSchedule): string {
   return v.can_release ? '<input type="text" data-release-note maxlength="1000" placeholder="Note" aria-label="Release note">' : '';
 }
@@ -66,7 +66,7 @@ function releaseCardHTML(v: SettingsReleaseSchedule): string {
     : `<span class="tnum">${esc(t)}</span>`;
   const on = v.can_change ? `<label class="sysr-switch">${peopleSwitch('data-release-on', v.on, false, 'Daily release')}<span>${v.on ? 'On' : 'Off'}</span></label>`
     : `<span>${v.on ? 'On' : 'Off'}</span>`;
-  const manager = v.can_change ? releaseBotPick('bot', v.bot, v.release_manager, 'Release Manager') : `<span>${esc(v.release_manager ? empName(v.release_manager) : 'None')}</span>`;
+  const manager = v.can_change ? releaseBotPick('bot', v.bot, v.release_manager, 'Release Owner') : `<span>${esc(v.release_manager ? empName(v.release_manager) : 'None')}</span>`;
   const writer = v.can_change ? releaseBotPick('writer', v.writer, v.technical_writer, 'Technical Writer') : `<span>${esc(v.technical_writer ? empName(v.technical_writer) : 'None')}</span>`;
   return `<div class="sb-rows rel-rows">
     <div class="sb-row"><span>Daily</span><div class="rel-line">${on}</div><span></span></div>
@@ -92,7 +92,7 @@ async function releaseSave(body: Record<string, unknown>): Promise<void> {
   try { RELEASE_VIEW = await patch('/v2/release-schedule', body); RELEASE_AT = Date.now(); releaseCardPaint(); releaseStatus('Saved'); }
   catch (e) { releaseCardPaint(); releaseStatus(errorMessage(e, 'Try again'), true); }
 }
-// One press asks the Release Manager; the answer says whether a task was filed, an open one woken, or why not.
+// One press asks the Release Owner; the answer says whether a task was filed, an open one woken, or why not.
 async function releaseNow(button: HTMLButtonElement | null, note = ''): Promise<{text: string; failed: boolean; task?: string | null}> {
   if (button) button.disabled = true;
   let text = '', failed = false, task: string | null = null;
@@ -292,8 +292,8 @@ async function renderScreeningCard(): Promise<void> {
 }
 
 // A built-in bot's own card on its page's Settings tab (ui/app/bot-page.ts), drawn only on that bot's page: the Task
-// Manager's checks, the Strategy Bot's levels (the owner's alone), and Releases on whichever bot the release schedule
-// names or finds as its Release Manager. Each keeps the permissions it had in Settings: the server's answers decide.
+// Manager's checks, the Strategy Owner's levels (the owner's alone), and Releases on whichever bot the release schedule
+// names or finds as its Release Owner. Each keeps the permissions it had in Settings: the server's answers decide.
 function botBuiltinCardsHTML(slug: string): string {
   if (slug === 'task-manager') return '<section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>';
   if (slug === 'goal-manager' && settingsStrategyBotShown()) return `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span></header>

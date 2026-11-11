@@ -229,7 +229,7 @@
       },
       {
         "actor": "bot:release",
-        "name": "Release Manager"
+        "name": "Release Owner"
       }
     ]
   }

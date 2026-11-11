@@ -81,7 +81,7 @@ function rdoMoveTargets(from: string): string[] | null {
 }
 
 // ----------------------------------------------------------------- the tree
-// The sidebar's chart (orgTreeByParent: groups, reports_to) without helpers (the Strategy Bot too) and recruiting seats,
+// The sidebar's chart (orgTreeByParent: groups, reports_to) without helpers (the Strategy Owner too) and recruiting seats,
 // drawn as an org chart: the top person (the owner nobody is above, wherever their group is) at the root, and every
 // top-level group under the one it answers to (orgGroupHead), so a department sits under the person who runs it.
 // The top person's own group is the top of the chart, not an outline: whoever is in it hangs from them. `leadOf` gives a

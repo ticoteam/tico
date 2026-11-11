@@ -1,5 +1,5 @@
-"""The Strategy Bot on every install (backend/strategy_bot.py; spec: Head of Product, Strategy Bot v3): the built-in bot
-that was the Goal Manager is named the Strategy Bot everywhere and heads the org chart under the owner, with the Heads
+"""The Strategy Owner on every install (backend/strategy_bot.py; spec: Head of Product, Strategy Owner v3): the built-in bot
+that was the Goal Manager is named the Strategy Owner everywhere and heads the org chart under the owner, with the Heads
 and the bots that report to no one under it. There is no switch a person sees. Only the chart moves: every stored
 `reports_to` stays as it was, and so does who may do what. Only the owner renames it."""
 
@@ -152,7 +152,17 @@ def definition(api, body, headers=None):
 
 # Where the old names may still be written: the upgrade that renames them, and the UI's fallback for a roster read
 # before it.
-OLD_NAME_ALLOWED = {"backend/strategy_bot.py", "backend/store.py", "ui/app/notices.ts", "ui/app/state.ts"}
+OLD_NAME_ALLOWED = {
+    "backend/strategy_bot.py",
+    "backend/store.py",
+    "ui/app/notices.ts",
+    "ui/app/state.ts",
+    # Written before the rename to Strategy Owner, and never changed after.
+    "backend/redesign_migration.py",
+    "backend/migrations/0006_drop_old_strategy_tables.sql",
+    "backend/migrations/0035_growth_rethink.py",
+    "backend/migrations/0064_history_events.py",
+}
 
 
 def test_the_old_name_is_nowhere_a_person_sees():
@@ -226,7 +236,7 @@ def test_the_strategy_bot_heads_the_chart_gains_no_access_and_answers_to_its_old
     shown = api.get("/api/v2/strategy-bot", headers=signed_in()).json()
     assert (
         "on" not in shown
-        and shown["name"] == "Strategy Bot"
+        and shown["name"] == "Strategy Owner"
         and shown["level"] == 2
         and shown["regular_checks"] is True
     )
@@ -234,12 +244,12 @@ def test_the_strategy_bot_heads_the_chart_gains_no_access_and_answers_to_its_old
     flip = api.post("/api/v2/strategy-bot", json={"on": False}, headers=signed_in())
     assert flip.status_code == 405, flip.text  # nobody turns it off, the owner included
     bots = chart(api)
-    assert bots["goal-manager"][:1] == ("p:morgan",) and bots["goal-manager"][2] == "Strategy Bot"
+    assert bots["goal-manager"][:1] == ("p:morgan",) and bots["goal-manager"][2] == "Strategy Owner"
     under_strategy = {slug for slug, (parent, _, _) in bots.items() if parent == "b:goal-manager"}
     assert under_strategy == {"sales-lead", "eng-lead", "scribe"}
     assert bots["support"][0] == "b:sales-lead"
-    # The Head's department hangs under the Strategy Bot with it; the owner's own group stays, or the chart would loop.
-    # The Built-in group is top level, not under the Strategy Bot even though goal-manager sits in it.
+    # The Head's department hangs under the Strategy Owner with it; the owner's own group stays, or the chart would loop.
+    # The Built-in group is top level, not under the Strategy Owner even though goal-manager sits in it.
     expected = {"sales": "b:goal-manager", "home": "", "built-in": ""}
     assert groups(api) == groups(api, "/api/humans") == expected
     assert bots["personal"][0] == "p:morgan" and bots["rileys"][0] == "p:riley"
@@ -247,9 +257,9 @@ def test_the_strategy_bot_heads_the_chart_gains_no_access_and_answers_to_its_old
     # The chart moved; who each bot reports to did not, in the API or in the database.
     assert {slug: row[1] for slug, row in bots.items()} == {slug: reports_before[slug] or "" for slug in bots}
     reports_after, names = stored(api)
-    assert reports_after == reports_before and names["goal-manager"] == "Strategy Bot"
+    assert reports_after == reports_before and names["goal-manager"] == "Strategy Owner"
     people = employees(api)
-    assert people["goal-manager"] == ("p:morgan", "Strategy Bot") and people["eng-lead"][0] == "b:goal-manager"
+    assert people["goal-manager"] == ("p:morgan", "Strategy Owner") and people["eng-lead"][0] == "b:goal-manager"
     # the strategy bot gains no access
     with api.app.state.store.transaction() as c:
         c.execute(
@@ -289,25 +299,25 @@ def test_the_name_sticks_and_only_the_owner_renames_it(environment):
     from backend import names
 
     with api.app.state.store.read() as c:
-        assert names.lookup(c, {"bot:goal-manager"}) == {"bot:goal-manager": "Strategy Bot"}
+        assert names.lookup(c, {"bot:goal-manager"}) == {"bot:goal-manager": "Strategy Owner"}
     assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
     from backend.app import create_app
     from fastapi.testclient import TestClient
 
     with TestClient(create_app(api.app.state.store.settings)):  # a restart is an update
         pass
-    assert stored(api)[1]["goal-manager"] == "Strategy Bot"
+    assert stored(api)[1]["goal-manager"] == "Strategy Owner"
     refused = api.post("/api/v2/goal-manager/turn-on", json={}, headers=as_person(api, "quinn"))
-    assert refused.status_code == 403 and "Strategy Bot" in refused.json()["error"]["detail"]
+    assert refused.status_code == 403 and "Strategy Owner" in refused.json()["error"]["detail"]
     # only the owner renames it and the new name shows everywhere
     for headers in (as_person(api, "riley"), as_person(api, "quinn"), as_bot(api, "botops")):
         refused = definition(api, {"display_name": "Atlas"}, headers)
         assert refused.status_code == 403, refused.text
-    # The Strategy Bot itself is refused too, and its try becomes a proposal to the owner (backend/strategy_acts.py
+    # The Strategy Owner itself is refused too, and its try becomes a proposal to the owner (backend/strategy_acts.py
     # `gate`).
     refused = definition(api, {"display_name": "Atlas"}, as_bot(api, "goal-manager"))
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "proposed", refused.text
-    assert stored(api)[1]["goal-manager"] == "Strategy Bot"
+    assert stored(api)[1]["goal-manager"] == "Strategy Owner"
     renamed = definition(api, {"display_name": "Atlas"})
     assert renamed.status_code == 200, renamed.text
     assert chart(api)["goal-manager"][2] == "Atlas" and employees(api)["goal-manager"][1] == "Atlas"
@@ -342,11 +352,11 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart_and_only_with_a_ye
         config_before = tuple(c.execute(BS.ROW_SQL + " WHERE bc.bot='goal-manager'").fetchone())
     strategy_before = api.get("/api/v2/strategy-bot", headers=signed_in()).json()
     row_before = rows(api)["goal-manager"]
-    assert before["morgan"]["org"]["eng-lead"][0] == "b:goal-manager"  # today's chart: the Strategy Bot heads it
+    assert before["morgan"]["org"]["eng-lead"][0] == "b:goal-manager"  # today's chart: the Strategy Owner heads it
 
     assert hide(api, True).status_code == 200
     mine = drawn(api, signed_in())
-    # The org chart API: no Strategy Bot; nothing under it; groups where they were; a seat under it hangs from the
+    # The org chart API: no Strategy Owner; nothing under it; groups where they were; a seat under it hangs from the
     # owner.
     from backend import people as P
 
@@ -371,7 +381,7 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart_and_only_with_a_ye
     }
     assert mine["org_groups"] == mine["humans_groups"] == {"sales": "", "home": "", "built-in": ""}
     assert mine["org_seats"][sid] == "p:morgan"
-    # The employee rows: every bot still listed, the Strategy Bot marked for the chart to leave off, nothing moved under
+    # The employee rows: every bot still listed, the Strategy Owner marked for the chart to leave off, nothing moved under
     # it.
     assert set(mine["employees"]) == set(before["morgan"]["employees"])
     assert mine["employees"]["goal-manager"][1] is True
@@ -434,7 +444,7 @@ def test_an_upgrade_names_it_moves_its_settings_and_leaves_an_older_release_its_
 
     with TestClient(create_app(api.app.state.store.settings)):  # the upgrade: a restart
         pass
-    assert stored(api)[1]["goal-manager"] == "Strategy Bot"
+    assert stored(api)[1]["goal-manager"] == "Strategy Owner"
     with api.app.state.store.transaction() as c:
         assert strategy_bot._record(c)["on"] is True
         assert strategy_bot.migrate(c) is False  # once

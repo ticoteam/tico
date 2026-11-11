@@ -14,7 +14,7 @@ Steps:
    moved in two ways needs a note.
 4. Tie every movement to a contract by name or number, with the date and the source of the change.
 5. Add the movements to the opening. The result must equal the closing figure in the schedule, or the difference is named.
-6. Explain each category in one sentence. The KPI belongs to the Strategy Bot: explain its movement and keep no number of your own.
+6. Explain each category in one sentence. The KPI belongs to the Strategy Owner: explain its movement and keep no number of your own.
 
 Checks before you finish:
 - The bridge adds up: opening plus movements equals closing.

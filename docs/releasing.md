@@ -8,9 +8,9 @@ GitHub release. Running installations look for that release and offer it as
 release's approval issue (label `release-approval`), built from the pull requests it ships. No separate product
 announcement is required.
 
-**One release path.** On a team that runs Tico with a Release Manager bot, only the Release Manager publishes
-releases. A Claude Code session or any other outside session that finishes work hands it to the Release Manager on a
-task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release Manager tags, rolls out and records it.
+**One release path.** On a team that runs Tico with a Release Owner bot, only the Release Owner publishes
+releases. A Claude Code session or any other outside session that finishes work hands it to the Release Owner on a
+task ("Release vX.Y.Z: <what>") instead of pushing the tag itself; the Release Owner tags, rolls out and records it.
 Tico itself never moves a task on a tag, release or deploy; it only marks the merged PR links the running release
 contains as Shipped (backend/github.py). Routines can run `on: release_published` for one task per release.
 
@@ -38,7 +38,7 @@ Tico's own releases (ticoteam/tico) go out on their own, at any hour, run by `.g
   never get a release the canary has not run. Latest never moves backwards, and a marking that failed is retried by the
   backstop once the canary runs that release healthy.
 - **Notes and approval.** Each candidate the canary takes gets an issue with its release notes (see
-  [Approval](#approval)). When a release publishes, the monitoring Release Manager files the Technical Writer's "Release
+  [Approval](#approval)). When a release publishes, the monitoring Release Owner files the Technical Writer's "Release
   notes for vX.Y.Z" task.
 - **A red candidate** goes on the one open `release-train` issue, once. Each push to main validates the new head, one
   validation at a time. A red or cancelled head waits for the next push, or a manual run (a flaky check). The next
@@ -202,7 +202,7 @@ hotfix's approval issue decides stable, as for any canary release.
 ## The fast path
 
 1. **While building a PR**, run the focused tests for its changes; CI selects the tests a change can reach (below).
-2. **Freeze main.** The Release Manager runs the release command's freeze guard on current main.
+2. **Freeze main.** The Release Owner runs the release command's freeze guard on current main.
 3. **Build and validate that exact commit.** The release command dispatches the full hosted Release validation for the
    frozen commit as the new version: it builds the runner binaries and the three images once, then tests those. The
    command waits for that run and checks its title and candidate commit. The 8-minute target is report-only.
@@ -213,7 +213,7 @@ hotfix's approval issue decides stable, as for any canary release.
 6. **Server rollout** starts at once: the canary install first, then the rest ("Update now", about 2 minutes each).
 7. **Desktop follows**: built only when the shell changed, and attached to the published release when it is done.
 
-These steps are the release command's, for a team whose Release Manager releases. Tico's own repository releases
+These steps are the release command's, for a team whose Release Owner releases. Tico's own repository releases
 through [the release train](#the-release-train) instead. Release validation never runs on a schedule or on a push to main
 itself: each run is a full gate for one candidate, dispatched for an exact commit and version.
 
@@ -317,7 +317,7 @@ newer database at all. Fix forward with a new patch release instead, unless the 
 
 ## The release command
 
-The Release Manager uses the Rust `tico-release` command through `scripts/release` for each approved release.
+The Release Owner uses the Rust `tico-release` command through `scripts/release` for each approved release.
 Build it once from the reviewed controls with `scripts/heavy.sh cargo build --locked --manifest-path tools/release-command/Cargo.toml`.
 Start from a clean checkout at current main:
 
@@ -543,7 +543,7 @@ Technical Writer tasks and links. Security is outside the release pipeline; no S
 Evidence comes from the task owner's messages and the owners of sub-tasks titled `Review 1:`,
 `Review 2:`, `QA:`, `Docs:`, `Documentation:` or `Technical Writer:`. Review 1 always requires a verdict;
 Review 2 requires one when its sub-task exists, and `qa` tasks require a QA pass. Docs are not
-checked here. The latest verdict must approve the merged PR head; older heads are flagged for the Release Manager
+checked here. The latest verdict must approve the merged PR head; older heads are flagged for the Release Owner
 to resolve with the recorded review delta. A passing test receipt names the full PR head, tests and a passing
 result on the same line (for example, `Tests: head <full-sha>: 12 passed, 0 failed`). The latest receipt for that
 head must pass; a newer pending result remains a gap. Any recorded failure at that head stays a gap for the Release
@@ -551,7 +551,7 @@ Manager to resolve, including after a passing rerun. Other test messages remain 
 than being inferred as passes.
 
 Exit 0 means no evidence gaps were found, 1 means the report lists gaps, and 2 means collection failed
-(including incomplete pagination). This is a visible-evidence snapshot for the Release Manager to read;
+(including incomplete pagination). This is a visible-evidence snapshot for the Release Owner to read;
 it does not run tests, authorize a release, move tasks, dispatch workflows or replace the freeze guard.
 
 At freeze, before asking for Release validation, check what the candidate carries since the previous tag:
@@ -674,7 +674,7 @@ hosted gate.
 
 1. Freeze current main with the guard above, then run the hosted release validation on that exact commit, with the
    version you will tag, dispatched from main: the tag publishes only a validation run of ci.yml from main.
-2. Once it is green, check main still equals that commit, then the Release Manager tags it and pushes:
+2. Once it is green, check main still equals that commit, then the Release Owner tags it and pushes:
    `git tag vX.Y.Z <validated-commit> && git push origin vX.Y.Z`.
 3. Once the release is published, file the Technical Writer's notes task. The notes are already on the release's
    approval issue.
@@ -772,9 +772,9 @@ route are rejected. Company installer URLs are constructed from that same hub ro
 storage uses the blob store's region, endpoint and bucket prefix; environment artifacts belong
 under `<prefix>/releases/app/` when a prefix is configured.
 
-## The Release Manager's rollout
+## The Release Owner's rollout
 
-A team that runs several installs can hand the whole rollout to its Release Manager bot. The owner's OK of a named
+A team that runs several installs can hand the whole rollout to its Release Owner bot. The owner's OK of a named
 release on its release task is the only gate: an OK the bot asked of the owner on that task
 (`tico task ask <id> --to <owner> --kind ok "Release vX.Y.Z?"`), or the owner's own message on the task naming the
 version. From there the bot runs
@@ -799,8 +799,8 @@ Setup, once:
   write on it: `tico bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
   same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs
-  `tico service-key create --label "<team> Release Manager" --scope update` there ([Service keys](service-keys.md#update-keys)).
-  Each key is stored in Tools → Credentials on the Release Manager's install, granted to the bot, with the variable
+  `tico service-key create --label "<team> Release Owner" --scope update` there ([Service keys](service-keys.md#update-keys)).
+  Each key is stored in Tools → Credentials on the Release Owner's install, granted to the bot, with the variable
   named in its config.
 - **The list of installs.** `knowledge/rollout.json` in the bot's repository: the repository, and each install's
   `name`, `url`, `key_env` and whether it is the `canary` (see `knowledge/rollout.example.json`).

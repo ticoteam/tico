@@ -1,4 +1,4 @@
-"""The Strategy Bot's merged asks (backend/strategy_merge.py): several bots' questions to one person become one item;
+"""The Strategy Owner's merged asks (backend/strategy_merge.py): several bots' questions to one person become one item;
 the person's answer to it is their answer to each, and an original that changed since is back as it was. On a store
 with no app."""
 
@@ -54,7 +54,7 @@ def test_only_bots_open_questions_to_the_person_merge_and_one_withdrawn_since_is
 
 
 def test_a_persons_comment_on_the_merged_item_is_only_a_comment(c):
-    """The answer is what passes on (answers.answer calls on_answer); a comment on the Strategy Bot's item is written
+    """The answer is what passes on (answers.answer calls on_answer); a comment on the Strategy Owner's item is written
     like any other, and nothing calls the removed on_reply."""
     one, ask_one = _asked(c, "bot:sales", "Plan the sales launch")
     two, _ = _asked(c, "bot:support", "Plan the support launch")

@@ -156,12 +156,12 @@ const noSecret = async (page: Page, tag: string) => assert.ok(!(await page.conte
       // In order: issues, access, credentials, then the page.
       const order = await page.locator('#int-detail .card').evaluateAll(cs => cs.map(c => (c as HTMLElement).className.split(' ').find(x => x.startsWith('lc-')) || c.id || 'meta'));
       assert.deepEqual(order.slice(0, 4), ['lc-issues-card', 'lc-access', 'lc-creds', 'meta'], tag + ': issues, access, credentials, then the page');
-      assert.match(await page.locator('.lc-issues-card').innerText(), /Credential missing on Test Mac · Release Manager/);
+      assert.match(await page.locator('.lc-issues-card').innerText(), /Credential missing on Test Mac · Release Owner/);
       const access = await page.locator('.lc-access .lc-team').evaluateAll((ts: Element[]) => ts.map(t => [t.querySelector('summary span')!.textContent,
         [...(t.querySelectorAll('.lc-who-row') as unknown as Iterable<Element>)].map(r => [r.querySelector('.lc-wn')!.textContent, r.querySelector('.pill')?.textContent || ''])]));
       assert.deepEqual(access, [
         ['Engineering', [['Engineering Lead', 'Approval']]],
-        ['Operations', [['Ana Silva', 'Approval'], ['Release Manager', 'Read only']]],
+        ['Operations', [['Ana Silva', 'Approval'], ['Release Owner', 'Read only']]],
       ], tag + ': who has it, by team, each with what they may change');
       assert.equal(await page.locator('.lc-access .lc-who-row .lc-dot').count(), 1, tag + ': the bot with the problem is marked');
       const cred = await page.locator('.lc-creds .lc-cred').innerText();

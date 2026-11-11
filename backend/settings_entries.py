@@ -64,9 +64,9 @@ HOOKS_IN, HOOKS_OUT, HOOKS_GW = (
 HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
 INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
 # System's other cards moved to the built-in bots' own Settings and to Settings > Security. Releases is on whichever bot
-# is the Release Manager: its address reads the schedule and opens that bot (ui/app/settings.ts settingsMovedOut).
+# is the Release Owner: its address reads the schedule and opens that bot (ui/app/settings.ts settingsMovedOut).
 RELEASES, TASK_MANAGER, SECURITY = (
-    "Release Manager > Settings > Releases",
+    "Release Owner > Settings > Releases",
     "Task Manager > Settings",
     "Settings > Security",
 )

@@ -1988,7 +1988,7 @@ GOAL_YES = _s(
 
 @tool(
     "tico_goal_read_back",
-    "Tico writes and stores the read-back in the owner's Strategy Bot chat. "
+    "Tico writes and stores the read-back in the owner's Strategy Owner chat. "
     "Saves nothing without a plain yes. "
     "Returns message_id, text and exact method/path/body steps; save agreed steps with tico_goal_save. "
     "Kinds: goal_create, goal_update, measure_add, target_set, measure_remove, suggestion.",
@@ -2112,8 +2112,8 @@ def goal_create(api, args):
     "tico_goal_status",
     "Set a goal's colour by hand: red, yellow or green with one honest sentence; "
     "done when reached, dropped when it stops mattering. A colour set by hand sticks, with your name and "
-    "note, until a person hands it back (status `auto`); the Strategy Bot only suggests a different one. "
-    "`auto` lets the Strategy Bot set the colour again: it ends a colour set by hand and works the automatic one "
+    "note, until a person hands it back (status `auto`); the Strategy Owner only suggests a different one. "
+    "`auto` lets the Strategy Owner set the colour again: it ends a colour set by hand and works the automatic one "
     "out now, from the goal's KPIs, or its owner's check-ins and tasks. The goal's owner, the owner of the goal "
     "it serves, or someone above them.",
     {
@@ -2134,9 +2134,9 @@ def goal_status(api, args):
 
 @tool(
     "tico_goal_refresh",
-    "The Strategy Bot's status pass: work the automatic colour of every live goal (or "
+    "The Strategy Owner's status pass: work the automatic colour of every live goal (or "
     "the ones named) out again. A goal whose colour a person set only gets a visible suggestion. "
-    "Returns {changed, suggested, checked}. The Strategy Bot or the team owner.",
+    "Returns {changed, suggested, checked}. The Strategy Owner or the team owner.",
     {"goal_ids": {"type": "array", "items": {"type": "string"}, "description": "Only these goals; default all"}},
     writes=True,
 )
@@ -2148,7 +2148,7 @@ def goal_refresh(api, args):
     "tico_goal_checkin",
     "Record how the owner says a goal is going, in their words: interpretation, kept "
     "apart from the readings (facts). It colours a goal that has no KPI. The goal's owner, someone above "
-    "them, or the Strategy Bot recording an owner's answer (`from_actor`).",
+    "them, or the Strategy Owner recording an owner's answer (`from_actor`).",
     {
         "id": _s("Goal id"),
         "body": _s("What is going on, in a sentence or two"),
@@ -2187,7 +2187,7 @@ def goal_needs_you(api, args):
 @tool(
     "tico_goal_company",
     "The company's Vision and Description (the Company section at the top of Goals, "
-    "where the Strategy Bot is on), empty until a person writes them. Read-only: only the owner or an admin "
+    "where the Strategy Owner is on), empty until a person writes them. Read-only: only the owner or an admin "
     "changes them.",
     {},
 )
@@ -2197,7 +2197,7 @@ def goal_company(api, args):
 
 @tool(
     "tico_goal_strategy_bot",
-    "The Strategy Bot's name, how much it does (level 1 Passive, "
+    "The Strategy Owner's name, how much it does (level 1 Passive, "
     "2 suggests actions, 3 acts on its "
     "own; only the owner changes it), whether its regular checks run, and how many items it put in each person's "
     "Needs you today against its cap of 5.",
@@ -2209,7 +2209,7 @@ def goal_strategy_bot(api, args):
 
 @tool(
     "tico_goal_strategy_bot_merge",
-    "The Strategy Bot only, at level 2 or 3: "
+    "The Strategy Owner only, at level 2 or 3: "
     "when several bots ask a person the same thing, "
     "make them one item in that person's Needs you. The originals leave their Needs you while it is open; their one "
     "answer goes to every bot that asked. Counts toward the 5 a day.",
@@ -2241,7 +2241,7 @@ def goal_strategy_bot_merge(api, args):
 
 @tool(
     "tico_goal_strategy_bot_level3_offer",
-    "The Strategy Bot only: record that its Monday note offered level 3, once "
+    "The Strategy Owner only: record that its Monday note offered level 3, once "
     "`level3_offer.due` in tico_goal_strategy_bot is true (10 recoveries approved in a row "
     "unchanged, none offered in 30 "
     "days). Only a person raises the level.",
@@ -2254,7 +2254,7 @@ def goal_strategy_bot_level3_offer(api, args):
 
 @tool(
     "tico_goal_strategy_bot_decide",
-    "The Strategy Bot only, at level 3: "
+    "The Strategy Owner only, at level 3: "
     "make one decision alone, with its reason: 1 to 10 "
     "changes to bot tasks (create a task for a bot, reorder one to the top of its queue, reassign one to another "
     "bot, close one), logged under one action id with an Undo for the owner. A task for a person, spending, "
@@ -2298,10 +2298,10 @@ def goal_strategy_bot_decide(api, args):
 
 @tool(
     "tico_goal_strategy_bot_log",
-    "The Strategy Bot log, newest first: "
+    "The Strategy Owner log, newest first: "
     "each decision it made alone and each thing it proposed "
     "instead because it stays the owner's, with the reason and what Undo restored. The owner only: anyone else, "
-    "the Strategy Bot included, is refused.",
+    "the Strategy Owner included, is refused.",
     {"before": _s("next_before from the previous page")},
 )
 def goal_strategy_bot_log(api, args):
@@ -2429,7 +2429,7 @@ def kpi_show(api, args):
     "Make a KPI: a measure on its own that goals link to. Name what is counted, per what; "
     "give a definition, the unit, which way is good, how often it is read and who is accountable (default you). "
     "With `goal_id` it is linked to that goal, with the target fields on the link (an improvement: target and "
-    "deadline; or a range: min/max). The Strategy Bot proposes instead (tico_proposal_create).",
+    "deadline; or a range: min/max). The Strategy Owner proposes instead (tico_proposal_create).",
     {
         "name": _s("'booked Calendly demos per two weeks'"),
         "goal_id": _s("Link it to this goal"),
@@ -2510,7 +2510,7 @@ def kpi_restore(api, args):
     "tico_kpi_link",
     "Link a goal to a KPI and set the target on that link, or change the target of an "
     "existing link: an improvement (baseline, target, deadline) or a range (min, max); none is just "
-    "linked. The goal's owner or someone above them; the Strategy Bot proposes instead.",
+    "linked. The goal's owner or someone above them; the Strategy Owner proposes instead.",
     {
         "goal_id": _s("Goal id"),
         "kpi_id": _s("KPI id (auto:<bot>:<metric> for a bot's automatic KPI)"),
@@ -2553,7 +2553,7 @@ def kpi_unlink(api, args):
     "tico_kpi_log",
     "Log a reading on a KPI: a fact, with the period it describes, where it came from and how "
     "good it is. Never edited: to correct one, log a new reading that `supersedes` it. The KPI's owner, the "
-    "Strategy Bot, or the owner of a goal that uses it.",
+    "Strategy Owner, or the owner of a goal that uses it.",
     {
         "kpi_id": _s("KPI id"),
         "value": {"type": "number"},
@@ -2606,10 +2606,10 @@ def kpi_log(api, args):
     "Propose a change you may not make yourself, for the owner to confirm: clearer "
     "goal wording (goal_wording: payload title/body), a KPI for a goal (goal_kpi: payload kpi or kpi_id, and "
     "target), a new definition (kpi_definition), a target (kpi_target: payload is the target fields), or a "
-    "flag (flag: payload issue vague|duplicate), or, where the Strategy Bot "
+    "flag (flag: payload issue vague|duplicate), or, where the Strategy Owner "
     "is on, a goal's Why (goal_why: "
     "payload why, one line tying the goal to the company's vision), or, "
-    "from the Strategy Bot at level 2 or 3, a red or "
+    "from the Strategy Owner at level 2 or 3, a red or "
     "stalled goal's recovery (recovery: payload evidence, options [{label, actions}], pick; actions create, "
     "reorder or settle), or, from any bot at any level, a change to the strategy draft (strategy_draft: payload "
     "summary, vision, sections {serve, sell, proof, now, know, how, not, extra: {key: {title, body}}}, bets [{id?, "
@@ -2617,7 +2617,7 @@ def kpi_log(api, args):
     "without is new; source bet_tripped when a tripped bet prompted it; confirmed, the owner's draft and bets "
     "change, nothing is published), or a change to the brand draft (brand_draft: payload "
     "{sections: {name: value or null}}; confirmed by an admin, merged into the draft, never published). "
-    "goal_wording may be only {bet_id} to link a goal to a bet. The Strategy Bot "
+    "goal_wording may be only {bet_id} to link a goal to a bet. The Strategy Owner "
     "cannot change a definition or a target it is judged against without one.",
     {
         "kind": {"type": "string", "enum": list(PROPOSAL_KINDS)},
@@ -2848,7 +2848,7 @@ def strategy_diff(api, args):
 
 @tool(
     "tico_strategy_guides",
-    "Deprecated: the Strategy Bot's drafting questions (the "
+    "Deprecated: the Strategy Owner's drafting questions (the "
     "default guide only). The exercises "
     "run against a strategy are lenses: tico_lens_list.",
     {},
@@ -3263,8 +3263,8 @@ def lens_list(api, args):
 @tool(
     "tico_lens_run",
     "Run a lens: answers by step key (a step left out is skipped and assumed from the strategy), on "
-    "the published strategy or, for the owner, the draft. The owner, the Strategy Bot and, for a market lens, the "
-    "Librarian may run one. The Strategy Bot's run files its changes as one strategy_draft proposal; nobody's run "
+    "the published strategy or, for the owner, the draft. The owner, the Strategy Owner and, for a market lens, the "
+    "Librarian may run one. The Strategy Owner's run files its changes as one strategy_draft proposal; nobody's run "
     "publishes. Waits up to `wait` seconds (at most 60) for the result.",
     {
         "lens": _s("Lens id, from tico_lens_list"),
@@ -3638,7 +3638,7 @@ def market_watch_check(api, args):
     "tico_market_briefing_post",
     "Librarian (the market curator): post the week's market briefing. `body` is Markdown, `items` the "
     "week's findings, each {text, kind: change|signal|theme|size, entity_ids: [market ids it touches]}. The server works out "
-    "which bets cite those ids and tells the Strategy Bot. `answers` are one-line answers to the Market page's questions, "
+    "which bets cite those ids and tells the Strategy Owner. `answers` are one-line answers to the Market page's questions, "
     "keyed changed, money, players, reach, saying (140 characters each); left out, the week's stay. The same week again "
     "replaces it.",
     {
@@ -5876,7 +5876,7 @@ def notice_list(api, args):
 
 @tool(
     "tico_release_schedule",
-    "The team's release schedule: when the Release Manager is asked to release what "
+    "The team's release schedule: when the Release Owner is asked to release what "
     "waits for a release (`times`, company time; `on`), who that bot is (`release_manager`) and the Technical Writer "
     "(`technical_writer`), the next hour, the last hour's result and how many tasks wait now. Send any of "
     "`on`, `times` (one or two HH:MM), `bot`, `writer` (a bot slug, or \"\" to find it by starter template) to "
@@ -5889,7 +5889,7 @@ def notice_list(api, args):
             "maxItems": 2,
             "description": "One or two release times, HH:MM in company time",
         },
-        "bot": _s("The Release Manager's bot slug, or empty to find it by starter template"),
+        "bot": _s("The Release Owner's bot slug, or empty to find it by starter template"),
         "writer": _s("The Technical Writer's bot slug, or empty to find it by starter template"),
     },
     writes=True,
@@ -5905,12 +5905,12 @@ def release_schedule(api, args):
 
 @tool(
     "tico_release_now",
-    "Ask the Release Manager to cut a release of what waits for a release now, without waiting "
+    "Ask the Release Owner to cut a release of what waits for a release now, without waiting "
     "for the daily hour (a hotfix, a midday release): ONE task listing the tasks, or a wake on its unfinished "
-    "release task. For a person who moves Engineering tasks, the Release Manager or the Head of Engineering bot. "
+    "release task. For a person who moves Engineering tasks, the Release Owner or the Head of Engineering bot. "
     "`sent` is false with a `reason` when nothing waits or nobody was asked. A person's note asks even with nothing "
     "waiting.",
-    {"note": _s("Why now; goes in the Release Manager's task")},
+    {"note": _s("Why now; goes in the Release Owner's task")},
     writes=True,
 )
 def release_now(api, args):
@@ -9939,7 +9939,7 @@ def thread_task(api, args):
     "\"body\": {\"text\": \"<their words>\"}}, ...]} (up to 100); N is the version tico_task_show printed. An OK goes "
     "on a card only when the person's message names it (approve, merge, publish, send, spend); 'clear my queue' never "
     "OKs anything. "
-    "The Strategy Bot may propose one owner-confirmed org-chart change as POST /api/v2/seats/batch with body "
+    "The Strategy Owner may propose one owner-confirmed org-chart change as POST /api/v2/seats/batch with body "
     "{\"seats\":[{\"title\":\"...\",\"description\":\"...\",\"reports_to\":\"...\",\"team\":\"...\"}]} . "
     "Use tico_org_models for published recommendations; no seat is added before the owner confirms. "
     "A task action or answer the person clearly asked for needs no card: pass on_behalf_of to that tool instead. "
@@ -10019,14 +10019,14 @@ def assistant_proposals(api, args):
     "In a person's own chat: save one thing they taught you about how they like things ranked "
     "and summarised (\"launches matter more than hiring news\"), as one short line in their words, then tell them "
     "what you saved. It is theirs alone and shows on What it has learned, "
-    "where they edit or delete it. The Strategy Bot "
+    "where they edit or delete it. The Strategy Owner "
     "in the owner's chat saves what the owner teaches it about the company with layer company.",
     {
         "text": _s("One short line, in their words"),
         "layer": {
             "enum": ["personal", "company"],
             "default": "personal",
-            "description": "personal (theirs), or company (the Strategy Bot in the owner's chat only)",
+            "description": "personal (theirs), or company (the Strategy Owner in the owner's chat only)",
         },
     },
     required=("text",),
@@ -10041,7 +10041,7 @@ def assistant_learn(api, args):
 @tool(
     "tico_assistant_learned",
     "What a person's chat bot has learned: their own layer, and for the owner the "
-    "company layer (vision, priorities, what they taught the Strategy Bot about the company).",
+    "company layer (vision, priorities, what they taught the Strategy Owner about the company).",
     {},
 )
 def assistant_learned(api, args):
@@ -13005,7 +13005,7 @@ AUDIENCE = {
     # A bot asks for its own credential in the chat or task its turn is on (backend/credential_cards.py); BotOps for any.
     "tico_api": REQUESTER,
     "tico_credential_request": ("bot", "botops"),
-    # Org changes: the Strategy Bot's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
+    # Org changes: the Strategy Owner's owner chat makes one the person asked for, citing their words (`on_behalf_of`).
     **{name: REQUESTER + ("assistant",) for name in ("tico_group_update", "tico_group_delete", "tico_org_reports_to")},
     # Maintenance: the owner or an admin changes it; the team reads it (backend/maintenance.py may_change).
     "tico_maintenance": REQUESTER_READ,

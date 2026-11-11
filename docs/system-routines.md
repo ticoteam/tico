@@ -120,7 +120,7 @@ The jobs that must happen within seconds (due times, recovery and outside polls)
 | **Outside text check** | Screens outside text a restart left waiting. | Every 10 seconds | |
 | **Finance upkeep** | Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds, watches documents and opens next month's period. | Every 10 seconds | |
 | **Hourly deadlines** | Turns off a webhook that failed for five days, retires replaced computers, hands a person a support ticket or screened item that waited an hour, and keeps unsent a held write nobody decided in time. | Hourly | |
-| **Strategy note check** | Starts the Strategy Bot's Monday note above Passive and pauses it at Passive. | Hourly | a Strategy Bot |
+| **Strategy note check** | Starts the Strategy Owner's Monday note above Passive and pauses it at Passive. | Hourly | a Strategy Owner |
 | **Tico Cloud check** | Reads this company's Tico Cloud access from HQ and renews its file hosting keys. | Every minute on Tico Cloud, else hourly | a Gateway key |
 | **Workspace key check** | Checks a pending or failing Google Workspace key again until it works or its hour is up. | Every 10 seconds | a Workspace key |
 | **Inbound mail** | Brings in mail and bills from HQ, and deletes inbound mail older than 90 days. | Every 15 seconds | |

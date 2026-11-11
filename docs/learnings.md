@@ -153,7 +153,7 @@ reached, even partway through, the night sends nothing, shows "Skipped", and the
 night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
 to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 15 items each,
-highest first. The same 15-item limit applies across pending runs when Update sends its request. Recipients are the active bots other than BotOps, the Assistant and the Strategy Bot,
+highest first. The same 15-item limit applies across pending runs when Update sends its request. Recipients are the active bots other than BotOps, the Assistant and the Strategy Owner,
 plus the Librarian for how the company works and the market, that had a run in the last 24 hours. A bot
 synced in from another platform (Grok, Dots, Muse) never gets a run here, so it gets no packet.
 

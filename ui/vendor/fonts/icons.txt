@@ -167,7 +167,6 @@ unarchive
 unsubscribe
 verified_user
 view_agenda
-view_timeline
 warning
 waving_hand
 webhook

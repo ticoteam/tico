@@ -10,7 +10,7 @@
   {"team": "leadership", "template": "chief-of-staff"},
   {"team": "leadership", "template": "strategy-planning"},
   {"team": "product", "template": "product-lead"},
-  {"team": "product", "template": "product-manager"},
+  {"team": "product", "template": "segment-product-owner", "title": "Product Owner"},
   {"team": "product", "template": "feedback-analyst"},
   {"team": "product", "template": "product-researcher"},
   {"team": "product", "template": "product-analyst"},

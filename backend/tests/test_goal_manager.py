@@ -11,7 +11,7 @@ from backend.tests.helpers.goal_manager import BASE, with_goal_manager
 
 
 def routines(api):
-    """The Strategy Bot's routines as they run now: each its automation (backend/routines.py `row`), deleted ones left
+    """The Strategy Owner's routines as they run now: each its automation (backend/routines.py `row`), deleted ones left
     out."""
     with api.app.state.store.read() as c:
         rows = {r["id"]: R.row(c, r["id"]) for r in c.execute("SELECT id FROM schedules WHERE bot='goal-manager'")}

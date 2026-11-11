@@ -14,7 +14,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 - **Built-in**: four bots every team gets. The [Assistant](assistant.md) is each human's own helper and their one DM,
   the owner's too; the other three are helpers it hands work to. BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
-  manual; the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
+  manual; the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
   is a built-in helper outside the chart: it manages the General pipeline, and once an hour it looks for tasks that say
   Paused, held bots and duplicates, and wakes only when it finds something. [Check health](health-monitor.md) is a
   plain-code step that runs hourly and opens one BotOps task
@@ -31,7 +31,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | Assistant (built-in) | Your own helper: finds things, makes tasks, drafts the rest for your click | Sidebar, or ⌘K | “What needs me today?” |
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
-| Strategy Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
+| Strategy Owner (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
 | Task Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `tico task-manager status` |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: its Home or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
@@ -72,7 +72,7 @@ Words are defined in the [Glossary](glossary.md).
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it
   supports (`parent_id`, optional) and a colour with a one-line note. The colour is set automatically
-  from the goal's KPIs (or its owner's check-ins and tasks) by the built-in **Strategy Bot**; a human
+  from the goal's KPIs (or its owner's check-ins and tasks) by the built-in **Strategy Owner**; a human
   may override it, and it stays theirs until they hand it back. `done` or `dropped` when it ends. A task
   may name the goal it serves. Bots read theirs with `tico goal list`; nothing is pushed into a run.
 - **KPI** — a measure that stands on its own: a name, definition, unit, direction, cadence and one owner.
@@ -140,7 +140,7 @@ Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
 (`#/assistant`, also the first tab on their own page, is the same chat in full): it looks things up at once, does low-risk things as that human, and
 proposes anything with a side effect for their own click ([The Assistant](assistant.md)). The owner's DM is the
-Assistant too: it hands strategy and goal work to the Strategy Bot, research to the Librarian and bot work to BotOps. There is no shared
+Assistant too: it hands strategy and goal work to the Strategy Owner, research to the Librarian and bot work to BotOps. There is no shared
 Tico chat page and no Tico Live; humans can also act across Tico through their own external agent over Tico's
 MCP ([Connect an external agent](connect-an-agent.md)).
 The database itself is readable with plain SQL (`tico sql`, the SQL page, `POST /api/v2/sql`):

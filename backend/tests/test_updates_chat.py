@@ -1,4 +1,4 @@
-"""The Updates chat (backend/updates_chat.py; spec: Strategy Bot v3, sections 10.8 and 10.9 tests 25, 28 and 29): a
+"""The Updates chat (backend/updates_chat.py; spec: Strategy Owner v3, sections 10.8 and 10.9 tests 25, 28 and 29): a
 question asked from Updates is a turn of the person's own chat bot, in the same chat as their menu tab, handed the
 recent updates that person may read. The server leaves out every update they may not see, and any that links a task,
 chat or bot they may not open, so the bot can never quote or link one; each comes ranked by the default order and with

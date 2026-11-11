@@ -81,7 +81,7 @@ def moved(c, actor, task_id):
 def may_set(c, auth, who, bot):
     """Whether `who` may set the model `bot`'s tasks run on: whoever may manage the bot whose model that is
     (Auth.bot_manager, the rule settings_admin applies to the bot's own model; a branch's is its original's), never a
-    bot, whatever it manages, and never the Strategy Bot, acting for a person or itself: a model stays the person's at
+    bot, whatever it manages, and never the Strategy Owner, acting for a person or itself: a model stays the person's at
     every level (the "cost" gate settings_admin runs first)."""
     return (
         who.role != "bot"

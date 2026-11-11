@@ -36,7 +36,7 @@ for one bot at a time):
    with no room named). A task is never filed in a Home (rooms.task_conversation_id). A task's history is read from
    where it was written and from every Home its bot has had, archived ones included, the current one last (`history_ids`).
 
-Left as they are: the Assistant's rooms (it has no Home), the Strategy Bot, the Librarian's "docs" rooms (its per-person
+Left as they are: the Assistant's rooms (it has no Home), the Strategy Owner, the Librarian's "docs" rooms (its per-person
 Q&A list reads them), Strategy rooms, task rooms, meetings, DMs (scope 'direct'), closed or archived rows, rows that are
 not exactly one person and one bot, rooms of bots synced from an outside app (the sync reads the person's room), and
 a room whose owner's viewer may not read the bot's Home (moving it would take their own history from them). An owner with no viewer (a human with no record in the registry) is not an exception: their room moves.
@@ -154,7 +154,7 @@ def home_for_chat(c, person, bot_ref, *, create=True):
     """The Home a person's chat with this bot goes into once the bot's chats have moved (rooms.personal_room, the chat and
     work rooms, a bot's message with no room named). Only a covered bot is one whose rooms the move took (it has home_merges
     rows): a bot the move never reached, and a fresh install's, keep their chats as they are, for one lookup. None where the
-    move leaves the chat as it is: the Assistant and the Strategy Bot, a bot synced from an outside app, a person whose
+    move leaves the chat as it is: the Assistant and the Strategy Owner, a bot synced from an outside app, a person whose
     viewer is refused the Home, and a bot with no Home when `create` is False. A person with no viewer (no record in the
     registry) gets the Home, as the move took their chat there."""
     from . import threads
@@ -309,7 +309,7 @@ def _moved(c, conversation_id):
 
 # ----------------------------------------------------------------------------- which rooms
 def _excluded_bots(assistant=None):
-    """The Assistant (no Home: its rooms are each person's own Assistant), and the Strategy Bot (no person chats with it)."""
+    """The Assistant (no Home: its rooms are each person's own Assistant), and the Strategy Owner (no person chats with it)."""
     from .strategy_bot import SLUG
 
     name = assistant or os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo"

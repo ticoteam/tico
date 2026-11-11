@@ -1,6 +1,6 @@
 """Freeze-time release guard: net reverts of shipped work, and merged pull requests whose final head nobody approved.
 
-The Release Manager runs it on the frozen candidate, before asking for Release validation:
+The Release Owner runs it on the frozen candidate, before asking for Release validation:
 
     python scripts/freeze_guard.py --head <candidate> [--previous vX.Y.Z] [--receipts receipts.json]
 

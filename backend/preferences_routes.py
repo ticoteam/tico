@@ -1,7 +1,7 @@
 # pyright: strict
 """A person's or a bot's own preferences: GET and POST /api/v2/preferences/{key}. Each actor reads and writes only its
 own. The server checks the values of the keys it acts on: the web's Send way, meetings' auto share and hiding the
-Strategy Bot from one's own chart."""
+Strategy Owner from one's own chart."""
 
 import json
 from collections.abc import Callable
@@ -28,7 +28,7 @@ SEND_WAY_DEFERS = frozenset("defer:" + f for f in ("30m", "1h", "4h", "24h", "2d
 
 
 # The keys a client keeps here: the web's (ui/app: pill, rails, sidebar, tasks-page, task-list, pipeline-rail), the
-# Strategy Bot's chart switch and meetings' auto share. Every other row in `preferences` is the server's own
+# Strategy Owner's chart switch and meetings' auto share. Every other row in `preferences` is the server's own
 # (getting started, the changelog, the Librarian's setup, ...) and is written only by its module.
 KEYS = frozenset(
     {
@@ -67,7 +67,7 @@ def check(who: Any, key: str, value: object) -> None:
         value in ("steer", "queue") or isinstance(value, str) and value in SEND_WAY_DEFERS
     ):
         raise Problem("validation", "compose.send_way is steer, queue or defer:<30m|1h|4h|24h|2d|7d|never>", 422)
-    # Hide from my chart on the Strategy Bot: a person's own view.
+    # Hide from my chart on the Strategy Owner: a person's own view.
     if key == strategy_bot.HIDE_PREF:
         views.human_only(who)
         if not isinstance(value, bool):

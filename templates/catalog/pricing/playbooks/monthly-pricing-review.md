@@ -1,7 +1,7 @@
 # Monthly pricing review
 
 Schedule: the 1st of each month at 09:00 team time (routine `monthly-pricing-review`), after setup. Budget 45 minutes. The outcome is one page on prices, discounts and plan
-mix for the Head of Product. Nothing is changed and nothing leaves the team.
+mix for your manager. Nothing is changed and nothing leaves the team.
 
 Inputs: the watched competitors' public pricing pages; last month's closed-won deals (CRM read or an export on the task) with list price, charged price, term, segment and deal size; `knowledge/our-prices.md`, `knowledge/competitor-prices.md`, `knowledge/discounts.md`; last month's review.
 

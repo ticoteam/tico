@@ -197,7 +197,7 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/v2/market/value-chain') return json(market ? mk.chain : {layers: [], edges: []});
     if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: null});
-    // The Strategy Bot beside the tabs, and Goals.
+    // The Strategy Owner beside the tabs, and Goals.
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});

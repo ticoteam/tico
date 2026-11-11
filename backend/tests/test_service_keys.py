@@ -143,7 +143,7 @@ def test_an_update_key_checks_starts_and_follows_an_update_and_reaches_nothing_e
 
 def test_a_key_made_with_a_personal_token_ends_with_that_token(api):
     token = post(api, "me/tokens", {"label": "release script"})
-    made = post(api, "service-keys", {"label": "Release Manager", "scope": "update"}, token=token["token"])
+    made = post(api, "service-keys", {"label": "Release Owner", "scope": "update"}, token=token["token"])
     listed = {k["id"]: k for k in get(api, "service-keys")["keys"]}[made["id"]]
     assert (listed["made_with_token"], listed["token_label"]) == (token["id"], "release script")
     update = {"Authorization": "Bearer " + made["key"]}

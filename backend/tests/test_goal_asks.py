@@ -1,6 +1,6 @@
-"""What the Goals page needs from a person is a Strategy Bot task (backend/goal_asks.py): one per KPI or proposal, kind
+"""What the Goals page needs from a person is a Strategy Owner task (backend/goal_asks.py): one per KPI or proposal, kind
 and person, in Tasks and Decide, closed by itself once resolved. Only above Passive: at Passive nobody is asked anything
-(spec: Strategy Bot v3, test 20). `goal_manager(api)` is an install the owner set to Passive."""
+(spec: Strategy Owner v3, test 20). `goal_manager(api)` is an install the owner set to Passive."""
 
 from datetime import datetime, timedelta, timezone
 
@@ -45,7 +45,7 @@ def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     # Another pass asks nothing twice.
     sync(api)
     assert [a["id"] for a in stale_asks(api)] == [task["id"]]
-    # A fresh reading closes it at once, as the Strategy Bot.
+    # A fresh reading closes it at once, as the Strategy Owner.
     log(api, kpi["id"], 12, period_end=H.now())
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
@@ -197,7 +197,7 @@ def test_an_owner_change_moves_the_ask_and_without_a_goal_manager_nothing_is_fil
     raise_level(api, 2)
     goal, kpi = goal_with_kpi(api, token="ben-test", owner="ben")
     log(api, kpi["id"], 10, token="ben-test", period_end=H.now())
-    # No Strategy Bot: no task, and the Goals page still says what waits.
+    # No Strategy Owner: no task, and the Goals page still says what waits.
     assert not asks(api)
     assert any(i["kind"] == "kpi_red" and "task" not in i for i in get(api, "goals/needs-you", "ben-test")["items"])
     goal_manager(api, level=2)

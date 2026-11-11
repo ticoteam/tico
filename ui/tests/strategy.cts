@@ -50,7 +50,7 @@ const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
 const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
+  bot('goal-manager', 'Strategy Owner', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 const kpis = [{id: 'k-margin', name: 'Gross margin per job', unit: '%'}, {id: 'k-jobs', name: 'Jobs per week', unit: ''}];
 const bets = () => [
   {id: 'b-price', statement: 'Price at half the market and still make money, because bots do the office work.',
@@ -585,7 +585,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A strategy change from the Strategy Bot in Needs you: who suggests it and why, each change as Now / Proposed
+    // A strategy change from the Strategy Owner in Needs you: who suggests it and why, each change as Now / Proposed
     // against the
     // draft, then "Add to draft" / "No, leave it" with the line that nothing is published (Dev 533).
     {
@@ -600,7 +600,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       await card.waitFor();
       const flat = (t: string) => t.replace(/\s+/g, ' ').trim();
       assert.equal(flat(await card.locator('.kpi-prop-head').innerText()),
-        'Strategy Bot suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
+        'Strategy Owner suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
       assert.equal(await card.locator('.strat-prop-open').getAttribute('href'), '#/strategy');
       // The vision it proposes is the draft's already: no row for it.
       assert.deepEqual(await card.locator('.strat-prop-list > li').allInnerTexts().then(rows => rows.map(flat)), [
@@ -640,7 +640,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
       assert.equal((await rename.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Positioning · Title Now Brand Proposed Positioning');
       assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
       await lens.waitFor();
-      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^Strategy Bot suggests a change to your strategy from the Blue Ocean lens/);
+      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^Strategy Owner suggests a change to your strategy from the Blue Ocean lens/);
       const values = lens.locator('.prop-np-v');
       const tall = () => values.evaluateAll(els => els.map(el => el.scrollHeight > el.clientHeight + 1));
       // The draft's own text is short, so only Proposed is cut; both are clamped to four lines until Show all.

@@ -119,6 +119,7 @@ ALIASES = {
     "press": "pr",
     "ads": "paid-media",
     "release manager": "release-owner",
+    "release owner": "release-owner",
     "release notes": "release-notes",
     "docs": "docs-writer",
     "technical writer": "docs-writer",
@@ -176,7 +177,7 @@ NOT_BARE = {"cro", "pipeline"}
 
 def find_role(text):
     """The template a slug, name or everyday word names exactly, else None. A name is tried whole before its "bot" or
-    "agent" ending is dropped, so the built-in's old name ("ceo bot") is an alias and "Strategy Bot" finds its
+    "agent" ending is dropped, so the built-in's old name ("ceo bot") is an alias and "Strategy Owner" finds its
     template. A bare word in NOT_BARE names something else in a company's own talk, so it finds nothing."""
     key = re.sub(r"^(an?|the|some|another)\s+", "", str(text).strip().lower()).strip()
     bare = re.sub(r"\s+(bot|agent)$", "", key)

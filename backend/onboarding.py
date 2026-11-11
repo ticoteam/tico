@@ -3,7 +3,7 @@
 A company starts with four built-in bots: the assistant, which is each person's private Assistant
 chat (backend/assistant.py) and works in the background (Slack routing, meetings' Auto delivery),
 BotOps, which builds every other bot, the Librarian, which answers questions from the company's
-docs (backend/librarian.py), and the Strategy Bot, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
+docs (backend/librarian.py), and the Strategy Owner, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
 names the company, asks the first-run questions, and records the org chart the owner builds department by
 department (the suggestions are backend/recruit.py), and on completion defines the chosen bots. A starter is
 created at once, `needs_onboarding`, and its repository is materialized by the computer; every other template is
@@ -743,7 +743,7 @@ class Onboarding:
 
     def complete(self, c, who, models=None, seats=True, finish=True):
         """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (BotOps, the
-        Librarian, the Strategy Bot and the Assistant) are created as bots, Active from day one, and every other role is
+        Librarian, the Strategy Owner and the Assistant) are created as bots, Active from day one, and every other role is
         laid out as a Recruiting seat with its reporting line: no bot, repository, computer slot or BotOps task until
         someone recruits it. `seats` False creates every pick as a bot, as the sample company does
         (backend/sample_company.py). `models` names the model a new bot runs on, by slug, in place of its card's (the
@@ -929,7 +929,7 @@ class Onboarding:
                     choice["display_name"],
                 ),
                 # The owner reviewed the setup description and edited duties/limits before it became a seat.
-                # Keep those words instead of asking the Strategy Bot to replace them on the first open.
+                # Keep those words instead of asking the Strategy Owner to replace them on the first open.
                 "description_by": who.actor,
                 "reports_to": line(choice),
             }
@@ -1145,12 +1145,12 @@ class Onboarding:
         return True
 
     def turn_on_goal_manager(self, c, who):
-        """The same for the built-in Strategy Bot (docs/strategy-bot.md)."""
+        """The same for the built-in Strategy Owner (docs/strategy-bot.md)."""
         return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
 
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
-        Librarian, the Strategy Bot, the Task Manager, Counsel, the Brand Owner, and the Bookkeeper once Finance is set
+        Librarian, the Strategy Owner, the Task Manager, Counsel, the Brand Owner, and the Bookkeeper once Finance is set
         up), the Assistant's routines it never had, General's manager once the Task Manager exists
         (pipeline_settings.ensure_presets) and BotOps' daily "Sweep stuck tasks" once BotOps is active. Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import, the sample
@@ -1195,7 +1195,7 @@ class Onboarding:
         return self._ensure_builtin(c, LIBRARIAN, "Librarian", "librarian.turned_on")
 
     def ensure_goal_manager(self, c):
-        """The same for the Strategy Bot: a company from before it was built in gets it once it can run it."""
+        """The same for the Strategy Owner: a company from before it was built in gets it once it can run it."""
         return self._ensure_builtin(c, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
 
     def ensure_task_manager(self, c):
@@ -1617,7 +1617,7 @@ class Onboarding:
         is already running is never demoted back to planned."""
         summary = str(card.get("summary") or "")
         if slug == GOAL_MANAGER:
-            # "Strategy Bot", or the owner's name for it: never back
+            # "Strategy Owner", or the owner's name for it: never back
             choice = {**choice, "display_name": strategy_bot.name(c)}
         found = H.resolve_bot(c, slug)
         bot_id = (found or {}).get("id", slug)

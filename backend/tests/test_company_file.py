@@ -133,7 +133,7 @@ def test_2_a_saas_for_dentists_starts_from_the_software_company_model():
     assert len(draft["bots"]) >= 50
     counts = depts(draft)
     assert all(counts.get(team, 0) >= 1 for team in ("legal", "hr", "finance", "operations")), counts
-    assert counts["engineering"] == 9 and "Head of Product" in titles(draft)
+    assert counts["engineering"] == 9 and "Product Lead" in titles(draft)
 
 
 def test_3_a_house_cleaning_company_starts_from_the_local_service_business_model():
@@ -192,7 +192,7 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert A.find_role("cap table")["slug"] == "equity-manager"
     assert A.find_role("engineer")["slug"] == "builder" and A.find_role("reviewer")["slug"] == "pr-reviewer"
     # The built-in's old name and its new one both name it; a bare "CEO" is a person's title, not the bot.
-    assert A.find_role("CEO Bot")["slug"] == A.find_role("Strategy Bot")["slug"] == "goal-manager"
+    assert A.find_role("CEO Bot")["slug"] == A.find_role("Strategy Owner")["slug"] == "goal-manager"
     assert A.find_role("CEO") is None
     # "CRO" and "pipeline" are everyday words for other things; the templates answer to their full names.
     assert A.find_role("CRO") is None and A.find_role("cro bot") is None and A.find_role("the pipeline") is None

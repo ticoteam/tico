@@ -1,6 +1,6 @@
 # Weekly product usage readout
 
-Schedule: Wednesdays at 09:00 team time (routine `weekly-usage-readout`), after setup. Budget 40 minutes. The outcome is one page the Head of Product reads in five minutes.
+Schedule: Wednesdays at 09:00 team time (routine `weekly-usage-readout`), after setup. Budget 40 minutes. The outcome is one page your manager reads in five minutes.
 Nothing is written to any data source.
 
 Inputs: `knowledge/definitions.md`, `knowledge/launches.md`, last week's readout, and the product data read through `tico db` (read only).

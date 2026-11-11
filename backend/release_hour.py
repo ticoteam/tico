@@ -1,8 +1,8 @@
 # pyright: strict
-"""The daily release hour (docs/pipelines-v3.md D13): a routine on the Release Manager.
+"""The daily release hour (docs/pipelines-v3.md D13): a routine on the Release Owner.
 
 At each time the release schedule names (release_schedule_routes, company time), the routine does what Release now
-does, through the same call (`release_schedule_routes.request_now`): the Release Manager gets ONE Release task, or
+does, through the same call (`release_schedule_routes.request_now`): the Release Owner gets ONE Release task, or
 keeps its unfinished one. Each slot fires once. The slot and what it did are written in the same transaction as the
 task (`release-schedule-fired`, which the schedule's `last` reads), so a restart, a second scheduler or a clock that
 jumps back never fires a slot again; a slot older than the newest one fired never fires. A server that was down at a
@@ -136,8 +136,8 @@ def words(answer: dict[str, Any] | None) -> str | None:
     if answer is None:
         return None
     if answer["sent"]:
-        return f"Asked the Release Manager for a release of {answer['tasks']} task{'s' if answer['tasks'] != 1 else ''}"
+        return f"Asked the Release Owner for a release of {answer['tasks']} task{'s' if answer['tasks'] != 1 else ''}"
     return {
-        "no_release_manager": "No Release Manager to ask",
-        "already_open": "The Release Manager's release task is still open",
+        "no_release_manager": "No Release Owner to ask",
+        "already_open": "The Release Owner's release task is still open",
     }.get(answer["reason"], str(answer["reason"]))

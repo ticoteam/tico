@@ -723,7 +723,7 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself. The third removal in one
 #   visit (any PR, counted from the `pr_queue_removed` history rows) goes up the never-stuck ladder instead: the
 #   pipeline's manager bot has it on its 3 tries; a removal after that goes to a person.
-# - The owner (Release Manager, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
+# - The owner (Release Owner, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
 #   `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
 #   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
 #   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in

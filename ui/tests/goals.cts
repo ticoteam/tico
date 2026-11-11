@@ -27,7 +27,7 @@ const bots = [
   bot('cmo', 'AI CMO', 'p:ana'), bot('seo', 'SEO', 'b:cmo'), bot('sales', 'Sales', 'p:ana'),
   bot('support', 'Support', 'p:ana', {status: 'paused', onboarding_state: 'needs_setup'}),
   bot('old', 'Old bot', 'p:ana', {status: 'archived'}),
-  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox', helper: true}),
+  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Owner', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox', helper: true}),
   bot('channel', 'Channel Inbox', 'b:botops', {helper: true}),
 ];
 const day = Date.now() - 2 * 86400000;
@@ -122,15 +122,15 @@ const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, 
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; helper bots off it.
     const lines = await page.locator('#goal-tree > li').evaluateAll(els => (els as HTMLElement[]).map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
-    assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1'], JSON.stringify(lines));   // the Strategy Bot is a helper too
+    assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1'], JSON.stringify(lines));   // the Strategy Owner is a helper too
     // The sidebar leaves the same helper bots off.
     assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"], #tree [data-org="b:goal-manager"]').count(), 0);
     const row = (owner: string) => page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont)`);
     assert.equal(await row('bot:sales').locator('.gt-goal').count(), 0, 'no goal: nothing written');
     assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"]').count(), 0, 'its built-in goals are hidden, and no line of its own');
     assert.equal(await page.locator('#nav-assistant, #nav-botops').count(), 0, 'Ask is the way in to both');
-    // No Strategy Bot chat beside the tree: Ask (the person's Assistant) is the way in.
-    assert.equal(await page.locator('#sbot, .gm-form, [data-gm-thread], [data-gm-on]').count(), 0, 'no Strategy Bot chat');
+    // No Strategy Owner chat beside the tree: Ask (the person's Assistant) is the way in.
+    assert.equal(await page.locator('#sbot, .gm-form, [data-gm-thread], [data-gm-on]').count(), 0, 'no Strategy Owner chat');
 
     // The search above the tree: every word somewhere in a line (its name or its goals' words), the lines above a match
     // kept for context, the rest taken out; a redraw keeps it, Escape clears it.
@@ -174,7 +174,7 @@ const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, 
     assert.equal(await page.locator('#goal-needs').count(), 0, 'no cards on the page itself');
     await page.locator('#goal-needs-line [data-needs-review]').click();
     assert.match(await page.locator('#goal-needs-sheet[open]').innerText(), /Needs you\s*2[\s\S]*Activation on Double organic signups/i);
-    // Each line is the Strategy Bot's task, linked; the link opens the task, not the KPI.
+    // Each line is the Strategy Owner's task, linked; the link opens the task, not the KPI.
     assert.equal(await page.locator('#goal-needs .need-row [data-need-task]').getAttribute('href'), '#/task/t-red');
     await page.locator('#goal-needs [data-decide=confirm]').click();
     await until(() => page.locator('#goal-needs .kpi-prop').count().then(n => n === 0), 'proposal gone');
