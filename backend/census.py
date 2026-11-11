@@ -123,6 +123,8 @@ class Census:
 
     def ready(self, c):
         """Counting is on and the owner has been shown the notice (as Homebrew does: nothing goes out before it)."""
+        if self.settings.hosted:  # hosted by our team: counted by default, no notice (the company signed up for hosting)
+            return not self.off_reason(c)
         return not self.off_reason(c) and bool(_load(c).get("notice"))
 
     # ------------------------------------------------------------------ the payload
@@ -252,7 +254,7 @@ class Census:
 
 def notice_due(c, settings, who):
     """Whether the owner's page prints the one-time notice: counting is on, and it was not dismissed."""
-    if who is None or who.role != "owner" or settings.demo or env_off():
+    if who is None or who.role != "owner" or settings.demo or settings.hosted or env_off():
         return False
     record = _load(c)
     return record.get("enabled", True) and record.get("notice") != "dismissed"
