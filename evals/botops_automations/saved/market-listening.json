@@ -6,40 +6,57 @@
       "enabled": false,
       "trigger": {
         "type": "listening",
-        "destination": "market"
+        "sources": [
+          {
+            "id": "news",
+            "kind": "search",
+            "site": "news",
+            "target": "Acme launch OR funding OR lawsuit"
+          }
+        ],
+        "rules": [
+          {
+            "do": "keep",
+            "tag": "market",
+            "text": "A launch, funding round, lawsuit or complaint about a named company in our market"
+          }
+        ],
+        "limits": [
+          {
+            "count": 10,
+            "per": "day"
+          }
+        ],
+        "at": "08:00",
+        "tz": "UTC"
       },
       "steps": [
         {
-          "id": "triage",
-          "type": "decide",
+          "id": "each",
+          "type": "paths",
           "enabled": true,
-          "set": "listening-item@5",
-          "level": "low",
-          "out": "d1"
-        },
-        {
-          "id": "pick",
-          "type": "filter",
-          "enabled": true,
-          "rules": [
+          "by": "item",
+          "paths": [
             {
+              "name": "market",
               "when": [
                 {
-                  "field": "d1.market",
+                  "field": "item.tag",
                   "op": "is",
-                  "value": "yes",
-                  "min": 0.7
+                  "value": "market"
                 }
               ],
-              "then": [
+              "steps": [
                 {
+                  "id": "task",
+                  "type": "action",
+                  "enabled": true,
                   "do": "create_task",
                   "args": {
-                    "title": "Market post to review"
+                    "title": "Market post to review: {{item.title}}"
                   }
                 }
-              ],
-              "stop": true
+              ]
             }
           ]
         }

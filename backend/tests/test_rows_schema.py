@@ -12,6 +12,8 @@ from backend.config import Settings
 from backend.store import Store
 
 TABLES = {
+    rows.ListeningSourceRow: "listening_sources",
+    rows.ListeningItemRow: "listening_items",
     rows.FactoryRow: "factories",
     rows.FactoryManagerActionRow: "factory_manager_actions",
     rows.FactoryManagerRunRow: "factory_manager_runs",
@@ -393,7 +395,6 @@ UNTYPED = frozenset(
         "inbound_inboxes",
         "inbound_messages",
         "inbound_sync",
-        "intake_items",
         "invariant_state",
         "job_recovery",
         "jobs",
@@ -408,10 +409,6 @@ UNTYPED = frozenset(
         "learnings",
         "lens_runs",
         "linked_docs",
-        "listen_items",
-        "listen_judgments",
-        "listen_runs",
-        "listening_destinations",
         "live_meeting_access",
         "live_meeting_bots",
         "live_meeting_chat",

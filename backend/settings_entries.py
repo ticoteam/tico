@@ -26,7 +26,6 @@ SETTINGS_FILES = sorted(
         "settings-devices.ts",
         "settings-history.ts",
         "settings-hosted.ts",
-        "settings-listening.ts",
         "settings-people.ts",
         "settings-providers.ts",
         "settings-recurring.ts",
@@ -1408,29 +1407,6 @@ ENTRIES = TEAM_RULES + [
         "webhooks/{id}/update",
         value="json",
         card=HOOKS_OUT_CARD,
-    ),
-    # Listening
-    S(
-        "listening.destination",
-        "Listening destination",
-        "Settings > Listening",
-        "owner",
-        "confirm",
-        "PUT",
-        "listening/destinations/{id}",
-        value="json",
-        card=_card("listening"),
-    ),
-    S(
-        "listening.destination.remove",
-        "Remove a listening destination",
-        "Settings > Listening",
-        "owner",
-        "confirm",
-        "POST",
-        "listening/destinations/{id}/remove",
-        value="json",
-        card=_card("listening"),
     ),
     # Tasks
     S(

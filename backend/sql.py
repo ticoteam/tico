@@ -23,7 +23,6 @@ import time
 from fastapi import Request
 from pydantic import Field
 
-from . import listening as L
 from . import outcome_stats
 from . import task_privacy as privacy
 from . import teammate_access as TA
@@ -414,8 +413,6 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
     # or recipients of messages outside the conversations they are in, nor in a participant or group list
     # (teammate_masks).
     unseen = TA.hidden(c, who, "see", ("human", "group"), auth) if unseen is None else unseen
-    listener = L.sees_everything(who)
-    mine_inboxes = [] if listener else L.destinations_of(who.actor, L.destinations(auth.settings, c))
     hidden = sorted(auth.unreadable_bots(c, who))
 
     def bots_visible(column):
@@ -580,10 +577,10 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "bot_transition_checkpoints": "conversation_id IN (SELECT id FROM conversations)",
         "humans": TA.sql_visible(c, who, "id", bare="human", unseen=unseen),
         # Recruiting seats are roles on the company chart that everyone sees (backend/lifecycle.py): their titles,
-        # job descriptions and reporting lines. Never a bare "1" (the same reason as intake_items below).
+        # job descriptions and reporting lines. Never a bare "1" (the same reason as listening_items below).
         "seats": "id IS NOT NULL",
         # Goals are the company's, except a bot's own: a caller reads those of bots they may read. Never a
-        # bare "1" (the same reason as intake_items below).
+        # bare "1" (the same reason as listening_items below).
         "goals": goals,
         "kpis": kpis,
         "kpi_readings": "kpi_id IN (SELECT id FROM kpis)",
@@ -629,19 +626,11 @@ def guarded(c, auth, who, inner, function, columns=None, unseen=None):
         "market_sizes": "1",
         "market_figures": "1",
         "market_sources": "1",
-        # Listening's saved posts carry third parties' names and handles (backend/listening.py):
-        # Listening and the owner read them all, a receiving bot only what was routed to it.
-        # Which runs happened, and whether they were blocked, is anyone's to read.
-        "listen_runs": "1",
-        # The destinations saved in Settings > Listening: the owner's and the admins'.
-        "listening_destinations": "key IS NOT NULL" if admin and not bot else "key IS NULL",
-        # Never a bare "1" for these three: SQLite would answer count(*) from the base table,
-        # which the authorizer rightly refuses, since for everyone else the rows are filtered.
-        "intake_items": (
-            "id IS NOT NULL" if listener else f"destination IN {qlist(mine_inboxes)}" if mine_inboxes else "id IS NULL"
-        ),
-        "listen_items": "id IS NOT NULL" if listener else "id IN (SELECT item_id FROM intake_items)",
-        "listen_judgments": "id IS NOT NULL" if listener else "item_id IN (SELECT id FROM listen_items)",
+        # A listening's sources and saved posts (backend/listening.py) carry third parties' names and handles, and a
+        # push source's token hash: the owner's and the admins'. Never a bare "1" or "0": SQLite would answer
+        # count(*) from the base table, which the authorizer rightly refuses.
+        "listening_sources": "id IS NOT NULL" if admin and not bot else "id IS NULL",
+        "listening_items": "id IS NOT NULL" if admin and not bot else "id IS NULL",
         # The roster, the sign-in lists and roles, onboarding: for the owner and the Admins. Never the key that
         # hashes roadmap visitors' addresses: with it the small IPv4 space turns every stored hash back into an address.
         # The setup research job (backend/strategy_setup.py) holds the owner's words and an unpublished draft, and the
@@ -1294,7 +1283,6 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
                 "market_sizes",
                 "market_figures",
                 "market_sources",
-                "listen_runs",
             }:
                 return sqlite3.SQLITE_OK
             # A base table is read only by its own inner view, whose name is this connection's secret.

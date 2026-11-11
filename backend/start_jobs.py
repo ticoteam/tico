@@ -39,14 +39,6 @@ def run(store, onboarding, telemetry):
             onboarding.complete_company(c, failed=telemetry.capture)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("complete_company", exc)
-    # The Librarian gets the market posts from Listening, once (Settings > Listening). After the Librarian exists.
-    try:
-        from . import listening
-
-        with _transaction(store) as c:
-            listening.seed_market(c, settings)
-    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
-        telemetry.capture("listening", exc)
     # A message bot made before the server linked it to its person is linked now, when there is no doubt whose
     # it is. A backfill: the bot works unlinked meanwhile, as it did before.
     try:

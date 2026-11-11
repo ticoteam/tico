@@ -233,20 +233,13 @@ def test_the_answers_match_the_published_contract(api):
     check("deleteAutomationPost", post(api, f"automations/{aid}/delete", {}))
 
 
-def test_the_librarian_gets_the_market_builtins_which_stand_down_for_the_teams_own(api):
-    """Market briefing (daily 07:00 team time, posting to Market and Updates) and one Market listening per destination
-    the Librarian receives; the top pauses them, nobody deletes them, and the team's own Librarian automation for the
-    same work runs instead of them, never beside them."""
+def test_the_librarian_gets_the_market_briefing_which_stands_down_for_the_teams_own(api):
+    """Market briefing (daily 07:00 team time, posting to Market and Updates): the top pauses it, nobody deletes it,
+    and the team's own Librarian automation for the same work runs instead of it, never beside it."""
     from backend import automations
-    from backend.tests.helpers.api import put
     from backend.tests.helpers.market import _librarian
 
     _librarian(api)
-    put(
-        api,
-        "listening/destinations/tools",
-        {"category": "lead", "threshold": 0.5, "receiver": "bot:librarian", "readers": [], "what": "Dev tools"},
-    )
     automations.tick(api.app.state.store)
     automations.tick(api.app.state.store)  # made once
     brief = get(api, "automations/auto_builtin_market_briefing")
@@ -258,26 +251,10 @@ def test_the_librarian_gets_the_market_builtins_which_stand_down_for_the_teams_o
     )
     assert [s["type"] for s in brief["steps"]] == ["bot_turn", "action"]
     assert brief["steps"][1]["args"] == {"to": ["market", "updates"]}
-    listen = get(api, "automations/auto_builtin_market_listening_tools")
-    assert listen["trigger"] == {"type": "listening", "destination": "tools"} and listen["owner_id"] == "bot:librarian"
     assert api.delete("/api/v2/automations/auto_builtin_market_briefing", headers=headers()).status_code == 409
     patch(api, "auto_builtin_market_briefing", {"enabled": False}, "ben-test", expected=403)
     assert patch(api, "auto_builtin_market_briefing", {"enabled": False})["warning"]
 
-    def heard():
-        with api.app.state.store.transaction() as c:
-            ids = automations.fire(
-                c,
-                "listening",
-                {"listening": {"destination": "tools"}},
-                "listening:x",
-                lambda t: t["destination"] == "tools",
-            )
-            return [c.execute("SELECT automation_id FROM automation_runs WHERE id=?", (i,)).fetchone()[0] for i in ids]
-
-    assert heard() == ["auto_builtin_market_listening_tools"]
-    own = make(api, owner="bot:librarian", trigger={"type": "listening", "destination": "tools"})["id"]
-    assert heard() == [own]
     # The briefing stands down while the Librarian's own automation posts to Market.
     patch(api, "auto_builtin_market_briefing", {"enabled": True})
     make(

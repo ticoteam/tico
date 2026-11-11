@@ -97,6 +97,7 @@ from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .github_app import CALLBACK_PATH as GITHUB_APP_CALLBACK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
+from .listening import PUSH_PATH as LISTENING_PUSH_PATH
 from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, encode
 from . import bot_settings as BS
@@ -798,6 +799,9 @@ def create_app(settings=None):
                 return await call_next(request)
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
+                return await call_next(request)
+            # A listening's push address carries its own token (backend/listening.py).
+            if request.url.path.startswith(LISTENING_PUSH_PATH) and request.method == "POST":
                 return await call_next(request)
             # A proxied tool call (backend/tool_proxy.py) carries its own signed token where the vendor's key goes, and
             # no Tico identity: the route refuses anything not signed for that tool and a live run.

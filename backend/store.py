@@ -671,7 +671,6 @@ EVENT_NOISE_ACTIONS = (
     "job.suppress",
     "bot.drain",
     "operator.deployment-undrain",
-    "listen.judgment",
     "bot.repository_read",
 )
 EVENT_NOISE_RETENTION_DAYS = 7
@@ -1422,10 +1421,6 @@ class Store:
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
-            # Destinations saved in Settings > Listening (backend/listening.py).
-            from . import listening as _listening
-
-            _listening.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")

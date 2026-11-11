@@ -197,19 +197,12 @@ def test_slack_messages_reach_the_dm_or_channel_inbox(api):
     assert len(runs(api, dm)["runs"]) == 1 and len(runs(api, general)["runs"]) == 1
 
 
-def test_a_webhook_and_a_listening_post_start_their_automations(api):
+def test_a_webhook_starts_its_automation(api):
     hook = make(api, {"type": "webhook", "id": "trg_1"})
-    leads = make(api, {"type": "listening", "destination": "leads"})
     out = fire(api, automations.on_webhook, "trg_1", "Deploys", "custom", "d1", {"ok": True}, "")
     assert out[0]["outcome"] == "automation" and out[0]["ok"]
     assert fire(api, automations.on_webhook, "trg_2", "Other", "custom", "d2", {}, "") == []
-    fire(
-        api,
-        automations.on_listening,
-        {"id": "i1", "destination": "leads"},
-        {"url": "https://acme.example/post", "content": "Looking for a tool"},
-    )
-    assert len(runs(api, hook)["runs"]) == 1 and len(runs(api, leads)["runs"]) == 1
+    assert len(runs(api, hook)["runs"]) == 1
 
 
 # ---------------------------------------------------------------------------------------------- schedules and batches

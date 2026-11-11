@@ -5,7 +5,7 @@
 38: a reorg is no bot's to make: a bot's group change is refused, and the owner moves the bot herself, audited as hers."""
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..harness import (
     CLAUDE_ID,
@@ -37,44 +37,34 @@ def canon(value):
 
 
 # ---------------------------------------------------------------------------------------------- steps
-def put_destination(org):
-    """The Market listening destination whose matches go to the Librarian (CONTRACT §2: receiver stays Librarian)."""
-    return org.api(
-        "put",
-        "/api/v2/listening/destinations/ai-tools",
-        {
-            "category": "lead",
-            "threshold": 0.5,
-            "receiver": "bot:librarian",
-            "readers": [],
-            "what": "Market watch for AI dev tools",
-        },
-        who=DANA,
-        wave=W6,
-    )
+LISTENING = {
+    "type": "listening",
+    "sources": [{"id": "news", "kind": "search", "site": "news", "target": "AI dev tools"}],
+    "rules": [],
+    "limits": [{"count": 10, "per": "hour"}],
+    "at": "00:00",
+    "tz": "UTC",
+}
 
 
-def listen(org):
-    """One listening run with one match, saved the way the listening runner saves it (the owner may save runs)."""
-    from backend.store import H
-
+def listen(org, facts):
+    """One read of the listening's source with one post, saved the way the listening bot saves it (the owner may
+    save)."""
+    found = org.api("get", f"/api/v2/listening/sources?automation={auto_id(facts, 'auto')}", who=DANA, wave=W6)
+    sources = (found.body or {}).get("sources") if isinstance(found.body, dict) else None
+    if not sources:
+        raise Unmet(W6, f"the listening has no source to save to: {found.status} {found.excerpt()}")
     return org.api(
         "post",
-        "/api/v2/listening/runs",
+        f"/api/v2/listening/sources/{sources[0]['id']}/items",
         {
-            "source": "news",
-            "query": "AI dev tools",
             "status": "ok",
-            "started_at": H.now(),
-            "pages_read": 1,
-            "items_seen": 1,
-            "note": "",
             "items": [
                 {
                     "native_id": "n-1",
                     "url": "https://news.acme.example/dev-tools",
                     "author": "Acme News",
-                    "content": "A new dev tool for mapping markets.",
+                    "text": "A new dev tool for mapping markets.",
                 }
             ],
         },
@@ -83,19 +73,10 @@ def listen(org):
     )
 
 
-def judge_match(org, facts):
-    """The match's judgment, saved as the listening judge saves it (POST /api/v2/listening/judgments): a lead score
-    over the destination's threshold routes the item, and the routing is what starts a listening trigger."""
-    items = (body(facts, "match") or {}).get("items") or []
-    if not items:
-        raise Unmet(W6, "the listening run saved no item to judge")
-    return org.api(
-        "post",
-        "/api/v2/listening/judgments",
-        {"judgments": [{"item_id": items[0]["id"], "question_set": "listening-item@1", "scores": {"lead": 0.9}}]},
-        who=DANA,
-        wave=W6,
-    )
+def send(org):
+    """The listening's next send time comes: its pass keeps the post (no rules) and sends it as one run."""
+    org.pass_time(timedelta(hours=1))
+    return org.api("get", "/api/v2/automations?trigger=listening", who=DANA, wave=W6)
 
 
 def graph(org):
@@ -143,7 +124,6 @@ def audit_group(org, facts):
 
 # ---------------------------------------------------------------------------------------------- 36
 def s36_steps(org, facts):
-    org.step(facts, "dest", put_destination, org)
     org.step(
         facts,
         "auto",
@@ -151,20 +131,20 @@ def s36_steps(org, facts):
         org,
         "Market · AI dev tools",
         "bot:librarian",
-        {"type": "listening", "destination": "ai-tools"},
+        LISTENING,
         [
             {
                 "id": "update",
                 "type": "bot_turn",
                 "enabled": True,
                 "bot": "librarian",
-                "prompt": "Update the market graph from this match.",
+                "prompt": "Update the market graph from what was sent:\n\n{{listening.text}}",
             }
         ],
     )
     org.step(facts, "graph0", graph, org)
-    org.step(facts, "match", listen, org)
-    org.step(facts, "judged", judge_match, org, facts)
+    org.step(facts, "match", listen, org, facts)
+    org.step(facts, "sent", send, org)
     org.step(facts, "graph1", graph, org)
     org.step(facts, "runs", runs_of, org, facts, "auto")
     org.step(facts, "turn", org.turn, "librarian", act=lambda token, attempt: curate(org, token))
@@ -173,7 +153,7 @@ def s36_steps(org, facts):
 
 def curate(org, token):
     """The Librarian's turn on the match, through the market routes as the Librarian: the post as evidence, then the
-    product it names, citing it. The url stays on the evidence; the graph names the match only if the hub says so."""
+    product it names, citing it. The url stays on the evidence."""
     seen = org.api(
         "post",
         "/api/v2/market/evidence",
@@ -240,11 +220,8 @@ def graph_names_turn(facts):
     if not ok:
         raise Unmet(W3, text)
     setup(facts, "graph2")
-    text = canon(facts["graph2"].body)
-    return (
-        "librarian" in text and "news.acme.example" in text,
-        "the graph does not name the Librarian's turn and the match",
-    )
+    names = "librarian" in canon(facts["graph2"].body)
+    return names, "the graph does not name the Librarian's turn"
 
 
 # ---------------------------------------------------------------------------------------------- 37
@@ -350,12 +327,12 @@ SCENARIOS = [
         "A listening match reaches the market graph only through the Librarian's turn",
         s36_steps,
         [
-            Check("listening destination saved, receiver Librarian", W6, lambda facts: accepted(facts, "dest")),
+            Check("the post is saved to the listening's source", W6, lambda facts: accepted(facts, "match")),
             Check("the match started the Librarian's automation run", W3, match_started_run),
             Check("the Librarian's turn ran on the match", W3, librarian_turn_ran),
             Check("no direct graph write from the match", W6, no_direct_write),
             Check("the Librarian's turn updated the market graph", W6, graph_updated_by_turn),
-            Check("the graph names the Librarian's turn and the match", W6, graph_names_turn),
+            Check("the graph names the Librarian's turn", W6, graph_names_turn),
         ],
         bots={"librarian": ("librarian", "claude")},
     ),

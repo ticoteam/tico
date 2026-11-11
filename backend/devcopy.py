@@ -244,6 +244,9 @@ EMPTY = (
     "automation_inboxes",
     "automation_effects",
     "automation_holds",
+    # A listening's sources are part of its automation (kept with it); the posts they saved never.
+    "listening_sources",
+    "listening_items",
     "automation_guard_holds",
     "automation_turn_answers",
     # Task cap counts are today's sends; the caps themselves are kept.
@@ -295,6 +298,7 @@ AUTOMATIONS = (
     "webhooks",
     "automations",
     "automation_versions",
+    "listening_sources",
 )
 # Cut to `--days`, in this order: {table: its time column}. A row a kept row still points at stays.
 HISTORY = {
@@ -421,7 +425,6 @@ KEEP = (
             "principals",
             "import_refs",
             "invariant_state",
-            "intake_items",
             "kpi_definitions",
             "kpi_readings",
             "kpis",
@@ -439,10 +442,6 @@ KEEP = (
             "lens_runs",
             "learned_entries",
             "linked_docs",
-            "listening_destinations",
-            "listen_items",
-            "listen_judgments",
-            "listen_runs",
             "live_meeting_chat",
             "live_meeting_chat_routes",
             "live_meeting_access",
@@ -761,13 +760,15 @@ def fetch_bundle(url, directory, profile=None, region=None):
 
 
 def revoke_automation_secrets(c):
-    """Kept definitions open nothing: a trigger's URL secret hashes to no value, a signing secret and an outgoing
+    """Kept definitions open nothing: a trigger's URL secret hashes to no value, a listening's push address is gone, a signing secret and an outgoing
     webhook's secret and headers are blank (the live install's would let the copy sign as it)."""
     present = tables(c)
     if "triggers" in present:
         c.execute("UPDATE triggers SET secret_hash='devcopy-revoked:'||id")
         if "signing_secret" in {r[1] for r in c.execute("PRAGMA table_info(triggers)")}:
             c.execute("UPDATE triggers SET signing_secret=NULL")
+    if "listening_sources" in present:
+        c.execute("UPDATE listening_sources SET token_hash=NULL")  # a push address of the live install opens nothing
     if "webhooks" in present:
         columns = {r[1] for r in c.execute("PRAGMA table_info(webhooks)")}
         c.execute(

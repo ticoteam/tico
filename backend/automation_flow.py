@@ -16,7 +16,7 @@ TRIGGERS = {
     "task_received": ("to",),
     "schedule": ("cron",),
     "webhook": ("id",),
-    "listening": ("destination",),
+    "listening": (),
     "event": ("name",),
     "due": ("first_due", "repeats"),
 }
@@ -37,7 +37,7 @@ ACTIONS = (
     "unsubscribe",
 )
 OPS = ("is", "is_not", ">=", "<=", "contains", "matches")
-SOURCES = ("mail", "tasks", "prs", "listening", "docs")
+SOURCES = ("mail", "tasks", "prs", "docs")
 MAX_PATHS = 10  # paths in one fork
 MAX_DEPTH = 3  # forks inside forks
 MAX_STEPS = 100  # every step in the flow, nested ones included
@@ -53,6 +53,17 @@ MAX_TEXT = 8000
 MAX_PROMPT = 32000  # an llm or bot_turn prompt (an Inbox Manager's instructions can run long)
 MAX_FIND = 100
 MAX_IDLE_HOURS = 8760  # the stale-PR find's bound: a year
+# A listening trigger (backend/listening.py): where posts come from, which are kept, and how many are sent on.
+LISTENING_KEYS = {"type", "sources", "rules", "limits", "at", "tz", "filters"}
+SOURCE_KINDS = ("search", "page", "push")
+MAX_SOURCES = 50
+MAX_LISTENING_RULES = 20
+RULE_TEXT = 300
+PERS = ("hour", "day", "week", "month")  # shortest first: the shortest one in `limits` sets the send times
+MAX_COUNT = 100
+SOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}")
+TAG = re.compile(r"[a-z0-9][a-z0-9-]{0,23}")
+SPLITS = ("tag", "item")  # a paths step's `by`, in a listening: one thread per tag, or per item
 NAME = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,39}")
 OWNER = re.compile(r"(person|bot|group):[a-z0-9][a-z0-9._-]{0,63}")
 CLOCK = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
@@ -265,6 +276,8 @@ def _check_trigger(trigger):
         _check_zone(trigger.get("tz") or "UTC", "trigger")
     if kind == "due":
         _check_due(trigger)
+    if kind == "listening":
+        _check_listening(trigger)
     if kind == "message":
         inbox = trigger["inbox"]
         _need(
@@ -273,6 +286,72 @@ def _check_trigger(trigger):
             "inbox is an email address, slack:dm or slack:#<channel>",
         )
     check_conds(trigger.get("filters") or [], "trigger filters")
+
+
+def _check_listening(trigger):
+    """A listening trigger: sources (none yet is allowed, so a listening can be saved before its first source), Keep
+    and Drop rules, and one limit per period."""
+    where = "trigger"
+    _need(set(trigger) <= LISTENING_KEYS, where, "a listening has sources, rules, limits, at and tz")
+    sources = trigger.get("sources", [])
+    _need(isinstance(sources, list) and len(sources) <= MAX_SOURCES, where, f"sources are at most {MAX_SOURCES}")
+    ids = set()
+    for n, source in enumerate(sources):
+        at = f"{where} source {n + 1}"
+        _need(
+            isinstance(source, dict) and set(source) <= {"id", "kind", "site", "target"},
+            at,
+            "has id, kind, site and target",
+        )
+        _need(
+            isinstance(source.get("id"), str) and SOURCE_ID.fullmatch(source["id"]), at, "id is letters, digits, _ or -"
+        )
+        _need(source["id"] not in ids, at, "source ids are unique")
+        ids.add(source["id"])
+        kind = source.get("kind")
+        _need(kind in SOURCE_KINDS, at, f"kind is one of {', '.join(SOURCE_KINDS)}")
+        _text(source.get("site", ""), at, "site", required=kind != "page", cap=80)
+        if kind == "push":
+            _need("target" not in source, at, "a push source has no target")
+        else:
+            _text(source.get("target"), at, "target", cap=500)
+        if kind == "page":
+            _need(
+                re.match(r"https?://[^\s/]+", source["target"]) is not None, at, "target is a page address, https://..."
+            )
+    rules = trigger.get("rules", [])
+    _need(
+        isinstance(rules, list) and len(rules) <= MAX_LISTENING_RULES, where, f"rules are at most {MAX_LISTENING_RULES}"
+    )
+    tags = set()
+    for n, rule in enumerate(rules):
+        at = f"{where} rule {n + 1}"
+        _need(isinstance(rule, dict) and rule.get("do") in ("keep", "drop"), at, "do is keep or drop")
+        _need(
+            set(rule) <= ({"do", "tag", "text"} if rule["do"] == "keep" else {"do", "text"}), at, "has do, tag and text"
+        )
+        _text(rule.get("text"), at, "text", cap=RULE_TEXT)
+        if rule["do"] == "keep":
+            tag = rule.get("tag")
+            _need(isinstance(tag, str) and TAG.fullmatch(tag), at, "tag is lowercase letters, digits or -, 24 at most")
+            _need(tag not in tags, at, "tags are unique among Keep rules")
+            tags.add(tag)
+    limits = trigger.get("limits")
+    _need(isinstance(limits, list) and 1 <= len(limits) <= len(PERS), where, "limits are 1 to 4, one per period")
+    pers = set()
+    for n, limit in enumerate(limits):
+        at = f"{where} limit {n + 1}"
+        _need(isinstance(limit, dict) and set(limit) == {"count", "per"}, at, "has count and per")
+        _need(limit["per"] in PERS and limit["per"] not in pers, at, f"per is one of {', '.join(PERS)}, each once")
+        pers.add(limit["per"])
+        count = limit["count"]
+        _need(type(count) is int and 1 <= count <= MAX_COUNT, at, f"count is 1 to {MAX_COUNT}")
+    if trigger.get("at") is not None:
+        _need(
+            isinstance(trigger["at"], str) and CLOCK.fullmatch(trigger["at"]), where, "at is a clock time such as 08:00"
+        )
+    if trigger.get("tz") is not None:
+        _check_zone(trigger["tz"], where)
 
 
 def _check_due(trigger):
@@ -405,6 +484,9 @@ def _check_step(step, where, seen, depth, counts, targets=frozenset()):
         check_action({"do": step.get("do"), "args": step.get("args", {})}, where)
     elif kind == "paths":
         _need(depth < MAX_DEPTH, where, f"paths nest at most {MAX_DEPTH} levels")
+        if step.get("by") is not None:
+            _need(step["by"] in SPLITS, where, "by is tag or item")
+            _need(counts[2] == "listening", where, "by is for a listening's paths")
         paths = step.get("paths")
         _need(isinstance(paths, list) and 1 <= len(paths) <= MAX_PATHS, where, f"a fork has 1 to {MAX_PATHS} paths")
         names = set()
@@ -530,7 +612,7 @@ def check(flow):
     _check_trigger(flow.get("trigger"))
     # A flow without destinations (every flow saved before them) keeps none; null is the same as leaving them out.
     targets = _check_destinations(flow["destinations"]) if flow.get("destinations") is not None else frozenset()
-    counts = [0, False]
+    counts = [0, False, flow["trigger"]["type"]]  # steps so far, a find seen, the trigger (for a paths `by`)
     _check_steps(flow.get("steps", []), "steps", set(), 0, counts, targets)
     _need(
         not (owner.startswith("group:") and next(choosing(flow.get("steps")), None)),
@@ -773,7 +855,7 @@ TRIGGER_WORDS = {
     "task_received": "a task sent to a person or bot",
     "schedule": "a time, as a five-field cron in a time zone",
     "webhook": "an existing incoming webhook (its id, no secret)",
-    "listening": "a match at a listening destination",
+    "listening": "posts from its sources, kept by its rules and sent on at its rate limits",
     "event": "a named event from Tico's catalog",
     "due": "a due date that repeats: its run starts open_days before each one (default 14)",
 }
@@ -784,7 +866,9 @@ TRIGGER_FIELDS = {
     "task_received": "to: a person id or a bot slug",
     "schedule": "cron: five fields, e.g. `0 9 * * 1-5`; tz: a time zone such as `Europe/Paris`",
     "webhook": "id: the existing trigger's id",
-    "listening": "destination: the destination's key",
+    "listening": "sources: `[{id, kind: search|page|push, site, target}]`; rules: `[{do: keep, tag, text}, {do: drop, "
+    "text}]`; limits: `[{count, per: hour|day|week|month}]`; at: `08:00`; tz: a time zone. The run reads "
+    "`listening.text`, `listening.items` and `listening.groups`",
     "event": "name: the event name",
     "due": "first_due: the first due day, 2027-01-31; repeats: once, weekly, monthly, quarterly or yearly; "
     "open_days: days before the due day the run starts (default 14); tz: a time zone (default the company's)",
@@ -802,7 +886,9 @@ STEP_WORDS = {
     "answer, a spend cap or a held webhook runs `default` with no reply",
     "find": "pulls items from a source since the last run; the steps after it run once per item. At most one, at the top",
     "bot_turn": "a task for a bot with the prompt; the bot runs it in its own session",
-    "paths": "named paths tested in order; the first whose conditions hold runs. Nothing follows a paths step in its list",
+    "paths": "named paths tested in order; the first whose conditions hold runs. Nothing follows a paths step in its "
+    "list. In a listening, `by: tag` or `by: item` runs the paths once per tag or per item, read as `item.tag`, "
+    "`item.text` and `item.count`",
     "action": "one action from the list below, with its args",
 }
 

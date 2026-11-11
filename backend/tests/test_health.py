@@ -1111,96 +1111,30 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
         assert harness_denies(c, settings) == batched
 
 
-def _listened(api, *, routed_days_ago, saved_days_ago, judged=None):
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
-            "VALUES('i1','reddit','1','https://example.com/1','a post','h1',?)",
-            (H.shift(H.now(), days=-routed_days_ago - 1),),
-        )
-        c.execute(
-            "INSERT INTO intake_items(id,destination,item_id,judgment_id,created_at) VALUES('in1','leads','i1','j1',?)",
-            (H.shift(H.now(), days=-routed_days_ago),),
-        )
-        c.execute(
-            "INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
-            "VALUES('i2','reddit','2','https://example.com/2','a later post','h2',?)",
-            (H.shift(H.now(), days=-saved_days_ago),),
-        )
-        if judged:
-            c.execute(
-                "INSERT INTO listen_judgments(id,item_id,question_set,scores,judged_at) VALUES('j1','i1',?,'{}',?)",
-                (judged, H.shift(H.now(), days=-routed_days_ago)),
-            )
-
-
-def test_listening_health_names_a_lost_registry_a_quiet_source_a_missing_question_set_and_hides_custom_questions(
-    environment, monkeypatch
-):
-    """One install, each listening finding in turn, the listen rows cleared between them."""
-    import json
-    from backend import listening
+def test_listening_health_names_a_source_whose_read_was_blocked(environment):
+    from backend import automation_flow as F
+    from backend import automations
+    from backend import listening as L
+    from backend.tests.helpers.listening import NOTE, SEARCH
 
     api = environment()
-    settings = api.app.state.store.settings
-
-    def fresh():
-        monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
-        with api.app.state.store.transaction() as c:
-            for table in ("listen_judgments", "intake_items", "listen_items"):
-                c.execute(f"DELETE FROM {table}")
-
-    # A server move that leaves listening.yaml behind keeps saving posts and sends them nowhere, silently.
-    fresh()
-    (settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
-    assert "listening" not in health_of(api)[1]  # never routed: nothing was lost
-    _listened(api, routed_days_ago=14, saved_days_ago=2)
-    check = health_of(api)[1]["listening"]
-    assert check["status"] == "bad"
-    assert "listening.yaml is missing from the company registry" in check["summary"]
-    assert "1 post saved since went to no inbox" in check["summary"]
-    (settings.registry_dir / "listening.yaml").write_text("destinations: {}\n")
-    check = health_of(api)[1]["listening"]  # emptied on purpose is possible: a warning, not bad
-    assert check["status"] == "warn" and "has no valid destinations" in check["summary"]
-
-    fresh()  # a source that stopped saving posts is not flagged
-    (settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
-    _listened(api, routed_days_ago=60, saved_days_ago=40)
     assert "listening" not in health_of(api)[1]
+    limits = [{"count": 5, "per": "day"}]
+    trigger = {"type": "listening", "sources": [SEARCH], "rules": [], "limits": limits, "at": "08:00", "tz": "UTC"}
 
-    fresh()  # scoring with the shipped questions after its own went missing
-    (settings.registry_dir / "listening.yaml").write_text(
-        "destinations:\n  leads: {category: lead, threshold: 0.75, receiver: bot:ana}\n"
-    )
-    shipped = listening.question_set(settings)
-    _listened(api, routed_days_ago=3, saved_days_ago=1, judged=f"listening-item@{shipped['version'] + 4}")
-    check = health_of(api)[1]["listening"]
-    assert check["status"] == "warn" and f"({shipped['label']})" in check["summary"]
-    assert f"listening-item@{shipped['version'] + 4}" in check["summary"]
+    def read(status, error=""):
+        with api.app.state.store.transaction() as c:
+            found = c.execute("SELECT id FROM listening_sources WHERE automation_id='auto_heard'").fetchone()
+            L.save(c, L._source(c, found["id"]), status, [], error=error)
 
-    fresh()  # custom categories are checked without their question text
-    (settings.registry_dir / "listening.yaml").write_text("""
-destinations:
-  leads: {category: custom, threshold: 0.75, receiver: bot:ana, unless: {category: veto, threshold: 0.70}}
-""")
-    directory = settings.registry_dir / "questions"
-    directory.mkdir()
-    path = directory / "listening-item.json"
-    secret = "private-question-fixture-value"
-    qset = {
-        "id": "listening-item",
-        "version": 9,
-        "summary": secret,
-        "questions": {"custom": {"type": "choice", "instructions": secret, "criteria": {"yes": secret, "no": None}}},
-    }
-    path.write_text(json.dumps(qset))
-    listening.destinations(settings)
-    body, checks = health_of(api)
-    assert checks["listening"]["status"] == "warn"
-    assert secret not in json.dumps(body)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
-    assert "listening" not in health_of(api, as_person(api, "sam"))[1]
+        flow = {"name": "Standups", "owner": "person:" + automations.top_person(c), "trigger": trigger, "steps": [NOTE]}
+        automations._save(c, H.KEEPER, "auto_heard", F.check(flow), None)
+    read("blocked", "Sign in again")
+    check = health_of(api)[1]["listening"]
+    assert check["status"] == "warn" and "Sign in again" in check["summary"]
+    read("ok")
+    assert "listening" not in health_of(api)[1]
 
 
 def test_a_computer_on_the_python_runner_is_told_to_update_and_the_heartbeat_takes_the_engine(environment):
