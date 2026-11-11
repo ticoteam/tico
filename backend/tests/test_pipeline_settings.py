@@ -60,6 +60,8 @@ def _ops(**fields):
                 "requirements": [
                     {
                         "kind": "owner_done",
+                        "source": None,
+                        "condition": None,
                         "settings": {},
                         "can_push_past": True,
                         "who_oks": "none",
@@ -80,6 +82,8 @@ def _ops(**fields):
                 "requirements": [
                     {
                         "kind": "ok",
+                        "source": None,
+                        "condition": None,
                         "settings": {},
                         "can_push_past": True,
                         "who_oks": "people_only",
@@ -167,7 +171,7 @@ def test_defaults_fill_in_the_switches_by_kind(c):
     assert (done["can_push_past"], done["who_oks"]) == (True, "none")
     assert (ok["can_push_past"], ok["who_oks"]) == (True, "people_with_exceptions")
     merged = _ops(name="Releases", prefix="R")
-    merged["stages"][1]["requirements"] = [{"kind": "pr_merged"}]
+    merged["stages"][1]["requirements"] = [PS.github("pr_merged")]
     saved = PS.save(c, ANA, merged)
     assert _req(saved, 1)["can_push_past"] is False  # its switch is off
 
@@ -197,7 +201,7 @@ CASES = {
     "a limit of zero": (lambda r: _stage(r, 1).update(task_limit=0), "The limit on Sign off is a whole number"),
     "a part of a minute": (lambda r: _stage(r).update(expected_minutes=1.5), "a whole number of minutes above zero"),
     "a setting a kind lacks": (
-        lambda r: _req(r).update(kind="checks_pass", settings={"rubric": "green"}),
+        lambda r: _req(r).update(PS.github("checks_pass", rubric="green")),
         "Checks pass has no setting rubric (on Intake).",
     ),
     "an answer on a stage": (
@@ -219,7 +223,7 @@ CASES = {
         "Who OKs is only for an OK or a page",
     ),
     "a merge pushed past": (
-        lambda r: _req(r).update(kind="pr_merged", can_push_past=True),
+        lambda r: _req(r).update(PS.github("pr_merged"), can_push_past=True),
         "can't be pushed past (C3)",
     ),
     "another action": (lambda r: _stage(r).update(on_enter={"send_email": True}), "On enter on Intake is nothing"),

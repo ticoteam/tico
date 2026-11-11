@@ -166,7 +166,7 @@ Customers and manager bots can edit all of it. General, Product and Engineering 
 - **Requirement.** One thing a task needs before it leaves a stage. Nine kinds, listed below. It is set on the stage, or
   added to one task. It can name a person.
 - **Task.** One pipeline, one stage, one owner right now. Stored: stage, owner, version. Everything else you see is
-  worked out from those and the facts.
+  worked out from those and the metadata.
 - **Link.** Ties a task to a task it filed: a sub-task, or a handoff into another pipeline. A task waits on the tasks it
   filed. At most 5 deep.
 - **Snooze.** Sets a task aside until a date, or with no end. Nothing chases it and it holds no slot.
@@ -189,19 +189,21 @@ That gives three kinds of stage, and no others:
 - **No requirements:** Tasks move on by themselves when the next stage has room. Engineering's On deck is one.
 - **By hand:** tasks leave when someone moves them. Product's Ideas is one.
 
-### The nine requirement kinds
+### The six requirement kinds
 
 1. **Owner says done.** The owner marks the stage's work finished. This is the whole of General.
 2. **OK from someone.** A named person or bot approves. Nothing is attached.
 3. **A page.** The owner attaches a page or file. Jev checks it against a "what to check" line. Optionally a person then
    OKs it.
-4. **PR open.** At least one PR is linked, and none was closed without merging.
-5. **Checks pass.** Every linked PR is green at its newest commit. Tico's own check runs are ignored.
-6. **PR merged.** Every linked PR has merged.
-7. **In a release.** Every merge is inside a published release.
-8. **Linked work done.** Every task filed during this visit to the stage ended Done, not Closed. Zero tasks filed means
+4. **An item.** Something a source keeps, read through one of the source's conditions. A source is a Python module
+   under `backend/item_sources/`; GitHub is the only one. Its item is a PR and its conditions are:
+   - **PR open.** At least one PR is linked, and none was closed without merging.
+   - **Checks pass.** Every linked PR is green at its newest commit. Tico's own check runs are ignored.
+   - **PR merged.** Every linked PR has merged.
+   - **In a release.** Every merge is inside a published release.
+5. **Linked work done.** Every task filed during this visit to the stage ended Done, not Closed. Zero tasks filed means
    not met.
-9. **Answer from someone.** A question with choices, for a named person. Added to one task, never set on a stage.
+6. **Answer from someone.** A question with choices, for a named person. Added to one task, never set on a stage.
 
 Two switches sit on a requirement:
 
@@ -295,7 +297,7 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - If not: Retried 3 times, then a person.
 6. **GitHub**
    - Starts: Checks are running, the PR is in the merge queue, or it merged and waits for a release.
-   - Ends: The fact arrives, by webhook or by the 5-minute read.
+   - Ends: The metadata arrives, by webhook or by the 5-minute read.
    - If not: After 2 hours of checks it is the bot's turn; a drop from the merge queue is the owner's turn at once. A
      release that never comes turns Late.
 7. **Other tasks**
@@ -648,7 +650,7 @@ Also:
 
 ## B. The architecture
 
-Sign-off B: one writer, one read, one check. Events are hints. Facts are saved copies of the outside. The database
+Sign-off B: one writer, one read, one check. Events are hints. Metadata is a saved copy of the outside. The database
 refuses everything else.
 
 ### The picture in words
@@ -656,7 +658,7 @@ refuses everything else.
 - **What happens (hints)** comes in from four places: a person or bot acts (app, tico CLI, MCP); a GitHub webhook (may be
   lost, late or doubled); a Jev verdict, a run ending, a release published; the Heartbeat (every 10 s, no matter what).
 - **The task engine** holds three parts: `move()`, the only writer of stage, owner, status; the never-stuck check, which
-  looks at state, wakes, and calls `move()`; and facts, saved copies of the outside: PRs, checks, releases, Jev verdicts,
+  looks at state, wakes, and calls `move()`; and metadata, saved copies of the outside: PRs, checks, releases, Jev verdicts,
   can a bot run.
 - Under the engine, a **database trigger** refuses any other write.
 - Out of the engine, **`waiting_on()`** is the only read of "whose turn". It is read by: task row, task page, Needs you,
@@ -670,14 +672,14 @@ refuses everything else.
    opened the guard in the same transaction. A lint test also fails the build on any other write.
 3. **One read.** Nothing else works out who has the turn. Screens don't have their own logic for it.
 4. **Events are hints.** A webhook or a button press only makes the check run sooner. The check works from stored state,
-   so a lost event costs at most 10 seconds, or 5 minutes for a GitHub fact.
+   so a lost event costs at most 10 seconds, or 5 minutes for GitHub metadata.
 5. **Effects travel with the move.** The on-enter action and the owner's wake are written in the same transaction as the
    move. Requirements added to the old visit end in it too. Each has a key made from the visit, so running twice does
    nothing.
 
-### Facts
+### Metadata
 
-A fact is Tico's saved copy of something that lives outside the task tables. Requirements read facts. Nothing calls
+Metadata is Tico's saved copy of something that lives outside the task tables. Requirements read metadata. Nothing calls
 GitHub, Jev or a computer while a task is being moved.
 
 - **A PR:** its newest commit, its checks, whether it is in the merge queue, whether it merged. From GitHub.
@@ -688,24 +690,27 @@ GitHub, Jev or a computer while a task is being moved.
 
 Three rules keep them honest:
 
-1. **Two ways in.** An event brings a fact fast: a webhook, Jev finishing. A re-read on a timer brings it for sure: every
+1. **Two ways in.** An event brings metadata fast: a webhook, Jev finishing. A re-read on a timer brings it for sure: every
    5 minutes for any PR a task waits on.
-2. **Newest wins.** Every fact carries a version and the time it was read. An older read can't replace a newer one.
+2. **Newest wins.** All metadata carries a version and the time it was read. An older read can't replace a newer one.
 3. **Read from the database only.** `move()` and `waiting_on()` never wait on the outside. A slow GitHub can't stall a
    move or the check.
 
-Example, Checks pass: GitHub says the checks finished. The fact is saved. The event nudges the check. `waiting_on()`
-reads the fact and finds Checks pass met. `move()` moves the task. If the webhook is lost, the 5-minute read saves the
-same fact and the rest is identical.
+Example, Checks pass: GitHub says the checks finished. The metadata is saved. The event nudges the check. `waiting_on()`
+reads the metadata and finds Checks pass met. `move()` moves the task. If the webhook is lost, the 5-minute read saves the
+same metadata and the rest is identical.
 
 ### Modules
 
 - `task_engine.py`: `move()` and the guard. Also the only writer of snoozes and of requirements added to a task.
-- `requirements.py`: the nine kinds, on a stage or added to one task. Each one answers met, waiting on what, or not met
+- `requirements.py`: the six kinds, on a stage or added to one task. Each one answers met, waiting on what, or not met
   and why.
 - `waiting_on.py`: the one read. Batched for lists and pipeline views.
 - `never_stuck.py`: the check, the ladder, Late, filling open slots.
-- `task_facts.py`: PR and release facts, the 5-minute GitHub read, webhook intake.
+- `item_sources/github.py`: the GitHub source. PR and release metadata, the 5-minute GitHub read, webhook
+  intake, its conditions and its one action, queue.
+- `item_metadata.py`: the saved metadata of every source's items, and what waits on it.
+- `source_actions.py`: a source's actions on entering a stage (act), their undo, and the retries.
 - `stage_effects.py`: file a linked task, queue and dequeue PRs, undo.
 - `answers.py`: a person's answer, Give to…, and the 👎 with its rule. Needs you itself is a read of `waiting_on()`.
 - `pipeline_settings.py`: one record for a pipeline, its stages and requirements. One schema for the editor, the API, hub
@@ -717,7 +722,7 @@ same fact and the rest is identical.
 pipelines     name, goal, manager, private, factory, settings_version
 stages        pipeline, position, kind (work | done | closed), name, purpose,
               owner (a bot | a person | 'assignee'), by_hand, limit, expected_minutes, on_enter
-requirements  stage or visit, kind, settings, can_push_past, who_oks (none | people_only | people_with_exceptions),
+requirements  stage or visit, kind, source, condition (on an item), settings, can_push_past, who_oks (none | people_only | people_with_exceptions),
               person, added_by, line, shows (page + version | email | PR | action), choices, withdrawn_at
               on a stage: every task. on a visit: this task, this time. unique (visit, added_by) for a bot
 tasks         pipeline, stage, owner, assignee, version, status (open | done | closed; written by move() only)
@@ -728,9 +733,9 @@ answers       visit, requirement, by, answer, notes, page_version, at
 feedbacks     exists today: person, subject, rating, reason, rule. Asks become a subject.
 snoozes       task, by, why, until (empty = no end), ended_at
 links         from_task, to_task, visit, kind (sub-task | handoff)
-pr_facts      task, repo, pr, head, checks, merged_commit, queue_state, fact_version, read_at
+item_metadata source, item type, item key, title, fields, metadata_version, read_at
 releases      repo, tag, commit, published_at
-effects       visit, kind (queue_pr | dequeue_pr), key (unique), state, tries, last_error
+effects       visit, kind (act | undo), source, action, item, key (unique), state, tries, last_error
 wakes         existing messages table + wake_key (unique: task, visit, level, try)
 ```
 
@@ -763,7 +768,7 @@ def move(task, to, by, why=None, seen_version=None):
     guard.close()
     v = open_visit(t)
     if to.on_enter.file_into:  file_linked_task(v)       # same transaction
-    if to.on_enter.queue_prs:  add_effect(v, queue_pr)   # row now; the GitHub call is made by the check
+    if to.on_enter.act:        add_effect(v, act)        # row now; the source's call is made by the check
     add_wake(t.owner, v)                             # row now, keyed by visit
     COMMIT
     fill_open_slots(); push to screens
@@ -799,9 +804,9 @@ late. Nothing depends on the exact 10 seconds.
 
 - **Many PRs.** A task links any number of PRs. PR open, Checks pass, PR merged and In a release each look at all of
   them.
-- **Facts are read, not trusted to arrive.** Webhooks are dropped if their delivery id was seen before. Any PR a task
+- **Metadata is read, not trusted to arrive.** Webhooks are dropped if their delivery id was seen before. Any PR a task
   waits on is re-read every 5 minutes, at most 50 PRs per call.
-- **No stale writes.** Each PR fact has a version, compared inside the transaction. An old read can't overwrite a newer
+- **No stale writes.** Each PR's metadata has a version, compared inside the transaction. An old read can't overwrite a newer
   one.
 - **Checks pass** ignores Tico's own check runs. No checks at all after 10 minutes counts as met (C13).
 - **A new commit during Review** puts the review back to Waiting on the reviewer.
@@ -1327,7 +1332,7 @@ into a test in phase 1.
   closes. One question per bot per task, so no copies. "Reconnect" rows are read from the bot's state, one per cause, and
   go when the cause goes. A 👎 with a rule stops the repeat.
 - **F7. The Writer woken on every release.** Tightened. In the engine a bot is woken once per visit. A release updates
-  facts and wakes nobody. New: the docs automation (D46) keeps one open task and adds later releases to it.
+  metadata and wakes nobody. New: the docs automation (D46) keeps one open task and adds later releases to it.
 - **F8. The review gate refuses moves, and a second mover retries.** Prevented. One mover. Nothing retries a refused
   move. The bot finishes its work, and the engine moves the task when Checks pass is met.
 
@@ -1349,7 +1354,7 @@ into a test in phase 1.
   be in the release's history. Time plays no part.
 - **F17. Closed in Merge, and the PR still merges.** Tightened. Closing takes the PRs out of the queue in the same step.
   New: if GitHub merges one first, the task shows "PR merged anyway" and the manager bot is told once.
-- **F18. A stale GitHub read overwrites a newer one.** Prevented. Every fact has a version. An older read can't replace a
+- **F18. A stale GitHub read overwrites a newer one.** Prevented. All metadata has a version. An older read can't replace a
   newer one.
 - **F19. Person-owned PRs take a different path.** Prevented. Merging is the Merge stage's on-enter action, done by the
   engine. Who owns the task makes no difference.
@@ -1483,7 +1488,7 @@ Each feature that exists today, and where it goes.
 - **Verdict routing on pass or fail** (verdict_moves): Review is a stage that leaves when the review is attached.
 - **After green: next check or merge wake:** the Checks pass requirement and the check.
 - **PR merged moves the task to the merge step from anywhere:** PR merged is a requirement on Merge. An early merge is
-  just a met fact when the task gets there.
+  just met when the task gets there.
 - **Check timeout passes with no verdict:** dropped.
 - **Timeout refiles to a free pool bot:** Late, then the manager.
 - **Check filed per commit, superseded on a new one** (check_pools): a review page is tied to a commit. A new commit puts
@@ -1492,7 +1497,7 @@ Each feature that exists today, and where it goes.
 - **Conflict or queue failure files a manager task:** the Builder's turn, with the reason. Late goes to the manager.
 - **Merged catch-up over 14 days:** the 5-minute read.
 - **Release found by the name "pending release"** (release_flow): In a release, checked by commit.
-- **Release publish moves tasks on:** the check does, when the fact arrives.
+- **Release publish moves tasks on:** the check does, when the metadata arrives.
 - **Wake rules on entering a step** (rules): `move()` wakes the owner once.
 - **Direct writers** (pipeline_setup, task_blocked, hubdb retire_held_steps, shared_bots, settings_admin): through
   `move()`, or deleted.
@@ -1527,7 +1532,7 @@ A, B and C are approved. This page is the build spec in the repo, and the checks
 
 ### Phase 3: Engineering
 
-- **Builds:** PR and release facts, the 5-minute read, webhook de-duplication. PR open, Checks pass, PR merged, In a
+- **Builds:** PR and release metadata, the 5-minute read, webhook de-duplication. PR open, Checks pass, PR merged, In a
   release. Many PRs per task. Merge with queue and dequeue. The Engineering preset. Product hands off into Engineering.
 - **Done when:** the rig passes with a fake GitHub that loses, delays and repeats webhooks and drops PRs from the queue.
   One real PR goes through Merge and Release. **0.6.0 is published.**

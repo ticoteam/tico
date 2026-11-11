@@ -1432,12 +1432,15 @@ class VisitRow(TypedDict):
 
 
 class RequirementRow(TypedDict):
-    """What a task needs to leave a stage: on the stage (every task) or on one visit (this task, this time)."""
+    """What a task needs to leave a stage: on the stage (every task) or on one visit (this task, this time). Kind `item`
+    names the `source` and its `condition` (backend/item_sources)."""
 
     id: str
     stage_id: str | None
     visit_id: str | None
     kind: str
+    source: str | None
+    condition: str | None
     settings: str
     can_push_past: int
     who_oks: str
@@ -1527,52 +1530,48 @@ class LinkRow(TypedDict):
 
 
 class EffectRow(TypedDict):
-    """A GitHub call a move still owes, keyed so it happens once."""
+    """A source action a move still owes (`act`) or owes back (`undo`), keyed so it happens once
+    (backend/source_actions.py)."""
 
     id: str
     visit_id: str
     kind: str
+    source: str
+    action: str
+    item_type: str
+    item_key: str
+    pinned: str | None
     key: str
     state: str
     tries: int
     last_error: str | None
+    next_try_at: str | None
     created_at: str
     updated_at: str
-    repo: str | None
-    number: int | None
-    head_sha: str | None
-    next_try_at: str | None
 
 
-class PrFactRow(TypedDict):
-    """Tico's saved copy of one pull request (backend/task_facts.py). Newest `fact_version` wins."""
+class ItemMetadataRow(TypedDict):
+    """Tico's saved copy of one item of a source (backend/item_metadata.py). Newest `metadata_version` wins."""
 
     id: str
-    repo: str
-    number: int
-    state: str
-    draft: int
-    head_sha: str | None
-    head_seen_at: str | None
-    checks_state: str
-    checks: str
-    checks_started_at: str | None
-    merged_sha: str | None
-    merged_at: str | None
-    queue_state: str
-    queued_at: str | None
-    removed_at: str | None
-    removed_reason: str | None
-    failing_check: str | None
-    failing_check_url: str | None
-    fact_version: int
-    read_at: str
+    source: str
+    item_type: str
+    item_key: str
+    title: str | None
+    fields: str
+    metadata_version: int
+    read_at: str | None
+    due_at: str | None
+    read_error: str | None
+    refused_at: str | None
+    gone_at: str | None
+    final_at: str | None
     created_at: str
     updated_at: str
 
 
-class ReleaseRow(TypedDict):
-    """A published release of a repo, never a draft (backend/task_facts.py)."""
+class GithubReleaseRow(TypedDict):
+    """A published release of a repo, never a draft (backend/item_sources/github.py)."""
 
     id: str
     repo: str
@@ -1580,20 +1579,20 @@ class ReleaseRow(TypedDict):
     commit_sha: str | None
     prerelease: int
     published_at: str
-    fact_version: int
+    metadata_version: int
     read_at: str
     created_at: str
 
 
-class ReleaseReadRow(TypedDict):
+class GithubReleaseReadRow(TypedDict):
     """When a repo's releases were last read: none saved after a read means it publishes none (C31)."""
 
     repo: str
     read_at: str
-    fact_version: int
+    metadata_version: int
 
 
-class ReleaseCommitRow(TypedDict):
+class GithubReleaseCommitRow(TypedDict):
     """Whether a commit is in a release's history, read once from GitHub."""
 
     release_id: str
@@ -1618,7 +1617,7 @@ class RequirementPageRow(TypedDict):
     requirement_id: str
     file_id: str
     version: int
-    heads: str
+    item_versions: str
     attached_by_id: str
     created_at: str
     replaced_at: str | None

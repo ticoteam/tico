@@ -43,13 +43,13 @@ human_actor: Callable[[object], str] = _core.human_actor
 is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
-SNOOZED, PERSON, PAUSED, BOT, JEV, GITHUB, TASKS, ROOM, BY_HAND = STATES = (
+SNOOZED, PERSON, PAUSED, BOT, JEV, SOURCE, TASKS, ROOM, BY_HAND = STATES = (
     "snoozed",
     "person",
     "paused",
     "bot",
     "jev",
-    "github",
+    "source",
     "tasks",
     "room",
     "by_hand",
@@ -302,7 +302,7 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
         named = standing.on if standing.state == R.WAITING and not standing.met else None
         if (
             named
-            and named not in (R.JEV, R.GITHUB)
+            and not R.outside(named)
             and standing.requirement["kind"] in ("ok", "answer", "page")
             and not H.task_private_readable(conn, named, row)
         ):
@@ -392,8 +392,10 @@ def of(
             if standing.on not in on_tasks:
                 on_tasks.add(standing.on or "")
                 out.append(Wait(TASKS, standing.on, line, requirement["id"], since, about=standing.about))
-        elif standing.state == R.WAITING and standing.on in (R.JEV, R.GITHUB):
-            out.append(Wait(JEV if standing.on == R.JEV else GITHUB, None, line, requirement["id"], since))
+        elif standing.state == R.WAITING and standing.on == R.JEV:
+            out.append(Wait(JEV, None, line, requirement["id"], since))
+        elif standing.state == R.WAITING and R.outside(standing.on):
+            out.append(Wait(SOURCE, standing.on, line, requirement["id"], since))  # who: the source, e.g. github
         elif standing.state == R.WAITING:
             # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve. One that names
             # nobody, or a person who left (`person_of` skips them), is the task's person's.

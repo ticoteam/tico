@@ -43,11 +43,11 @@ stages        id, pipeline_id, position, kind (work|done|closed), name, purpose,
               task_limit, expected_minutes, expected_bots_only (0|1), on_enter (json), created_at,
               updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
-requirements  id, stage_id | visit_id (exactly one), kind, settings (json), can_push_past (0|1),
+requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
               who_oks (none|people_only|people_with_exceptions), person_id, added_by_id, by_bot (0|1),
               line, shows (json), choices (json), position, created_at, withdrawn_at
-              kind: owner_done | ok | page | pr_open | checks_pass | pr_merged | in_release |
-                    linked_done | answer
+              kind: owner_done | ok | page | item | linked_done | answer
+              source and condition on an item only (github: pr_open | checks_pass | pr_merged | in_release)
               answer is never on a stage. person_id only on ok, page, answer (C29).
               unique (visit_id, added_by_id) where by_bot = 1 and withdrawn_at is null (C15)
 visits        id, task_id, stage_id, entered_at,
@@ -61,7 +61,8 @@ snoozes       id, task_id, visit_id, by_id, why, until_at (null = no end), creat
               ended_by_id        one open snooze per task
 links         id, from_task_id, to_task_id, visit_id, kind (sub_task|handoff), created_at
               a task has at most one row as to_task_id
-effects       id, visit_id, kind (queue_pr|dequeue_pr), key (unique), state (owed|done|failed|moot),
+effects       id, visit_id, kind (act|undo), source, action, item_type, item_key (nocase), pinned,
+              key (unique), state (owed|done|failed|moot),
               tries, last_error, created_at, updated_at
 task_move_guards   id = 1, open (0|1), task_id      the guard the trigger reads: open for one task
 tasks         + pipeline_id, stage_id, assignee_id      (status, owner_id, version exist)
@@ -266,14 +267,15 @@ def people_only(requirement) -> bool
 id), `line` (what is missing, one sentence), `name`, `requirement`, and `met`. A kind reads tables only. It never calls
 GitHub, Jev or a computer.
 
-The nine kinds: `owner_done`, `ok`, `answer`, `linked_done`, and Product and Engineering's `page`, `pr_open`,
-`checks_pass`, `pr_merged`, `in_release`. `SETTINGS` lists the settings keys each kind takes; `pipeline_settings` refuses
+The six kinds: `owner_done`, `ok`, `answer`, `linked_done`, and Product and Engineering's `page` and `item`. An
+`item` names a source and one of its conditions (`backend/item_sources/`: GitHub's `pr_open`, `checks_pass`,
+`pr_merged`, `in_release`). A condition gives its name, settings and whether it is never pushed past. `SETTINGS` lists the settings keys each kind takes; `pipeline_settings` refuses
 any other key.
 
 ## waiting_on.py
 
 ```python
-STATES = ("snoozed", "person", "paused", "bot", "jev", "github", "tasks", "room", "by_hand")   # headline order
+STATES = ("snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "by_hand")   # headline order
 
 def waiting_on(conn, task_id) -> list[Wait]
 def waiting_on_many(conn, task_ids) -> dict[str, list[Wait]]
@@ -516,7 +518,7 @@ The record `read` gives and `save` takes. Keys are the column names. `settings_v
 ```
 
 - `on_enter` is `{}`, `{"file_into": "<pipeline id>"}` (refused until phase 2: "Filing into a pipeline comes with the
-  Product pipeline") or `{"queue_prs": true}` (refused until phase 3).
+  Product pipeline") or `{"act": "github.queue"}` (a source action).
 - A row with an id is changed in place; without one it is made: a stage as `<pipeline id>-<slug of its name>` (`-2`,
   `-3` on a clash), a requirement as `H.new_id()`. A stage left out is retired (refused while it holds open tasks), a
   requirement left out is withdrawn. A requirement's kind does not change in place. A requirement id is listed once in
@@ -537,14 +539,16 @@ Release 0.6. The shared base is on `chris/pe-base`; the full contract (owners, t
 (`20261110213830_product_engineering_facts.py`):
 
 ```
-pr_facts           id, repo (nocase), number, state (open|closed|merged), draft, head_sha, head_seen_at,
+item_metadata      id, source, item_type, item_key (nocase), title, fields (json: a PR's state (open|closed|merged), draft, head_sha, head_seen_at,
                    checks_state (none|pending|success|failure), checks (json), checks_started_at,
                    merged_sha, merged_at, queue_state (none|queued|auto_merge|removed), queued_at,
                    removed_at, removed_reason, failing_check, failing_check_url,
-                   fact_version (ms), read_at, created_at, updated_at        unique (repo, number)
-releases           id, repo, tag, commit_sha, prerelease, published_at, fact_version, read_at, created_at
+                   ...), metadata_version (ms), read_at, due_at, read_error, refused_at, gone_at, final_at,
+                   created_at, updated_at
+                   unique (source, item_type, item_key)
+releases           id, repo, tag, commit_sha, prerelease, published_at, metadata_version, read_at, created_at
                    unique (repo, tag)
-release_reads      repo (pk), read_at, fact_version     a read happened, even with no releases (C31)
+release_reads      repo (pk), read_at, metadata_version     a read happened, even with no releases (C31)
 release_commits    release_id, commit_sha, included, checked_at              pk (release_id, commit_sha)
 github_deliveries  id (X-GitHub-Delivery), event, received_at               kept 7 days
 requirement_pages  id, visit_id, requirement_id, file_id, version, heads (json), attached_by_id, created_at,
@@ -552,11 +556,12 @@ requirement_pages  id, visit_id, requirement_id, file_id, version, heads (json),
 page_verdicts      id, file_id, version, rubric_hash, verdict (null|met|not_met|unsure|failed), p, reasons,
                    model, cost_usd, tries, last_error, next_try_at, created_at, updated_at
                    unique (file_id, version, rubric_hash)
-effects            + repo, number, head_sha, next_try_at
+effects            + next_try_at (the item and its pinned head are on every effect)
 ```
 
-Modules: `task_facts.py` (facts, the `GitHub` protocol), `page_verdicts.py` (Jev's verdict store and step),
-`task_pages.py` (attach), `merge_queue.py` (queue, queue again, pull), `pipeline_seats.py` (roles to bots, the OK
+Modules: `item_sources/github.py` (the GitHub source: metadata, the `GitHub` protocol, the queue action),
+`item_metadata.py` (every source's saved metadata), `source_actions.py` (act, undo, retries), `page_verdicts.py` (Jev's verdict store and step),
+`task_pages.py` (attach), `pipeline_seats.py` (roles to bots, the OK
 person). Tests and the rig use `backend/tests/helpers/fake_github.py`.
 
 ### Standings of the Product and Engineering kinds
@@ -575,7 +580,7 @@ page          no page attached                          not_met  owner   No page
               met and OK'd for this version              met              OK'd
               met, no person                             met              Jev passed it
 pr_open       no PR linked                               not_met  owner   No PR linked
-              no fact yet                                waiting  github  Reading the PR from GitHub
+              no metadata yet                            waiting  github  Reading the PR from GitHub
               every PR closed without merging            not_met  owner   <ref> was closed without merging
               an open or merged PR                       met              PR open
 checks_pass   a check failed                             not_met  owner   Checks failed on <ref>: <names>
@@ -609,7 +614,7 @@ With many PRs the first unmet one, in link order, gives the line.
 - **Queue again** (`tico task queue`) covers a PR GitHub refused to queue as well as one it dropped from the queue.
 - **A drop from the merge queue is the owner's turn at once**, with the reason (one wake per drop). There is no separate
   "after 3 drops" step: the owner already has the turn.
-- **GitHub down for days:** the facts wait, the stage turns Late after its expected time and the manager bot looks once,
+- **GitHub down for days:** the metadata waits, the stage turns Late after its expected time and the manager bot looks once,
   then a person's list at 3 times the expected time (rig case `github-down-for-days`).
 - **The Release Manager** is the bot the release schedule names, else the first active bot made from `release-owner`.
   `release-notes` is the Release Notes Writer and never stands in.

@@ -293,7 +293,7 @@ class TaskMove(Contract):
 
 
 class TaskQueue(Contract):
-    """Queue a task's PRs again after GitHub took them out of the merge queue (merge_queue.requeue)."""
+    """Queue a task's PRs again after GitHub took them out of the merge queue (item_sources.github.requeue)."""
 
     version: Version | None = None
     on_behalf_of: ID | None = None

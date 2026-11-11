@@ -82,6 +82,8 @@ def requirement(c, stage_id, kind, **fields):
         "id": rid,
         "stage_id": stage_id,
         "kind": kind,
+        "source": fields.pop("source", None),
+        "condition": fields.pop("condition", None),
         "settings": json.dumps(fields.pop("settings", {})),
         "can_push_past": fields.pop("can_push_past", 1),
         "who_oks": fields.pop("who_oks", "none"),
@@ -96,6 +98,11 @@ def requirement(c, stage_id, kind, **fields):
         tuple(row.values()),
     )
     return rid
+
+
+def github(condition, **fields):
+    """A requirement spec of kind `item` on the task's GitHub PRs (`pipeline`'s `requirements`)."""
+    return {"kind": "item", "source": "github", "condition": condition, **fields}
 
 
 def _general(c, manager):

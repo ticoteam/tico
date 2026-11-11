@@ -210,7 +210,7 @@ def test_closing_a_task_closes_the_open_tasks_it_filed_and_nesting_stops_at_five
 
 
 def test_closing_a_task_leaves_open_a_filed_task_whose_pr_merged(c, general):
-    from backend import task_facts as F
+    from backend.item_sources import github as F
 
     top = X.new_task(c, ANA, "Checkout flow", assignee="bot:builder")
     merged = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=top["id"])

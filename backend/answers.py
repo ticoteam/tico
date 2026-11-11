@@ -229,7 +229,7 @@ def _may_answer_page(
             _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
     standing = R.standing(conn, row, requirement, newest)
-    if standing.state != R.WAITING or standing.on in (R.JEV, R.GITHUB):
+    if standing.state != R.WAITING or R.outside(standing.on):
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is not waiting on anyone", task_id)
     person = standing.on
     if by != person and not (person is None and is_human(by)):

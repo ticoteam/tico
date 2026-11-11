@@ -33,9 +33,9 @@ from pathlib import Path
 
 import pytest
 
-from backend import merge_queue as MQ
+from backend.item_sources import github as MQ
 from backend import task_engine as E
-from backend import task_facts as F
+from backend.item_sources import github as F
 from backend import task_requirements as R
 from backend import waiting_on as WO
 from backend.store import H
@@ -54,8 +54,30 @@ class Seam:
     """Everything the situations do to, and read from, the GitHub fact and merge-queue code. Cut 1 changes this class
     and nothing else in this file."""
 
-    # Waiting states as `waiting_on` names them -> as the golden file names them (today: the same).
-    WAIT_STATE: dict[str, str] = {}
+    # Waiting states as `waiting_on` names them -> as the golden file names them.
+    WAIT_STATE: dict[str, str] = {"source": "github"}
+    # Source action kinds (backend/source_actions.py) -> the merge-queue effect kinds the golden file names.
+    EFFECT_KINDS = {"act": "queue_pr", "undo": "dequeue_pr"}
+    # A Merge stage's on-enter action: queue the task's PRs.
+    QUEUE_ON_ENTER = {"act": "github.queue"}
+
+    @staticmethod
+    def github(condition, settings=None):
+        """A requirement on the task's GitHub PRs, as a pipeline spec names it (`{"kind": "pr_open"}` in the golden
+        file's terms)."""
+        out = {"kind": "item", "source": "github", "condition": condition}
+        return {**out, "settings": settings} if settings is not None else out
+
+    @staticmethod
+    def kind(requirement):
+        """A requirement's kind as the golden file names it: a GitHub condition by its name."""
+        return requirement.get("condition") or requirement["kind"]
+
+    @staticmethod
+    def wait(w):
+        """A wait as the golden file records it: [state, who, line]. A wait on a source named no one."""
+        state = Seam.WAIT_STATE.get(w.state, w.state)
+        return [state, None if w.state == "source" else w.who, w.line]
 
     # ------------------------------------------------------------------ driving
     @staticmethod
@@ -93,8 +115,9 @@ class Seam:
 
     @staticmethod
     def requeue(c, task_id, by):
-        """Queue again (`tico task queue`)."""
-        return MQ.requeue(c, task_id, by, seen_version=E.task(c, task_id)["version"])
+        """Queue again (`tico task queue`): the actions owed, each with the head it is pinned to as `head_sha`."""
+        owed = MQ.requeue(c, task_id, by, seen_version=E.task(c, task_id)["version"])
+        return [{**e, "head_sha": e["pinned"]} for e in owed]
 
     @staticmethod
     def pull(c, task_id, by):
@@ -112,7 +135,14 @@ class Seam:
         updated_at."""
         assert field in ("read_at", "head_seen_at", "checks_started_at", "updated_at")
         at = H.shift(H.now(), hours=-hours, minutes=-minutes)
-        c.execute(f"UPDATE pr_facts SET {field}=? WHERE repo=? AND number=?", (at, repo, number))
+        where = ("github", "pr", F.pr_key(repo, number))
+        if field in ("read_at", "updated_at"):
+            c.execute(f"UPDATE item_metadata SET {field}=? WHERE source=? AND item_type=? AND item_key=?", (at, *where))
+        else:
+            c.execute(
+                "UPDATE item_metadata SET fields=json_set(fields, ?, ?) WHERE source=? AND item_type=? AND item_key=?",
+                (f"$.{field}", at, *where),
+            )
 
     @staticmethod
     def age_links(c, task_id, hours):
@@ -120,15 +150,15 @@ class Seam:
 
     @staticmethod
     def age_release_reads(c, hours):
-        c.execute("UPDATE release_reads SET read_at=?", (H.shift(H.now(), hours=-hours),))
+        c.execute("UPDATE github_release_reads SET read_at=?", (H.shift(H.now(), hours=-hours),))
 
     # ------------------------------------------------------------------ reading
     @staticmethod
     def github_requirements(c, row):
         """The pipeline's GitHub requirements on any stage, in stage then position order: [(name, requirement)]."""
         found = c.execute(
-            "SELECT r.id, r.kind FROM requirements r JOIN stages s ON s.id = r.stage_id WHERE s.pipeline_id=? "
-            "AND r.withdrawn_at IS NULL AND r.kind IN ('pr_open','checks_pass','pr_merged','in_release') "
+            "SELECT r.id, r.condition FROM requirements r JOIN stages s ON s.id = r.stage_id WHERE s.pipeline_id=? "
+            "AND r.withdrawn_at IS NULL AND r.kind = 'item' AND r.source = 'github' "
             "ORDER BY s.position, r.position, r.created_at",
             (row["pipeline_id"],),
         ).fetchall()
@@ -139,7 +169,7 @@ class Seam:
         """The task's GitHub rows, normalised: {prs, releases, effects, due}."""
         prs = []
         for link in F.prs_of(c, task_id):
-            fact = link["fact"]
+            fact = link["metadata"]
             prs.append(
                 {
                     "ref": F.pr_ref(link["repo"], link["number"]),
@@ -161,7 +191,7 @@ class Seam:
                         "failing_check_url": fact["failing_check_url"],
                         "head_seen_at": bool(fact["head_seen_at"]),
                         "checks_started_at": bool(fact["checks_started_at"]),
-                        "read_again": fact["read_at"] == "",  # a webhook asked for a full read on the next pass
+                        "read_again": fact["due_at"] is not None,  # a full read asked for on the next pass
                     },
                 }
             )
@@ -181,7 +211,8 @@ class Seam:
                             "holds": sorted(
                                 [sha, bool(inc)]
                                 for sha, inc in c.execute(
-                                    "SELECT commit_sha, included FROM release_commits WHERE release_id=?", (r["id"],)
+                                    "SELECT commit_sha, included FROM github_release_commits WHERE release_id=?",
+                                    (r["id"],),
                                 ).fetchall()
                             ),
                         }
@@ -190,11 +221,11 @@ class Seam:
                 }
         effects = [
             {
-                "kind": e["kind"],
+                "kind": Seam.EFFECT_KINDS[e["kind"]],
                 "state": e["state"],
                 "tries": e["tries"],
-                "ref": F.pr_ref(e["repo"], e["number"]) if e["repo"] else None,
-                "head": e["head_sha"],
+                "ref": F.pr_ref(*F.split_key(e["item_key"])),
+                "head": e["pinned"],
                 "error": e["last_error"],
             }
             for e in (
@@ -202,8 +233,8 @@ class Seam:
                 for cur in [
                     c.execute(
                         "SELECT e.* FROM effects e JOIN visits v ON v.id = e.visit_id WHERE v.task_id=? "
-                        "AND e.kind IN (?, ?) ORDER BY v.entered_at, e.created_at, e.rowid",
-                        (task_id, MQ.QUEUE, MQ.DEQUEUE),
+                        "AND e.source=? AND e.action=? ORDER BY v.entered_at, e.created_at, e.rowid",
+                        (task_id, MQ.SOURCE, MQ.QUEUE),
                     )
                 ]
                 for r in cur.fetchall()
@@ -259,13 +290,13 @@ def record(c, task_id, gh, extra=None):
 
     status = c.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
     out = {"stage": row["stage"]["name"], "status": status, "level": (row.get("visit") or {}).get("level")}
-    out["requirements"] = [{"kind": s.requirement["kind"], **standing(s)} for s in R.standings(c, row)]
+    out["requirements"] = [{"kind": Seam.kind(s.requirement), **standing(s)} for s in R.standings(c, row)]
     out["github_kinds"] = (
         [{"kind": kind, **standing(R.standing(c, row, req))} for kind, req in Seam.github_requirements(c, row)]
         if row.get("visit")
         else []
     )
-    out["waiting"] = [[Seam.WAIT_STATE.get(w.state, w.state), w.who, w.line] for w in WO.of(c, row)]
+    out["waiting"] = [Seam.wait(w) for w in WO.of(c, row)]
     out["turn"] = WO.turn(c, row) if row.get("visit") else None
     out.update(Seam.rows(c, task_id))
     out["github_calls"] = [list(call) for call in gh.calls if call[0] in ("ready", "enqueue", "dequeue")]
@@ -303,9 +334,9 @@ def engineering(c, release=None):
         "eng",
         "Engineering",
         stages=(
-            {"name": "Build", "owner": B, "requirements": [{"kind": "pr_open"}, {"kind": "checks_pass"}]},
-            {"name": "Merge", "owner": RM, "on_enter": {"queue_prs": True}, "requirements": [{"kind": "pr_merged"}]},
-            {"name": "Release", "owner": RM, "requirements": [{"kind": "in_release", "settings": release or {}}]},
+            {"name": "Build", "owner": B, "requirements": [Seam.github("pr_open"), Seam.github("checks_pass")]},
+            {"name": "Merge", "owner": RM, "on_enter": Seam.QUEUE_ON_ENTER, "requirements": [Seam.github("pr_merged")]},
+            {"name": "Release", "owner": RM, "requirements": [Seam.github("in_release", release or {})]},
         ),
         manager=EM,
     )
