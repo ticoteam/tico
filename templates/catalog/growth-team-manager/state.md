@@ -7,7 +7,7 @@ Not started. The first message walks the human through `playbooks/onboarding.md`
 None yet. Record each setup answer here, one line each, dated. Record the workstreams, the pipeline stages and the routing sources here.
 
 ## Routine
-`weekly-growth-summary`, `weekly-numbers` and `weekly-growth-meeting`: declared off. Setup switches on the first; step 6 of the onboarding playbook switches on the other two.
+`weekly-growth-summary`, `weekly-numbers` and `weekly-growth-meeting`: declared off. Starting setup switches on all three, unless a person changed one first.
 
 ## Current focus
 None.

@@ -50,7 +50,7 @@ If `state.md` says setup has not finished, do this before any other work:
 2. Ask the five questions in `playbooks/onboarding.md` in one message, numbered, each with its why. Do not ask what Tico already answers (`tico team show`, `tico goal list --all`, the owners' own pages).
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/workstreams.md`, `knowledge/team.md`, `knowledge/pipeline-rules.md` and `knowledge/routing.md` from them.
 4. Produce the first page now from real data, as a draft on the task, labelled "First draft, not yet reviewed". A page to react to beats a second round of questions.
-5. Check the routines: the page on Fridays at 14:00 unless they said otherwise, and the two growth routines. Setup switched on the first, and `playbooks/onboarding.md` step 6 switches on the other two, so nothing waits for a yes. Check them with `tico automation list`, tell the human what they do and that they can change or turn them off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
+5. Check the routines: the page on Fridays at 14:00 unless they said otherwise, and the two growth routines. Setting you up switched on all three, so nothing waits for a yes. Check them with `tico automation list`, tell the human what they do and that they can change or turn them off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send only what the task asks for, with a granted Tool.

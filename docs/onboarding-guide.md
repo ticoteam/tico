@@ -29,7 +29,7 @@ There is no limit on how many bots to create, but set them up one at a time, in 
 
 A recruited starter shows **Needs setup**. Press **Set up** on its page (or just say hello): it introduces itself, asks a handful of
 questions in one message, and writes a real first draft from your own data so you have something to react to. Starting the setup switches
-its first routine on; ask it to change or turn off the routine and it does, and it marks itself set up once its setup is done.
+its routines on; ask it to change or turn off a routine and it does, and it marks itself set up once its setup is done.
 
 - Answer briefly and concretely. "Fine, the default" is a valid answer; so is pasting two examples of something done well.
 - Name who reviews its first drafts and who covers when they are away. Ask for review of particular work when needed.

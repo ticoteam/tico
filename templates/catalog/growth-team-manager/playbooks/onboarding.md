@@ -40,7 +40,7 @@ Follow `playbooks/weekly-growth-summary.md`. Write it in the shape of `knowledge
 
 ## 6. Check the routines
 
-Setting you up switched your first routine on. List your automations with `tico automation list`. If `weekly-growth-summary` shows off, turn it on with `tico automation update <id> --enable`. Then turn on the two growth routines the same way: `weekly-numbers` and `weekly-growth-meeting`, each by its id from that list.
+Setting you up switched on all three routines: `weekly-growth-summary`, `weekly-numbers` and `weekly-growth-meeting`. Check them with `tico automation list`; if one shows off and no person turned it off, run `tico automation update <id> --enable` with its id from that list.
 
 Tell the human in one line what they do: "I will draft this page every Friday at 14:00 for you to review, refresh the growth numbers every Monday at 07:00, and run the growth meeting every Monday at 08:00." They can change or turn off any of them any time; there is nothing to approve.
 

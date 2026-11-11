@@ -474,9 +474,9 @@ the flow format):
 A template may declare the same thing under `routines:` in its `bot.yaml`
 (`id`, `title`, `cron` or `on`, `timezone`, `template: playbooks/<file>.md`, and optionally
 `enabled: false`); `tico bot create` seeds the new bot's automations from it once, and from then on
-the automations are what run. The starter templates declare their first routine with `enabled: false`:
-it exists and is visible on the Automations page, and is switched on when the bot's setup starts (**Set up**, go-live),
-so nobody approves it separately. Quote `"on":` in the
+the automations are what run. The starter templates declare their routines with `enabled: false`:
+each exists and is visible on the Automations page, and all are switched on when the bot's setup starts (**Set up**,
+go-live), except one a person turned off or changed first, so nobody approves them separately. Quote `"on":` in the
 YAML; an unquoted `on` is read as a boolean.
 
 - **`cron`** is five fields, in the time zone you give (`tz`), not the computer's.

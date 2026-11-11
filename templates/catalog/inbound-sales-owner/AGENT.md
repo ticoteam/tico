@@ -41,8 +41,8 @@ If `state.md` says setup has not finished, do this before any other work:
    rules into `knowledge/inbound-method.md`, and write `knowledge/voice.md` and `knowledge/do-not-contact.md`.
 4. Sweep the leads already waiting as a first pass: sort each, draft the replies, and attach the pack to the task
    labelled "First draft, not yet reviewed". Send nothing.
-5. Check the routines: setting you up switched on the inbound sweep, and step 6 of the onboarding playbook turns on
-   the weekly read-out. Check both with `tico automation list`, tell the human what each does and that they can change
+5. Check the routines: setting you up switched on both, the inbound sweep and the weekly read-out.
+   Check both with `tico automation list`, tell the human what each does and that they can change
    or turn either off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the
    first sweep are recorded: it clears your "Needs setup" mark.
 

@@ -55,7 +55,7 @@ page "Social Ads playbook", written as plain HTML from the file:
 Publish it again, the same way, whenever the file changes.
 
 Then tell the person about the cutoff in "Cutoffs: set these in Rules": it is off until a person sets N in Rules, and
-Tico does not turn it on for them. If they give you a number, suggest the rule; a person accepts it in Rules:
+{{app_name}} does not turn it on for them. If they give you a number, suggest the rule; a person accepts it in Rules:
 
     tico rules add --kind internal --who <your slug> --text "Social ads pause when cost per new customer passes <N> times its 30-day average"
 
