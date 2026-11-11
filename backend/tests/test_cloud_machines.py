@@ -895,6 +895,77 @@ def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_botops(cloud
         assert file_health_card(c, "ops", "cpu_cap", cloud.at[0])  # closed: the next refusal files a new one
 
 
+def restarted(cloud):
+    """An offline restart under way: stopped for it, then started by the work's wake. Returns the computer."""
+    computer = silent_with_waiting_work(cloud)
+    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
+    assert cloud.tick(1) == ["stop", "start"]
+    assert cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+    return computer
+
+
+def person_reach(cloud):
+    with cloud.store.read() as c:
+        return (
+            c.execute("SELECT count(*) FROM tasks WHERE owner_id LIKE 'human:%'").fetchone()[0],
+            c.execute("SELECT count(*) FROM message_deliveries WHERE recipient LIKE 'human:%'").fetchone()[0],
+        )
+
+
+def test_a_restart_that_never_checks_in_fails_once_to_botops_and_does_not_loop(cloud):
+    with_botops(cloud)
+    restarted(cloud)
+    before = person_reach(cloud)
+    for _ in range(CM.OFFLINE_RESTART_DELAY // 60 - 1):  # past the 5-minute pause these tests set: not idle yet
+        cloud.tick(60)
+    cloud.tick(58)  # one second short of the stop's deadline
+    assert cloud.row()["state"] == "starting" and cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+    assert machine_cards(cloud) == []
+    cloud.tick(1)
+    assert cloud.row()["problem"] == "" and CM.machine_view(cloud.row())["restarting"] is False
+    (card,) = machine_cards(cloud)
+    assert card["owner_id"] == H.bot_actor(H.FLEET_MAINTAINER) and card["status"] == "open"
+    assert "ops" in card["body"] and "did not come back" in card["body"] and "refused" not in card["body"]
+    assert len(events(cloud, "cloud_machine.restart_failed")) == 1
+    assert person_reach(cloud) == before  # nobody is told
+    # Still silent with work waiting, for hours: no second restart and no second task.
+    for _ in range(4):
+        cloud.tick(CM.OFFLINE_RESTART_GAP)
+    restarts = [e for e in events(cloud, "cloud_machine.stopped") if CM.OFFLINE_REASON in (e["detail"] or "")]
+    assert len(restarts) == 1
+    assert len(machine_cards(cloud)) == 1 and len(events(cloud, "cloud_machine.restart_failed")) == 1
+    assert person_reach(cloud) == before
+
+
+def test_a_restart_checked_in_before_its_deadline_files_nothing(cloud):
+    with_botops(cloud)
+    computer = restarted(cloud)
+    cloud.tick(CM.OFFLINE_RESTART_DELAY - 2)
+    reported(cloud, computer)
+    assert cloud.row()["problem"] == ""
+    cloud.tick(CM.OFFLINE_RESTART_DELAY)
+    assert machine_cards(cloud) == [] and events(cloud, "cloud_machine.restart_failed") == []
+
+
+def test_a_failed_restart_that_checks_in_later_can_be_restarted_again_after_the_hour(cloud):
+    with_botops(cloud)
+    computer = restarted(cloud)
+    cloud.tick(CM.OFFLINE_RESTART_DELAY)
+    assert len(machine_cards(cloud)) == 1
+    reported(cloud, computer)  # back after all: the next silence is a fresh one
+    assert cloud.row()["problem"] == ""
+    with cloud.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=5), computer["runner_id"]),
+        )
+        CM.save(c, "ops", state="running")
+    cloud.hq.machines["m1"]["state"] = "running"
+    cloud.hq.calls.clear()
+    cloud.tick(CM.OFFLINE_RESTART_GAP)
+    assert "stop" in cloud.hq.actions() and cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+
+
 def test_a_same_choice_reposted_keeps_the_start_refusal_and_its_wake_guard(cloud):
     enrolled(cloud)
     cloud.tick(400)
