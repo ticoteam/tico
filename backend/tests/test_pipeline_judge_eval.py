@@ -265,7 +265,7 @@ def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monk
 def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped_rubrics():
     """The three pages Jev was unsure of on Acme (Nov 11) and the two it passed are cases, built by the page step's own
     builder (page_verdicts.job_of): the page's text, the stage's shipped rubric, the PR and its newest commit."""
-    from backend.pipeline_settings import REVIEW_RUBRIC
+    from backend.pipeline_settings import FIXES_2_RUBRIC, REVIEW_RUBRIC
 
     cases = {c["id"]: c for c in run.chosen(run.load(), "acme-*")}
     assert set(cases) == {"acme-review-1", "acme-review-2", "acme-fixes-2", "acme-spec", "acme-validate"}
@@ -276,4 +276,10 @@ def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped
     head = state["work"]["context"]["heads"]["ticoteam/pipeline-sandbox#38"]
     assert state["attachment"]["text"].startswith(f"Reviewed commit {head}")
     assert adapter.state_for(cases["acme-validate"])["work"]["context"]["release"] == ["v6"]
+    assert adapter.state_for(cases["acme-fixes-2"])["requirement"]["rubric"] == FIXES_2_RUBRIC
+    # Its two cuts are traps: a pre-release page without what the reviewers found, or without the checks, is not met.
+    for trap in ("dev-prerelease-no-reviews", "dev-prerelease-unchecked"):
+        cut = next(c for c in run.load() if c["id"] == trap)
+        assert cut["expected"] == "not_met" and cut["requirement"]["rubric"] == FIXES_2_RUBRIC
+        assert len(cut["attachment"]["text"]) < len(cases["acme-fixes-2"]["attachment"]["text"])
     assert run.chosen(run.load(), "acme-spec,dev-review-done") and len(run.chosen(run.load(), "acme-spec")) == 1

@@ -815,7 +815,7 @@
    "domain": "dev",
    "requirement": {
     "name": "Review page",
-    "rubric": "Shows what was built, with screenshots or output, and how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found. Enough for a person to OK it without opening the code."
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening the code."
    },
    "work": {
     "title": "Add subtract(a, b) to calc.py",
@@ -893,6 +893,64 @@
    "expected": "met",
    "trap": null,
    "source": "Acme rc.3 case 1, Product Validate page (Nov 11): judged met"
+  },
+  {
+   "id": "dev-prerelease-no-reviews",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff"
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "fixes2_v1.md",
+    "text": "# subtract(a, b): what was built\n\nPull request: https://github.com/ticoteam/pipeline-sandbox/pull/38 at head 1927310520c10dd7b70de3077ff3dac747f24d0d\n\n## What changed\nDevelopers can now `from calc import subtract` and call `subtract(a, b)` to get `a - b`. It works for ints and floats, and raises `TypeError` for non-numbers, as Python's `-` does. Nothing else in calc.py changed.\n\n## How it was checked\n- Five new tests in test_calc.py: `subtract(5, 3) == 2`, `subtract(3, 5) == -2`, `subtract(2.5, 0.5) == 2.0`, `subtract(7, 0) == 7`, and `TypeError` for `\"a\"` and `None`.\n- Before the change the tests failed (ImportError: no `subtract`). After it, `python3 -m unittest` runs 6 tests, all pass (the existing `add` test included).\n- Not checked: float rounding such as 0.3 - 0.1, NaN, infinity, very large numbers (out of scope in the spec).\n\n## Checks at the head commit\nPassing: `checks`, `knobs` and `advisory`; `shards` skipped (not requested). https://github.com/ticoteam/pipeline-sandbox/pull/38/checks\n\n## To decide\nNothing blocking. Spec open question on float rounding: left as Python's own (the default).\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "no_review_findings",
+   "source": "The Acme Fixes 2 page with its review findings cut: what both reviewers found is missing"
+  },
+  {
+   "id": "dev-prerelease-unchecked",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff"
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "fixes2_v1.md",
+    "text": "# subtract(a, b): what was built\n\nPull request: https://github.com/ticoteam/pipeline-sandbox/pull/38 at head 1927310520c10dd7b70de3077ff3dac747f24d0d\n\n## What changed\nDevelopers can now `from calc import subtract` and call `subtract(a, b)` to get `a - b`. It works for ints and floats, and raises `TypeError` for non-numbers, as Python's `-` does. Nothing else in calc.py changed.\n\n## Review findings\n- Reviewer 1: no comments on the pull request and no review page attached. Nothing to fix.\n- Reviewer 2: no comments on the pull request. Nothing to fix.\n\n## To decide\nNothing blocking. Spec open question on float rounding: left as Python's own (the default).\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "no_checks",
+   "source": "The Acme Fixes 2 page with how it was checked and the checks cut"
   }
  ]
 }
