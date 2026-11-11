@@ -28,7 +28,9 @@ body.native #app-nudge{display:none}
   body{display:block}
   #side{position:fixed;top:0;left:0;bottom:0;width:min(88vw,360px);height:auto;transform:translateX(-100%);transition:transform var(--dur) var(--ease)}
   body.drawer #side{transform:none;box-shadow:0 0 40px rgba(0,0,0,.35)}   /* a shadow on the closed drawer bleeds onto the page's left edge */
-  .side-close{display:block}
+  .side-close{display:block;min-width:40px;min-height:40px}
+  /* Every modal's ✕ is a finger's width on a phone: it is often the only way out. */
+  button.tmodal-x{min-width:40px;height:40px}
   .side-head{display:flex;min-height:46px}
   /* A phone drawer: full width, thumb-sized rows, and a chevron you can actually hit. */
   #side{width:100vw;padding:0 10px}
@@ -49,6 +51,9 @@ body.native #app-nudge{display:none}
   body.drawer #side-backdrop{display:block}
   body.drawer{overflow:hidden}
   #main{padding:18px 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px);max-width:none}
+  /* A field or button the browser scrolls to (focus, the keyboard's Next, a link to a card) stops above the tab bar, never under it. */
+  html{scroll-padding-bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
+  html.in-setup,html:has(body.bot-page){scroll-padding-bottom:12px}
   #mobile-nav{position:fixed;z-index:18;left:0;right:0;bottom:0;height:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:start;padding:6px 4px env(safe-area-inset-bottom);border-top:1px solid var(--line);background:var(--surface);background:color-mix(in srgb,var(--surface) 94%,transparent);box-shadow:0 -5px 20px rgba(0,0,0,.08);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);transition:transform var(--dur) var(--ease),visibility var(--dur) var(--ease)}
   .mobile-nav-item{min-width:0;height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:3px 2px;border:0;background:transparent;color:var(--muted);font:600 var(--t-xs)/var(--lh-display) var(--sans);cursor:pointer;text-decoration:none;-webkit-tap-highlight-color:transparent}
   .mobile-nav-item:hover{text-decoration:none}
