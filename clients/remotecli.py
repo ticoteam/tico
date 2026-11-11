@@ -836,6 +836,8 @@ def run(args, who=None):
             "snooze",
             "unsnooze",
             "update",
+            "queue",
+            "unlink",
         ):
             # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
             return unwrap(via_tool(client, args))
@@ -909,6 +911,8 @@ def run(args, who=None):
         if sub == "relate":
             return via_tool(client, args)  # the tool says what to do instead of blocks and blocked_by
         if sub == "attach":
+            if getattr(args, "req", None):
+                return via_tool(client, args, page=args.file)
             path = Path(args.file)
             body = {"name": args.name or path.name}
             if getattr(args, "note", None) is not None:

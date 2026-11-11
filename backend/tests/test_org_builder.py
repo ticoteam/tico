@@ -339,3 +339,14 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
     assert ask(api, who=as_person(api, "quinn")).status_code == 403
     # A demo never asks, whatever else is set.
     assert recruit.off_reason(None, SimpleNamespace(demo=True)) == "demo"
+
+
+def test_a_blank_software_answer_counts_as_software_as_the_chart_and_presets_do():
+    from backend import recruit
+
+    assert [recruit._about({"software_product": v})["software"] for v in ("yes", "", None, "no")] == [
+        True,
+        True,
+        True,
+        False,
+    ]

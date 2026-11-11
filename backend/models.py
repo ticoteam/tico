@@ -292,6 +292,13 @@ class TaskMove(Contract):
     on_behalf_of: ID | None = None
 
 
+class TaskQueue(Contract):
+    """Queue a task's PRs again after GitHub took them out of the merge queue (merge_queue.requeue)."""
+
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
 class TaskOwner(Contract):
     """Give the task to another owner for this stage (H.task_reassign)."""
 
@@ -353,10 +360,23 @@ class OkUse(Contract):
 
 
 class TaskAskAnswer(Contract):
-    """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer)."""
+    """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer).
+    `page_version`: on a page, the version the person was shown; refused when another is attached now."""
 
     value: Annotated[str, Field(min_length=1, max_length=20_000)]
     note: str | None = Field(default=None, max_length=20_000)
+    version: Version | None = None
+    page_version: Annotated[int, Field(strict=True, ge=1)] | None = None
+    on_behalf_of: ID | None = None
+
+
+class TaskPageAttach(Contract):
+    """Attach a page to a page requirement of the task's stage (task_pages.attach). `requirement` is its id or name;
+    `page` is page:<file id> (its newest version) or page:<file id>@<version>. `version` is the task's, as on every
+    task write."""
+
+    requirement: Annotated[str, Field(min_length=1, max_length=500)]
+    page: Annotated[str, Field(min_length=1, max_length=200)]
     version: Version | None = None
     on_behalf_of: ID | None = None
 

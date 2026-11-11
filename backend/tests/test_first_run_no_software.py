@@ -56,16 +56,22 @@ def test_a_company_that_makes_no_software_gets_no_product_or_engineering_seats_b
 
 
 @pytest.mark.parametrize("software", ["yes", ""])
-def test_a_software_company_and_one_that_did_not_say_still_get_their_product_and_qa_owners(environment, software):
-    """Only a "no" leaves the software seats out: a blank answer is unknown, and unknown keeps the default chart
-    (company_import.default_chart), the one the site's file gives a company that picked nothing."""
+def test_a_software_company_and_one_that_did_not_say_get_the_six_pipeline_bots(environment, software):
+    """Only a "no" leaves the software seats out: a blank answer is yes (D7), and a software company starts with every
+    Product and Engineering stage owner live (D2). QA Owner stays an open seat (D4)."""
     api = environment()
     _set_up(api, software=software)
     titles = {row["title"] for row in rows(api, "SELECT title FROM tasks WHERE title LIKE 'Set up % template'")}
     assert titles == {
-        "Set up Product Owner from the segment-product-owner template",
-        "Set up QA Owner from the qa-owner template",
+        "Set up Product Manager from the product-manager template",
+        "Set up Engineering Manager from the engineering-manager template",
+        "Set up Builder from the builder template",
+        "Set up Reviewer 1 from the pr-reviewer template",
+        "Set up Reviewer 2 from the pr-reviewer template",
+        "Set up Release Manager from the release-owner template",
     }
+    seats = {row["title"]: row for row in rows(api, "SELECT title, filled_by FROM seats WHERE closed_at IS NULL")}
+    assert not seats["QA Owner"]["filled_by"]
 
 
 def test_a_new_company_has_no_daily_release_and_no_two_automations_of_one_name(environment):

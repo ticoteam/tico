@@ -6,7 +6,8 @@ import type {Route} from 'playwright';
 // - a file's OK reads the pinned version (GET /api/v2/files/{id}/versions/{n}) and shows it; Approve sends the OK's hash;
 // - a stage's OK (no grant) is off while its page loads, on once it is shown, and off when its page does not load;
 // - a support report's OK shows the message and the version and install ID that go with it, off until they are read;
-// - an OK of a message shows every other field its content has too.
+// - an OK of a message shows every other field its content has too;
+// - a page requirement's OK reads the page at its pinned version; Approve is off until it is shown, then sends that version.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -44,8 +45,10 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     need('r5', 'Approve the plan', 14, ['page:p2']),
     need('r6', 'Send this report to Tico support?', 15),
     need('r7', 'Approve the reply', 16),
+    {...need('r8', 'Spec page', 17), ask: {...need('r8', 'Spec page', 17).ask, kind: 'page', may: ['ok', 'no'], shows: ['page:pf@2'],
+      page: {file_id: 'pf', version: 2, ref: 'page:pf@2'}}},
   ];
-  const proof = gate(), page1 = gate(), compose = gate();
+  const proof = gate(), page1 = gate(), compose = gate(), specPage = gate();
   const writes: {p: string; body: Record<string, unknown>}[] = [];
   const pdf = '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
   const pg = (id: string, title: string) => ({id, title, body: `${title} body.`, kind: 'doc', owner_id: 'bot:pm', updated_at: '2026-11-09T10:00:00Z'});
@@ -80,6 +83,12 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
       if (p === '/api/v2/oks/r6') return json({requirement_id: 'r6', subject: 'support:k1', content: {message: 'Sync stopped at 9am.', content_sha256: 'f'.repeat(64), include_ids: true}, shown_hash: '1'.repeat(64), standing: 'waiting', task_id: 't-r6'});
       if (p === '/api/v2/support/compose') { await compose.p; return json({enabled: true, version: '0.6.0', install_id: 'inst-42', to: 'hq.tico.example'}); }
       if (p === '/api/v2/oks/r7') return json({requirement_id: 'r7', subject: 'hq_reply:x', content: {subject: 'Re: refund', body: 'We refunded it.', to: 'jo@acme.example'}, shown_hash: '2'.repeat(64), standing: 'waiting', task_id: 't-r7'});
+      if (p === '/api/v2/oks/r8') return json({error: 'not_found'}, 404);
+      if (p === '/api/v2/files/pf') {
+        assert.equal(url.searchParams.get('v'), '2', 'the page is read at the version the OK is for');
+        await specPage.p;
+        return route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="spec.html"'}, body: '<h1>Importer spec</h1>'});
+      }
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
         const m = /^\/api\/v2\/tasks\/(t-r\d)\/asks\/(r\d)\/(ok|answer)$/.exec(p);
@@ -164,7 +173,18 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     await dialog.getByText('We refunded it.').waitFor();
     assert.match(await dialog.locator('.dc-doc').innerText(), /jo@acme\.example/);
 
+    // r8: a page requirement's OK: off until the page at version 2 is shown; Approve sends that version.
+    await next('Spec page');
+    await page.waitForTimeout(300);
+    assert.equal(await approve.isDisabled(), true, 'Approve waits for the page at its version');
+    specPage.open();
+    await dialog.locator('iframe.dc-page').waitFor();
+    assert.match(await dialog.locator('iframe.dc-page').getAttribute('srcdoc') ?? '', /Importer spec/);
+    await dialog.locator('[data-dc="approve"]:not([disabled])').click();
+    for (let i = 0; i < 50 && !writes.some(w => w.p === '/api/v2/tasks/t-r8/asks/r8/answer'); i++) await page.waitForTimeout(100);
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/tasks/t-r8/asks/r8/answer')?.body, {value: 'ok', page_version: 2, version: 3});
+
     assert.deepEqual(errors, []);
-    console.log('PASS: Approve waits for the letter proof, the file version and the stage pages; what does not load leaves it off.');
+    console.log('PASS: Approve waits for the letter proof, the file version, the stage pages and a page at its version; what does not load leaves it off.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

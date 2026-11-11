@@ -36,8 +36,8 @@ is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
 DONE, OK, NO, AGAIN, GIVE, PUSHED_PAST = "done", "ok", "no", "again", "give", "pushed_past"
-# The kinds a person (or a named bot) answers by hand. A page's OK arrives with phase 3.
-BY_HAND = ("owner_done", "ok", "answer")
+# The kinds a person (or a named bot) answers by hand. A page is answered once Jev has looked (task_requirements._page).
+BY_HAND = ("owner_done", "ok", "answer", "page")
 # Kinds that are an ask: they can name a person, and take a thumb (C29).
 ASKS = ("ok", "answer")
 
@@ -174,6 +174,9 @@ def _may_answer(
         if by not in (row.get("owner_id"), manager, E.SYSTEM) and not is_human(by):
             _refuse(conn, by, "task_requirement", "Only the owner, the manager or a person says it is done", task_id)
         return
+    if kind == "page":
+        _may_answer_page(conn, by, row, requirement, value, notes)
+        return
     person = R.person_of(conn, requirement, row["visit"]["id"])
     if kind == "ok" and value == AGAIN:
         newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
@@ -211,15 +214,66 @@ def _may_answer(
         _refuse(conn, by, "task_why", "Say what to change", task_id)
 
 
+def _may_answer_page(
+    conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, value: str, notes: str | None
+) -> None:
+    """A page takes ok or no, and only once Jev has looked and it waits on someone: the person it names after Jev passed
+    it, or a person deciding what Jev was unsure of or could not check. Never Jev's turn, never the owner's."""
+    task_id = row["id"]
+    if value not in (OK, NO):
+        _refuse(conn, by, "task_requirement", "A page takes ok or no. To change it, attach a new version.", task_id)
+    if value == OK:
+        from . import task_asks
+
+        if task_asks.acting_for_people(by):
+            _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
+    newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
+    standing = R.standing(conn, row, requirement, newest)
+    if standing.state != R.WAITING or standing.on in (R.JEV, R.GITHUB):
+        _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is not waiting on anyone", task_id)
+    person = standing.on
+    if by != person and not (person is None and is_human(by)):
+        _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
+    if value == NO and not (notes or "").strip():
+        _refuse(conn, by, "task_why", "Say what to change", task_id)
+
+
+def _page_version(
+    conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, page_version: int | str | None
+) -> int | None:
+    """The page version an answer on a page is for: the one attached now. A caller that names the version it was shown
+    is refused when the page changed since (`task_changed`)."""
+    if requirement["kind"] != "page":
+        return None
+    from . import task_pages
+
+    page = task_pages.current(conn, row["visit"]["id"], requirement["id"])
+    now = int(page["version"]) if page else None
+    if page_version not in (None, "") and now != int(page_version):
+        _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
+    return now
+
+
 # ----------------------------------------------------------------------------- writes
-def _write(conn: "sqlite3.Connection", row: Row, requirement_id: str, by: str, value: str, notes: str | None) -> str:
+def _write(
+    conn: "sqlite3.Connection",
+    row: Row,
+    requirement_id: str,
+    by: str,
+    value: str,
+    notes: str | None,
+    page_version: int | None = None,
+) -> str:
     H = _h()
     answer_id = H.new_id()
     conn.execute(
-        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, created_at) VALUES (?,?,?,?,?,?,?)",
-        (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, H.now()),
+        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, page_version, H.now()),
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
+    if page_version is not None:
+        data["page_version"] = page_version
     # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
@@ -295,21 +349,25 @@ def answer(
     *,
     seen_version: int | str | None = None,
     own_click: bool = False,
+    page_version: int | str | None = None,
 ) -> Row:
     """Answer a requirement of the task's open visit: `done` (owner says done), `ok`, `no` with notes or `again` (an
-    OK), or the choice or text (a question). If that was the last thing missing, the task moves in the same step. The
+    OK), `ok` or `no` on a page (for the version attached now; `page_version`, when given, is the one the person was
+    shown), or the choice or text (a question). If that was the last thing missing, the task moves in the same step. The
     same answer given twice is one answer. `own_click`: the person's own click in their own session (_may_answer)."""
     row = _open_task(conn, task_id, by)
     E.check_version(conn, by, row, seen_version)
     requirement = _asked(conn, row, requirement_id, by)
     value = str(value or "").strip()
+    pinned = _page_version(conn, by, row, requirement, page_version)
     _may_answer(conn, by, row, requirement, value, notes, own_click=own_click)
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
-    if newest and (newest["by_id"], newest["answer"], newest.get("notes")) == (str(by), value, notes):
+    same = (str(by), value, notes, pinned)
+    if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version")) == same:
         out = E.task(conn, task_id) or row
         out["answer_id"] = newest["id"]
         return out
-    answer_id = _write(conn, row, requirement_id, by, value, notes)
+    answer_id = _write(conn, row, requirement_id, by, value, notes, pinned)
     if requirement["kind"] == "ok" and value != OK:
         from . import task_asks
 

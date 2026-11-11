@@ -495,13 +495,21 @@ async function decideSupportHTML(content: unknown): Promise<string> {
   }
   return `<pre class="dc-raw">${esc(c.message)}</pre>${ids ? `<p class="dc-line">${ids}</p>` : ''}`;
 }
-/** A stage's OK shows what the requirement names: pages in full, an email as frozen, a file at its version, the rest by
-    name. One that does not load leaves Approve off (`missing`). */
+/** A page at the exact version an OK of it is for (`page:<id>@<n>`, a page requirement): its HTML read from that version
+    and drawn sandboxed, as the page viewer draws it. */
+async function decidePageHTML(fid: string, version: number): Promise<string> {
+  const file = await viewFile(fid, 'page.html', version);
+  const doc = htmlPreviewDoc(await file.blob.text());
+  return `<iframe class="html-view dc-page" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Version ${version}" srcdoc="${esc(doc)}"></iframe>`;
+}
+/** A stage's OK shows what the requirement names: pages in full (a page requirement's at its pinned version), an email
+    as frozen, a file at its version, the rest by name. One that does not load leaves Approve off (`missing`). */
 async function decideShowsRead(v: AskOkView, shows: string[]) {
   const parts: string[] = [];
   for (const ref of shows) {
     const [kind, ...rest] = ref.split(':'), id = rest.join(':'), pinned = /^([^@]+)@(\d+)$/.exec(id);
     try {
+      if (kind === 'page' && pinned) { parts.push(await decidePageHTML(pinned[1]!, Number(pinned[2]))); continue; }
       if (kind === 'page') { v.pages.push((await get<import('../types/api').GetPageResponse>('/v2/pages/' + encodeURIComponent(id), {fresh: true})).page); continue; }
       if (kind === 'email') { parts.push(emailSendPreviewHTML(await get<EmailSendPreview>('/v2/email/sends/' + encodeURIComponent(id), {fresh: true}))); continue; }
       if (kind === 'file' && pinned) { parts.push(await decideFileHTML(v, {file: pinned[1], version: Number(pinned[2])})); continue; }
@@ -532,6 +540,8 @@ async function decideDo(st: DecState, it: NeedsEntry, label: string, run: () => 
     decidePaintSide(st);
   }
 }
+/** A page requirement's ask: the version on screen, which the answer is for. */
+const decidePageVersion = (it: NeedsEntry): number | undefined => it.ask?.page?.version;
 const decideUndoAnswer = (r: unknown) => { const id = (r as TaskMoved | null)?.answer_id; return id ? () => answerUndo(id) : null; };
 const decideUndoReopen = (taskId: string) => () => () => taskMove(taskId, 'reopen', null);
 /** Approve: the person's own OK of exactly what is on screen. A change since it was read is shown, never OK'd. */
@@ -539,7 +549,7 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
   const rid = decideRid(it), v = st.ok.get(rid), taskId = it.task_id;
   if (!v || !taskId || st.busy) return;
   if (v.state === 'none') {
-    await decideDo(st, it, 'Approved', () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, decideNote('#dc-notes') || undefined), decideUndoAnswer);
+    await decideDo(st, it, 'Approved', () => taskAnswer(taskId, rid, 'ok', it.task?.version ?? null, decideNote('#dc-notes') || undefined, decidePageVersion(it)), decideUndoAnswer);
     return;
   }
   const hash = v.state === 'ready' ? v.hash : null;
@@ -585,7 +595,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   }
   switch (what) {
     case 'approve': await decideApprove(st, it); return;
-    case 'sendback': { const note = decideNote('#dc-notes'); if (note) await decideDo(st, it, 'Sent back', () => taskAnswer(taskId, rid, 'no', ver, note), decideUndoAnswer); return; }
+    case 'sendback': { const note = decideNote('#dc-notes'); if (note) await decideDo(st, it, 'Sent back', () => taskAnswer(taskId, rid, 'no', ver, note, decidePageVersion(it)), decideUndoAnswer); return; }
     case 'other': { const text = decideNote('#dc-other'); if (text) await decideDo(st, it, 'Answered', () => taskAnswer(taskId, rid, text, ver), decideUndoAnswer); return; }
     case 'done': await decideDo(st, it, 'Done', () => taskDone(taskId, ver), decideUndoReopen(taskId)); return;
     case 'again': await decideDo(st, it, 'Tried again', () => taskTryAgain(taskId)); return;

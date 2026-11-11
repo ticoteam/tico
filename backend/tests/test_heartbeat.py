@@ -40,6 +40,9 @@ ORDER = [
     "repository_waits",
     "entity_links",
     "call_sweeps",
+    "pr_facts",
+    "merge_queue_effects",
+    "jev_verdicts",
 ]
 
 
@@ -139,7 +142,7 @@ def test_a_poll_never_runs_more_often_than_every_10_seconds(api, fake):
     beat(api, scheduler, AT)
     ran.clear()
     beat(api, scheduler, AT + timedelta(seconds=5))  # a 5-second interval
-    polls = {k for k in ORDER if HB.BY_KEY[k].kind == "poll"}
+    polls = {k for k in ORDER if HB.BY_KEY[k].kind == "poll" and HB.BY_KEY[k].floor <= HB.POLL_FLOOR}  # pr_facts: 1 min
     assert polls.isdisjoint(ran) and "run_housekeeping" in ran
     ran.clear()
     beat(api, scheduler, AT + timedelta(seconds=10))

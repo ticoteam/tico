@@ -218,6 +218,51 @@ def call_sweeps(ctx: Context) -> tuple[str, bool]:
     return "Done", True
 
 
+def _engine_github(ctx: Context) -> Any:
+    """The engine's GitHub (backend/github.py `AppGitHub`) through the company's GitHub App, or None without one."""
+    app: Any = ctx.github_app
+    if app is None or app.row() is None:
+        return None
+    from .github import AppGitHub
+
+    return AppGitHub(ctx.github_app)
+
+
+def pr_facts(ctx: Context) -> tuple[str, bool]:
+    # The 5-minute re-read of the PRs and releases open tasks wait on (backend/task_facts.py `refresh`): a webhook
+    # GitHub never sent, or one Tico missed, still reaches the task.
+    github = _engine_github(ctx)
+    if github is None:
+        return "No GitHub app", True
+    from . import task_facts
+
+    changed = task_facts.refresh(ctx.store, github)
+    return (f"{changed} facts changed", False) if changed else ("Nothing due", True)
+
+
+def merge_queue_effects(ctx: Context) -> tuple[str, bool]:
+    # The Merge stage's owed queue and dequeue calls (backend/merge_queue.py `run`).
+    github = _engine_github(ctx)
+    if github is None:
+        return "No GitHub app", True
+    from . import merge_queue
+
+    done = merge_queue.run(ctx.store, github)
+    return (f"{done} merge queue calls", False) if done else ("Nothing due", True)
+
+
+def jev_verdicts(ctx: Context) -> tuple[str | None, bool]:
+    # Jev's verdicts on pages attached to page requirements (backend/page_verdicts.py): a few a beat, each model call
+    # made with no transaction held, each verdict recorded in its own short write.
+    from . import page_verdicts
+
+    at = ctx.at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    given = page_verdicts.run(ctx.store, at)
+    if not given:
+        return None, True
+    return f"Jev gave {given} verdicts", False
+
+
 # ----------------------------------------------------------------------------- the steps, in the order they run
 MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
     timedelta(minutes=1),
@@ -296,6 +341,17 @@ STEPS = [
     ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
+    Step("pr_facts", "PR and release facts", "poll", MINUTE, pr_facts, failure="pr_facts", capture="scheduler"),
+    Step(
+        "merge_queue_effects",
+        "Merge queue",
+        "due",
+        None,
+        merge_queue_effects,
+        failure="merge_queue_effects",
+        capture="scheduler",
+    ),
+    Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}
 CONTROLLED = {step.control: step for step in STEPS if step.control}

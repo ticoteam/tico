@@ -31,7 +31,7 @@ Nothing on GitHub changes, and no test is skipped, quarantined or deleted by thi
    (`skills/prove-a-test-catches-the-bug/SKILL.md`). A path with no such test is named, not counted as covered.
 7. **Check slow suites against the threshold.** A suite is slow when its median passes the threshold in
    `knowledge/thresholds.md`. Name the test or step that grew, if the log shows it.
-8. **Hand over product bugs.** A product bug a test exposed goes to the Engineering Team Manager on a task, with the failing
+8. **Hand over product bugs.** A product bug a test exposed goes to the Engineering Manager on a task, with the failing
    test, its runs and the commit range (`playbooks/triage-a-failing-test.md`).
 9. **Write three fix plans.** Choose by time saved times people blocked: the slowest suite, the flakiest test, the most
    common cause. For each: the test or file, the change, the expected effect and how to verify it. A change to a product file
@@ -47,7 +47,7 @@ Nothing on GitHub changes, and no test is skipped, quarantined or deleted by thi
 - **Past deadline:** skipped or quarantined tests whose deadline has passed, with their tickets.
 - **Paths with no test:** each must-test path that has no test asserting its behaviour.
 - **Suites:** median over the last 14 days against the 14 before.
-- **Product bugs handed over:** each with its failing test, runs and the Engineering Team Manager task link.
+- **Product bugs handed over:** each with its failing test, runs and the Engineering Manager task link.
 - **Fix plans:** three, each with the file or test, the change, the expected effect, the check and the owner.
 - **Could not read:** runs or logs unavailable, with the count.
 - **Sources:** the suites, the date range, and the date of the thresholds file.

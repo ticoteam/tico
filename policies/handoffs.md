@@ -50,9 +50,11 @@ refuses it once the rule is enforced; `tico task create --dry-run` shows what it
   only on what its stage needs and on the tasks it filed.
 - Waiting on work another bot or person must do: file it from your task (below). Your task waits
   until that task ends, and you are woken once then.
-- Waiting on your pull request's checks, review or release: link it with
+- Waiting on your pull request's checks, review or release in General: link it with
   `tico task link <task-id> <pr url> --wake-once`, then snooze the task to when you expect it, with
-  the pull request in the reason. End the turn instead of polling.
+  the pull request in the reason. End the turn instead of polling. On a stage that needs a pull
+  request, checks or a release (Engineering), Tico reads GitHub itself: link it and end the turn,
+  with no `--wake-once` and no snooze.
 - Waiting on something Tico cannot see (a reply by mail, a date, an outside system):
   `tico task snooze <task-id> --until <date> -m "<what you wait for and what to check>" --version N`
   and end the turn. Give a date wherever there is one: "vendor replies by Nov 14". A snooze with no
@@ -61,6 +63,18 @@ refuses it once the rule is enforced; `tico task create --dry-run` shows what it
   A comment is on the record with your name; it is not a chat. An @ in it only marks the task unread
   for that person. If you need them, ask them on the task.
 - Never message a person about a task outside the task: no chats, emails or pushes about it.
+
+## Pages and pull requests on a stage
+
+`tico task show <task-id>` lists what the stage still needs. A stage moves on by itself the moment
+nothing is missing; you do not say done for a need Tico can see.
+- A page (a Spec, a Review, what was built, Checked in production): write it, publish it with
+  `tico file publish <path> --task <task-id>` (it prints the file id), then attach it to the need:
+  `tico task attach <task-id> page:<file id> --req "<requirement>" --version N`. Jev checks it; a person OKs it
+  where the stage asks for one. Sent back: change it, publish again and attach the new version.
+- A review page names the pull request's newest commit. New commits make it stale: write it again.
+- A pull request: open it and link it with `tico task link <task-id> <pr url>`. Checks, merges and
+  releases are read from GitHub. Never merge a pull request on a stage: the merge queue merges.
 
 ## How a run ends
 

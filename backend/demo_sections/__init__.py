@@ -20,6 +20,7 @@ from . import (
     schedules,
     services,
     skills,
+    software,
     strategy,
     threads_rules,
     work_hours,
@@ -44,6 +45,7 @@ SECTIONS = (
     alerts,
     skills,
     directory,
+    software,
 )
 
 

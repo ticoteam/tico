@@ -7,7 +7,7 @@ description: Report each committed roadmap item as on track, at risk or slipped,
 When to use: in the weekly summary, and whenever a person asks what is committed, what is late, or what changed.
 
 Steps:
-1. Read the list the owner named as the roadmap (a doc, milestones, a board). Copy each item with its goal, owner and target date. Do not add items you have not been given.
+1. Read the list the owner named as the roadmap (a doc, milestones, a tracker). Copy each item with its goal, owner and target date. Do not add items you have not been given.
 2. Read each item's source, read only: its milestone or linked issues, the status of its spec, and the owner's latest update. Note the date of each read.
 3. Mark the status. On track: on target, with any dependency named and on schedule. At risk: a dependency is open with no date, the spec is missing, or the item is more than a week behind its plan. Slipped: the target date has passed.
 4. Write one line per item: the status, the evidence and its date.

@@ -83,7 +83,7 @@ architecture) and C (the screens).
 
 ## Calls
 
-Close calls that change behavior, C1 to C30. They are part of sign-off A. Text in italics says what was there before.
+Close calls that change behavior, C1 to C31. They are part of sign-off A. Text in italics says what was there before.
 
 - **C1.** A bot should give an end date when it snoozes, and its wake says so. It is not required. A bot's snooze with
   no end date shows as "On ice", the manager bot is told once, and it is listed on the manager's rail. After 3 snoozes
@@ -146,6 +146,10 @@ Close calls that change behavior, C1 to C30. They are part of sign-off A. Text i
   from someone. "Checks pass" can't. If a person has to make it pass, that is a sub-task.
 - **C30.** Anyone working a task can add an OK or an answer from someone to it. It lasts for this stage. Answer from
   someone is never set on a stage.
+- **C31.** In a release on a repo that publishes no releases is met once the PR merged, with the line "This repo
+  doesn't publish releases". A repo publishes releases once Tico has read one published release of it (a pre-release
+  counts). Until Tico has read the repo's releases once, the line is "Reading releases". *Before, the task waited in
+  Release for a release that never came.*
 
 ## A. The state machine
 
@@ -292,7 +296,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
 6. **GitHub**
    - Starts: Checks are running, the PR is in the merge queue, or it merged and waits for a release.
    - Ends: The fact arrives, by webhook or by the 5-minute read.
-   - If not: After 2 hours of checks or 3 queue drops it is the bot's turn. A release that never comes turns Late.
+   - If not: After 2 hours of checks it is the bot's turn; a drop from the merge queue is the owner's turn at once. A
+     release that never comes turns Late.
 7. **Other tasks**
    - Starts: It filed tasks that are still open.
    - Ends: The last one ends. The owner is woken once.
@@ -341,6 +346,8 @@ Anything else is "stopped early", and the never-stuck check wakes it again.
 ### Handoff: Product to Engineering
 
 - Entering In development files one Engineering task, linked. The owner may file more.
+- The filed task has the Product task's title and body, and a link to the Spec page at the version that was OK'd
+  (`page:<file id>@<version>`). Its requester is the Product Manager. It starts in On deck.
 - The Product task leaves when every task filed in this visit ended Done.
 - If one ends Closed, the Product task stays and it is its owner's turn, with the reason shown.
 - **Not validated:** the owner moves the task back to In development with a reason. That is a new visit, so a new
@@ -379,8 +386,8 @@ is.
   Builder is out of credit". They carry on by themselves when the bot can run.
 - **A person's turn:** the task is in their Needs you, once. No reminders.
 - **Jev:** a failed check is retried on the same 3 tries, then goes to a person as "Jev couldn't check this".
-- **GitHub:** the PR is read again if the last read is over 5 minutes old. Checks still running after 2 hours, or a PR
-  that fell out of the merge queue 3 times, become the owner's turn with the reason.
+- **GitHub:** the PR is read again if the last read is over 5 minutes old. Checks still running after 2 hours become the
+  owner's turn with the reason; a PR that fell out of the merge queue is the owner's turn at once (Merge).
 - **Other tasks:** nothing. Those tasks have their own turn. When the last one ends, the owner is woken once with how
   each ended.
 - **Room:** the oldest waiting task takes the next free slot.
@@ -589,13 +596,18 @@ Stages: To do → Done · Closed
   with no assignee, the Task Manager is woken to pick one.
 - **Done.** When the bot says done, it is Done. Nobody checks it. You can reopen it with a note.
 
+Roles are found by the seat's template, never by a name: Product Manager, Engineering Manager, Builder, Reviewer 1,
+Reviewer 2 and Release Manager. A software company has all six live. The person on a people OK is the first person
+above the pipeline's manager bot on the org chart, else the org owner. Product and Engineering are made for a company
+that answers yes to "Do you build software?" (a blank answer is yes); an untouched pair is retired when it answers no.
+
 ### Product
 
 From an idea to something checked in production. Manager: the Product Manager bot.
 
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
-- **Ideas.** Tasks leave by hand. The Product Manager is woken once when Spec has room. To park an idea, snooze it with
+- **Ideas.** Owner: Product Manager. Tasks leave by hand. The Product Manager is woken once when Spec has room. To park an idea, snooze it with
   no end date.
 - **Spec.** Owner: Product Manager. To leave: a Spec page. Jev checks it, then **a person OKs it**. Limit 2. Expected
   time: 2 days.
@@ -611,16 +623,20 @@ own thread.
 
 Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → Merge → Release → Done · Closed
 
-- **On deck.** No requirements. Tasks move into Build when it has room, oldest first.
+- **On deck.** Owner: Builder. No requirements. Tasks move into Build when it has room, oldest first.
 - **Build.** Owner: Builder. To leave: PR open, Checks pass. Limit 3. Expected time: 1 day.
 - **Review 1.** Owner: Reviewer 1. To leave: a Review page for the newest commit. Jev checks it is a real review.
   Expected time: 2 hours.
 - **Fixes 1.** Owner: Builder. To leave: Owner says done, Checks pass. Expected time: 4 hours.
-- **Review 2.** Owner: Reviewer 2, a different model. To leave: a Review page for the newest commit. Expected time: 2
+- **Review 2.** Owner: Reviewer 2, a different model: Codex if the company has it, else a different Claude model. To leave: a Review page for the newest commit. Expected time: 2
   hours.
 - **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built. Jev checks it, then **a
   person OKs it**. Expected time: 4 hours.
-- **Merge.** Owner: Builder. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected time: 2 hours.
+- **Merge.** Owner: Release Manager. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
+  time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
+  PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
+  back to Fixes 2 when the fault needs the Builder. A commit pushed in Merge does not send the task back through Review:
+  the merge queue's checks are the gate.
 - **Release.** Owner: Release Manager. To leave: In a release. Can't be pushed past. Expected time: 1 day.
 
 Also:
@@ -789,15 +805,21 @@ late. Nothing depends on the exact 10 seconds.
   one.
 - **Checks pass** ignores Tico's own check runs. No checks at all after 10 minutes counts as met (C13).
 - **A new commit during Review** puts the review back to Waiting on the reviewer.
-- **Merge.** Each PR is queued at the commit that was checked. A new commit in Merge keeps the task there and queues the
-  new one once it is green. Up to 3 tries per commit, 10 minutes apart, then it is the Builder's turn with GitHub's
-  reason.
+- **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
+  none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
+  owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
+  commit), Tico saves why and which check failed, PR merged says "Dropped from the merge queue: <reason>", and the
+  owner is told once. Tico never queues it again by itself. The owner (the Release Manager, who may push to PR
+  branches) queues it again (`tico task queue`), after pushing its own fix if one is needed, or sends the task back to
+  Fixes 2. Queuing again is refused while the PR's own checks on its newest commit are running or failing, with the
+  reason. A commit pushed in Merge keeps the task in Merge: the reviews of the earlier commit stand for this visit.
 - **A commit after the person's OK** still merges once it is green. The task shows "Changed after OK" and the manager bot
   is told once (C22).
 - **Leaving Merge backwards, or closing,** takes the PRs out of the queue. That call doesn't exist today and gets built.
   If GitHub merges one first, the task shows "PR merged anyway" and the manager bot is told once.
 - **In a release** means the merge commit is in the commit history of a published release of the release repo: not a
-  draft, no dash in the tag. Time plays no part. Checked when a release publishes and on the 5-minute read.
+  draft, and no dash in the tag unless the In a release setting "Pre-releases count" is on (off by default). Time
+  plays no part. A repo that publishes no releases: met once merged (C31). Checked when a release publishes and on the 5-minute read.
 
 ### What gets deleted
 
@@ -1214,7 +1236,7 @@ tico task move E-214 next|<stage> -m "why"
 tico task close E-214 -m "why"
 tico task ask E-214 --to chris "one line"
      [--choices a,b] [--show page:12]
-tico task attach E-214 --req "Review page" page:12
+tico task attach E-214 --req "Review page" page:12 --version 4
 tico task file --parent E-214 --pipeline general "title"
 tico task snooze E-214 [--until 2026-11-14] -m "why"
 tico task ask E-214 --withdraw
@@ -1571,7 +1593,7 @@ Numbered in order so they can be cited (scenario 1 to 52).
 27. Production runs an older version than the release: Jev says "not yet". Nothing is filed.
 28. A new commit lands during Review: the review goes back to Waiting on the reviewer.
 29. A task has two PRs and one merges: it stays in Merge. Both merge: it moves.
-30. The merge queue drops a PR: the task stays in Merge. After 3 tries it is the Builder's turn with the reason.
+30. The merge queue drops a PR: the task stays in Merge, and it is the Release Manager's turn with the reason.
 31. Close an Engineering task in Merge: its PRs leave the queue and never merge.
 32. A stale PR read arrives after a newer one: the recorded commit doesn't change.
 33. A PR merges after a release is cut: the task stays in Release until a release that contains the merge.

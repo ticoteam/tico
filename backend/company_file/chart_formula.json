@@ -115,13 +115,14 @@
       "team": "Product",
       "seats": [
         {
-          "key": "product-team-manager",
-          "id": "product-team-manager",
-          "title": "Product Team Manager",
-          "template": "product-team-manager",
+          "key": "product-manager",
+          "id": "product-manager",
+          "title": "Product Manager",
+          "template": "product-manager",
           "department": "product",
           "reports_to": null,
-          "reason": "Leads the product team and its owners."
+          "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
+          "live": true
         },
         {
           "key": "segment-product",
@@ -131,20 +132,8 @@
           "title": "{label} Product Owner",
           "template": "segment-product-owner",
           "department": "product",
-          "reports_to": "product-team-manager",
-          "reason": "Owns the {label} segment's product{initiatives}.",
-          "live": "first"
-        },
-        {
-          "key": "product-owner",
-          "id": "product-owner",
-          "title": "Product Owner",
-          "template": "segment-product-owner",
-          "department": "product",
-          "reports_to": "product-team-manager",
-          "reason": "Owns the product: what gets built next, and the spec for each change.",
-          "unless": "segment",
-          "live": true
+          "reports_to": "product-manager",
+          "reason": "Owns the {label} segment's product{initiatives}."
         }
       ]
     },
@@ -152,13 +141,14 @@
       "team": "Engineering",
       "seats": [
         {
-          "key": "engineering-team-manager",
-          "id": "engineering-team-manager",
-          "title": "Engineering Team Manager",
-          "template": "engineering-team-manager",
+          "key": "engineering-manager",
+          "id": "engineering-manager",
+          "title": "Engineering Manager",
+          "template": "engineering-manager",
           "department": "engineering",
           "reports_to": null,
-          "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases."
+          "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
+          "live": true
         },
         {
           "key": "builder",
@@ -166,8 +156,9 @@
           "title": "Builder",
           "template": "builder",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
-          "reason": "Builds the product: writes the code for each change."
+          "reports_to": "engineering-manager",
+          "reason": "Builds the product: writes the code for each change.",
+          "live": true
         },
         {
           "key": "reviewer-1",
@@ -175,8 +166,9 @@
           "title": "Reviewer 1",
           "template": "pr-reviewer",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
-          "reason": "Reviews each code change before it ships, as the first reviewer."
+          "reports_to": "engineering-manager",
+          "reason": "Reviews each code change before it ships, as the first reviewer.",
+          "live": true
         },
         {
           "key": "reviewer-2",
@@ -184,8 +176,9 @@
           "title": "Reviewer 2",
           "template": "pr-reviewer",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
-          "reason": "Reviews each code change before it ships, as the second reviewer."
+          "reports_to": "engineering-manager",
+          "reason": "Reviews each code change before it ships, as the second reviewer.",
+          "live": true
         },
         {
           "key": "qa-owner",
@@ -193,9 +186,8 @@
           "title": "QA Owner",
           "template": "qa-owner",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
-          "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
-          "live": true
+          "reports_to": "engineering-manager",
+          "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones."
         },
         {
           "key": "security-owner",
@@ -203,7 +195,7 @@
           "title": "Security Owner",
           "template": "security-owner",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Owns security: keeping the product and its data safe."
         },
         {
@@ -212,17 +204,18 @@
           "title": "Infrastructure Owner",
           "template": "infrastructure-owner",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Owns infrastructure: the servers and systems the product runs on."
         },
         {
-          "key": "release-owner",
-          "id": "release-owner",
-          "title": "Release Owner",
+          "key": "release-manager",
+          "id": "release-manager",
+          "title": "Release Manager",
           "template": "release-owner",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
-          "reason": "Owns releases: how each change is checked, shipped and rolled out."
+          "reports_to": "engineering-manager",
+          "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
+          "live": true
         }
       ]
     },
@@ -385,7 +378,7 @@
       "name": "Growth"
     },
     {
-      "seat": "engineering-team-manager",
+      "seat": "engineering-manager",
       "name": "Engineering"
     },
     {
@@ -397,7 +390,7 @@
       "name": "Infrastructure"
     },
     {
-      "seat": "release-owner",
+      "seat": "release-manager",
       "name": "Release"
     },
     {

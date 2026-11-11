@@ -38,9 +38,9 @@ The QA Owner decides fix or quarantine for each.
    Expected: about 6 minutes off every run. Check: the step "Restore cache" reports a hit. Owner: the Engineering Team
    Manager, who routes it to a builder.
 2. **Cache the browser install** (`ci.yml`, job `e2e`): key the cache on the browser version. Expected: about 1 minute off
-   each e2e run. Check: the "Install browsers" step reports a cache hit. Owner: the Engineering Team Manager.
+   each e2e run. Check: the "Install browsers" step reports a cache hit. Owner: the Engineering Manager.
 3. **Split the e2e job across two runners** (`ci.yml`, job `e2e`) by spec file. Expected: the job's median falls from
-   6 min 10 s to about 3 min 30 s. Check: the median over the next 14 days. Owner: the Engineering Team Manager.
+   6 min 10 s to about 3 min 30 s. Check: the median over the next 14 days. Owner: the Engineering Manager.
 
 ## Could not read
 - Logs older than the repository's retention for 4 runs on 2026-09-15; counted as unknown, not green.

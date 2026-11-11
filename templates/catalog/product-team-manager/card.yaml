@@ -44,7 +44,7 @@ prerequisites:
 onboarding:
   - ask: "What is the product outcome for this quarter, in one sentence, and which goal in Tico does it serve?"
     why: "Every proposal is scored against it. Without one, prioritising is taste."
-  - ask: "Where does the roadmap live (a doc, GitHub milestones, a board) and what is committed for this quarter?"
+  - ask: "Where does the roadmap live (a doc, GitHub milestones, a tracker) and what is committed for this quarter?"
     why: "Sets the list I report on as on track or at risk, and where I read it."
   - ask: "Which customer segments does the product serve, and who is the Product Owner for each (or who should be)?"
     why: "Each segment's Product Owner owns its specs and discovery. A segment with no owner is a hire proposal, not my work."
