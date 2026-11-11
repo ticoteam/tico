@@ -41,7 +41,12 @@ def engineering(c, release=None):
         "Engineering",
         stages=(
             {"name": "Build", "owner": B, "requirements": [{"kind": "pr_open"}, {"kind": "checks_pass"}]},
-            {"name": "Merge", "owner": RM, "on_enter": {"act": "github.queue"}, "requirements": [{"kind": "pr_merged"}]},
+            {
+                "name": "Merge",
+                "owner": RM,
+                "on_enter": {"act": "github.queue"},
+                "requirements": [{"kind": "pr_merged"}],
+            },
             {"name": "Release", "owner": RM, "requirements": [{"kind": "in_release", "settings": release or {}}]},
         ),
         manager=EM,
