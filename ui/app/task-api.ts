@@ -35,6 +35,8 @@ interface PipelineReqRec {
   who_oks: 'none' | 'people_only' | 'people_with_exceptions';
   person_id: string | null;
   line: string;
+  /** An answer's choices, when it is a choice; null on every other requirement. */
+  choices?: string[] | null;
 }
 interface PipelineStageRec {
   id?: string;
