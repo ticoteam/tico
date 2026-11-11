@@ -3,7 +3,7 @@
 import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from . import agents, go_live as pending_go_lives, models as M
+from . import agents, go_live as pending_go_lives, models as M, setup_live
 from .auth import Identity
 from .execution import bot_repository
 from .settings_admin import repository_present
@@ -49,8 +49,15 @@ def register(
             started = True
         # Going live turns its first routine on too: nobody approves it separately.
         armed = onboarding.arm_first_routine(c, who, bot)
+        # A seat bot nobody chats with runs the same setup on its own, with no person (backend/setup_live.py).
+        own = setup_live.start_setup(c, onboarding, bot)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))
-        return {"activated": activated, "setup_started": started, "routine_armed": armed}
+        return {
+            "activated": activated,
+            "setup_started": started,
+            "routine_armed": armed,
+            **({"own_setup_task_id": own} if own else {}),
+        }
 
     def wait_for_repository(c, who, bot, placed, body, github_asked=True):
         """Keep the placement and remember the go-live: the computer is told about the bot on its next heartbeat,
