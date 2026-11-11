@@ -2,7 +2,7 @@
 """How Jev judges a piece of evidence against a requirement: one attachment, one rubric, one model, one probability.
 
 `judge_once` is the seam. It asks a model for p, the probability the attachment meets the rubric, and the bands decide:
-p >= 0.8 is met, p <= 0.2 is not met, anything between is unsure. Every verdict carries a reason: Jev answers a
+p >= 0.75 is met, p <= 0.2 is not met, anything between is unsure. Every verdict carries a reason: Jev answers a
 probability and no prose, so the reason is Tico's own words for the band and the rubric (`reason_for`). A call that
 did not give an answer (an error, a timeout, an answer that cannot be read, no model, the team's Decide cap) is not a
 verdict at all: it is `failed`, with what went wrong as its reason, and the caller retries it (page_verdicts). Nothing
@@ -50,7 +50,10 @@ LOG = logging.getLogger("tico.pipeline_judges")
 MODELS: dict[str, str] = {"jev": "tico-decide-low"}
 DEFAULT_MODEL = "jev"
 QUESTION_SET = "pipeline-requirement"
-MET_AT, NOT_MET_AT = 0.8, 0.2
+# The bar: met at 0.75 or more, not met at 0.2 or less. It lives here and nowhere else (the eval imports it), and no
+# company or pipeline stores its own. Was 0.8 to Nov 11: at 0.75 the whole eval set had no false met, good pages unsure
+# went from 4 of 30 to 1 of 30, and the highest not-met case was 0.43 (Chris, Nov 11).
+MET_AT, NOT_MET_AT = 0.75, 0.2
 REASON_BYTES = 500
 # How much of the evidence's text and the task's spec Jev is sent. Jev reads 32k tokens of state (clients/judge.py
 # MAX_STATE_CHARS: 120,000 characters of JSON, about four a token), and the two share it with the rest of the state
@@ -81,7 +84,7 @@ def judge_model_of(conn: sqlite3.Connection, pipeline_id: str | None) -> str:
 
 
 def verdict_of(p: float) -> str:
-    """The band a probability falls in: met at 0.8 or more, not_met at 0.2 or less, unsure between."""
+    """The band a probability falls in: met at MET_AT (0.75) or more, not_met at NOT_MET_AT (0.2) or less, unsure between."""
     if p >= MET_AT:
         return "met"
     if p <= NOT_MET_AT:
@@ -97,7 +100,7 @@ def reason_for(verdict: str, p: float, rubric: str) -> str:
         return f"Jev found it meets the check (p {p:.2f}): {check}"
     if verdict == "not_met":
         return f"Jev found it does not meet the check (p {p:.2f}): {check}"
-    return f"Jev could not tell whether it meets the check (p {p:.2f}, between 0.2 and 0.8): {check}"
+    return f"Jev could not tell whether it meets the check (p {p:.2f}, between {NOT_MET_AT} and {MET_AT}): {check}"
 
 
 def _probability(value: object) -> float | None:

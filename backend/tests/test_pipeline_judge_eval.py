@@ -103,6 +103,17 @@ def test_the_bar_refuses_any_false_met_even_at_high_accuracy():
     assert any("false met" in f for f in result["bar_failures"])
 
 
+def test_the_eval_scores_on_the_engines_bar_and_a_not_met_case_at_it_is_a_false_met():
+    """The eval has no bar of its own: 0.75 is met there as on the server, so a not-met case Jev puts at 0.75 fails it."""
+    from backend import pipeline_judges as P
+
+    assert (run.MET_AT, run.NOT_MET_AT) == (P.MET_AT, P.NOT_MET_AT) == (0.75, 0.2)
+    assert run.verdict(0.75) == P.verdict_of(0.75) == "met" and run.verdict(0.74) == P.verdict_of(0.74) == "unsure"
+    cases = _synthetic(10, expected="not_met")
+    result = run.score("at-the-bar", lambda case: (0.75 if case["id"] == "c0" else 0.05, 0.0, 5), cases)
+    assert result["false_met"] == 1 and not result["passes_bar"]
+
+
 def test_the_bar_p95_gate_is_under_thirty_seconds():
     cases = _synthetic(10)
     answers = {c["id"]: "met" for c in cases}
