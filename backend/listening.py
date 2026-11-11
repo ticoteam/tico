@@ -64,6 +64,7 @@ KEEP_DAYS = 30
 SEARCH_DUE_HOURS = 24
 PAGE_DUE_HOURS = 24
 PAGES_PER_PASS = 10
+PASS_SECONDS = 20  # of page reads and model calls in one pass, across every listening: the tick waits on the pass
 OVERDUE_DAYS = 2  # a source not read for this long shows hollow
 STALLED_MINUTES = 30  # a post waiting unscored this long shows the listening hollow
 PUSH_PER_MINUTE = 60
@@ -75,6 +76,7 @@ DEFAULT_AT = "08:00"
 
 # The Page source's reader: `backend.market_watch.read`, or a test's own.
 READER = None
+CLOCK = time.monotonic  # the pass's clock, replaced in tests
 _PUSHES = {}  # source id -> the times of its last calls, for PUSH_PER_MINUTE
 _PUSH_LOCK = threading.Lock()
 
@@ -445,7 +447,13 @@ def _reader(settings):
     return market_watch.read
 
 
-def read_pages(store, aid, now):
+def _budget(seconds=PASS_SECONDS):
+    """A pass's time for page reads and model calls: a call that answers whether any is left."""
+    end = CLOCK() + seconds
+    return lambda: CLOCK() < end
+
+
+def read_pages(store, aid, now, left=None):
     """The server reads each Page source once a day. The first read is what later ones are compared with; after it, a
     page that changed enough (the market watch's measure) saves one item: its title the first changed line, its text
     what was added and removed."""
@@ -464,6 +472,8 @@ def read_pages(store, aid, now):
             )
         ]
     for row in due:
+        if left and not left():  # the pass's time is used up: the page is still due at the next
+            return
         result = reader(row["target"])
         items, text = [], None
         if result.get("status") == "ok":
@@ -589,10 +599,11 @@ def _decided(c, item_id, now, status, tag, value, cost, claimed=None):
     )
 
 
-def score(store, row, flow, now, primary=None):
+def score(store, row, flow, now, primary=None, left=None):
     """Claim up to MAX_SCORE `new` items, newest first, then for each, outside any transaction: a near copy of an
     earlier item is marked so; the rest are asked of the decision model, every rule in one call. With decisions off
-    or a spend cap reached nothing is claimed and the items stay `new`."""
+    or a spend cap reached nothing is claimed and the items stay `new`. When the pass's time is used up (`left`) the
+    claims still held are released, for the next pass."""
     from .judge import audit_detail, server_engine
 
     aid, rules = row["id"], flow["trigger"].get("rules") or []
@@ -678,6 +689,10 @@ def score(store, row, flow, now, primary=None):
                 _decided(c, item["id"], now, "kept", "", 1.0, 0.0, claimed=now)
             out["scored"] += 1
             continue
+        if left and not left():
+            release(ordered[place:])
+            out["cut"] = True
+            break
         try:
             state = _state(item, sources.get(item["source_id"]))
             J.validate(state, questions, label)
@@ -880,7 +895,9 @@ def send(store, aid, at, now):
 
 def run_pass(store, at=None, primary=None):
     """One pass over every listening that is on: read its pages, mark copies, score, expire, send. Each listening's
-    failure is its own; the others still run."""
+    failure is its own; the others still run. Reading and scoring share PASS_SECONDS, so the tick is never held long;
+    the listening whose unscored post has waited longest goes first, so a busy one cannot keep the others waiting.
+    Expire and send run for every listening whatever time is left: they make no outside call and must be on time."""
     at = at or datetime.now(timezone.utc)
     now = _iso(at)
     with store.read() as c:
@@ -889,21 +906,28 @@ def run_pass(store, at=None, primary=None):
         rows = [
             dict(r)
             for r in c.execute(
-                "SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type='listening' "
-                "ORDER BY created_at"
+                "SELECT a.*, (SELECT min(i.created_at) FROM listening_items i WHERE i.automation_id=a.id "
+                "AND i.status='new') AS waiting_since FROM automations a WHERE a.deleted_at IS NULL AND a.enabled=1 "
+                "AND a.trigger_type='listening' ORDER BY waiting_since IS NULL, waiting_since, a.created_at"
             )
         ]
+    left = _budget()
+    for row in rows:
+        if not left():
+            break
+        try:
+            read_pages(store, row["id"], now, left)
+            exact_copies(store, row["id"], now)
+            score(store, row, json.loads(row["flow"]), now, primary, left)
+        except Exception:
+            log.exception("listening pass failed for %s", row["id"])
     for row in rows:
         try:
-            flow = json.loads(row["flow"])
-            read_pages(store, row["id"], now)
-            exact_copies(store, row["id"], now)
-            score(store, row, flow, now, primary)
             with store.transaction() as c:
                 expire(c, row["id"], now)
             send(store, row["id"], at, now)
         except Exception:
-            log.exception("listening pass failed for %s", row["id"])
+            log.exception("listening send failed for %s", row["id"])
 
 
 def prune(c, now=None):

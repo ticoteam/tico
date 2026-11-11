@@ -39,6 +39,28 @@ def _tables(conn):
     return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
+def _without_find(node):
+    """Take every Find step reading `listening` out of `node`, at any depth (a path's steps, `otherwise`); True when
+    one was there."""
+    found = False
+    if isinstance(node, list):
+        for child in node:
+            found = _without_find(child) or found
+    elif isinstance(node, dict):
+        for key, child in node.items():
+            if key == "steps" and isinstance(child, list):
+                kept = [
+                    s
+                    for s in child
+                    if not (isinstance(s, dict) and s.get("type") == "find" and s.get("source") == "listening")
+                ]
+                if len(kept) != len(child):
+                    child[:] = kept
+                    found = True
+            found = _without_find(child) or found
+    return found
+
+
 def _old_automations(conn):
     """Delete each automation on the old trigger; take the listening Find out of the others and turn them off."""
     rows = conn.execute("SELECT id, trigger_type, flow FROM automations").fetchall()
@@ -53,14 +75,7 @@ def _old_automations(conn):
                 conn.execute(f"DELETE FROM {table} WHERE automation_id=?", (aid,))
             conn.execute("DELETE FROM automations WHERE id=?", (aid,))
             continue
-        steps = flow.get("steps") if isinstance(flow, dict) else None
-        if not isinstance(steps, list):
-            continue
-        kept = [
-            s for s in steps if not (isinstance(s, dict) and s.get("type") == "find" and s.get("source") == "listening")
-        ]
-        if len(kept) != len(steps):
-            flow["steps"] = kept
+        if isinstance(flow, dict) and _without_find(flow):
             if "enabled" in flow:
                 flow["enabled"] = False
             conn.execute("UPDATE automations SET flow=?, enabled=0 WHERE id=?", (json.dumps(flow), aid))

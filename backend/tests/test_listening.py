@@ -195,6 +195,29 @@ def test_with_decisions_off_posts_stay_new_show_hollow_and_expire_in_a_week(api,
     assert statuses(api, aid) == {"expired": 1}
 
 
+def test_a_pass_out_of_time_releases_its_claims_still_sends_and_the_next_pass_scores_them(api, monkeypatch):
+    clock = {"now": 0.0, "step": 6.0}
+    monkeypatch.setattr(L, "CLOCK", lambda: clock["now"])
+    judge = FakeJudge()
+
+    def slow(state, questions, label=None):
+        clock["now"] += clock["step"]
+        return judge(state, questions, label)
+
+    busy, source = started(api, rules=[KEEP])
+    other, other_source = started(api, rules=[KEEP])
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(10)], when=at(0.2))
+    saved(api, other_source, [item(1, f"{story(1)} [r0]")], when=at(0.1))  # waiting longest, so it goes first
+    run(api, at(0.6), slow)  # after the send time; the fourth call uses up the 20 seconds
+    assert statuses(api, other) == {"sent": 1}
+    assert statuses(api, busy) == {"sent": 3, "new": 7} and len(judge.calls) == 4
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE claimed_at IS NOT NULL")[0]["n"] == 0
+    assert [r["listening"]["count"] for r in runs(api, busy)] == [3]
+    clock["step"] = 0.0
+    run(api, at(0.7), slow)
+    assert statuses(api, busy) == {"sent": 3, "kept": 7} and len(judge.calls) == 11
+
+
 def test_two_passes_at_once_score_no_post_twice(api):
     aid, source = started(api, rules=[KEEP])
     saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(5)])
@@ -299,6 +322,16 @@ def test_paths_by_tag_run_one_thread_per_tag_and_the_rest_on_otherwise(api):
     done = runs(api, aid)
     assert len(done) == 1 and done[0]["status"] == "ok"
     assert notes(done[0]) == ["leads: 2", "rest: news"]
+
+
+def test_run_now_with_nothing_sent_ends_with_no_thread(api):
+    for by in ("tag", "item"):
+        steps = [{"id": "split", "type": "paths", "by": by, "paths": [path("leads")], "otherwise": {"steps": []}}]
+        aid, _ = started(api, rules=[KEEP], steps=steps)
+        post(api, f"automations/{aid}/run", {})
+        api.app.state.store.automations.drain()
+        done = runs(api, aid)
+        assert len(done) == 1 and done[0]["status"] == "empty" and notes(done[0]) == []
 
 
 def test_paths_by_item_run_one_thread_per_item(api):
@@ -423,10 +456,13 @@ def test_the_migration_drops_the_old_tables_and_the_automations_on_the_old_model
     for table in ("automation_versions", "automation_runs", "automation_daily", "automation_holds"):
         conn.execute(f"CREATE TABLE {table} (automation_id TEXT)")
     find = {"id": "f", "type": "find", "source": "listening"}
+    inner = {"id": "p", "type": "paths", "paths": [{"name": "b", "steps": [find]}], "otherwise": {"steps": [find]}}
+    fork = {"id": "k", "type": "paths", "paths": [{"name": "a", "steps": [inner, NOTE]}], "otherwise": {"steps": []}}
     flows = {
         "old": ("listening", {"trigger": {"type": "listening", "destination": "leads"}, "steps": [NOTE]}),
         "finds": ("schedule", {"trigger": {"type": "schedule"}, "steps": [find, NOTE], "enabled": True}),
         "plain": ("schedule", {"trigger": {"type": "schedule"}, "steps": [NOTE], "enabled": True}),
+        "nested": ("schedule", {"trigger": {"type": "schedule"}, "steps": [NOTE, fork], "enabled": True}),
     }
     for aid, (kind, flow) in flows.items():
         conn.execute("INSERT INTO automations VALUES (?,?,?,1)", (aid, kind, json.dumps(flow)))
@@ -436,6 +472,11 @@ def test_the_migration_drops_the_old_tables_and_the_automations_on_the_old_model
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert not tables & set(old) and {"listening_sources", "listening_items"} <= tables
     rows = {r[0]: (json.loads(r[1]), r[2]) for r in conn.execute("SELECT id, flow, enabled FROM automations")}
-    assert set(rows) == {"finds", "plain"} and conn.execute("SELECT count(*) FROM automation_runs").fetchone()[0] == 0
+    assert (
+        set(rows) == {"finds", "plain", "nested"}
+        and conn.execute("SELECT count(*) FROM automation_runs").fetchone()[0] == 0
+    )
     assert rows["finds"][0]["steps"] == [NOTE] and rows["finds"][0]["enabled"] is False and rows["finds"][1] == 0
     assert rows["plain"] == (flows["plain"][1], 1)
+    assert '"find"' not in json.dumps(rows["nested"][0]) and rows["nested"][1] == 0
+    assert rows["nested"][0]["steps"][1]["paths"][0]["steps"][1] == NOTE
