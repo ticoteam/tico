@@ -606,16 +606,13 @@ def run(args, who=None):
         return actor if value in ("me", "self") else value
 
     def tool(client, args):
-        """The goal, strategy and brand commands run the MCP tool of the same name, so both say the same thing."""
+        """The market spend commands run the MCP tool of the same name, so both say the same thing."""
         from clients import hubtools
 
         fields = {
             k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn", "json") and v is not None
         }
         fields["operation_id"] = key
-        if args.fn == "brand check":
-            file = fields.pop("file")
-            fields["text"] = sys.stdin.read() if file == "-" else Path(file).read_text()
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
     def refs(values):
@@ -831,14 +828,6 @@ def run(args, who=None):
             except UnicodeDecodeError:
                 body["content_base64"] = base64.b64encode(data).decode("ascii")
             return post(f"tasks/{args.id}/files", body)
-    if cmd == "goal":
-        if sub in ("create", "update"):
-            args.parent_id = args.parent
-            if args.body_file:
-                args.body = Path(args.body_file).read_text()
-        return tool(client, args)
-    if cmd in ("strategy", "brand"):
-        return tool(client, args)
     if fn.startswith("market watch "):
         return via_tool(client, args)
     if fn == "market briefing latest":
@@ -1613,14 +1602,6 @@ def growth_text(fn, result):
     return "\n".join(_plain(result)) or "Nothing yet."
 
 
-def strategy_section_text(result, key):
-    """One section of the published strategy as text, for `tico strategy show --section`."""
-    current = result.get("current") if isinstance(result, dict) else None
-    if not current:
-        return "Nothing published yet."
-    return (current.get("sections") or {}).get(key) or ""
-
-
 def _entity_line(row):
     """One entity in a list: its id, name and status, and the link keys it has to us (customer_of ...)."""
     keys = " ".join(row.get("links_to_us") or [])
@@ -1688,12 +1669,8 @@ def main(args, who=None, fields=None):
             print(integrations_text(result))
         elif args.fn == "tool show" and not args.json:
             print(integration_text(result))
-        elif args.fn == "strategy show" and getattr(args, "section", None) and not args.json:
-            print(strategy_section_text(result, args.section))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
-        elif args.cmd == "brand" and not getattr(args, "json", False):
-            print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])
         elif args.fn == "meeting read" and getattr(args, "notes", False):

@@ -28,6 +28,7 @@ from clients import hubcli, hubtools
 from clients.tico import APIError, Client
 
 HERE = Path(__file__).parent / "cli_fixtures"
+REPO = str(Path(__file__).resolve().parents[2])  # printed as <repo>: a path in an error is the checkout's own
 RECORD = os.environ.get("TICO_CLI_FIXTURES_RECORD") == "1"
 ROOT_HELP = hubcli.parser().description
 
@@ -47,6 +48,10 @@ _MAIL = {
 }
 _FILE = {"name": "statement.pdf", "type": "application/pdf", "size": 2048}
 _CHANNEL = {"slug": "google-search", "name": "Google search", "stage": "testing", "track": "performance"}
+_GOAL = {"id": "g1", "title": "Launch", "status": "green", "owner": "bot:ana", "kpis": []}
+_GOAL_CALLS = (("GET", ""), ("POST", ""), ("POST", "/status"))
+_CHECKIN = {"id": "c1", "goal_id": "g1", "text": "On track", "author": "bot:ana"}
+_SIZE = {"id": "s1", "segment": "smb", "method": "top_down", "low": 2.5, "high": 4.0, "status": "proposed"}
 ANSWERS = {
     "GET triggers": {"triggers": [_TRIGGER]},
     "POST triggers": {"trigger": _TRIGGER | {"url": "https://tico.example/hooks/stripe"}},
@@ -96,6 +101,29 @@ ANSWERS = {
         "total": {"name": "total", "spend": 900, "new_customers": 3, "cac": 300},
     },
     "GET growth/kpis": {"kpis": [{"id": "k1", "name": "Bookings", "role": "north_star"}]},
+    "GET goals": {"goals": [_GOAL]},
+    "POST goals": {"goal": _GOAL},
+    **{f"{verb} goals/{id}{tail}": {"goal": _GOAL} for id in ("id-1", "1") for verb, tail in _GOAL_CALLS},
+    **{f"POST goals/{id}/checkins": {"checkin": _CHECKIN} for id in ("id-1", "1")},
+    "POST market/sizes": {"size": _SIZE},
+    **{f"POST market/sizes/{id}/{d}": {"size": _SIZE} for id in ("id-1", "1") for d in ("accept", "reject")},
+    "GET market/spend": {
+        "year": 2026,
+        "total": {"spend_usd": 3e9, "low_usd": 2.5e9, "high_usd": 4e9},
+        "segments": [
+            {"id": "all", "name": "Office software", "depth": 0, "size": None, "estimates": []},
+            {
+                "id": "smb",
+                "name": "Small offices",
+                "depth": 1,
+                "estimates": [_SIZE],
+                "disagree": True,
+                "size": _SIZE | {"spend_usd": 3e9, "low_usd": 2.5e9, "high_usd": 4e9, "confidence": "medium"},
+            },
+        ],
+    },
+    "POST market/figures": {"figure": {"id": "f1", "entity": "acme", "segment": "smb", "value": 2.5}},
+    "PUT strategy/draft": {"draft": {"version": 3, "summary": "Win small offices first"}},
 }
 
 
@@ -146,6 +174,7 @@ def run_line(argv, monkeypatch):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("HUB_API_URL", "http://127.0.0.1:9")
     monkeypatch.setenv("HUB_TOKEN", "fixture-token")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Plain words, no hype.\n"))  # what `-` reads (`brand check -`)
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
@@ -158,8 +187,8 @@ def run_line(argv, monkeypatch):
         "argv": list(argv),
         "tools": tools,
         "http": http,
-        "stdout": out.getvalue(),
-        "stderr": portable(err.getvalue()),
+        "stdout": out.getvalue().replace(REPO, "<repo>"),
+        "stderr": portable(err.getvalue()).replace(REPO, "<repo>"),
         "exit": code,
     }
 

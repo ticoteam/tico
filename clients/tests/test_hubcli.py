@@ -1978,7 +1978,10 @@ def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_publish
     remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
     assert capsys.readouterr().out == "- Motion: self serve\n"
     remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how", "--json"]))
-    assert json.loads(capsys.readouterr().out) == published
+    assert json.loads(capsys.readouterr().out) == {
+        "section": "how",
+        "text": "- Motion: self serve",
+    }  # the tool's answer
     published["current"] = None
     remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
     assert capsys.readouterr().out == "Nothing published yet.\n"

@@ -185,6 +185,8 @@ def argument_value(action, command):
         return '{"project": "acme-smoke"}'
     if action.metavar == "FILE" and action.type is not None:
         return "JSONFILE"  # a flag whose type reads the file as it parses (`--items-file`)
+    if str(action.metavar).lower() == "file":
+        return "FILE"  # a file that becomes another property (`brand check <file>` is the tool's `text`)
     if dest in (
         "id",
         "task",
