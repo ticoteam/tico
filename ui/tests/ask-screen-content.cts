@@ -7,7 +7,8 @@ import type {Route} from 'playwright';
 // - a stage's OK (no grant) is off while its page loads, on once it is shown, and off when its page does not load;
 // - a support report's OK shows the message and the version and install ID that go with it, off until they are read;
 // - an OK of a message shows every other field its content has too;
-// - a page requirement's OK reads the page at its pinned version; Approve is off until it is shown, then sends that version.
+// - a page requirement's OK reads the page at its pinned version; Approve is off until it is shown, then sends that page;
+//   a refresh that brings another version does not approve it: the new one is read and shown, and needs a new click.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -49,6 +50,7 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
       page: {file_id: 'pf', version: 2, ref: 'page:pf@2'}}},
   ];
   const proof = gate(), page1 = gate(), compose = gate(), specPage = gate();
+  let needsVersion = String(needs.length);
   const writes: {p: string; body: Record<string, unknown>}[] = [];
   const pdf = '%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[]/Count 0>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n';
   const pg = (id: string, title: string) => ({id, title, body: `${title} body.`, kind: 'doc', owner_id: 'bot:pm', updated_at: '2026-11-09T10:00:00Z'});
@@ -67,7 +69,7 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
       if (p === '/api/employees') return json([]);
       if (p === '/api/humans' || p === '/api/people') return json({people: [{id: 'ana', name: 'Ana'}], teams: {}});
       if (p === '/api/v2/pipelines') return json({pipelines: [pipeline]});
-      if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: String(needs.length), next: null});
+      if (p === '/api/v2/needs-you') return json({actor: 'human:ana', count: needs.length, items: needs, version: needsVersion, next: null});
       // Letters: the grant's content is the letter's terms; the proof is read from the letter's own preview.
       if (p === '/api/v2/oks/r1') return json({requirement_id: 'r1', subject: 'letter:L1', content: {letter_id: 'L1', approval_hash: 'h'}, shown_hash: 'd'.repeat(64), standing: 'waiting', task_id: 't-r1'});
       if (p === '/api/v2/oks/r2') return json({requirement_id: 'r2', subject: 'letter:L2', content: {letter_id: 'L2', approval_hash: 'h'}, shown_hash: 'd'.repeat(64), standing: 'waiting', task_id: 't-r2'});
@@ -85,9 +87,10 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
       if (p === '/api/v2/oks/r7') return json({requirement_id: 'r7', subject: 'hq_reply:x', content: {subject: 'Re: refund', body: 'We refunded it.', to: 'jo@acme.example'}, shown_hash: '2'.repeat(64), standing: 'waiting', task_id: 't-r7'});
       if (p === '/api/v2/oks/r8') return json({error: 'not_found'}, 404);
       if (p === '/api/v2/files/pf') {
-        assert.equal(url.searchParams.get('v'), '2', 'the page is read at the version the OK is for');
+        const v = url.searchParams.get('v');
+        assert.ok(v === '2' || v === '3', 'the page is read at the version the OK is for');
         await specPage.p;
-        return route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="spec.html"'}, body: '<h1>Importer spec</h1>'});
+        return route.fulfill({contentType: 'text/html', headers: {'content-disposition': 'inline; filename="spec.html"'}, body: `<h1>Importer spec v${v}</h1>`});
       }
       if (r.method() === 'POST' && p.startsWith('/api/v2/')) {
         writes.push({p, body: JSON.parse(r.postData() || '{}') as Record<string, unknown>});
@@ -179,10 +182,22 @@ const gate = () => { let open!: () => void; const p = new Promise<void>(r => { o
     assert.equal(await approve.isDisabled(), true, 'Approve waits for the page at its version');
     specPage.open();
     await dialog.locator('iframe.dc-page').waitFor();
-    assert.match(await dialog.locator('iframe.dc-page').getAttribute('srcdoc') ?? '', /Importer spec/);
+    assert.match(await dialog.locator('iframe.dc-page').getAttribute('srcdoc') ?? '', /Importer spec v2/);
+    await dialog.locator('[data-dc="approve"]:not([disabled])').waitFor();
+    // The bot attaches version 3 and the list is read again: the screen still shows version 2, so Approve sends nothing
+    // and reads version 3 instead.
+    const r8 = needs.at(-1)!;
+    r8.ask = {...r8.ask, shows: ['page:pf@3'], page: {file_id: 'pf', version: 3, ref: 'page:pf@3'}};
+    needsVersion = 'v3';
+    await page.evaluate(() => (window as unknown as {v2Refresh: () => Promise<void>}).v2Refresh());
+    await page.waitForTimeout(300);
+    await dialog.locator('[data-dc="approve"]:not([disabled])').click();
+    await dialog.getByText('It changed. Look again.').waitFor();
+    await dialog.locator('iframe.dc-page[title="Version 3"]').waitFor();
+    assert.equal(writes.some(w => w.p === '/api/v2/tasks/t-r8/asks/r8/answer'), false, 'version 3 was never on screen when Approve was clicked');
     await dialog.locator('[data-dc="approve"]:not([disabled])').click();
     for (let i = 0; i < 50 && !writes.some(w => w.p === '/api/v2/tasks/t-r8/asks/r8/answer'); i++) await page.waitForTimeout(100);
-    assert.deepEqual(writes.find(w => w.p === '/api/v2/tasks/t-r8/asks/r8/answer')?.body, {value: 'ok', page_version: 2, version: 3});
+    assert.deepEqual(writes.find(w => w.p === '/api/v2/tasks/t-r8/asks/r8/answer')?.body, {value: 'ok', page_version: 'pf@3', version: 3});
 
     assert.deepEqual(errors, []);
     console.log('PASS: Approve waits for the letter proof, the file version, the stage pages and a page at its version; what does not load leaves it off.');

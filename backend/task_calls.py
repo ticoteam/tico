@@ -402,10 +402,10 @@ def task_answer(
     seen_version: int | str | None = None,
     *,
     own_click: bool = False,
-    page_version: int | str | None = None,
+    page_version: str | None = None,
 ) -> Row:
     """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; `ok` or `no` on a
-    page, for the version shown (`page_version`); the choice or the text on a question; `done` on the owner's own
+    page, for the page shown (`page_version`, `<file id>@<version>`); the choice or the text on a question; `done` on the owner's own
     work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
     request is the person's own click in their own session (task_asks.own_click): only that OKs an OK the person
     asked themself."""

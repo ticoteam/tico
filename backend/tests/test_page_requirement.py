@@ -211,7 +211,7 @@ def test_after_jev_passes_the_named_person_oks_that_exact_version(c, store):
         A.answer(c, row["id"], rid, BEN, "ok")  # asked of Ana
     with _refused("task_why"):
         A.answer(c, row["id"], rid, ANA, "no")
-    sent = A.answer(c, row["id"], rid, ANA, "no", "Say how errors show", page_version=1)
+    sent = A.answer(c, row["id"], rid, ANA, "no", "Say how errors show", page_version=f"{fid}@1")
     assert sent["stage"]["name"] == "Spec"
     assert _standing(c, row).line == "Sent back: Say how errors show"
     assert H._one(c, "SELECT page_version FROM answers WHERE id=?", (sent["answer_id"],))["page_version"] == 1
@@ -221,8 +221,22 @@ def test_after_jev_passes_the_named_person_oks_that_exact_version(c, store):
     _say(c, second, "met")
     assert _standing(c, row).line == "OK Ana (version 2)", "the send back was for version 1"
     with _refused("task_changed"):
-        A.answer(c, row["id"], rid, ANA, "ok", page_version=1)  # she was shown version 1
-    done = A.answer(c, row["id"], rid, ANA, "ok", page_version=2)
+        A.answer(c, row["id"], rid, ANA, "ok", page_version=f"{fid}@1")  # she was shown version 1
+    done = A.answer(c, row["id"], rid, ANA, "ok", page_version=f"{fid}@2")
+    assert done["stage"]["name"] == "Done"
+
+
+def test_an_ok_of_one_page_does_not_approve_another_page_at_the_same_version(c, store):
+    rid = _pipeline(c, person=ANA)
+    row = _task(c)
+    shown, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + shown), "met")
+    other, _ = _page(c, store, "<p>Another spec</p>")  # page B, also at version 1, replaces page A
+    _say(c, _attach(c, row, "page:" + other), "met")
+    with _refused("task_changed"):
+        A.answer(c, row["id"], rid, ANA, "ok", page_version=f"{shown}@1")  # she was shown page A
+    assert E.task(c, row["id"])["stage"]["name"] == "Spec"
+    done = A.answer(c, row["id"], rid, ANA, "ok", page_version=f"{other}@1")
     assert done["stage"]["name"] == "Done"
 
 
@@ -485,13 +499,19 @@ def test_the_route_attaches_a_readable_page_and_the_task_read_shows_it(api):
         _say(conn, P.current(conn, row["visit"]["id"], rid), "met")
     stale = api.post(
         f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
-        json={"value": "ok", "page_version": 2},
+        json={"value": "ok", "page_version": f"{fid}@2"},
         headers=headers("ana-test"),
     )
     assert stale.status_code == 409, stale.text
-    ok = api.post(
+    bare = api.post(
         f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
         json={"value": "ok", "page_version": 1},
+        headers=headers("ana-test"),
+    )
+    assert bare.status_code == 422, "a version without its file says nothing about which page was shown"
+    ok = api.post(
+        f"/api/v2/tasks/{row['id']}/asks/{rid}/answer",
+        json={"value": "ok", "page_version": f"{fid}@1"},
         headers=headers("ana-test"),
     )
     assert ok.status_code == 200, ok.text
