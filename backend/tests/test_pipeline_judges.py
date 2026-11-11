@@ -75,13 +75,13 @@ def test_the_bands_decide_met_not_met_or_unsure(tmp_path):
     assert verdict(0.8) == "met" and verdict(0.95) == "met"
     assert verdict(0.2) == "not_met" and verdict(0.01) == "not_met"
     assert verdict(0.5) == "unsure" and verdict(0.79) == "unsure" and verdict(0.21) == "unsure"
-    assert verdict(float("nan")) == "unsure"  # an answer with no probability is unsure, not a pass
+    assert verdict(float("nan")) == "failed"  # an answer with no probability is a judge failure, not a pass
 
 
-def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path, monkeypatch):
+def test_a_failed_model_call_is_failed_and_no_engine_means_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(
         P, "_installed_store", None
-    )  # no installed app: no production engine, so no engine means unsure
+    )  # no installed app: no production engine, so no engine means the call fails
     path = tmp_path / "hub.sqlite"
     copy_booted(path)
     c = hub(path)
@@ -90,11 +90,16 @@ def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path, monk
     def broken(model, state, questions, label):
         raise J.JudgeError("unavailable", "the model did not answer")
 
-    assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=broken)["verdict"] == "unsure"
-    assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=None)["verdict"] == "unsure"
+    def crashed(model, state, questions, label):
+        raise KeyError("answers")  # not a JudgeError: still a failure of the call, never an unsure
+
+    for engine in (broken, None, crashed):
+        result = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=engine)
+        assert (result["verdict"], result["p"], result["failed"]) == ("failed", None, True)
+        assert result["reason"], "a failure says what went wrong"
 
 
-def test_the_spend_cap_stops_the_call_and_the_answer_is_unsure(tmp_path, monkeypatch):
+def test_the_spend_cap_stops_the_call_and_the_call_is_failed(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
     copy_booted(path)
     c = hub(path)
@@ -107,7 +112,7 @@ def test_the_spend_cap_stops_the_call_and_the_answer_is_unsure(tmp_path, monkeyp
 
     result = P.judge_once(c, REQ, ATTACHMENT, settings=_settings(path), engine=ask)
 
-    assert result["verdict"] == "unsure" and called == []
+    assert result["verdict"] == "failed" and "spend cap" in result["reason"] and called == []
 
 
 def test_every_pipeline_is_judged_by_jev_whatever_it_stored(tmp_path):
@@ -351,6 +356,23 @@ def test_a_met_on_a_cut_spec_is_unsure_and_a_not_met_stays_not_met(tmp_path):
     assert P.judge_once(c, REQ, long, settings=settings, engine=_engine(0.05))["verdict"] == "not_met"
     whole = _work_fields(task_spec="x" * P.SPEC_CHARS)
     assert P.judge_once(c, REQ, whole, settings=settings, engine=_engine(0.95))["verdict"] == "met"
+
+
+def test_every_verdict_carries_a_reason_even_when_the_model_gives_none(tmp_path):
+    """Jev answers a probability, never prose: Tico says the band, p and the check, so no verdict is a bare word."""
+    path = tmp_path / "hub.sqlite"
+    copy_booted(path)
+    c = hub(path)
+    settings = _settings(path)
+    said = {}
+    for p in (0.95, 0.5, 0.05):
+        result = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(p, reason=""))
+        said[result["verdict"]] = result["reason"]
+    assert set(said) == {"met", "unsure", "not_met"}
+    assert all(REQ["rubric"] in reason for reason in said.values()), said
+    assert "could not tell" in said["unsure"] and "p 0.50" in said["unsure"]
+    kept = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.5, reason="No scope line"))
+    assert kept["reason"] == "No scope line", "a model's own reason is kept"
 
 
 def test_the_question_set_says_a_missing_author_is_unknown_and_a_cut_spec_is_flagged():

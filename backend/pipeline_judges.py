@@ -2,8 +2,11 @@
 """How Jev judges a piece of evidence against a requirement: one attachment, one rubric, one model, one probability.
 
 `judge_once` is the seam. It asks a model for p, the probability the attachment meets the rubric, and the bands decide:
-p >= 0.8 is met, p <= 0.2 is not met, anything between is unsure. An unsure answer, a failed call, an unknown model and a
-call over the team's Decide cap are all unsure, and nothing unsure passes work.
+p >= 0.8 is met, p <= 0.2 is not met, anything between is unsure. Every verdict carries a reason: Jev answers a
+probability and no prose, so the reason is Tico's own words for the band and the rubric (`reason_for`). A call that
+did not give an answer (an error, a timeout, an answer that cannot be read, no model, the team's Decide cap) is not a
+verdict at all: it is `failed`, with what went wrong as its reason, and the caller retries it (page_verdicts). Nothing
+unsure or failed passes work.
 
 The judge model is Jev alone: Decide Low (`tico-decide-low`), by Chris's decision on Nov 9. No pipeline picks another
 model. Jev goes through judge.server_engine, so its spend counts against the team's Decide cap.
@@ -57,7 +60,7 @@ CANNOT_SEE = "Tico could not read all of this evidence, so a person decides."
 # What a person sees when the judge said met on a spec it was shown only the start of: the rest may hold what is missing.
 SPEC_CUT = "The judge saw only the start of this work's spec, so a person decides."
 # The engine a test or a harness may set: (model, state, questions, label) -> {p, reason, provider, model, cost_usd,
-# latency_ms}. None, with no installed store, asks no one, so every answer is unsure until a caller sets one.
+# latency_ms}. None, with no installed store, asks no one, so every call fails until a caller sets one.
 ENGINE: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None
 # The store the server installed (install): judge_once asks the production engine on it when no engine is given.
 _installed_store: Any = None
@@ -75,6 +78,17 @@ def verdict_of(p: float) -> str:
     if p <= NOT_MET_AT:
         return "not_met"
     return "unsure"
+
+
+def reason_for(verdict: str, p: float, rubric: str) -> str:
+    """What a verdict says when the model gave no reason (Jev never does): the band, Jev's probability and the check it
+    was asked, so a person or the bot that wrote the page can see what was judged. Never empty."""
+    check = " ".join(str(rubric or "").split()) or "the requirement"
+    if verdict == "met":
+        return f"Jev found it meets the check (p {p:.2f}): {check}"
+    if verdict == "not_met":
+        return f"Jev found it does not meet the check (p {p:.2f}): {check}"
+    return f"Jev could not tell whether it meets the check (p {p:.2f}, between 0.2 and 0.8): {check}"
 
 
 def _probability(value: object) -> float | None:
@@ -171,7 +185,7 @@ def _questions() -> dict[str, Any]:
 
 def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None":
     """The engine a judge call uses when none is given: ENGINE when a test or harness set it, else the production engine on
-    the installed store, else None (every answer is unsure)."""
+    the installed store, else None (every call fails)."""
     if ENGINE is not None:
         return ENGINE
     return live_engine(_installed_store) if _installed_store is not None else None
@@ -226,12 +240,11 @@ def judge_once(
 ) -> dict[str, Any]:
     """Judge one attachment against one requirement's rubric with one model.
 
-    Returns {"verdict": "met" | "not_met" | "unsure", "p": float, "model", "cost_usd", "latency_ms", "provider",
-    "reason", "requirement_id", "attachment_id"}, and `failed: True` when the call itself failed. The model is Jev
-    (judge_model_of).
-    `engine` (or the module's ENGINE) makes the call; with neither, every answer is unsure. An attachment with no id is no
-    evidence: it is not met with p 0 and no model is asked. A failed call, an unreadable answer, or a call over the team's
-    Decide cap (checked when `settings` is given) is unsure with p 0.5, never a pass.
+    Returns {"verdict": "met" | "not_met" | "unsure" | "failed", "p": float | None, "model", "cost_usd", "latency_ms",
+    "provider", "reason", "requirement_id", "attachment_id"}; the reason is never empty. The model is Jev
+    (judge_model_of). `engine` (or the module's ENGINE) makes the call; with neither, the call fails. An attachment with
+    no id is no evidence: it is not met with p 0 and no model is asked. A failed call, an unreadable answer, or a call
+    over the team's Decide cap (checked when `settings` is given) is `failed` (and `failed: True`), p None, never a pass.
     The caller's `c` is a read; no write transaction is held during the model call."""
     chosen = judge_model_of(c, requirement.get("pipeline_id"))
     base = _base(requirement, attachment, chosen)
@@ -244,9 +257,10 @@ def judge_once(
 
 
 def _failed(base: dict[str, Any], why: str) -> dict[str, Any]:
-    """The call itself failed (no model, an error, an unreadable answer, over the Decide cap): unsure with p 0.5, never a
-    pass, and `failed` so a caller that retries (page_verdicts) can tell it from a model that was unsure."""
-    return {**base, "verdict": "unsure", "p": 0.5, "reason": why, "failed": True}
+    """The call itself failed (no model, an error, an unreadable answer, over the Decide cap): a judge failure, never a
+    verdict and never a pass, with what went wrong as its reason, so a caller retries it (page_verdicts) and a person who
+    sees it is told it was Jev that failed, not the page."""
+    return {**base, "verdict": "failed", "p": None, "reason": why or "The judge call failed", "failed": True}
 
 
 def judge_outside(
@@ -290,11 +304,17 @@ def _ask(
         result = ask(chosen, state, _questions(), QUESTION_SET)
     except JudgeError as exc:
         return _failed(base, judge.FAILED.get(J.error_code(exc), exc.detail))
+    except Exception as exc:  # noqa: BLE001 - any other error in the call is a judge failure, retried, never a verdict
+        LOG.warning("The judge call failed: %s", type(exc).__name__)
+        return _failed(base, "The judge call failed")
     p = _probability(result.get("p"))
     if p is None:
         return _failed(base, "The judge's answer could not be read")
     verdict = verdict_of(p)
-    reason = " ".join(str(result.get("reason") or "").split())[:REASON_BYTES]
+    said = " ".join(str(result.get("reason") or "").split())
+    reason = (said or reason_for(verdict, p, str(requirement.get("rubric") or requirement.get("name") or "")))[
+        :REASON_BYTES
+    ]
     if _cannot_see(attachment, state):
         # Enforced here, not only in the prompt: a model that says met on text it was not all shown is still unsure.
         # The call was made and is paid for, so its cost and latency are kept.

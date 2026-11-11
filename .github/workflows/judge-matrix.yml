@@ -11,6 +11,10 @@ on:
         description: Comma-separated models (jev is the only judge model)
         type: string
         default: jev
+      only:
+        description: Case ids to run, comma-separated (acme-* is a prefix); empty runs every case
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -25,11 +29,13 @@ jobs:
     timeout-minutes: 30
     env:
       MODELS: ${{ inputs.models }}
+      ONLY: ${{ inputs.only }}
       PYTHONUNBUFFERED: '1'
     steps:
       - name: Check the inputs
         run: |
           [[ "$MODELS" =~ ^[a-z0-9.-]+(,[a-z0-9.-]+)*$ ]] || { echo "::error::models must be a comma-separated list of names"; exit 1; }
+          [[ -z "$ONLY" || "$ONLY" =~ ^[a-z0-9*-]+(,[a-z0-9*-]+)*$ ]] || { echo "::error::only must be a comma-separated list of case ids"; exit 1; }
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
@@ -45,13 +51,13 @@ jobs:
           bash scripts/ci_install.sh python
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Check the harness (no calls)
-        run: python -m evals.pipeline_judge.run --models "$MODELS" --dry-run --out "$RUNNER_TEMP/judge-dry"
+        run: python -m evals.pipeline_judge.run --models "$MODELS" --dry-run --out "$RUNNER_TEMP/judge-dry" ${ONLY:+--only "$ONLY"}
       - name: Run the matrix
         env:
           TICO_GATEWAY_KEY: ${{ secrets.TICO_GATEWAY_KEY }}
         run: |
           mkdir -p "$RUNNER_TEMP/judge"
-          python -m evals.pipeline_judge.run --models "$MODELS" --out "$RUNNER_TEMP/judge"
+          python -m evals.pipeline_judge.run --models "$MODELS" --out "$RUNNER_TEMP/judge" ${ONLY:+--only "$ONLY"}
       - name: Summary
         if: always()
         run: cat "$RUNNER_TEMP"/judge/*.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || echo "No report was written." >> "$GITHUB_STEP_SUMMARY"

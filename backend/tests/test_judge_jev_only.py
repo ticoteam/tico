@@ -77,14 +77,14 @@ def test_jev_failing_on_the_decisions_route_is_a_503_and_no_answer(api, wire):
     assert detail["error"] == "unavailable" and "answers" not in detail
 
 
-def test_jev_failing_leaves_a_pipeline_requirement_unsure_never_met(api, wire):
+def test_jev_failing_leaves_a_pipeline_requirement_failed_never_met(api, wire):
     store = api.app.state.store
     requirement = {"id": "req-1", "name": "Shows the page live", "rubric": "The link opens", "pipeline_id": None}
     attachment = {"id": "att-1", "source": "link", "digest": "d", "url": "https://x.example", "file_version": 0}
     attachment["text"] = "The link opens the page"
     with store.read() as c:
         result = P.judge_once(c, requirement, attachment, settings=store.settings, engine=P.live_engine(store))
-    assert result["verdict"] == "unsure" and result["p"] == 0.5
+    assert result["verdict"] == "failed" and result["p"] is None and result["reason"]
     assert wire["requests"]
     _jev_only(wire["requests"])
 
@@ -185,5 +185,5 @@ def test_jev_failing_on_a_page_verdict_is_retried_then_a_persons_never_met(api, 
     _jev_only(wire["requests"])
     with store.read() as r:
         (standing,) = R.standings(r, E.task(r, row["id"]))
-        assert standing.line == "Jev couldn't check this"
+        assert standing.line == "Jev couldn't check this: The decision model did not answer; try again shortly"
         assert E.task(r, row["id"])["stage"]["name"] == "Spec"

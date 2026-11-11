@@ -165,19 +165,48 @@ def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
         if version
         else (None, False)
     )
+    links = conn.execute(
+        "SELECT repo, number, detail FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
+        "AND number IS NOT NULL ORDER BY created_at, id",
+        (page["task_id"],),
+    ).fetchall()
+    return job_of(
+        {**requirement, "name": R.name_of(requirement)},
+        task,
+        {"file_id": row["file_id"], "version": row["version"], "digest": (version or {}).get("digest") or ""},
+        text,
+        cut,
+        judged,
+        # The work's repo, PR and PR author, as an attachment is judged with (pipeline_judges.pr_work), when the task
+        # links one PR. With more, each PR and its newest commit are in the context's `heads`.
+        {"repo": links[0][0], "number": links[0][1], "detail": links[0][2]} if len(links) == 1 else None,
+    )
+
+
+def job_of(
+    requirement: Row, task: Row, page: Row, text: str | None, cut: bool, judged: Row, link: Row | None = None
+) -> tuple[Row, Row]:
+    """`_job` with nothing read: the requirement (its id and name), the task (title, body, version, pipeline), the page
+    (file_id, version, digest), its text and whether it was cut, what it is judged against (`judged_against`: the
+    rubric and the context), and the task's PR link (repo, number, detail) when it links one. The eval
+    (evals/pipeline_judge) builds its page cases through this, so the judge is shown there exactly what it is shown
+    here."""
+    from . import pipeline_judges as PJ
+
     pipeline: Row = task.get("pipeline") or {}
     asked: Row = {
         "id": requirement["id"],
-        "name": R.name_of(requirement),
-        "rubric": judged.get("rubric") or R.name_of(requirement),
+        "name": requirement.get("name") or "",
+        "rubric": judged.get("rubric") or requirement.get("name") or "",
         "goal": pipeline.get("goal") or "",
         "pipeline_id": task.get("pipeline_id"),
     }
+    ref = f"page:{page['file_id']}@{page['version']}"
     attachment: Row = {
-        "id": f"page:{row['file_id']}@{row['version']}",
-        "source": f"page:{row['file_id']}@{row['version']}",
-        "file_version": int(row["version"]),
-        "digest": (version or {}).get("digest") or "",
+        "id": ref,
+        "source": ref,
+        "file_version": int(page["version"]),
+        "digest": page.get("digest") or "",
         "text": text,
         "truncated": cut,
         "task_title": task.get("title") or "",
@@ -188,6 +217,7 @@ def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
         # with every edit and says nothing about this page, so a page is never out of date by it.
         "older_evidence_ok": True,
         "context": judged.get("context") or {},
+        **(PJ.pr_work(link) if link else {}),
     }
     return asked, attachment
 
