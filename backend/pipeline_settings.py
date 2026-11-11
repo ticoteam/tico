@@ -284,9 +284,7 @@ PRESETS["product"] = {
             "Validate",
             "Check it in production and attach a Checked in production page that names the version production runs.",
             1440,
-            [
-                _page("Checked in production", VALIDATE_RUBRIC, with_release=True)
-            ],
+            [_page("Checked in production", VALIDATE_RUBRIC, with_release=True)],
         ),
     ],
     "done": {"id": "product-done"},
