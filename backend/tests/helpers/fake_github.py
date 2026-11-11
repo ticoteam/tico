@@ -3,8 +3,10 @@
 It holds PRs, the checks on each commit, a linear main history per repo (a merge appends its commit) and the published
 releases. Calls are recorded in `calls`. `fail_next(call, reason)` makes the next call of that name raise with the
 reason, as a GitHub error would. As on GitHub, enqueue refuses a draft and a PR the base branch's rules refuse
-(`rule`). The rig (evals/never_stuck/fake_github.py) builds its faults on top: lost, late,
-repeated and reordered webhooks, and queue drops.
+(`rule`), and, on a repo whose ruleset requires Tico's `tico/merge-ok` check (`require_merge_ok`), a PR whose head has
+no successful one: what a bot's own `gh pr merge` meets. `group` makes a merge group and its `merge_group` webhook.
+The rig (evals/never_stuck/fake_github.py) builds its faults on top: lost, late, repeated and reordered webhooks, and
+queue drops.
 """
 
 import itertools
@@ -22,6 +24,10 @@ class FakeGitHub:
         self.history = {}  # repo -> [sha, ...], oldest first: what main contains
         self.published = {}  # repo -> [{tag, commit_sha, prerelease, published_at}], newest first
         self.calls = []
+        self.merge_ok_required = set()  # repos whose ruleset requires tico/merge-ok
+        self.merge_ok = {}  # (repo, sha) -> [(ok, summary)] Tico posted, oldest first; the newest one counts
+        self.checks_write = True  # the App has Checks: write; without it post_check posts nothing
+        self.groups = {}  # (repo, merge group head sha) -> [PR numbers], first in the queue first
         self._fail = {}
         self._shas = (f"{n:040x}" for n in itertools.count(1))
 
@@ -99,6 +105,30 @@ class FakeGitHub:
         `reason` until `rule(repo, number, None)` lifts it."""
         self.prs[(repo, number)]["rule"] = reason
 
+    def require_merge_ok(self, repo):
+        """The repo's ruleset requires `tico/merge-ok` from the company's App."""
+        self.merge_ok_required.add(repo)
+
+    def merge_ok_on(self, repo, sha):
+        """The newest `tico/merge-ok` on a commit: True (success), False (failure) or None (none posted)."""
+        posted = self.merge_ok.get((repo, sha))
+        return posted[-1][0] if posted else None
+
+    def group(self, repo, *numbers):
+        """GitHub builds a merge group of the PRs (first in the queue first) and asks for its checks: the
+        `merge_group` `checks_requested` webhook's payload."""
+        head = self.sha()
+        self.groups[(repo, head)] = list(numbers)
+        return {
+            "action": "checks_requested",
+            "merge_group": {
+                "head_sha": head,
+                "head_ref": f"refs/heads/gh-readonly-queue/main/pr-{numbers[-1]}-{head}",
+                "base_ref": "refs/heads/main",
+            },
+            "repository": {"full_name": repo},
+        }
+
     def fail_next(self, call, reason="GitHub is unavailable"):
         self._fail[call] = reason
 
@@ -146,6 +176,8 @@ class FakeGitHub:
             return {"ok": False, "how": None, "reason": "Pull request is in draft state"}
         if pr.get("rule"):
             return {"ok": False, "how": None, "reason": pr["rule"]}
+        if repo in self.merge_ok_required and not self.merge_ok_on(repo, head_sha):
+            return {"ok": False, "how": None, "reason": 'Required status check "tico/merge-ok" is expected.'}
         pr["queue_state"] = "queued" if self.queue else "auto_merge"
         pr.update(removed_reason=None, failing_check=None, failing_check_url=None)
         return {"ok": True, "how": pr["queue_state"], "reason": ""}
@@ -159,3 +191,15 @@ class FakeGitHub:
             return {"ok": True, "how": "absent", "reason": ""}
         pr.update(queue_state="none", removed_reason=None, failing_check=None, failing_check_url=None)
         return {"ok": True, "how": "dequeued", "reason": ""}
+
+    def post_check(self, repo, sha, ok, summary):
+        self._call("post_check", repo, sha, ok)
+        if not self.checks_write:
+            return False
+        self.merge_ok.setdefault((repo, sha), []).append((bool(ok), summary))
+        return True
+
+    def merge_group_prs(self, repo, base_ref, head_sha):
+        self._call("merge_group_prs", repo, head_sha)
+        numbers = self.groups.get((repo, head_sha), [])
+        return [{"number": n, "head_sha": self.prs[(repo, n)]["head_sha"]} for n in numbers]

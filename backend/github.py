@@ -279,6 +279,8 @@ def register_worktree_pr(c, pr):
     app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     if not app or str(app["org"] or "").lower() != match.group(1).lower():
         return set()
+    from .item_sources import github as GS
+
     made = set()
     for row in H._rows(
         c.execute(
@@ -289,7 +291,7 @@ def register_worktree_pr(c, pr):
         if not c.execute(
             "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
             (row["task_id"], repo.lower(), int(match.group(3))),
-        ).fetchone():
+        ).fetchone() and not GS.queues_now(c, row["task_id"]):  # in Merge only a person links a new PR
             link = H.task_link(c, H.KEEPER, row["task_id"], url)
             made.add(link["id"])
             H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
@@ -1945,6 +1947,8 @@ def install_github(app, settings, store):
             app.state.github_app.live.pop("workflows-refused", None)
             queue_sync(app.state.github_app, refresh=True)
             return {"ok": True}
+        if event == "merge_group":
+            return merge_group(headers, payload)
         with store.transaction() as c:
             from .item_sources import github as GS
 
@@ -1976,6 +1980,17 @@ def install_github(app, settings, store):
                 return Response(status_code=204)
         return {"ok": True, **result, **({"metadata": metadata} if metadata else {})}
 
+    def merge_group(headers, payload):
+        """GitHub's merge queue asks for the checks on a group's merge commit: `tico/merge-ok` is answered there at
+        once (item_sources/github.py `answer_merge_group`), with no transaction held during GitHub's calls."""
+        from .item_sources import github as GS
+
+        with store.transaction() as c:
+            if GS.seen_delivery(c, headers.get("x-github-delivery"), "merge_group"):
+                return {"ok": True, "repeat": True}
+        answer = GS.answer_merge_group(store, AppGitHub(app.state.github_app), payload)
+        return {"ok": True, "merge_ok": answer.get("ok"), "posted": answer.get("posted")}
+
 
 # ----------------------------------------------------------------------------- the engine's GitHub (item_sources.github.GitHub)
 FACT_READ = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
@@ -1994,6 +2009,8 @@ mergePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head,mergeMethod:$met
 FACT_READY = """mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"""
 FACT_DEQUEUE = """mutation($id:ID!){dequeuePullRequest(input:{id:$id}){clientMutationId}}"""
 FACT_AUTO_OFF = """mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}"""
+MERGE_GROUP_READ = """query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){
+mergeQueue(branch:$branch){entries(first:100){nodes{position headCommit{oid} pullRequest{number headRefOid}}}}}}"""
 WRITE_PERMISSIONS = {"contents": "write", "pull_requests": "write", "metadata": "read"}
 FAILED_JOBS = ("failure", "timed_out", "startup_failure", "cancelled")
 
@@ -2225,6 +2242,58 @@ class AppGitHub:
         )
         _, errors = self._graphql(repo, WRITE_PERMISSIONS, FACT_MERGE, {**ids, "method": method})
         return {"ok": not errors, "how": "merged" if not errors else None, "reason": errors}
+
+    def post_check(self, repo, sha, ok, summary):
+        """Tico's `tico/merge-ok` check run on `sha`, completed as success or failure (a new run each time: GitHub
+        counts the newest run of a name). Minted with the server's own Checks: write token (`mint_checks`), which no
+        bot's token carries. False when the installation has no Checks: write (nothing posted: the check is only extra
+        where a ruleset does not require it, and GitHub refuses the merge where one does)."""
+        from .item_sources import github as GS
+
+        permissions = self.service.live_permissions()
+        if permissions is None:
+            raise GitHubRefused("GitHub did not say whether the App may post checks")
+        token = self.service.mint_checks(repo) if permissions.get("checks") == "write" else None
+        if not token:
+            return False
+        response = self.service._call(
+            "POST",
+            f"/repos/{quote(repo, safe='/')}/check-runs",
+            headers={"Authorization": "Bearer " + token},
+            json={
+                "name": GS.MERGE_OK,
+                "head_sha": sha,
+                "status": "completed",
+                "conclusion": "success" if ok else "failure",
+                "output": {"title": "Signed off in Tico" if ok else "Not queued by Tico", "summary": summary[:500]},
+            },
+        )
+        if response.status_code not in (200, 201):
+            raise GitHubRefused(f"GitHub answered HTTP {response.status_code} to {GS.MERGE_OK}")
+        return True
+
+    def merge_group_prs(self, repo, base_ref, head_sha):
+        branch = str(base_ref or "").removeprefix("refs/heads/")
+        owner, name = repo.split("/", 1)
+        data, errors = self._graphql(
+            repo,
+            {"contents": "read", "pull_requests": "read", "metadata": "read"},
+            MERGE_GROUP_READ,
+            {"owner": owner, "name": name, "branch": branch},
+        )
+        if errors:
+            raise GitHubRefused(errors)
+        queue = (data.get("repository") or {}).get("mergeQueue") or {}
+        entries = sorted(
+            ((queue.get("entries") or {}).get("nodes") or []), key=lambda e: int((e or {}).get("position") or 0)
+        )
+        out = []
+        for entry in entries:
+            pull = (entry or {}).get("pullRequest") or {}
+            out.append({"number": int(pull.get("number") or 0), "head_sha": str(pull.get("headRefOid") or "").lower()})
+            if str(((entry or {}).get("headCommit") or {}).get("oid") or "").lower() == head_sha.lower():
+                return out  # the group: this entry and every one ahead of it
+        return []
 
     def dequeue(self, repo, number):
         _, found = self._pull(repo, number, WRITE_PERMISSIONS)

@@ -130,6 +130,14 @@ class RigGitHub:
             self._pr_hook(repo, number)
         return out
 
+    def post_check(self, repo: str, sha: str, ok: bool, summary: str) -> bool:
+        self._up("post_check")
+        return self.gh.post_check(repo, sha, ok, summary)
+
+    def merge_group_prs(self, repo: str, base_ref: str, head_sha: str) -> list[dict[str, Any]]:
+        self._up("merge_group_prs")
+        return self.gh.merge_group_prs(repo, base_ref, head_sha)
+
     def dequeue(self, repo: str, number: int) -> dict[str, Any]:
         self._up("dequeue")
         out = self.gh.dequeue(repo, number)

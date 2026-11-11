@@ -551,6 +551,41 @@ def write_tokens(token):
     }
 
 
+def test_no_turn_token_ever_writes_checks_statuses_or_settings(api, gh):
+    """tico/merge-ok is the server's: a bot whose token could write checks or commit statuses could pass it itself. With
+    every opt-in ticked and an installation that has all of them as Read and write, no token a turn gets asks for one,
+    and asking `mint_turn` for one is refused before GitHub is asked."""
+    flagged_grants(api, gh)
+    gh.permissions = {
+        name: 'write' for name in ('actions', 'workflows', 'checks', 'statuses', 'administration', 'deployments')
+    }
+    service = api.app_state.github_app
+    service.live.clear()
+    service.cache.clear()
+    asked = len(gh.of('/access_tokens'))
+    for purpose in ('turn', 'git'):
+        assert turn_token(api, purpose=purpose).status_code == 200
+    minted = [r[2]['permissions'] for r in gh.of('/access_tokens')[asked:]]
+    assert minted and any(p.get('workflows') == 'write' and p.get('actions') == 'write' for p in minted)
+    for permissions in minted:
+        assert {name: level for name, level in permissions.items() if level != 'read'}.keys() <= {
+            'contents',
+            'pull_requests',
+            'issues',
+            'actions',
+            'workflows',
+        }, permissions
+    asked = len(gh.of('/access_tokens'))
+    for name in github_app.TURN_NEVER_WRITE:
+        with pytest.raises(github_app.Problem) as refused:
+            service.mint_turn(['emp-cpo'], {**github_app.TURN_PERMISSIONS, name: 'write'})
+        assert refused.value.code == 'github_turn_permissions'
+    with pytest.raises(github_app.Problem) as empty:  # a token naming no permission would get every one the App has
+        service.mint(['emp-cpo'], {})
+    assert empty.value.code == 'github_app_permissions'
+    assert len(gh.of('/access_tokens')) == asked
+
+
 def test_edit_workflows_gets_workflows_write_only_on_a_flagged_grant_the_installation_accepts(api, gh):
     data = flagged_grants(api, gh)
     refused = api.put(

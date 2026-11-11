@@ -570,6 +570,18 @@ def enter(
 
 
 # ----------------------------------------------------------------------------- move
+def short_of_queue(work: Sequence[Row], stage: Row | None) -> Row | None:
+    """Where a reopened or restored task lands instead of `stage`: the stage itself, or, when its on-enter action
+    queues the PRs to merge, the work stage before it, so what that stage needs (the person's OK) is asked again on a
+    new visit. Nothing that skips the stages before it lands in a stage that queues PRs."""
+    from .item_sources import github as GS
+
+    if not stage or not GS.queues_prs(stage):
+        return stage
+    at = next((i for i, s in enumerate(work) if s["id"] == stage["id"]), 0)
+    return work[at - 1] if at > 0 else stage
+
+
 def _target(conn: "sqlite3.Connection", by: str, row: Row, to: str) -> tuple[Row, str] | tuple[None, None]:
     """The stage `to` names for this task, and the kind of move it is: forward, back, done, closed or reopen. None
     when the task is already there."""
@@ -593,6 +605,7 @@ def _target(conn: "sqlite3.Connection", by: str, row: Row, to: str) -> tuple[Row
             (row["id"],),
         ).fetchone()
         target = next((s for s in work if before and s["id"] == before[0]), None) or (work[0] if work else None)
+        target = short_of_queue(work, target)
     else:
         target = next((s for s in order if s["id"] == to), None)
         target = target or next((s for s in order if s["name"].lower() == str(to).strip().lower()), None)
@@ -720,6 +733,26 @@ def _push_past(
     return pushed
 
 
+def _may_go_back_to(conn: "sqlite3.Connection", by: str, row: Row, target: Row, kind: str) -> None:
+    """Only a person moves a task back into a stage that queues its PRs (from a later stage, where a new PR may have
+    been linked). Anyone else moves it back to the stage before that one, where what it needs is asked again."""
+    if kind != "back" or is_human(by):
+        return
+    work = [s for s in stages(conn, row["pipeline_id"]) if s["kind"] == "work"]
+    short = short_of_queue(work, target)
+    if short and short["id"] != target["id"]:
+        _refuse(
+            conn,
+            by,
+            "task_stage",
+            f"Only a person moves a task back into {target['name']}. Move it back to {short['name']} instead.",
+            row["id"],
+            row=row,
+            then=("back", "ask"),
+            version=row.get("version"),
+        )
+
+
 def _may_close(conn: "sqlite3.Connection", by: str, row: Row) -> None:
     """A bot can't close a person's request by itself (C8): a task a person asked for that no task filed. It asks the
     person why it can't be done, and they close it or reassign it. A person closes anything; a bot closes what a bot
@@ -799,6 +832,7 @@ def move(
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)
     else:
         _need_why(conn, by, why, "close it" if kind == "closed" else "move it back", task_id)
+        _may_go_back_to(conn, by, row, target, kind)
     if kind == "closed" and not cascade:
         _may_close(conn, by, row)
     # Why its sub-tasks close, kept on each: their readers may not read a private task that filed them, so it is not named.
@@ -1294,7 +1328,7 @@ def _restore_stage(conn: "sqlite3.Connection", by: str, row: Row, work: Sequence
     """Where an open task comes back (`restore`): the work stage it was in, while it is still in the pipeline, has
     room and may take it, else the first one if that may. Refused when a private task may go into neither."""
     first = work[0] if work else None
-    saved = next((s for s in work if s["id"] == was), None)
+    saved = short_of_queue(work, next((s for s in work if s["id"] == was), None))
     held: Row | None = None
     for stage in (saved, first):
         if not stage or (stage is saved and stage is not first and not has_room(conn, stage)):

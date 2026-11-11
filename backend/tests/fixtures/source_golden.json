@@ -2342,7 +2342,7 @@
     "state": "done",
     "tries": 1,
     "ref": "acme/app#1",
-    "head": null,
+    "head": "sha1",
     "error": null
    }
   ],
@@ -5778,7 +5778,7 @@
     "state": "done",
     "tries": 1,
     "ref": "acme/app#1",
-    "head": null,
+    "head": "sha1",
     "error": null
    }
   ],
@@ -7267,7 +7267,7 @@
     "state": "done",
     "tries": 1,
     "ref": "acme/app#1",
-    "head": null,
+    "head": "sha1",
     "error": null
    },
    {
@@ -7433,7 +7433,7 @@
     "state": "done",
     "tries": 1,
     "ref": "acme/app#1",
-    "head": null,
+    "head": "sha1",
     "error": null
    }
   ],

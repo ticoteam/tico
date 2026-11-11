@@ -15,7 +15,8 @@ changes; bots keep using whatever git access their computer already has.
 | Metadata | read | required by GitHub for every app |
 | Actions | read (read and write to run workflows) | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. With read alone it cannot start, rerun or cancel them; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
 | Workflows | none (read and write to edit workflow files) | not in the manifest. Add it only for a bot that must create or change `.github/workflows` files; see [Letting a bot edit workflow files](#letting-a-bot-edit-workflow-files) |
-| Checks, Commit statuses | read | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. It cannot create, rerun or change them |
+| Checks | read and write | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. Write is the server's alone: Tico posts its `tico/merge-ok` check with it ([Require Tico's merge check](#require-ticos-merge-check)). No bot's run token carries Checks or Commit statuses write, whatever its grant |
+| Commit statuses | read | a bot reads a pull request's commit statuses. It cannot create or change them |
 | Deployments | read | a bot reads deployments, such as a pull request's preview link, in any repository it can read. It cannot create or change them |
 | Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
 
@@ -283,6 +284,43 @@ runs use the shared App and this command submits COMMENT with the same exact-hea
 can remain cached in an active run; end those runs before verifying the rollback. Builder credentials and
 existing repository grants keep their normal behavior.
 
+## Require Tico's merge check
+
+When a task's Merge stage queues a pull request, the Tico server first posts a check run named `tico/merge-ok` as
+success on exactly the commit it queues. Taking the PR out (the task is sent back or closed) turns it to failure on
+that commit. When the merge queue builds a group, Tico answers on the group's commit too: success only when the Merge
+stage queued every PR in the group at its current head, failure otherwise, and failure when it cannot read the group.
+A repository ruleset that requires this check stops any bot (or person) from merging or queuing a PR around the Merge
+stage, its reviews and the person's OK: GitHub refuses the merge or the queue until Tico has posted success on that
+commit.
+
+What it means: Tico's Merge stage queued this PR at this commit, after the sign-off. It does not mean every commit was
+reviewed: a commit pushed after the person's OK still merges once green when the stage owner queues it again (C22 in
+[Pipelines v3](pipelines-v3.md)), and the check is posted on that new commit then. A commit pushed later has no check
+until the owner queues it again.
+
+What it needs on the App:
+
+- **Checks: Read and write.** New Apps ask for it. An App made before asks the Owner to accept the change: on the App's
+  GitHub settings page (**Permissions & events → Repository permissions**) set **Checks** to **Read and write**, then
+  accept the updated permissions on the installation. Until then nothing is posted; a repository that requires the
+  check refuses every queue, and the owner of each task in Merge is told with GitHub's reason.
+- **The Merge group event.** New Apps subscribe to it. For an older App, check **Merge group** under **Subscribe to
+  events**. Without it Tico never hears that a group needs its checks: on a repository that requires the check, each
+  group waits until the merge queue's check timeout and is then removed, and each task's owner hears of the removal.
+
+The ruleset an organization administrator adds on the product repository (after the App has Checks write and the
+Merge group event, and after Tico has posted one `tico/merge-ok` there):
+
+- Target the default branch (`refs/heads/main`), `enforcement: active`, no bypass actors.
+- **Require status checks to pass** with one required check: context `tico/merge-ok`, **integration_id** set to the
+  company App's id (the **App ID** on the App's GitHub settings page). In the REST API this is a
+  `required_status_checks` rule with `required_status_checks: [{"context": "tico/merge-ok", "integration_id": <app
+  id>}]`. Keep the repository's other required checks and rules.
+- Pin the App. Without the integration id, any workflow run with the repository's `GITHUB_TOKEN` (Checks write as
+  `github-actions`) could post a check of the same name and pass it.
+- Keep the merge queue on, so the group's commit is checked as well as each PR's.
+
 ## Bot repository access
 
 Tick the team's repositories in Settings → General → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
@@ -509,7 +547,7 @@ app from its settings page.
 New GitHub Apps include the task events and read permissions automatically. For an existing
 App, enable webhook events for Pull requests, Pull request reviews,
 Pull request review comments, Check runs, Check suites, Workflow runs and Commit statuses, plus Push for
-deploy tracking. Release events are not used. The webhook remains `POST /api/v2/github/webhook` with signature verification.
+deploy tracking and Merge group for [Tico's merge check](#require-ticos-merge-check). Release events are not used. The webhook remains `POST /api/v2/github/webhook` with signature verification.
 Checks need read access to Checks and commit statuses need read access to Commit statuses in
 the GitHub App. Existing installations without these events keep their last known PR states;
 opening a task refreshes reachable PRs, cached for three minutes.

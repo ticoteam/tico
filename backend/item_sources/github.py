@@ -89,6 +89,17 @@ class GitHub(Protocol):
         `merged` means GitHub merged it first ("PR merged anyway")."""
         ...
 
+    def post_check(self, repo: str, sha: str, ok: bool, summary: str) -> bool:
+        """Post Tico's `tico/merge-ok` check run on a commit: success or failure, with a one-line summary. Only the
+        server posts it, with its own Checks: write token that no bot's token carries. False when the App has no
+        Checks: write (nothing posted); raises when GitHub could not be asked or refused."""
+        ...
+
+    def merge_group_prs(self, repo: str, base_ref: str, head_sha: str) -> list[Row]:
+        """The PRs in the merge queue's group whose merge commit is `head_sha`: [{number, head_sha}], the group's own
+        entry and every one ahead of it; [] when GitHub names no such group."""
+        ...
+
 
 def version_now() -> int:
     """Metadata version for a read or webhook that begins now: the time in ms."""
@@ -729,8 +740,9 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
 #   Merge: nothing sends it back through Review; the merge queue's checks are the gate. The manager hears of the new
 #   commit once (`changed_after_ok`, C22).
-# - The task is closed or sent back while a PR is queued: `pull` owes the `undo` (`undo:github.queue:<visit>:<ref>`),
-#   carried out with `dequeuePullRequest` (auto-merge off). A PR GitHub merged first stays merged ("merged anyway" note to the
+# - The task is closed or sent back while a PR is queued: `pull` owes the `undo`
+#   (`undo:github.queue:<visit>:<ref>@<head sha>`), carried out with `dequeuePullRequest` (auto-merge off), and
+#   `tico/merge-ok` on that head turns to failure. A PR GitHub merged first stays merged ("merged anyway" note to the
 #   manager, keyed `<task>:<visit>:merged_anyway:<ref>`).
 # - History: `pr_queued` (asked again, and GitHub accepted), `pr_dequeued`, `pr_queue_removed`.
 #
@@ -760,6 +772,20 @@ def _engine() -> Any:
 def queues_prs(stage: Row | None) -> bool:
     """Whether a stage's on-enter action is "queue the PRs to merge" (`{"act": "github.queue"}`)."""
     return SA.act_of(stage) == (SOURCE, QUEUE)
+
+
+LINK_IN_MERGE = "Send the task back before linking another pull request."
+
+
+def queues_now(conn: "sqlite3.Connection", task_id: str) -> bool:
+    """Whether the open task is in a stage whose on-enter action queues its PRs. While it is, only a person links a
+    new PR to it (hubdb.task_link refuses anyone else with LINK_IN_MERGE): every PR the stage queues was signed off on
+    the stages before it, or by the person who linked it."""
+    found = conn.execute(
+        "SELECT s.on_enter FROM tasks t JOIN stages s ON s.id = t.stage_id WHERE t.id=? AND t.status='open'",
+        (task_id,),
+    ).fetchone()
+    return bool(found) and queues_prs({"on_enter": found[0]})
 
 
 def entered(conn: "sqlite3.Connection", task: Row, by: str, action: str) -> list[Row]:
@@ -997,19 +1023,40 @@ def _pr_of(effect: Row) -> tuple[str, int]:
 
 
 def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
-    """Someone else queued the PR (or GitHub merged it) before Tico's owed `queue` ran: it is done, with no call."""
+    """GitHub merged the PR before Tico's owed `queue` ran: it is done, with no call. One someone else queued (or set
+    to merge by itself) is still carried out, so `tico/merge-ok` is posted on its head and it does not wait forever on
+    a ruleset that requires the check (`enqueue` answers ok for a PR already queued)."""
     metadata = pr(conn, *_pr_of(effect))
-    return metadata is not None and (metadata["queue_state"] in QUEUED or metadata["state"] == "merged")
+    return metadata is not None and metadata["state"] == "merged"
+
+
+MERGE_OK = "tico/merge-ok"  # the check only the server posts (docs/pipelines-v3.md "GitHub": "tico/merge-ok")
+
+
+def merge_ok_line(effect: Row, ok: bool) -> str:
+    """The one-line summary of the check: the task by id only (a private task's title stays in Tico)."""
+    if ok:
+        return f"Queued by Tico's Merge stage for task {effect.get('task_id')}, after its sign-off."
+    return f"Taken out by Tico: task {effect.get('task_id')} left the Merge stage."
 
 
 def carry_out(github: "GitHub", effect: Row) -> Row:
-    """GitHub's call for one action, no transaction held: queue the PR at its pinned head, or take it out."""
+    """GitHub's call for one action, no transaction held: queue the PR at its pinned head, or take it out.
+
+    Queueing posts `tico/merge-ok` = success on exactly the pinned head first, the one `enqueue` is about to queue;
+    a post that fails raises, so nothing is queued and the call is tried again like any failed call (then the owner's,
+    `gave_up`). Taking it out posts failure on that head after the dequeue, so neither a bot nor GitHub queues it
+    again with Tico's success."""
     repo, number = _pr_of(effect)
+    head = str(effect.get("pinned") or "")
     if effect["kind"] == SA.ACT:
         github.ready(repo, number)  # a Builder's draft reaches Merge: GitHub queues no draft
-        said = github.enqueue(repo, number, str(effect["pinned"]))
+        github.post_check(repo, head, True, merge_ok_line(effect, True))
+        said = github.enqueue(repo, number, head)
     else:
         said = github.dequeue(repo, number)
+        if head:
+            github.post_check(repo, head, False, merge_ok_line(effect, False))
     return said if said.get("ok") or said.get("reason") else {**said, "reason": "GitHub said no"}
 
 
@@ -1082,6 +1129,59 @@ def _merged_anyway(conn: "sqlite3.Connection", task_id: str, visit_id: str, ref:
         wake_key=f"{task_id}:{visit_id}:{WAKE_MERGED_ANYWAY}:{ref}",
         quiet=True,
     )
+
+
+# ----------------------------------------------------------------------------- the merge queue's own commit
+def queued_by_tico(conn: "sqlite3.Connection", repo: str, number: int, head_sha: str) -> bool:
+    """Whether Tico's Merge stage queues the PR at exactly `head_sha`: a `queue` action at that head, done or still
+    owed (GitHub may ask for the group's checks before the enqueue's answer is recorded), in the open visit of an open
+    task, and not taken back."""
+    found = conn.execute(
+        "SELECT 1 FROM effects e JOIN visits v ON v.id = e.visit_id JOIN tasks t ON t.id = v.task_id "
+        "WHERE e.source=? AND e.action=? AND e.kind=? AND e.state IN ('owed','done') AND lower(e.item_key)=lower(?) "
+        "AND lower(e.pinned)=lower(?) AND v.left_at IS NULL AND t.status='open' AND NOT EXISTS (SELECT 1 FROM effects u "
+        "WHERE u.visit_id = e.visit_id AND u.source = e.source AND u.action = e.action AND u.kind=? "
+        "AND lower(u.item_key) = lower(e.item_key))",
+        (SOURCE, QUEUE, SA.ACT, pr_key(repo, number), head_sha, SA.UNDO),
+    ).fetchone()
+    return found is not None
+
+
+GROUP_READ_WAITS = (1.0, 2.0)  # seconds between reads of a group GitHub does not list yet (a webhook has 10)
+
+
+def answer_merge_group(store: Any, github: "GitHub", payload: Row) -> Row:
+    """GitHub's merge queue asks for the checks on a group's merge commit (`merge_group` `checks_requested`): post
+    `tico/merge-ok` there, success only when Tico queued every PR in the group at exactly its head now. Anything it
+    cannot read or decide is failure (closed). No transaction is held during GitHub's calls. Returns {ok, posted}."""
+    group = _obj(payload.get("merge_group"))
+    repo = str(_obj(payload.get("repository")).get("full_name") or "")
+    head = str(group.get("head_sha") or "")
+    if payload.get("action") != "checks_requested" or not repo or not head:
+        return {}
+    ok, line = False, "Tico could not read this merge group, so it can't say each PR was signed off."
+    try:
+        prs = github.merge_group_prs(repo, str(group.get("base_ref") or ""), head)
+        for wait in GROUP_READ_WAITS:  # GitHub may list the group's entry a moment after it asks
+            if prs:
+                break
+            time.sleep(wait)
+            prs = github.merge_group_prs(repo, str(group.get("base_ref") or ""), head)
+        with store.read() as conn:
+            others = [p for p in prs if not queued_by_tico(conn, repo, int(p["number"]), str(p.get("head_sha") or ""))]
+        if prs and not others:
+            ok, line = True, f"Tico's Merge stage queued every PR in this group: {len(prs)}."
+        elif prs:
+            refs = ", ".join(pr_ref(repo, int(p["number"])) for p in others)
+            line = f"Not queued by Tico's Merge stage at this commit: {refs}."
+    except Exception:  # noqa: BLE001 - fail closed: the group waits on a failure, never on a guess
+        LOG.warning("Reading the merge group %s of %s failed", head, repo, exc_info=True)
+    try:
+        posted = github.post_check(repo, head, ok, line)
+    except Exception:  # noqa: BLE001 - nothing posted: the queue times the group out, which removes it
+        LOG.warning("Posting %s on the merge group %s of %s failed", MERGE_OK, head, repo, exc_info=True)
+        posted = False
+    return {"ok": ok, "posted": posted}
 
 
 # ----------------------------------------------------------------------------- GitHub's four conditions
