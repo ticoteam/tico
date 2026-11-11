@@ -188,7 +188,6 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     }
     // Market.
     if (p === '/api/v2/listening/stats') return listening === 200 ? json(listeningStats()) : refuse(listening, 'forbidden', 'Not yours');
-    if (p === '/api/v2/listening/destinations') return json(fixture<ListeningFixture>('redesign-listening.json').destinations);
     if (p === '/api/v2/market/briefings/latest') return json(briefing ? fixture('redesign-briefing.json') : {briefing: null});
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
     if (p === '/api/v2/market/entities') return json(market ? mk.entities : {entities: [], total: 0});

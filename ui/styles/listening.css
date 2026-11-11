@@ -1,0 +1,73 @@
+/* ui/styles/listening.css — Listening (ui/app/listening.ts): the Automations page (automations.css) over the
+   listenings. Its list has a search and no filters; a listening's flow leads with Sources, Rules and Rate limits; a
+   send's run shows its counts beside what it sent.
+   The cascade runs in the order index.html links these files; keep rules in order. */
+
+/* the page: no filters, range or tabs; the search sits beside the + */
+.au-lst .au-body{grid-template-columns:minmax(0,1fr)}
+.au-lst.ed-open .au-body{grid-template-columns:minmax(0,1fr) var(--rail-right,340px)}
+.au-lst :is(.au-rail,.au-range,.au-fbtn,.au-ctl){display:none}
+.au-lst .au-ph .au-s{padding:0;width:240px}
+.au-lst .au-ph .au-q{width:100%}
+/* one listening open: the search and the + are the list's */
+.au-lst.au-one .au-ph :is(.au-s,.au-newbox){display:none}
+
+/* the list: a dot, the name, the limits, when it last sent */
+.lst-list{display:grid;padding:0 28px 48px}
+.lst-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto 64px;align-items:center;gap:12px;min-height:44px;padding:0 4px;border-bottom:1px solid var(--line);color:var(--ink);text-decoration:none}
+.lst-row:hover{background:var(--surface2)}
+.lst-nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lst-row.off .lst-nm{color:var(--muted)}
+.lst-lim,.lst-last{color:var(--muted);font-size:var(--t-sm);font-variant-numeric:tabular-nums;white-space:nowrap}
+.lst-last{text-align:right}
+/* a source that is blocked, failed, overdue or never read: the dot is hollow */
+.au-dot.lst-no{box-sizing:border-box;border:1.5px solid var(--g5);background:none}
+
+/* the flow's block */
+.lst-blk{display:grid;gap:12px}
+.lst-sec{display:grid;gap:2px;min-width:0}
+.lst-sec>.au-lb{margin-bottom:2px}
+.lst-r{display:flex;align-items:baseline;gap:8px;min-width:0;padding:3px 0;font-size:var(--t-base)}
+.lst-r>.au-dot{flex:none;align-self:center}
+.lst-site{flex:none;font-weight:600}
+.lst-tg,.lst-tx{flex:1;min-width:0;overflow-wrap:anywhere}
+.lst-tg,.lst-age{color:var(--muted)}
+.lst-age{flex:none;font-size:var(--t-sm);font-variant-numeric:tabular-nums}
+.lst-do{flex:none;width:36px;color:var(--muted);font-size:var(--t-sm)}
+.lst-r>.au-c1{flex:none}
+.lst-lk{flex:none;align-self:center;font-size:15px;width:36px;height:16px;color:var(--muted)}
+.lst-addr{display:flex;align-items:center;gap:6px;min-width:0;margin:2px 0 4px 18px;padding:2px 2px 2px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.lst-addr code{flex:1;min-width:0;overflow-wrap:anywhere;font-size:var(--t-sm)}
+
+/* the editor */
+.lst-dup{display:flex;align-items:center;gap:6px;color:var(--muted);border-style:dashed}
+.lst-dup .nav-icon{font-size:15px;width:16px;height:16px}
+.au-ir.lst-lr{white-space:nowrap}
+.au-ir.lst-lr>input{flex:0 0 64px}
+.lst-tags{margin-top:0}
+/* a path's conditions: the field on its own line, then the test and the value; an item has no confidence to set */
+.au-lst .au-ed [data-path-ed] .au-cond-row{grid-template-columns:88px minmax(0,1fr) auto}
+.au-lst .au-ed [data-path-ed] .au-cond-row>:first-child{grid-column:1/-1}
+.au-lst .au-ed [data-path-ed] .au-cond-row .au-pct{display:none}
+.lst-tags .au-c1{color:var(--ink);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.lst-tags .au-c1:hover{border-color:var(--g4)}
+
+/* a send's run: the counts, and what was sent */
+.lst-run{display:grid;grid-template-columns:minmax(180px,240px) minmax(0,1fr);gap:20px;padding:8px 0 4px}
+.lst-cnt{display:grid;align-content:start;gap:2px}
+.lst-cr{display:flex;justify-content:space-between;gap:12px;padding:2px 0;font-size:var(--t-sm)}
+.lst-cr .au-n{font-variant-numeric:tabular-nums}
+.lst-b{font-weight:600}
+.lst-sent{min-width:0}
+.lst-sent pre{margin:4px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);font:var(--t-sm)/1.5 var(--mono,ui-monospace,monospace);white-space:pre-wrap;overflow-wrap:anywhere}
+.lst-then{padding:6px 0 2px}
+
+@media (max-width:760px){
+  /* the header is the search and the + */
+  .au-lst .au-ph .au-hrow:first-child{display:none}
+  .au-lst .au-ph .au-s{flex:1;width:auto}
+  .lst-list{padding:0 12px 24px}
+  .lst-row{grid-template-columns:10px minmax(0,1fr) 48px;min-height:48px}
+  .lst-lim{display:none}
+  .lst-run{grid-template-columns:minmax(0,1fr);gap:10px}
+}

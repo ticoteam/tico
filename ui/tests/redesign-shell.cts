@@ -89,8 +89,6 @@ async function open(browser: import('playwright').Browser, {route = '#/updates',
     if (p === '/api/v2/goals/needs-you') return json({items: []});
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
-    if (p === '/api/v2/listening/destinations') return json({destinations: [{key: 'leads', category: 'leads', threshold: 0.75, receiver: 'bot:release', source: 'settings'}],
-      categories: [{id: 'leads', label: 'Leads'}], receivers: [{actor: 'bot:release', name: 'Release Owner'}]});
     if (p === '/api/v2/usage/limits') return json(fixture('redesign-usage-limits.json'));
     if (p === '/api/v2/task-caps') return method === 'GET' ? json(fixture('redesign-task-caps.json')) : json({ok: true});
     if (p.startsWith('/api/v2/usage/')) return json({ok: true});
@@ -157,7 +155,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       // The goals tree answers slowly: #/goals/g-1 is left before it arrives, as a person tapping on would.
       const {page, errors, goals} = await open(browser, {goalsDelay: 400});
       await page.locator('#tree li').first().waitFor();
-      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'rd-co', 'welcome', 'updates', 'tasks', 'automations', 'tools',
+      assert.deepEqual(await railKeys(page), ['side-update', 'overview', 'rd-co', 'welcome', 'updates', 'tasks', 'automations', 'listening', 'tools',
         'library', 'rd-lib', 'rules', 'rd-rules', 'nav-pins', 'threads',
         'side-section', 'nav-inboxes-section'], tag + ': the order');
       assert.equal(await page.getAttribute('a[data-nav="automations"]', 'href'), '#/automations', tag + ': Automations');
@@ -167,17 +165,20 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       assert.equal(await page.getAttribute('a[data-nav="strategy"]', 'href'), '#/strategy/market', tag + ': Strategy opens on Market');
       assert.deepEqual(await page.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), PHONE_BAR, tag + ': the phone bar is the mock\'s');
       for (const [from, to] of [['#/tasks/routines', '#/automations'], ['#/recurring', '#/automations'], ['#/goals', '#/strategy/goals'],
-        ['#/goals/g-1', '#/strategy/goals/g-1'], ['#/settings/listening', '#/strategy/market/listening']] as const) {
+        ['#/goals/g-1', '#/strategy/goals/g-1'], ['#/settings/listening', '#/listening'], ['#/strategy/market/listening', '#/listening']] as const) {
         await page.evaluate(h => { location.hash = h; }, from);
         assert.ok(await hashSoon(page, to), `${tag}: ${from} lands on ${to}`);
       }
-      await page.locator('[data-rdm-settings]').click();
-      await page.locator('[data-listen-dest="leads"]').waitFor();
-      // Every slow tree asked for has been read and acted on: the goal left behind must not open over Listening.
+      await page.locator('#au-root.au-lst').waitFor({state: 'attached'});
+      assert.equal(await page.locator('#side a[data-nav="listening"].cur').count(), 1, tag + ': Listening is current');
+      assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 0, tag + ': and Automations is not');
+      await page.evaluate(() => { location.hash = '#/strategy/market'; });
+      await page.locator('.mkt-pg #mkt-q-saying a[href="#/listening"]').waitFor();
+      // Every slow tree asked for has been read and acted on: the goal left behind must not open over Market.
       await page.waitForFunction(n => (window as unknown as {__treeRead: number}).__treeRead >= n, goals.asked);
-      assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/listening', tag + ': a goal left before it loaded keeps off the address');
+      assert.equal(await page.evaluate(() => location.hash), '#/strategy/market', tag + ': a goal left before it loaded keeps off the address');
       assert.equal(await page.locator('#goal-panel[open]').count(), 0, tag + ': and does not open');
-      assert.equal(await page.locator('.mkt-pg #mkt-q-saying').count(), 1, tag + ': Listening is a question on Market');
+      assert.equal(await page.locator('.mkt-pg #mkt-q-saying').count(), 1, tag + ': What are buyers saying? is a question on Market');
       await page.evaluate(() => { location.hash = '#/automations'; });
       await page.locator('#au-root, #automations-root').first().waitFor({state: 'attached'});
       assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 1, tag + ': Automations is current');
@@ -210,7 +211,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Company', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Tools', 'Library', 'Docs', 'Files', 'Skills', 'Meetings', 'Contacts', 'Rules'], tag + ': the rail, with no Strategy Owner entry');
+      assert.deepEqual(shown, ['Company', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Listening', 'Tools', 'Library', 'Docs', 'Files', 'Skills', 'Meetings', 'Contacts', 'Rules'], tag + ': the rail, with no Strategy Owner entry');
       assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0, tag + ': the Strategy Owner is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
@@ -231,14 +232,14 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       }, CAP_409.message);
       assert.ok(/refused ·\s*Ana takes 10 tasks a day from Engineering Lead and 10 are open\. Nothing was queued\./.test(chat), tag + ': the chat shows the refusal: ' + chat);
 
-      for (const [hash, tab] of [['#/strategy/market/listening', 'Market'], ['#/strategy', 'Strategy'], ['#/strategy/lenses', 'Strategy'], ['#/strategy/goals', 'Goals'], ['#/strategy/org', 'Org']] as const) {
+      for (const [hash, tab] of [['#/strategy/market', 'Market'], ['#/strategy', 'Strategy'], ['#/strategy/lenses', 'Strategy'], ['#/strategy/goals', 'Goals'], ['#/strategy/org', 'Org']] as const) {
         await page.evaluate(h => { location.hash = h; }, hash);
         await page.waitForFunction(t => document.querySelector('.strat-tabs a.cur')?.textContent === t, tab);
         assert.equal(await page.locator('#sbot').count(), 0, `${tag}: no Strategy Owner beside ${hash}`);
         if (hash === '#/strategy/goals') await shot(page, 'desktop-goals');
         if (hash === '#/strategy') await shot(page, 'desktop-strategy');
         if (hash === '#/strategy/org') await shot(page, 'desktop-org');
-        if (hash === '#/strategy/market/listening') await shot(page, 'desktop-listening');
+        if (hash === '#/strategy/market') await shot(page, 'desktop-market');
       }
       await page.evaluate(() => { location.hash = '#/tasks'; });
       // The roster fixture stores the old default name, which state.js shows as the Strategy Owner: it must not appear.

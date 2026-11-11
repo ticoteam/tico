@@ -147,7 +147,6 @@ a.rdm-row:hover{background:var(--surface2)}
 .rdm-d{max-width:120px;overflow:hidden;text-overflow:ellipsis}
 .rdm-row.hl{background:var(--surface2);box-shadow:inset 2px 0 0 var(--ink)}
 .rdm-none{margin:10px 0 4px}
-.rdm-set{margin-top:12px}
 @media (max-width:760px){
   .rdm-row{grid-template-columns:16px minmax(0,1fr) 30px;min-height:40px}
   .rdm-d{display:none}

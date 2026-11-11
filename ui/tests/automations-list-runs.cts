@@ -23,9 +23,9 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       const {page, errors, writes} = await openAutomations(browser, {viewport: PHONE});
       await page.waitForSelector('tr.au-row');
       assert.equal(await screen(page), 'list');
-      assert.deepEqual(await groups(page), ['message', 'task_received', 'webhook', 'listening']);
+      assert.deepEqual(await groups(page), ['message', 'task_received', 'webhook', 'event']);
       assert.equal(await page.locator('tr.au-row .au-sw').count(), 0, 'no switches in rows');
-      assert.match(await page.locator('tr.au-row[data-row="au_listen"]').innerText(), /Off/);
+      assert.match(await page.locator('tr.au-row[data-row="au_price"]').innerText(), /Off/);
       for (const h of await page.locator('tr.au-row').evaluateAll(r => r.map(x => x.getBoundingClientRect().height))) assert.ok(h < 50, 'a row is one line');
       // The table scrolls sideways in its own box; the page does not.
       assert.ok(await page.locator('.au-tbl').evaluate(b => b.scrollWidth > b.clientWidth));
@@ -221,15 +221,15 @@ const screen = (page: Page) => page.locator('#au-root').getAttribute('data-scree
       for (const fail of [false, true]) {
         const release = hold('au_deploy', fail);
         await page.evaluate(() => { location.hash = '#/automations/au_deploy'; });
-        await page.evaluate(() => { location.hash = '#/automations/au_listen'; });
+        await page.evaluate(() => { location.hash = '#/automations/au_price'; });
         await page.waitForSelector('.au-hd .au-name:text("Pricing mentions")');
         await page.waitForSelector('.au-card[data-open="n1"]');
         release();
         await page.waitForTimeout(300);
         assert.equal(await page.locator('.au-hd .au-name').innerText(), 'Pricing mentions');
-        assert.match(await page.locator('.au-trig').innerText(), /Listening match/);
+        assert.match(await page.locator('.au-trig').innerText(), /Urgent insight/);
         assert.equal(await page.locator('.au-pane .err').count(), 0);
-        assert.match(page.url(), /au_listen$/);
+        assert.match(page.url(), /au_price$/);
       }
 
       // A built-in: Delete is shown off; turning it off asks first, and a No leaves it on.
