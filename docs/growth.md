@@ -107,7 +107,8 @@ A marketing idea is a task in the General pipeline with a label that says where 
   follows.
 - **What a task needs.** A title, a channel and a body. There is no prediction, hypothesis, score or bet.
 
-A Growth pipeline with its own stages comes with the Product pipeline.
+Experiments have their own pipelines too: Growth Experiments (Ideas, Building, Running) and Growth Monitoring
+(Watching, Slipping), with Success's pair, in docs/pipelines-v3.md "Growth and Success".
 
 Bets are company claims and live on the Strategy page. A marketing task does not link to a bet, so this page has no bet
 view.

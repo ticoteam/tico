@@ -44,6 +44,8 @@ interface PipelineStageRec {
   purpose: string;
   owner: string | null;
   by_hand: boolean;
+  /** On a by-hand stage: a person's request moves on by itself when the next stage has room. */
+  requests_move_on: boolean;
   task_limit: number | null;
   expected_minutes: number | null;
   expected_bots_only: boolean;

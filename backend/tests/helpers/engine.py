@@ -137,8 +137,8 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
     for position, spec in enumerate(rows):
         sid = f"{pid}-{_slug(spec['name'])}"
         c.execute(
-            "INSERT INTO stages (id, pipeline_id, position, kind, name, owner, by_hand, task_limit, expected_minutes, "
-            "expected_bots_only, on_enter, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO stages (id, pipeline_id, position, kind, name, owner, by_hand, requests_move_on, task_limit, "
+            "expected_minutes, expected_bots_only, on_enter, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 sid,
                 pid,
@@ -147,6 +147,7 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
                 spec["name"],
                 spec.get("owner"),
                 1 if spec.get("by_hand") else 0,
+                1 if spec.get("requests_move_on") else 0,
                 spec.get("task_limit"),
                 spec.get("expected_minutes"),
                 1 if spec.get("expected_bots_only") else 0,

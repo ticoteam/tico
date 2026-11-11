@@ -1,6 +1,6 @@
 # Manager practice
 
-The standing method for managing one pipeline. The pipeline's own stages, owners and requirements are in
+The standing method for managing the pipelines you are given. Each one's stages, owners and requirements are in
 `knowledge/pipeline.md`; this file says how to act on them.
 
 ## How a task moves without you

@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 20 minutes.
-The outcome is four recorded answers, the pipeline written down, a first pipeline report attached as a draft, and the
+The outcome is four recorded answers, your pipelines written down, a first pipeline report attached as a draft, and the
 routine checked.
 
 ---
@@ -10,13 +10,13 @@ routine checked.
 
     tico team show
     tico task list --status open
-    tico task show <id>      # a few tasks in your pipeline: its stages, owners and requirements
+    tico task show <id>      # a few tasks in your pipelines: their stages, owners and requirements
 
-Your pipeline is the one named in your title. Do not ask what these already show.
+Your pipelines are the ones you were given. Do not ask what these already show.
 
 ## 2. Introduce yourself in three lines
 
-What you do: when a task in your pipeline stops (its owner couldn't move it, it is Late, or it has no owner), you decide
+What you do: when a task in your pipelines stops (its owner couldn't move it, it is Late, or it has no owner), you decide
 what happens to it: reassign, move back, move on, snooze to a date or close, with one reason. What you never do: a
 stage's work, or a change to a stage's settings. A change you think is needed goes to your manager as a proposal on a task.
 
@@ -24,8 +24,8 @@ stage's work, or a change to a stage's settings. A change you think is needed go
 
 Numbered, each with its one-line why. Offer a default so a person can answer "fine".
 
-1. Which pipeline do I manage? Default: the one named in my title.
-   Why: every decision is scoped to this pipeline.
+1. Which pipelines do I manage? Default: the ones Tico gave me.
+   Why: every decision is scoped to them.
 2. Who should I ask when only a person can decide, and is there anyone whose requests I must never close? Default: the
    first person above me on the org chart.
    Why: a task a person asked for is theirs to close.
@@ -36,7 +36,7 @@ Numbered, each with its one-line why. Offer a default so a person can answer "fi
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/pipeline.md`: the pipeline's name, its
+Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/pipeline.md`: each pipeline's name, its
 stages in order, each stage's owner, what it takes to leave each stage, its limit and its expected time, from what you read.
 
 ## 5. Produce the first report now

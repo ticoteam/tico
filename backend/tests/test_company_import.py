@@ -1664,11 +1664,13 @@ def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its
             "finance",  # the default chart's Bookkeeper is live: Finance (private) with it
             "general",
             "growth-experiments",
+            "growth-monitoring",  # with Growth Experiments, by the same seat
             "lead",
             "legal",  # and the Legal Owner: Legal (private)
             "opportunity",
             "product",
             "success-experiments",
+            "success-monitoring",
         ]
         bots = {r[0] for r in c.execute("SELECT slug FROM bots")}
         assert {"coo", "botops", "task-manager", *LIVE_DEFAULT} <= bots

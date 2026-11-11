@@ -42,7 +42,7 @@ const plain = <T,>(x: T): T => JSON.parse(JSON.stringify(x));   // out of the vm
 
 const req = (kind: string) => ({kind, settings: {}, can_push_past: true, who_oks: 'none', person_id: null, line: ''});
 const stage = (id: string, name: string, extra: Record<string, unknown> = {}) => ({id, name, purpose: '', owner: null, by_hand: false,
-  task_limit: null, expected_minutes: null, expected_bots_only: false, on_enter: {}, requirements: [req('owner_done')], ...extra});
+  requests_move_on: false, task_limit: null, expected_minutes: null, expected_bots_only: false, on_enter: {}, requirements: [req('owner_done')], ...extra});
 const rec = (extra: Record<string, unknown> = {}) => ({id: 'product', name: 'Product', goal: 'Specs that ship', prefix: 'P',
   manager_id: 'bot:pm', owner_id: 'human:ana', private: false, factory_id: 'f-product', preset: null, settings_version: 3,
   retired_at: null, stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec', {task_limit: 2}), stage('dev', 'In development')],
@@ -187,6 +187,17 @@ const factories = (async () => {
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peRi: '0', peRf: 'kind'}, 'owner_done'));
   const done = plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
   assert.deepEqual([done['kind'], done['source'], done['condition']], ['owner_done', null, null]);
+
+  // A by-hand stage alone offers whether a person's request moves on by itself; leaving by hand off clears it.
+  const ideas = stage('ideas', 'Ideas', {by_hand: true});
+  state.draft.stages.unshift(ideas);
+  (state as Record<string, unknown>)['open'] = new WeakSet();
+  assert.match(ctx.peStageHTML(state, ideas, 0, 3), /data-pe-sf="requests_move_on"[^>]*> A person's request moves on/);
+  assert.doesNotMatch(ctx.peStageHTML(state, state.draft.stages[1]!, 1, 3), /requests_move_on/);
+  ctx.peInput(state, Object.assign(field('HTMLInputElement', {peSi: '0', peSf: 'requests_move_on'}, 'on', true), {type: 'checkbox'}));
+  assert.equal(state.draft.stages[0]!['requests_move_on'], true);
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'by_hand'}, '0'));
+  assert.equal(state.draft.stages[0]!['requests_move_on'], false, 'only a by-hand stage keeps it');
 }
 // ---- the editor: a stage's answer
 {

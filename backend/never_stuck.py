@@ -204,11 +204,13 @@ _FIRST_WAITING = (
 _FREED = "SELECT id FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
 
 
-# A person's request still on its first visit to a by-hand stage (task_engine.not_held_by_hand), oldest first.
+# A person's request still on its first visit to a by-hand stage that moves requests on (task_engine.not_held_by_hand),
+# oldest first.
 _REQUESTS = (
     "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
     "JOIN stages s ON s.id = t.stage_id "
     "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL "
+    "AND s.requests_move_on=1 "
     "AND v.entered_how='new' AND t.requester_id LIKE 'human:%' "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
     "ORDER BY v.entered_at, v.id"
@@ -216,10 +218,11 @@ _REQUESTS = (
 
 
 def _requests(conn: "sqlite3.Connection") -> int:
-    """A task a person files into a by-hand stage (Product's Ideas) is not held there: the person already picked it.
-    Once the stage's own requirements are met (Ideas has none) it moves into the next stage as soon as that has room,
-    oldest first, before the by-hand stage's owner is woken
-    about room (C10). Ideas a bot filed stay until someone moves them. Returns how many moved."""
+    """A task a person files into a by-hand stage whose "a person's request moves on" setting is on (Product's Ideas)
+    is not held there: the person already picked it. Once the stage's own requirements are met (Ideas has none) it moves
+    into the next stage as soon as that has room, oldest first, before the by-hand stage's owner is woken about room
+    (C10). Ideas a bot filed stay until someone moves them, and so does every task in a by-hand stage with the setting
+    off (Growth's Ideas, Monitoring's Watching). Returns how many moved."""
     moved = 0
     for (task_id,) in conn.execute(_REQUESTS).fetchall():
         row = E.task(conn, str(task_id))
@@ -254,6 +257,8 @@ def _room(conn: "sqlite3.Connection") -> int:
         row = E.task(conn, str(first[0])) if first else None
         if not row or not row.get("visit"):
             continue
+        if stage_owner == "assignee":
+            continue  # each task there is its own assignee's, and resting: nobody is told (Growth's Ideas)
         owner: str | None = stage_owner or row.get("owner_id")
         if not is_bot(owner) or not _reads(conn, owner, row):
             continue

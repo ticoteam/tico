@@ -45,6 +45,7 @@ STAGE_FIELDS = (
     "purpose",
     "owner",
     "by_hand",
+    "requests_move_on",
     "task_limit",
     "expected_minutes",
     "expected_bots_only",
@@ -89,6 +90,7 @@ PRESETS: dict[str, Row] = {
                 "purpose": "",
                 "owner": ASSIGNEE,
                 "by_hand": False,
+                "requests_move_on": False,
                 "task_limit": None,
                 "expected_minutes": 1440,
                 "expected_bots_only": True,
@@ -110,6 +112,7 @@ def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements:
         "purpose": purpose,
         "owner": None,  # the stage's role (ROLES), filled by preset()
         "by_hand": False,
+        "requests_move_on": False,
         "task_limit": None,
         "expected_minutes": minutes,
         "expected_bots_only": True,
@@ -241,6 +244,7 @@ PRESETS["product"] = {
             None,
             [],
             by_hand=True,
+            requests_move_on=True,  # a person who files a request already picked it (never_stuck._requests)
         ),
         _stage(
             "product-spec",
@@ -355,6 +359,7 @@ def _stage_out(conn: "sqlite3.Connection", row: Row) -> Row:
         "purpose": row.get("purpose") or "",
         "owner": row.get("owner"),
         "by_hand": bool(row.get("by_hand")),
+        "requests_move_on": bool(row.get("requests_move_on")),
         "task_limit": row.get("task_limit"),
         "expected_minutes": row.get("expected_minutes"),
         "expected_bots_only": bool(row.get("expected_bots_only")),
@@ -482,6 +487,7 @@ def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
         "purpose": _text(item.get("purpose"), f"The purpose of {label}", problems),
         "owner": _ref(item.get("owner"), f"The owner of {label}", problems),
         "by_hand": _flag(item.get("by_hand"), f"Tasks leave by hand on {label}", problems),
+        "requests_move_on": _flag(item.get("requests_move_on"), f"A person's request moves on, on {label}", problems),
         "task_limit": _count(item.get("task_limit"), f"The limit on {label} is a whole number above zero.", problems),
         "expected_minutes": _count(
             item.get("expected_minutes"), f"Expected time on {label} is a whole number of minutes above zero.", problems
@@ -781,6 +787,8 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
             problems.append(f"The owner of {label} must be a bot, a person or the task's assignee, not {owner}.")
         if position == 0 and stage["task_limit"]:
             problems.append(f"The first stage of a pipeline has no limit ({label}).")
+        if stage["requests_move_on"] and not stage["by_hand"]:
+            problems.append(f"A person's request moves on by itself only from a stage tasks leave by hand ({label}).")
         _check_on_enter(conn, record, stage, label, problems)
         for req in stage["requirements"]:
             if req["id"] and req["id"] in req_ids:
@@ -1007,6 +1015,7 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
             stage["purpose"],
             stage["owner"],
             1 if stage["by_hand"] else 0,
+            1 if stage["requests_move_on"] else 0,
             stage["task_limit"],
             stage["expected_minutes"],
             1 if stage["expected_bots_only"] else 0,
@@ -1016,8 +1025,9 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
         old = old_rows.get(sid) if sid else None
         if old:
             conn.execute(
-                "UPDATE stages SET position=?, name=?, purpose=?, owner=?, by_hand=?, task_limit=?, "
-                "expected_minutes=?, expected_bots_only=?, on_enter=?, updated_at=?, retired_at=NULL WHERE id=?",
+                "UPDATE stages SET position=?, name=?, purpose=?, owner=?, by_hand=?, requests_move_on=?, "
+                "task_limit=?, expected_minutes=?, expected_bots_only=?, on_enter=?, updated_at=?, retired_at=NULL "
+                "WHERE id=?",
                 (*values, ts, sid),
             )
             limit, was = stage["task_limit"], old.get("task_limit")
@@ -1026,9 +1036,9 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
         else:
             sid = sid or _free_stage_id(conn, f"{pid}-{_slug(stage['name'])}", taken)
             conn.execute(
-                "INSERT INTO stages (position, name, purpose, owner, by_hand, task_limit, expected_minutes, "
-                "expected_bots_only, on_enter, id, pipeline_id, kind, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
+                "INSERT INTO stages (position, name, purpose, owner, by_hand, requests_move_on, task_limit, "
+                "expected_minutes, expected_bots_only, on_enter, id, pipeline_id, kind, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
                 (*values, sid, pid, ts, ts),
             )
         loosened = _write_requirements(conn, by, sid, stage["requirements"], ts) or loosened
@@ -1322,7 +1332,8 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
       that says no gets its untouched pair retired; saying yes again brings that pair back.
     - Growth Experiments, Lead, Opportunity, Customer and Success Experiments (pipeline_presets_more) are made for every
       company once its setup finished, each with its Growth or Success factory. A company set up before they existed
-      gets them at its next start.
+      gets them at its next start. Growth and Success Monitoring are made with them, only where their factory's
+      Experiments pipeline is (live).
     - Legal and Finance, private, in the Corporate factory, likewise, but only once their owner bot exists (the Legal
       Owner, the Bookkeeper): never with the Task Manager standing in. `ensure_private` makes them when that bot is
       made.
@@ -1351,6 +1362,14 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
         elif key in more.PRESETS:
             if not _set_up(conn):
                 continue
+            paired = more.WITH.get(key)
+            if (
+                paired
+                and not conn.execute(
+                    "SELECT 1 FROM pipelines WHERE (id=? OR preset=?) AND retired_at IS NULL", (paired, paired)
+                ).fetchone()
+            ):
+                continue  # Monitoring goes with its factory's Experiments: not made where that one is not
             if key in more.PRIVATE and not preset(conn, key)["manager_id"]:
                 continue  # made once its owner bot exists (ensure_private), its factory with it
             more.ensure_factory(conn, PRESETS[key]["factory_id"], _h().now())

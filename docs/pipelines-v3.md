@@ -73,8 +73,8 @@ architecture) and C (the screens).
 - **Person OK setting:** "People only" or "People, with exceptions". Default: with exceptions. The two person OKs in
   the Product and Engineering presets are people only.
 - **Push past** is a switch on each requirement.
-- Tasks leave **Ideas** by hand, except a request a person files: it goes into Spec when Spec has room. Later is
-  dropped.
+- Tasks leave Product's **Ideas** by hand, except a request a person files: it goes into Spec when Spec has room. Later
+  is dropped. Growth's and Success's Ideas hold every idea, a person's too, until someone starts it.
 - **Many PRs** per task. All must merge.
 - **The other existing orgs** are rebuilt from scratch on v3.
 - **Build order:** General, then Product, then Engineering.
@@ -184,8 +184,10 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
   (C25).
 - **To leave:** a list of requirements. All must be met.
 - **Tasks leave by hand:** a switch. Tasks stay until someone moves them. Nothing there is late and nobody is chased.
-  A person's request (a task a person filed that no task filed) on its first visit is not held: it moves on when the
-  next stage has room, oldest first. Moved back into the stage, or snoozed there, it is held like any other.
+- **A person's request moves on:** a switch on a by-hand stage only (`requests_move_on`), off by default. When on, a
+  person's request (a task a person filed that no task filed) on its first visit is not held: it moves on when the
+  next stage has room, oldest first. Moved back into the stage, or snoozed there, it is held like any other. On in
+  Product's Ideas; off in Growth's and Success's Ideas and in Monitoring's Watching.
 - **On enter:** nothing, "file a linked task into pipeline X", or "queue the PRs to merge". There are no other actions. A
   stage that files a task always has Linked work done among its requirements.
 - **Expected time** and **limit** (how many tasks fit). The first stage of a pipeline has no limit.
@@ -194,7 +196,8 @@ That gives three kinds of stage, and no others:
 
 - **Work stage:** has requirements. It is the owner's turn until they are met.
 - **No requirements:** Tasks move on by themselves when the next stage has room. Engineering's On deck is one.
-- **By hand:** tasks leave when someone moves them. Product's Ideas is one. A person's request is not held there.
+- **By hand:** tasks leave when someone moves them. Product's Ideas is one; a person's request is not held there.
+  Growth's Ideas and Monitoring's Watching are others, where it is.
 
 ### The six requirement kinds
 
@@ -327,8 +330,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Ends: A slot frees. Oldest first.
    - If not: It turns Late and the manager bot gets it.
 9. **A by-hand stage**
-   - Starts: It enters a stage that tasks leave by hand. A person's request on its first visit is not held: it is in
-     state 8.
+   - Starts: It enters a stage that tasks leave by hand. Where a person's request moves on, one on its first visit is
+     not held: it is in state 8.
    - Ends: Someone picks it, closes it or snoozes it.
    - If not: Nothing. It is a place to wait.
 
@@ -608,20 +611,21 @@ are chat, not asks. The setup checklist is onboarding and is not touched.
 
 ## Default pipelines
 
-Ten presets built from the same parts, in four factories. Customers and manager bots can change any of it.
+Twelve presets built from the same parts, in four factories. Customers and manager bots can change any of it.
 
 | Factory | Pipelines |
 |---|---|
 | Product | Product → Engineering |
-| Growth | Growth Experiments; Lead → Opportunity |
-| Success | Customer; Success Experiments |
+| Growth | Growth Experiments, Growth Monitoring; Lead → Opportunity |
+| Success | Customer; Success Experiments, Success Monitoring |
 | Corporate | Legal; Finance (both private) |
 | none | General |
 
 A new org gets General at its first start, and the rest once its setup finishes (Product and Engineering only if it
 builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
 renamed is never made again. Legal and Finance are made only once their owner bot exists (the Legal Owner, the
-Bookkeeper as Finance Owner), the moment it is made; never with the Task Manager standing in.
+Bookkeeper as Finance Owner), the moment it is made; never with the Task Manager standing in. Growth and Success
+Monitoring are made only where their factory's Experiments pipeline is.
 
 ### Private pipelines
 
@@ -665,7 +669,8 @@ From an idea to something checked in production. Manager: the Product Pipeline M
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
 - **Ideas.** Owner: Product Owner. Tasks leave by hand. The Product Owner is woken once when Spec has room. To park an idea, snooze it with
-  no end date. A request a person files is not held: it goes into Spec as soon as Spec has room, oldest first.
+  no end date. A person's request moves on (the stage's switch is on): it goes into Spec as soon as Spec has room,
+  oldest first.
 - **Spec.** Owner: Product Owner. To leave: a Spec page. Jev checks it, then **a person OKs it** (people only: no bot
   OKs it or pushes past it). Limit 2. Expected time: 2 days.
 - **In development.** On enter: file an Engineering task. To leave: Linked work done. Owner: Product Owner. Expected
@@ -705,20 +710,32 @@ Also:
 
 ### Growth and Success
 
-Each pipeline's manager is its own Pipeline Manager (`<pipeline>-pipeline-manager`). A stage's owner is found by its
-role's template; until that bot exists, the stage is the manager's, and a manager nobody fills is the Task Manager
+Each pipeline's manager is its own Pipeline Manager (`<pipeline>-pipeline-manager`); a Monitoring pipeline's is its
+Experiments pipeline's, so one seat manages both. A stage's owner is found by its role's template; until that bot exists, the stage is the manager's, and a manager nobody fills is the Task Manager
 (the ladder above). Built in `backend/pipeline_presets_more.py`.
 
 - **Growth Experiments** (GX) and **Success Experiments** (SX). Test ideas, keep what works, drop the rest. Every
   stage belongs to the task's assignee, the teammate running that experiment; with nobody assigned, the manager is
   woken to pick one.
-  Stages: Ideas → On deck → Running → Measuring → Done · Closed
-  - **Ideas.** Tasks leave by hand. Snooze one to park it.
-  - **On deck.** Plan it. To leave: Owner says done. If it spends money or publishes, the owner adds an OK from a
-    person to that task first, so only those wait on a person. Expected time: 1 day.
-  - **Running.** To leave: Owner says done. Limit 3. Expected time: 7 days.
-  - **Measuring.** To leave: a Results page (the number before and after, keep or drop). Jev checks it. Expected time:
-    2 days. Done is a measured experiment, kept or dropped; Closed is one stopped before it was measured.
+  Stages: Ideas → Building → Running → Done · Closed
+  - **Ideas.** By hand. One line each: what to try and why. Ideas rest here, a person's too: nothing wakes, chases
+    or marks them Late, and a freed slot in Building wakes nobody. The owner starts one of its own when Building has
+    room ("No room in Building. It holds 6: move it again when one leaves." when it has none); a person can start any.
+  - **Building.** The real thing, not yet live: the email, the page change, the ad. Limit 6. To leave: a **Go-live
+    page** (the thing as it will look, the metric, the prediction as a number, the cost, how long it runs, when to stop
+    early, the brand check passed). Jev checks it, then **a person OKs it** (people only). Expected time: 3 days.
+  - **Running.** The owner puts it live and snoozes the task to its end date; it wakes then, to measure. To leave: a
+    **Results page** (the number before and after with dates and sources, and the result: `result:failed`,
+    `result:worked-once` or `result:watching`; worked means the baseline beaten and 60% of the prediction reached).
+    Jev checks it. On `result:watching` the owner first files a Monitoring task as its follow-up, and the page links
+    it. Expected time: 2 days, snoozed time not counted. Done is a measured experiment; Closed is one stopped before.
+- **Growth Monitoring** (GM) and **Success Monitoring** (SM). Keep what worked working. One task per kept thing: what
+  it is (a link), its KPI and range, and the experiment it came from. Every stage is the assignee's.
+  Stages: Watching → Slipping → Done · Closed
+  - **Watching.** By hand: the resting stage. Nothing is Late; nobody is woken. The owner moves it to Slipping when its
+    number leaves its range.
+  - **Slipping.** To leave: Owner says done. Fixed, the owner moves it back to Watching. Not fixable, the owner files
+    an idea and closes this task with the reason. Expected time: 3 days.
 - **Lead** (L). Find leads and bring the qualified ones to Opportunity.
   Stages: Targets (Lead Generation Owner) → Outreach → Replies → Qualified (Outbound Sales Owner) → Done · Closed.
   Each of the first three: Owner says done. **Qualified** files an Opportunity on enter; to leave: Linked work done,
@@ -1685,7 +1702,7 @@ Numbered in order so they can be cited (scenario 1 to 52).
 17. Anyone tries to push past PR merged: refused, offered Move back and Close.
 18. A task is dragged two stages ahead: every skipped requirement is recorded as pushed past, with one reason.
 19. A new org gets the presets: every work stage has an owner and at least one requirement. On deck has none. Tasks leave
-    Ideas by hand, except a person's request.
+    Ideas by hand, except a person's request in Product.
 20. Spec empties while Ideas holds tasks: a person's request goes in by itself; else the Product Owner is woken once.
 21. Close a Product task in Spec with the spec unmet: it closes at once with the reason.
 22. Close a Product task in a factory: the Done count doesn't change.

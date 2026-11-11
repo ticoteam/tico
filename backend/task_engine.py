@@ -817,11 +817,19 @@ def move(
         missing = R.unmet(conn, row) + _skipped(conn, row, target)
         _may_push_past(conn, by, row, why, missing, target["id"])
         if target["kind"] == "work" and not has_room(conn, target):
+            # From a stage tasks leave by hand the task stays put until someone moves it again, unless it is a
+            # person's request that moves on by itself (`not_held_by_hand`).
+            held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
+            then_what = (
+                f"It holds {target['task_limit']}: move it again when one leaves."
+                if held_here
+                else "The task moves in when there is room."
+            )
             _refuse(
                 conn,
                 by,
                 "task_stage_full",
-                f"No room in {target['name']}. The task moves in when there is room.",
+                f"No room in {target['name']}. {then_what}",
                 task_id,
                 row=row,
                 then=("snooze", "close"),
@@ -1031,11 +1039,15 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
 
 def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
     """A person's request (one a person asked for that no task filed, as C8 reads it) on its first visit, in a by-hand
-    stage: the person already picked it, so it is not held there. It moves on by itself when the next stage has room,
-    oldest first (never_stuck). One moved back into the stage, or snoozed there, is held like any other."""
+    stage whose "a person's request moves on" setting is on (`requests_move_on`: Product's Ideas): the person already
+    picked it, so it is not held there. It moves on by itself when the next stage has room, oldest first
+    (never_stuck). With the setting off (Growth's Ideas, Monitoring's Watching) every task there waits until someone
+    moves it. One moved back into the stage, or snoozed there, is held like any other."""
     stage_row: Row = row.get("stage") or {}
     visit: Row = row.get("visit") or {}
-    if not stage_row.get("by_hand") or visit.get("entered_how") != "new" or row.get("snooze"):
+    if not stage_row.get("by_hand") or not stage_row.get("requests_move_on"):
+        return False
+    if visit.get("entered_how") != "new" or row.get("snooze"):
         return False
     if not is_human(row.get("requester_id")):
         return False

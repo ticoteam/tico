@@ -168,6 +168,8 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
     + peRow(peF('Owner', `<select data-pe-sf="owner" ${at}>${peChoice(owners, stage.owner, 'Not set')}</select>`)
     + peF('Tasks leave', `<select data-pe-sf="by_hand" ${at}><option value="0"${stage.by_hand ? '' : ' selected'}>When requirements are met</option>`
       + `<option value="1"${stage.by_hand ? ' selected' : ''}>By hand</option></select>`))
+    // A by-hand stage only: whether a task a person files there moves on by itself when the next stage has room.
+    + (stage.by_hand ? `<label class="pe-check"><input type="checkbox" role="switch" data-pe-sf="requests_move_on" ${at}${stage.requests_move_on ? ' checked' : ''}> A person's request moves on</label>` : '')
     + peRow((si > 0 ? peF('Limit', `<input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="task_limit" ${at} value="${stage.task_limit ?? ''}" placeholder="None">`, 'short') : '')
     + `<div class="pe-f pe-f-time"><span>Expected time</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="None" aria-label="Expected time">`
     + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`
@@ -243,7 +245,13 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
     if (sf === 'name') stage.name = value;
     else if (sf === 'purpose') stage.purpose = value;
     else if (sf === 'owner') stage.owner = value || null;
-    else if (sf === 'by_hand') stage.by_hand = value === '1';
+    else if (sf === 'by_hand') {
+      stage.by_hand = value === '1';
+      if (!stage.by_hand) stage.requests_move_on = false;
+      peDraw(state);
+      return;
+    }
+    else if (sf === 'requests_move_on') stage.requests_move_on = checked;
     else if (sf === 'on_enter') stage.on_enter = peOnEnter(value);
     else if (sf === 'task_limit') stage.task_limit = Number(value) > 0 ? Math.round(Number(value)) : null;
     else if (sf === 'expected_n' || sf === 'expected_unit') {
@@ -337,7 +345,7 @@ function peClick(state: PeState, target: Element): void {
     void peSave(state); return;
   }
   if (el.hasAttribute('data-pe-stage-add')) {
-    const fresh: PipelineStageRec = {name: '', purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
+    const fresh: PipelineStageRec = {name: '', purpose: '', owner: null, by_hand: false, requests_move_on: false, task_limit: null, expected_minutes: null,
       expected_bots_only: false, on_enter: {}, requirements: []};
     d.stages.push(fresh);
     state.open.add(fresh);

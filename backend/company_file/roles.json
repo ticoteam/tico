@@ -2524,8 +2524,8 @@
    "department": "operations",
    "lead": false,
    "core": false,
-   "summary": "Manages one pipeline. When a task stops (its owner couldn't move it, it is Late, or it has no owner), it decides what happens: reassign, move back, move on, snooze to a date or close, with one line of reason. It never does a stage's work and never changes a stage's settings.",
-   "when": "Any team whose work moves through a pipeline, such as product, engineering, growth, sales, customer success, legal or finance. Each pipeline gets its own Pipeline Manager.",
+   "summary": "Manages the pipelines it is given. When a task stops (its owner couldn't move it, it is Late, or it has no owner), it decides what happens: reassign, move back, move on, snooze to a date or close, with one line of reason. It never does a stage's work and never changes a stage's settings.",
+   "when": "Any team whose work moves through a pipeline, such as product, engineering, growth, sales, customer success, legal or finance. Each pipeline has one Pipeline Manager; one may manage several.",
    "tags": [
     "pipeline",
     "stages",
