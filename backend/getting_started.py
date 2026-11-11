@@ -22,8 +22,6 @@ MARKET_TASK = "Set up the market map"
 ONLINE_SECONDS = 120
 # The checklist items a person may skip.
 OPTIONAL = ("github", "subscription")
-# The tools a Claude or ChatGPT plan signs in to (model_subscriptions.KINDS with billing "subscription").
-PLAN_RUNTIMES = ("claude", "codex")
 
 
 def _person(who):
@@ -129,9 +127,11 @@ def _plan_signed_in(c):
     from .model_subscriptions import KINDS, in_effect
     from .readiness import api_key_login, computer_login
 
+    # The tools a plan signs in to: the ones a subscription kind names (Claude and Codex today).
+    plan_runtimes = sorted({kind["runtime"] for kind in KINDS.values() if kind.get("billing") == "subscription"})
     for runner in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         readiness = readiness_document(runner["readiness"])
-        for runtime in PLAN_RUNTIMES:
+        for runtime in plan_runtimes:
             login = computer_login(readiness, runtime)
             if login.get("installed") and login.get("authenticated") == "ready" and not api_key_login(login):
                 return True
