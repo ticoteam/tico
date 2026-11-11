@@ -4483,6 +4483,9 @@ def parser():
     from clients import hubtools_connections  # `tico github`, and the connection verbs of `tico repo` and `tico health`
 
     hubtools_connections.add_commands(sub)
+    from clients import hubtools_computers  # `tico upgrade`, `tico cloud`, `tico subscription`, computer restart
+
+    hubtools_computers.add_commands(sub)
     return p
 
 
