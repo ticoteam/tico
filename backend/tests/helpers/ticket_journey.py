@@ -149,7 +149,6 @@ class Company:
         self.ids = {}
         self.pages = 0
         self.running = {}  # the runs under way, by attempt id
-        self.refused_at_setup = 0
 
     # ------------------------------------------------------------------ rows and reads
     def rows(self, sql, args=()):
@@ -242,8 +241,11 @@ class Company:
         self.report()
         asleep = self.rows("SELECT slug FROM bots WHERE state NOT IN ('active','archived')")
         assert not asleep, f"bots that are not live after BotOps took them live: {[r['slug'] for r in asleep]}"
-        # Setup's own refusals (wakes sent to BotOps before it started) are not the ticket's.
-        self.refused_at_setup = self.rows("SELECT count(*) AS n FROM refusals")[0]["n"]
+        # First-run setup reaches no bot that has not started: a company once began with 11 such refused writes.
+        refused = self.rows("SELECT actor, rule, detail FROM refusals")
+        assert not refused, (
+            f"first-run setup had writes refused: {[(r['actor'], r['rule'], r['detail'][:120]) for r in refused]}"
+        )
 
     def turn(self, slug):
         """The bot's next run, started as the runner starts it, or None when nothing is queued for it. A claim the
@@ -349,9 +351,9 @@ class Company:
         return run
 
     def clean(self):
-        """Nothing a person would have to fix by hand: no refused write, no open task without an owner, no task made
+        """Nothing a person would have to fix by hand: no refused write since the company was made, no open task without an owner, no task made
         twice."""
-        refused = self.rows("SELECT actor, rule, detail FROM refusals ORDER BY created_at, id")[self.refused_at_setup :]
+        refused = self.rows("SELECT actor, rule, detail FROM refusals ORDER BY created_at, id")
         assert not refused, (
             f"writes were refused along the way: {[(self.slug_of(r['actor']), r['rule'], r['detail'][:200]) for r in refused]}"
         )
