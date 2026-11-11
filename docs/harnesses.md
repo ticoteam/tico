@@ -375,6 +375,29 @@ The readiness heartbeat carries, per harness: `installed`, `version`, `pinned` (
 or the owner turned it on), `state`. A runner
 talking to a server from before this change drops the field instead of going offline.
 
+## Contract check with the real CLIs
+
+Tests drive fake `claude` and `codex` scripts, but a computer runs the real ones, at the newest version unless pinned.
+`scripts/cli_contract.sh` runs the real CLIs in an empty home, up to authentication and never through it, and reads
+what they print with the runner's own code (`runner-rs/src/cli_contract.rs`):
+
+- `--version` is readable, and every command and flag the runner passes still exists;
+- signed out, `claude auth status --json` and `codex login status` answer in the words the status check reads;
+- `claude setup-token`, in the terminal the runner opens, shows a link and a prompt for the code; a made-up code is
+  masked and gives the "OAuth error … Press Enter to retry" screen;
+- `codex login --device-auth` shows a link and a one-time code (never entered);
+- a turn with no login ends as a refused sign-in for both, not as a general failure.
+
+```bash
+scripts/cli_contract.sh            # the claude and codex on PATH
+scripts/cli_contract.sh --latest   # the newest of each from npm, as a cloud computer gets them
+```
+
+It needs network access to Anthropic and OpenAI, takes about two minutes after the build, and never opens a browser.
+Release validation runs it with `--latest` on every full validation (job `cli-contract`, Linux), which the release
+train starts once a day; the job is not part of the release verdict. Read it before a release: a red `cli-contract`
+names what the CLI changed.
+
 ## Writing a harness
 
 A harness is a manifest plus a host adapter.
