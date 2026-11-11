@@ -131,8 +131,8 @@ async function open(browser: Browser, me: Record<string, unknown>, branches = fa
     if (p === '/api/employees') return json(bots);
     if (p === '/api/issues') return json([]);
     if (p === '/api/runs') return json([]);
-    if (p === '/api/v2/templates') return json({cards: [{template: 'finance-owner', slug: 'bookkeeping', name: 'Bookkeeper',
-      summary: 'Keeps the ledger.', instructions: '# Bookkeeper\n\nKeep the ledger.', model: 'fixture-model'}]});
+    if (p === '/api/v2/templates') return json({cards: [{template: 'finance-owner', slug: 'finance-owner', name: 'Finance Owner',
+      summary: 'Keeps the ledger.', instructions: '# Finance Owner\n\nKeep the ledger.', model: 'fixture-model'}]});
     if (p === '/api/v2/bots' && method === 'POST') {
       const body = request.postDataJSON(); calls.push(['POST', 'bots', body]);
       bots.push(bot(body.slug, body.display_name, '', '', {status: body.status}));
@@ -173,7 +173,7 @@ async function open(browser: Browser, me: Record<string, unknown>, branches = fa
       }
       if (!s[2]) return json(seatView(seat));
       if (s[2] === 'recruit') return json({seat: seatView(seat), models: [{id: 'fixture-model', name: 'Fixture model'}, {id: 'other-model', name: 'Other model'}],
-        candidates: [applicant('bookkeeping', 'Bookkeeper', 'strong'), applicant('controller', 'Controller', 'good')]});
+        candidates: [applicant('finance-owner', 'Finance Owner', 'strong'), applicant('controller', 'Controller', 'good')]});
       if (seatSave.hire) return route.fulfill({status: seatSave.hire, contentType: 'application/json',
         body: JSON.stringify({error: {detail: 'Hiring failed'}})});
       seat.filled = true;
@@ -679,7 +679,7 @@ async function teamAdd(browser: Browser) {
   assert.equal(bots.some(b => b.name === 'ledger'), false, 'no bot exists until one is hired');
   const rows = page.locator('[data-recruit-row]');
   await page.waitForFunction(() => document.querySelectorAll('[data-recruit-row]').length === 2);
-  assert.deepEqual(await rows.evaluateAll(els => els.map(el => el.dataset.recruitRow)), ['bookkeeping', 'controller']);
+  assert.deepEqual(await rows.evaluateAll(els => els.map(el => el.dataset.recruitRow)), ['finance-owner', 'controller']);
   await page.locator('#tree a.node.seat[data-seat-open="seat1"] .cnt', {hasText: '2'}).waitFor({state: 'attached'});
   assert.equal(await page.locator('#tree a.node.seat[data-seat-open="seat1"]').getAttribute('href'), '#/seat/seat1');
   assert.deepEqual(await page.evaluate(() => orgTreeByParent()['b:scout']!.map(n => n.kind + ':' + n.id)), ['seat:seat1']);
@@ -691,7 +691,7 @@ async function teamAdd(browser: Browser) {
   await closeJob.evaluate(el => el.blur());
   assert.equal(await closeJob.textContent(), 'Close job');
   assert.equal(calls.some(c => c[1] === 'close'), false);
-  await page.locator('[data-recruit-hire="bookkeeping"]').click();
+  await page.locator('[data-recruit-hire="finance-owner"]').click();
   await node(page, 'b:' + LEDGER_ID).waitFor({state: 'attached'});
   await page.waitForFunction((id: string) => location.hash === '#/bot/' + id, LEDGER_ID);
   assert.deepEqual(recruits, [['POST', 'recruit', 'seat1', {}]]);

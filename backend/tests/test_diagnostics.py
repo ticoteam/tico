@@ -44,8 +44,8 @@ def test_names_become_labels_that_are_the_same_all_through_a_bundle():
     out = r.text(
         "Morgan Reed (morgan@acme.example, morgan) asked bot:assistant; BotOps and botops; Riley Quinn later; morgan again"
     )
-    assert out == "person-1 (person-1, person-1) asked bot-2; bot-1 and bot-1; person-2 later; person-1 again"
-    assert r.label("BOTOPS") == "bot-1" and r.label("Zed") is None
+    assert out == "person-1 (person-1, person-1) asked bot-1; bot-2 and bot-2; person-2 later; person-1 again"
+    assert r.label("BOTOPS") == "bot-2" and r.label("Zed") is None
     # Whole words only, and every string, however nested, goes through it.
     assert r.text("coordinator") == "coordinator"
     assert r.clean({"a": ["riley failed", {"b": "Morgan Reed"}], "n": 3, "ok": True, "x": None}) == {
@@ -141,7 +141,8 @@ def test_the_bundle_holds_only_allowlisted_facts_and_never_content(environment, 
         "assistant",
         "botops",
     ):
-        assert name not in text.replace("[company-domain]", ""), name
+        # The features block names the Assistant feature (`"assistant": false`), which is not the bot's slug.
+        assert name not in text.replace("[company-domain]", "").replace('"assistant":', ""), name
     assert bundle["versions"]["tico"] and bundle["counts"]["people"] == 3 and bundle["counts"]["bots"] >= 2
     assert bundle["database"]["migration"] >= 11 and set(bundle["features"]) <= set(D.FEATURES)
     assert all(set(x) == {"name", "status"} for x in bundle["health"]) and bundle["health"]

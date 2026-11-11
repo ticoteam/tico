@@ -1108,7 +1108,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catalog-picker')!.open);
     assert.equal(created.length, 2);
     assert.equal(created[1]!.slug, 'ana-inbox');
-    assert.equal(created[1]!.template, 'inbox');
+    assert.equal(created[1]!.template, 'inbox-manager');
     assert.equal(created[1]!.display_name, 'Ana Rivera message bot');
     assert.match(created[1]!.instructions, /Mailbox: ana@acme.example/);
 

@@ -14,7 +14,7 @@ const writer = {id: 's-writer', kind: 'seat', stage: 'recruiting', title: 'Conte
 const head = {id: 's-head', kind: 'seat', stage: 'recruiting', title: 'Head of Marketing', description: 'Leads marketing.',
   team: '', reports_to: 'human:ana', created_at: '2026-10-24T00:00:00Z', org_parent: 'p:ana'};
 const seats = [writer, head];
-const candidate = {template: 'content-owner', slug: 'content', name: 'Content Owner', line: 'Writes the blog.',
+const candidate = {template: 'content-owner', slug: 'content-owner', name: 'Content Owner', line: 'Writes the blog.',
   summary: 'Writes the blog.', owns: ['The drafts'], never: [], onboarding: [], prerequisites: [], tags: [],
   model_name: '', model: '', instructions: ''};
 const found = {seat: writer, candidates: [candidate], agents: [], models: [], agents_at: 0};
@@ -49,7 +49,7 @@ const found = {seat: writer, candidates: [candidate], agents: [], models: [], ag
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/seat/s-writer/content');
+    await page.goto('https://tico-ui.test/#/seat/s-writer/content-owner');
     const line = page.locator('[data-reports-now]');
     await line.waitFor();
     assert.equal((await line.innerText()).trim(), 'Reports to Ana until Head of Marketing is hired.');

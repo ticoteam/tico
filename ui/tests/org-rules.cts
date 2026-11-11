@@ -72,11 +72,11 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     const modal = page.locator('#ru-add');
     await modal.locator('textarea[name=text]').fill('Ask before a production deploy');
     await modal.locator('[data-ru-adv]').click();
-    assert.match(await modal.locator(`[data-scope="who"] .ru-chip`).innerText(), /engineering.lead/i);
+    assert.match(await modal.locator(`[data-scope="who"] .ru-chip`).innerText(), /engineering.team.manager/i);
     await modal.locator('[data-scope="with"] [data-seg="groups"]').click();
     await modal.locator('[data-scope="with"] .ru-addsel').selectOption({label: 'Engineering'});
     await modal.locator('button[type=submit]').click();
-    await page.waitForFunction(() => /[?&]rule=/.test(location.hash) && /party=bot%3Aengineering-lead/.test(location.hash), null, {timeout: t(10000)});
+    await page.waitForFunction(() => /[?&]rule=/.test(location.hash) && /party=bot%3Aengineering-team-manager/.test(location.hash), null, {timeout: t(10000)});
     const ruleId = await hashParam(page, 'rule');
     let rule = await ok<Rule>(page, 'GET', '/v2/rules/' + ruleId);
     assert.equal(rule.status, 'active');
@@ -247,7 +247,7 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     assert.match(await reachRow('Up to 999 tasks a day').locator('.ru-txt').innerText(), /Up to 999 tasks a day.*default/s);
     assert.match(await reachRow('Reach:').locator('.ru-txt').innerText(), /^Reach: (anyone|nearby|only who's listed)/);
     assert.match(await reachRow('3 a day').locator('.ru-txt').innerText(), /^To .+ · 3 a day/);
-    assert.equal(await reachRow('Up to 40 chats a day').locator('a.ru-set').getAttribute('href'), '#/rules?party=bot%3Aengineering-lead');
+    assert.equal(await reachRow('Up to 40 chats a day').locator('a.ru-set').getAttribute('href'), '#/rules?party=bot%3Aengineering-team-manager');
 
     // Priya manages nothing about the Engineering Lead: the panel is read only, and the bot's Rules tab opens by link.
     const priya = await pageAs(browser, hub, 'priya');
