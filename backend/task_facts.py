@@ -21,6 +21,7 @@ short ones around reads made with no transaction held.
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
@@ -66,9 +67,15 @@ class GitHub(Protocol):
         """Whether `commit_sha` is in the history of `release_sha` (GitHub's compare: behind or identical)."""
         ...
 
+    def ready(self, repo: str, number: int) -> None:
+        """Mark a draft PR ready for review, as GitHub queues and merges no draft. A PR that is not a draft (or is
+        gone, closed or merged) is left as it is."""
+        ...
+
     def enqueue(self, repo: str, number: int, head_sha: str) -> Row:
         """Put the PR in the merge queue at exactly `head_sha`, or turn on auto-merge where the repo has no queue, or
-        merge it where it has neither. {ok, how: queued|auto_merge|merged, reason}. A head that moved is not ok."""
+        merge it where it has neither. {ok, how: queued|auto_merge|merged, reason}. A head that moved, a draft, or a
+        PR the base branch's rules refuse (a required review or check) is not ok, with GitHub's reason."""
         ...
 
     def dequeue(self, repo: str, number: int) -> Row:
@@ -80,6 +87,20 @@ class GitHub(Protocol):
 def version_now() -> int:
     """A fact version for a read or webhook that begins now: the time in ms."""
     return time.time_ns() // 1_000_000
+
+
+def sent_version(payload: Row, arrived: int) -> int:
+    """A `pull_request` webhook's version: when GitHub last changed the PR (`pull_request.updated_at`), never later than
+    it arrived. GitHub promises no order, so a late webhook carries an older state than the fact may already hold; its
+    arrival time would make it newer. Without a readable time it is when it arrived."""
+    stamp = str(_obj(payload.get("pull_request")).get("updated_at") or "")
+    try:
+        at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return arrived
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return min(arrived, int(at.timestamp() * 1000))
 
 
 def pr_ref(repo: str, number: int) -> str:
@@ -119,14 +140,18 @@ def pr(conn: "sqlite3.Connection", repo: str, number: int) -> Row | None:
 def save_pr(conn: "sqlite3.Connection", repo: str, number: int, fact: Row, version: int) -> bool:
     """Save what GitHub said of a PR, as seen by a read or webhook that began at `version`. `fact` has the keys
     `GitHub.read_pr` gives, and `checks` (`GitHub.read_checks` at its head) when they were read; a key left out keeps
-    the saved value. False, and nothing written, when the saved fact is newer. `checks_state` is worked out here from
-    `checks`, leaving out Tico's own."""
+    the saved value. False, and nothing written, when the saved fact is newer. A merged PR stays merged. `checks_state`
+    is worked out here from `checks`, leaving out Tico's own."""
     H = _h()
     now = H.now()
     old = pr(conn, repo, number)
     if old and int(old["fact_version"]) > version:
         return False
     merged: Row = {**(old or {}), **{k: v for k, v in fact.items() if k != "checks"}}
+    if old and old.get("state") == "merged" and merged.get("state") != "merged":
+        # Merged is for good. A webhook that comes late (a `dequeued` whose snapshot still says open) changes nothing
+        # of it: GitHub promises no order, and its version is only when it arrived.
+        merged.update({k: old.get(k) for k in ("state", "head_sha", "merged_sha", "merged_at", "queue_state")})
     head = merged.get("head_sha")
     moved = not old or old.get("head_sha") != head
     checks: list[Row] = fact["checks"] if "checks" in fact else ([] if moved else list((old or {}).get("checks") or []))
@@ -346,7 +371,13 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
         ):
             return []
         fact, removal = _pr_fact_of(payload)
-        if save_and_settle(conn, repo, number, fact, version):
+        sent = sent_version(payload, version)
+        old = pr(conn, repo, number)
+        if old and int(old["fact_version"]) > sent:
+            # Older than what is saved (a late webhook, or one beaten by a check that came first): not saved; an open
+            # PR is read in full on the next pass, so what it said is never lost.
+            removal = old["state"] == "open"
+        elif save_and_settle(conn, repo, number, fact, sent):
             out.append(pr_ref(repo, number))
         if removal:
             conn.execute("UPDATE pr_facts SET read_at='' WHERE repo=? AND number=?", (repo, number))
@@ -371,12 +402,23 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
                 "url": payload.get("target_url") or "",
                 "tico": False,
             }
-        for number in [
+        numbers = [
             int(found[0])
             for found in conn.execute(
                 "SELECT number FROM pr_facts WHERE repo=? AND head_sha=? AND state='open'", (repo, sha)
             ).fetchall()
-        ]:
+        ]
+        if event == "check_run":
+            # A check run on a commit no fact has yet came before its `synchronize`: the PRs it names are read in full
+            # on the next pass, which brings the new head and its checks.
+            for found in _obj(payload.get("check_run")).get("pull_requests") or []:
+                number = int(_obj(found).get("number") or 0)
+                if number and number not in numbers:
+                    conn.execute(
+                        "UPDATE pr_facts SET read_at='' WHERE repo=? AND number=? AND state='open' AND head_sha<>?",
+                        (repo, number, sha),
+                    )
+        for number in numbers:
             old: list[Row] = (pr(conn, repo, number) or {}).get("checks") or []
             checks = [c for c in old if c.get("name") != check["name"]] + [check]
             if save_and_settle(conn, repo, number, {"checks": checks}, version):

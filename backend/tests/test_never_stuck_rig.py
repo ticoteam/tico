@@ -238,6 +238,8 @@ def test_rig_github_runs_checks_lands_the_queue_and_goes_down() -> None:
         w.shift(gh.ci_s)
         gh.tick()
         assert gh.read_checks("acme/app", head)[0]["state"] == "success"
+        assert not gh.enqueue("acme/app", 1, head)["ok"], "GitHub queues no draft"
+        gh.ready("acme/app", 1)
         assert gh.enqueue("acme/app", 1, head)["ok"]
         gh._queued[("acme/app", 1)] = H.shift(H.now(), seconds=-gh.land_after_s)
         gh.land()

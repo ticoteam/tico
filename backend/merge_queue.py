@@ -300,7 +300,9 @@ def removed(conn: "sqlite3.Connection", fact: Row) -> int:
             continue  # a person owner has it in Needs you
         drops = drops_in_visit(conn, task_id, str(visit["id"]))
         if drops >= DROPS:
-            _up_the_ladder(conn, task_id, drops, f"GitHub took {ref} out of the merge queue {drops} times in this stage.")
+            _up_the_ladder(
+                conn, task_id, drops, f"GitHub took {ref} out of the merge queue {drops} times in this stage."
+            )
             continue
         link = f" {fact['failing_check_url']}" if fact.get("failing_check_url") else ""
         lead = (
@@ -390,6 +392,7 @@ def run(store: Any, github: "GitHub", now: str | None = None) -> int:
         version: int = F.version_now()
         try:
             if effect["kind"] == QUEUE:
+                github.ready(repo, number)  # a Builder's draft reaches Merge: GitHub queues no draft
                 said = github.enqueue(repo, number, str(effect["head_sha"]))
             else:
                 said = github.dequeue(repo, number)

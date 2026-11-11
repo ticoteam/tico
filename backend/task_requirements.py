@@ -391,7 +391,9 @@ def _silent(task: Row, requirement: Row, link: Row, found: Standing, heard: obje
     quiet = _seconds_since(heard or fact.get("read_at") or fact.get("updated_at") or link.get("created_at"))
     if quiet is None or quiet < F.SILENT_S:
         return found
-    return Standing(requirement, NOT_MET, task.get("owner_id"), f"GitHub hasn't answered about {link['ref']} for 2 hours")
+    return Standing(
+        requirement, NOT_MET, task.get("owner_id"), f"GitHub hasn't answered about {link['ref']} for 2 hours"
+    )
 
 
 def _pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
@@ -401,7 +403,9 @@ def _pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Ro
     return _first(
         requirement,
         [
-            Standing(requirement, MET, line="PR open") if link["fact"] else _silent(task, requirement, link, _reading(requirement))
+            Standing(requirement, MET, line="PR open")
+            if link["fact"]
+            else _silent(task, requirement, link, _reading(requirement))
             for link in prs
         ],
     )
@@ -472,7 +476,9 @@ def _pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: 
     prs, said = _prs(conn, task, requirement)
     if said:
         return said
-    return _first(requirement, [_silent(task, requirement, link, _merged_one(conn, task, requirement, link)) for link in prs])
+    return _first(
+        requirement, [_silent(task, requirement, link, _merged_one(conn, task, requirement, link)) for link in prs]
+    )
 
 
 def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Standing:
