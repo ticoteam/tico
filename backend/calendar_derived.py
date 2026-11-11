@@ -576,17 +576,23 @@ def group_runs(occurrences: list[dict[str, object]], min_minutes: int = GROUP_MI
 
 
 def month_counts(
-    c: sqlite3.Connection, bot_ids: list[str], start_utc: datetime, end_utc: datetime
+    c: sqlite3.Connection,
+    bot_ids: list[str],
+    start_utc: datetime,
+    end_utc: datetime,
+    zone: ZoneInfo | str | None = None,
 ) -> list[dict[str, object]]:
-    """How many runs each bot had on each company day of the window (Monday to Sunday is bot_hours' week; a day is
-    ZONE's). A run is counted on the first window day it is in, so every count falls inside the window."""
+    """How many runs each bot had on each day of the window, a day in `zone` (the viewer's; default the company's ZONE,
+    whose Monday-to-Sunday weeks bot_hours keeps). A run is counted on the first window day it is in, so every count
+    falls inside the window."""
+    day_zone = ZoneInfo(zone) if isinstance(zone, str) else zone or ZONE
     ids = _ids(bot_ids)
     lo, hi = _utc(start_utc), _utc(end_utc)
     if not ids or lo >= hi:
         return []
     counts: dict[tuple[str, date], int] = {}
     for run in _run_rows(c, ids, lo, hi, datetime.now(timezone.utc)):
-        key = (run.bot_id, max(run.start, lo).astimezone(ZONE).date())
+        key = (run.bot_id, max(run.start, lo).astimezone(day_zone).date())
         counts[key] = counts.get(key, 0) + 1
     return [
         {"bot_id": bot, "date": day.isoformat(), "count": count}

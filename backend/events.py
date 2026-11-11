@@ -59,7 +59,7 @@ from . import read_cache
 from . import visuals as V
 from .store import H, Problem, encode
 
-TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters")
+TOPICS = ("tasks", "messages", "runs", "bots", "needs", "threads", "meeting_items", "presence", "letters", "calendar")
 AGENT_TOPICS = ("messages", "threads")  # what an external agent's standing token may follow (outside a turn)
 KEEP_HOURS = 24  # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5  # the shared look for changes another process wrote
@@ -358,6 +358,44 @@ TRIGGERS = [
     ),
     ("changes_proposal_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id", "proposed_task_id")),
     ("changes_proposal_roles_delete", "DELETE", "task_roles", None, _item_task_refs("OLD.task_id", "proposed_task_id")),
+    # Calendar (backend/calendar_api.py): a Tico event, an attendee's reply, a person's time away. The row names the
+    # calendar row (or `human:<id>` for time away); a reader refetches the window it shows. A Google write adds its
+    # own row (calendar_api._record_google): Google itself pushes nothing.
+    *(
+        (
+            f"changes_calendar_events_{event.lower()}",
+            event,
+            "calendar_events",
+            None,
+            _row("calendar", "event", "NEW.id", ref="NEW.calendar_id"),
+        )
+        for event in ("INSERT", "UPDATE")
+    ),
+    *(
+        (
+            f"changes_calendar_attendees_{event.lower()}",
+            event,
+            "calendar_event_attendees",
+            None,
+            _row(
+                "calendar",
+                "event",
+                f"{side}.calendar_event_id",
+                ref=f"(SELECT calendar_id FROM calendar_events WHERE id={side}.calendar_event_id)",
+            ),
+        )
+        for event, side in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD"))
+    ),
+    *(
+        (
+            f"changes_calendar_absences_{event.lower()}",
+            event,
+            "absences",
+            None,
+            _row("calendar", "away", f"{side}.id", ref=f"'human:'||{side}.human_id"),
+        )
+        for event, side in (("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD"))
+    ),
     (
         "changes_presences_insert",
         "INSERT",
@@ -1432,6 +1470,14 @@ for _name in (
     "changes_roles_meeting_delete",
 ):
     NEEDS[_name] = (*NEEDS.get(_name, ()), "meeting_task_links")
+
+
+for _name in (
+    "changes_calendar_attendees_insert",
+    "changes_calendar_attendees_update",
+    "changes_calendar_attendees_delete",
+):
+    NEEDS[_name] = ("calendar_events",)
 
 
 for _name in ("changes_proposal_task_access", "changes_proposal_roles_insert", "changes_proposal_roles_delete"):
@@ -2909,6 +2955,10 @@ def read_in(
                     picked.append(("letters", change, {"id": ident, "gone": True}))
                 continue
             picked.append(("letters", change, {"id": ident, "letter": letters.public(letter)}))
+    for row in by_topic.get("calendar", []):
+        # Which calendar moved, never what is on it: the reader refetches through /api/v2/calendar/events, which
+        # decides what this viewer may see (a private event is Busy).
+        picked.append(("calendar", row, {"calendar": row["ref"], "id": row["subject_id"], "kind": row["kind"]}))
     for topic in ('meeting_items', 'presence'):
         for row in by_topic.get(topic, []):
             picked.append(
