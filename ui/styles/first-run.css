@@ -250,7 +250,7 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--muted)) 50%,v
   .fr-owner select{width:100%}
   .bot-onboard .primary{width:100%}
 }
-.fr-strategy{margin:var(--s3) 0;font-size:var(--t-base)}
+.fr-strategy,.fr-github{margin:var(--s3) 0;font-size:var(--t-base)}
 
 /* first run, Your bets (ui/setup-strategy.js): the claims and What we won't do on the left, the draft filling in on the
    right; one column on a phone, the draft under the claims. The bets borrow the Strategy page's rows (strategy.css). */

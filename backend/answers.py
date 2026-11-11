@@ -239,17 +239,18 @@ def _may_answer_page(
 
 
 def _page_version(
-    conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, page_version: int | str | None
+    conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, page_version: str | None
 ) -> int | None:
-    """The page version an answer on a page is for: the one attached now. A caller that names the version it was shown
-    is refused when the page changed since (`task_changed`)."""
+    """The page version an answer on a page is for: the one attached now. A caller that names the page it was shown
+    (`<file id>@<version>`) is refused when another is attached since (`task_changed`): another file at the same
+    version number is another page."""
     if requirement["kind"] != "page":
         return None
     from . import task_pages
 
     page = task_pages.current(conn, row["visit"]["id"], requirement["id"])
     now = int(page["version"]) if page else None
-    if page_version not in (None, "") and now != int(page_version):
+    if page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}"):
         _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
     return now
 
@@ -349,11 +350,11 @@ def answer(
     *,
     seen_version: int | str | None = None,
     own_click: bool = False,
-    page_version: int | str | None = None,
+    page_version: str | None = None,
 ) -> Row:
     """Answer a requirement of the task's open visit: `done` (owner says done), `ok`, `no` with notes or `again` (an
-    OK), `ok` or `no` on a page (for the version attached now; `page_version`, when given, is the one the person was
-    shown), or the choice or text (a question). If that was the last thing missing, the task moves in the same step. The
+    OK), `ok` or `no` on a page (for the version attached now; `page_version`, when given, is the `<file id>@<version>`
+    the person was shown), or the choice or text (a question). If that was the last thing missing, the task moves in the same step. The
     same answer given twice is one answer. `own_click`: the person's own click in their own session (_may_answer)."""
     row = _open_task(conn, task_id, by)
     E.check_version(conn, by, row, seen_version)

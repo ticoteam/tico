@@ -31,6 +31,8 @@
 
 @media (max-width:640px){
   .tk-row .tk-after,.tk-row .tk-who{display:none}
+  /* S17: a long title wraps on a phone, to two lines at most. */
+  .tk-row .tk-title{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:var(--lh-tight)}
 }
 
 /* New task (S6): Title, Details, then one row: For, the pipeline, Create. */

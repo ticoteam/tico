@@ -469,7 +469,7 @@ def register(
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (file_id,)).fetchone()
             if not row or not F.file_visible(c, auth, who, row, {}):  # pyright: ignore[reportUnknownMemberType]
                 raise Problem("not_found", "That page is not one you can read", 404)
-            made = task_pages.attach(c, task_id, body.requirement, ref, who.actor, seen_version=body.version)
+            made = H.task_page_attach(c, who.actor, task_id, body.requirement, ref, body.version)
             return {"page": {"file_id": made["file_id"], "version": made["version"]}}
 
         return work(request, tid, body, call)
@@ -640,7 +640,7 @@ def register(
         def call(c: Any, who: Any, task_id: str) -> Any:
             from .item_sources import github as GS
 
-            owed = GS.requeue(c, task_id, who.actor, seen_version=body.version)
+            owed = H.task_requeue(c, who.actor, task_id, body.version)
             prs = [(GS.split_key(e["item_key"]), e["pinned"]) for e in owed]
             return {"queued": [{"repo": repo, "number": number, "head": head} for (repo, number), head in prs]}
 

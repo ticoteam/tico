@@ -153,7 +153,8 @@ DELETION_WARN = 24 * 60 * 60  # an unsettled disk may still cost money even afte
 HEARTBEAT = 60
 # An own machine HQ still runs whose runner has been silent this long while claimable work waits is stopped, and the
 # work's wake starts it again (HQ's start leaves a live machine as it is). At most one per OFFLINE_RESTART_GAP, and none
-# again until its runner has checked in since the last.
+# again until its runner has checked in since the last. A restart its runner has not checked in from this long after the
+# stop (OFFLINE_RESTART_DELAY again) has failed: it stops saying Restarting and BotOps gets a task (`restart_failed`).
 OFFLINE_RESTART_DELAY = 15 * 60
 OFFLINE_RESTART_GAP = 60 * 60
 OFFLINE_RESTARTING = "offline_restarting"
@@ -795,7 +796,7 @@ def mint(c, key, owner=None):
     if not operator or not H.human(c, operator):
         raise Problem("operator", "Nobody on the roster to own this cloud machine's computer", 409)
     code = secrets.token_urlsafe(32)
-    made_at = datetime.fromtimestamp(now(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    made_at = stamp(now())
     c.execute(
         "INSERT INTO enrollments(code_hash,owner_id,expires_at) VALUES(?,?,?)",
         (digest(code), operator, H.shift(made_at, minutes=ENROLL_MINUTES)),
@@ -981,6 +982,11 @@ def epoch(value):
     if at is None:
         return None
     return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).timestamp()
+
+
+def stamp(at):
+    """Epoch seconds `at` as the hub writes a timestamp (H.now's format)."""
+    return datetime.fromtimestamp(at, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
 def facts(c, settings, current, at):
@@ -1212,9 +1218,11 @@ def decide(current, found, at, idle_s):
         if offline_restart_ready(current, found, at):
             return "stop", None
         # Work queued for it that its runner has not taken yet is activity: stopping now would only start it again.
-        # So is an update under way: stopping it would cut the update short, and the wake for it would be spent.
+        # So is an update under way: stopping it would cut the update short, and the wake for it would be spent. A
+        # restart not back yet is not idle either: it has until its deadline (`restart_failed`) to check in.
         last = max(found["activity"] or 0, current["active_at"] or 0, found["want_at"] or 0)
-        settled = not found["turns"] and not found["updating"] and not booting
+        restarting = current["problem"] == OFFLINE_RESTARTING
+        settled = not found["turns"] and not found["updating"] and not booting and not restarting
         if settled and resizing(current):
             return "stop", None  # drained (`held`): the next start is at the size chosen
         if settled and not current["always_on"] and at - last >= idle_s:
@@ -1682,6 +1690,9 @@ class Manager:
                 if live["machine_id"] == current["machine_id"] and not live["runner_id"] and not live["enroll_by"]:
                     save(c, key, enroll_by=enrollment_deadline(c, key, at))
                 current = row(c, key)
+        if current and current["problem"] == OFFLINE_RESTARTING:
+            if at - (epoch(current["problem_at"]) or 0) >= OFFLINE_RESTART_DELAY:
+                current = self.restart_failed(key, current, at)
         current = self.grow(key, current, at)
         if resizing(current) != bool(current["drain_started_at"]):
             with self.store.transaction() as c:  # when the drain began, for Health (DRAIN_WARN)
@@ -1707,6 +1718,22 @@ class Manager:
         if action:
             self.act(hq, current, action, found, at)
         return action
+
+    def restart_failed(self, key, current, at):
+        """An offline restart its runner has not checked in from OFFLINE_RESTART_DELAY after the stop has failed: the
+        machine stops saying Restarting, and when HQ was asked to start it BotOps gets one task (one open per bot). No
+        second restart until its runner checks in (`offline_restart_ready`). Returns the row as it is now."""
+        from .cloud_machine_health import file_card as file_health_card
+
+        with self.store.transaction() as c:
+            live = row(c, key)
+            if not live or live["problem"] != OFFLINE_RESTARTING or live["problem_at"] != current["problem_at"]:
+                return live  # it checked in, or something else happened, meanwhile
+            save(c, key, problem="", problem_at=None)
+            H.event(c, H.KEEPER, "cloud_machine.restart_failed", key, {"machine": live["machine_id"]})
+            if live["state"] in ON:
+                file_health_card(c, key, None, epoch(live["problem_at"]) or at)
+            return row(c, key)
 
     def grow(self, key, current, at):
         """A running machine whose storage grows (`grows`) and whose disk is nearly full (`low_disk`, from its runner's
@@ -1896,7 +1923,7 @@ class Manager:
                     failures=0,
                     next_try_at=None,
                     problem=OFFLINE_RESTARTING if offline_restart or restarting else "",
-                    problem_at=H.now() if offline_restart else restarting_since,
+                    problem_at=stamp(at) if offline_restart else restarting_since,
                     stop_until=None,
                     start_asked_at=None,
                 )
