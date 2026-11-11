@@ -557,10 +557,10 @@ KEEP = (
             "task_move_guards",
             # What Product and Engineering read (backend/item_sources/github.py, backend/task_pages.py): saved copies of PRs and
             # releases, pages attached to a requirement and Jev's verdicts on them.
-            "pr_facts",
-            "releases",
-            "release_reads",
-            "release_commits",
+            "item_metadata",
+            "github_releases",
+            "github_release_reads",
+            "github_release_commits",
             "requirement_pages",
             "page_verdicts",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.

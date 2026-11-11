@@ -316,7 +316,7 @@ def _spec_page(c, task, version=3):
     """The Spec page that counted on the task's visit to Spec, as task_pages.attach leaves it (track B)."""
     rid = c.execute("SELECT id FROM requirements WHERE stage_id='product-spec' AND kind='page'").fetchone()[0]
     c.execute(
-        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, heads, attached_by_id, "
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",
         (H.new_id(), task["visit"]["id"], rid, "f-spec", version, "{}", "bot:pm", H.now()),
     )

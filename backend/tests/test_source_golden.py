@@ -112,7 +112,14 @@ class Seam:
         updated_at."""
         assert field in ("read_at", "head_seen_at", "checks_started_at", "updated_at")
         at = H.shift(H.now(), hours=-hours, minutes=-minutes)
-        c.execute(f"UPDATE pr_facts SET {field}=? WHERE repo=? AND number=?", (at, repo, number))
+        where = ("github", "pr", F.pr_key(repo, number))
+        if field in ("read_at", "updated_at"):
+            c.execute(f"UPDATE item_metadata SET {field}=? WHERE source=? AND item_type=? AND item_key=?", (at, *where))
+        else:
+            c.execute(
+                "UPDATE item_metadata SET fields=json_set(fields, ?, ?) WHERE source=? AND item_type=? AND item_key=?",
+                (f"$.{field}", at, *where),
+            )
 
     @staticmethod
     def age_links(c, task_id, hours):
@@ -120,7 +127,7 @@ class Seam:
 
     @staticmethod
     def age_release_reads(c, hours):
-        c.execute("UPDATE release_reads SET read_at=?", (H.shift(H.now(), hours=-hours),))
+        c.execute("UPDATE github_release_reads SET read_at=?", (H.shift(H.now(), hours=-hours),))
 
     # ------------------------------------------------------------------ reading
     @staticmethod
@@ -161,7 +168,7 @@ class Seam:
                         "failing_check_url": fact["failing_check_url"],
                         "head_seen_at": bool(fact["head_seen_at"]),
                         "checks_started_at": bool(fact["checks_started_at"]),
-                        "read_again": fact["read_at"] == "",  # a webhook asked for a full read on the next pass
+                        "read_again": fact["due_at"] is not None,  # a full read asked for on the next pass
                     },
                 }
             )
@@ -181,7 +188,8 @@ class Seam:
                             "holds": sorted(
                                 [sha, bool(inc)]
                                 for sha, inc in c.execute(
-                                    "SELECT commit_sha, included FROM release_commits WHERE release_id=?", (r["id"],)
+                                    "SELECT commit_sha, included FROM github_release_commits WHERE release_id=?",
+                                    (r["id"],),
                                 ).fetchall()
                             ),
                         }

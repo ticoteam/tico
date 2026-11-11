@@ -57,7 +57,7 @@ def test_a_pr_fact_keeps_the_newest_read(c):
     assert F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": []}, 200)
     assert not F.save_pr(c, REPO, 1, {"state": "closed", "head_sha": "a"}, 100)  # an older read began first
     fact = F.pr(c, REPO, 1)
-    assert (fact["state"], fact["fact_version"], fact["checks_state"]) == ("open", 200, "none")
+    assert (fact["state"], fact["metadata_version"], fact["checks_state"]) == ("open", 200, "none")
     assert F.pr(c, "ACME/App", 1)["id"] == fact["id"]  # a repo's name in any case
 
 

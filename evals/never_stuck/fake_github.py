@@ -339,6 +339,7 @@ def take(c: Any, d: Delivery) -> bool:
     """One webhook, as the server's webhook takes it: False for a delivery seen before."""
     from backend import release_schedule_routes as RS
     from backend import task_engine as E
+    from backend import item_metadata as IM
     from backend.item_sources import github as TF
 
     if TF.seen_delivery(c, d.id, d.event):
@@ -355,15 +356,14 @@ def take(c: Any, d: Delivery) -> bool:
         # older than the saved fact is not saved, and an open PR is read in full on the next pass. A check run only
         # changes the checks of a PR whose saved head it is on; on a head not saved yet it has the PR read in full.
         old = TF.pr(c, d.repo, d.number)
-        reread = "UPDATE pr_facts SET read_at='' WHERE repo=? AND number=? AND state='open'"
         if d.event == "check_run":
             if old and old["state"] == "open" and old["head_sha"] == d.fact["head_sha"]:
                 TF.save_and_settle(c, d.repo, d.number, {"checks": d.fact["checks"]}, d.version)
             elif old:
-                c.execute(reread, (d.repo, d.number))
+                IM.mark_due(c, TF.SOURCE, TF.PR, TF.pr_key(d.repo, d.number))
             return True
-        if old and int(old["fact_version"]) > d.version:
-            c.execute(reread, (d.repo, d.number))
+        if old and int(old["metadata_version"]) > d.version:
+            IM.mark_due(c, TF.SOURCE, TF.PR, TF.pr_key(d.repo, d.number))
             return True
         TF.save_and_settle(c, d.repo, d.number, d.fact, d.version)
         return True
@@ -377,9 +377,9 @@ def linked(c: Any, repo: str, number: int) -> list[str]:
     return [
         str(r[0])
         for r in c.execute(
-            "SELECT DISTINCT l.task_id FROM task_links l JOIN tasks t ON t.id = l.task_id WHERE l.kind='pr' "
-            "AND lower(l.repo)=lower(?) AND l.number=? AND t.status='open' AND t.pipeline_id IS NOT NULL "
+            "SELECT DISTINCT l.task_id FROM task_links l JOIN tasks t ON t.id = l.task_id WHERE l.source='github' "
+            "AND l.item_type='pr' AND l.item_key=? AND t.status='open' AND t.pipeline_id IS NOT NULL "
             "ORDER BY l.task_id",
-            (repo, int(number)),
+            (f"{repo}#{int(number)}",),
         ).fetchall()
     ]

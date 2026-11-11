@@ -105,6 +105,17 @@ def back(c, task_id):
     assert MQ.pull(c, merge, X.ANA) == [] and effects(c, task_id) == owed
 
 
+def age(c, field, at, number=None):
+    """Move one time of the saved PR metadata back (every PR, or one): `read_at` and `updated_at` are the item's,
+    the others its fields."""
+    where = "source='github' AND item_type='pr'" + (" AND item_key LIKE ?" if number else "")
+    args = (f"%#{number}",) if number else ()
+    if field in ("read_at", "updated_at"):
+        c.execute(f"UPDATE item_metadata SET {field}=? WHERE {where}", (at, *args))
+    else:
+        c.execute(f"UPDATE item_metadata SET fields=json_set(fields, '$.{field}', ?) WHERE {where}", (at, *args))
+
+
 def later(minutes=10):
     return H.shift(H.now(), minutes=minutes)
 
@@ -138,11 +149,11 @@ def test_checks_pass_reads_the_checks_at_the_newest_commit(c):
     assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#1: unit")
     F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "pending"}]}, 2)
     assert line(c, task_id, "checks_pass") == (R.WAITING, R.GITHUB, "Checks running")
-    c.execute("UPDATE pr_facts SET checks_started_at=?", (H.shift(H.now(), hours=-3),))
+    age(c, "checks_started_at", H.shift(H.now(), hours=-3))
     assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks still running after 2 hours")
     F.save_pr(c, REPO, 1, {"head_sha": "b"}, 3)  # a new commit: no checks known on it yet
     assert line(c, task_id, "checks_pass") == (R.WAITING, R.GITHUB, "Waiting for checks")
-    c.execute("UPDATE pr_facts SET head_seen_at=?", (H.shift(H.now(), minutes=-11),))
+    age(c, "head_seen_at", H.shift(H.now(), minutes=-11))
     assert line(c, task_id, "checks_pass") == (R.MET, None, "No checks on this repo")  # C13
     F.save_pr(
         c,
@@ -380,20 +391,20 @@ def test_a_wait_on_github_with_no_word_for_two_hours_is_the_owner_s(company):
     MQ.run(company, gh)
     with company.transaction() as c:
         assert line(c, merging, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
-        c.execute("UPDATE pr_facts SET read_at=? WHERE number=2", (hours_ago,))  # every read since failed
+        age(c, "read_at", hours_ago, 2)  # every read since failed
         assert line(c, merging, "pr_merged") == (R.NOT_MET, RM, "GitHub hasn't answered about acme/app#2 for 2 hours")
     gh.merge(REPO, 2)
     with company.transaction() as c:
         seen(c, gh, 2)
         assert stage(c, merging) == "Release"
         assert line(c, merging, "in_release") == (R.WAITING, R.GITHUB, "Reading releases")
-        c.execute("UPDATE pr_facts SET updated_at=? WHERE number=2", (hours_ago,))  # merged 3 hours ago, never read
+        age(c, "updated_at", hours_ago, 2)  # merged 3 hours ago, never read
         assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
         release = {"tag": "v1.0.0", "commit_sha": "0" * 40, "prerelease": False, "published_at": H.now()}
         F.save_release(c, REPO, release, F.version_now())
         F.saw_releases(c, REPO, F.version_now())  # the releases were read just now: GitHub answers again
         assert line(c, merging, "in_release") == (R.WAITING, R.GITHUB, "Waiting for a release of acme/app")
-        c.execute("UPDATE release_reads SET read_at=?", (hours_ago,))
+        c.execute("UPDATE github_release_reads SET read_at=?", (hours_ago,))
         assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
 
 
@@ -676,7 +687,7 @@ def test_a_pr_deleted_after_it_was_read_is_the_owner_s_after_two_hours(company):
     F.refresh(company, gh, later())
     with company.transaction() as c:
         assert line(c, task_id, "pr_open") == (R.MET, None, "PR open")  # within the 2 hours
-        c.execute("UPDATE pr_facts SET read_at=?", (H.shift(H.now(), hours=-3),))  # every read since found it gone
+        age(c, "read_at", H.shift(H.now(), hours=-3))  # every read since found it gone
         assert line(c, task_id, "pr_open") == (R.NOT_MET, B, "GitHub hasn't answered about acme/app#1 for 2 hours")
 
 
@@ -749,7 +760,7 @@ def test_webhooks_keep_only_linked_prs_and_each_check_on_the_head(c):
     assert stage(c, task_id) == "Merge"  # checks pass (Tico's own check doesn't count)
     gone = {"action": "dequeued", "reason": "CI_FAILURE", "pull_request": pr, "repository": repo}
     F.webhook(c, "pull_request", gone)  # read in full on the next pass, with the check that failed
-    assert F.pr(c, REPO, 1)["read_at"] == "" and F.pr(c, REPO, 1)["queue_state"] == "none"
+    assert F.pr(c, REPO, 1)["due_at"] is not None and F.pr(c, REPO, 1)["queue_state"] == "none"
     F.webhook(c, "release", {"action": "published", "release": {"tag_name": "v1.2.0"}, "repository": repo})
     assert [r["tag"] for r in F.releases(c, REPO)] == ["v1.2.0"]
 
@@ -763,7 +774,7 @@ def test_webhooks_out_of_order_never_unmerge_and_an_early_check_reads_the_pr(c):
     # The check run on the new head b comes before its `synchronize`: the PR is read in full on the next pass.
     run = {"head_sha": "b", "name": "unit", "status": "completed", "conclusion": "success", "app": {"slug": "ci"}}
     F.webhook(c, "check_run", {"check_run": {**run, "pull_requests": [{"number": 1}]}, "repository": repo})
-    assert F.pr(c, REPO, 1)["read_at"] == ""
+    assert F.pr(c, REPO, 1)["due_at"] is not None
     landed = {**pr, "state": "closed", "merged": True, "merge_commit_sha": "m", "merged_at": "2026-11-10T00:00:00Z"}
     F.webhook(c, "pull_request", {"action": "closed", "pull_request": landed, "repository": repo})
     # GitHub's `dequeued` for the merge comes after `closed`, with a snapshot taken while the PR was still open.
@@ -783,7 +794,7 @@ def test_a_pull_request_webhook_is_as_new_as_github_s_updated_at(c):
     F.webhook(c, "pull_request", {"action": "synchronize", "pull_request": pushed, "repository": repo})
     F.webhook(c, "pull_request", {"action": "opened", "pull_request": old, "repository": repo})  # arrives late
     fact = F.pr(c, REPO, 1)
-    assert fact["head_sha"] == "b" and fact["read_at"] == ""  # kept, and read in full on the next pass
+    assert fact["head_sha"] == "b" and fact["due_at"] is not None  # kept, and read in full on the next pass
 
 
 def test_a_webhook_delivered_twice_is_taken_once(hook_api):
