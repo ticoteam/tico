@@ -372,11 +372,11 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
             return []
         fact, removal = _pr_fact_of(payload)
         sent = sent_version(payload, version)
-        old = pr(conn, repo, number)
-        if old and int(old["fact_version"]) > sent:
+        saved = pr(conn, repo, number)
+        if saved and int(saved["fact_version"]) > sent:
             # Older than what is saved (a late webhook, or one beaten by a check that came first): not saved; an open
             # PR is read in full on the next pass, so what it said is never lost.
-            removal = old["state"] == "open"
+            removal = saved["state"] == "open"
         elif save_and_settle(conn, repo, number, fact, sent):
             out.append(pr_ref(repo, number))
         if removal:
@@ -411,8 +411,9 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
         if event == "check_run":
             # A check run on a commit no fact has yet came before its `synchronize`: the PRs it names are read in full
             # on the next pass, which brings the new head and its checks.
-            for found in _obj(payload.get("check_run")).get("pull_requests") or []:
-                number = int(_obj(found).get("number") or 0)
+            named: list[Any] = _obj(payload.get("check_run")).get("pull_requests") or []
+            for entry in named:
+                number = int(_obj(entry).get("number") or 0)
                 if number and number not in numbers:
                     conn.execute(
                         "UPDATE pr_facts SET read_at='' WHERE repo=? AND number=? AND state='open' AND head_sha<>?",

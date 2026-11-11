@@ -505,7 +505,7 @@ def _settle_removal(c, link_id, pr):
         return
     task = H.task(c, link["task_id"])
     H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
-    if _engine_speaks(c, task["id"]):
+    if _engine_speaks(c, link["task_id"]):
         return
     queue_wake(
         c,
