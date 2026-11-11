@@ -155,11 +155,30 @@ def _may_work(conn: "sqlite3.Connection", actor: str, row: Row, mover: bool | No
 
 def _owners_done_is_work(conn: "sqlite3.Connection", actor: str, row: Row, requirement_id: str) -> None:
     """Answering the owner's own "done" finishes the stage, and giving it away hands the task over: /done and /owner
-    by another road, so the same reader may do them, refused as those are."""
+    by another road, so the same reader may do them, refused as those are. The owner's answer to a stage's question is
+    their work too."""
     from . import task_requirements as R
 
-    if (R.get(conn, requirement_id) or {}).get("kind") == "owner_done":
+    requirement = R.get(conn, requirement_id) or {}
+    if requirement.get("kind") == "owner_done" or R.owners_answer(requirement):
         _may_work(conn, actor, row)
+
+
+def _requirement_named(conn: "sqlite3.Connection", row: Row, requirement: str) -> str:
+    """The requirement a caller names: its id, or the name of a stage's answer the task's open visit asks
+    (`tico task answer E-12 confidence 80`). Anything else is passed on as it is, for the engine to refuse."""
+    from . import task_engine as E
+    from . import task_requirements as R
+
+    visit: Row | None = (E.task(conn, row["id"]) or {}).get("visit")
+    if not visit or R.get(conn, requirement):
+        return requirement
+    wanted = requirement.strip().lower()
+    for found in R.for_visit(conn, visit):
+        settings: Row = found.get("settings") or {}
+        if found["kind"] == "answer" and str(settings.get("name") or "") == wanted:
+            return str(found["id"])
+    return requirement
 
 
 def may_handle_ask(
@@ -412,6 +431,7 @@ def task_answer(
     from . import answers as A
 
     row = _open(conn, actor, task_id, work=False)
+    requirement_id = _requirement_named(conn, row, requirement_id)
     _owners_done_is_work(conn, actor, row, requirement_id)
     with task_effects.because(actor):
         return A.answer(
@@ -590,7 +610,8 @@ def _may(
                 out.append("again")
         elif asked:
             out += ["ok", "no"]
-    if kind == "answer" and not standing.met and asked:
+    owners = R.owners_answer(requirement)
+    if kind == "answer" and not standing.met and (works if owners else asked):
         out.append("answer")
     # A page is answered once Jev has looked: by whom it waits on, or any person when it names nobody (answers).
     if kind == "page" and standing.state == R.WAITING and not R.outside(standing.on):
@@ -598,7 +619,8 @@ def _may(
             out += ["ok", "no"]
     # Give: whoever it waits on, whoever asked it, or someone who works the task (may_handle_ask); the owner's own work
     # is given by someone who works the task, which reassigns it.
-    if kind in ("ok", "answer") and standing.state == R.WAITING:
+    on_stage_answer = kind == "answer" and bool(requirement.get("stage_id"))
+    if kind in ("ok", "answer") and standing.state == R.WAITING and not on_stage_answer:
         if works or viewer in (standing.on, requirement.get("added_by_id")):
             out.append("give")
     if answer and answer["by_id"] == viewer and (kind != "owner_done" or works):
@@ -608,7 +630,7 @@ def _may(
     # A thumb rates a bot's ask, as answers._ask reads it: one added to the task is its author's, a stage's is the
     # owner's.
     asker = requirement.get("added_by_id") if requirement.get("visit_id") else owner
-    if kind in ("ok", "answer") and human and is_bot(asker):
+    if kind in ("ok", "answer") and human and is_bot(asker) and not on_stage_answer:
         out.append("thumbs")
     return out
 
@@ -712,6 +734,7 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
     from . import read_cache
     from . import task_engine as E
     from . import task_relations
+    from . import task_requirements as R
     from . import waiting_on as W
 
     TR: Any = task_relations
@@ -726,6 +749,7 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
         for key, found in _keyed(conn, sql, unread).items():
             values.setdefault((sql, key), found)
     E.prime_stages(conn, [str(row["pipeline_id"]) for row in rows.values() if row.get("pipeline_id")])
+    R.prime_values(conn, ids)
     TR.prime_ancestry(conn, ids)
     if viewer:
         _h().prime_task_delegated(conn, ids, viewer)
@@ -781,6 +805,22 @@ def _answer_view(conn: "sqlite3.Connection", task_id: str, answer: Row, private:
         "by": answer["by_id"],
         "via": (found[0] if found else None) or None,
         "at": answer["created_at"],
+    }
+
+
+def _typed_view(requirement: Row) -> Row | None:
+    """A stage's answer as the task shows it: {name, type, min, max, question}. None for any other requirement."""
+    settings: Row = requirement.get("settings") or {}
+    if requirement.get("kind") != "answer" or not requirement.get("stage_id"):
+        return None
+    from . import task_requirements as R
+
+    return {
+        "name": settings.get("name"),
+        "type": R.answer_type(requirement),
+        "min": settings.get("min"),
+        "max": settings.get("max"),
+        "question": settings.get("question") or "",
     }
 
 
@@ -856,6 +896,7 @@ def task_view(
         # A page requirement shows the page attached now, at its pinned version: what an OK of it is for.
         page = _page_of(conn, visit["id"], requirement) if requirement["kind"] == "page" else None
         shows = [page["ref"]] if page else [] if private else requirement.get("shows") or []
+        typed = _typed_view(requirement)
         to_leave.append(
             {
                 "requirement_id": requirement["id"],
@@ -870,6 +911,7 @@ def task_view(
                 if requirement.get("visit_id")
                 else None,
                 "choices": None if private else requirement.get("choices"),
+                **({"typed": typed} if typed else {}),
                 "shows": shows,
                 # What it shows is where its words come from: a reader who may not open one of those pages reads
                 # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
@@ -927,4 +969,5 @@ def task_view(
         else None,
         "filed_by": filed_by,
         "filed": filed,
+        "values": R.values(conn, task_id),
     }

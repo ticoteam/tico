@@ -134,6 +134,24 @@ def test_a_bot_that_stops_early_gets_three_tries_then_its_manager_bot_then_a_per
     assert kinds.count("woken_again") == 6 and kinds.count("ladder") == 2
 
 
+def test_an_owner_who_never_answers_the_stages_question_climbs_the_same_ladder(c, general, later):
+    settings = {"name": "confidence", "type": "number", "min": 0, "max": 100, "question": "How sure are you?"}
+    stages = ({"name": "Build", "owner": BUILDER, "requirements": [{"kind": "answer", "settings": settings}]},)
+    X.pipeline(c, "eng", "Engineering", stages, manager=MANAGER)
+    task_id = X.new_task(c, ANA, "Build the importer", "eng")["id"]
+    for seconds in (120, 900, 3600):
+        X.ran(c, task_id, BUILDER)
+        assert later(seconds=seconds) == {"woken": 1}
+    X.ran(c, task_id, BUILDER)
+    assert later(seconds=120) == {"to_manager": 1, "woken": 1} and _ladder(c, task_id) == ("manager", 1)
+    for seconds in (900, 3600):
+        X.ran(c, task_id, MANAGER)
+        assert later(seconds=seconds) == {"woken": 1}
+    X.ran(c, task_id, MANAGER)
+    assert later(seconds=120) == {"to_person": 1} and _ladder(c, task_id)[0] == "person"
+    assert (ANA, "How sure are you?") in [(w.who, w.line) for w in W.waiting_on(c, task_id)]
+
+
 def test_try_again_hands_it_back_to_the_owner_with_the_count_at_zero(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     c.execute(

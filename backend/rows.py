@@ -1467,6 +1467,8 @@ class AnswerRow(TypedDict):
     page_version: int | None
     created_at: str
     undone_at: str | None
+    name: str | None
+    value_type: str | None
 
 
 class SnoozeRow(TypedDict):

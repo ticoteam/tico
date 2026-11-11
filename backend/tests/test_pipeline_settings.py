@@ -74,6 +74,7 @@ def _ops(**fields):
                         "who_oks": "none",
                         "person_id": None,
                         "line": "Say it is sorted",
+                        "choices": None,
                     }
                 ],
             },
@@ -96,6 +97,7 @@ def _ops(**fields):
                         "who_oks": "people_only",
                         "person_id": BEN,
                         "line": "Ben OKs it",
+                        "choices": None,
                     }
                 ],
             },
@@ -213,9 +215,40 @@ CASES = {
         lambda r: _req(r).update(PS.github("checks_pass", rubric="green")),
         "Checks pass has no setting rubric (on Intake).",
     ),
-    "an answer on a stage": (
-        lambda r: _req(r).update(kind="answer", person_id=BEN),
-        "Answer from someone is never set on a stage",
+    "an answer with no name": (
+        lambda r: _req(r).update(kind="answer", settings={"type": "text"}),
+        "Say it is sorted on Intake needs a name",
+    ),
+    "an answer of no type": (
+        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "type": "date"}),
+        "Say it is sorted on Intake is text, a number or a choice.",
+    ),
+    "a number's bounds the wrong way": (
+        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "type": "number", "min": 5, "max": 1}),
+        "The min of Say it is sorted on Intake is more than its max.",
+    ),
+    "a choice with no choices": (
+        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "type": "choice"}),
+        "Say it is sorted on Intake needs its choices.",
+    ),
+    "choices on owner done": (
+        lambda r: _req(r).update(choices=["Yes", "No"]),
+        "Only an answer has choices, not Owner says done (on Intake).",
+    ),
+    "only when": (
+        lambda r: _req(r, 1).update(settings={"only_when": {"answer": "risky", "in": ["Yes"]}}),
+        "Only when and Met when are not ready yet. Remove only_when from OK from someone on Sign off.",
+    ),
+    "met when": (
+        lambda r: _req(r).update(kind="answer", settings={"name": "sorted", "met_when": {"min": 1}}),
+        "Remove met_when from Answer from someone on Intake.",
+    ),
+    "two answers, one name": (
+        lambda r: (
+            _req(r).update(kind="answer", settings={"name": "sorted"}),
+            _req(r, 1).update(kind="answer", person_id=BEN, settings={"name": "sorted"}),
+        ),
+        "Two answers are named sorted.",
     ),
     "a kind that is not one": (lambda r: _req(r).update(kind="vibes"), "vibes is not a requirement kind"),
     "a person on owner done": (

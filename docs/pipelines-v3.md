@@ -147,8 +147,9 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   is still the one whose turn it is. *Today an @ on a task reaches no list. Channels are not changed.*
 - **C29.** Only a requirement a person can meet with a button can name a person: OK from someone, a page's OK, Answer
   from someone. "Checks pass" can't. If a person has to make it pass, that is a sub-task.
-- **C30.** Anyone working a task can add an OK or an answer from someone to it. It lasts for this stage. Answer from
-  someone is never set on a stage.
+- **C30.** Anyone working a task can add an OK or an answer from someone to it. It lasts for this stage. A stage can
+  ask for an answer too: named and typed, from the task's owner or a named person (kind 6). *Before typed answers, an
+  answer was never set on a stage.*
 - **C31.** In a release on a repo that publishes no releases is met once the PR merged, with the line "This repo
   doesn't publish releases". A repo publishes releases once Tico has read one published release of it (a pre-release
   counts). Until Tico has read the repo's releases once, the line is "Reading releases". *Before, the task waited in
@@ -209,7 +210,14 @@ That gives three kinds of stage, and no others:
    - **In a release.** Every merge is inside a published release.
 5. **Linked work done.** Every task filed during this visit to the stage ended Done, not Closed. Zero tasks filed means
    not met.
-6. **Answer from someone.** A question with choices, for a named person. Added to one task, never set on a stage.
+6. **Answer from someone.** A question for a named person, or on a stage for the task's owner when it names nobody.
+   Added to one task, it is a line with optional choices. On a stage it has a name (`confidence`: lower case, unique in
+   the pipeline) and a type: text, a whole number (with a min and a max) or a choice (one of its choices, strictly).
+   The value is kept in one exact form ("080" is 80) and a value that does not fit is refused in one line
+   ("Confidence is a whole number from 0 to 100"). A new visit asks again; the newest answer wins, and the task's read
+   carries each name's newest answer (`values`). The owner, the manager or any person answers the owner's; it takes no
+   thumb and can't be given away. A bot answers with `tico task answer <id> confidence 80`. "Only when" and "Met when"
+   (routing on answers) are not built yet and are refused at save.
 
 Two switches sit on a requirement:
 

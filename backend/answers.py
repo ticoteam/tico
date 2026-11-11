@@ -93,6 +93,8 @@ def ask_of(conn: "sqlite3.Connection", subject_id: str) -> Row | None:
     requirement = R.get(conn, requirement_id)
     if not visit or not requirement or requirement["kind"] not in ASKS:
         return None
+    if requirement["kind"] == "answer" and requirement.get("stage_id"):
+        return None  # a stage's answer takes no thumb (_ask)
     if requirement.get("visit_id"):
         if requirement["visit_id"] != visit_id:
             return None
@@ -176,6 +178,14 @@ def _may_answer(
         return
     if kind == "page":
         _may_answer_page(conn, by, row, requirement, value, notes)
+        return
+    if R.owners_answer(requirement):
+        # A stage's answer that names nobody is the owner's, given as they say done: by the owner, the manager or a
+        # person.
+        if not value:
+            _refuse(conn, by, "task_requirement", "Give an answer", task_id)
+        if by not in (row.get("owner_id"), _part(row, "pipeline").get("manager_id")) and not is_human(by):
+            _refuse(conn, by, "task_requirement", "Only the owner, the manager or a person answers this", task_id)
         return
     person = R.person_of(conn, requirement, row["visit"]["id"])
     if kind == "ok" and value == AGAIN:
@@ -264,13 +274,18 @@ def _write(
     value: str,
     notes: str | None,
     page_version: int | None = None,
+    typed: Row | None = None,
 ) -> str:
+    """Write one answers row. `typed` is the answer requirement it meets: its name and type go on the row with it."""
     H = _h()
     answer_id = H.new_id()
+    settings: Row = (typed or {}).get("settings") or {}
+    name = str(settings["name"]) if settings.get("name") else None
+    value_type = R.answer_type(typed) if typed else None
     conn.execute(
-        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, page_version, H.now()),
+        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, name, value_type, "
+        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, page_version, name, value_type, H.now()),
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
     if page_version is not None:
@@ -362,13 +377,20 @@ def answer(
     value = str(value or "").strip()
     pinned = _page_version(conn, by, row, requirement, page_version)
     _may_answer(conn, by, row, requirement, value, notes, own_click=own_click)
+    if requirement["kind"] == "answer":
+        # One exact form: "080" is 80, a choice as the choice is spelled. What does not fit is refused in one line.
+        stored, why = R.typed(requirement, value)
+        if stored is None:
+            _refuse(conn, by, "task_requirement", why, task_id)
+        value = stored
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
     same = (str(by), value, notes, pinned)
     if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version")) == same:
         out = E.task(conn, task_id) or row
         out["answer_id"] = newest["id"]
         return out
-    answer_id = _write(conn, row, requirement_id, by, value, notes, pinned)
+    typed = requirement if requirement["kind"] == "answer" else None
+    answer_id = _write(conn, row, requirement_id, by, value, notes, pinned, typed)
     if requirement["kind"] == "ok" and value != OK:
         from . import task_asks
 
@@ -379,7 +401,7 @@ def answer(
         E.changed(conn, task_id, by)
         out = E.task(conn, task_id) or row
         _tell_bot(conn, out, requirement, by, value, notes, _wake_key(out, answer_id))
-    if requirement["kind"] == "answer":
+    if requirement["kind"] == "answer" and requirement.get("visit_id"):
         from . import strategy_merge
 
         merged: Any = strategy_merge
@@ -420,6 +442,9 @@ def give_to(
         return E.reassign(conn, task_id, person, by, seen_version=row.get("version"))
     if kind not in ASKS:
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} can't name a person", task_id)
+    if kind == "answer" and requirement.get("stage_id"):
+        # A give is kept as an answer, and on a stage's answer any value meets it: the stage names who answers.
+        _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is answered by who the stage names", task_id)
     visit = row["visit"]
     standing = R.standing(conn, row, requirement, R.newest_answers(conn, visit["id"]).get(requirement_id))
     if standing.state != R.WAITING:
@@ -512,6 +537,9 @@ def _ask(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: str)
         bot = row.get("owner_id")
     if not visit or requirement["kind"] not in ASKS:
         _refuse(conn, by, "task_requirement", "That is not an ask on this task", task_id)
+    if requirement["kind"] == "answer" and requirement.get("stage_id"):
+        # A thumb rates a bot's ask, and a send back would answer the stage's question with the reason.
+        _refuse(conn, by, "task_requirement", "A stage's answer takes no thumb", task_id)
     if not is_bot(bot):
         _refuse(conn, by, "task_requirement", "Only a bot's ask takes a thumb", task_id)
     return row, requirement, visit, str(bot)

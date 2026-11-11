@@ -832,7 +832,8 @@ STABLE = [
         "Tasks",
         "answerAsk",
         "Answer a requirement: ok, no (send it back, with a note), again (look again), or the answer to a question; "
-        "carries answer_id",
+        "a stage's answer may be named by its name instead of its id, and takes a whole number in its range, one of "
+        "its choices, or text; carries answer_id",
         "TaskResult",
     ),
     (
@@ -2587,6 +2588,14 @@ SCHEMAS = {
         },
         snooze={"oneOf": [obj({"until": "n", "by": "s", "why": "n"}), {"type": "null"}]},
         filed_by={"type": ["string", "null"], "description": "The task that filed this one"},
+        values={
+            "type": "object",
+            "description": "On the task's own read: the newest answer to each of its stages' named answers, by name, "
+            "on any visit: {value, type, by, at, stage_id}; a number's value is a whole number",
+            "additionalProperties": obj(
+                {"value": {"type": ["string", "integer"]}, "type": "s", "by": "s", "at": "s", "stage_id": "s"}
+            ),
+        },
         filed=items(obj({"id": "s", "kind": "s", "status": "s", "title": "n"}))
         | {"description": "The tasks this one filed; title is null for one the reader may not read"},
         cover={
@@ -2658,6 +2667,16 @@ SCHEMAS = {
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
             "answer": {"oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]},
+            # A stage's answer: how it is named and what it takes. Absent on every other requirement.
+            "typed": obj(
+                {
+                    "name": "s",
+                    "type": {"enum": ["text", "number", "choice"]},
+                    "min": {"type": ["integer", "null"]},
+                    "max": {"type": ["integer", "null"]},
+                    "question": "s",
+                }
+            ),
             "may": items({"enum": ["done", "ok", "no", "again", "answer", "give", "undo", "withdraw", "thumbs"]})
             | {"description": "What this reader may do with it: a hint, the engine decides"},
         },
