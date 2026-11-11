@@ -151,8 +151,13 @@ The note says, in this order:
 
 For a chart seat, take it live first: `tico bot go-live <slug>`. When it answers `waiting_for_repository`, the
 computer has not reported the repository yet and Tico finishes going live by itself: snooze the task a few minutes
-(`tico task snooze <id> --until <time> -m "waiting to go live" --version N`) and say done once `tico bot show <slug>` says active. If it is
-still waiting after 30 minutes, say so on the task once, naming what Health says, and leave it for the owner.
+(`tico task snooze <id> --until <time> -m "waiting to go live" --version N`) and say done once `tico bot show <slug>` says active;
+your done ends your snooze. If it is still waiting after 30 minutes, say so on the task once, naming what Health says, and leave
+it for the owner.
+
+Going live turns on the routines its template came with, except one a person turned off or changed. In the note, name the
+routines that are on from `routines` in `tico bot show <slug>` (`on` true), and only those: never say one is on because the
+template has it.
 
 Otherwise, unless a human asked you in chat to take it live, the bot stays as it is (still being set up) until its
 owner turns it on.

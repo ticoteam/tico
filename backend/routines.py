@@ -242,6 +242,94 @@ def remove(c, actor, sid, *, at=None):
     return row(c, sid)
 
 
+def _trigger_of(entry):
+    """The trigger a template routine is seeded with (clients/remotecli.py `seed_automations`), as (type, value)."""
+    on = entry["on"] or ""
+    if on.startswith("webhook."):
+        return "webhook", on[len("webhook.") :]
+    return ("event", on) if on else ("schedule", entry["cron"])
+
+
+def seeded(c, bot, entry):
+    """Where one routine of the bot's template (`entry`, as clients/routines.py validates it) is now: (its schedule id or
+    None, its row as `row` reads it), or None when the bot does not have it. A built-in's or a starter's was made here
+    (`create`, the schedule row moved to an automation); a bot `tico bot create` built got it straight as an automation
+    owned by the bot, with the routine's title and time, made by BotOps."""
+    sid = c.execute("SELECT id FROM schedules WHERE bot=? AND routine_key=?", (bot, entry["id"])).fetchone()
+    if sid:
+        found = row(c, sid["id"])
+        return (sid["id"], found) if found and not found["deleted_at"] else None
+    from . import automations
+
+    want = _trigger_of(entry)
+    for auto in c.execute(
+        "SELECT * FROM automations WHERE owner_id=? AND name=? AND deleted_at IS NULL AND builtin=0 ORDER BY created_at",
+        ("bot:" + bot, entry["title"][:120]),
+    ).fetchall():
+        trigger = automations.flow_of(auto)["trigger"]
+        value = trigger.get({"schedule": "cron", "event": "name", "webhook": "id"}.get(trigger["type"], "")) or ""
+        made = c.execute(
+            "SELECT 1 FROM audit_log WHERE object=? AND before IS NULL AND (via='botops' OR actor=?)",
+            ("automation:" + auto["id"], automations.BOTOPS),
+        ).fetchone()
+        if (trigger["type"], value) == want and made:
+            return None, {**dict(auto), "automation": auto["id"]}
+    return None
+
+
+def untouched(c, sid, found):
+    """Whether nobody has changed a seeded routine since it was made: never switched on or off, never edited, not a
+    draft waiting for a person's OK. Every change to an automation is on its audit trail (backend/audit_log.py) and every
+    change to a routine before it moved is a `routine.updated` event, so one of either means a person (or BotOps or a bot
+    for one) decided about it, and that decision stands."""
+    if sid and c.execute("SELECT 1 FROM events WHERE action='routine.updated' AND target=? LIMIT 1", (sid,)).fetchone():
+        return False
+    aid = found.get("automation")
+    if not aid:
+        return True
+    version = c.execute(
+        "SELECT v.status FROM automations a JOIN automation_versions v ON v.automation_id=a.id AND v.n=a.version "
+        "WHERE a.id=?",
+        (aid,),
+    ).fetchone()
+    if not version or version["status"] != "active":
+        return False
+    return not c.execute(
+        "SELECT 1 FROM audit_log WHERE object=? AND before IS NOT NULL LIMIT 1", ("automation:" + aid,)
+    ).fetchone()
+
+
+def switch_on(c, actor, sid, found):
+    """Turn a seeded routine on, as `actor`: through its schedule row when it has one, else its automation."""
+    if sid:
+        update(c, actor, sid, {"enabled": True})
+        return
+    from . import automations, strategy_acts
+
+    auto = automations._row(c, found["automation"])
+    if not auto:
+        return
+    strategy_acts.gate(c, actor, "cost", f"start the automation \"{auto['name']}\"")
+    before = automations.flow_of(auto)
+    automations._save(c, actor, auto["id"], {**before, "enabled": True}, before, via="setup")
+
+
+SHOWN = 20  # a bot's routines in its answers: a template has a few; a bot with more is told to list them
+
+
+def of_bot(c, bot):
+    """The bot's routines as its own answers show them (go-live, `tico bot show`): every automation it owns that is not
+    deleted, with its name and whether it is on now, the first SHOWN of them."""
+    return [
+        {"id": r["id"], "name": r["name"], "on": bool(r["enabled"])}
+        for r in c.execute(
+            "SELECT id, name, enabled FROM automations WHERE owner_id=? AND deleted_at IS NULL ORDER BY created_at, id "
+            "LIMIT ?",
+            ("bot:" + bot, SHOWN),
+        )
+    ]
+
+
 def no_input(c, settings, schedule, local):
     """Why a built-in routine's run would have nothing to work on, or None: such a run is skipped rather than
     opening a task its bot can only close."""

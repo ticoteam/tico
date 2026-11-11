@@ -3646,7 +3646,8 @@ def parser():
         "bot", aliases=["bots"], help="build a bot from a template (BotOps), change it, place it, its status"
     ).add_subparsers(dest="sub")
     s = bot.add_parser(
-        "show", help="one bot: its profile, and for one you may read also its status, machine, queue and goals"
+        "show",
+        help="one bot: its profile, and for one you may read also its status, machine, queue, goals and routines",
     )
     s.add_argument("slug")
     s.set_defaults(fn="bot show")

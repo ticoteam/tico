@@ -62,7 +62,8 @@ Done when: the change is made as the requester and read back, or the refusal is 
 - `tico bot copy <slug> --slug <new-slug>`: copy a bot into one the requester owns. `tico bot update-from-original <copy>` and
   `tico bot suggest-to-original <copy>` carry changes between a copy and its original.
 - `tico bot go-live <slug>` (`--computer "<label>"`): put it on a computer, turn it on and start its setup. The answer has `state`,
-  `placed`, `setup_started` and `routine_armed` (set when its first routine was turned on).
+  `placed`, `setup_started`, `routine_armed` (the routines this call turned on) and `routines` (each one's name and
+  whether it is `on` now). `tico bot show <slug>` has `routines` too.
 - `tico bot place <slug> --computer "<label>"`: move it to another computer.
 - `tico bot model <slug> <model> --effort <effort>`: change its model. Read `readiness` in the answer.
 - `tico bot pause <slug>` and `tico bot resume <slug>`.
