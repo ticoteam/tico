@@ -1,11 +1,14 @@
 """Computers (list, detail, performance, turns at once, the browser exit), health, maintenance and support. Restarts, releases, this installation's update, the cloud machine and subscriptions are in computer_upkeep.
 
-Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
+Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together. HEALTH and COMPUTER
+are the `tico health` and `tico computer` command lines as specs (clients/cli_spec.py), with `tico health ready`
+(clients/commands/connections.py) and `tico computer restart` and `versions` (clients/commands/computer_upkeep.py)."""
 
 import hashlib
 import json
 from urllib.parse import quote
 
+from clients.cli_spec import NULL, Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._requester import _as_person
@@ -22,7 +25,7 @@ from clients.commands._requester import _as_person
             "type": ["integer", "null"],
             "minimum": 1,
             "maximum": 256,
-            "description": "Null for automatic, N for a count of turns at once",
+            "description": "1-256 turns at once, or null (`automatic` on a command line) for its own capacity",
         },
     },
     ("computer", "limit"),
@@ -40,9 +43,14 @@ def computer_turns_at_once(api, args):
     "and daily cap; an admin may turn it off. With usage, also what went through it per day, bot and hostname.",
     {
         "computer": _s("Computer id"),
-        "sharing": {"type": "boolean", "description": "Omit to read"},
+        "sharing": {"type": "boolean", "description": "Whether it shares (on or off); omit to read"},
         "bots": {"type": "array", "items": {"type": "string"}, "description": "Bot slugs it shares with; omit to keep"},
-        "daily_cap_gb": {"type": "number", "minimum": 0.1, "maximum": 10000, "description": "Omit to keep (default 5)"},
+        "daily_cap_gb": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10000,
+            "description": "The daily cap in GB; omit to keep (default 5)",
+        },
         "usage": {"type": "boolean", "description": "Also read the last 7 days of what went through it"},
     },
     ("computer",),
@@ -288,7 +296,13 @@ def computers(api, args):
     "the busiest processes, and up to 96 points (columns named in `columns`). Numbers and process names only.",
     {
         "computer": _s("The computer's label or id (tico computer list)"),
-        "hours": {"type": "integer", "minimum": 1, "maximum": 336, "default": 24},
+        "hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 336,
+            "default": 24,
+            "description": "How many hours back, 1-336",
+        },
     },
     required=("computer",),
 )
@@ -526,3 +540,81 @@ def maintenance_runs(api, args):
 def maintenance_run(api, args):
     body = {"step": args["step"]} if args.get("step") else {}
     return _as_person(api).call("POST", "maintenance/run", body, _key(args))
+
+
+# ----------------------------------------------------------------------------- the `tico` commands
+def _slugs(text):
+    return [b.strip() for b in text.split(",") if b.strip()]
+
+
+HEALTH = (
+    Group("health", "what is wrong, and where"),
+    Command(
+        "health check", "what is wrong with the bots, most urgent first, each with its fix", example="tico health check"
+    ),
+    Command(
+        "health metrics",
+        "the server's flight recorder: requests, CPU, loop lag, SQL, database size",
+        example="tico health metrics --minutes 30 --section slow,sql",
+    ),
+    Command(
+        "health findings",
+        "what Check health found on this install, each problem with its report",
+        example="tico health findings",
+    ),
+    Command(
+        "health report",
+        "report a finding as a Tico bug: one ticket per problem, with the redacted diagnostics",
+        args=(Arg("key", positional=True, nargs="?"),),
+        example="tico health report runner-crash-loop",
+    ),
+    Command(
+        "health ready",
+        "is this company able to work now: blockers with their fixes, then warnings; exits 1 when not ready",
+        args=(Arg("bots", "--bot", metavar="SLUG"), Arg("github", "--no-github", action="store_const", const=False)),
+        example="tico health ready --bot builder",
+    ),
+)
+
+COMPUTER = (
+    Group("computer", "the computers a bot may go on"),
+    Command(
+        "computer list",
+        "the computers a bot may go on, one short row each; --computer for one in full",
+        example="tico computer list --computer mac-studio --section bots",
+    ),
+    Command(
+        "computer performance",
+        "a computer's CPU, memory and disk over time, overloads and what ran then",
+        args=(Arg("hours", default=24),),
+        example="tico computer performance mac-studio --hours 6",
+    ),
+    Command(
+        "computer turns-at-once",
+        "set how many turns a computer runs at once: N, or automatic for its own capacity",
+        args=(Arg("limit", type=lambda v: NULL if v == "automatic" else int(v)),),
+        example="tico computer turns-at-once mac-studio 4",
+    ),
+    Command(
+        "computer browser-exit",
+        "read or set whether a computer shares its internet with bots: on or off",
+        args=(
+            Arg("sharing", positional=True, nargs="?", action="store", choices=("on", "off")),
+            Arg("bots", action="store", type=_slugs, metavar="A,B"),
+            Arg("daily_cap_gb", "--cap-gb", metavar="GB"),
+            Arg("usage", default=None),
+        ),
+        convert=lambda f: f | {"sharing": f["sharing"] == "on"} if "sharing" in f else f,
+        example="tico computer browser-exit mac-studio on --bots researcher --cap-gb 2",
+    ),
+    Command(
+        "computer restart",
+        "restart a computer's runner on the latest code once no turn runs (the Owner, an admin or its person)",
+        example="tico computer restart 'Shared cloud machine'",
+    ),
+    Command(
+        "computer versions",
+        "the server's release and each computer's release, runner version and update state",
+        example="tico computer versions",
+    ),
+)

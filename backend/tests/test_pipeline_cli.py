@@ -1,6 +1,6 @@
 """The 0.5 tools `tico_requirements`, `tico_requirement_attach`, `tico_pipeline` and `tico_pipeline_manager` are gone in
 Pipelines v3 (docs/pipelines-v3.md): over MCP each is an unknown tool and calls nothing. `tico pipeline`, `tico stage` and
-`tico requirement` are the new commands (clients/hubcli_pipelines.py)."""
+`tico requirement` are the new commands (clients/commands/pipelines.py)."""
 
 import pytest
 

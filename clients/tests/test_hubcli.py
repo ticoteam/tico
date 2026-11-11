@@ -21,7 +21,7 @@ from unittest import mock
 
 import pytest
 
-from clients import hubcli
+from clients import cli_spec, hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 
@@ -1083,7 +1083,8 @@ def test_computer_turns_at_once_cli_sends_automatic_as_null(monkeypatch):
     sent = []
     monkeypatch.setitem(BY_NAME['tico_computer_turns_at_once'], 'fn', lambda api, args: sent.append(args))
     for argv in (['computer', 'turns-at-once', 'rig-1', 'automatic'], ['computer', 'turns-at-once', 'rig-1', '3']):
-        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+        args = hubcli.parser().parse_args(argv)
+        cli_spec.of(args).call(None, args)
     assert [row['limit'] for row in sent] == [None, 3]
     assert all(row['computer'] == 'rig-1' for row in sent)
 
@@ -1100,12 +1101,15 @@ def test_browser_exit_cli_sends_none_as_null_and_on_off_as_booleans(monkeypatch)
         ['bot', 'browser-exit', 'ops', 'none'],
         ['bot', 'browser-exit', 'ops', 'rig-1'],
         ['computer', 'browser-exit', 'rig-1', 'on', '--bots', 'ops,cpo'],
+        ['computer', 'browser-exit', 'rig-1', 'off'],
         ['computer', 'browser-exit', 'rig-1'],
     ):
-        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+        args = hubcli.parser().parse_args(argv)
+        cli_spec.of(args).call(None, args) if cli_spec.of(args) else remotecli.via_tool(None, args)
     assert ['computer' in row for row in sent[:3]] == [False, True, True]
     assert [row.get('computer') for row in sent[1:3]] == [None, 'rig-1']
-    assert (sent[3]['sharing'], sent[3]['bots']) == (True, ['ops', 'cpo']) and 'sharing' not in sent[4]
+    assert (sent[3]['sharing'], sent[3]['bots']) == (True, ['ops', 'cpo']) and sent[4]['sharing'] is False
+    assert 'sharing' not in sent[5]
 
 
 def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_path):

@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from clients import hubcli, hubcli_pipelines, hubtools, remotecli
+from clients import cli_spec, hubcli, hubcli_pipelines, hubtools, remotecli
 from clients.commands import pipelines as P
 from clients.tico import APIError
 
@@ -216,7 +216,7 @@ LINES = [
 def test_each_command_runs_its_tool_and_both_doors_send_the_same_requests(cli, capsys, argv, fields):
     args = hubcli.parser().parse_args(argv)
     name = remotecli.tool_name(args.fn)
-    assert name in hubtools.BY_NAME and args.fn in hubcli_pipelines.COMMANDS
+    assert name in hubtools.BY_NAME and (cli_spec.of(args) or args.fn in hubcli_pipelines.COMMANDS)
     assert hubtools.argument_error(fields, hubtools.BY_NAME[name]["inputSchema"]) is None
     code, api = cli(argv)
     printed = json.loads(capsys.readouterr().out)

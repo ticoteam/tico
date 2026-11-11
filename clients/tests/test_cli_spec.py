@@ -135,12 +135,16 @@ def spec_leaves(p=None, path=()):
     return out
 
 
-def test_every_spec_command_has_an_example_that_runs_it():
+def test_every_spec_command_has_an_example_that_runs_it(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # a JSON file an example names is read as it parses (`pipeline save --file x.json`)
     wrong = []
     for path, _p, command in spec_leaves():
         if " ".join(path) != command.path:
             continue  # a group run bare (`tico rules due`): its default leaf has its own example
         words = shlex.split(command.example)
+        for word in words:
+            if word.endswith(".json"):
+                (tmp_path / word).write_text("{}")
         if words[:1] != ["tico"] or cli_spec.of(hubcli.parser().parse_args(words[1:])) is not command:
             wrong.append(f"{command.path}: {command.example!r}")
     assert wrong == []

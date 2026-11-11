@@ -54,7 +54,10 @@ def cli(monkeypatch, api, *argv):
 
 def test_every_computer_tool_is_registered_with_a_command_and_offered_to_people_not_the_assistant():
     names = {t["name"] for t in hubtools_computers.MINE}
-    assert names == {remotecli.tool_name(fn) for fn in hubtools_computers.COMMANDS}
+    from clients.cli_spec import Command
+    from clients.commands.computers import COMPUTER
+
+    assert names <= {c.tool for c in (*hubtools_computers.UPKEEP, *COMPUTER) if isinstance(c, Command)}
     for name in names:
         entry = hubtools.BY_NAME[name]
         kinds = hubtools.offered_to(entry)

@@ -1,0 +1,123 @@
+[
+ {
+  "argv": [
+   "usage"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "usage",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico usage: error: argument sub: invalid choice: 'nope' (choose from show, limits) Did you mean: tico usage show, tico usage limits?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "usage",
+   "show"
+  ],
+  "tools": [
+   [
+    "tico_usage_show",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "usage",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "usage",
+   "show",
+   "--group",
+   "bot",
+   "--from",
+   "from-1",
+   "--to",
+   "bot:ana",
+   "--bot",
+   "ana",
+   "--bots",
+   "bots-1"
+  ],
+  "tools": [
+   [
+    "tico_usage_show",
+    {
+     "bot": "ana",
+     "bots": "bots-1",
+     "from": "from-1",
+     "group": "bot",
+     "operation_id": null,
+     "to": "bot:ana"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "usage?group=bot&from=from-1&to=bot%3Aana&bot=ana&bots=bots-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "usage",
+   "limits"
+  ],
+  "tools": [
+   [
+    "tico_usage_limits",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "usage/limits",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "usage",
+   "show",
+   "--group",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico usage show: error: argument --group: invalid choice: 'nope' (choose from bot, day, routine, task, harness, model, effort, subscription)",
+  "exit": 64
+ }
+]

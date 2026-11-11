@@ -1,0 +1,74 @@
+[
+ {
+  "argv": [
+   "billing"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "billing",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico billing: error: argument sub: invalid choice: 'nope' (choose from show) Did you mean: tico billing show?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "billing",
+   "show"
+  ],
+  "tools": [
+   [
+    "tico_billing_show",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "billing",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "billing",
+   "show",
+   "--month",
+   "2026-10"
+  ],
+  "tools": [
+   [
+    "tico_billing_show",
+    {
+     "month": "2026-10",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "billing?month=2026-10",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

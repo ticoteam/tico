@@ -705,7 +705,8 @@ def _command(group, words, help_, example, fn):
 
 
 def add_commands(sub):
-    """Add `tico github ...` and the connection verbs under `tico repo` and `tico health` to the CLI's parser."""
+    """Add `tico github ...` and the connection verbs under `tico repo` to the CLI's parser. `tico health ready` is
+    in HEALTH (clients/commands/computers.py)."""
     gh = sub.add_parser("github", help="the team's GitHub App: connect it from a terminal, see what it reaches")
     github = gh.add_subparsers(dest="sub")
     _command(
@@ -824,17 +825,6 @@ def add_commands(sub):
     s.add_argument("repository", metavar="OWNER/REPO")
     s.add_argument("command")
 
-    health = _group(sub, "health")
-    s = _command(
-        health,
-        "ready",
-        "is this company able to work now: blockers with their fixes, then warnings; exits 1 when not ready",
-        "tico health ready --bot builder",
-        "health ready",
-    )
-    s.add_argument("--bot", dest="bots", action="append", metavar="SLUG", help="only these bots must be ready")
-    s.add_argument("--no-github", dest="github", action="store_false", default=None, help="GitHub may be missing")
-
 
 COMMANDS = frozenset(
     {
@@ -850,7 +840,6 @@ COMMANDS = frozenset(
         "repo refresh",
         "repo default",
         "repo setup-command",
-        "health ready",
     }
 )
 
