@@ -587,3 +587,21 @@ def test_a_retried_read_is_refused_not_replayed_and_the_retry_cache_is_capped(se
         return len(bc.MAILBOX.recent)
 
     assert asyncio.run(fill()) <= 3
+
+
+def test_a_poll_left_open_by_a_stopped_runner_never_takes_the_restarted_runners_command(setup, tools):
+    s = setup
+    old = {}
+    first = threading.Thread(target=lambda: old.update(cmds=collect(s, s.host, wait=10)))
+    first.start()
+    time.sleep(0.3)
+    new = {}
+    second = threading.Thread(target=lambda: new.update(cmds=collect(s, s.host, wait=10)))
+    second.start()
+    first.join(5)
+    assert not first.is_alive() and old["cmds"] == []
+    thread, box = call(s, s.ops, "read")
+    second.join(10)
+    assert not second.is_alive() and [c["verb"] for c in new["cmds"]] == ["read"]
+    report(s, s.host, new["cmds"][0], text="Reports")
+    assert done(thread, box).status_code == 200

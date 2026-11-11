@@ -267,6 +267,7 @@ class Mailbox:
         self.queues: dict[str, list[Command]] = {}
         self.inflight: dict[str, Command] = {}
         self.wakers: dict[str, asyncio.Event] = {}
+        self.polls: dict[str, int] = {}
         self.holds: dict[str, Hold] = {}
         self.sessions: dict[str, SessionFacts] = {}
         self.frames: dict[str, Frame] = {}
@@ -327,6 +328,18 @@ class Mailbox:
         if found is None:
             found = self.wakers[runner_id] = asyncio.Event()
         return found
+
+    def poll(self, runner_id: str) -> int:
+        """A computer's newest poll supersedes its older ones: a poll left open by a stopped runner must not take
+        a command the restarted runner is waiting for. Wakes the older polls so they return at once."""
+        with self.lock:
+            mine = self.polls[runner_id] = self.polls.get(runner_id, 0) + 1
+        self.waker(runner_id).set()
+        return mine
+
+    def current(self, runner_id: str, mine: int) -> bool:
+        with self.lock:
+            return self.polls.get(runner_id) == mine
 
     # -------------------------------------------------------------------- holds
     def take(self, account_id: str, actor: str, who: Who, person: bool = False) -> None:
@@ -1300,11 +1313,16 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         mailbox.bind()
         deadline = time.monotonic() + max(0.0, min(wait, POLL_WAIT))
         waker = mailbox.waker(runner_id)
+        mine = mailbox.poll(runner_id)
         while True:
             waker.clear()
+            if not mailbox.current(runner_id, mine):
+                return {"commands": []}
             queued = mailbox.queued(runner_id)
             if queued:
                 refused = await asyncio.to_thread(check_commands, queued)
+                if not mailbox.current(runner_id, mine):
+                    return {"commands": []}
                 for cmd in queued:
                     if cmd.id in refused:
                         if cmd.cleanup:
