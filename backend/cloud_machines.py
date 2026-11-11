@@ -587,6 +587,25 @@ def home(c, bot, current=None):
     return row(c, SHARED) if current["placement"] == "shared" else current
 
 
+def first_home(c, bot):
+    """The computer (`runners_with_state` row) a cloud-mode bot with no computer goes on first (place_now), or None:
+    its own machine's when that has enrolled, else the shared machine's. A bot set to its own machine has none until
+    it has work, and it has no work until it is live; BotOps builds its repository on the shared machine, so it
+    starts there, and its want to move (`bot_want`) makes its own machine and moves it once its history is on GitHub."""
+    current = row(c, bot)
+    if not current or current["mode"] != "cloud":
+        return None
+    machine, shared = home(c, bot, current), row(c, SHARED)
+    for found in (machine, shared):
+        if found and found["runner_id"] and not found.get("deleting"):
+            runner = c.execute(
+                "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (found["runner_id"],)
+            ).fetchone()
+            if runner:
+                return runner
+    return None
+
+
 def asked_again(c, bot):
     """A person asked for `bot`'s waiting work again (Run now on a task whose run is already queued): the wake its
     stopped machine spent on that work is forgotten, so the next look starts it once more. Nothing changes for a

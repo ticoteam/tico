@@ -32,6 +32,9 @@ Heavy bots get their own: a bot made from the `video-owner` template, or a Build
 bot first gets a cloud machine row; after that a person switches it in the bot editor ("Shared cloud machine" / "Own
 cloud machine" under Computer).
 
+- A bot set to its own machine that has no computer yet when it goes live (a new company's Builder) goes on the shared
+  machine first: its own is made for work, and it has none before it is live. It stays on the shared machine until a
+  person switches it to its own.
 - The shared machine is one row and one HQ machine, key `_shared` (a bot's own machine is keyed by the bot id, and no
   bot id has an underscore). It is on while any bot on it wants it (work, a move, a watcher's wake) and pauses once
   every bot on it has had no turn out and no activity for its Pause after (`pause_minutes`: 30 by default, whole
