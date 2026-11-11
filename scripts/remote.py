@@ -385,7 +385,7 @@ def main(argv=None):
         help='what the VM installs first (default: guessed from the command)',
     )
     parser.add_argument('--cpus', choices=('4', '8', '16'), default=os.environ.get('TICO_REMOTE_CPUS', '4'))
-    # The whole default Python suite takes about 15 minutes on 16 vCPUs (a test worker per vCPU; 49 before Nov 11) and
+    # The whole default Python suite takes about 19 minutes on 16 vCPUs (a test worker per vCPU; 49 before Nov 11) and
     # about four times that on 4, past the limit: a whole-suite run takes --cpus 16.
     parser.add_argument('--minutes', type=int, default=50, help='time limit for the command (1 to 60)')
     parser.add_argument('--ref', help='commit to run (default: HEAD, which must be pushed)')
