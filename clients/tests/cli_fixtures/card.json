@@ -1,0 +1,484 @@
+[
+ {
+  "argv": [
+   "card"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico card: error: argument sub: invalid choice: 'nope' (choose from list, add, update, remove) Did you mean: tico card update, tico card remove?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_card_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "cards",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "list",
+   "--place",
+   "dashboard"
+  ],
+  "tools": [
+   [
+    "tico_card_list",
+    {
+     "operation_id": null,
+     "place": "dashboard"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "places/dashboard",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "list",
+   "--cursor",
+   "c2",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_card_list",
+    {
+     "cursor": "c2",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "cards?limit=5&cursor=c2",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "list",
+   "--limit",
+   "many"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico card list: error: argument --limit: invalid int value: 'many'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "add"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico card add <template>\ntico card add: error: the following arguments are required: template",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "add",
+   "done_per_week"
+  ],
+  "tools": [
+   [
+    "tico_card_add",
+    {
+     "operation_id": null,
+     "template": "done_per_week"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "cards",
+    {
+     "template": "done_per_week",
+     "settings": {},
+     "title": "",
+     "place": "",
+     "size": "medium"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "add",
+   "nope"
+  ],
+  "tools": [
+   [
+    "tico_card_add",
+    {
+     "operation_id": null,
+     "template": "nope"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "cards",
+    {
+     "template": "nope",
+     "settings": {},
+     "title": "",
+     "place": "",
+     "size": "medium"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "add",
+   "done_per_week",
+   "--title",
+   "Shipped",
+   "--team",
+   "eng",
+   "--weeks",
+   "8",
+   "--count",
+   "3",
+   "--kpi",
+   "k1",
+   "--metric",
+   "cac",
+   "--channel",
+   "google-search",
+   "--months",
+   "6",
+   "--place",
+   "dashboard",
+   "--size",
+   "large"
+  ],
+  "tools": [
+   [
+    "tico_card_add",
+    {
+     "channel": "google-search",
+     "count": 3,
+     "kpi": "k1",
+     "metric": "cac",
+     "months": 6,
+     "operation_id": null,
+     "place": "dashboard",
+     "size": "large",
+     "team": "eng",
+     "template": "done_per_week",
+     "title": "Shipped",
+     "weeks": 8
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "cards",
+    {
+     "template": "done_per_week",
+     "settings": {
+      "team": "eng",
+      "weeks": 8,
+      "count": 3,
+      "kpi": "k1",
+      "metric": "cac",
+      "channel": "google-search",
+      "months": 6
+     },
+     "title": "Shipped",
+     "place": "dashboard",
+     "size": "large"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "add",
+   "kpi",
+   "--size",
+   "huge"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico card add: error: argument --size: invalid choice: 'huge' (choose from small, medium, large)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "add",
+   "kpi",
+   "--weeks",
+   "many"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico card add: error: argument --weeks: invalid int value: 'many'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico card update <card>\ntico card update: error: the following arguments are required: card",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "update",
+   "c1"
+  ],
+  "tools": [
+   [
+    "tico_card_update",
+    {
+     "card": "c1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "cards/c1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "update",
+   "c1",
+   "--title",
+   "Shipped",
+   "--team",
+   "eng",
+   "--weeks",
+   "8",
+   "--count",
+   "3",
+   "--kpi",
+   "k1",
+   "--metric",
+   "cac",
+   "--channel",
+   "google-search",
+   "--months",
+   "6"
+  ],
+  "tools": [
+   [
+    "tico_card_update",
+    {
+     "card": "c1",
+     "channel": "google-search",
+     "count": 3,
+     "kpi": "k1",
+     "metric": "cac",
+     "months": 6,
+     "operation_id": null,
+     "team": "eng",
+     "title": "Shipped",
+     "weeks": 8
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "cards/c1",
+    {
+     "settings": {
+      "team": "eng",
+      "weeks": 8,
+      "count": 3,
+      "kpi": "k1",
+      "metric": "cac",
+      "channel": "google-search",
+      "months": 6
+     },
+     "title": "Shipped"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "update",
+   "c1",
+   "--place",
+   "dashboard"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico card update: error: unrecognized arguments: --place dashboard It takes: --channel, --count, --kpi, --metric, --months, --team, --title, --weeks",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "remove"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico card remove <card>\ntico card remove: error: the following arguments are required: card",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "card",
+   "remove",
+   "c1"
+  ],
+  "tools": [
+   [
+    "tico_card_remove",
+    {
+     "card": "c1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "DELETE",
+    "cards/c1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

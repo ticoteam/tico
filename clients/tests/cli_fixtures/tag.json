@@ -1,0 +1,561 @@
+[
+ {
+  "argv": [
+   "tag"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "tag",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico tag: error: argument sub: invalid choice: 'nope' (choose from list, show, create, update) Did you mean: tico tag update, tico tag show?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "tag",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_tag_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "tags",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "list",
+   "--templates"
+  ],
+  "tools": [
+   [
+    "tico_tag_list",
+    {
+     "is_template": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "tags?is_template=true",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "list",
+   "--instances"
+  ],
+  "tools": [
+   [
+    "tico_tag_list",
+    {
+     "is_template": false,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "tags?is_template=false",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "list",
+   "--templates",
+   "--instances"
+  ],
+  "tools": [
+   [
+    "tico_tag_list",
+    {
+     "is_template": false,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "tags?is_template=false",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico tag show <id>\ntico tag show: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "tag",
+   "show",
+   "launch"
+  ],
+  "tools": [
+   [
+    "tico_tag_show",
+    {
+     "id": "launch",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "tags/launch",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "show",
+   "launch",
+   "--offset",
+   "50"
+  ],
+  "tools": [
+   [
+    "tico_tag_show",
+    {
+     "id": "launch",
+     "offset": 50,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "tags/launch?offset=50",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "show",
+   "launch",
+   "--offset",
+   "many"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico tag show: error: argument --offset: invalid int value: 'many'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "tag",
+   "create"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico tag create <key>\ntico tag create: error: the following arguments are required: key",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "tag",
+   "create",
+   "launch"
+  ],
+  "tools": [
+   [
+    "tico_tag_create",
+    {
+     "key": "launch",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "tags",
+    {
+     "key": "launch"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "create",
+   "launch",
+   "--label",
+   "Launch",
+   "--metadata",
+   "{\"due\": \"friday\"}",
+   "--markdown",
+   "- [ ] ship",
+   "--template",
+   "--owner",
+   "bot:ana"
+  ],
+  "tools": [
+   [
+    "tico_tag_create",
+    {
+     "is_template": true,
+     "key": "launch",
+     "label": "Launch",
+     "markdown": "- [ ] ship",
+     "metadata": {
+      "due": "friday"
+     },
+     "operation_id": null,
+     "owner": "bot:ana"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "tags",
+    {
+     "key": "launch",
+     "label": "Launch",
+     "metadata": {
+      "due": "friday"
+     },
+     "markdown": "- [ ] ship",
+     "is_template": true,
+     "owner": "bot:ana"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "create",
+   "launch-q4",
+   "--from-template",
+   "launch"
+  ],
+  "tools": [
+   [
+    "tico_tag_create",
+    {
+     "key": "launch-q4",
+     "operation_id": null,
+     "template_id": "launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "tags/launch/instances",
+    {
+     "key": "launch-q4"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "create",
+   "launch",
+   "--metadata",
+   "[1]"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"error\": \"kind\",\n  \"detail\": \"Tag metadata must be a JSON object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "tag",
+   "create",
+   "launch",
+   "--metadata",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"error\": \"JSONDecodeError: Expecting value: line 1 column 1 (char 0)\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "tag",
+   "create",
+   "launch",
+   "--markdown-file",
+   "missing.md"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing.md'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "tag",
+   "create",
+   "launch",
+   "--markdown",
+   "x",
+   "--markdown-file",
+   "missing.md"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing.md'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "tag",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico tag update <id>\ntico tag update: error: the following arguments are required: id, --version",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "tag",
+   "update",
+   "launch"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico tag update <id>\ntico tag update: error: the following arguments are required: --version",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "tag",
+   "update",
+   "launch",
+   "--version",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_tag_update",
+    {
+     "id": "launch",
+     "operation_id": null,
+     "version": 2
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "tags/launch",
+    {
+     "version": 2
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "update",
+   "launch",
+   "--version",
+   "2",
+   "--label",
+   "Launch",
+   "--metadata",
+   "{\"due\": \"friday\"}",
+   "--markdown",
+   "- [x] ship",
+   "--owner",
+   ""
+  ],
+  "tools": [
+   [
+    "tico_tag_update",
+    {
+     "id": "launch",
+     "label": "Launch",
+     "markdown": "- [x] ship",
+     "metadata": {
+      "due": "friday"
+     },
+     "operation_id": null,
+     "owner": "",
+     "version": 2
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "tags/launch",
+    {
+     "version": 2,
+     "label": "Launch",
+     "metadata": {
+      "due": "friday"
+     },
+     "markdown": "- [x] ship",
+     "owner": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "tag",
+   "update",
+   "launch",
+   "--version",
+   "two"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico tag update: error: argument --version: invalid int value: 'two'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "tag",
+   "update",
+   "launch",
+   "--version",
+   "2",
+   "--markdown-file",
+   "missing.md"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing.md'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "tag",
+   "update",
+   "launch",
+   "--version",
+   "2",
+   "--metadata",
+   "[1]"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"error\": \"kind\",\n  \"detail\": \"Tag metadata must be a JSON object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ }
+]
