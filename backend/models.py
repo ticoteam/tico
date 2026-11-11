@@ -361,12 +361,12 @@ class OkUse(Contract):
 
 class TaskAskAnswer(Contract):
     """ok, no (send it back, with a note), again (look again), or the answer to a question (H.task_answer).
-    `page_version`: on a page, the version the person was shown; refused when another is attached now."""
+    `page_version`: on a page, the `<file id>@<version>` the person was shown; refused when another is attached now."""
 
     value: Annotated[str, Field(min_length=1, max_length=20_000)]
     note: str | None = Field(default=None, max_length=20_000)
     version: Version | None = None
-    page_version: Annotated[int, Field(strict=True, ge=1)] | None = None
+    page_version: Annotated[str, Field(pattern=r"^[^@\s]+@[1-9][0-9]{0,8}$", max_length=200)] | None = None
     on_behalf_of: ID | None = None
 
 
