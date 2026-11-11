@@ -43,7 +43,7 @@ Import retries do not duplicate a seat, and an import cannot replace a company w
 A file named at install (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts, and that
 completes setup: there is nothing for the owner to fill in. Their first visit opens one **Welcome to <company>** screen in
 the same modal instead of the tour: the team as the chart has it (each team's lead first, open seats muted; the built-ins last, under their group's name, General), what the bots
-run on (the computer, ticked on Tico Cloud, and the Claude or Codex subscription line until one is signed in), and
+run on (the computer, ticked on Tico Cloud, and the Claude or ChatGPT subscription line until one is signed in), and
 **Start**. Start, ✕ or Escape close it where it opened and mark the tour seen; the tour stays in the account menu. If it
 cannot be read or applied, the server still starts, **no sample team is set up in its place**, and setup opens on its
 first step as usual; the Your team step shows the default team, picked, with one line above it giving the server's
