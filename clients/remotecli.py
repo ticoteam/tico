@@ -97,8 +97,8 @@ def _rules_args(args):
     return args
 
 
-def _directory_args(args):
-    """`tico directory` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
+def _contacts_args(args):
+    """`tico contacts` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
     --option pairs are an attribute's options. The pairs are the command line's; the tool takes objects."""
     if getattr(args, "match", None):
         args.match = {args.match[0]: args.match[1]}
@@ -347,8 +347,8 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "thread":
         return via_tool(client, args)
-    if args.cmd == "directory":
-        return via_tool(client, _directory_args(args))
+    if args.cmd == "contacts":
+        return via_tool(client, _contacts_args(args))
     if args.cmd == "finance":
         return via_tool(
             client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {})
@@ -1805,9 +1805,9 @@ def _entity_line(row):
     return f"{row['id']}  {row['name']}  {row['status']}" + (f"  [{keys}]" if keys else "")
 
 
-def directory_text(fn, result):
-    """`--text` for the Directory's reads: a short summary, one line per entity, or a card. Any other command prints JSON."""
-    if fn == "directory self":
+def contacts_text(fn, result):
+    """`--text` for Contacts reads: a short summary, one line per entity, or a card. Any other command prints JSON."""
+    if fn == "contacts self":
         lines = [result["name"] + (f" ({result['primary_domain']})" if result.get("primary_domain") else "")]
         if result.get("operates_in"):
             lines.append("operates in: " + ", ".join(place["name"] for place in result["operates_in"]))
@@ -1815,12 +1815,12 @@ def directory_text(fn, result):
             "obligations: " + ("none yet" if not result.get("obligations") else str(len(result["obligations"])))
         )
         return "\n".join(lines)
-    if fn == "directory find":
+    if fn == "contacts find":
         lines = [_entity_line(row) for row in result.get("rows", [])] or ["(none you can see)"]
         if result.get("next"):
             lines.append(f"more: --after {result['next']}")
         return "\n".join(lines)
-    if fn == "directory get":
+    if fn == "contacts get":
         if result.get("ambiguous"):
             return f"{result['ref']} matches {len(result['matches'])} entities; name one by id:\n" + "\n".join(
                 _entity_line(row) for row in result["matches"]
@@ -1870,8 +1870,8 @@ def main(args, who=None):
 
             print(dbquery.render(result, args))
             return 0 if result.get("ok", True) else 2
-        elif args.cmd == "directory" and getattr(args, "as_text", False):
-            print(directory_text(args.fn, result))
+        elif args.cmd == "contacts" and getattr(args, "as_text", False):
+            print(contacts_text(args.fn, result))
         elif args.fn == "tool list" and not args.bot and not args.json:
             print(integrations_text(result))
         elif args.fn == "tool show" and not args.json:

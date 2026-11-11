@@ -1,8 +1,8 @@
-/* ui/app/directory-settings.ts — Settings › Directory (#/settings/directory): the Directory's types and their fields,
+/* ui/app/directory-settings.ts — Settings › Contacts (#/settings/contacts): the contact types and their fields,
    whether each inbox adds every mail sender, and the shared places. ui/app/settings.ts owns the tab and calls
    directorySettingsShow when it opens.
    Reads: GET /api/v2/entities/types, /types/<key>, /counts and /api/v2/mailboxes. The one write is the inbox switch,
-   PATCH /api/v2/mailboxes/<id>/directory ({on}); its person decides, or an admin for a shared inbox. The switch is
+   PATCH /api/v2/mailboxes/<id>/contacts ({on}); its person decides, or an admin for a shared inbox. The switch is
    drawn only for rows whose listing says `feeds_directory`, so a hub without that route shows no control at all.
    Where we operate reads GET /api/v2/entities/self; an owner or an admin adds a place (found with
    /api/v2/entities/find/place) through POST /api/v2/entities/links and removes one through POST /api/v2/entities/unlink.
@@ -76,7 +76,7 @@ async function dirsFields(box: HTMLElement, key: string, run: number): Promise<v
   }
 }
 // The inboxes this person may switch: their own, and for an admin every shared one (a personal inbox is its person's
-// alone). Only rows that say whether they feed the Directory get a switch.
+// alone). Only rows that say whether they feed Contacts get a switch.
 function dirsMailRows(mail: DirMailboxes | null): string {
   if (!mail) return '';
   const rows = new Map<string, DirMailbox>();
@@ -94,7 +94,7 @@ async function dirsMailSwitch(input: HTMLInputElement): Promise<void> {
   const on = input.checked;
   input.disabled = true;
   try {
-    const r: { feeds_directory?: boolean } = await patch('/v2/mailboxes/' + encodeURIComponent(id) + '/directory', { on });
+    const r: { feeds_directory?: boolean } = await patch('/v2/mailboxes/' + encodeURIComponent(id) + '/contacts', { on });
     input.checked = r.feeds_directory ?? on;
   } catch (e) {
     input.checked = !on;

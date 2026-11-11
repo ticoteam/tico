@@ -5452,7 +5452,7 @@ def create_app(settings=None):
     finance_routes.install(app, store, auth, mutate)  # Finance: budgets, P&L, expenses, actions (backend/finance)
     from .entities import routes as entity_routes
 
-    entity_routes.install(app, store, auth, mutate)  # The Directory: `tico directory` (backend/entities/routes.py)
+    entity_routes.install(app, store, auth, mutate)  # Contacts: `tico contacts` (backend/entities/routes.py)
     from . import finance_ads_routes
 
     finance_ads_routes.install(app, store, auth, mutate)  # Finance: ad spend import settings on ad tools' pages

@@ -3398,5 +3398,5 @@ class MailboxAccessUpdate(Contract):
     level: MailboxLevel
 
 
-class MailboxDirectoryUpdate(Contract):
+class MailboxContactsUpdate(Contract):
     on: StrictBool

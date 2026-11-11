@@ -1556,7 +1556,7 @@ def _write_hold(
         },
     )
     if check == "structured" and error:
-        why = f"the Directory rules could not be checked ({error}), so it is held until a person checks it"
+        why = f"the Contacts rules could not be checked ({error}), so it is held until a person checks it"
         quoted = ""
     else:
         why = "it broke the rule"
@@ -2249,7 +2249,7 @@ def _rechecked(c, hold, check, audience=None, auth=None):
         if verdict.get("error"):
             raise Problem(
                 "unchecked",
-                f"The Directory rules could not be checked ({verdict['error']}), so this stays held until a person "
+                f"The Contacts rules could not be checked ({verdict['error']}), so this stays held until a person "
                 "checks it.",
                 409,
             )

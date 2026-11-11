@@ -1,15 +1,17 @@
-/* ui/app/directory.ts — Library › Directory (#/library/directory): the people, organizations, places and documents the
-   company knows, as the reader may see them. View and find only; a note is the one thing written here.
+/* ui/app/directory.ts — Library › Contacts (#/library/contacts; it was Library › Directory, and #/library/directory
+   still lands here): the people, organizations and places the company knows, as the reader may see them. Documents are
+   not contacts: their type never shows here (a document is a file, linked from its contact's page). View and find only;
+   a note is the one thing written here.
    Backend: backend/entities/routes.py over backend/entities/store.py, which applies the read rule
    (backend/entities/visible.py) to every row, count, link and column. The page only draws what comes back.
    Addresses:
-     #/library/directory[?type=<key>&q=<prefix>&link=<link key>]   the list (People by default)
-     #/library/directory/<id>                                      one entity (ui/app/directory-entity.ts)
-   Settings › Directory is ui/app/directory-settings.ts. Classic script: globals are shared with ui/app/. */
+     #/library/contacts[?type=<key>&q=<prefix>&link=<link key>]   the list (People by default)
+     #/library/contacts/<id>                                      one entity (ui/app/directory-entity.ts)
+   Settings › Contacts is ui/app/directory-settings.ts. Classic script: globals are shared with ui/app/. */
 'use strict';
 
-const DIR_ROUTE = '#/library/directory';
-const DIR_MAIN_TYPES = ['person', 'organization', 'place', 'document'];
+const DIR_ROUTE = '#/library/contacts', DIR_OLD_ROUTE = '#/library/directory';
+const DIR_MAIN_TYPES = ['person', 'organization', 'place'];   // the hub leaves documents out (store.NOT_CONTACTS)
 // How a link to us reads as a relationship (backend/entities/schema.py link types).
 const DIR_RELATIONS: Record<string, string> = {
   customer_of: 'Customer', vendor_to: 'Vendor', partner_of: 'Partner', invests_in: 'Investor', advises: 'Advisor',
@@ -113,14 +115,14 @@ async function pageDirectory(query: string): Promise<void> {
   const root = document.getElementById('dir-root');
   if (!root) return;
   const relations = Object.keys(DIR_RELATIONS);
-  root.innerHTML = `<header class="tt-head"><h1>Directory</h1><span class="spacer"></span>
+  root.innerHTML = `<header class="tt-head"><h1>Contacts</h1><span class="spacer"></span>
       <button type="button" class="ghost small dir-icon" data-dir-search-toggle aria-label="Search" aria-expanded="${want.q ? 'true' : 'false'}"><span class="nav-icon" aria-hidden="true">search</span></button>
       <details class="dir-menu" data-dir-link-menu><summary class="ghost small dir-icon${want.link ? ' on' : ''}" aria-label="Relationship">${filterIcon(16)}</summary>
         <div class="dir-menu-list" role="menu">
           <a role="menuitemradio" aria-checked="${want.link ? 'false' : 'true'}" href="${dirListHref(type)}" data-dir-link="">All</a>
           ${relations.map(k => `<a role="menuitemradio" aria-checked="${k === want.link}" href="${dirListHref(type, k)}" data-dir-link="${esc(k)}">${esc(dirRelation(k))}</a>`).join('')}
         </div></details></header>
-    <nav class="tt-tabs dir-tabs" aria-label="Directory">${tabs.map(t => {
+    <nav class="tt-tabs dir-tabs" aria-label="Contacts">${tabs.map(t => {
       const n = counted.get(t.key);
       return `<a href="${dirListHref(t.key)}" data-dir-tab="${esc(t.key)}"${t.key === type ? ' class="cur" aria-current="page"' : ''}>${esc(t.plural_name || t.name)}${n && n.count ? ` <span class="dir-tab-n tnum">${esc(dirN(n.count, n.approximate))}</span>` : ''}</a>`;
     }).join('')}</nav>
@@ -226,6 +228,8 @@ function dirTable(type: string, rows: readonly DirBrief[]): string {
 // ----------------------------------------------------------------- routing
 // The redesign's router asks first (ui/app/redesign.ts).
 function directoryRoute(r: string): boolean {
+  // The old address of the page, from before it was Contacts.
+  if (rdUnder(r, DIR_OLD_ROUTE)) { location.replace(DIR_ROUTE + r.slice(DIR_OLD_ROUTE.length)); return true; }
   const [path = '', query = ''] = r.split('?');
   if (!rdUnder(path, DIR_ROUTE)) return false;
   const rest = path.slice(DIR_ROUTE.length).replace(/^\//, '');
