@@ -158,7 +158,7 @@ const PAGES: PageSpec[] = [
       'ui/app/settings-hosted.ts', 'ui/health.ts', 'ui/runner-updates.ts']},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
     ui: [...SETTINGS_UI, 'ui/app/settings-devices.ts', 'ui/app/computer-detail.ts', 'ui/app/cloud-machines.ts',
-      'ui/app/subscriptions.ts', 'ui/runner-updates.ts']},
+      'ui/app/subscriptions.ts', 'ui/app/plan-signin.ts', 'ui/runner-updates.ts']},
   {name: 'support', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/support.ts', 'ui/styles/support.css', 'ui/app/updates.ts', 'ui/styles/updates.css'],
     steps: async page => {
       await page.evaluate(() => window.supportOpen());

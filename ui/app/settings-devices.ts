@@ -672,7 +672,7 @@ function renderSettingsMachines() {
     if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection!); return; }
     if (event.target.closest('[data-subs-cell] select, [data-subs-reconnect]')) {
       const reconnect = event.target.closest<HTMLElement>('[data-subs-reconnect]');
-      if (reconnect) subsDialog('reconnect', subsById(reconnect.dataset.subsReconnect));
+      if (reconnect) { const sub = subsById(reconnect.dataset.subsReconnect); if (sub) planSignIn({sub}); }
       return;
     }
     if (event.target.closest('#machine-add-dialog')) return;

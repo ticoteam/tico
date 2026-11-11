@@ -950,22 +950,47 @@ section.card>header .settings-head-act{margin-left:auto}
 .subs-dialog .tmodal-body,.machine-add .tmodal-body{overflow:visible}
 .subs-dialog[open],.subs-dialog>form{overflow:visible}
 .subs-form{display:grid;gap:12px}
-.subs-connect{display:grid;gap:12px;margin-bottom:12px}
-.subs-connect>button{width:100%}
-.subs-connect-or{font-size:var(--t-sm);color:var(--muted);text-align:center}
 .subs-note{margin:0;font-size:var(--t-sm)}
 .subs-field{display:grid;gap:4px;min-width:0}
 .subs-field[hidden]{display:none}
 .subs-field .k{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted)}
-.subs-field input,.subs-field select,.subs-field textarea,.subs-combo input{width:100%;box-sizing:border-box}
+.subs-field input,.subs-field select,.subs-field textarea{width:100%;box-sizing:border-box}
 .subs-field textarea{font-family:var(--mono);font-size:var(--t-sm);resize:vertical}
-.subs-combo{position:relative}
-.subs-combo input{padding-right:28px;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center}
-.subs-combo-list{position:absolute;z-index:5;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;max-height:220px;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
-.subs-combo-list[hidden]{display:none}
-.subs-combo-list li{padding:0 8px;min-height:28px;display:flex;align-items:center;border-radius:6px;cursor:pointer}
-.subs-combo-list li.on,.subs-combo-list li:hover{background:var(--surface2)}
-.subs-combo-list li[hidden]{display:none}
+/* Adding a subscription (app/plan-signin.ts): one narrow sheet, one thing to tap on each step. On a phone it sits at the
+   top of the screen, so its button stays in view when the keyboard opens. */
+.plan-sheet{width:min(400px,calc(100vw - 32px))}
+.plan-body{display:grid;gap:12px;padding:16px;overflow:auto;min-height:0}
+.plan-list{display:grid;gap:8px}
+.plan-pick{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:52px;padding:0 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;font-size:var(--t-md);font-weight:600;text-align:left;cursor:pointer}
+.plan-pick:hover{background:var(--surface2)}.plan-pick .nav-icon{color:var(--muted)}
+.plan-keys{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:var(--t-sm)}
+.plan-keys .linkish,.plan-alt{color:var(--muted);min-height:28px}
+.plan-alt{font-size:var(--t-sm)}
+:is(a,button).plan-open,.plan-wide{display:block;box-sizing:border-box;width:100%;min-height:44px;padding:11px 14px;border:1px solid transparent;border-radius:var(--r-ctl);background:var(--accent);color:var(--accent-ink);font-weight:600;text-align:center;text-decoration:none;cursor:pointer}
+:is(a,button).plan-open:hover{background:color-mix(in srgb,var(--accent) 88%,var(--ink));text-decoration:none}
+.plan-code{display:flex;align-items:center;gap:8px}
+.plan-code code{flex:1;min-width:0;padding:10px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);font-family:var(--mono);font-size:var(--t-2xl);letter-spacing:.08em;text-align:center;overflow-wrap:anywhere;user-select:all}
+.plan-code button,.plan-entry button{min-height:44px}
+.plan-entry{display:grid;gap:8px;margin:0}
+.plan-entry-row{display:flex;gap:8px}
+.plan-entry-row input{flex:1;min-width:0;min-height:44px;box-sizing:border-box;font-family:var(--mono);font-size:16px}
+.plan-wait{display:flex;align-items:center;gap:8px;margin:0;color:var(--muted);font-size:var(--t-sm)}
+.plan-wait .tnum{margin-left:auto}
+.plan-spin{flex:none;width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:treespin .9s linear infinite}
+.plan-note,.plan-said,.plan-err{margin:0}.plan-note{font-size:var(--t-sm)}
+.plan-err[hidden]{display:none}.plan-err{font-size:var(--t-sm)}
+.plan-foot{display:flex;align-items:center;gap:8px;min-height:32px}
+.plan-done{display:grid;justify-items:center;gap:8px;padding:16px 0}
+.plan-check{display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:var(--ok-bg);color:var(--ok);font-size:22px;font-weight:700}
+.plan-form{display:grid;gap:8px;margin:0}
+.plan-label{font-size:var(--t-sm);color:var(--muted)}
+.plan-form :is(input[type=text],input[type=password],textarea){width:100%;box-sizing:border-box;min-height:44px;font-size:16px}
+.plan-form textarea{font-family:var(--mono);font-size:var(--t-sm);resize:vertical}
+.plan-form [data-plan-file]{justify-self:start}
+@media (max-width:760px){
+  dialog.plan-sheet{width:calc(100vw - 24px);max-width:none;margin-top:12px;margin-bottom:auto;max-height:calc(100dvh - 24px)}
+}
+@media (prefers-reduced-motion:reduce){.plan-spin{animation-duration:3s}}
 .subs-cell{display:inline-flex;align-items:center;gap:6px}
 .subs-pick{height:28px;max-width:200px;padding:0 24px 0 8px;font-size:var(--t-sm)}
 .settings-machines td,.settings-machines th{white-space:nowrap}

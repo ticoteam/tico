@@ -740,10 +740,14 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     assert.equal(await page.locator('#onb-models').count(), 0);
     assert.equal((await page.locator('#onb-machine-status .onb-line-text').textContent())!.trim(), 'Add the computer your bots run on');
     assert.equal(await page.locator('#onb-computer').evaluate((el: HTMLDetailsElement) => el.open), false);
-    const sub = page.locator('#onb-subscription a');
-    assert.equal((await sub.textContent())!, 'Add a Claude or Codex subscription');
-    assert.equal((await sub.getAttribute('href'))!, '#/settings');
-    assert.equal((await sub.getAttribute('data-gs-tab'))!, 'devices');
+    // The subscription line opens the sheet Settings > Models uses, over the setup pop-up; closing it leaves setup as it was.
+    assert.equal(await page.locator('#onb-subscription a').count(), 0);
+    await page.locator('#onb-subscription [data-onb-subscription]').click();
+    const plan = page.locator('dialog.plan-sheet[open]');
+    await plan.locator('[data-plan-kind]').first().waitFor();
+    await plan.locator('[data-plan-close]').click();
+    await plan.waitFor({state: 'detached'});
+    assert.equal(await page.locator('#onb-subscription [data-onb-subscription]').isVisible(), true);
     assert.deepEqual(await page.locator('#onb button.primary').evaluateAll(els => els.map(el => el.textContent)), ['Done']);
     await shot(page, 'desktop-5-run');
     // The computer: the enrollment file is the Settings flow; the commands keep <slug> literal.
