@@ -149,10 +149,24 @@ REVIEW_RUBRIC = (
 # The pre-release page a person OKs. The checks themselves are the stage's `checks_pass`; the page shows them. "With
 # screenshots or output, and how it was checked" read as two things to show, and a clean pair of reviews as nothing found
 # (Acme, Nov 11: a good page unsure, p 0.34); pages missing the reviews or the checks stay not met (p under 0.1).
+# "On the commit they reviewed" (and the newest commits, now in the context) let a page that says the reviews were of an
+# earlier commit than the checks be read as honest, not as missing reviews (rc.4, Nov 11: good pages 0.53 to 0.80).
 FIXES_2_RUBRIC = (
     "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
-    "Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening "
-    "the code."
+    "Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person "
+    "to OK it without opening the code."
+)
+# A spec with no acceptance criteria passed the old line at p 0.72 to 0.81 (rc.4 eval, Nov 11); the scope's in and out
+# and checkable criteria are what a builder builds from.
+SPEC_RUBRIC = (
+    "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone "
+    "can check."
+)
+# "What was run or looked at there, and what it gave" keeps a page that only says it works from passing (p 0.66 to 0.74
+# on the old line), and a page that shows it scores higher.
+VALIDATE_RUBRIC = (
+    "Names the version production runs and shows the change working in that version: what was run or looked at there, "
+    "and what it gave. If that version is older than the release that holds this work, it is not yet."
 )
 # The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines"). Made only for a company that builds
 # software (a blank answer is yes), once its setup is finished (ensure_presets).
@@ -254,7 +268,7 @@ PRESETS["product"] = {
             "Spec",
             "A spec a builder can build from.",
             2880,
-            [_people_only(_page("Spec page", "Covers goal, scope, what done looks like"))],
+            [_people_only(_page("Spec page", SPEC_RUBRIC))],
             task_limit=2,
         ),
         _stage(
@@ -270,14 +284,7 @@ PRESETS["product"] = {
             "Validate",
             "Check it in production and attach a Checked in production page that names the version production runs.",
             1440,
-            [
-                _page(
-                    "Checked in production",
-                    "Names the version production runs and shows the change working there. If that version is older "
-                    "than the release that holds this work, it is not yet.",
-                    with_release=True,
-                )
-            ],
+            [_page("Checked in production", VALIDATE_RUBRIC, with_release=True)],
         ),
     ],
     "done": {"id": "product-done"},
@@ -303,6 +310,14 @@ EARLIER: dict[str, tuple[str, ...]] = {
         "without opening the code.",
         "Shows what was built, with screenshots or output, and how it was checked; that the checks pass at the newest "
         "commit; and what Reviewer 1 and Reviewer 2 found. Enough for a person to OK it without opening the code.",
+        "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
+        "Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening "
+        "the code.",
+    ),
+    "product-spec/page/rubric": ("Covers goal, scope, what done looks like",),
+    "product-validate/page/rubric": (
+        "Names the version production runs and shows the change working there. If that version is older than the "
+        "release that holds this work, it is not yet.",
     ),
 }
 SOFTWARE = ("engineering", "product")  # the presets only a company that builds software gets

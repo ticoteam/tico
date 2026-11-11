@@ -741,6 +741,30 @@ def test_a_validate_page_is_judged_against_the_release_its_filed_work_went_out_i
     assert context == {"task": row["id"], "release": ["v1.1.0"]}, "the first release it is in"
 
 
+def test_any_page_on_a_task_with_prs_is_judged_with_their_newest_commits_and_an_unread_one_never_holds_it_up(c, store):
+    """A pre-release page says the checks pass at the newest commit: Jev is shown the linked PRs' newest commits so it
+    can check that. Only an at_head page waits for a PR Tico has not read; any other page leaves that PR out."""
+    _pipeline(c, page_settings={"rubric": "Shows the checks at the newest commit"}, line="Review page")
+    row = _task(c)
+    fid, _ = _page(c, store)
+    made = _attach(c, row, "page:" + fid, requirement="review page")
+    assert json.loads(made["judged_against"])["context"] == {"task": row["id"]}, "no PR: no heads"
+    c.execute(
+        "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
+        "VALUES (?,?,?,?,?,?,'github','pr',?,?)",
+        (H.new_id(), row["id"], "pr", "https://github.com/acme/app/pull/12", "acme/app", 12, "acme/app#12", H.now()),
+    )
+    fid2, _ = _page(c, store, "<p>v2</p>")
+    unread = _attach(c, row, "page:" + fid2, requirement="review page")
+    assert json.loads(unread["judged_against"])["context"] == {"task": row["id"]}, "a PR not read yet is left out"
+    _link_pr(c, row["id"], "acme/app", 13, "ccc")
+    read = _attach(c, row, "page:" + fid, requirement="review page")
+    assert json.loads(read["judged_against"])["context"] == {"task": row["id"], "heads": {"acme/app#13": "ccc"}}
+    _say(c, read, "met")
+    _push(c, "acme/app", 13, "ddd")
+    assert _standing(c, row).met, "a new commit does not undo a page that is not at_head"
+
+
 # ----------------------------------------------------------------------------- the Jev step
 def _engine(p, calls, reason="Clear and complete"):
     def ask(model, state, questions, label):
@@ -787,8 +811,10 @@ def test_jev_is_not_told_the_pinned_page_is_out_of_date(store, seeded, monkeypat
     assert V.run(store, H.shift(H.now(), seconds=1)) == 1
     (state,) = calls
     assert state["work"]["work_version"] > 0
-    stale = state["attachment"]["work_version"] < state["work"]["work_version"]
-    assert not stale or state["requirement"].get("older_evidence_ok") is True, state
+    assert state["attachment"]["work_version"] == state["work"]["work_version"], (
+        "the page is shown as made for the work as it is now: version 0 of work at version N made Jev hedge (rc.4)"
+    )
+    assert state["requirement"].get("older_evidence_ok") is True, state
 
 
 def test_the_same_page_on_two_tasks_is_judged_for_each_task(store, seeded, monkeypatch):

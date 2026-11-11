@@ -212,6 +212,9 @@ def job_of(
         "task_title": task.get("title") or "",
         "task_spec": task.get("body") or "",
         "task_work_version": task.get("version") or 0,
+        # The page is made for the work as it is now: without this Jev is shown evidence for version 0 of work at
+        # version N, and hedges on a page that is right (live rc.4, Nov 11).
+        "work_version": int(task.get("version") or 0),
         # The page is pinned (file and version), and what it is judged against (the rubric, the task, the heads, the
         # release) is in its rubric_hash: a change to any of them is another verdict. The task's own version moves on
         # with every edit and says nothing about this page, so a page is never out of date by it.

@@ -1,12 +1,18 @@
 """Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
-cases.json holds 41 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
+cases.json holds 66 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
 text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
-unsure. 24 are Dev (tests pass, screenshots match spec, review done, pre-release page) and 17 Marketing (lead has company and contact, campaign
-brief approved, landing page live). The five `acme-*` cases are real pages from the Acme test company (Nov 11), built as
-the page step builds them (attachment kind "page", backend/page_verdicts.py `job_of`) with the stage's shipped rubric.
-`--only acme-*` runs just those. Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a
-draft, a placeholder page, a self-review, a pre-release page without the reviews or without the checks. No customer data belongs in cases.json.
+unsure. 49 are Dev (tests pass, screenshots match spec, review done, spec, pre-release and Checked in production pages)
+and 17 Marketing (lead has company and contact, campaign brief approved, landing page live). The page cases are real pages
+from the Acme test company, built as the page step builds them (attachment kind "page", backend/page_verdicts.py
+`job_of`) with the stage's shipped rubric: five `acme-*` (rc.3) and nineteen `live-*` (rc.4, three tasks from Spec to
+Validate, all good pages), with `trap-*` cut from them. `--only acme-*,live-*,trap-*` runs just those. Traps: a missing
+file, an older work_version, the wrong screen, a lead with no email, a draft, a placeholder page, a self-review, a
+pre-release page without the reviews, without the checks or with the checks of an older commit, a review of an older
+commit or with nothing run, a Validate page on an older version or showing nothing, a spec with no acceptance criteria.
+A case may be `allow_unsure` (met is right, unsure is allowed): an unsure answer on it is left out of the bar's counts
+(live-c-fixes-2-v2, a pre-release page whose reviews are of an earlier commit than its checks). No customer data belongs in
+cases.json.
 
 Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.8 or more,
 not_met at 0.2 or less, and unsure between (the engine's rule: unsure passes the call up to a person and never passes the
@@ -71,6 +77,8 @@ def problems(cases):
             out.append(f"{who}: requirement needs a name and a rubric")
         if case["attachment"] is None and case["expected"] != "not_met":
             out.append(f"{who}: no attachment can only be not_met")
+        if case.get("allow_unsure") and case["expected"] != "met":
+            out.append(f"{who}: only a met case may allow unsure")
         try:
             J.validate(adapter.state_for(case), adapter.QUESTIONS, f"{adapter.QUESTION_SET}@eval")
         except J.JudgeError as exc:
@@ -134,24 +142,27 @@ def score(name, judge, cases, pause=time.sleep, clock=time.monotonic):
                 "ms": ms,
                 "retries": retries,
                 "trap": case.get("trap"),
+                "excused": bool(case.get("allow_unsure")) and got == "unsure",
             }
         )
-        if got != case["expected"]:
+        if got != case["expected"] and not rows[-1]["excused"]:
             mistakes.append(f"{case['id']}: expected {case['expected']}, got {got} (p={p:.2f})")
-    n = len(rows)
+    excused = [r["id"] for r in rows if r["excused"]]
+    counted = [r for r in rows if not r["excused"]]  # an allowed unsure is in no count of the bar
+    n = len(counted)
     false_met = [r["id"] for r in rows if r["got"] == "met" and r["expected"] != "met"]
     by_domain = {
         d: round(
-            sum(r["got"] == r["expected"] for r in rows if r["domain"] == d)
-            / max(1, sum(r["domain"] == d for r in rows)),
+            sum(r["got"] == r["expected"] for r in counted if r["domain"] == d)
+            / max(1, sum(r["domain"] == d for r in counted)),
             3,
         )
         for d in DOMAINS
     }
     times = [r["ms"] for r in rows if r["ms"]]
     labeled_unsure = sum(c["expected"] == "unsure" for c in cases) / max(1, n)
-    unsure_rate = round(sum(r["got"] == "unsure" for r in rows) / max(1, n), 3)
-    accuracy = round(sum(r["got"] == r["expected"] for r in rows) / max(1, n), 3)
+    unsure_rate = round(sum(r["got"] == "unsure" for r in counted) / max(1, n), 3)
+    accuracy = round(sum(r["got"] == r["expected"] for r in counted) / max(1, n), 3)
     p95 = percentile(times, 0.95)
     failed_bar = []
     if not n:
@@ -173,7 +184,8 @@ def score(name, judge, cases, pause=time.sleep, clock=time.monotonic):
         "accuracy_by_domain": by_domain,
         "false_met": len(false_met),
         "false_met_cases": false_met,
-        "missed_met": sum(r["got"] != "met" and r["expected"] == "met" for r in rows),
+        "missed_met": sum(r["got"] != "met" and r["expected"] == "met" for r in counted),
+        "excused": excused,
         "unsure_rate": unsure_rate,
         "retries": sum(r["retries"] for r in rows),
         "errors": errors,

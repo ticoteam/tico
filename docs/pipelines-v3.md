@@ -710,12 +710,13 @@ Stages: Ideas → Spec → In development → Validate → Done · Closed
 - **Ideas.** Owner: Product Owner. Tasks leave by hand. The Product Owner is woken once when Spec has room. To park an idea, snooze it with
   no end date. A person's request moves on (the stage's switch is on): it goes into Spec as soon as Spec has room,
   oldest first.
-- **Spec.** Owner: Product Owner. To leave: a Spec page. Jev checks it, then **a person OKs it** (people only: no bot
+- **Spec.** Owner: Product Owner. To leave: a Spec page with the goal, the scope (in and out) and acceptance criteria
+  someone can check. Jev checks it, then **a person OKs it** (people only: no bot
   OKs it or pushes past it). Limit 2. Expected time: 2 days.
 - **In development.** On enter: file an Engineering task. To leave: Linked work done. Owner: Product Owner. Expected
   time: 5 days.
-- **Validate.** Owner: Product Owner. To leave: a "Checked in production" page that names the version production runs.
-  Jev checks it. No person. Expected time: 1 day.
+- **Validate.** Owner: Product Owner. To leave: a "Checked in production" page that names the version production runs
+  and shows the change working there: what was run or looked at, and what it gave. Jev checks it. No person. Expected time: 1 day.
 
 ### Engineering
 
@@ -732,7 +733,9 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **Review 2.** Owner: Reviewer 2, a different model: Codex if the company has it, else a different Claude model. To leave: a Review page for the newest commit. Expected time: 2
   hours.
 - **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built, that the checks pass at
-  the newest commit, and what both reviewers found. Jev checks it, then **a person OKs it** (people only). Expected time: 4 hours.
+  the newest commit, and what both reviewers found on the commit they reviewed. Jev checks it against the linked PRs'
+  newest commits (any page on a task that links PRs is checked against them; a PR Tico has not read yet is left out),
+  then **a person OKs it** (people only). Expected time: 4 hours.
 - **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
@@ -1322,8 +1325,9 @@ Today: the pipeline editor.
   - "▸ Validate"
 - **Bottom row:** "+ Stage" at the left, "Save" (main) at the right.
 
-**A requirement, open:** fields, name then value: Needs "A page ▾"; Jev checks "Covers goal, scope, what done looks
-like"; Then a person "Ana ▾"; Who OKs "People only ▾"; Can be pushed past "On".
+**A requirement, open:** fields, name then value: Needs "A page ▾"; Jev checks "States the goal, the scope (what is
+in and what is out), and what done looks like as acceptance criteria someone can check."; Then a person "Ana ▾"; Who OKs
+"People only ▾"; Can be pushed past "On".
 
 Rules:
 
