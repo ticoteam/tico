@@ -10,9 +10,9 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-stage-name{font-weight:600}
 .pv-stage-n{color:var(--muted);font-size:var(--t-sm)}
 
-/* Columns: one per work stage, side by side, scrolling sideways. */
+/* Columns: one per work stage, side by side, sharing the width (240px to 480px each), scrolling sideways past that. */
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
-.pv-col{flex:0 0 260px;display:flex;flex-direction:column;gap:8px;min-width:0;padding:8px;border-radius:8px;background:var(--surface2)}
+.pv-col{flex:1 1 0;min-width:240px;max-width:480px;display:flex;flex-direction:column;gap:8px;padding:8px;border-radius:8px;background:var(--surface2)}
 .pv-col-head{padding:2px 4px}
 .pv-col-body{display:flex;flex-direction:column;gap:6px;min-height:24px}
 

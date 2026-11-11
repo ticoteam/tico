@@ -1,5 +1,6 @@
 /* ui/app/pipeline-rail.ts — The manager's rail beside a pipeline's stages (docs/pipelines-v3.md S10), on a desktop.
-   Top: the manager's face and name, and a button that folds the rail to a thin strip (kept in this browser). Tabs: Log,
+   Closed until the chat icon in the page's header opens it (open or closed is kept in this browser); open, it is a
+   column at the right of the page. Top: the manager's face and name, and a button that closes it. Tabs: Log,
    Tasks, and Learned once it has a line. Above the tab's list, the Late tasks: title and how long, no mark, no avatar. Below, the chat with the
    manager: the ordinary direct thread (thread-view.ts threadMount), never a chat of its own.
    Tasks lists the open tasks the manager was woken about (it owns none, C25); the Log shows each push past and each
@@ -16,17 +17,23 @@ interface PrState {
 }
 
 let PR: PrState | null = null;
-const PR_HIDDEN_KEY = 'tico.pipeline.rail_hidden';
+const PR_OPEN_KEY = 'tico.pipeline.rail_open';
 const PR_READ_MS = 60000;
 const PR_TABS: [PrTab, string][] = [['log', 'Log'], ['tasks', 'Tasks'], ['learned', 'Learned']];
 const PR_HIDE_ICON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" '
   + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
 
-function prHidden(): boolean {
-  try { return localStorage.getItem(PR_HIDDEN_KEY) === '1'; } catch { return false; }
+/** Closed unless this browser opened it. */
+function prOpen(): boolean {
+  try { return localStorage.getItem(PR_OPEN_KEY) === '1'; } catch { return false; }
 }
-function prHide(hidden: boolean): void {
-  try { localStorage.setItem(PR_HIDDEN_KEY, hidden ? '1' : '0'); } catch { /* storage blocked: not kept */ }
+function prKeepOpen(open: boolean): void {
+  try { localStorage.setItem(PR_OPEN_KEY, open ? '1' : '0'); } catch { /* storage blocked: not kept */ }
+}
+/** The page's column for the rail: there only while the rail is open. */
+function prPlace(host: HTMLElement, open: boolean): void {
+  host.hidden = !open;
+  host.closest('.tasks-page')?.classList.toggle('has-rail', open);
 }
 
 /** A manager's actor id from its reference, stored with or without bot:. */
@@ -77,25 +84,23 @@ const prTasks = (state: PrState, tasks: TaskAny[]): TaskAny[] =>
 
 function prDraw(state: PrState): void {
   if (PR !== state) return;
-  const host = state.host, tasks = pvTasksOf(state.pipelineId), hidden = prHidden();
+  const host = state.host, tasks = pvTasksOf(state.pipelineId), open = prOpen();
   const name = actorLabel(state.manager);
   host.classList.add('pm-rail');
-  host.classList.toggle('collapsed', hidden);
-  host.closest('.tasks-page')?.classList.toggle('rail-hidden', hidden);
+  prPlace(host, open);
+  document.getElementById('task-manager')?.setAttribute('aria-pressed', String(open));
+  if (!open) return;
   let shell = host.querySelector<HTMLElement>(':scope > .pm-shell');
   if (!shell) {
-    host.innerHTML = `<div class="pm-shell"><button type="button" class="pm-strip" data-pm-show></button>
-      <div class="pm-panel"><header class="pm-head"></header><div class="pm-tabs" role="tablist"></div>
+    host.innerHTML = `<div class="pm-shell"><div class="pm-panel"><header class="pm-head"></header><div class="pm-tabs" role="tablist"></div>
       <div class="pm-body"></div><div class="pm-chat"></div></div></div>`;
     shell = host.querySelector<HTMLElement>(':scope > .pm-shell');
   }
   if (!shell) return;
-  const strip = shell.querySelector<HTMLElement>('.pm-strip');
-  if (strip) { strip.innerHTML = actorFace(state.manager, 28); strip.setAttribute('aria-label', `Show ${name}`); strip.title = `Show ${name}`; }
   const head = shell.querySelector<HTMLElement>('.pm-head');
   if (head) {
     head.innerHTML = `<span class="pm-face">${actorFace(state.manager, 32)}</span><b class="pm-name">${esc(name)}</b>`
-      + `<button type="button" class="ghost pm-x" data-pm-hide aria-label="Hide" title="Hide">${PR_HIDE_ICON}</button>`;
+      + `<button type="button" class="ghost pm-x" data-pm-hide aria-label="Close" title="Close">${PR_HIDE_ICON}</button>`;
   }
   const count = prTasks(state, tasks).length;
   const tabs = shell.querySelector<HTMLElement>('.pm-tabs');
@@ -111,7 +116,7 @@ function prDraw(state: PrState): void {
   const body = shell.querySelector<HTMLElement>('.pm-body');
   if (body) body.innerHTML = prLateHTML(tasks) + prTabHTML(state, tasks);
   const chat = shell.querySelector<HTMLElement>('.pm-chat');
-  if (chat && !hidden && !state.chat) state.chat = threadMount(chat, {dm: state.manager, card: true, header: false});
+  if (chat && !state.chat) state.chat = threadMount(chat, {dm: state.manager, card: true, header: false});
 }
 
 async function prRead(state: PrState): Promise<void> {
@@ -132,20 +137,30 @@ function prClick(ev: MouseEvent): void {
   if (!state || !target || !state.host.contains(target)) return;
   const tab = target.closest<HTMLElement>('[data-pm-tab]');
   if (tab) { state.tab = (tab.dataset['pmTab'] as PrTab | undefined) ?? 'log'; prDraw(state); return; }
-  if (target.closest('[data-pm-hide]')) { prHide(true); prDraw(state); return; }
-  if (target.closest('[data-pm-show]')) { prHide(false); prDraw(state); }
+  if (target.closest('[data-pm-hide]')) pipelineRailToggle(false);
 }
+
+/** The header's chat icon: opens or closes the rail of the pipeline in view. */
+function pipelineRailToggle(open = !prOpen()): void {
+  prKeepOpen(open);
+  const state = PR;
+  if (!state) return;
+  if (!open) { threadUnmount(state.chat); state.chat = null; }
+  prDraw(state);
+}
+
+/** Whether the pipeline has a rail here: a manager, and not a phone. The header shows the chat icon for it. */
+const pipelineRailFor = (rec: PipelineRec | null | undefined): boolean =>
+  !!rec?.manager_id && !window.matchMedia('(max-width:600px)').matches;
 
 /** Mounts the rail into the page's host for a pipeline with a manager, or draws it again with the tasks now held; a
     pipeline with no manager, or a phone, has no rail. */
 function pipelineRailSync(host: HTMLElement, rec: PipelineRec): void {
-  const phone = window.matchMedia('(max-width:600px)').matches;
-  if (!rec.manager_id || phone) {
+  if (!pipelineRailFor(rec)) {
     if (PR?.host === host) pipelineRailLeave();
-    host.hidden = true;
+    prPlace(host, false);
     return;
   }
-  host.hidden = false;
   const manager = prActor(rec.manager_id);
   if (!PR || PR.host !== host || PR.pipelineId !== rec.id || PR.manager !== manager || !host.isConnected) {
     pipelineRailLeave();
@@ -165,5 +180,5 @@ function pipelineRailLeave(): void {
   PR = null;
   state.host.removeEventListener('click', prClick);
   threadUnmount(state.chat);
-  state.host.closest('.tasks-page')?.classList.remove('rail-hidden');
+  state.host.closest('.tasks-page')?.classList.remove('has-rail');
 }
