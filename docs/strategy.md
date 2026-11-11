@@ -148,7 +148,7 @@ through; how you know they want it; why now; why this team; what you understand 
 what stops a bigger company copying you; how you make money, and the price that breaks; where the next hundred
 customers come from; the bet most people would call wrong; what you won't do, and the request you turned down. Each is
 asked as a claim to confirm or strike. It is "in the style of", not theirs. The other guides
-became lenses; `tico strategy guides` and `GET /api/v2/strategy/guides` are deprecated and list the Default guide only.
+became lenses; `GET /api/v2/strategy/guides` is deprecated and lists the Default guide only.
 
 ## Who may do what
 
@@ -312,7 +312,6 @@ tico strategy bet add --statement S [--why W] [--rules-out R] [--wrong-if-kpi ID
     --wrong-if-threshold N | --wrong-if-thesis MARKET_ID | --wrong-if-text TEXT] [--check-by DATE] [--cite MARKET_ID ...]
     [--status proposed|active] [--rank N]
 tico strategy bet update <id> [the same flags]      tico strategy bet retire <id>      (owner only)
-tico strategy guides                     deprecated; the Default guide only
 tico lens list|run|show|runs            see Lenses (lenses.md)
 tico goal create ... --bet <id>          tico goal update <id> --bet <id>
 ```

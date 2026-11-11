@@ -137,7 +137,7 @@ def test_chat_by_slug_or_id_reaches_the_bot_and_its_runner_claims_it_by_either(a
 
 
 def test_mcp_and_cli_chat_name_the_bot_by_slug(api, sales):
-    sent = tool(api, "ana-test", "tico_chat_send", {"to": "sales-helper", "text": "Hello"})
+    sent = tool(api, "ana-test", "tico_message_send", {"to": "sales-helper", "text": "Hello"})
     assert json.dumps(sent).count("bot:" + sales) >= 1
     assert column(api, "SELECT recipient_id FROM messages WHERE body='Hello'") == ["bot:" + sales]
 

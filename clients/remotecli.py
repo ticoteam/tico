@@ -126,7 +126,7 @@ def via_tool(client, args, **more):
     }
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
-    if args.fn in ("bot keep-tasks-going", "bot turns-at-once", "computer turns-at-once") and hasattr(args, "limit"):
+    if args.fn in ("bot turns-at-once", "computer turns-at-once") and hasattr(args, "limit"):
         fields["limit"] = args.limit  # explicit null restores the default; omission only reads
     if args.fn == "bot browser-exit" and hasattr(args, "computer"):
         fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
@@ -476,6 +476,7 @@ def run(args, who=None):
         "team budget",
         "org order",
         "org reports-to",
+        "org models",
         "run list",
         "message list",
         "message mark-read",
@@ -509,7 +510,6 @@ def run(args, who=None):
         "task requesters",
         "task requester-save",
         "task requester-remove",
-        "task publication-preview",
         "task comment-moderate",
         "roadmap tasks",
     ):
@@ -751,6 +751,7 @@ def run(args, who=None):
                 "fyi": args.fyi,
                 "conversation_id": args.conversation,
                 "refs": args.ref or [],
+                "command": getattr(args, "command", False),
                 "steer": getattr(args, "steer", False),
                 "needs_action": getattr(args, "needs_action", False),
                 "operation_id": key,

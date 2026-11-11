@@ -541,6 +541,17 @@
     {
       "fixable": true,
       "new": [
+        "message",
+        "send"
+      ],
+      "old": [
+        "chat",
+        "send"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
         "health",
         "check"
       ],
@@ -784,6 +795,14 @@
     [
       "org",
       "reports-to"
+    ],
+    [
+      "org",
+      "models"
+    ],
+    [
+      "org",
+      "show"
     ]
   ],
   "commands_removed": [

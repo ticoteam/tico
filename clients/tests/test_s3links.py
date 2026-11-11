@@ -120,8 +120,12 @@ def test_the_tools_rewrite_text_before_sending_and_say_so():
     assert commented["sent"]["text"] == "`s3://acme-files/a.md` " + VIEW + "/b.md"
     done = hubtools.BY_NAME["tico_task_done"]["fn"](api, {"id": "t1", "note": "s3://acme-files/r.pdf", "version": 3})
     assert done["sent"]["note"] == VIEW + "/r.pdf"
-    chat = hubtools.BY_NAME["tico_chat_send"]["fn"](api, {"to": "finance", "text": "s3://acme-files/c.png"})
+    chat = hubtools.BY_NAME["tico_message_send"]["fn"](api, {"to": "finance", "text": "s3://acme-files/c.png"})
     assert chat["sent"]["text"] == VIEW + "/c.png"
+    command = hubtools.BY_NAME["tico_message_send"]["fn"](
+        api, {"to": "finance", "text": "/read s3://acme-files/c.png", "command": True}
+    )
+    assert command["sent"]["text"] == "/read s3://acme-files/c.png" and "s3_links" not in command
     # Text without a bucket URI costs no config read and comes back as it always did.
     before = len(api.calls)
     plain = hubtools.BY_NAME["tico_task_comment"]["fn"](api, {"id": "t1", "text": "Done."})

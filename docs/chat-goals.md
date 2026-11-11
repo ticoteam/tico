@@ -58,12 +58,12 @@ tico chat goal <conversation-id> pause
 tico chat goal <conversation-id> resume
 tico chat goal <conversation-id> edit "Write a shorter Acme summary"
 tico chat goal <conversation-id> clear
-tico chat send ops "/compact" --conversation <conversation-id> --command
+tico message send ops "/compact" --conversation <conversation-id> --command
 ```
 
 MCP `tico_chat_goal` takes `conversation_id`, optional `action` (`get`, `set`, `edit`, `pause`,
-`resume`, `clear`) and `objective` for set or edit. `tico_chat_send` and `tico_message_send`
-accept `command: true` for verbatim harness delivery.
+`resume`, `clear`) and `objective` for set or edit. `tico_message_send` accepts `command: true` for verbatim
+harness delivery.
 
 `GET /api/v2/conversations/{id}/goal` returns `{goal, supported, commands}`.
 `POST` on that path takes `{action, objective?}` and returns `{goal}`; unsupported harnesses

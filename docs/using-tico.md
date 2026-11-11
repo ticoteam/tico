@@ -277,14 +277,14 @@ the same way with `GET` and `POST /api/v2/preferences/compose.send_way` (`{"valu
 `defer:<30m|1h|4h|24h|2d|7d|never>`). The CLI and API take the same words:
 
 ```bash
-tico chat send content "Skip the charts." --steer
+tico message send content "Skip the charts." --steer
 tico task comment <task-id> "Billing first." --defer 4h
 ```
 
 `POST /api/v2/chat/<bot>` and `POST /api/v2/tasks/<id>/comments` take `delivery` (`steer`,
 `queue` or `defer`) and `defer_for` (`<n>m`, `<n>h`, `<n>d` up to two years, or `never`;
-defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `tico_chat_send`,
-`tico_message_send` and `tico_task_comment` take the same fields.
+defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `tico_message_send`
+and `tico_task_comment` take the same fields.
 
 A person's post in a bot's Home or a DM with a bot takes them too, as optional fields: `POST /api/v2/threads/<id>/messages`,
 `POST /api/v2/threads/dm` (with its first `body`) and `POST /api/v2/uploads/threads/<id>/messages` (form fields). A
