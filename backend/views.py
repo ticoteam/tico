@@ -2077,6 +2077,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
                     "bots": it["bots"],
                     "task_ids": tasks,
                     "task": briefs.get(tasks[0]),
+                    **({"href": it["href"]} if it.get("href") else {}),
                 }
             )
             continue

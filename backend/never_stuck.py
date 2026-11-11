@@ -780,14 +780,17 @@ def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, 
 
 
 def _asks_only(waits: list[W.Wait]) -> bool:
-    """Whether all a task waits on is OKs and answers asked of people."""
-    return bool(waits) and all(wait.state == W.PERSON and wait.ask for wait in waits)
+    """Whether all a task waits on is OKs and answers asked of people, and causes a person fixes first (`Wait.fix`,
+    Connect GitHub)."""
+    return bool(waits) and all((wait.state == W.PERSON and wait.ask) or wait.fix for wait in waits)
 
 
 def _pushable(conn: "sqlite3.Connection", waits: list[W.Wait]) -> bool:
     """Whether a bot may push past any of these asks: its switch is on and it is not people only (task_engine
     ._may_push_past refuses the rest)."""
     for wait in waits:
+        if wait.fix:
+            continue  # pushing past it would not get round its cause: the next stage needs it as well
         requirement = R.get(conn, str(wait.requirement_id)) if wait.requirement_id else None
         if requirement and R.can_push_past(requirement) and not R.people_only(requirement):
             return True

@@ -1313,11 +1313,35 @@ def _now() -> Any:
     return hubdb
 
 
+# A task with no PR linked needs a repository the company's GitHub App reaches. With no App installed nobody can open
+# one, so the condition says a person connects GitHub first (`Standing.fix`): whoever has the task is Paused on it, the
+# company's Owner has one row in Needs you for every task it holds up, and the tasks carry on once the App is installed
+# (waiting_on).
+CONNECT = "Connect GitHub"
+CONNECT_AT = "#/tools/github"
+_INSTALLED = "SELECT installation_id FROM github_app WHERE id='app'"
+
+
+def installed(conn: "sqlite3.Connection") -> bool:
+    """Whether the company's GitHub App is connected and installed, as Health's GitHub check counts it."""
+    import sqlite3
+
+    from .. import read_cache
+
+    try:
+        found = cast("Any", read_cache).one(conn, _INSTALLED)
+    except sqlite3.OperationalError:
+        return False  # no table: GitHub was never set up here
+    return bool(found and found[0])
+
+
 def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[Row], Standing | None]:
     """The PRs a GitHub condition reads, each with `ref` and `metadata`, or the standing when there are none to read."""
     links: list[Row] = [
         {**link, "ref": pr_ref(str(link["repo"]), int(link["number"]))} for link in prs_of(conn, task["id"])
     ]
+    if not links and not installed(conn):
+        return [], Standing(requirement, NOT_MET, task.get("owner_id"), CONNECT, fix=CONNECT_AT)
     if not links:
         return [], Standing(requirement, NOT_MET, task.get("owner_id"), "No PR linked")
     live = [link for link in links if not (link["metadata"] and link["metadata"]["state"] == "closed")]

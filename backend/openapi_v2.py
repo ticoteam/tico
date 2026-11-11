@@ -2327,6 +2327,7 @@ NEEDS_ITEM = obj(
     message_id={"type": "string", "description": "A mention's message"},
     conversation_id={"type": "string", "description": "The thread a mention was written in"},
     root_id={"type": "string", "description": "A mention's root thread: the rail row it moves"},
+    href={"type": "string", "description": "A paused cause a person fixes in the app: where (Connect GitHub)"},
 )
 
 # Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.

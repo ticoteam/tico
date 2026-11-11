@@ -331,7 +331,8 @@ function decidePaintSide(st: DecState) {
   } else if (kind === 'stuck') {
     body = `<div class="dc-acts">${decideBtn('again', 'Try again', true, busy)}${decideBtn('give', 'Reassign', false, busy)}${decideBtn('back', 'Move back', false, busy)}${decideBtn('close-task', 'Close', false, busy)}</div>${decideMoreHTML(st, it)}`;
   } else {
-    body = `<div class="dc-acts">${decideBtn('open', 'Open', true)}</div>`;
+    // A cause a person fixes in the app (Connect GitHub) goes straight there; Open shows the first task it holds up.
+    body = `<div class="dc-acts">${it.href ? decideBtn('fix', it.line, true) : ''}${decideBtn('open', 'Open', !it.href)}</div>`;
   }
   // What was typed stays through a redraw of the same item (busy, then a refusal in the server's words).
   const held = host.querySelector<HTMLElement>('[data-key]')?.dataset.key === it.id ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
@@ -650,6 +651,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
     }
     case 'give-to': { const to = decideTo(); if (to) await decideDo(st, it, `Given to ${actorLabel(to)}`, () => taskReassign(taskId, to, ver)); return; }
     case 'open': decideOpenWhere(it); return;
+    case 'fix': if (it.href) { decideStop(); location.hash = it.href; } return;
     case 'up':
       if (st.thumbed.has(it.id)) return;
       try { await taskThumbs(taskId, rid, true); st.thumbed.add(it.id); decidePaintHead(st); }

@@ -64,7 +64,8 @@ class Wait:
     sentence. `until` is a snooze's end, where it has one. `ask` is set when a requirement names who it waits on (an
     OK or an answer); without it the wait is the task's own work, which whoever has the task has. `about` is the task
     it filed whose title (or why it was closed) the line says: it never leaves the server (`view`), and a reader who
-    may not open that task is not told them (`unnamed`)."""
+    may not open that task is not told them (`unnamed`). `fix` is set on a Paused wait a person fixes before any bot
+    can act (a requirement's `Standing.fix`, such as Connect GitHub): where they fix it. Nobody is woken for it."""
 
     state: str
     who: str | None = None
@@ -74,6 +75,7 @@ class Wait:
     until: str | None = None
     ask: bool = False
     about: str | None = None
+    fix: str | None = None
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -104,7 +106,7 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
 def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
     """A wait as JSON for a reader (`unnamed`), without `about`: which task a line came from is the server's."""
     out = asdict(unnamed(wait, shown))
-    del out["about"]
+    del out["about"], out["fix"]
     return out
 
 
@@ -414,6 +416,10 @@ def of(
             out.append(_turn(conn, row, named, line, requirement["id"], since, True, seen))
         elif by_hand or asked:
             continue  # in a by-hand stage nobody is chased for what is not met
+        elif standing.fix and is_bot(has):
+            # Nobody can meet it until a person fixes its cause (Connect GitHub): the bot is Paused on it, without a
+            # turn, and the person who fixes it has one row for every task it holds up (`needs_by_person`).
+            out.append(Wait(PAUSED, has, line, requirement["id"], since, fix=standing.fix))
         else:
             if filed is None:
                 filed = _filed_open(conn, visit["id"]) if theirs else []
@@ -470,13 +476,14 @@ def of(
 def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None) -> set[str]:
     """The bots whose turn it is on this task: each bot it waits on (Paused ones too: their wake waits until they can
     run), and the pipeline's manager bot while the ladder has the task at its level. Empty at level `person`: nothing
-    runs until a person acts."""
+    runs until a person acts. A bot Paused on a cause a person fixes first (`Wait.fix`) has no turn: nothing it could
+    do would help, so it is not woken, and it is woken once when the cause goes (never_stuck's ladder)."""
     visit: Row = row.get("visit") or {}
     level = visit.get("level") or "owner"
     if level == "person" or row["stage"]["kind"] != "work":
         return set()
     found = of(conn, row) if waits is None else waits
-    out = {str(wait.who) for wait in found if wait.state in (BOT, PAUSED) and wait.who}
+    out = {str(wait.who) for wait in found if wait.state in (BOT, PAUSED) and wait.who and not wait.fix}
     pipe: Row = row.get("pipeline") or {}
     manager: str | None = pipe.get("manager_id")
     if level == "manager" and is_bot(manager) and out:
@@ -496,7 +503,9 @@ def turn(
         return None
     found = of(conn, row) if waits is None else waits
     states = (BOT, PAUSED) if paused else (BOT,)
-    bots = sorted((w for w in found if w.state in states and w.who), key=lambda w: (w.state != BOT, w.ask))
+    bots = sorted(
+        (w for w in found if w.state in states and w.who and not w.fix), key=lambda w: (w.state != BOT, w.ask)
+    )
     if not bots:
         return None
     pipe: Row = row.get("pipeline") or {}
@@ -601,10 +610,11 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     """Needs you, for one person, oldest first. A task whose work is theirs is listed once (`kind` "task"), however many
     requirements are missing. Each OK or answer that names them is its own entry (`kind` "ask"). A bot that cannot run
     is one entry per cause (`kind` "paused") for the person who can fix it, with the tasks it holds up, not one per
-    task. A read: nothing is stored, so nothing can fall out of step with the tasks. A task a person snoozed is set
-    aside and is not listed. A bot's snooze hides no ask: each OK or answer still asked of a person stays in their
-    list (Acme rc.5, Nov 11: a manager bot's snooze took a people-only OK out of the person's list for two days); the
-    rest of the task is set aside. An ask the stage's merge conflict waits on says so in one more sentence
+    task; a cause the company's Owner fixes first (Connect GitHub, `Wait.fix`) is theirs, with `href` to where. A read:
+    nothing is stored, so nothing can fall out of step with the tasks. A task a person snoozed is set aside and is not
+    listed. A bot's snooze hides no ask: each OK or answer still asked of a person stays in their list (Acme rc.5, Nov
+    11: a manager bot's snooze took a people-only OK out of the person's list for two days); the rest of the task is
+    set aside. An ask the stage's merge conflict waits on says so in one more sentence
     (pr_conflicts.held)."""
     return needs_by_person(conn).get(person, [])
 
@@ -666,15 +676,19 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
                 continue  # BotOps has the held run's review task (execution._hand_to_maintainer): no person row
             if wait.line.endswith(task_wakes.CANT_START):
                 continue  # BotOps has the task to find why its runs can't start (start_holds.file): no person row
-            if wait.who not in fixers:
-                fixers[wait.who] = _fixer(conn, wait.who, seen.get(actor_id(wait.who)))
-            fixer = fixers[wait.who]
+            if wait.fix:
+                # A cause of the company's (Connect GitHub): its Owner fixes it, once for every task it holds up.
+                fixer = company_person(conn)
+            else:
+                if wait.who not in fixers:
+                    fixers[wait.who] = _fixer(conn, wait.who, seen.get(actor_id(wait.who)))
+                fixer = fixers[wait.who]
             if not fixer:
                 continue
-            entry = paused.setdefault(fixer, {}).setdefault(
-                wait.line,
-                {"kind": "paused", "line": wait.line, "bots": [], "tasks": [], "since": wait.since or ""},
-            )
+            fresh: Row = {"kind": "paused", "line": wait.line, "bots": [], "tasks": [], "since": wait.since or ""}
+            if wait.fix:
+                fresh["href"] = wait.fix
+            entry = paused.setdefault(fixer, {}).setdefault(wait.line, fresh)
             if wait.who not in entry["bots"]:
                 entry["bots"].append(wait.who)
             if task_id not in entry["tasks"]:
@@ -689,15 +703,15 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
 
 
 def listed(waits: list[Wait], row: Row) -> list[Wait]:
-    """The waits of a task that go in Needs you. A task a bot snoozed lists only the OKs and answers asked of a person:
-    a bot's snooze never hides an ask, and sets the rest aside. Any other task, all of them (a task a person snoozed
-    is not listed)."""
+    """The waits of a task that go in Needs you. A task a bot snoozed lists only what is asked of a person, the OKs and
+    answers and a cause they fix first (`Wait.fix`): a bot's snooze never hides an ask, and sets the rest aside. Any
+    other task, all of them (a task a person snoozed is not listed)."""
     snooze: Row = row.get("snooze") or {}
     if not snooze:
         return waits
     if not is_bot(snooze.get("by_id")):
         return []
-    return [wait for wait in waits if wait.state == PERSON and wait.ask]
+    return [wait for wait in waits if (wait.state == PERSON and wait.ask) or wait.fix]
 
 
 def _botops_reviews(conn: "sqlite3.Connection", bot: str) -> bool:

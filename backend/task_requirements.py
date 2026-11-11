@@ -94,7 +94,9 @@ def _active_ids(conn: "sqlite3.Connection") -> frozenset[str]:
 class Standing:
     """Where one requirement stands for one visit. `on` is who or what it waits on: an actor, `jev`, a source, or a
     task id. `line` is one sentence: what is missing, or what met it. `about` is the task it filed whose title (and
-    why it was closed) the line says, so a reader who may not open that task is not told them (waiting_on.unnamed)."""
+    why it was closed) the line says, so a reader who may not open that task is not told them (waiting_on.unnamed).
+    `fix` is where a person fixes what stops anyone meeting it (a link in the app, such as GitHub's "#/tools/github"
+    while no GitHub App is installed): a bot that has it is Paused on that cause and nobody is woken until it goes."""
 
     requirement: Row
     state: str
@@ -102,6 +104,7 @@ class Standing:
     line: str = ""
     about: str | None = None
     since: str | None = None  # when it was asked of whom it waits on, when that is later than the visit began
+    fix: str | None = None
 
     @property
     def met(self) -> bool:

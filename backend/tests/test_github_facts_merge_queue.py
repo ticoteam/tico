@@ -1029,8 +1029,8 @@ def test_a_worktree_branch_pr_is_not_linked_while_its_task_is_in_merge(hook_api)
 
     gh = FakeGitHub()
     with hook_api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM github_app")
         task_id = in_merge(c, gh, 1)
+        c.execute("DELETE FROM github_app")
         c.execute(
             "INSERT INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,ciphertext,"
             "nonce,created_at,created_by) VALUES('app',1,'tico','c','acme',0,NULL,'',x'00',x'00','t','ana')"
