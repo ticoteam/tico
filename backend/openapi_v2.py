@@ -12000,6 +12000,14 @@ STABLE.extend(
         ),
         (
             "/api/v2/calendar/events/{occurrence_id}",
+            "get",
+            "Calendar",
+            "getCalendarEvent",
+            "One event as the caller sees it (404 when they cannot see it)",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
             "patch",
             "Calendar",
             "changeCalendarEvent",
