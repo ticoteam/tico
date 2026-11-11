@@ -32,7 +32,7 @@ A beat runs these steps in this order. A step runs only when it is due. If one s
 | Go-live expiry | Due times | Every 10 minutes |
 | Unreadable queued work | Recovery | Every minute |
 | Repository and setup waits | Outside polls | Every 10 seconds |
-| Directory links | Recovery | Every beat |
+| Contacts links | Recovery | Every beat |
 | Calls and live meetings | Recovery | Every 10 seconds |
 
 What each step does is listed in [System routines](system-routines.md). On the Heartbeat screen, **Steps** groups the steps by kind. Each row shows:

@@ -3985,10 +3985,10 @@ def market_research(api, args):
     return api.post("market/spend/research", {"description": args["description"]}, key=_key(args))
 
 
-# ----------------------------------------------------------------------------- directory
-# The Directory (backend/entities/routes.py): `tico directory`. The one read rule decides what each reader sees; a tool here
+# ----------------------------------------------------------------------------- contacts
+# Contacts (backend/entities/routes.py): `tico contacts`. The one read rule decides what each reader sees; a tool here
 # only names what to ask. Reads are offered to every kind of caller; writes to people and bots, not the Assistant.
-DIRECTORY_VALUE_TYPES = [
+CONTACTS_VALUE_TYPES = [
     "text",
     "number",
     "currency",
@@ -4005,8 +4005,8 @@ DIRECTORY_VALUE_TYPES = [
     "rating",
     "actor",
 ]
-DIRECTORY_REF = _s("An entity: its id, an email, a domain, a name or an external id")
-DIRECTORY_MATCH = {
+CONTACTS_REF = _s("An entity: its id, an email, a domain, a name or an external id")
+CONTACTS_MATCH = {
     "type": "object",
     "description": "How to find the one entity: one of id, email, domain or name (a name needs a type match)",
     "additionalProperties": {"type": "string"},
@@ -4019,35 +4019,35 @@ def _clean(fields):
 
 
 @tool(
-    "tico_directory_self",
-    "Who we are in the Directory: our company, the places we operate in, and the obligations that bind us.",
+    "tico_contacts_self",
+    "Who we are in Contacts: our company, the places we operate in, and the obligations that bind us.",
     {},
 )
-def directory_self(api, args):
+def contacts_self(api, args):
     return api.get("entities/self")
 
 
 @tool(
-    "tico_directory_types",
-    "The Directory's entity types (person, organization, place ...) and the ones added, each with its description and who added it.",
+    "tico_contacts_types",
+    "The contact types (person, organization, place ...) and the ones added, each with its description and who added it.",
     {},
 )
-def directory_types(api, args):
+def contacts_types(api, args):
     return api.get("entities/types")
 
 
 @tool(
-    "tico_directory_describe",
+    "tico_contacts_describe",
     "One entity type: its attributes with value type, owner and options, and the link types that may touch it.",
     {"type": _s("The type key, like organization")},
     required=("type",),
 )
-def directory_describe(api, args):
+def contacts_describe(api, args):
     return api.get("entities/types/" + args["type"])
 
 
 @tool(
-    "tico_directory_find",
+    "tico_contacts_find",
     "Entities of one type that you can see, by name (a prefix), status or a link to us (customer_of). "
     "A page is 50; pass its next as after for the next page.",
     {
@@ -4060,7 +4060,7 @@ def directory_describe(api, args):
     },
     required=("type",),
 )
-def directory_find(api, args):
+def contacts_find(api, args):
     return api.get(
         "entities/find/" + args["type"],
         name=args.get("name"),
@@ -4072,37 +4072,37 @@ def directory_find(api, args):
 
 
 @tool(
-    "tico_directory_get",
+    "tico_contacts_get",
     "One entity as you see it: its values with source and age, its links, external records and your notes. "
     "A reference that two entities match returns both, marked ambiguous.",
-    {"ref": DIRECTORY_REF},
+    {"ref": CONTACTS_REF},
     required=("ref",),
 )
-def directory_get(api, args):
+def contacts_get(api, args):
     return api.get("entities/card", ref=args["ref"])
 
 
 @tool(
-    "tico_directory_rules",
+    "tico_contacts_rules",
     "The rules that apply to an entity, each with the path it comes by.",
     {
-        "ref": DIRECTORY_REF,
+        "ref": CONTACTS_REF,
         "action": _s("What you would do, like email"),
         "as_bot": _s("The bot the rules are for"),
     },
     required=("ref",),
 )
-def directory_rules(api, args):
+def contacts_rules(api, args):
     return api.get("entities/rules", ref=args["ref"], action=args.get("action"), as_bot=args.get("as_bot"))
 
 
 @tool(
-    "tico_directory_upsert",
+    "tico_contacts_upsert",
     "Create or update one entity of a type. The match names it; one that matches more than one entity is refused, never guessed. "
     "Values are set by attribute key, and a value that changes keeps its old one in history.",
     {
         "type": _s("The type key, like person"),
-        "match": DIRECTORY_MATCH,
+        "match": CONTACTS_MATCH,
         "values": {"type": "object", "description": "Attribute key to value"},
         "name": _s("The entity's name (required to create one unless the match gives it)"),
         "evidence_id": _s("A market evidence id that supports the values"),
@@ -4111,7 +4111,7 @@ def directory_rules(api, args):
     required=("type", "match"),
     writes=True,
 )
-def directory_upsert(api, args):
+def contacts_upsert(api, args):
     body = _clean(
         {
             "type": args["type"],
@@ -4126,12 +4126,12 @@ def directory_upsert(api, args):
 
 
 @tool(
-    "tico_directory_link",
+    "tico_contacts_link",
     "A typed, dated link between two entities you can see. The link type says which ends it may join; a link already current is returned, not written twice.",
     {
-        "from_ref": DIRECTORY_REF,
+        "from_ref": CONTACTS_REF,
         "link_key": _s("The link type, like works_at"),
-        "to_ref": DIRECTORY_REF,
+        "to_ref": CONTACTS_REF,
         "valid_from_on": _s("YYYY-MM-DD the link starts"),
         "valid_until_on": _s("YYYY-MM-DD the link ends"),
         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
@@ -4140,7 +4140,7 @@ def directory_upsert(api, args):
     required=("from_ref", "link_key", "to_ref"),
     writes=True,
 )
-def directory_link(api, args):
+def contacts_link(api, args):
     body = _clean(
         {
             "from_ref": args["from_ref"],
@@ -4156,51 +4156,51 @@ def directory_link(api, args):
 
 
 @tool(
-    "tico_directory_unlink",
+    "tico_contacts_unlink",
     "End a link: it stops being current today. Its history stays.",
-    {"link_id": _s("The link's id, from tico_directory_get")},
+    {"link_id": _s("The link's id, from tico_contacts_get")},
     required=("link_id",),
     writes=True,
 )
-def directory_unlink(api, args):
+def contacts_unlink(api, args):
     return api.post("entities/unlink", {"link_id": args["link_id"]}, key=_key(args))
 
 
 @tool(
-    "tico_directory_merge",
+    "tico_contacts_merge",
     "Merge a duplicate (drop) into the entity it is a copy of (keep): the dropped entity's rows move to the kept one, "
-    "and tico_directory_unmerge reverses it exactly.",
-    {"keep": DIRECTORY_REF, "drop": DIRECTORY_REF},
+    "and tico_contacts_unmerge reverses it exactly.",
+    {"keep": CONTACTS_REF, "drop": CONTACTS_REF},
     required=("keep", "drop"),
     writes=True,
 )
-def directory_merge(api, args):
+def contacts_merge(api, args):
     return api.post("entities/merge", {"keep": args["keep"], "drop": args["drop"]}, key=_key(args))
 
 
 @tool(
-    "tico_directory_unmerge",
+    "tico_contacts_unmerge",
     "Reverse the last merge of a dropped entity, named by its own id (a merged reference answers with the kept entity).",
     {"drop": _s("The dropped entity's id")},
     required=("drop",),
     writes=True,
 )
-def directory_unmerge(api, args):
+def contacts_unmerge(api, args):
     return api.post("entities/unmerge", {"drop": args["drop"]}, key=_key(args))
 
 
 @tool(
-    "tico_directory_history",
+    "tico_contacts_history",
     "Past values of an entity's fields, newest first. Name an attribute for one field. A page is 50; pass its next as after.",
     {
-        "ref": DIRECTORY_REF,
+        "ref": CONTACTS_REF,
         "attribute": _s("One attribute key, like title"),
         "after": _s("The next the last page gave"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 50},
     },
     required=("ref",),
 )
-def directory_history(api, args):
+def contacts_history(api, args):
     return api.get(
         "entities/history",
         ref=args["ref"],
@@ -4211,10 +4211,10 @@ def directory_history(api, args):
 
 
 @tool(
-    "tico_directory_note",
+    "tico_contacts_note",
     "A note on an entity. audience me is yours alone; company is shown to everyone who can see the entity.",
     {
-        "ref": DIRECTORY_REF,
+        "ref": CONTACTS_REF,
         "body": _s("The note"),
         "audience": {"type": "string", "enum": ["me", "company"]},
         "evidence_id": _s("A market evidence id the note cites"),
@@ -4222,7 +4222,7 @@ def directory_history(api, args):
     required=("ref", "body"),
     writes=True,
 )
-def directory_note(api, args):
+def contacts_note(api, args):
     body = _clean(
         {
             "ref": args["ref"],
@@ -4235,14 +4235,14 @@ def directory_note(api, args):
 
 
 @tool(
-    "tico_directory_attribute_add",
+    "tico_contacts_attribute_add",
     "Add an attribute to an entity type. Its description is required; a select or status needs its options; "
     "an owner of connection:<id> makes the field that connection's.",
     {
         "type": _s("The type key, like organization"),
         "key": _s("The attribute key, lowercase, like crm_stage"),
         "name": _s("The label people see"),
-        "value_type": {"type": "string", "enum": DIRECTORY_VALUE_TYPES},
+        "value_type": {"type": "string", "enum": CONTACTS_VALUE_TYPES},
         "description": _s("What the attribute holds"),
         "options": {
             "type": "array",
@@ -4263,7 +4263,7 @@ def directory_note(api, args):
     required=("type", "key", "name", "value_type", "description"),
     writes=True,
 )
-def directory_attribute_add(api, args):
+def contacts_attribute_add(api, args):
     body = _clean(
         {
             "key": args["key"],
@@ -4282,7 +4282,7 @@ def directory_attribute_add(api, args):
 
 
 @tool(
-    "tico_directory_type_add",
+    "tico_contacts_type_add",
     "Add an entity type, with its description. A near-duplicate of a type that exists is refused with that type.",
     {
         "key": _s("The type key, lowercase, like vendor"),
@@ -4294,7 +4294,7 @@ def directory_attribute_add(api, args):
     required=("key", "name", "description"),
     writes=True,
 )
-def directory_type_add(api, args):
+def contacts_type_add(api, args):
     body = _clean(
         {
             "key": args["key"],
@@ -4308,7 +4308,7 @@ def directory_type_add(api, args):
 
 
 @tool(
-    "tico_directory_link_type_add",
+    "tico_contacts_link_type_add",
     "Add a link type, with its description. inherits_rules says a rule toward one end reaches the other (works_at does; "
     "a competitor does not). symmetric stores the link once, both ways.",
     {
@@ -4324,7 +4324,7 @@ def directory_type_add(api, args):
     required=("key", "name", "inverse_name", "description"),
     writes=True,
 )
-def directory_link_type_add(api, args):
+def contacts_link_type_add(api, args):
     body = _clean(
         {
             "key": args["key"],
@@ -13198,10 +13198,10 @@ COUNSEL_TOOLS = frozenset(
 # not offered to the Assistant either, so the live Assistant is shown what its gate admits and nothing else.
 ASSISTANT_HIDDEN = frozenset(
     {
-        # The Directory's schema and field history: a person's Assistant reads entities (get, find, rules, self).
-        "tico_directory_types",
-        "tico_directory_describe",
-        "tico_directory_history",
+        # Contacts schema and field history: a person's Assistant reads entities (get, find, rules, self).
+        "tico_contacts_types",
+        "tico_contacts_describe",
+        "tico_contacts_history",
         "tico_credential_grant",
         "tico_credential_revoke",
         "tico_credential_delete",

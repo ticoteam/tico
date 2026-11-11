@@ -636,14 +636,14 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
     tico finance action <action-id>         an action's status and result
     tico finance inbox [--kind K] [--cursor C] [--limit N]   your Finance work queue, with counts per kind; --kind pages one kind
-    tico directory self | types | describe <type>        who we are, the types, one type's attributes and links
-    tico directory find <type> [--name N] [--status S] [--link K] [--after C] [--limit N] [--text]
-    tico directory get <id|email|domain|name> [--text]   one entity: values, links, records, your notes
-    tico directory upsert <type> --match email=x [--set k=v ...] [--name N] [--evidence ID] [--confidence F]
-    tico directory link <a> <link> <b> [--from D] [--until D]; unlink <link-id>; merge <keep> <drop>; unmerge <drop>
-    tico directory history <ref> [--attribute K]; note <ref> <text> [--audience me|company]; rules <ref>
-    tico directory attribute add <type> <key> --name N --value-type T --description D [--option k=label]
-    tico directory type add <key> --name N --description D; tico directory link-type add <key> --name N --inverse N --description D
+    tico contacts self | types | describe <type>        who we are, the types, one type's attributes and links
+    tico contacts find <type> [--name N] [--status S] [--link K] [--after C] [--limit N] [--text]
+    tico contacts get <id|email|domain|name> [--text]   one entity: values, links, records, your notes
+    tico contacts upsert <type> --match email=x [--set k=v ...] [--name N] [--evidence ID] [--confidence F]
+    tico contacts link <a> <link> <b> [--from D] [--until D]; unlink <link-id>; merge <keep> <drop>; unmerge <drop>
+    tico contacts history <ref> [--attribute K]; note <ref> <text> [--audience me|company]; rules <ref>
+    tico contacts attribute add <type> <key> --name N --value-type T --description D [--option k=label]
+    tico contacts type add <key> --name N --description D; tico contacts link-type add <key> --name N --inverse N --description D
     tico task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
     tico task-manager on|off                the hourly department report (the owner or an admin)
     tico task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
@@ -923,7 +923,7 @@ def on_off(word):
 
 
 def _pair(text):
-    """`KEY=VALUE` on a command line, split at the first `=`: a match, a value or an option of `tico directory`."""
+    """`KEY=VALUE` on a command line, split at the first `=`: a match, a value or an option of `tico contacts`."""
     key, sep, value = str(text).partition("=")
     if not sep or not key.strip():
         raise argparse.ArgumentTypeError(f"{text} is not KEY=VALUE")
@@ -4938,23 +4938,23 @@ def parser():
     s.add_argument("--cursor")
     s.add_argument("--limit", type=int)
     s.set_defaults(fn="finance inbox")
-    # The Directory (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
-    directory = sub.add_parser(
-        "directory",
-        help="the Directory: people, organizations and places, their links, values and notes, as you see them",
+    # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
+    contacts = sub.add_parser(
+        "contacts",
+        help="contacts: people, organizations and places, their links, values and notes, as you see them",
     ).add_subparsers(dest="sub")
-    s = directory.add_parser("self", help="who we are: our company, where we operate, the obligations that bind us")
+    s = contacts.add_parser("self", help="who we are: our company, where we operate, the obligations that bind us")
     s.add_argument("--text", dest="as_text", action="store_true", help="a short summary, not JSON")
-    s.set_defaults(fn="directory self")
-    directory.add_parser("types", help="the entity types and their descriptions, and who added each").set_defaults(
-        fn="directory types"
+    s.set_defaults(fn="contacts self")
+    contacts.add_parser("types", help="the entity types and their descriptions, and who added each").set_defaults(
+        fn="contacts types"
     )
-    s = directory.add_parser(
+    s = contacts.add_parser(
         "describe", help="one type: its attributes (owners, options) and the link types that touch it"
     )
     s.add_argument("type")
-    s.set_defaults(fn="directory describe")
-    s = directory.add_parser("find", help="entities of one type you can see, by name, status or a link to us")
+    s.set_defaults(fn="contacts describe")
+    s = contacts.add_parser("find", help="entities of one type you can see, by name, status or a link to us")
     s.add_argument("type")
     s.add_argument("--name", help="a name prefix")
     s.add_argument("--status")
@@ -4962,17 +4962,17 @@ def parser():
     s.add_argument("--after", help="the next the last page gave")
     s.add_argument("--limit", type=int, help="up to 50")
     s.add_argument("--text", dest="as_text", action="store_true", help="one line per entity, not JSON")
-    s.set_defaults(fn="directory find")
-    s = directory.add_parser("get", help="one entity as you see it: values with source, links, records and your notes")
+    s.set_defaults(fn="contacts find")
+    s = contacts.add_parser("get", help="one entity as you see it: values with source, links, records and your notes")
     s.add_argument("ref", metavar="id|email|domain|name")
     s.add_argument("--text", dest="as_text", action="store_true", help="a short card, not JSON")
-    s.set_defaults(fn="directory get")
-    s = directory.add_parser("rules", help="the rules that apply to an entity (none until rules arrive)")
+    s.set_defaults(fn="contacts get")
+    s = contacts.add_parser("rules", help="the rules that apply to an entity (none until rules arrive)")
     s.add_argument("ref", metavar="id|email|domain|name")
     s.add_argument("--as", dest="as_bot", metavar="BOT", help="the bot the rules are for")
     s.add_argument("--action", help="what you would do, like email")
-    s.set_defaults(fn="directory rules")
-    s = directory.add_parser("upsert", help="create or update one entity: --match names it, --set sets its values")
+    s.set_defaults(fn="contacts rules")
+    s = contacts.add_parser("upsert", help="create or update one entity: --match names it, --set sets its values")
     s.add_argument("type")
     s.add_argument("--match", required=True, type=_pair, metavar="KEY=VALUE", help="email, domain, name or id")
     s.add_argument(
@@ -4981,8 +4981,8 @@ def parser():
     s.add_argument("--name")
     s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
     s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
-    s.set_defaults(fn="directory upsert")
-    s = directory.add_parser("link", help="a typed, dated link between two entities: a works_at b")
+    s.set_defaults(fn="contacts upsert")
+    s = contacts.add_parser("link", help="a typed, dated link between two entities: a works_at b")
     s.add_argument("from_ref", metavar="a")
     s.add_argument("link_key", metavar="link")
     s.add_argument("to_ref", metavar="b")
@@ -4990,30 +4990,30 @@ def parser():
     s.add_argument("--until", dest="valid_until_on", metavar="DATE", help="YYYY-MM-DD the link ends")
     s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it rests on")
     s.add_argument("--confidence", type=float, help="0 to 1; the default is 0.6")
-    s.set_defaults(fn="directory link")
-    s = directory.add_parser("unlink", help="end a link: it stops being current today; its history stays")
+    s.set_defaults(fn="contacts link")
+    s = contacts.add_parser("unlink", help="end a link: it stops being current today; its history stays")
     s.add_argument("link_id")
-    s.set_defaults(fn="directory unlink")
-    s = directory.add_parser("merge", help="merge a duplicate into the entity it copies; unmerge reverses it")
+    s.set_defaults(fn="contacts unlink")
+    s = contacts.add_parser("merge", help="merge a duplicate into the entity it copies; unmerge reverses it")
     s.add_argument("keep")
     s.add_argument("drop")
-    s.set_defaults(fn="directory merge")
-    s = directory.add_parser("unmerge", help="reverse the last merge of a dropped entity, named by its own id")
+    s.set_defaults(fn="contacts merge")
+    s = contacts.add_parser("unmerge", help="reverse the last merge of a dropped entity, named by its own id")
     s.add_argument("drop")
-    s.set_defaults(fn="directory unmerge")
-    s = directory.add_parser("history", help="past values of an entity's fields, newest first")
+    s.set_defaults(fn="contacts unmerge")
+    s = contacts.add_parser("history", help="past values of an entity's fields, newest first")
     s.add_argument("ref", metavar="id|email|domain|name")
     s.add_argument("--attribute", help="one field's history")
     s.add_argument("--after", help="the next the last page gave")
     s.add_argument("--limit", type=int, help="up to 50")
-    s.set_defaults(fn="directory history")
-    s = directory.add_parser("note", help="a note on an entity; --audience me keeps it to you")
+    s.set_defaults(fn="contacts history")
+    s = contacts.add_parser("note", help="a note on an entity; --audience me keeps it to you")
     s.add_argument("ref", metavar="id|email|domain|name")
     s.add_argument("body")
     s.add_argument("--audience", choices=["me", "company"])
     s.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID", help="the market evidence it cites")
-    s.set_defaults(fn="directory note")
-    attribute = directory.add_parser("attribute", help="add an attribute to a type").add_subparsers(dest="subsub")
+    s.set_defaults(fn="contacts note")
+    attribute = contacts.add_parser("attribute", help="add an attribute to a type").add_subparsers(dest="subsub")
     s = attribute.add_parser("add", help="add an attribute: name, value type, description, and options for a select")
     s.add_argument("type")
     s.add_argument("key")
@@ -5028,16 +5028,16 @@ def parser():
     s.add_argument("--required", action="store_true")
     s.add_argument("--sensitive", action="store_true", help="only Finance's owner and the system read it")
     s.add_argument("--owner", help="tico (the default) or connection:<id>")
-    s.set_defaults(fn="directory attribute add")
-    kind = directory.add_parser("type", help="add an entity type").add_subparsers(dest="subsub")
+    s.set_defaults(fn="contacts attribute add")
+    kind = contacts.add_parser("type", help="add an entity type").add_subparsers(dest="subsub")
     s = kind.add_parser("add", help="add an entity type, with its description")
     s.add_argument("key")
     s.add_argument("--name", required=True)
     s.add_argument("--description", required=True)
     s.add_argument("--plural", dest="plural_name")
     s.add_argument("--icon")
-    s.set_defaults(fn="directory type add")
-    link_type = directory.add_parser("link-type", help="add a link type").add_subparsers(dest="subsub")
+    s.set_defaults(fn="contacts type add")
+    link_type = contacts.add_parser("link-type", help="add a link type").add_subparsers(dest="subsub")
     s = link_type.add_parser("add", help="add a link type: its name both ways, its description, the ends it may join")
     s.add_argument("key")
     s.add_argument("--name", required=True)
@@ -5049,7 +5049,7 @@ def parser():
         "--inherits-rules", dest="inherits_rules", action="store_true", help="a rule toward one end reaches the other"
     )
     s.add_argument("--symmetric", action="store_true", help="stored once, both ways")
-    s.set_defaults(fn="directory link-type add")
+    s.set_defaults(fn="contacts link-type add")
     manager = sub.add_parser(
         "task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)"
     ).add_subparsers(dest="sub")

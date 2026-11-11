@@ -332,7 +332,7 @@ STEPS = [
     ),
     Step(
         "entity_links",
-        "Directory links",
+        "Contacts links",
         "recovery",
         None,
         entity_links,
