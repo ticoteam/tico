@@ -7,9 +7,12 @@ person on its people OKs from `resolve`, and `ensure_presets` fills a still-empt
 - A role is found by its seat's template, never by a name (F23): a seat with that `template` whose `filled_by` is a bot
   that is not archived. A filled seat is closed (`lifecycle.fill_seat` sets `closed_at` with `filled_by`), so this is
   any seat, open or closed, that a bot fills. Reviewer 1 and Reviewer 2 share `pr-reviewer`: among its filled seats,
-  ordered by title then `created_at`, the first is Reviewer 1 and the second Reviewer 2.
+  ordered by title then `created_at`, the first is Reviewer 1 and the second Reviewer 2. The Product Owner is the
+  first `segment-product-owner` the same way (the first segment's, live at setup).
 - With no such seat, the first active bot whose `bot_settings.template` is the role's, by slug.
   Reviewer 2 is then the second `pr-reviewer` bot.
+- Every pipeline's manager shares `pipeline-manager`, so a Pipeline Manager is the bot of that template whose slug is
+  its chart id (`product-pipeline-manager`, `engineering-pipeline-manager`; a live seat's bot gets it at go-live).
 - Release Manager is `release_schedule_routes.release_manager`: the same bot the release hour runs on. That one must be
   active, so until a Release Manager is set up (a live seat's bot starts planned) it is found like any other role.
 - `ok_person` (D5): the person on a stage's people OK is the first person above the pipeline's manager bot on the org
@@ -23,31 +26,44 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import sqlite3
 
-PRODUCT_MANAGER = "product_manager"
-ENGINEERING_MANAGER = "engineering_manager"
+PRODUCT_PIPELINE_MANAGER = "product_pipeline_manager"
+PRODUCT_OWNER = "product_owner"
+ENGINEERING_PIPELINE_MANAGER = "engineering_pipeline_manager"
 BUILDER = "builder"
 REVIEWER_1 = "reviewer_1"
 REVIEWER_2 = "reviewer_2"
 RELEASE_MANAGER = "release_manager"
-ROLES = (PRODUCT_MANAGER, ENGINEERING_MANAGER, BUILDER, REVIEWER_1, REVIEWER_2, RELEASE_MANAGER)
+ROLES = (
+    PRODUCT_PIPELINE_MANAGER,
+    PRODUCT_OWNER,
+    ENGINEERING_PIPELINE_MANAGER,
+    BUILDER,
+    REVIEWER_1,
+    REVIEWER_2,
+    RELEASE_MANAGER,
+)
+PIPELINE_MANAGER_TEMPLATE = "pipeline-manager"
 # The template each role's seat is placed with (templates/catalog/<template>).
 TEMPLATES = {
-    PRODUCT_MANAGER: "product-manager",
-    ENGINEERING_MANAGER: "engineering-manager",
+    PRODUCT_PIPELINE_MANAGER: PIPELINE_MANAGER_TEMPLATE,
+    PRODUCT_OWNER: "segment-product-owner",
+    ENGINEERING_PIPELINE_MANAGER: PIPELINE_MANAGER_TEMPLATE,
     BUILDER: "builder",
     REVIEWER_1: "pr-reviewer",
     REVIEWER_2: "pr-reviewer",
     RELEASE_MANAGER: "release-owner",
 }
 # The default chart's row id for each role's seat (backend/company_file/chart_formula.json). A live seat's bot gets
-# this slug at go-live (company_import._go_live).
+# this slug at go-live (company_import._go_live). The Product Owner's is the first segment's, `<segment>-product-owner`,
+# or `product-owner` with no segment.
 CHART_IDS = {
-    PRODUCT_MANAGER: "product-manager",
-    ENGINEERING_MANAGER: "engineering-manager",
+    PRODUCT_PIPELINE_MANAGER: "product-pipeline-manager",
+    PRODUCT_OWNER: "product-owner",
+    ENGINEERING_PIPELINE_MANAGER: "engineering-pipeline-manager",
     BUILDER: "builder",
     REVIEWER_1: "reviewer-1",
     REVIEWER_2: "reviewer-2",
-    RELEASE_MANAGER: "release-manager",
+    RELEASE_MANAGER: "release-owner",
 }
 
 
@@ -59,6 +75,10 @@ _SEATED = (
 _BY_TEMPLATE = (
     "SELECT b.id FROM bots b JOIN bot_settings s ON s.bot_id = b.id "
     "WHERE s.template=? AND COALESCE(b.state, 'active') <> 'archived' ORDER BY b.slug"
+)
+_PIPELINE_MANAGER = (
+    "SELECT b.id FROM bots b JOIN bot_settings s ON s.bot_id = b.id "
+    "WHERE s.template=? AND b.slug=? AND COALESCE(b.state, 'active') <> 'archived'"
 )
 
 
@@ -89,6 +109,9 @@ def resolve(conn: "sqlite3.Connection") -> dict[str, str | None]:
             rm: Any = release_schedule_routes
             others = _bots(conn, TEMPLATES[role], seats)
             bot: str | None = rm.release_manager(conn) or (others[0] if others else None)
+        elif TEMPLATES[role] == PIPELINE_MANAGER_TEMPLATE:
+            row = conn.execute(_PIPELINE_MANAGER, (PIPELINE_MANAGER_TEMPLATE, CHART_IDS[role])).fetchone()
+            bot = str(row[0]) if row else None
         elif role in (REVIEWER_1, REVIEWER_2):
             at = 0 if role == REVIEWER_1 else 1
             bot = reviewers[at] if len(reviewers) > at else None
