@@ -823,7 +823,9 @@ class SettingsAdmin:
 
         cited = str((H.DELEGATION.get() or {}).get("cited") or "")
         bot_id = bot_of(c, cited)[0] if cited else None
-        row = H.bot(c, bot_id) if bot_id else None
+        if not bot_id:
+            return None
+        row = H.bot(c, bot_id)
         if not row or row["state"] == "archived" or (template and BS.read(c, bot_id).get("template") != template):
             return None
         if not c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (cited,)).fetchone():
