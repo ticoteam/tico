@@ -123,7 +123,9 @@ def test_a_product_task_handed_to_engineering_lands_on_an_owned_stage(environmen
     api = _sample_company(environment)
     owner = "human:owner"
     with api.app.state.store.transaction() as c:
-        row = H.task_create(c, owner, "Saved carts", "Let a shopper keep a cart.", owner, pipeline="product", lint=False)
+        row = H.task_create(
+            c, owner, "Saved carts", "Let a shopper keep a cart.", owner, pipeline="product", lint=False
+        )
         row = E.move(c, row["id"], "product-spec", owner)
         rid = c.execute("SELECT id FROM requirements WHERE stage_id='product-spec' AND kind='page'").fetchone()[0]
         c.execute(
