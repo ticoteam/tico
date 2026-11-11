@@ -54,9 +54,10 @@ It lands in Watching, where your Watch routine checks it.
 
 - **Before and after**: the number for each period, with its dates and its source.
 - **The prediction** from the Go-live page, and how much of it was reached.
-- **The result** and its tag, in one line.
+- **The result** and its tag, in one line, with why that tag: on `result:watching` what stays on and is watched, on
+  `result:worked-once` why there is nothing to watch.
 - **What we learned**, in one or two lines.
-- On `result:watching`, **the Monitoring task**, linked.
+- On `result:watching`, **the Monitoring task**, named (its id and title) and linked.
 
     tico page publish reports/<task>-results.html --title "Results: <title>" --task <id>
     tico task attach <id> page:<file id> --req "Results page" --version N

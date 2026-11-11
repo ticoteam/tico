@@ -1719,7 +1719,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
    },
    "work": {
     "title": "Second welcome email: turn on reminders",
@@ -1742,7 +1742,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
    },
    "work": {
     "title": "Answer the no-show question on the reminders page",
@@ -1765,7 +1765,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
    },
    "work": {
     "title": "Search ad group for 'class booking app'",
@@ -1788,7 +1788,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
    },
    "work": {
     "title": "Second welcome email: turn on reminders",
@@ -1811,7 +1811,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
    },
    "work": {
     "title": "Search ad group for 'class booking app'",
@@ -1834,7 +1834,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
    },
    "work": {
     "title": "Answer the no-show question on the reminders page",
@@ -1857,7 +1857,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
    },
    "work": {
     "title": "Search ad group for 'class booking app'",
@@ -1880,7 +1880,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Results page",
-    "rubric": "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
    },
    "work": {
     "title": "Second welcome email: turn on reminders",
@@ -1903,7 +1903,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Results page",
-    "rubric": "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
    },
    "work": {
     "title": "Answer the no-show question on the reminders page",
@@ -1915,7 +1915,7 @@
    "attachment": {
     "kind": "page",
     "name": "grow-results-page-watching.md",
-    "text": "# Results: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme. Ran Nov 17, 2026 to Jan 12, 2027.\n\n- Before: 120 organic clicks a week, brand terms left out (Search Console, Web, Oct 20 to Nov 16, 2026).\n- After: 171 clicks a week (Search Console, Web, Dec 15, 2026 to Jan 11, 2027).\n- Predicted: 180. Reached 51 of the predicted 60 (85%), and beat the baseline.\n- Result: result:watching. Monitoring task GM-7, \"Reminders page clicks\", filed as this task's follow-up: range 150 to\n  220 clicks a week.\n",
+    "text": "# Results: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme. Ran Nov 17, 2026 to Jan 12, 2027.\n\n- Before: 120 organic clicks a week, brand terms left out (Search Console, Web, Oct 20 to Nov 16, 2026).\n- After: 171 clicks a week (Search Console, Web, Dec 15, 2026 to Jan 11, 2027).\n- Predicted: 180. Reached 51 of the predicted 60 (85%), and beat the baseline.\n- Result: result:watching. The section stays on the page, so its clicks are watched: Monitoring task GM-7,\n  \"Reminders page clicks\", filed as this task's follow-up, range 150 to 220 clicks a week.\n",
     "work_version": 2
    },
    "expected": "met",
@@ -1926,7 +1926,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Results page",
-    "rubric": "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
    },
    "work": {
     "title": "Search ad group for 'class booking app'",
@@ -1949,7 +1949,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Results page",
-    "rubric": "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
    },
    "work": {
     "title": "Second welcome email: turn on reminders",
@@ -1972,7 +1972,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Results page",
-    "rubric": "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
    },
    "work": {
     "title": "Answer the no-show question on the reminders page",
@@ -1995,7 +1995,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Results page",
-    "rubric": "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
    },
    "work": {
     "title": "Search ad group for 'class booking app'",
@@ -2018,7 +2018,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Results page",
-    "rubric": "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
    },
    "work": {
     "title": "Answer the no-show question on the reminders page",

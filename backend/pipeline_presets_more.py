@@ -93,15 +93,20 @@ def _pipeline(
     }
 
 
+# Jev reads the page's text: a link's target is not in it, and the thing that goes live is its copy or a picture of it
+# (playbooks/build-a-bet.md). The lines say what Jev can see and that watching and worked-once are both "worked": with
+# "as it will look", "links" and the tags unexplained, a good ad page scored 0.71 to 0.82 and a good watching page 0.33
+# to 0.45 (Nov 11).
 GO_LIVE_RUBRIC = (
-    "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it "
-    "moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check "
-    "passed."
+    "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the "
+    "metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand "
+    "check passed."
 )
 RESULTS_RUBRIC = (
-    "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, "
-    "result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted "
-    "change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+    "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number "
+    "before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, "
+    "or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On "
+    "result:watching it names the Monitoring task filed as this task's follow-up."
 )
 
 
@@ -182,10 +187,25 @@ def _monitoring(pid: str, name: str, goal: str, prefix: str, factory: str) -> Ro
 # purpose follows only where every stage the preset has is there.
 _IDEAS_RC3 = "Ideas wait here. Move one to On deck when it is worth trying. Snooze one to park it."
 _RUNNING_RC3 = "Run it as planned. Say done once it has run long enough to measure."
+_GO_LIVE_RC6 = (
+    "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it "
+    "moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check "
+    "passed."
+)
+_RESULTS_RC6 = (
+    "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, "
+    "result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted "
+    "change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+)
 EARLIER: dict[str, tuple[str, ...]] = {
-    f"{pid}-{stage}/purpose": (text,)
+    f"{pid}-{stage}": (text,)
     for pid in ("growth-experiments", "success-experiments")
-    for stage, text in (("ideas", _IDEAS_RC3), ("running", _RUNNING_RC3))
+    for stage, text in (
+        ("ideas/purpose", _IDEAS_RC3),
+        ("running/purpose", _RUNNING_RC3),
+        ("building/page/rubric", _GO_LIVE_RC6),
+        ("running/page/rubric", _RESULTS_RC6),
+    )
 }
 
 FACTORIES: dict[str, Row] = {

@@ -777,13 +777,14 @@ Experiments pipeline's, so one seat manages both. A stage's owner is found by it
     or marks them Late, and a freed slot in Building wakes nobody. The owner starts one of its own when Building has
     room ("No room in Building. It holds 6: move it again when one leaves." when it has none); a person can start any.
   - **Building.** The real thing, not yet live: the email, the page change, the ad. Limit 6. To leave: a **Go-live
-    page** (the thing as it will look, the metric, the prediction as a number, the cost, how long it runs, when to stop
-    early, the brand check passed). Jev checks it, then **a person OKs it** (people only). Expected time: 3 days.
+    page** (the thing that goes live, its copy or a picture of it; the metric, the prediction as a number, the cost,
+    how long it runs, when to stop early, the brand check passed). Jev checks it, then **a person OKs it** (people only). Expected time: 3 days.
   - **Running.** The owner puts it live and snoozes the task to its end date; it wakes then, to measure. To leave: a
-    **Results page** (the number before and after with dates and sources, and the result: `result:failed`,
-    `result:worked-once` or `result:watching`; worked means the baseline beaten and 60% of the prediction reached).
-    Jev checks it. On `result:watching` the owner first files a Monitoring task as its follow-up, and the page links
-    it. Expected time: 2 days, snoozed time not counted. Done is a measured experiment; Closed is one stopped before.
+    **Results page** (the number before and after with dates and sources, and the result: `result:failed` when it
+    did not work; when it worked, `result:watching` if what was kept needs watching or `result:worked-once` if there
+    is nothing to watch; worked means the baseline beaten and 60% of the prediction reached). Jev checks it. On
+    `result:watching` the owner first files a Monitoring task as its follow-up, and the page names and links it (Jev
+    reads the page's text, so it sees the name, not the link). Expected time: 2 days, snoozed time not counted. Done is a measured experiment; Closed is one stopped before.
 - **Growth Monitoring** (GM) and **Success Monitoring** (SM). Keep what worked working. One task per kept thing: what
   it is (a link), its KPI and range, and the experiment it came from. Every stage is the assignee's.
   Stages: Watching → Slipping → Done · Closed
