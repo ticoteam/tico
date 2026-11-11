@@ -643,6 +643,8 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
         for wait in waits:
             if wait.state != PAUSED or not wait.who:
                 continue
+            if wait.line.endswith(task_wakes.BEING_SET_UP) and _botops_reviews(conn, wait.who):
+                continue  # BotOps is setting it up, and its task starts when the bot is live: no person row
             if wait.line.endswith(task_wakes.RUN_HELD) and _botops_reviews(conn, wait.who):
                 continue  # BotOps has the held run's review task (execution._hand_to_maintainer): no person row
             if wait.line.endswith(task_wakes.CANT_START):

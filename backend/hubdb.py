@@ -2589,7 +2589,9 @@ INACTIVE_STATES = HELD_STATES + ("planned",)
 def back_when(conn, slug, state):
     """When a held or planned bot runs again, in words the sender can act on."""
     if state == "planned":
-        return "has not started yet"
+        from .setup_live import being_set_up
+
+        return "is still being set up" if being_set_up(conn, slug) else "has not started yet"
     resumes = quarantine_resumes(conn, slug)["resumes_at"] if state == "quarantined" else None
     if resumes:
         return f"is quarantined until about {resumes[11:16]} UTC, when it resumes by itself"

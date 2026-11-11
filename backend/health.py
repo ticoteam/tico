@@ -1062,7 +1062,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                         "problem": problem_words(cloud["problem"]),
                     }
                 )
-            elif count and oldest and oldest < cutoff:
+            elif count and oldest and oldest < cutoff and slug not in parked:
+                # An onboarding bot's queue waits on purpose (unfinished_setup says so), not on the machine.
                 if where and cloud["state"] in GOING:
                     claimable = (
                         ('company_limit', None, False)
