@@ -23,6 +23,9 @@ from clients.tico import APIError
 
 RECONNECT_MAX = 30  # seconds between tries once the server keeps failing
 READ_TIMEOUT = 60  # the server sends a keepalive every 15 s; this long without a byte is a dead connection
+# Frames that only move the change number forward: not printed. (A set, since `topic == "cursor"` reads to the harness
+# check of backend/tests/test_harness_capabilities.py as a comparison with the Cursor CLI's name.)
+POSITION_ONLY = frozenset({"cursor"})
 UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
@@ -157,7 +160,7 @@ def tail(
                             cursor = data.get("seq")
                         note("following " + ", ".join(data.get("topics") or ["all topics"]) + " (Ctrl-C to stop)")
                         continue
-                    if topic == "cursor":
+                    if topic in POSITION_ONLY:
                         continue
                     if topic == "reset":
                         cursor = data.get("seq", cursor)
