@@ -435,6 +435,26 @@ impl Tico {
         response(self.signed(request).send()?)
             .with_context(|| format!("Tico request {path} failed"))
     }
+    /// A DELETE of a Tico endpoint with an empty JSON body (`{}`: Tico's routes read one), answered and refused as
+    /// `call` answers.
+    pub fn delete(&self, path: &str, key: &str) -> Result<Value> {
+        ensure!(
+            path.starts_with('/') && !path.starts_with("//"),
+            "Invalid Tico endpoint"
+        );
+        let url = format!(
+            "{}{}",
+            settings::safe_url(&self.destination.base_url)?,
+            path
+        );
+        let request = self
+            .client
+            .delete(url)
+            .header("Idempotency-Key", key)
+            .json(&serde_json::json!({}));
+        response(self.signed(request).send()?)
+            .with_context(|| format!("Tico request {path} failed"))
+    }
     pub fn unlink_meeting_task(&self, meeting: &str, task: &str, key: &str) -> Result<Value> {
         let mut url = reqwest::Url::parse(&settings::safe_url(&self.destination.base_url)?)?;
         url.path_segments_mut()

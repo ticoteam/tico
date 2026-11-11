@@ -90,7 +90,7 @@ def test_scopes_follow_what_tico_may_do():
     assert W.workspace_scopes("calendar", nothing) == [G + "calendar.readonly"]
     assert W.workspace_scopes("gmail", send_only) == [GMAIL] and W.workspace_scopes("calendar") == [CALENDAR]
     # The admin authorizes the read-only scopes too: delegation takes only scopes named in the Admin console.
-    assert W.scope_urls() == sorted([GMAIL, CALENDAR, G + "gmail.readonly", G + "calendar.readonly"])
+    assert W.scope_urls() == sorted([GMAIL, CALENDAR, G + "gmail.readonly", G + "calendar.readonly", W.MEET_SCOPE])
 
 
 def test_the_company_s_own_app_asks_only_for_what_is_ticked(own_app):

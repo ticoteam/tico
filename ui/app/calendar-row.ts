@@ -73,23 +73,13 @@ const calRange = (o: CalOccurrence) => o.all_day ? '' : `${calClock(calWhen(o.st
 // ----------------------------------------------------------------- Join
 // Joining opens the call in a new tab and, on a Mac, Tico Recorder on it (decision 15), unless the person turned that off
 // in the page's ⋯ menu. A browser follows the Recorder's link without leaving the page; with no Recorder installed nothing
-// happens and the call is open anyway. Shared with the Meet calls work's hand-off (ui/app/thread-call.ts callRecorderOpen)
-// once that merges.
+// happens and the call is open anyway. The link is opened as a Meet call's is (ui/app/thread-call.ts recorderLinkOpen).
 const CAL_RECORD_KEY = 'tico.calendar.record';
 function calRecordOn(): boolean { try { return localStorage.getItem(CAL_RECORD_KEY) !== 'off'; } catch { return true; } }
 function calRecordSet(on: boolean): void { try { localStorage.setItem(CAL_RECORD_KEY, on ? 'on' : 'off'); } catch { /* not kept */ } }
-function calMac(): boolean {
-  const ua = (navigator as Navigator & {userAgentData?: {platform?: string}}).userAgentData;
-  if (ua?.platform) return ua.platform === 'macOS';
-  return /Mac/.test(navigator.platform || '') && !(navigator.maxTouchPoints > 1);
-}
 function calRecorder(o: CalOccurrence): void {
-  if (!calRecordOn() || !calMac()) return;
-  const link = `tico-recorder://record?server=${encodeURIComponent(location.origin)}&title=${encodeURIComponent(o.title)}&event=${encodeURIComponent(o.occurrence_id)}`;
-  const frame = document.createElement('iframe');
-  frame.hidden = true; frame.className = 'cal-recorder-link'; frame.src = link;
-  document.body.append(frame);
-  setTimeout(() => frame.remove(), 3000);
+  if (!calRecordOn() || !recorderMac()) return;
+  recorderLinkOpen(`tico-recorder://record?server=${encodeURIComponent(location.origin)}&title=${encodeURIComponent(o.title)}&event=${encodeURIComponent(o.occurrence_id)}`, 'cal-recorder-link');
 }
 // A Join link: the call itself, so a new tab opens it as any link would; the click also starts the Recorder.
 const calJoinAttrs = (o: CalOccurrence) => o.meeting_url

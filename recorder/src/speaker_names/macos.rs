@@ -594,6 +594,13 @@ impl Watch {
                     for line in log.poll(&polled.info, &polled.observed, &intervals, at) {
                         crate::diag!("{line}");
                     }
+                    // A truncated read has no names; the last full one stands until it is stale.
+                    if polled.found
+                        && !(polled.observed.participants.is_empty()
+                            && polled.observed.self_names.is_empty())
+                    {
+                        super::note_present(&id, &polled.observed);
+                    }
                     for name in &polled.observed.participants {
                         if participants.insert(name.clone()) {
                             batch.people.push((name.clone(), false));

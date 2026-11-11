@@ -5,6 +5,7 @@ import json
 import re
 import threading
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import Request
@@ -24,6 +25,9 @@ from .views import human_only
 # Seconds between polls of a meeting's event stream. Tests set it to 0 rather than replacing asyncio.sleep, which
 # is process-wide and would also stop the server's own loop-lag probe from ever yielding.
 EVENT_POLL_SECONDS = 1
+# A Tico Recorder that records a call (backend/calls.py) keeps sending the speech it already heard for up to this long
+# after the call ends; its writes are taken until then, and the call's transcript is posted only after it.
+RECORDER_TAIL_SECONDS = 90
 
 
 def bot_name_sql(bot_column):
@@ -188,13 +192,39 @@ def _require_read(c, auth, who, rid):
     return row
 
 
-def _connector(c, auth, who, rid, *, states=None):
+def recorder_tail(c, rid, actor):
+    """Whether `actor`'s Recorder is the recording source of the call this meeting belongs to, and the call ended less
+    than RECORDER_TAIL_SECONDS ago: its last chunks and corrections are still taken."""
+    found = c.execute(
+        "SELECT ended_at FROM calls WHERE live_meeting_id=? AND recorder_actor=? AND state='ended'", (rid, actor)
+    ).fetchone()
+    if not found or not found[0]:
+        return False
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=RECORDER_TAIL_SECONDS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return found[0] >= cutoff
+
+
+def _connector(c, auth, who, rid, *, states=None, recorder=False):
+    """The meeting's connector, who controls its transcript. `recorder` also lets in the person whose Tico Recorder is a
+    call's recording source (backend/calls.py, the call's `recorder_actor`) while the call is live and for its tail
+    (recorder_tail), whatever the meeting's state then: only the chunk and correction routes pass it, so that person
+    writes the transcript and controls nothing else."""
     human_only(who)
     auth.domain(who)
     row = _require_read(c, auth, who, rid)
-    if who.actor != row["owner_actor"]:
+    tail = recorder and recorder_tail(c, rid, who.actor)
+    if (
+        who.actor != row["owner_actor"]
+        and not tail
+        and not (
+            recorder
+            and c.execute(
+                "SELECT 1 FROM calls WHERE live_meeting_id=? AND recorder_actor=? AND state='live'", (rid, who.actor)
+            ).fetchone()
+        )
+    ):
         raise Problem("forbidden", "Only the person who connected this meeting can control its transcript", 403)
-    if states and row["state"] not in states:
+    if states and row["state"] not in states and not tail:
         raise Problem("meeting_state", f"This operation requires a {' or '.join(states)} meeting", 409)
     return row
 
@@ -1594,10 +1624,11 @@ def _run_windows(app, rid, *, final=False):
         index += 1
 
 
-def append_chunks(c, rid, row, actor, chunks):
+def append_chunks(c, rid, row, actor, chunks, *, tail=False):
     """Stores transcript chunks in order. Each is a dict with seq, speaker, start_ms, end_ms and text. A chunk already
     stored with the same text is accepted again (a retry); different text at a stored sequence is a conflict. The
     transcript route and calls (backend/calls.py) both write through here, so they share one order and one history.
+    `tail` takes new text into an ended call's meeting (recorder_tail); it wakes no bot, as the call is over.
     Returns (accepted, added): every sequence seen, and the ones newly stored."""
     expected = row["seq"] + 1
     accepted, added = [], []
@@ -1620,7 +1651,7 @@ def append_chunks(c, rid, row, actor, chunks):
                 raise Problem("sequence_conflict", f"Sequence {chunk['seq']} already has different text", 409)
             accepted.append(chunk["seq"])
             continue
-        if row["state"] != "live":
+        if row["state"] != "live" and not tail:
             raise Problem("meeting_state", f"A {row['state']} meeting cannot accept new transcript text", 409)
         if chunk["seq"] != expected:
             raise Problem("sequence_gap", f"Expected sequence {expected}", 409, extra={"expected_seq": expected})
@@ -1650,14 +1681,15 @@ def append_chunks(c, rid, row, actor, chunks):
                 "revision": 1,
             },
         )
-        _route_mentions(
-            c,
-            rid,
-            chunk["text"],
-            source_key=f"chunk:{chunk['seq']}",
-            transcript_seq=chunk["seq"],
-            at_ms=chunk["end_ms"],
-        )
+        if row["state"] == "live":
+            _route_mentions(
+                c,
+                rid,
+                chunk["text"],
+                source_key=f"chunk:{chunk['seq']}",
+                transcript_seq=chunk["seq"],
+                at_ms=chunk["end_ms"],
+            )
         accepted.append(chunk["seq"])
         added.append(chunk["seq"])
         expected += 1
@@ -2071,8 +2103,10 @@ def install_live_meetings(app, store, auth, write):
         who = request.state.identity
 
         def work(c):
-            row = _connector(c, auth, who, rid)
-            accepted, added = append_chunks(c, rid, row, who.actor, [chunk.model_dump() for chunk in body.chunks])
+            row = _connector(c, auth, who, rid, recorder=True)
+            tail = row["state"] == "ended" and recorder_tail(c, rid, who.actor)
+            chunks = [chunk.model_dump() for chunk in body.chunks]
+            accepted, added = append_chunks(c, rid, row, who.actor, chunks, tail=tail)
             return {
                 "id": rid,
                 "state": row["state"],
@@ -2090,7 +2124,7 @@ def install_live_meetings(app, store, auth, write):
         who = request.state.identity
 
         def work(c):
-            _connector(c, auth, who, rid, states=("live", "paused"))
+            _connector(c, auth, who, rid, states=("live", "paused"), recorder=True)
             current = c.execute("SELECT * FROM live_meeting_chunks WHERE meeting_id=? AND seq=?", (rid, seq)).fetchone()
             if not current:
                 raise Problem("not_found", f"Transcript sequence {seq} was not found", 404)

@@ -346,6 +346,34 @@ impl Batch {
     }
 }
 
+/// Who the watch saw in the Meet window at its last poll that found one, by recording: its people and the local
+/// person, each once. Kept only in memory, for a call's live status.
+static PRESENT: std::sync::Mutex<Option<(String, Vec<String>, std::time::Instant)>> =
+    std::sync::Mutex::new(None);
+/// A reading older than this is no longer who is there.
+const PRESENT_FOR: std::time::Duration = std::time::Duration::from_secs(15);
+
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn note_present(id: &str, observed: &Observation) {
+    let mut names: Vec<String> = vec![];
+    for name in observed.self_names.iter().chain(&observed.participants) {
+        if !names.iter().any(|seen| same(seen, name)) {
+            names.push(name.clone());
+        }
+    }
+    *PRESENT.lock().unwrap_or_else(|error| error.into_inner()) =
+        Some((id.to_owned(), names, std::time::Instant::now()));
+}
+/// The names in the Meet window now, for the recording `id`; None while no Meet window was read lately.
+pub fn present(id: &str) -> Option<Vec<String>> {
+    PRESENT
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_ref()
+        .filter(|(seen, names, at)| seen == id && !names.is_empty() && at.elapsed() < PRESENT_FOR)
+        .map(|(_, names, _)| names.clone())
+}
+
 #[cfg(target_os = "macos")]
 pub use macos::{Watch, access, dismiss_permission, open_settings, permission_pending};
 #[cfg(not(target_os = "macos"))]

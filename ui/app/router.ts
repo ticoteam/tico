@@ -3,8 +3,9 @@
 'use strict';
 
 let LAST_ROUTE = '', ROUTE_FADING = false, ROUTE_SEQ = 0, ROUTE_PENDING = '', ROUTE_FADE: ViewTransition | null = null;
-// The page an address draws: its path, with every thread one page (the rail stays while the thread beside it changes).
-const routePage = (h: string | undefined): string => { const [p = ''] = String(h || '').split('?'); return p === THREADS_ROUTE || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
+// The page an address draws: its path, with every thread and New message one page (the rail stays while the pane
+// beside it changes).
+const routePage = (h: string | undefined): string => { const [p = ''] = String(h || '').split('?'); return p === THREADS_ROUTE || p === THREADS_NEW || p.startsWith(THREAD_ROUTE) ? THREADS_ROUTE : p; };
 function route(hash: string = location.hash): void {
   if (hash.startsWith('#/settings?recruit=')) {
     try {
@@ -104,6 +105,7 @@ function route(hash: string = location.hash): void {
   }
   else if (S.route === THREADS_ROUTE || S.route.startsWith(THREADS_ROUTE + '?')) pageThreads();
   else if (calendarRoute(S.route)) { /* the Calendar page (ui/app/calendar.ts) */ }
+  else if (S.route === THREADS_NEW || S.route.startsWith(THREADS_NEW + '?')) pageNewMessage();
   else if (S.route.startsWith(THREAD_ROUTE)) pageThread(decodeURIComponent(S.route.slice(THREAD_ROUTE.length).split(/[/?]/)[0] ?? ''));
   else if (S.route.startsWith('#/seat/')) { const [id = '', template] = (S.route.slice(7).split('?')[0] ?? '').split('/').map(decodeURIComponent); void pageSeat(id, template || ''); }
   else if (S.route === ASSISTANT) pageAssistant();

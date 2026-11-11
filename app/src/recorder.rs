@@ -1,6 +1,8 @@
 //! Tico Recorder (recorder/, bundle id team.tico.recorder.native) and this app.
 //!
 //! The page's Record opens the Recorder on the page's own org (`open_recorder`), when it is installed (`installed`).
+//! A call the page starts or joins opens it to record that call (`record_call`): the Recorder claims the call's
+//! recording source on that org and records into the call's live meeting when it is the source.
 //!
 //! The Recorder signs in to an org with Tico's agent sign-in (backend/mcp_oauth.py). The approval page needs the
 //! person's Tico session, which this app already has for each of its orgs, so the Recorder asks this app to show it:
@@ -63,20 +65,49 @@ pub(crate) fn recorder_link(hub: &Url) -> String {
     link.to_string()
 }
 
+/// The link that has the Recorder record a call on an org: `tico-recorder://record?server=<org address>&call=<id>`.
+/// Only a call id that is a uuid, in its canonical form; anything else is refused.
+pub(crate) fn call_link(hub: &Url, call: &str) -> Option<String> {
+    let call = uuid::Uuid::parse_str(call).ok()?;
+    let mut link = Url::parse("tico-recorder://record").expect("a fixed link");
+    link.query_pairs_mut()
+        .append_pair("server", hub.as_str())
+        .append_pair("call", &call.to_string());
+    Some(link.to_string())
+}
+
 /// Opens the Recorder on `hub`, in Tico Recorder itself rather than whatever else took its scheme.
 pub(crate) fn open_recorder(hub: &Url) {
     #[cfg(target_os = "macos")]
-    {
-        let link = recorder_link(hub);
-        if let Err(e) = std::process::Command::new("/usr/bin/open")
-            .args(["-b", RECORDER_ID, &link])
-            .spawn()
-        {
-            log::warn!("could not open Tico Recorder: {e}");
-        }
-    }
+    open_in_recorder(&recorder_link(hub));
     #[cfg(not(target_os = "macos"))]
     let _ = hub;
+}
+
+/// Has the Recorder record call `call` on `hub`, when it is installed and the id is a call id. Answers whether it
+/// was opened.
+pub(crate) fn record_call(hub: &Url, call: &str) -> bool {
+    let Some(link) = call_link(hub, call) else {
+        return false;
+    };
+    if !installed() {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    open_in_recorder(&link);
+    #[cfg(not(target_os = "macos"))]
+    let _ = link;
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn open_in_recorder(link: &str) {
+    if let Err(e) = std::process::Command::new("/usr/bin/open")
+        .args(["-b", RECORDER_ID, link])
+        .spawn()
+    {
+        log::warn!("could not open Tico Recorder: {e}");
+    }
 }
 
 /// The org and approval page a `tico://open` link names, when it is an org this app has and the page is that org's
@@ -415,6 +446,37 @@ mod tests {
         if let Some(at) = Instant::now().checked_sub(ANSWER_WAIT + Duration::from_secs(1)) {
             let stale = Pending { at, ..pending };
             assert!(!answers(Some(&stale), "approval-1", &answer), "too late");
+        }
+    }
+
+    #[test]
+    fn a_call_link_names_the_pages_org_and_only_a_call_id() {
+        let hub = Url::parse("https://acme.example.com/").unwrap();
+        let id = "6f1c1a52-6a4e-4c39-9d43-6a1f0e3c2b10";
+        let link = Url::parse(&call_link(&hub, &id.to_uppercase()).unwrap()).unwrap();
+        assert_eq!(
+            (link.scheme(), link.host_str()),
+            ("tico-recorder", Some("record"))
+        );
+        let query: Vec<(String, String)> = link.query_pairs().into_owned().collect();
+        assert_eq!(
+            query,
+            [
+                (
+                    "server".to_string(),
+                    "https://acme.example.com/".to_string()
+                ),
+                ("call".to_string(), id.to_string()),
+            ]
+        );
+        for call in [
+            "",
+            "123",
+            "../../logout",
+            &format!("{id}&server=https://evil.example"),
+        ] {
+            assert_eq!(call_link(&hub, call), None, "{call}");
+            assert!(!record_call(&hub, call), "{call}");
         }
     }
 

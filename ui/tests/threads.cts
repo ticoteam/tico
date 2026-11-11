@@ -1,8 +1,8 @@
 // Threads per role, at desktop and phone width (docs/dev/threads-contract.md, plan §9 "UI per role"): the sidebar's
 // Threads link and its Catch up count, the thread rail (Pinned, Threads, Find, Browse) beside one thread, the pin,
-// Catch up, New thread, a thread's flat timeline (an older server's sub-threads drawn flat, each reply quoting what it
+// Catch up, New message, a thread's flat timeline (an older server's sub-threads drawn flat, each reply quoting what it
 // answers), a message shown as "Checking…" until the server answers, a held message, the bot page's Home and DM, a person's Home,
-// New DM, a server without the rail (its empty pane: the picture and New thread), and a teammate who may see a bot
+// a teammate's DM button, a server without the rail (its empty pane: the picture and New thread), and a teammate who may see a bot
 // but not read it getting no Home.
 // TICO_SCREENSHOT_DIR=<dir> also saves the screenshots.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -240,6 +240,7 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
     }
     if (p === '/api/v2/threads/catch-up') return json(bob ? {items: [], count: 0, next_cursor: null} : {items: catchUp(), count: 3, next_cursor: null});
     if (p === '/api/v2/threads/browse') { seen.browsed.push(url.searchParams.get('q')); return json({threads: [openHouse], next_cursor: null}); }
+    if (p === '/api/v2/threads/match') return json({threads: [], dm: null});
     if (p === '/api/v2/threads' && method === 'POST') {
       const body = JSON.parse(req.postData() || '{}'); seen.created.push(body);
       if (!body.title) return json({error: {code: 'name_required', message: 'Group chats need a name.'}}, 422);
@@ -806,28 +807,29 @@ let browser: import('playwright').Browser | null = null;
     assert.deepEqual(seen.earlier, ['h-old', 'h-old']);
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
 
-    // New thread: members as chips (a team she has Write on among them, not one without), a name, who sees it, a pin.
+    // New message: teammates as chips (a team she has Write on among them, not one without); with no thread of exactly
+    // them, a named private thread, pinned for its people.
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
     await rail.locator('[data-tr-new]').click();
-    const nt = page.locator('#thread-new[open]');
-    await nt.locator('#nt-add').waitFor();
-    await nt.locator('#nt-add').focus();
-    const offered = await nt.locator('#nt-sugg li > span:last-child').allTextContents();
+    await page.waitForFunction(() => location.hash === '#/threads/new');
+    const nm = page.locator('.tr-pane .nm');
+    await nm.locator('#nm-list li').first().waitFor();
+    const offered = await nm.locator('#nm-list li .nm-name').allTextContents();
     assert.ok(offered.includes('Ops team') && !offered.includes('Legal') && !offered.includes('Ana'), 'teammates she may add: ' + offered);
-    assert.equal(await nt.locator('[type=submit]').isDisabled(), true, 'no name, no thread');
-    await nt.locator('#nt-sugg li', {hasText: 'Bea'}).click();
-    await nt.locator('#nt-sugg li', {hasText: 'Cy'}).click();
-    assert.deepEqual(await nt.locator('.nt-chip').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.actor)), ['human:bea', 'human:cy']);
-    assert.equal(await nt.locator('.nt-why').textContent(), 'Group chats need a name.');
-    assert.equal(await nt.locator('[type=submit]').isDisabled(), true);
-    await nt.locator('#nt-name').focus();      // the shot shows the form, not the suggestions
-    await themed(page, 'new-thread');
-    await nt.locator('#nt-name').fill('#launch-review');
-    assert.equal(await nt.locator('.nt-why').textContent(), '');
-    await nt.locator('[type=submit]').click();
+    assert.equal(await nm.locator('.p-send').isDisabled(), true, 'nobody chosen, nothing to send to');
+    await nm.locator('#nm-list li', {hasText: 'Bea'}).click();
+    await nm.locator('#nm-q').fill('cy');
+    await nm.locator('#nm-q').press('Enter');
+    assert.deepEqual(await nm.locator('.nm-chip').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.actor)), ['human:bea', 'human:cy']);
+    await nm.locator('#nm-list li.nm-new[aria-selected="true"]').waitFor();
+    await nm.locator('#nm-q').press('Enter');
+    await page.waitForFunction(() => document.activeElement?.id === 'nm-title');
+    await themed(page, 'new-message');
+    await nm.locator('#nm-title').fill('#launch-review');
+    await nm.locator('#nm-title').press('Enter');
     await page.waitForFunction(() => location.hash === '#/thread/t-new');
-    assert.deepEqual(seen.created, [{title: 'launch-review', audience: 'members', audience_group_id: null, members: ['human:bea', 'human:cy'], pin_for_members: true}]);
+    assert.deepEqual(seen.created, [{title: 'launch-review', audience: 'members', members: ['human:bea', 'human:cy'], pin_for_members: true}]);
 
     // Catch up: one thread at a time; Mark read goes on, Later puts one at the end, Esc closes.
     await page.goto('https://tico-ui.test/#/thread/t-plan');
@@ -919,15 +921,14 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/thread/t-plan?m=m2');
     await page.locator('.th-msg.th-focus[data-mid="m2"]').waitFor();
 
-    // New DM (on a teammate's page): a picker of teammates, never groups.
+    // A teammate's DM button: New message with them chosen, their DM marked.
     await page.goto('https://tico-ui.test/#/person/bea');
     await page.locator('#person-dm').click();
-    await page.locator('#thread-new .thd-pick').first().waitFor();
-    const picks = await page.locator('#thread-new .thd-pick span').allTextContents();
-    assert.ok(picks.includes('Bea') && picks.includes('Ops') && !picks.includes('Ana'), 'teammates, not yourself: ' + picks);
-    assert.equal(await page.locator('#thread-new input[value^="group:"]').count(), 0);
+    await page.locator('.nm-chip[data-actor="human:bea"]').waitFor();
+    await page.locator('#nm-list li[aria-selected="true"] .nm-name', {hasText: 'Bea'}).waitFor();
     await shot(page, 'new-dm-desktop');
     await page.keyboard.press('Escape');
+    await page.waitForFunction(() => location.hash !== '#/threads/new?to=human%3Abea');
 
     // Members: each avatar keeps its round size (a group's initials, a bot's shape), names start in one column, and
     // Owner or Remove sits at the row's end.
@@ -1037,15 +1038,14 @@ let browser: import('playwright').Browser | null = null;
     await page.locator('#catch-up .cu-undo').waitFor({state: 'detached'});
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#catch-up')?.open);
+    // New message takes the screen; its back arrow returns to the rail.
     await page.locator('#thread-rail [data-tr-new]').tap();
-    await page.locator('#thread-new[open] #nt-name').waitFor();
+    await page.locator('.tr-pane .nm #nm-q').waitFor();
+    assert.equal(await page.locator('#thread-rail').isVisible(), false);
     assert.ok(await sideways(page) <= 390);
-    await themed(page, 'new-thread', true);
-    // Esc closes the suggestions first, then the dialog.
-    await page.keyboard.press('Escape');
-    assert.equal(await page.locator('#thread-new[open]').count(), 1);
-    await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-new')?.open);
+    await themed(page, 'new-message', true);
+    await page.locator('.nm-head .thv-back-rail').tap();
+    await page.waitForFunction(() => location.hash === '#/threads');
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
     // On a phone the timeline reads the same, with no sideways scroll; a long press, not a hover bar, holds the actions.
@@ -1076,9 +1076,8 @@ let browser: import('playwright').Browser | null = null;
     await shot(page, 'not-shown-phone');
     await page.goto('https://tico-ui.test/#/person/bea');
     await page.locator('#person-dm').tap();
-    await page.locator('#thread-new .thd-pick').first().waitFor();
+    await page.locator('.nm-chip[data-actor="human:bea"]').waitFor();
     await shot(page, 'new-dm-phone');
-    await page.keyboard.press('Escape');
     assert.deepEqual(seen.errors, []);
     await page.close();
   }
@@ -1114,8 +1113,7 @@ let browser: import('playwright').Browser | null = null;
     // A person's page starts a DM with them; your own does not offer one.
     await page.goto('https://tico-ui.test/#/person/bea');
     await page.locator('#person-dm').tap();
-    assert.equal(await page.locator('#thread-new input[value="human:bea"]').isChecked(), true, 'the DM starts with this person');
-    await page.keyboard.press('Escape');
+    await page.locator('.nm-chip[data-actor="human:bea"]').waitFor();
     await page.goto('https://tico-ui.test/#/person/ana');
     await page.locator('#ptabs').waitFor();
     assert.equal(await page.locator('#person-dm').count(), 0);
@@ -1244,7 +1242,7 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.locator('#tree [data-org="b:ops"] .tree-dm').textContent(), '2');
     assert.equal(await page.locator('#tree [data-org="p:bea"] .tree-dm').textContent(), '1');
     await page.locator('.tr-empty [data-tr-new]').waitFor();    // nothing pinned, nothing opened before: New thread
-    // The picture of a thread, its heading and its one sentence, then New thread, which still opens the dialog.
+    // The picture of a thread, its heading and its one sentence, then New thread, which opens New message.
     const empty = page.locator('.tr-empty');
     assert.equal(await empty.locator('h2').innerText(), 'Talk with your team here');
     assert.equal(await empty.locator('p').innerText(), 'Share conversations with your bots and anything else the team should see.');
@@ -1264,10 +1262,8 @@ let browser: import('playwright').Browser | null = null;
     assert.ok(await empty.locator('[data-tr-new]').evaluate(b => b.getBoundingClientRect().bottom <= innerHeight),
       'New thread is in reach once the pane scrolls');
     await empty.locator('[data-tr-new]').click();
-    await page.locator('#thread-new[open]').waitFor();
+    await page.locator('.tr-pane .nm #nm-q').waitFor();
     assert.ok(await sideways(page) <= 844, 'no sideways scroll');
-    await page.locator('#thread-new .nt-x').click();
-    await page.waitForFunction(() => !document.querySelector<HTMLDialogElement>('#thread-new')?.open);
     assert.deepEqual(seen.errors, []);
     await page.close();
     railOff = false;

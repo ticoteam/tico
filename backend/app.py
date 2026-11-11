@@ -5382,6 +5382,9 @@ def create_app(settings=None):
     from .google_workspace import install as install_google_workspace
 
     install_google_workspace(app, store)
+    from . import web_push
+
+    web_push.install(app, store)  # after install_credentials: the VAPID key is sealed with the vault
     from .mailboxes import install as install_mailboxes
 
     install_mailboxes(app, store)

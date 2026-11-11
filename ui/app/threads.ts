@@ -47,6 +47,8 @@ interface ThreadRow {
   // Catch up, as the server counts it).
   task_id?: string | null | undefined;
   task_hidden?: boolean | undefined;
+  // The thread's live call, for the rail's green phone (ui/app/thread-call.ts keeps it live).
+  live_call?: { id: string; live_count?: number | undefined } | null | undefined;
   [key: string]: unknown;
 }
 // The rail's reply: Pinned and the rest, the next page's cursor, the Catch up count and the unread of each DM.
@@ -133,7 +135,8 @@ interface ThreadsState {
   gen: number;
 }
 
-const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/';
+// New message (ui/app/new-message.ts) is a page of its own beside the rail.
+const THREADS_ROUTE = '#/threads', THREAD_ROUTE = '#/thread/', THREADS_NEW = '#/threads/new';
 const THREADS: ThreadsState = {on: null, rail: null, pinned: [], threads: [], next: null, catchUp: 0, cu: null, dms: {}, roots: {}, counted: new Set(),
                  loading: null, again: false, wired: false, needsSeen: null, readAt: 0, gen: 0};
 // A stream connect within this long of the rail's last read leaves it be (the `needs` handler in threadsSync).

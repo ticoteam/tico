@@ -215,6 +215,9 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
   app, `tico-recorder://record?server=<origin>&title=<title>&event=<occurrence_id>` (Recorder on by default; a
   per-person "Record calls I join" toggle in the page's ⋯ menu, stored in localStorage + `/calendar/settings`
   field `record_on_join` default true).
+  The Recorder records only an occurrence `GET /events/{occurrence_id}` shows with `can.join`, from 15 min before
+  its start to its end, under that title; signed in already it starts at once, after a sign-in it asks "Record
+  <title>?" once, as for a Tico call (meet-calls contract).
 - Who bots may book: one control on Rules > reach (track reach).
 
 ## Rules for every track

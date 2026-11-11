@@ -117,7 +117,7 @@ commands! {
     record(event: Option<Value>) => |app| app.record(event);
     open_meeting(id: String) => |app| { let opened = app.open(&id); app.report(opened) };
     close_meeting() => |app| app.close();
-    stop_recording() => |app| app.stop();
+    stop_recording() => |app| app.stop_by_hand();
     rename(title: String) => |app| app.rename(&title);
     finish_live() => |app| app.finish_live();
     control_live(action: String) => |app| app.control_live(&action);
@@ -155,6 +155,8 @@ commands! {
     import_legacy(directory: String) => |app| app.import_legacy(&directory);
     confirm_connect() => |app| app.confirm_connect();
     dismiss_connect() => |app| app.dismiss_connect();
+    confirm_record() => |app| app.confirm_record();
+    dismiss_record() => |app| app.dismiss_record();
     dismiss_error() => |app| app.dismiss_error();
     open_url(url: String) => |app| app.open_url(&url);
     dismiss_notice() => |app| app.dismiss_notice();
@@ -495,6 +497,8 @@ fn main() {
             import_legacy,
             confirm_connect,
             dismiss_connect,
+            confirm_record,
+            dismiss_record,
             dismiss_error,
             open_url,
             dismiss_notice,
