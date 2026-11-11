@@ -347,6 +347,9 @@ UNSURE_BEFORE_SQL = (
     "AND v.rubric_hash = p.rubric_hash WHERE p.visit_id=? AND p.requirement_id=? AND p.replaced_at IS NOT NULL "
     "AND v.verdict = 'unsure' LIMIT 1"
 )
+# Jev sent back an earlier page of this requirement on this visit (one since replaced): on a page a person OKs anyway,
+# the owner had its one round, so the next send back is that person's to decide (`_page`).
+NOT_MET_BEFORE_SQL = UNSURE_BEFORE_SQL.replace("v.verdict = 'unsure'", "v.verdict = 'not_met'")
 # What Jev's unsure says to the bot that holds the stage, and then to the pipeline's manager bot (`_unsure_to_bots`).
 FIX_OR_EXPLAIN = "Not yet met: fix it or explain it on the page."
 DECIDE = "Decide if it meets the check: OK it or send it back, and say why."
@@ -373,7 +376,8 @@ PAGE_OK_HINT = "Attach the new version; Tico asks the person."
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
     exact version when the requirement names one or is people only. An answer counts only for the page version it was given on.
-    Jev unsure on a stage a bot holds goes to bots first (two sign-offs rule, Nov 11; `_unsure_to_bots`): back to that bot
+    Jev's send back is the owner's turn; on a page a person OKs anyway, the next send back on the same visit is that
+    person's to decide. Jev unsure on a stage a bot holds goes to bots first (two sign-offs rule, Nov 11; `_unsure_to_bots`): back to that bot
     once, then to the pipeline's manager bot; when Jev could not check, straight to the manager bot. Otherwise a person
     decides, once per visit:
     after a person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's
@@ -405,10 +409,12 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     reasons = " ".join(str((verdict or {}).get("reasons") or "").split())
     if said is None:
         return Standing(requirement, WAITING, JEV, "Jev is checking")
-    if said == "not_met":
+    oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
+    if said == "not_met" and not (
+        oks_anyway and conn.execute(NOT_MET_BEFORE_SQL, (visit_id, requirement["id"])).fetchone()
+    ):
         return Standing(requirement, NOT_MET, owner, f"Jev sent it back: {reasons}" if reasons else "Jev sent it back")
     person = person_of(conn, requirement, visit_id)
-    oks_anyway = bool(requirement.get("person_id") or people_only(requirement))
     back = _sent_back(conn, visit_id, requirement["id"]) if oks_anyway else None
     if back and not requirement.get("person_id"):
         person = person or str(back["by_id"])  # the person who sent it back is asked again, by Tico, not by the bot
@@ -419,6 +425,11 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         after += f"{fresh} " if fresh else ""
     # This version was asked of someone once Jev had looked: its wait counts from then, not from the stage's start.
     asked = max(str(page["created_at"]), str((verdict or {}).get("updated_at") or ""))
+    if said == "not_met":
+        # A page a person OKs anyway that Jev sent back before on this visit: the owner had its round, so the person
+        # decides with Jev's reason, as on an unsure (Initech, Nov 11: a page Jev could never pass left only a push-past).
+        line = f"Jev sent it back again: {reasons}" if reasons else "Jev sent it back again"
+        return Standing(requirement, WAITING, person, after + line, since=asked)
     if said in ("unsure", "failed"):
         # A failed verdict's reason is why the calls failed (last_error): it was Jev, not the page.
         failure = " ".join(str((verdict or {}).get("last_error") or "").split())

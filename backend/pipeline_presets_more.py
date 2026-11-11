@@ -97,10 +97,12 @@ def _pipeline(
 # (playbooks/build-a-bet.md). The lines say what Jev can see and that watching and worked-once are both "worked": with
 # "as it will look", "links" and the tags unexplained, a good ad page scored 0.71 to 0.82 and a good watching page 0.33
 # to 0.45 (Nov 11).
+# The brand line is one a new company can meet on day one: with no brand card published there is nothing to check
+# against, and the page says so (Initech, Nov 11: "Says the brand check passed" sent back every page of a new company).
 GO_LIVE_RUBRIC = (
     "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the "
-    "metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand "
-    "check passed."
+    "metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it "
+    "fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
 )
 RESULTS_RUBRIC = (
     "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number "
@@ -192,19 +194,24 @@ _GO_LIVE_RC6 = (
     "moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check "
     "passed."
 )
+_GO_LIVE_NOV11 = (
+    "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the "
+    "metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand "
+    "check passed."
+)
 _RESULTS_RC6 = (
     "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, "
     "result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted "
     "change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
 )
 EARLIER: dict[str, tuple[str, ...]] = {
-    f"{pid}-{stage}": (text,)
+    f"{pid}-{stage}": texts
     for pid in ("growth-experiments", "success-experiments")
-    for stage, text in (
-        ("ideas/purpose", _IDEAS_RC3),
-        ("running/purpose", _RUNNING_RC3),
-        ("building/page/rubric", _GO_LIVE_RC6),
-        ("running/page/rubric", _RESULTS_RC6),
+    for stage, texts in (
+        ("ideas/purpose", (_IDEAS_RC3,)),
+        ("running/purpose", (_RUNNING_RC3,)),
+        ("building/page/rubric", (_GO_LIVE_RC6, _GO_LIVE_NOV11)),
+        ("running/page/rubric", (_RESULTS_RC6,)),
     )
 }
 

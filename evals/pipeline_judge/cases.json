@@ -1719,7 +1719,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
    },
    "work": {
     "title": "Second welcome email: turn on reminders",
@@ -1742,7 +1742,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
    },
    "work": {
     "title": "Answer the no-show question on the reminders page",
@@ -1761,11 +1761,34 @@
    "trap": null
   },
   {
+   "id": "grow-golive-no-brand-card",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Answer the no-show question on the reminders page",
+    "spec": "Channel Owner: SEO Owner. Add a section to acme.example/reminders answering how studios cut no-shows.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-no-brand-card.md",
+    "text": "# Go-live: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme\n\n## What goes live\nOn acme.example/reminders, a new first section headed \"How to cut no-shows at your studio\": four short steps, the\n2026 numbers from our reminder report (dated Oct 2026, linked), and a link to the setup guide. New title: \"Cut no-shows\nat your studio with text reminders | Acme\". The full section as it will look is below.\n\n> ## How to cut no-shows at your studio\n> 1. Text each client the day before. 2. Let them confirm or cancel by reply. 3. Fill the spot from the waitlist.\n> 4. Track no-shows a month. Studios on Acme cut no-shows by a third in 2026 (Acme reminder report, Oct 2026).\n\n## The bet\n- Metric: organic clicks to acme.example/reminders, brand terms left out (Search Console, Web).\n- Prediction: from 120 to 180 clicks a week by Jan 12, 2027.\n- Why: 4,100 views a week for no-show questions and a 2.9% click rate (Search Console, 28 days to Nov 9).\n- Cost: no money. About 20 minutes of Dana's time.\n- Runs: 8 weeks, Nov 17 to Jan 12.\n- Stop early if: clicks drop below 100 a week two weeks in a row, or the page stops loading.\n\n## Checks\n- Brand: no brand card is published yet, so there was no brand check. The section uses our plain product words\n  and no claims beyond the dated report.\n- Who puts it live: Dana (edits the site).\n",
+    "work_version": 2
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
    "id": "grow-golive-ad",
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
    },
    "work": {
     "title": "Search ad group for 'class booking app'",
@@ -1788,7 +1811,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
    },
    "work": {
     "title": "Second welcome email: turn on reminders",
@@ -1811,7 +1834,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
    },
    "work": {
     "title": "Search ad group for 'class booking app'",
@@ -1834,7 +1857,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
    },
    "work": {
     "title": "Answer the no-show question on the reminders page",
@@ -1857,7 +1880,7 @@
    "domain": "marketing",
    "requirement": {
     "name": "Go-live page",
-    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check passed."
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
    },
    "work": {
     "title": "Search ad group for 'class booking app'",

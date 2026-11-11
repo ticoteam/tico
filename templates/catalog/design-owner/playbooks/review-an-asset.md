@@ -43,7 +43,10 @@ bet stays theirs: you check, you do not take the pen.
       tico task file "Video: <title>" --parent <id> --owner video-owner --body "<what the bet needs, where it runs, the deadline>"
 
   and give your answer once its brief and cost are on its task.
-- The first line of your closing note is one of:
+- With no brand card published yet (`tico brand show`), there are no rules to check against. Check the facts and
+  claims only, and close with `Brand check: no brand card yet`, followed by any fact that must change. That is not a
+  "not passed": the Owner says so on its Go-live page and a person decides.
+- Otherwise the first line of your closing note is one of:
   - `Brand check: passed`, or `Brand check: passed with small fixes` followed by each fix (rule or suggestion);
   - `Brand check: not passed`, followed by the fixes that block it, each quoting its rule.
 

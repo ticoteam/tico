@@ -428,6 +428,34 @@ def test_a_page_a_person_oks_anyway_goes_to_them_every_version_and_after_a_send_
     assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] == "Spec", "the question is still open"
 
 
+def test_a_page_a_person_oks_anyway_that_jev_sends_back_twice_is_the_persons_to_decide(c, store):
+    """Initech (Nov 11): Jev sent back every version of a Go-live page a person OKs anyway, so the person could never OK
+    it and the only way on was a push-past. Jev's first send back is the bot's to fix; a second in the same visit is the
+    person's to decide, with Jev's reason, and their OK moves the task on. A page no person OKs stays the bot's."""
+    rid = _pipeline(c, who_oks="people_only")
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid), "not_met", "No prediction")
+    standing = _standing(c, row)
+    assert (standing.state, standing.on) == (R.NOT_MET, WRITER), "the bot's one round first"
+    _again(c, store, row, fid, verdict="not_met", reasons="Says no brand check passed")
+    standing = _standing(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, None)
+    assert standing.line == "Jev sent it back again: Says no brand check passed"
+    (ask,) = [r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == rid]
+    assert sorted(ask["may"]) == ["no", "ok"], "the person may OK it"
+    assert A.answer(c, row["id"], rid, BEN, "ok", "No brand card yet; the copy is fine")["stage"]["name"] != "Spec"
+
+
+def test_a_page_no_person_oks_that_jev_sends_back_twice_stays_the_bots(c, store):
+    _pipeline(c)
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid), "not_met", "No prediction")
+    _again(c, store, row, fid, verdict="not_met", reasons="Still no prediction")
+    assert (_standing(c, row).state, _standing(c, row).on) == (R.NOT_MET, WRITER)
+
+
 def test_a_plain_yes_no_question_on_a_stage_with_a_page_a_person_oks_is_allowed(c, store):
     """Lead's review of #3283: the Product Owner asking a person a clarifying yes/no in Spec is normal. Only a yes/no
     that shows the people-only page itself is refused (it would be a second OK of that page)."""
