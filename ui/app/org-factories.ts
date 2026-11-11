@@ -25,10 +25,13 @@ const orgShowsFm = (g: OfGroup): boolean => !!g.manager && g.pipelines.length >=
 /** One locked card. With a manager, its name opens the bot; `chip` (a pipeline) opens that pipeline. */
 function orgCardHtml(kind: 'fm' | 'pm', manager: string | null, chip: OfBox | null): string {
   const id = manager ? orgBotOf(manager) : '';
+  // With no manager the card is the pipeline's: its name is the title and opens it, over an empty manager slot.
   const head = manager
     ? `<a class="org-fac-open" href="#/bot/${encodeURIComponent(id)}"><b>${esc(botDisplayName(id))}</b></a><span class="rdo-r">${avatar(id, 16)}</span>`
-    : '<b>No manager</b>';
-  const link = chip
+    : chip ? `<a class="org-fac-open" href="${esc(pipelineHref(chip.id))}"${chip.goal ? ` title="${esc(chip.goal)}"` : ''}><b>${esc(chip.name)}</b></a>`
+      + '<span class="rdo-r"><i class="org-fac-empty" role="img" aria-label="No manager" title="No manager"></i></span>'
+    : '<span class="rdo-r"><i class="org-fac-empty" role="img" aria-label="No manager" title="No manager"></i></span>';
+  const link = chip && manager
     ? `<a class="org-fac-chip" href="${esc(pipelineHref(chip.id))}"${chip.goal ? ` title="${esc(chip.goal)}"` : ''}>${esc(chip.name)} <span aria-hidden="true">→</span></a>`
     : '';
   return `<div class="rdo-card org-fac-card ${kind}" data-org-card="${kind}">${head}${link}`
