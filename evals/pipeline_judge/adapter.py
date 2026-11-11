@@ -94,9 +94,8 @@ def state_for(case):
 
 
 def _decide(name, key, url):
-    """Decide at the level the server uses for this model; its answer carries the Gateway's usage."""
-    level = P.DECIDE_LEVELS[name]
-    ask = J.gateway(key, url, model=J.decide_model(level), timeout=J.decide_timeout(level))
+    """Ask Jev on the Gateway, as the server does; its answer carries the Gateway's usage."""
+    ask = J.gateway(key, url, model=J.GATEWAY_MODEL, timeout=J.GATEWAY_TIMEOUT)
 
     def engine(model, state, questions, label):
         result = ask(state, questions, label)

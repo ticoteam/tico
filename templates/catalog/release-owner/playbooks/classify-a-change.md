@@ -36,7 +36,7 @@ pull request does not say, put it in "Could not classify" with the question.
 Read `skills/write-release-notes-for-users/SKILL.md` for the wording.
 
 One line, present tense, from the user's side: "You can now export a report as a CSV." Not "Add CSV export
-endpoint". No internal names, no ticket numbers as the message, no customer names. End with the pull request
+endpoint". No internal names, no issue numbers as the message, no customer names. End with the pull request
 link. Two pull requests that make one user-visible change become one line with both links.
 
 ## 5. When to hold it back

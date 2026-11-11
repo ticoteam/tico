@@ -316,7 +316,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Takes a task Head of Engineering gives it, builds the change on a branch with a test that proves it, opens the pull request and answers its review and QA comments. It merges only when the team's merge rules allow it and the checks pass at the head.",
+   "summary": "Owns Build and the two Fixes stages of the Engineering pipeline: builds each change on a branch with a test that proves it, opens the pull request, gets its checks green and fixes what the two reviewers found. It never merges: the Merge stage queues the pull request.",
    "when": "Offer when GitHub is connected and the team turns tasks into code.",
    "tags": [
     "saas",
@@ -963,7 +963,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Turns a requested change into a plan with one child task per repository, follows each engineer's pull requests to merge, and reports progress with links.",
+   "summary": "Manages the Engineering pipeline. Decides what happens to a task that is stuck, late or has no owner, splits outcomes that span repositories into Engineering tasks, and reports progress with links. Never merges.",
    "when": "Offer when engineer bots work across several repositories.",
    "tags": [
     "github",
@@ -2589,7 +2589,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Reads every open pull request each weekday morning and drafts a review for each: what the change does, what blocks a merge, and what it could not check. Posts only when a task asks and its Tools allow it. Merging stays with a human.",
+   "summary": "Reviews each pull request in its Engineering review stage and writes a Review page at the newest commit: what the change does, what blocks it, and what it could not check. Each weekday it also drafts reviews for pull requests outside the pipeline. Never merges.",
    "when": "Offer when GitHub is connected and pull requests wait for a reviewer.",
    "tags": [
     "saas",
@@ -2807,7 +2807,7 @@
    "department": "product",
    "lead": false,
    "core": false,
-   "summary": "Turns a chosen problem into a one-page spec engineers can build from: evidence, a time budget, non-goals and acceptance criteria that can be checked. Then it drives the spec to launch, with open questions closed by named humans and a readiness check signed line by line.",
+   "summary": "Runs the Product pipeline: turns an idea into a one-page Spec page engineers can build from (evidence, a time budget, non-goals, acceptance criteria that can be checked), hands it to Engineering once a person OKs it, and checks the result in production.",
    "when": "A software team where work starts before the problem is written down, or where launches slip because nobody owns the checklist.",
    "tags": [
     "saas",
@@ -2822,7 +2822,7 @@
     "specs are missing or out of date",
     "launches slip because nobody owns the checklist",
     "requirements live in someone's head",
-    "QA finds out what 'done' means after the build"
+    "engineers find out what 'done' means after the build"
    ],
    "recommend_when": [
     "sells_software",
@@ -3125,7 +3125,7 @@
   {
    "slug": "release-notes",
    "template": "release-notes",
-   "name": "Release Manager",
+   "name": "Release Notes Writer",
    "department": "engineering",
    "lead": false,
    "core": false,
@@ -3158,11 +3158,11 @@
   {
    "slug": "release-owner",
    "template": "release-owner",
-   "name": "Release Owner",
+   "name": "Release Manager",
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Owns the path from a merged change to users. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. It never reruns, cancels, deploys, rolls back or merges on its own.",
+   "summary": "Owns Merge and Release in the Engineering pipeline: sees each pull request through the merge queue, pushes its own fix when the queue drops one, and gets it into a release. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. It never runs a merge command, and never reruns, cancels, deploys or rolls back on its own.",
    "when": "A software team whose merged changes wait days to reach users, whose merge queue is slow or distrusted, or who cut releases by hand and need one seat to get each release ready and out.",
    "tags": [
     "saas",

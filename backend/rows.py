@@ -1538,6 +1538,111 @@ class EffectRow(TypedDict):
     last_error: str | None
     created_at: str
     updated_at: str
+    repo: str | None
+    number: int | None
+    head_sha: str | None
+    next_try_at: str | None
+
+
+class PrFactRow(TypedDict):
+    """Tico's saved copy of one pull request (backend/task_facts.py). Newest `fact_version` wins."""
+
+    id: str
+    repo: str
+    number: int
+    state: str
+    draft: int
+    head_sha: str | None
+    head_seen_at: str | None
+    checks_state: str
+    checks: str
+    checks_started_at: str | None
+    merged_sha: str | None
+    merged_at: str | None
+    queue_state: str
+    queued_at: str | None
+    removed_at: str | None
+    removed_reason: str | None
+    failing_check: str | None
+    failing_check_url: str | None
+    fact_version: int
+    read_at: str
+    created_at: str
+    updated_at: str
+
+
+class ReleaseRow(TypedDict):
+    """A published release of a repo, never a draft (backend/task_facts.py)."""
+
+    id: str
+    repo: str
+    tag: str
+    commit_sha: str | None
+    prerelease: int
+    published_at: str
+    fact_version: int
+    read_at: str
+    created_at: str
+
+
+class ReleaseReadRow(TypedDict):
+    """When a repo's releases were last read: none saved after a read means it publishes none (C31)."""
+
+    repo: str
+    read_at: str
+    fact_version: int
+
+
+class ReleaseCommitRow(TypedDict):
+    """Whether a commit is in a release's history, read once from GitHub."""
+
+    release_id: str
+    commit_sha: str
+    included: int
+    checked_at: str
+
+
+class GithubDeliveryRow(TypedDict):
+    """A webhook delivery already taken: a repeat of it is dropped."""
+
+    id: str
+    event: str
+    received_at: str
+
+
+class RequirementPageRow(TypedDict):
+    """The page attached to a page requirement for one visit, at one version (backend/task_pages.py)."""
+
+    id: str
+    visit_id: str
+    requirement_id: str
+    file_id: str
+    version: int
+    heads: str
+    attached_by_id: str
+    created_at: str
+    replaced_at: str | None
+    rubric_hash: str | None
+    judged_against: str
+
+
+class PageVerdictRow(TypedDict):
+    """Jev's verdict on one page version against one rubric (backend/page_verdicts.py). NULL verdict: still owed."""
+
+    id: str
+    file_id: str
+    version: int
+    rubric_hash: str
+    verdict: str | None
+    p: float | None
+    reasons: str | None
+    model: str | None
+    cost_usd: float
+    tries: int
+    last_error: str | None
+    next_try_at: str | None
+    created_at: str
+    updated_at: str
 
 
 class TaskMoveGuardRow(TypedDict):

@@ -60,6 +60,7 @@ EMPTY = (
     "meeting_deliveries",
     "worktree_waits",
     "effects",  # a GitHub call a task's move still owes (backend/stage_effects.py): the copy makes none
+    "github_deliveries",  # webhook deliveries already taken: a copy hears none of them again
     "ok_grants",  # an OK bound to an email, a letter or a page (backend/task_asks.py): the copy acts on none
     "ok_shown",  # what a person was shown of one
     "idempotency",  # bindings too
@@ -562,6 +563,14 @@ KEEP = (
             "snoozes",
             "links",
             "task_move_guards",
+            # What Product and Engineering read (backend/task_facts.py, backend/task_pages.py): saved copies of PRs and
+            # releases, pages attached to a requirement and Jev's verdicts on them.
+            "pr_facts",
+            "releases",
+            "release_reads",
+            "release_commits",
+            "requirement_pages",
+            "page_verdicts",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
             "run_starts",
             "turns",

@@ -29,12 +29,12 @@ and open the pull requests.
 - **QA Owner** (`qa-owner`): owns every automated test, unit through end to end. Files fixes into Engineering. Not a stage of it.
 - **Security Owner** (`security-owner`): dependency alerts, committed credentials and patch plans.
 - **Infrastructure Owner** (`infrastructure-owner`): CI, runners, workflows and deploy health.
-- **Release Owner** (`release-owner`): release readiness, release notes and the rollout of a version the owner approved.
+- **Release Manager** (`release-owner`): release readiness, release notes and the rollout of a version the owner approved.
 
 ## Route, never do
 - A failing or flaky test, or a missing test → the QA Owner. A failing CI job, runner or workflow → the Infrastructure Owner.
 - A vulnerable dependency or a committed credential → the Security Owner.
-- A release, its notes or its rollout → the Release Owner. You track the release step on the parent and do not run it.
+- A release, its notes or its rollout → the Release Manager. You track the release step on the parent and do not run it.
 - A product question (what to build, the spec) → the segment's Product Owner, through the Product Team Manager.
 
 ## Lines with the rest of the team
@@ -98,7 +98,7 @@ Each outcome follows one sequence: plan, split, dispatch, track, report, close. 
    stale worktrees and missing activity.
 5. **Report.** Follow `skills/report-progress-with-links/SKILL.md`.
 6. **Close.** The parent closes when every required child is merged and each required release step is done or handed off to the
-   Release Owner.
+   Release Manager.
 
 Failure modes to avoid:
 - Calling a change shipped when only its pull request merged and the release is still pending.

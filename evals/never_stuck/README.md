@@ -9,6 +9,7 @@ python -m evals.never_stuck.run --seed 7 --explain          # one seed, every st
 python -m evals.never_stuck.run --seeds 1-200 -j 2          # a sweep
 python -m evals.never_stuck.run --seeds 1-10000 --shard 3/12 -j 4 --allow-known --json   # one release shard
 python -m evals.never_stuck.run --scenarios                 # the 52 spec scenarios, the bugs, the extra checks
+python -m evals.never_stuck.run --software --seeds 1-200 -j 2   # one idea to Done through Product and Engineering
 python -m evals.never_stuck.perf --tasks 10000              # one check pass over 10,000 open tasks
 ```
 
@@ -26,6 +27,14 @@ python -m evals.never_stuck.perf --tasks 10000              # one check pass ove
 - `scenarios.py`: the 52 scenarios of the Pipelines v3 spec ("Scenarios"; build plan in
   `docs/dev/pipelines-v3-build.md`), each built or listed in `LATER` with its phase and why; `FAILING` names the ones
   an engine bug breaks.
+- Product and Engineering (a software company's world, `World(seed, software=True)`: the five role bots with their
+  templates and the presets): `software.py` (the hands: pages, PRs, webhooks, the Jev, re-read and merge queue steps),
+  `fake_github.py` (CI, the merge queue, webhooks lost, repeated, late, GitHub down, queue drops, over track C's
+  `backend/tests/helpers/fake_github.py`), `fake_jev.py` (Jev via `pipeline_judges.ENGINE`: met, not met, unsure, a
+  failed call), `software_scenarios.py` (`idea-to-done` and the refusals), `software_sim.py` (the seeded run with
+  faults; the daily release hour publishes what merged). A case that reaches a stub or a missing preset ends
+  `NotBuiltYet`; `software_scenarios.PENDING` (empty: every case is built) lists what each waits on, and the test runs
+  those as strict expected failures.
 - `run.py`: the command line. `perf.py`: the 10,000-task timing.
 
 `backend/tests/test_never_stuck_rig.py` runs every scenario and a few seeds in about 15 s (`-n 2`). A scenario or seed that

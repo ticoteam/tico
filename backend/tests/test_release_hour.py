@@ -145,3 +145,13 @@ def test_a_time_the_spring_gap_skips_fires_at_the_first_instant_after_it(api):
     assert len(release_tasks(api)) == 1
     assert list(fired(api)) == ["2027-03-14T02:30"]
     assert datetime.fromisoformat(fired(api)["2027-03-14T02:30"]["at"]) == gap_end
+
+
+def test_the_release_manager_is_found_by_the_release_owner_template_never_the_notes_writer(api):
+    with api.app.state.store.transaction() as c:
+        for slug, template in (("notes", "release-notes"), ("rm", "release-owner")):
+            X.bot(c, slug)
+            c.execute("UPDATE bot_settings SET template=? WHERE bot_id=?", (template, slug))
+        assert RS.release_manager(c, {"bot": ""}) == "rm"
+        c.execute("UPDATE bots SET state='archived' WHERE id='rm'")
+        assert RS.release_manager(c, {"bot": ""}) is None  # a Release Notes Writer is not the Release Manager (D1)

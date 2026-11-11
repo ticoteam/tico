@@ -209,6 +209,20 @@ def test_closing_a_task_closes_the_open_tasks_it_filed_and_nesting_stops_at_five
     assert X.guard_closed(c)
 
 
+def test_closing_a_task_leaves_open_a_filed_task_whose_pr_merged(c, general):
+    from backend import task_facts as F
+
+    top = X.new_task(c, ANA, "Checkout flow", assignee="bot:builder")
+    merged = X.new_task(c, ANA, "Build the cart", assignee="bot:builder", parent=top["id"])
+    other = X.new_task(c, ANA, "Build the payment form", assignee="bot:builder", parent=top["id"])
+    H.task_link(c, ANA, merged["id"], "https://github.com/acme/app/pull/1")
+    F.save_pr(c, "acme/app", 1, {"state": "merged", "head_sha": "a", "merged_sha": "m"}, 1)
+    E.move(c, top["id"], E.CLOSED, ANA, "The flow is off")
+    # Its work is in the code (docs/pipelines-v3.md scenario 24): it stays open to reach a release or be closed.
+    states = [E.task(c, t["id"])["status"] for t in (top, merged, other)]
+    assert states == ["closed", "open", "closed"]
+
+
 def test_a_task_waits_on_the_tasks_it_filed_and_moves_when_they_are_all_done(c, general):
     stages = ({"name": "In development", "owner": "bot:manager", "requirements": [{"kind": "linked_done"}]},)
     X.pipeline(c, "product", "Product", stages)

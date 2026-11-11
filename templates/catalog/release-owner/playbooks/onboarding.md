@@ -44,6 +44,13 @@ Write each answer to `state.md` under `## Answers`, dated. Then write, as presen
 - `knowledge/voice.md`: the format and voice, with the two pasted examples, and the changes that never appear (answers 3 and 4).
 - `knowledge/labels.md`: which labels or prefixes mean which section (answer 4).
 
+## 4b. Ask for write access once
+
+Merge needs you to push fix commits to pull request branches. Check with `gh repo view <repo> --json viewerPermission`. If
+it is not WRITE or higher, ask the owner once, on the task, to run
+`tico bot repos <your slug> --chosen <owner>/<repo>:write` for each repository that ships. Until then, a queue failure
+you would fix yourself goes back to the Builder in Fixes 2.
+
 ## 5. Produce the first results now
 
 Follow `playbooks/weekly-delivery-report.md` over the last two weeks. Write `reports/YYYY-MM-DD-delivery.md`, attach it to the

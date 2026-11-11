@@ -21,8 +21,8 @@ The outcome is the class of the failure, the first bad commit, and a decision or
 3. **Check flakiness before blaming a commit.** Has this test flipped before? Did the same commit pass on another run? If so,
    it is flaky, not broken. Enter it in `knowledge/flaky-tests.md` with the run ids.
 4. **Decide or hand over.** A flaky test gets a decision from `skills/decide-fix-or-quarantine/SKILL.md`. A test defect is fixed
-   as a branch and a pull request when the task asks for it. A product bug is handed to the Engineering Team Manager on a task
-   with the failing test, its runs and the commit range: `tico task create --owner engineering-team-manager --title "<the bug>" --body "<test, runs, commits, path>"`.
+   as a branch and a pull request when the task asks for it. A product bug is handed to the Engineering Manager on a task
+   with the failing test, its runs and the commit range: `tico task create --owner engineering-manager --title "<the bug>" --body "<test, runs, commits, path>"`.
 5. **Name the owner.** Take the owner of the suite from `knowledge/suites.md`. A product bug also goes to that owner as a note,
    when their decision is needed.
 

@@ -33,7 +33,6 @@ Row = dict[str, Any]
 MET, WAITING, NOT_MET = "met", "waiting", "not_met"
 # What a requirement waits on when it is not a person or a task: `Standing.on` for the kinds that read saved facts.
 JEV, GITHUB = "jev", "github"
-PHASE_ONE = ("owner_done", "ok", "answer", "linked_done")
 KIND_NAMES = {
     "owner_done": "Owner says done",
     "ok": "OK from someone",
@@ -276,8 +275,255 @@ def _linked_done(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     return Standing(requirement, MET, line="Done")
 
 
-def _later_phase(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return Standing(requirement, NOT_MET, task.get("owner_id"), f"{name_of(requirement)} is not built yet")
+# The five kinds the Product and Engineering pipelines bring. Each is its own function so each lands on its own:
+# `_page` with backend/task_pages.py and Jev's verdicts (page_verdicts), the four GitHub kinds with backend/task_facts.py.
+# The lines each one says are in docs/dev/pipelines-v3-build.md ("Standings of the Product and Engineering kinds").
+# A person already decided an earlier page of this requirement on this visit that Jev was unsure of or could not check.
+ASKED_ONCE_SQL = (
+    "SELECT 1 FROM requirement_pages p JOIN page_verdicts v ON v.file_id = p.file_id AND v.version = p.version "
+    "AND v.rubric_hash = p.rubric_hash JOIN answers a ON a.visit_id = p.visit_id AND a.requirement_id = p.requirement_id "
+    "AND a.page_version = p.version AND a.undone_at IS NULL AND a.created_at >= p.created_at "
+    "WHERE p.visit_id=? AND p.requirement_id=? AND p.replaced_at IS NOT NULL AND v.verdict IN ('unsure', 'failed') "
+    "AND a.answer IN ('ok', 'no') LIMIT 1"
+)
+
+
+def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
+    exact version when the requirement names one. An answer counts only for the page version it was given on. Jev
+    unsure, or unable to check, is a person's to decide, once per visit: after a person decided one such page, the next
+    one goes back to the owner, so a noisy rubric never fills a person's list."""
+    from . import page_verdicts as V
+    from . import task_facts as F
+    from . import task_pages as P
+
+    visit_id = task["visit"]["id"]
+    owner = task.get("owner_id")
+    page = P.current(conn, visit_id, requirement["id"])
+    if not page:
+        return Standing(requirement, NOT_MET, owner, "No page attached")
+    settings: Row = requirement.get("settings") or {}
+    if settings.get("at_head") and json.loads(page["heads"] or "{}") != F.heads(conn, task["id"]):
+        return Standing(requirement, NOT_MET, owner, "New commits since the review")
+    if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
+        answer = None  # given on an earlier page
+    if answer and answer["answer"] == "ok":
+        return Standing(requirement, MET, line="OK'd")
+    if answer and answer["answer"] == "no":
+        notes = (answer.get("notes") or "").strip()
+        return Standing(requirement, NOT_MET, owner, f"Sent back: {notes}" if notes else "Sent back")
+    verdict = V.get(conn, page["file_id"], page["version"], page.get("rubric_hash") or "")
+    said = (verdict or {}).get("verdict")
+    reasons = " ".join(str((verdict or {}).get("reasons") or "").split())
+    if said is None:
+        return Standing(requirement, WAITING, JEV, "Jev is checking")
+    if said == "not_met":
+        return Standing(requirement, NOT_MET, owner, f"Jev sent it back: {reasons}" if reasons else "Jev sent it back")
+    person = person_of(conn, requirement, visit_id)
+    if said in ("unsure", "failed"):
+        line = (
+            "Jev couldn't check this"
+            if said == "failed"
+            else (f"Jev is unsure: {reasons}" if reasons else "Jev is unsure")
+        )
+        if conn.execute(ASKED_ONCE_SQL, (visit_id, requirement["id"])).fetchone():
+            return Standing(requirement, NOT_MET, owner, line)
+        return Standing(requirement, WAITING, person, line)
+    if requirement.get("person_id"):
+        from . import hubdb
+
+        H: Any = hubdb
+        name = H.actor_name(conn, person) if person else "someone"
+        return Standing(requirement, WAITING, person, f"OK {name} (version {page['version']})")
+    return Standing(requirement, MET, line="Jev passed it")
+
+
+# The four GitHub kinds read saved facts only (backend/task_facts.py) and, for "PR merged", the Merge stage's effects
+# (backend/merge_queue.py). With many PRs, the first one not met, in link order, gives the line. A PR closed without
+# merging is left out while another is linked; when every one is, the owner is told. A wait on GitHub ends: when GitHub
+# has said nothing about the PR (or the releases it waits for) for 2 hours, it is the owner's turn (`_silent`).
+def _now() -> Any:
+    from . import hubdb
+
+    return hubdb
+
+
+def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[Row], Standing | None]:
+    """The PRs a GitHub kind reads, each with `ref` and `fact`, or the standing when there are none to read."""
+    from . import task_facts as F
+
+    links: list[Row] = [
+        {**link, "ref": F.pr_ref(str(link["repo"]), int(link["number"]))} for link in F.prs_of(conn, task["id"])
+    ]
+    if not links:
+        return [], Standing(requirement, NOT_MET, task.get("owner_id"), "No PR linked")
+    live = [link for link in links if not (link["fact"] and link["fact"]["state"] == "closed")]
+    if not live:
+        return [], Standing(requirement, NOT_MET, task.get("owner_id"), f"{links[0]['ref']} was closed without merging")
+    return live, None
+
+
+def _first(requirement: Row, found: list[Standing]) -> Standing:
+    """The first unmet standing of many PRs', else the first met one."""
+    return next((s for s in found if not s.met), found[0])
+
+
+def _reading(requirement: Row) -> Standing:
+    return Standing(requirement, WAITING, GITHUB, "Reading the PR from GitHub")
+
+
+def _seconds_since(ts: object) -> float | None:
+    H = _now()
+    at, now = H.parse_ts(ts), H.parse_ts(H.now())
+    return None if at is None or now is None else (now - at).total_seconds()
+
+
+def _silent(task: Row, requirement: Row, link: Row, found: Standing, heard: object = None) -> Standing:
+    """A wait on GitHub about one PR becomes the owner's turn once GitHub has said nothing for SILENT_S: no webhook and
+    no read of the PR got through (GitHub down or refusing, or the PR gone). `heard` is when GitHub last answered, when
+    the caller knows better than the PR's fact (its releases' read); else the fact's last read, else when it was
+    linked. Every wait on GitHub so ends in a bot's turn, whatever the stage's expected time."""
+    from . import task_facts as F
+
+    if found.state != WAITING or found.on != GITHUB:
+        return found
+    fact: Row = link.get("fact") or {}
+    quiet = _seconds_since(heard or fact.get("read_at") or fact.get("updated_at") or link.get("created_at"))
+    if quiet is None or quiet < F.SILENT_S:
+        return found
+    return Standing(
+        requirement, NOT_MET, task.get("owner_id"), f"GitHub hasn't answered about {link['ref']} for 2 hours"
+    )
+
+
+def _pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    prs, said = _prs(conn, task, requirement)
+    if said:
+        return said
+    return _first(requirement, [_open_one(task, requirement, link) for link in prs])
+
+
+def _open_one(task: Row, requirement: Row, link: Row) -> Standing:
+    """Met once GitHub said the PR exists. An open PR is re-read every few minutes; one GitHub stopped answering about
+    (a deleted PR reads as gone, which saves nothing) is the owner's after the 2-hour silence rule, not met for ever."""
+    quiet = _silent(task, requirement, link, _reading(requirement))
+    fact: Row | None = link["fact"]
+    if not fact or (fact["state"] == "open" and quiet.state == NOT_MET):
+        return quiet
+    return Standing(requirement, MET, line="PR open")
+
+
+def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
+    from . import merge_queue
+    from . import task_facts as F
+
+    fact, ref = link["fact"], link["ref"]
+    if not fact:
+        return _reading(requirement)
+    if fact["state"] == "merged":
+        return Standing(requirement, MET, line="Checks pass")
+    state = fact["checks_state"]
+    if state == "failure":
+        return Standing(
+            requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {merge_queue.failing_names(fact)}"
+        )
+    if state == "pending":
+        running = _seconds_since(fact.get("checks_started_at"))
+        if running is not None and running >= F.CHECKS_TOO_LONG_S:
+            return Standing(requirement, NOT_MET, task.get("owner_id"), "Checks still running after 2 hours")
+        return Standing(requirement, WAITING, GITHUB, "Checks running")
+    if state == "none":
+        seen = _seconds_since(fact.get("head_seen_at"))
+        if seen is None or seen < F.NO_CHECKS_AFTER_S:
+            return Standing(requirement, WAITING, GITHUB, "Waiting for checks")
+        return Standing(requirement, MET, line="No checks on this repo")  # C13
+    return Standing(requirement, MET, line="Checks pass")
+
+
+def _checks_pass(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    prs, said = _prs(conn, task, requirement)
+    if said:
+        return said
+    found = [_silent(task, requirement, link, _checks_one(task, requirement, link)) for link in prs]
+    if all(s.met for s in found):
+        return Standing(requirement, MET, line=next((s.line for s in found if s.line == "Checks pass"), found[0].line))
+    return _first(requirement, found)
+
+
+def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
+    from . import merge_queue
+
+    fact, ref = link["fact"], link["ref"]
+    if not fact:
+        return _reading(requirement)
+    if fact["state"] == "merged":
+        return Standing(requirement, MET, line="Merged")
+    owner = task.get("owner_id")
+    queues = merge_queue.queues_prs(task.get("stage"))
+    effect = merge_queue.newest(conn, task["visit"]["id"], ref) if queues else None
+    if fact["queue_state"] in ("queued", "auto_merge"):  # queued, by Tico or anyone: an owed queue_pr is then done
+        return Standing(requirement, WAITING, GITHUB, "In the merge queue")
+    if effect and effect["state"] == "owed":
+        return Standing(requirement, WAITING, GITHUB, "Queuing the PR")
+    if effect and effect["state"] == "failed":
+        return Standing(requirement, NOT_MET, owner, f"GitHub refused the merge: {effect.get('last_error') or ref}")
+    if fact["queue_state"] == "removed":
+        return Standing(requirement, NOT_MET, owner, merge_queue.removed_line(fact))
+    if effect:
+        return Standing(requirement, WAITING, GITHUB, "In the merge queue")
+    if queues:
+        return Standing(requirement, WAITING, GITHUB, "Queuing the PR")  # owed as soon as its head is known
+    return Standing(requirement, NOT_MET, owner, "Not merged yet")
+
+
+def _pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    prs, said = _prs(conn, task, requirement)
+    if said:
+        return said
+    return _first(
+        requirement, [_silent(task, requirement, link, _merged_one(conn, task, requirement, link)) for link in prs]
+    )
+
+
+def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Standing:
+    from . import task_facts as F
+
+    fact = link["fact"]
+    if not fact:
+        return _reading(requirement)
+    if fact["state"] != "merged" or not fact.get("merged_sha"):
+        return Standing(requirement, WAITING, GITHUB, "Not merged yet")
+    settings: Row = requirement.get("settings") or {}
+    repo = F.release_repo(settings, str(link["repo"]))
+    publishes = F.publishes_releases(conn, repo)
+    if publishes is None:
+        return Standing(requirement, WAITING, GITHUB, "Reading releases")
+    if not publishes:
+        return Standing(requirement, MET, line="This repo doesn't publish releases")  # C31
+    for release in reversed(F.releases(conn, repo, prereleases=bool(settings.get("prereleases")))):
+        if F.included(conn, release["id"], str(fact["merged_sha"])):
+            return Standing(requirement, MET, line=f"In {release['tag']}")
+    return Standing(requirement, WAITING, GITHUB, f"Waiting for a release of {repo}")
+
+
+def _in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    prs, said = _prs(conn, task, requirement)
+    if said:
+        return said
+    return _first(requirement, [_release_silent(conn, task, requirement, link) for link in prs])
+
+
+def _release_silent(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
+    """In a release for one PR, with `_silent`: a merged PR is not read again, so once it merged GitHub's word is the
+    read of the release repo's releases (never read yet: since it merged)."""
+    from . import task_facts as F
+
+    found = _release_one(conn, requirement, link)
+    fact: Row = link.get("fact") or {}
+    if fact.get("state") != "merged":
+        return _silent(task, requirement, link, found)
+    repo = F.release_repo(requirement.get("settings") or {}, str(link["repo"]))
+    return _silent(task, requirement, link, found, F.releases_read_at(conn, repo) or fact.get("updated_at"))
 
 
 KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standing]] = {
@@ -285,11 +531,28 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
     "ok": _ok,
     "answer": _answer,
     "linked_done": _linked_done,
-    "page": _later_phase,
-    "pr_open": _later_phase,
-    "checks_pass": _later_phase,
-    "pr_merged": _later_phase,
-    "in_release": _later_phase,
+    "page": _page,
+    "pr_open": _pr_open,
+    "checks_pass": _checks_pass,
+    "pr_merged": _pr_merged,
+    "in_release": _in_release,
+}
+# The keys a requirement's `settings` may hold, by kind. Anything else is refused at save (pipeline_settings).
+# - page: `rubric` (Jev's "what to check"; empty means the requirement's line), `at_head` (the page is for the newest
+#   commit of every linked PR: a new commit puts it back to the owner), `with_release` (Jev is also shown the release
+#   of the tasks this task filed, so "production is older than the release" is judged against a fact).
+# - in_release: `release_repo` ("owner/name"; empty means the server's release repo, else each PR's own repo) and
+#   `prereleases` (a pre-release counts, D3; off by default).
+SETTINGS: dict[str, tuple[str, ...]] = {
+    "owner_done": (),
+    "ok": (),
+    "answer": (),
+    "linked_done": (),
+    "page": ("rubric", "at_head", "with_release"),
+    "pr_open": (),
+    "checks_pass": (),
+    "pr_merged": (),
+    "in_release": ("release_repo", "prereleases"),
 }
 
 

@@ -1,8 +1,8 @@
 """The real Rust screen WebSocket and lifecycle contract.
 
 These start only owned loopback services on allocated ports and use fictional identities/SQLite.
-Build relay-rs first (`cd relay-rs && cargo build --release`), then run this file with -m slow -n 0. The binary is
-TICO_SCREEN_RELAY_BIN, else the checkout's own relay-rs/target/release build when it matches the sources.
+Run this file with -m slow -n 0. The binary is TICO_SCREEN_RELAY_BIN, else the build matching the relay-rs sources:
+backend/screen_binary.prepare finds it, or builds it with cargo on first use.
 """
 
 import contextlib

@@ -689,11 +689,16 @@ def _go_live(onboarding, c, who, seats, made, teams):
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
     names = O.display_names(onboarding.settings, record)
     home = "human:" + onboarding.auth.owner_id(c)
+    reviewers = []  # the review seats' cards gone live so far: the second reviews on another model (D12)
     for key in sorted((key for key in seats if seats[key]["live"]), key=lambda key: _depth(key, seats)):
         seat, seat_id = seats[key], made[key]
         above = c.execute("SELECT reports_to FROM seats WHERE id=?", (seat_id,)).fetchone()["reports_to"] or ""
         under = lifecycle.bot_parent(c, above) or home
         card = O.render(cards[seat["template"]], names, seat["title"])
+        if seat["template"] == REVIEWER_TEMPLATE:
+            other = second_reviewer_model(onboarding, c, reviewers[0]) if reviewers else None
+            reviewers.append(card)
+            card = {**card, "model": other} if other else card
         instructions = card["instructions"].rstrip()
         if seat["description"]:
             instructions += "\n\nJob description:\n" + seat["description"]
@@ -711,6 +716,26 @@ def _go_live(onboarding, c, who, seats, made, teams):
         if teams.get(key):
             Groups.move_bot(c, bot_id, teams[key])
         lifecycle.fill_seat(c, who, seat_id, bot_id)
+
+
+REVIEWER_TEMPLATE = "pr-reviewer"  # Reviewer 1 and Reviewer 2 (pipeline_seats.TEMPLATES)
+
+
+def second_reviewer_model(onboarding, c, first_card):
+    """The model Reviewer 2 runs on, so the Engineering pipeline's second review is a different model's (D12): Codex's
+    recommended model when the company has OpenAI, else another current model of the provider Reviewer 1 runs on
+    (another Claude model for a Claude company; a Codex company's Reviewer 1 already runs Codex). None when no provider
+    is chosen yet: both then follow the company default until someone picks one."""
+    from . import providers as P
+
+    first = onboarding._runtime(c, first_card)
+    if not first:
+        return None
+    codex = P.recommended("openai")
+    if codex and codex["id"] != first[0] and "openai" in P.load(c, onboarding.settings)["enabled"]:
+        return codex["id"]
+    provider = P.MODEL_BY_ID[first[0]]["provider"]
+    return next((row["id"] for row in P.provider_models(provider) if row["id"] != first[0]), None)
 
 
 def lay_out_chart(onboarding, c, who, seats):
@@ -746,8 +771,12 @@ FINISHED_KEY = "new_company_finished"  # on the onboarding record: when the fini
 
 
 def new_company(c):
-    """Whether this company's work is still only what every hub boots with: no pipeline beyond General."""
-    return not c.execute("SELECT 1 FROM pipelines WHERE id<>? LIMIT 1", (H.GENERAL_PIPELINE,)).fetchone()
+    """Whether this company's work is still only what every hub boots with: no pipeline beyond General and the presets
+    nobody changed or put a task in (pipeline_settings.from_preset: Product and Engineering, made before setup ends)."""
+    from . import pipeline_settings
+
+    kept = {H.GENERAL_PIPELINE, *pipeline_settings.from_preset(c)}
+    return all(row[0] in kept for row in c.execute("SELECT id FROM pipelines"))
 
 
 def finish_new_company(onboarding, c, who, seats, made, teams):

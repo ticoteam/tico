@@ -92,7 +92,7 @@ def _about(answers):
     return {
         "what": re.sub(r"\s+", " ", str(what)).strip()[: R.BRIEFING_LIMIT],
         "sells_to": str(answers.get("customers") or ""),
-        "software": str(answers.get("software_product") or "") == "yes",
+        "software": str(answers.get("software_product") or "").strip().lower() != "no",  # blank = yes (D7)
     }
 
 

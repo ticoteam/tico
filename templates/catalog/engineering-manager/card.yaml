@@ -12,7 +12,7 @@ tags:
 - delivery
 - developer-tools
 when: Offer when engineer bots work across several repositories.
-summary: Turns a requested change into a plan with one child task per repository, follows each engineer's pull requests to merge, and reports progress with links.
+summary: Manages the Engineering pipeline. Decides what happens to a task that is stuck, late or has no owner, splits outcomes that span repositories into Engineering tasks, and reports progress with links. Never merges.
 pains:
 - Changes across repositories need one delivery plan
 - Stuck child tasks and pull requests need follow-up

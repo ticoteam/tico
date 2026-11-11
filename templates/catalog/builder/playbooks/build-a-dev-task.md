@@ -1,17 +1,16 @@
 # Build a task
 
-Triggered when you are given a task to build. Budget as long as the change needs. A task you have worked for more than
-four hours gets a note to Head of Engineering on the task, not a silent wait.
+Triggered when a task you own enters Build. Budget as long as the change needs; the stage's expected time is a day, and
+past it the task is Late and the Engineering Manager looks at it.
 
-Inputs: the task and its conversation (`tico task show <id>`), its acceptance tests if Head of Product wrote them,
-`knowledge/standards.md` and `knowledge/patterns.md`.
+Inputs: the task and its conversation (`tico task show <id>`), the Spec page it links (`page:<file id>@<version>`,
+read with `tico file read <file id>`), `knowledge/standards.md` and `knowledge/patterns.md`.
 
-Outcome: one pull request linked to the task, opened as a draft and marked ready once, one head commit whose checks you
-ran and recorded, and the task done. Every change gets a review.
+Outcome: one pull request linked to the task, opened as a draft and marked ready once, with the checks passing at its
+head. Build leaves by itself when the pull request is open and the checks pass; it then goes to Review 1.
 
 Done when the change does what the task says, a test fails on the old code and passes on yours, the pull request
-description says what changed, why and how it was tested, the task links the pull request, and the note on the task
-names the head commit and the checks.
+description says what changed, why and how it was tested, and the task links the pull request.
 
 ---
 
@@ -19,7 +18,7 @@ names the head commit and the checks.
 
     tico task show <id>
 
-Read the spec, the acceptance tests and the last conversation. If the task is unclear, ask once with `tico task ask <id> --to <person> "<question>" --version N`
+Read the spec page, its acceptance criteria and the last conversation. If the task is unclear, ask once with `tico task ask <id> --to <person> "<question>" --version N`
 and keep going on what is clear. Do not build a behaviour the spec does not state.
 
 ## 2. Branch and open a draft
@@ -41,7 +40,7 @@ pull request as a draft, then link it:
 
     git -C software/<repo> push -u origin HEAD
     gh pr create -R <repo> --draft --base <base branch> --title "<title>" --body "<what changes and why>"
-    tico task link <id> <pull request url> --wake-once
+    tico task link <id> <pull request url>
 
 If {{app_name}} already opened a draft for the branch, `gh pr create` says so: edit that one with `gh pr edit`. A draft
 gets no review request. Where the repository's CI skips drafts ({{app_name}}'s own does; `knowledge/standards.md` says
@@ -55,8 +54,8 @@ task gives. Only then change the code.
 
 ## 4. Change
 
-Make the smallest change that makes the test pass. A refactor you noticed on the way goes into a note for Head of
-Engineering on the task, not into this pull request.
+Make the smallest change that makes the test pass. A refactor you noticed on the way goes into a note for the
+Engineering Manager on the task, not into this pull request.
 
 ## 5. Check on your computer
 
@@ -76,9 +75,12 @@ it ready:
 In {{app_name}}'s own repository, `python3 scripts/pr_checks.py local --ready` runs step 5 and marks the pull request
 ready after a pass. Every push to a ready pull request runs CI, so batch the fixes that follow.
 
-## 7. Finish the task
+## 7. Let the stage finish
 
-    tico task done <id> -m "PR <pull request url> at <head sha>: checks run <list>; not checked <list>" --version N
+There is nothing to say done in Build. {{app_name}} reads the checks from GitHub and moves the task to Review 1 once
+they pass at the head; a failing check wakes you with its names (`skills/get-the-checks-green-at-the-head/SKILL.md`).
+Leave a note on the task with the head commit, the checks you ran and the ones you could not:
 
-Paste the receipt line from step 5 into the note when you have one. Review comments that come later are answered under
-`playbooks/fix-what-review-and-qa-found.md`.
+    tico task comment <id> "PR <pull request url> at <head sha>: checks run <list>; not checked <list>"
+
+Review findings come back in Fixes 1 and Fixes 2: `playbooks/fix-what-review-found.md`.

@@ -5,8 +5,9 @@
    It opens from a stage's header (that stage open) or the page's edit button, for whoever may change the pipeline.
    The whole record is read (GET /api/v2/pipelines/{id}) and saved at once (POST, with the settings_version it was read
    at). When someone else saved first, the editor says what they changed and lets the person load theirs or save theirs
-   over it. Any other refusal shows the server's words. What the editor does not show (a stage's On enter, Expected for
-   bots only, a requirement's settings) is sent back as it was read.
+   over it. Any other refusal shows the server's words. A stage's On enter files a linked task into a pipeline or queues
+   its PRs; a page has Jev's check and its switches, In a release its repo and whether pre-releases count. What the
+   editor does not show (Expected for bots only, other settings) is sent back as it was read.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -19,6 +20,8 @@ interface PeState {
   /** The stages whose panel is open. */
   open: WeakSet<PipelineStageRec>;
   factories: FactoryRow[] | null;
+  /** The pipelines a stage can file into (On enter). */
+  pipelines: {id: string; name: string}[];
   /** Someone saved first: what they changed, and their record. */
   clash: {theirs: PipelineRec; changed: string[]} | null;
   error: string;
@@ -27,18 +30,22 @@ interface PeState {
 
 let PE: PeState | null = null;
 
-/** The kinds a stage's requirement can be. A kind built in a later phase shows, but cannot be picked yet. An answer is
-    asked on one task, never set on a stage. */
-const PE_KINDS: [string, string, boolean][] = [
-  ['owner_done', 'Owner says done', true],
-  ['ok', 'OK from someone', true],
-  ['linked_done', 'Linked work done', true],
-  ['page', 'A page', false],
-  ['pr_open', 'PR open', false],
-  ['checks_pass', 'Checks pass', false],
-  ['pr_merged', 'PR merged', false],
-  ['in_release', 'In a release', false],
+/** The kinds a stage's requirement can be. An answer is asked on one task, never set on a stage. */
+const PE_KINDS: [string, string][] = [
+  ['owner_done', 'Owner says done'],
+  ['ok', 'OK from someone'],
+  ['linked_done', 'Linked work done'],
+  ['page', 'A page'],
+  ['pr_open', 'PR open'],
+  ['checks_pass', 'Checks pass'],
+  ['pr_merged', 'PR merged'],
+  ['in_release', 'In a release'],
 ];
+/** A requirement's switches, by kind: the setting and its label. */
+const PE_SWITCHES: Record<string, [string, string][]> = {
+  page: [['at_head', 'Newest commit only'], ['with_release', 'With its release']],
+  in_release: [['prereleases', 'Pre-releases count']],
+};
 /** Kinds met with a button: they name who meets them, and have a Who OKs. */
 const PE_OK_KINDS = ['ok', 'page'];
 /** Kinds that can never be pushed past (C3). */
@@ -76,18 +83,34 @@ const peF = (label: string, control: string): string => `<label class="pe-f"><sp
 function peReqHTML(req: PipelineReqRec, si: number, ri: number): string {
   const at = `data-pe-si="${si}" data-pe-ri="${ri}"`;
   const okKind = PE_OK_KINDS.includes(req.kind), never = PE_NEVER_PUSHED.includes(req.kind);
-  const kinds = PE_KINDS.map(([k, name, may]) =>
-    `<option value="${k}"${k === req.kind ? ' selected' : ''}${may || k === req.kind ? '' : ' disabled'}>${esc(name)}${may ? '' : ' (later)'}</option>`).join('');
+  const kinds = PE_KINDS.map(([k, name]) => `<option value="${k}"${k === req.kind ? ' selected' : ''}>${esc(name)}</option>`).join('');
+  const page = req.kind === 'page';
   const who = req.person_id ? actorLabel(req.person_id) : '';
   return `<details class="pe-req"${req.id ? '' : ' open'}><summary><span class="pe-req-name">${esc(req.line || peKindName(req.kind))}</span>`
     + `<span class="pe-req-who muted">${esc(who)}</span></summary><div class="pe-req-body">`
     + peF('Needs', `<select data-pe-rf="kind" ${at}${req.id ? ' disabled' : ''}>${kinds}</select>`)
     // A page's line is what Jev checks (S11); on any other kind it is the requirement's name.
     + peF(req.kind === 'page' ? 'Jev checks' : 'Name', `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" autocomplete="off">`)
-    + (okKind ? peF('From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, 'Choose')}</select>`)
+    // A page's person is optional: Jev checks, then that person OKs the version Jev passed.
+    + (okKind ? peF(page ? 'Then OK from' : 'From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, page ? 'Nobody' : 'Choose')}</select>`)
       + peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`) : '')
+    + (req.kind === 'in_release' ? peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`) : '')
+    + (PE_SWITCHES[req.kind] ?? []).map(([key, label]) =>
+      `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${req.settings[key] === true ? ' checked' : ''}> ${esc(label)}</label>`).join('')
     + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`
     + `<button type="button" class="ghost pe-req-x" data-pe-req-x ${at}>Remove</button></div></details>`;
+}
+
+/** A stage's On enter: nothing, file a linked task into a pipeline, or queue the task's PRs. A pipeline the list lacks
+    stays chosen under its id. */
+function peOnEnterOptions(state: PeState, stage: PipelineStageRec): string {
+  const into = typeof stage.on_enter['file_into'] === 'string' ? stage.on_enter['file_into'] : '';
+  const queue = stage.on_enter['queue_prs'] === true;
+  const targets = into && !state.pipelines.some(p => p.id === into) ? [...state.pipelines, {id: into, name: into}] : state.pipelines;
+  const opt = (value: string, label: string, on: boolean): string => `<option value="${esc(value)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
+  return opt('', 'Nothing', !into && !queue)
+    + targets.filter(p => p.id !== state.id || p.id === into).map(p => opt('file_into:' + p.id, 'File into ' + p.name, p.id === into)).join('')
+    + opt('queue_prs', 'Queue PRs', queue);
 }
 
 function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count: number): string {
@@ -100,6 +123,7 @@ function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count:
     + peF('Tasks leave', `<select data-pe-sf="by_hand" ${at}><option value="0"${stage.by_hand ? '' : ' selected'}>When requirements are met</option>`
       + `<option value="1"${stage.by_hand ? ' selected' : ''}>By hand</option></select>`)
     + (si > 0 ? peF('Limit', `<input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="task_limit" ${at} value="${stage.task_limit ?? ''}" placeholder="None">`) : '')
+    + peF('On enter', `<select data-pe-sf="on_enter" ${at}>${peOnEnterOptions(state, stage)}</select>`)
     + `<div class="pe-f"><span>Expected time</span><span class="pe-pair"><input type="number" min="1" step="1" inputmode="numeric" data-pe-sf="expected_n" ${at} value="${ex.n}" placeholder="None" aria-label="Expected time">`
     + `<select data-pe-sf="expected_unit" ${at} aria-label="Unit">${PE_UNITS.map(([l, size]) => `<option value="${size}"${size === ex.unit ? ' selected' : ''}>${l}</option>`).join('')}</select></span></div>`
     + `<h4 class="pe-h">To leave</h4>`
@@ -166,6 +190,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
     else if (sf === 'purpose') stage.purpose = value;
     else if (sf === 'owner') stage.owner = value || null;
     else if (sf === 'by_hand') stage.by_hand = value === '1';
+    else if (sf === 'on_enter') stage.on_enter = peOnEnter(value);
     else if (sf === 'task_limit') stage.task_limit = Number(value) > 0 ? Math.round(Number(value)) : null;
     else if (sf === 'expected_n' || sf === 'expected_unit') {
       const panel = el.closest('.pe-pair');
@@ -180,20 +205,38 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
     return;
   }
   const req = stage.requirements[peIndex(el, 'peRi')];
+  const rs = el.dataset['peRs'];
+  if (req && rs) { req.settings = peSetting(req.settings, rs, checked || null); return; }
   const rf = el.dataset['peRf'];
   if (!req || !rf) return;
   if (rf === 'line') req.line = value;
+  else if (rf === 'release_repo') req.settings = peSetting(req.settings, rf, value.trim() || null);
   else if (rf === 'person_id') req.person_id = value || null;
   else if (rf === 'who_oks') req.who_oks = value as PipelineReqRec['who_oks'];
   else if (rf === 'can_push_past') req.can_push_past = checked;
   else if (rf === 'kind') {
     req.kind = value;
+    req.settings = {};
     const ok = PE_OK_KINDS.includes(value);
     req.who_oks = ok ? 'people_with_exceptions' : 'none';
     if (!ok) req.person_id = null;
     req.can_push_past = !PE_NEVER_PUSHED.includes(value);
     peDraw(state);
   }
+}
+
+/** The On enter choice as the record stores it. */
+function peOnEnter(value: string): Record<string, unknown> {
+  if (value === 'queue_prs') return {queue_prs: true};
+  if (value.startsWith('file_into:')) return {file_into: value.slice('file_into:'.length)};
+  return {};
+}
+
+/** A requirement's settings with one set, or dropped when `value` is null (a switch off, an empty field). */
+function peSetting(settings: Record<string, unknown>, key: string, value: unknown): Record<string, unknown> {
+  const next = {...settings};
+  if (value === null) delete next[key]; else next[key] = value;
+  return next;
 }
 
 function peClick(state: PeState, target: Element): void {
@@ -332,12 +375,14 @@ async function openPipelineEditor(pipelineId: string, stageId = ''): Promise<voi
   dialog.addEventListener('change', ev => { if (choice(ev.target)) onField(ev); });
   dialog.showModal();
   try {
-    const [rec, factories] = await Promise.all([
+    const [rec, factories, all] = await Promise.all([
       pipelineRec(pipelineId),
       factoriesRead('7d').then(map => map.factories, () => null),
+      pipelinesAll().catch(() => [] as PipelineRec[]),
     ]);
     if (!dialog.isConnected) return;
-    const state: PeState = {id: pipelineId, base: rec, draft: peCopy(rec), open: new WeakSet(), factories, clash: null, error: '', saving: false};
+    const pipelines = all.filter(p => !p.retired_at).map(p => ({id: p.id, name: p.name}));
+    const state: PeState = {id: pipelineId, base: rec, draft: peCopy(rec), open: new WeakSet(), factories, pipelines, clash: null, error: '', saving: false};
     const opened = state.draft.stages.find(s => s.id === stageId);
     if (opened) state.open.add(opened);
     PE = state;

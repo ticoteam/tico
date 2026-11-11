@@ -284,9 +284,10 @@ const taskAsk = (id: string, b: TaskAskNew, version: number | null): Promise<Tas
   post(`${taskPath(id)}/asks`, withVersion(version, {...b}), newRequestId());
 const taskWithdrawAsk = (id: string, rid: string, why?: string): Promise<TaskMoved> =>
   writeRequest('DELETE', `/v2/tasks/${encodeURIComponent(id)}/asks/${encodeURIComponent(rid)}`, why ? {why} : {});
-/** ok, no (send back, with a note), again (look again), or the answer to a question. */
-const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string): Promise<TaskMoved> =>
-  post(`${askPath(id, rid)}/answer`, withVersion(version, note ? {value, note} : {value}), newRequestId());
+/** ok, no (send back, with a note), again (look again), or the answer to a question. On a page, `pageVersion` is the
+    version the person was shown: refused when another is attached now. */
+const taskAnswer = (id: string, rid: string, value: string, version: number | null, note?: string, pageVersion?: number): Promise<TaskMoved> =>
+  post(`${askPath(id, rid)}/answer`, withVersion(version, {value, ...(note ? {note} : {}), ...(pageVersion ? {page_version: pageVersion} : {})}), newRequestId());
 const taskGiveAsk = (id: string, rid: string, to: string, version: number | null): Promise<TaskMoved> =>
   post(`${askPath(id, rid)}/give`, withVersion(version, {to}), newRequestId());
 const taskThumbs = (id: string, rid: string, up: boolean, note?: string): Promise<TaskMoved> =>

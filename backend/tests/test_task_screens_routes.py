@@ -135,12 +135,9 @@ def _releasing(api):
     """A Delivery pipeline whose Ship stage waits for a release, and ops as the Release Manager."""
     stages = [
         {"id": "build", "name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-        {"id": "ship", "name": "Ship", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+        {"id": "ship", "name": "Ship", "owner": "assignee", "requirements": [{"kind": "in_release"}]},
     ]
     post(api, "pipelines/delivery", {"name": "Delivery", "stages": stages})
-    # "In a release" is saved from phase 3 (pipeline_settings.PHASE): the stage is given one as it would be then.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE requirements SET kind='in_release' WHERE stage_id='ship'")
     patched = api.patch("/api/v2/release-schedule", json={"bot": "ops"}, headers=headers())
     assert patched.status_code == 200 and patched.json()["release_manager"] == "ops", patched.text
 

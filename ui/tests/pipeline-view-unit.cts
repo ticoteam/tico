@@ -5,7 +5,9 @@
 // - a refused move reads as the engine said it: a push past asks why, anything else is the engine's line;
 // - Company › Factories orders a factory's pipelines by where they file, joins them with an arrow, and puts pipelines in
 //   no factory under Other with no count;
-// - the editor names what someone else changed when its save is refused as out of date.
+// - the editor names what someone else changed when its save is refused as out of date;
+// - the editor offers every kind, a page's and In a release's settings, and a stage's On enter, and saves them as the
+//   record stores them.
 // Run: node ui/tests/pipeline-view-unit.cts
 'use strict';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -18,7 +20,11 @@ const APP = path.join(__dirname, '..', 'app');
 const ctx = vm.createContext({
   esc: (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[c]!),
   TASKS: '#/tasks',
-  document: {addEventListener() {}},
+  document: {addEventListener() {}, getElementById: () => null},
+  HTMLInputElement: class {},
+  HTMLSelectElement: class {},
+  S: {people: [{id: 'ana', name: 'Ana'}], emps: []},
+  botDisplayName: (id: string) => id,
   localStorage: {getItem: () => null, setItem() {}},
   actorFace: (who: string) => `<i data-face="${who}"></i>`,
   actorLabel: (who: string) => who.replace(/^(bot|human):/, ''),
@@ -131,5 +137,43 @@ const factories = (async () => {
   const order = rec({stages: [...rec().stages].reverse()});
   assert.deepEqual(plain(ctx.peChanged(mine, order)), ['The order of the stages']);
   assert.deepEqual(plain(ctx.peChanged(mine, rec())), []);
+}
+// ---- the editor: the new kinds, their settings and On enter
+{
+  const state = {id: 'product', pipelines: [{id: 'product', name: 'Product'}, {id: 'engineering', name: 'Engineering'}],
+    draft: rec({stages: [stage('spec', 'Spec', {requirements: [{...req('page'), who_oks: 'people_with_exceptions'}]}),
+      stage('release', 'Release', {requirements: [req('in_release')]})]})};
+  const kinds = ctx.peReqHTML(state.draft.stages[0]!.requirements[0]!, 0, 0);
+  assert.doesNotMatch(kinds, /later|disabled>/, 'every kind may be picked');
+  assert.match(kinds, /<option value="in_release">In a release<\/option>/);
+  assert.match(kinds, /<span>Jev checks<\/span>/);
+  assert.match(kinds, /<span>Then OK from<\/span><select[^>]*><option value="">Nobody<\/option>/, 'a page needs no person');
+  assert.match(kinds, /data-pe-rs="at_head"[^>]*> Newest commit only/);
+  assert.match(kinds, /data-pe-rs="with_release"[^>]*> With its release/);
+  const release = ctx.peReqHTML(state.draft.stages[1]!.requirements[0]!, 1, 0);
+  assert.match(release, /data-pe-rf="release_repo"/);
+  assert.match(release, /data-pe-rs="prereleases"[^>]*> Pre-releases count/);
+  assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
+
+  const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false) =>
+    Object.assign(Object.create(ctx[kind].prototype), {dataset: data, value, checked, type: 'peRs' in data ? 'checkbox' : 'text'});
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', true));
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRs: 'prereleases'}, 'on', true));
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRf: 'release_repo'}, ' ticoteam/tico '));
+  assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {at_head: true});
+  assert.deepEqual(plain(state.draft.stages[1]!.requirements[0]!.settings), {prereleases: true, release_repo: 'ticoteam/tico'});
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', false));
+  assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {}, 'a switch off is not saved');
+
+  const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]!);
+  assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="queue_prs">Queue PRs<\/option>/,
+    'a stage files into another pipeline, not its own');
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'on_enter'}, 'file_into:engineering'));
+  assert.deepEqual(plain(state.draft.stages[0]!.on_enter), {file_into: 'engineering'});
+  assert.match(ctx.peOnEnterOptions(state, state.draft.stages[0]!), /value="file_into:engineering" selected/);
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'queue_prs'));
+  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {queue_prs: true});
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, ''));
+  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {});
 }
 factories.then(() => console.log('pipeline-view-unit: ok'), error => { console.error(error); process.exitCode = 1; });

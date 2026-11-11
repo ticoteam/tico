@@ -199,7 +199,7 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert A.find_role("sales pipeline") is None and A.find_role("pipeline") is None
     assert A.find_role("Pipeline Owner")["slug"] == "pipeline"
     assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro-owner"
-    assert A.find_role("release manager")["slug"] == "release-notes"
+    assert A.find_role("release manager")["slug"] == "release-owner"
 
 
 def test_7_show_me_everything_switches_the_chart_to_the_everything_model():

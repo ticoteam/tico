@@ -54,8 +54,30 @@ ANA, BEN, CARA = "human:ana", "human:ben", "human:cara"
 PEOPLE = (ANA, BEN, CARA)
 BUILDER, WRITER, REVIEWER, MANAGER = "bot:builder", "bot:writer", "bot:reviewer", "bot:manager"
 BOTS = (BUILDER, WRITER, REVIEWER, MANAGER)
+# A software company's world (World(seed, software=True)) also has the bots the Product and Engineering presets name,
+# each found by its template (backend/pipeline_seats.py): the Builder is the Builder above.
+PM, EM, REVIEWER_1, REVIEWER_2, RELEASE = "bot:pm", "bot:em", "bot:rev1", "bot:rev2", "bot:rm"
+ROLE_TEMPLATES = {
+    PM: "product-manager",
+    EM: "engineering-manager",
+    BUILDER: "builder",
+    REVIEWER_1: "pr-reviewer",
+    REVIEWER_2: "pr-reviewer",
+    RELEASE: "release-owner",
+}
+SOFTWARE_BOTS = (PM, EM, REVIEWER_1, REVIEWER_2, RELEASE)
 # Who owns each bot on the org chart: the person a paused bot's row goes to.
-BOT_OWNERS = {"builder": "ben", "writer": "cara", "reviewer": "ana", "manager": "ana"}
+BOT_OWNERS = {
+    "builder": "ben",
+    "writer": "cara",
+    "reviewer": "ana",
+    "manager": "ana",
+    "pm": "ana",
+    "em": "ben",
+    "rev1": "ben",
+    "rev2": "ben",
+    "rm": "ana",
+}
 # The Builder runs on Tico Cloud's own model: out of credit stops it and no other bot.
 TICO_MODEL = {"builder": "tico-standard"}
 GENERAL = "general"
@@ -197,13 +219,16 @@ def _settings(folder: Path) -> Any:
 def _store(settings: Any) -> Any:
     from backend import store as store_module
 
+    from backend.blobs import Blobs
+
     store = store_module.Store(settings)
     store.factory = RigConnection
     store.pooled = store_module._pooled(RigConnection)
+    store.blobs = Blobs(settings)  # what connections carry, as media.install sets it: Jev reads a page's bytes from it
     return store
 
 
-_TEMPLATE: Path | None = None
+_TEMPLATES: dict[bool, Path] = {}
 
 
 def _people() -> dict[str, Any]:
@@ -216,14 +241,16 @@ def _people() -> dict[str, Any]:
     }
 
 
-def _fill(c: sqlite3.Connection) -> None:
-    """People, four bots on one computer, General managed by the Manager bot, and the Work pipeline."""
+def _fill(c: sqlite3.Connection, software: bool = False) -> None:
+    """People, four bots on one computer, General managed by the Manager bot, and the Work pipeline. A software company
+    also has the role bots, each with its template, a finished setup, and the presets the end of setup makes
+    (`ensure_presets`): Product and Engineering."""
     from backend import bot_settings as BS
     from backend import pipeline_settings as PS
     from backend import task_engine as E
     from backend.store import H, encode
 
-    slugs = [b.split(":", 1)[1] for b in BOTS]
+    slugs = [b.split(":", 1)[1] for b in (*BOTS, *(SOFTWARE_BOTS if software else ()))]
     H.sync_registry(c, {s: {"name": s.title(), "runtime": "fake", "status": "active"} for s in slugs}, _people())
     c.execute(
         "INSERT OR REPLACE INTO registry_metadata(key, value) VALUES('people', ?)",
@@ -238,19 +265,28 @@ def _fill(c: sqlite3.Connection) -> None:
         config: dict[str, Any] = {"name": slug.title(), "runtime": "fake", "status": "active"}
         if slug in TICO_MODEL:
             config["model"] = TICO_MODEL[slug]
+        if software and f"bot:{slug}" in ROLE_TEMPLATES:
+            config["template"] = ROLE_TEMPLATES[f"bot:{slug}"]
         BS.write(c, slug, config)
         c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
     general = PS.preset(c, GENERAL)
     general["manager_id"] = MANAGER
     PS.save(c, E.SYSTEM, general)
     PS.save(c, E.SYSTEM, json.loads(json.dumps(WORK_RECORD)))
+    if software:
+        # Setup finished (Product and Engineering are made then, not at a first start), with no answer to "Software is
+        # the product": a blank is yes.
+        from backend import onboarding as O
+
+        O.Onboarding._store(c, {**O.load(c), "completed": H.now()}, "human:ana")
+        PS.ensure_presets(c)
 
 
-def template() -> Path:
-    """The template database, built once per process."""
-    global _TEMPLATE
-    if _TEMPLATE is not None and _TEMPLATE.exists():
-        return _TEMPLATE
+def template(software: bool = False) -> Path:
+    """The template database, built once per process for each kind of company."""
+    found = _TEMPLATES.get(software)
+    if found is not None and found.exists():
+        return found
     folder = Path(tempfile.mkdtemp(prefix="never-stuck-template-"))
     settings = _settings(folder)
     travel = time_machine.travel(START - dt.timedelta(days=1), tick=False)
@@ -262,7 +298,7 @@ def template() -> Path:
         store = _store(settings)
         store.initialize()
         with store.transaction() as c:
-            _fill(c)
+            _fill(c, software)
         _close(store)
         with sqlite3.connect(settings.db_path) as raw:
             raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -271,8 +307,8 @@ def template() -> Path:
         env.__exit__(None, None, None)
         ids.close()
         travel.stop()
-    _TEMPLATE = settings.db_path
-    return _TEMPLATE
+    _TEMPLATES[software] = settings.db_path
+    return settings.db_path
 
 
 def _close(store: Any) -> None:
@@ -298,8 +334,9 @@ class Refusal:
 class World:
     """One run. Use as a context manager: it starts the clock and the ids, copies the template, and stops all three."""
 
-    def __init__(self, seed: int) -> None:
+    def __init__(self, seed: int, software: bool = False) -> None:
         self.seed = seed
+        self.software = software
         self.rng = random.Random(seed)
         self.folder = Path(tempfile.mkdtemp(prefix=f"never-stuck-{seed}-"))
         self.settings: Any = None
@@ -314,7 +351,7 @@ class World:
     def __enter__(self) -> "World":
         self.env = offline()
         self.env.__enter__()
-        source = template()
+        source = template(self.software)
         self.settings = _settings(self.folder)
         with sqlite3.connect(source) as src, sqlite3.connect(self.settings.db_path) as dst:
             src.backup(dst)

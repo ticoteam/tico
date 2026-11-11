@@ -54,17 +54,20 @@ The rig is the same in every phase. It grows with each phase's scenarios.
 
 ## Phase 2: Product
 
+Product and Engineering are built together (D8): In development files one Engineering task from the start. Phases 2 and
+3 are checked together.
+
 - **The rig passes its page, limit, by-hand and handoff scenarios.** How to check: these scenarios are green in CI.
   - Page: 14, 16 and 27.
   - Limit: 11, and the room refusals of 9.
   - By hand: 20.
-  - Handoff and links: 23, 24 (closing the open filed task), 25, 26, 38 and 52. In this phase the filed task is a
-    General task, as in the real idea below. Phase 3 runs 23, 24 and 26 again with Engineering tasks.
+  - Handoff and links: 23, 24 (closing the open filed task), 25, 26, 38 and 52. The filed task is an Engineering
+    task.
   - The manager's rail: the rest of 10.
   - Also needing a pipeline of more than one stage: 18, 21, 22 and 41.
-- **One real idea goes from Ideas to Done on the new Tico Team, with In development filing a General task for the
-  Builder.** How to check: the Product task's history shows Ideas, Spec, In development, Validate and Done. In
-  development filed a General task owned by the Builder, linked to the Product task, and it ended Done. No hand database
+- **One real idea goes from Ideas to Done on the new Tico Team, with In development filing an Engineering task.** How
+  to check: the Product task's history shows Ideas, Spec, In development, Validate and Done. In development filed an
+  Engineering task, linked to the Product task, carrying the Spec page at its OK'd version, and it ended Done. No hand database
   fix was made.
 
 ## Phase 3: Engineering
@@ -75,7 +78,7 @@ The rig is the same in every phase. It grows with each phase's scenarios.
 - **One real PR goes through Merge and Release.** How to check: an Engineering task on the new Tico Team shows PR merged
   met in Merge and In a release met in Release, then Done. The PR's merge commit is in the history of the published
   release.
-- **0.6.0 is published.** How to check: the 0.6.0 release exists on GitHub, is not a draft, and has no dash in its tag.
+- **0.6.0 is published.** How to check: the 0.6.0 release exists on GitHub, is not a draft, and has no dash in its tag (Tico Team turns "Pre-releases count" on, so its rc releases count there).
 
 ## Phase 4: proof, then rebuild the orgs
 

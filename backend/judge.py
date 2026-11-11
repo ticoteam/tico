@@ -528,8 +528,7 @@ def server_engine(store, c, primary=None):
         return None
     asks_as = step_models(steps)
 
-    # `level` is ignored: every decision is Jev (Decide Low). backend/pipeline_judges.py still names Low.
-    def engine(state, questions, label=None, level=None):
+    def engine(state, questions, label=None):
         return metered(store, asks_as, state, questions, label, lambda: chain(state, questions, label))
 
     engine.model, engine.provider = asks_as[0], getattr(chain, "provider", "")

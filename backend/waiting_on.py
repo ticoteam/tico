@@ -303,7 +303,7 @@ def unreadable(conn: "sqlite3.Connection", row: Row, standings: Iterable[R.Stand
         if (
             named
             and named not in (R.JEV, R.GITHUB)
-            and standing.requirement["kind"] in ("ok", "answer")
+            and standing.requirement["kind"] in ("ok", "answer", "page")
             and not H.task_private_readable(conn, named, row)
         ):
             return named
@@ -444,7 +444,11 @@ def of(
             line = f"{line}: {_share_line(conn, shut, 'add')}"
         since = late or visit.get("last_change_at") or entered
         out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since))
-    return sorted(out, key=lambda wait: _ORDER[wait.state])
+    # Two requirements missing for the same reason ("No PR linked" for PR open and Checks pass) are one line.
+    once: dict[tuple[str, str | None, str], Wait] = {}
+    for wait in out:
+        once.setdefault((wait.state, wait.who, wait.line), wait)
+    return sorted(once.values(), key=lambda wait: _ORDER[wait.state])
 
 
 def turns(conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait] | None = None) -> set[str]:

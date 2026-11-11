@@ -14,7 +14,11 @@ from backend.tests.helpers.source_outages import notices
 
 
 def managers(c):
-    """An Engineering pipeline managed by the COO: who an outage notice goes to."""
+    """An Engineering pipeline managed by the COO: who an outage notice goes to. Uses the preset's pipeline when the
+    company already has it."""
+    if c.execute("SELECT 1 FROM pipelines WHERE preset='engineering'").fetchone():
+        c.execute("UPDATE pipelines SET manager_id='bot:coo' WHERE preset='engineering'")
+        return
     X.pipeline(c, "engineering", "Engineering", manager="bot:coo")
     c.execute("UPDATE pipelines SET preset='engineering' WHERE id='engineering'")
 
