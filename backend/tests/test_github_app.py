@@ -129,6 +129,23 @@ def test_missing_repo_permission_is_refused_with_both_fixes_and_botops_creates_i
     assert made.status_code == 200 and gh.created_repositories == {"Acme/bot-newbie"}, made.text
 
 
+def test_a_first_repository_list_that_fails_is_named_by_its_code_on_the_install_event(api, gh, monkeypatch):
+    from backend import repositories
+
+    connect(api)
+    secret = "ghs_PLANTEDsecret0123456789abcdef"
+
+    def refused(service):
+        raise Problem("github_repositories", "GitHub answered " + secret, 502)
+
+    monkeypatch.setattr(repositories, "sync", refused)
+    assert api.get("/api/v2/github/app/installed", headers=auth()).status_code == 302
+    with api.app_state.store.read() as c:
+        rows = [r["detail"] for r in c.execute("SELECT detail FROM events WHERE action='github.app_installed'")]
+    assert json.loads(rows[-1]) == {"installed": True, "sync_failed": "github_repositories"}
+    assert secret not in "".join(rows)
+
+
 def test_state_is_single_use_and_bound_to_session(api, gh):
     state = manifest(api)["state"]
     bad = api.get("/api/v2/github/app/callback", params={"code": "c", "state": "forged"}, headers=auth())

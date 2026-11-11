@@ -2192,13 +2192,22 @@ def install_github_app(app, settings, store):
         """The install step: refresh the App's installation and sync its repositories. Returns the installation's id, or None
         when there is none yet. Runs on the setup redirect and on an install's return to the authorize callback."""
         found = service.installation(refresh=True)
+        failed = None
         if found:
             try:
                 R.sync(service)
             except Problem as exc:
                 log.warning("Repository sync failed: %s", exc.code)
+                failed = str(exc.code)
         with store.transaction() as c:
-            H.event(c, actor, "github.app_installed", "", {"installed": bool(found)})
+            # The install stands when its first repository list fails; the code says why Tools shows none yet.
+            H.event(
+                c,
+                actor,
+                "github.app_installed",
+                "",
+                {"installed": bool(found), **({"sync_failed": failed} if failed else {})},
+            )
         return found
 
     def saved_authorization(actor, row, login, github_id, tokens):

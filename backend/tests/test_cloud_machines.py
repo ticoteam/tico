@@ -497,6 +497,21 @@ def test_a_create_whose_answer_was_lost_is_not_taken_for_a_machine_that_never_en
     assert "delete" not in cloud.hq.actions()
 
 
+def test_a_refused_list_leaves_one_event_per_change_and_cloud_being_off_leaves_none(cloud):
+    def events():
+        with cloud.store.read() as c:
+            return [json.loads(r["detail"]) for r in c.execute("SELECT detail FROM events WHERE action=?", (kind,))]
+
+    kind = "cloud_machine.list_refused"
+    cloud.hq.list = lambda: (_ for _ in ()).throw(CM.Refused("boat_error", 502))
+    for _ in range(2):
+        cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert events() == [{"code": "boat_error", "status": 502}]
+    cloud.hq.list = lambda: (_ for _ in ()).throw(CM.Refused("not_configured", 503))
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert len(events()) == 1
+
+
 def test_a_machine_hq_marked_failed_is_made_again_not_started(cloud):
     adopt(cloud)
     work(cloud)

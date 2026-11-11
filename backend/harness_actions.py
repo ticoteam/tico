@@ -38,13 +38,41 @@ def view(row):
     }
 
 
+def failed(c, row, category):
+    """The event a failed request leaves: its id, a category from this module's two, and the computer's last error
+    lines as it last reported them (scrubbed there, and again here), since its log file never leaves it."""
+    from . import setup_failures
+
+    runner = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (row["runner_id"],)).fetchone()
+    recent = readiness_document(runner["readiness"]).get("recent_errors") if runner else None
+    H.event(
+        c,
+        "runner:" + row["runner_id"],
+        "runner.harness.failed",
+        row["runner_id"],
+        {
+            "harness": row["harness"],
+            "action": row["action"],
+            "id": row["id"],
+            "category": category,
+            "lines": setup_failures.lines(recent, 10),
+        },
+    )
+
+
 def sweep(c):
     now = H.now()
+    late = c.execute(
+        "SELECT * FROM runner_harness_actions WHERE state IN ('requested','running') AND created_at<?",
+        (H.shift(now, hours=-EXPIRES_HOURS),),
+    ).fetchall()
     c.execute(
         "UPDATE runner_harness_actions SET state='failed', message='The computer did not answer in time', "
         "updated_at=? WHERE state IN ('requested','running') AND created_at<?",
         (now, H.shift(now, hours=-EXPIRES_HOURS)),
     )
+    for row in late:
+        failed(c, row, "no_answer")
     c.execute("DELETE FROM runner_harness_actions WHERE created_at<?", (H.shift(now, days=-KEEP_DAYS),))
 
 
@@ -190,12 +218,14 @@ def report(c, runner_id, aid, body):
         "UPDATE runner_harness_actions SET state=?, message=?, updated_at=? WHERE id=?",
         (body.state, redact(body.message), H.now(), aid),
     )
-    if body.state in TERMINAL:
+    if body.state == "failed":
+        failed(c, row, "harness_action_failed")
+    elif body.state in TERMINAL:
         H.event(
             c,
             "runner:" + runner_id,
             "runner.harness." + body.state,
             runner_id,
-            {"harness": row["harness"], "action": row["action"]},
+            {"harness": row["harness"], "action": row["action"], "id": aid},
         )
     return {"state": body.state}

@@ -261,6 +261,33 @@ ALLOWED["report"] = {
     "group": None,
     "checks": [{"name": None, "status": None, "detail": None, "fix": None, "source": None}],
 }
+# The last week's failed setup steps and other failure events (backend/setup_failures.py `failures`): a category from
+# a fixed list, numbers, ids as labels, and for a computer's failure its own scrubbed error lines.
+ALLOWED["failures"] = [
+    {
+        "at": None,
+        "event": None,
+        "who": None,
+        "category": None,
+        "step": None,
+        "status": None,
+        "github_status": None,
+        "exit_code": None,
+        "elapsed_ms": None,
+        "count": None,
+        "ref": None,
+        "kind": None,
+        "action": None,
+        "runtime": None,
+        "harness": None,
+        "error": None,
+        "login": None,
+        "id": None,
+        "bot": None,
+        "computer": None,
+        "lines": None,
+    }
+]
 FEATURES = (
     "demo",
     "updater",
@@ -302,6 +329,7 @@ def fit(bundle):
     while size() > MAX_BYTES:
         lists = [bundle.get("logs", {}).get(k, []) for k in ("server", "updater", "app")]
         lists += [r.get("log", []) for r in bundle.get("runners", [])]
+        lists += [r.get("lines", []) for r in bundle.get("failures", [])]
         longest = max(lists, key=len, default=[])
         if longest:
             n = max(1, len(longest) // 2)
@@ -514,7 +542,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
     person attaching diagnostics chooses `performance_hours` (0 leaves performance out). `shell` is the desktop app the
     page runs in ({version, lines, mac}: support.AppShell), whose version and log go in labelled `app`. `report` is what
     the person reports (support.Report), redacted with the rest."""
-    from . import beta, health, onboarding, replication, runner_versions
+    from . import beta, health, onboarding, replication, runner_versions, setup_failures
     from .getting_started import _online_runners
     from .views import roster
 
@@ -548,6 +576,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         github_on = bool(github and github.row(c) and github.row(c)["installation_id"])
         perf = _performance(c, performance_hours) if performance_hours else None
         beta_on = beta.turned_on(c, settings, shell)
+        failures = setup_failures.failures(c, lambda runner_id: runner_label(c, runner_id))
     features = {
         "demo": bool(settings.demo),
         "updater": bool(releases._updater()[0]),
@@ -619,6 +648,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
             **({"app": _lines(shell.get("lines"), APP_LINES)} if shell else {}),
         },
         "flight": flight,
+        "failures": failures,
         **({"performance": perf} if perf else {}),
         **({"report": report} if report else {}),
     }

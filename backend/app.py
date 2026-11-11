@@ -28,6 +28,7 @@ from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
 from . import task_followers
+from . import setup_failures
 from . import sources as SRC
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link, setup_handoff
@@ -631,6 +632,14 @@ def create_app(settings=None):
                 exc.extra = {**getattr(exc, "extra", {}), **said}
         if getattr(exc, "extra", None) and str(exc.extra.get("link") or "").startswith("#/"):
             exc.extra = absolute_link(exc.extra, settings.public_url)
+        if setup_failures.step(request.method, getattr(request.scope.get("route"), "path", "")):
+            # A refused setup step leaves its category, status and ids on the server, and the answer carries the
+            # row's reference (backend/setup_failures.py).
+            ref = await asyncio.get_running_loop().run_in_executor(
+                None, setup_failures.record, store, request, exc.code, exc.status, getattr(exc, "extra", None)
+            )
+            if ref:
+                exc.extra = {**getattr(exc, "extra", {}), "ref": ref}
         if str(exc.code).startswith("task_"):
             # The engine's refusal, flat (docs/dev/pipelines-v3-cutover.md, "HTTP"): the rule, one line, what is
             # missing, the commands allowed next and the task's version.
@@ -1312,6 +1321,10 @@ def create_app(settings=None):
 
             request_failure(request, 500, exc)
             telemetry.capture("request", exc, 500, route=error_route(request))
+            if setup_failures.step(request.method, getattr(request.scope.get("route"), "path", "")):
+                await asyncio.get_running_loop().run_in_executor(
+                    None, setup_failures.record, store, request, "server_error", 500, None, exc
+                )
             raise
         finally:
             if via_reset is not None:
