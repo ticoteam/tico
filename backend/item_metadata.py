@@ -153,7 +153,7 @@ def nudge(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
 _WAITING_TASKS = (
     "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
     "JOIN stages s ON s.id = t.stage_id WHERE t.status='open' AND t.pipeline_id IS NOT NULL AND ("
-    "? = 'github' AND COALESCE(json_extract(CASE WHEN json_valid(s.on_enter) THEN s.on_enter END, '$.queue_prs'), 0) "
+    "COALESCE(json_extract(CASE WHEN json_valid(s.on_enter) THEN s.on_enter END, '$.act'), '') LIKE ? || '.%' "
     "OR EXISTS (SELECT 1 FROM requirements r WHERE (r.stage_id = t.stage_id OR r.visit_id = v.id) "
     "AND r.withdrawn_at IS NULL AND (? = 'github' AND r.kind IN ('pr_open', 'checks_pass', 'pr_merged', 'in_release') "
     "OR r.kind = 'page' AND COALESCE(json_extract(CASE WHEN json_valid(r.settings) THEN r.settings END, "

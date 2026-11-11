@@ -1,7 +1,8 @@
 # pyright: strict
 """What entering a stage does, and how leaving it backwards undoes that (docs/pipelines-v3.md, "Entering a stage").
 
-A stage's on-enter action is nothing, "file a linked task into pipeline X", or "queue the PRs to merge". It happens once
+A stage's on-enter action is nothing, "file a linked task into pipeline X", or a source's action ("queue the PRs to
+merge"). It happens once
 per visit, in the move's transaction. Moving back or closing undoes it: tasks filed in that visit close with a note, and
 PRs leave the merge queue.
 
@@ -13,7 +14,8 @@ Manager is paused or still onboarding) the engine files it itself; one refused e
 files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed yet"), the
 owner's turn, and the owner may file one by hand. History: `handoff_filed` on the filing task.
 
-Queueing (`{"queue_prs": true}`): GS.queue on enter, GS.pull on undo (track C).
+A source's action (`{"act": "github.queue"}`, Engineering's Merge queues the task's PRs): owed on enter, owed back on
+undo (backend/source_actions.py).
 """
 
 from typing import TYPE_CHECKING, Any, cast
@@ -110,10 +112,9 @@ def enter(conn: "sqlite3.Connection", task: Row, by: str) -> None:
     target = action.get("file_into")
     if isinstance(target, str) and target and task.get("visit"):
         _file(conn, task, target, by)
-    if action.get("queue_prs") is True:
-        from .item_sources import github as GS
+    from . import source_actions
 
-        GS.queue(conn, task, by)
+    source_actions.enter(conn, task, by)
 
 
 def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:
@@ -144,10 +145,9 @@ def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
     visit = task.get("visit")
     if not visit:
         return
-    if _on_enter(task.get("stage")).get("queue_prs") is True:
-        from .item_sources import github as GS
+    from . import source_actions
 
-        GS.pull(conn, task, by)
+    source_actions.undo_stage(conn, task)
     for filed in filed_open(conn, visit["id"]):
         if merged_work(conn, filed):
             continue

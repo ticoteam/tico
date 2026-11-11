@@ -172,7 +172,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         for s in ("engineering-build", "engineering-review-1", "engineering-fixes-2", "engineering-merge")
     ] == [1440, 120, 240, 120]
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
-    assert stages["engineering-merge"]["on_enter"] == {"queue_prs": True}
+    assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
     assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_with_exceptions")
     assert spec["settings"]["rubric"] == "Covers goal, scope, what done looks like"
@@ -286,7 +286,7 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
             },
             {
                 "name": "Ship",
-                "on_enter": {"queue_prs": True},
+                "on_enter": {"act": "github.queue"},
                 "requirements": [
                     {"kind": "pr_open"},
                     {"kind": "checks_pass"},
@@ -308,7 +308,7 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
         "The release repo on Ship is owner/name, or empty for the server's.",
     ]
     saved = PS.save(c, ANA, record)
-    assert saved["stages"][1]["on_enter"] == {"queue_prs": True}
+    assert saved["stages"][1]["on_enter"] == {"act": "github.queue"}
 
 
 # ----------------------------------------------------------------------------- the handoff

@@ -122,17 +122,17 @@ def jev_step(world: World) -> int:
 
 
 def reread_step(world: World, github: RigGitHub) -> int:
-    """`pr_facts` (track C): the 5-minute re-read of the PRs and releases open tasks wait on."""
+    """`item_metadata` (track C): the 5-minute re-read of the PRs and releases open tasks wait on."""
     from backend.item_sources import github as TF
 
     return int(TF.refresh(world.store, github, world.now()))
 
 
 def effects_step(world: World, github: RigGitHub) -> int:
-    """`merge_queue_effects` (track C): queue and take out PRs."""
-    from backend.item_sources import github as MQ
+    """`source_actions` (track C): queue and take out PRs."""
+    from backend import source_actions as SA
 
-    return int(MQ.run(world.store, github, world.now()))
+    return int(SA.run(world.store, {"github": github}, world.now()))
 
 
 # ----------------------------------------------------------------------------- the hands

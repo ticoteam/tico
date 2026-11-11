@@ -56,6 +56,10 @@ class Seam:
 
     # Waiting states as `waiting_on` names them -> as the golden file names them (today: the same).
     WAIT_STATE: dict[str, str] = {}
+    # Source action kinds (backend/source_actions.py) -> the merge-queue effect kinds the golden file names.
+    EFFECT_KINDS = {"act": "queue_pr", "undo": "dequeue_pr"}
+    # A Merge stage's on-enter action: queue the task's PRs.
+    QUEUE_ON_ENTER = {"act": "github.queue"}
 
     # ------------------------------------------------------------------ driving
     @staticmethod
@@ -93,8 +97,9 @@ class Seam:
 
     @staticmethod
     def requeue(c, task_id, by):
-        """Queue again (`tico task queue`)."""
-        return MQ.requeue(c, task_id, by, seen_version=E.task(c, task_id)["version"])
+        """Queue again (`tico task queue`): the actions owed, each with the head it is pinned to as `head_sha`."""
+        owed = MQ.requeue(c, task_id, by, seen_version=E.task(c, task_id)["version"])
+        return [{**e, "head_sha": e["pinned"]} for e in owed]
 
     @staticmethod
     def pull(c, task_id, by):
@@ -198,11 +203,11 @@ class Seam:
                 }
         effects = [
             {
-                "kind": e["kind"],
+                "kind": Seam.EFFECT_KINDS[e["kind"]],
                 "state": e["state"],
                 "tries": e["tries"],
-                "ref": F.pr_ref(e["repo"], e["number"]) if e["repo"] else None,
-                "head": e["head_sha"],
+                "ref": F.pr_ref(*F.split_key(e["item_key"])),
+                "head": e["pinned"],
                 "error": e["last_error"],
             }
             for e in (
@@ -210,8 +215,8 @@ class Seam:
                 for cur in [
                     c.execute(
                         "SELECT e.* FROM effects e JOIN visits v ON v.id = e.visit_id WHERE v.task_id=? "
-                        "AND e.kind IN (?, ?) ORDER BY v.entered_at, e.created_at, e.rowid",
-                        (task_id, MQ.QUEUE, MQ.DEQUEUE),
+                        "AND e.source=? AND e.action=? ORDER BY v.entered_at, e.created_at, e.rowid",
+                        (task_id, MQ.SOURCE, MQ.QUEUE),
                     )
                 ]
                 for r in cur.fetchall()
@@ -312,7 +317,7 @@ def engineering(c, release=None):
         "Engineering",
         stages=(
             {"name": "Build", "owner": B, "requirements": [{"kind": "pr_open"}, {"kind": "checks_pass"}]},
-            {"name": "Merge", "owner": RM, "on_enter": {"queue_prs": True}, "requirements": [{"kind": "pr_merged"}]},
+            {"name": "Merge", "owner": RM, "on_enter": Seam.QUEUE_ON_ENTER, "requirements": [{"kind": "pr_merged"}]},
             {"name": "Release", "owner": RM, "requirements": [{"kind": "in_release", "settings": release or {}}]},
         ),
         manager=EM,

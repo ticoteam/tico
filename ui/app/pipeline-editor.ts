@@ -105,12 +105,12 @@ function peReqHTML(req: PipelineReqRec, si: number, ri: number): string {
     stays chosen under its id. */
 function peOnEnterOptions(state: PeState, stage: PipelineStageRec): string {
   const into = typeof stage.on_enter['file_into'] === 'string' ? stage.on_enter['file_into'] : '';
-  const queue = stage.on_enter['queue_prs'] === true;
+  const queue = stage.on_enter['act'] === 'github.queue';
   const targets = into && !state.pipelines.some(p => p.id === into) ? [...state.pipelines, {id: into, name: into}] : state.pipelines;
   const opt = (value: string, label: string, on: boolean): string => `<option value="${esc(value)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
   return opt('', 'Nothing', !into && !queue)
     + targets.filter(p => p.id !== state.id || p.id === into).map(p => opt('file_into:' + p.id, 'File into ' + p.name, p.id === into)).join('')
-    + opt('queue_prs', 'Queue PRs', queue);
+    + opt('act:github.queue', 'Queue PRs', queue);
 }
 
 function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count: number): string {
@@ -227,7 +227,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
 
 /** The On enter choice as the record stores it. */
 function peOnEnter(value: string): Record<string, unknown> {
-  if (value === 'queue_prs') return {queue_prs: true};
+  if (value.startsWith('act:')) return {act: value.slice('act:'.length)};
   if (value.startsWith('file_into:')) return {file_into: value.slice('file_into:'.length)};
   return {};
 }

@@ -166,13 +166,13 @@ const factories = (async () => {
   assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {}, 'a switch off is not saved');
 
   const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]!);
-  assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="queue_prs">Queue PRs<\/option>/,
+  assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="act:github.queue">Queue PRs<\/option>/,
     'a stage files into another pipeline, not its own');
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'on_enter'}, 'file_into:engineering'));
   assert.deepEqual(plain(state.draft.stages[0]!.on_enter), {file_into: 'engineering'});
   assert.match(ctx.peOnEnterOptions(state, state.draft.stages[0]!), /value="file_into:engineering" selected/);
-  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'queue_prs'));
-  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {queue_prs: true});
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'act:github.queue'));
+  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {act: 'github.queue'});
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, ''));
   assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {});
 }

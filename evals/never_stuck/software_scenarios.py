@@ -231,7 +231,7 @@ def presets(r: SoftRig) -> None:
     want = {"Build": BUILDER, "Review 1": REVIEWER_1, "Review 2": REVIEWER_2, "Merge": RELEASE, "Release": RELEASE}
     expect(owners == want, f"owners {owners}")
     expect(stages["In development"]["on_enter"] == {"file_into": ENGINEERING}, "In development files")
-    expect(stages["Merge"]["on_enter"] == {"queue_prs": True}, "Merge queues")
+    expect(stages["Merge"]["on_enter"] == {"act": "github.queue"}, "Merge queues")
     for name, kind in (("Merge", "pr_merged"), ("Release", "in_release")):
         found = [q for q in stages[name]["requirements"] if q["kind"] == kind]
         expect(found and not found[0]["can_push_past"], f"{name}'s {kind} can be pushed past")

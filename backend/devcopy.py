@@ -59,7 +59,7 @@ EMPTY = (
     "suggestions",  # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries",
     "worktree_waits",
-    "effects",  # a GitHub call a task's move still owes (backend/stage_effects.py): the copy makes none
+    "effects",  # a source action a task's move still owes (backend/source_actions.py): the copy makes none
     "github_deliveries",  # webhook deliveries already taken: a copy hears none of them again
     "ok_grants",  # an OK bound to an email, a letter or a page (backend/task_asks.py): the copy acts on none
     "ok_shown",  # what a person was shown of one

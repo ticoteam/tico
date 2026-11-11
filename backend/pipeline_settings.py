@@ -23,7 +23,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import access as Access
-from . import hubdb_core, pipeline_rights, task_engine
+from . import hubdb_core, pipeline_rights, source_actions, task_engine
 from . import pipeline_seats as S
 from . import task_requirements as R
 from .hubdb_core import KEEPER as SYSTEM
@@ -178,7 +178,7 @@ PRESETS["engineering"] = {
             "the task back to Fixes 2.",
             120,
             [{"kind": "pr_merged"}],
-            on_enter={"queue_prs": True},
+            on_enter={"act": "github.queue"},
         ),
         _stage(
             "engineering-release",
@@ -539,8 +539,8 @@ def _check_on_enter(conn: "sqlite3.Connection", record: Row, stage: Row, label: 
     action = stage["on_enter"]
     if not action:
         return
-    if list(action) == ["queue_prs"] and action["queue_prs"] is True:
-        return
+    if list(action) == ["act"] and isinstance(action["act"], str) and source_actions.known(action["act"]):
+        return  # a source's action: `github.queue`
     target = action.get("file_into") if list(action) == ["file_into"] else None
     if not isinstance(target, str) or not target:
         problems.append(

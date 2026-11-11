@@ -228,26 +228,26 @@ def _engine_github(ctx: Context) -> Any:
     return AppGitHub(ctx.github_app)
 
 
-def pr_facts(ctx: Context) -> tuple[str, bool]:
-    # The 5-minute re-read of the PRs and releases open tasks wait on (backend/item_sources/github.py `refresh`): a webhook
-    # GitHub never sent, or one Tico missed, still reaches the task.
+def item_metadata(ctx: Context) -> tuple[str, bool]:
+    # The 5-minute re-read of the items open tasks wait on, GitHub's PRs and releases (backend/item_sources/github.py
+    # `refresh`): a webhook GitHub never sent, or one Tico missed, still reaches the task.
     github = _engine_github(ctx)
     if github is None:
         return "No GitHub app", True
     from .item_sources import github as GS
 
     changed = GS.refresh(ctx.store, github)
-    return (f"{changed} facts changed", False) if changed else ("Nothing due", True)
+    return (f"{changed} items changed", False) if changed else ("Nothing due", True)
 
 
-def merge_queue_effects(ctx: Context) -> tuple[str, bool]:
-    # The Merge stage's owed queue and dequeue calls (backend/item_sources/github.py `run`).
+def source_actions(ctx: Context) -> tuple[str, bool]:
+    # The owed source actions, the Merge stage's queue and dequeue calls (backend/source_actions.py `run`).
     github = _engine_github(ctx)
     if github is None:
         return "No GitHub app", True
-    from .item_sources import github as GS
+    from . import source_actions as SA
 
-    done = GS.run(ctx.store, github)
+    done = SA.run(ctx.store, {"github": github})
     return (f"{done} merge queue calls", False) if done else ("Nothing due", True)
 
 
@@ -341,16 +341,16 @@ STEPS = [
     ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
-    Step("pr_facts", "PR and release facts", "poll", MINUTE, pr_facts, failure="pr_facts", capture="scheduler"),
     Step(
-        "merge_queue_effects",
-        "Merge queue",
-        "due",
-        None,
-        merge_queue_effects,
-        failure="merge_queue_effects",
+        "item_metadata",
+        "PR and release metadata",
+        "poll",
+        MINUTE,
+        item_metadata,
+        failure="item_metadata",
         capture="scheduler",
     ),
+    Step("source_actions", "Merge queue", "due", None, source_actions, failure="source_actions", capture="scheduler"),
     Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}

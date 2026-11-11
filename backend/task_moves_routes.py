@@ -641,7 +641,8 @@ def register(
             from .item_sources import github as GS
 
             owed = GS.requeue(c, task_id, who.actor, seen_version=body.version)
-            return {"queued": [{"repo": e["repo"], "number": e["number"], "head": e["head_sha"]} for e in owed]}
+            prs = [(GS.split_key(e["item_key"]), e["pinned"]) for e in owed]
+            return {"queued": [{"repo": repo, "number": number, "head": head} for (repo, number), head in prs]}
 
         return work(request, tid, body, call)
 

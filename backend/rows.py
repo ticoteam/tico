@@ -1527,21 +1527,24 @@ class LinkRow(TypedDict):
 
 
 class EffectRow(TypedDict):
-    """A GitHub call a move still owes, keyed so it happens once."""
+    """A source action a move still owes (`act`) or owes back (`undo`), keyed so it happens once
+    (backend/source_actions.py)."""
 
     id: str
     visit_id: str
     kind: str
+    source: str
+    action: str
+    item_type: str
+    item_key: str
+    pinned: str | None
     key: str
     state: str
     tries: int
     last_error: str | None
+    next_try_at: str | None
     created_at: str
     updated_at: str
-    repo: str | None
-    number: int | None
-    head_sha: str | None
-    next_try_at: str | None
 
 
 class ItemMetadataRow(TypedDict):

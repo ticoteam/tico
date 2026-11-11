@@ -874,8 +874,9 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
     out += _lines(
         conn,
         "SELECT e.key, v.task_id FROM effects e JOIN visits v ON v.id = e.visit_id JOIN tasks t ON t.id = v.task_id "
-        "WHERE e.kind='queue_pr' AND e.state IN ('owed', 'done') AND v.how IN ('back', 'closed') AND NOT EXISTS "
-        "(SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id AND u.kind='dequeue_pr')",
+        "WHERE e.kind='act' AND e.state IN ('owed', 'done') AND v.how IN ('back', 'closed') AND NOT EXISTS "
+        "(SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id AND u.kind='undo' AND u.source = e.source "
+        "AND u.action = e.action)",
         "5: effect {0} of task {1} was not undone when it moved back or closed",
         (1,),
     )

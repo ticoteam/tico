@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from .. import item_metadata as IM
+from .. import source_actions as SA
 
 if TYPE_CHECKING:
     import sqlite3
@@ -701,13 +702,13 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 # The Merge stage: Tico puts a task's PRs in GitHub's merge queue and takes them out (docs/pipelines-v3.md "GitHub",
 # the Engineering pipeline's Merge stage). Track C owns this file.
 #
-# - Entering a stage whose `on_enter` is `{"queue_prs": true}` (`stage_effects.enter`) owes one `queue_pr` effect per open
-#   linked PR at its head (`queue`). The Heartbeat's effects step (`run`) carries it out with GitHub's GraphQL
-#   `enqueuePullRequest` (auto-merge where the repo has no queue). No bot runs a merge command. Effect key:
-#   `queue_pr:<visit>:<ref>@<head sha>`; a second owe of the same key is nothing. A PR whose fact comes in after the task
-#   entered is owed then (`fact_changed`).
-# - A failed GitHub call is tried again after RETRY_S; after TRIES failed calls, or when GitHub answers no, the effect is
-#   `failed`: "PR merged" stands NOT_MET on the owner with "GitHub refused the merge: <reason>".
+# - Entering a stage whose `on_enter` is `{"act": "github.queue"}` (`stage_effects.enter`) owes one `queue` action
+#   (backend/source_actions.py, `act`) per open linked PR, pinned to its head (`queue`). The Heartbeat's
+#   `source_actions` step carries it out with GitHub's GraphQL `enqueuePullRequest` (auto-merge where the repo has no
+#   queue). No bot runs a merge command. Key: `act:github.queue:<visit>:<ref>@<head sha>`; a second owe of the same key
+#   is nothing. A PR whose metadata comes in after the task entered is owed then (`fact_changed`).
+# - A failed GitHub call is tried again after source_actions.RETRY_S; after its TRIES failed calls, or when GitHub
+#   answers no, the action is `failed`: "PR merged" stands NOT_MET on the owner with "GitHub refused the merge: <reason>".
 # - GitHub removes a PR from the queue without merging it: the fact is saved (task_facts.save_pr: `queue_state` removed,
 #   `removed_at`, `removed_reason`, `failing_check`, `failing_check_url`). "PR merged" stands NOT_MET on the stage owner
 #   with "Dropped from the merge queue: <reason>", and the owner gets ONE wake (`removed`), keyed
@@ -720,32 +721,21 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
 #   Merge: nothing sends it back through Review; the merge queue's checks are the gate. The manager hears of the new
 #   commit once (`changed_after_ok`, C22).
-# - The task is closed or sent back while a PR is queued: `pull` owes `dequeue_pr` (`dequeue_pr:<visit>:<ref>`), carried
-#   out with `dequeuePullRequest` (auto-merge off). A PR GitHub merged first stays merged ("merged anyway" note to the
+# - The task is closed or sent back while a PR is queued: `pull` owes the `undo` (`undo:github.queue:<visit>:<ref>`),
+#   carried out with `dequeuePullRequest` (auto-merge off). A PR GitHub merged first stays merged ("merged anyway" note to the
 #   manager, keyed `<task>:<visit>:merged_anyway:<ref>`).
 # - History: `pr_queued` (asked again, and GitHub accepted), `pr_dequeued`, `pr_queue_removed`.
 #
-# Effects use the existing `effects` table (owed, done, failed, moot) with `repo`, `number`, `head_sha` and `next_try_at`.
+# The actions are `effects` rows (owed, done, failed, moot) of source `github`, action `queue`, item type `pr`.
 # Every function takes the caller's open write transaction and never commits, except `run`.
 
-QUEUE = "queue_pr"
-DEQUEUE = "dequeue_pr"
+QUEUE = "queue"  # GitHub's one source action: put the PR in the merge queue (undo: take it out)
+ACTIONS = (QUEUE,)
 WAKE_REMOVED = "queue_removed"  # the stage owner's one wake per removal
 WAKE_MERGED_ANYWAY = "merged_anyway"
 WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
-RETRY_S = (60, 300, 900)  # a failed GitHub call is tried again after these; then the effect is `failed`
-TRIES = len(RETRY_S)  # failed calls before the effect is `failed`
-BATCH = 50  # effects carried out per pass at most
-
-
-def queue_key(visit_id: str, ref: str, head_sha: str) -> str:
-    return f"{QUEUE}:{visit_id}:{ref}@{head_sha}"
-
-
-def dequeue_key(visit_id: str, ref: str) -> str:
-    return f"{DEQUEUE}:{visit_id}:{ref}"
 
 
 def removed_wake_key(task_id: str, visit_id: str, ref: str, removed_at: str) -> str:
@@ -760,61 +750,38 @@ def _engine() -> Any:
 
 
 def queues_prs(stage: Row | None) -> bool:
-    """Whether a stage's on-enter action is "queue the PRs to merge"."""
-    action: Any = (stage or {}).get("on_enter")
-    if isinstance(action, str):
-        try:
-            action = json.loads(action)
-        except ValueError:
-            return False
-    return isinstance(action, dict) and cast(Row, action).get("queue_prs") is True
+    """Whether a stage's on-enter action is "queue the PRs to merge" (`{"act": "github.queue"}`)."""
+    return SA.act_of(stage) == (SOURCE, QUEUE)
 
 
-def effects(conn: "sqlite3.Connection", visit_id: str, ref: str | None = None, kind: str = QUEUE) -> list[Row]:
-    """A visit's effects of one kind, oldest first; for one PR when `ref` is given."""
-    found = _rows(
-        conn, "SELECT * FROM effects WHERE visit_id=? AND kind=? ORDER BY created_at, rowid", (visit_id, kind)
-    )
-    if ref is None:
-        return found
-    return [e for e in found if e["repo"] and pr_ref(str(e["repo"]), int(e["number"])) == ref]
+def entered(conn: "sqlite3.Connection", task: Row, by: str, action: str) -> list[Row]:
+    """A stage that acts on GitHub was entered (source_actions.enter): its one action queues the task's PRs."""
+    return queue(conn, task, by) if action == QUEUE else []
+
+
+def effects(conn: "sqlite3.Connection", visit_id: str, ref: str | None = None) -> list[Row]:
+    """A visit's `queue` actions, oldest first; for one PR when `ref` is given."""
+    return SA.of_visit(conn, visit_id, SOURCE, QUEUE, item_key=ref)
 
 
 def newest(conn: "sqlite3.Connection", visit_id: str, ref: str) -> Row | None:
-    """The newest `queue_pr` effect of a visit for one PR that is not moot (what "PR merged" reads), or None."""
+    """The newest `queue` action of a visit for one PR that is not moot (what "PR merged" reads), or None."""
     found = [e for e in effects(conn, visit_id, ref) if e["state"] != "moot"]
     found.sort(key=lambda e: (str(e["updated_at"]), str(e["created_at"])))
     return found[-1] if found else None
-
-
-def _owe(
-    conn: "sqlite3.Connection", visit_id: str, kind: str, key: str, repo: str, number: int, head: str | None
-) -> Row | None:
-    """Owe one effect, once per key: the row written, or None when that key was owed before."""
-    H = _h()
-    ts = H.now()
-    effect_id = H.new_id()
-    written = conn.execute(
-        "INSERT OR IGNORE INTO effects (id, visit_id, kind, key, state, tries, created_at, updated_at, repo, number, "
-        "head_sha, next_try_at) VALUES (?, ?, ?, ?, 'owed', 0, ?, ?, ?, ?, ?, NULL)",
-        (effect_id, visit_id, kind, key, ts, ts, repo, int(number), head),
-    ).rowcount
-    if not written:
-        return None
-    return _rows(conn, "SELECT * FROM effects WHERE id=?", (effect_id,))[0]
 
 
 def _owe_queue(conn: "sqlite3.Connection", visit_id: str, link: Row) -> Row | None:
     fact = link["fact"]
     if not fact or fact["state"] != "open" or not fact.get("head_sha"):
         return None
-    repo, number, head = str(link["repo"]), int(link["number"]), str(fact["head_sha"])
-    return _owe(conn, visit_id, QUEUE, queue_key(visit_id, pr_ref(repo, number), head), repo, number, head)
+    key = pr_key(str(link["repo"]), int(link["number"]))
+    return SA.owe(conn, visit_id, SA.ACT, SOURCE, QUEUE, PR, key, str(fact["head_sha"]))
 
 
 def queue(conn: "sqlite3.Connection", task: Row, by: str) -> list[Row]:
-    """Owe a `queue_pr` effect for each open linked PR of the task at its saved head (`stage_effects.enter`). Returns
-    the effects owed now. A PR whose fact is not read yet is owed when it comes in (`fact_changed`)."""
+    """Owe a `queue` action for each open linked PR of the task at its saved head (`stage_effects.enter`). Returns
+    the actions owed now. A PR whose fact is not read yet is owed when it comes in (`fact_changed`)."""
     visit = task.get("visit")
     if not visit or not queues_prs(task.get("stage")):
         return []
@@ -831,7 +798,7 @@ def failing_names(fact: Row) -> str:
 
 def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: int | None = None) -> list[Row]:
     """Queue again: the stage owner's action on the Merge stage after GitHub removed a PR (or refused to queue it).
-    Owes a new `queue_pr` for each such PR at its newest saved head: the old effect is moot, and one for that same head
+    Owes a new `queue` for each such PR at its newest saved head: the old action is moot, and one for that same head
     is owed again. Refuses `task_stage` (not on a stage whose on_enter queues PRs), `task_requirement` when no PR was
     removed or refused, while the PR's own checks on its newest commit are running ("The checks on <ref> are still
     running") or failing ("Checks failed on <ref>: <names>"), and when the caller may not; `task_changed` (a bot's
@@ -878,18 +845,8 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     owed: list[Row] = []
     for link in again:
         ref, head = link["ref"], str(link["fact"]["head_sha"])
-        key = queue_key(visit_id, ref, head)
-        conn.execute(
-            "UPDATE effects SET state='moot', updated_at=? WHERE visit_id=? AND kind=? AND key<>? "
-            "AND lower(repo)=lower(?) AND number=? AND state IN ('owed', 'done', 'failed')",
-            (ts, visit_id, QUEUE, key, link["repo"], int(link["number"])),
-        )
-        conn.execute(
-            "UPDATE effects SET state='owed', tries=0, last_error=NULL, next_try_at=NULL, updated_at=? WHERE key=?",
-            (ts, key),
-        )
-        _owe(conn, visit_id, QUEUE, key, str(link["repo"]), int(link["number"]), head)
-        owed.append(_rows(conn, "SELECT * FROM effects WHERE key=?", (key,))[0])
+        key = pr_key(str(link["repo"]), int(link["number"]))
+        owed.append(SA.owe_again(conn, visit_id, SOURCE, QUEUE, PR, key, head))
         E._event(conn, task_id, by, "pr_queued", None, ref, "Queue again", {"ref": ref, "head": head, "again": True})
     conn.execute("UPDATE tasks SET version=?, updated_at=? WHERE id=?", (int(row.get("version") or 0) + 1, ts, task_id))
     E.changed(conn, task_id, by)
@@ -897,24 +854,12 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
 
 
 def pull(conn: "sqlite3.Connection", task: Row, by: str) -> list[Row]:
-    """Owe a `dequeue_pr` for each PR a `queue_pr` of the visit put in the queue (the task closed or went back). A
-    `queue_pr` still owed is moot instead: nothing was queued yet (`run` takes out one GitHub queued meanwhile).
+    """Owe the `undo` of each `queue` the visit carried out (the task closed or went back; source_actions.undo).
     Idempotent."""
     visit = task.get("visit")
     if not visit:
         return []
-    visit_id = str(visit["id"])
-    conn.execute(
-        "UPDATE effects SET state='moot', updated_at=? WHERE visit_id=? AND kind=? AND state='owed'",
-        (_h().now(), visit_id, QUEUE),
-    )
-    owed = [_owe_dequeue(conn, visit_id, e) for e in effects(conn, visit_id) if e["state"] == "done"]
-    return [e for e in owed if e]
-
-
-def _owe_dequeue(conn: "sqlite3.Connection", visit_id: str, effect: Row) -> Row | None:
-    repo, number = str(effect["repo"]), int(effect["number"])
-    return _owe(conn, visit_id, DEQUEUE, dequeue_key(visit_id, pr_ref(repo, number)), repo, number, None)
+    return SA.undo(conn, str(visit["id"]), SOURCE, QUEUE)
 
 
 def _on_queueing_stage(conn: "sqlite3.Connection", task_ids: list[str]) -> list[Row]:
@@ -1019,7 +964,7 @@ def _never_stuck() -> Any:
 
 def fact_changed(conn: "sqlite3.Connection", task_ids: list[str], after: Row, before: Row | None) -> None:
     """What a changed PR fact means on the Merge stage, for the open tasks that link it: a PR whose fact came in after
-    the task entered is owed its `queue_pr` now (never once one was owed for it in this visit: Tico never queues a PR
+    the task entered is owed its `queue` now (never once one was owed for it in this visit: Tico never queues a PR
     again by itself), and a new commit tells the pipeline's manager once ("Changed after OK", C22)."""
     E = _engine()
     repo, number = str(after["repo"]), int(after["number"])
@@ -1033,137 +978,76 @@ def fact_changed(conn: "sqlite3.Connection", task_ids: list[str], after: Row, be
             E._tell_manager(conn, row, f"Changed after OK: {ref} has a new commit", f"{WAKE_CHANGED}:{head}")
 
 
-# ----------------------------------------------------------------------------- the effects step
-def due(conn: "sqlite3.Connection", now: str, limit: int = BATCH) -> list[Row]:
-    """Owed effects whose next try is due, oldest first, with the task each is for."""
-    return _rows(
-        conn,
-        "SELECT e.*, v.task_id FROM effects e JOIN visits v ON v.id = e.visit_id WHERE e.state='owed' "
-        "AND e.repo IS NOT NULL AND (e.next_try_at IS NULL OR e.next_try_at <= ?) "
-        "ORDER BY e.created_at, e.rowid LIMIT ?",
-        (now, limit),
-    )
-
-
+# ----------------------------------------------------------------------------- carrying out the queue (source_actions)
 def run(store: Any, github: "GitHub", now: str | None = None) -> int:
-    """The effects step on the Heartbeat: carry out owed `queue_pr` / `dequeue_pr` effects with no transaction held
-    during GitHub calls, record each in a short write, and save what GitHub said as a fact. Returns how many were
-    carried out (done, or failed for good)."""
-    at: str = now or _h().now()
-    with store.read() as conn:
-        owed = due(conn, at)
-    count = 0
-    for effect in owed:
-        repo, number = str(effect["repo"]), int(effect["number"])
-        if effect["kind"] == QUEUE:
-            with store.transaction() as conn:
-                if _queued_already(conn, effect):
-                    count += 1
-                    continue
-        version: int = version_now()
-        try:
-            if effect["kind"] == QUEUE:
-                github.ready(repo, number)  # a Builder's draft reaches Merge: GitHub queues no draft
-                said = github.enqueue(repo, number, str(effect["head_sha"]))
-            else:
-                said = github.dequeue(repo, number)
-        except Exception as exc:  # noqa: BLE001 - GitHub down or refusing the call: tried again later
-            with store.transaction() as conn:
-                count += _failed_call(conn, effect, str(exc) or type(exc).__name__, at)
-            continue
-        with store.transaction() as conn:
-            count += _record(conn, effect, said, version)
-    return count
+    """The Heartbeat's `source_actions` step with GitHub's client alone (backend/source_actions.py `run`)."""
+    return SA.run(store, {SOURCE: github}, now)
 
 
-def _queued_already(conn: "sqlite3.Connection", effect: Row) -> bool:
-    """Someone else queued the PR (or GitHub merged it) before Tico's owed `queue_pr` ran: it is done, with no call."""
-    fact = pr(conn, str(effect["repo"]), int(effect["number"]))
-    if not fact or (fact["queue_state"] not in QUEUED and fact["state"] != "merged"):
-        return False
-    return bool(
-        conn.execute(
-            "UPDATE effects SET state='done', last_error=NULL, next_try_at=NULL, updated_at=? WHERE id=? AND state='owed'",
-            (_h().now(), effect["id"]),
-        ).rowcount
-    )
+def _pr_of(effect: Row) -> tuple[str, int]:
+    return split_key(str(effect["item_key"]))
 
 
-def _failed_call(conn: "sqlite3.Connection", effect: Row, reason: str, now: str) -> int:
-    """A GitHub call that failed: tried again after RETRY_S; after TRIES failed calls the effect is `failed`."""
-    H = _h()
-    tries = int(effect["tries"] or 0) + 1
-    if tries < TRIES:
-        conn.execute(
-            "UPDATE effects SET tries=?, last_error=?, next_try_at=?, updated_at=? WHERE id=? AND state='owed'",
-            (tries, reason[:500], H.shift(now, seconds=RETRY_S[tries - 1]), H.now(), effect["id"]),
-        )
-        return 0
-    return _give_up(conn, effect, tries, reason)
+def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
+    """Someone else queued the PR (or GitHub merged it) before Tico's owed `queue` ran: it is done, with no call."""
+    fact = pr(conn, *_pr_of(effect))
+    return fact is not None and (fact["queue_state"] in QUEUED or fact["state"] == "merged")
 
 
-def _give_up(conn: "sqlite3.Connection", effect: Row, tries: int, reason: str) -> int:
-    """The effect is `failed`. For a `queue_pr` "PR merged" says GitHub refused, on the stage owner, told once."""
+def carry_out(github: "GitHub", effect: Row) -> Row:
+    """GitHub's call for one action, no transaction held: queue the PR at its pinned head, or take it out."""
+    repo, number = _pr_of(effect)
+    if effect["kind"] == SA.ACT:
+        github.ready(repo, number)  # a Builder's draft reaches Merge: GitHub queues no draft
+        said = github.enqueue(repo, number, str(effect["pinned"]))
+    else:
+        said = github.dequeue(repo, number)
+    return said if said.get("ok") or said.get("reason") else {**said, "reason": "GitHub said no"}
+
+
+def gave_up(conn: "sqlite3.Connection", effect: Row, reason: str) -> None:
+    """A `queue` failed for good: "PR merged" says GitHub refused, on the stage owner, told once."""
+    if effect["kind"] != SA.ACT:
+        return
     E = _engine()
-    written = conn.execute(
-        "UPDATE effects SET state='failed', tries=?, last_error=?, next_try_at=NULL, updated_at=? "
-        "WHERE id=? AND state='owed'",
-        (tries, reason[:500], _h().now(), effect["id"]),
-    ).rowcount
-    if not written:
-        return 0
-    if effect["kind"] != QUEUE:
-        return 1
     row: Row | None = E.task(conn, str(effect["task_id"]))
     visit: Row = (row.get("visit") or {}) if row else {}
     if row and row["status"] == "open" and visit.get("id") == effect["visit_id"]:
-        ref = pr_ref(str(effect["repo"]), int(effect["number"]))
+        ref = pr_ref(*_pr_of(effect))
         E.changed(conn, str(row["id"]), E.SYSTEM)
         E.tell_owner(
             conn,
             str(row["id"]),
             f"GitHub refused the merge of {ref}: {reason}. Queue it again with `tico task queue {row['id']}` once "
             "it can merge, or move it back.",
-            f"{WAKE_REFUSED}:{ref}:{effect['head_sha']}",
+            f"{WAKE_REFUSED}:{ref}:{effect['pinned']}",
         )
-    return 1
 
 
-def _record(conn: "sqlite3.Connection", effect: Row, said: Row, version: int) -> int:
-    """Record what GitHub said to one effect, and save it as the PR's fact."""
+def recorded(conn: "sqlite3.Connection", effect: Row, said: Row, state: str, version: int) -> bool:
+    """Save what GitHub said to an action it carried out as the PR's metadata. True when the PR went in the queue
+    (source_actions takes it out again when the action was moot by then)."""
     E = _engine()
-    repo, number = str(effect["repo"]), int(effect["number"])
+    repo, number = _pr_of(effect)
     ref: str = pr_ref(repo, number)
     task_id = str(effect["task_id"])
-    found = conn.execute("SELECT state FROM effects WHERE id=?", (effect["id"],)).fetchone()
-    state = str(found[0]) if found else "moot"
-    if not said.get("ok"):
-        if state != "owed":
-            return 0
-        return _give_up(conn, effect, int(effect["tries"] or 0) + 1, str(said.get("reason") or "GitHub said no"))
     how = str(said.get("how") or "")
-    conn.execute(
-        "UPDATE effects SET state=CASE WHEN state='owed' THEN 'done' ELSE state END, tries=tries+1, last_error=NULL, "
-        "next_try_at=NULL, updated_at=? WHERE id=?",
-        (_h().now(), effect["id"]),
-    )
-    if effect["kind"] == QUEUE:
+    if effect["kind"] == SA.ACT:
         if how in QUEUED:
             save_and_settle(conn, repo, number, {"queue_state": how}, version)
-            data = {"ref": ref, "head": effect["head_sha"], "how": how}
+            data = {"ref": ref, "head": effect["pinned"], "how": how}
             E._event(conn, task_id, E.SYSTEM, "pr_queued", None, ref, None, data)
-            if state == "moot":  # the task left the stage while GitHub was queuing it: take it out again
-                _owe_dequeue(conn, str(effect["visit_id"]), effect)
-        else:  # merged at once, where the repo has neither a queue nor auto-merge: read in full on the next pass
-            IM.mark_due(conn, SOURCE, PR, pr_key(repo, number))
-        return 1
+            return True
+        # merged at once, where the repo has neither a queue nor auto-merge: read in full on the next pass
+        IM.mark_due(conn, SOURCE, PR, pr_key(repo, number))
+        return False
     if how == "merged":
         IM.mark_due(conn, SOURCE, PR, pr_key(repo, number))
         _merged_anyway(conn, task_id, str(effect["visit_id"]), ref)
     elif how == "dequeued":
         save_and_settle(conn, repo, number, {"queue_state": "none"}, version)
         E._event(conn, task_id, E.SYSTEM, "pr_dequeued", ref, None, None, {"ref": ref})
-    return 1
+    return False
 
 
 def _merged_anyway(conn: "sqlite3.Connection", task_id: str, visit_id: str, ref: str) -> None:

@@ -41,7 +41,7 @@ def engineering(c, release=None):
         "Engineering",
         stages=(
             {"name": "Build", "owner": B, "requirements": [{"kind": "pr_open"}, {"kind": "checks_pass"}]},
-            {"name": "Merge", "owner": RM, "on_enter": {"queue_prs": True}, "requirements": [{"kind": "pr_merged"}]},
+            {"name": "Merge", "owner": RM, "on_enter": {"act": "github.queue"}, "requirements": [{"kind": "pr_merged"}]},
             {"name": "Release", "owner": RM, "requirements": [{"kind": "in_release", "settings": release or {}}]},
         ),
         manager=EM,
@@ -215,14 +215,14 @@ def test_entering_merge_owes_one_queue_per_pr_and_github_queues_it(company):
     gh = FakeGitHub()
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
-        assert effects(c, task_id) == [("queue_pr", "owed")]
+        assert effects(c, task_id) == [("act", "owed")]
         assert MQ.queue(c, E.task(c, task_id), E.SYSTEM) == []  # owed once per key
         assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "Queuing the PR")
     assert MQ.run(company, gh) == 1
     assert MQ.run(company, gh) == 0
     assert [call[0] for call in gh.calls].count("enqueue") == 1
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "done")]
+        assert effects(c, task_id) == [("act", "done")]
         assert F.pr(c, REPO, 1)["queue_state"] == "queued"
         assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
         assert "pr_queued" in X.events(c, task_id)
@@ -243,7 +243,7 @@ def test_a_pr_whose_fact_comes_late_is_queued_when_it_comes(c):
     gh = FakeGitHub()
     gh.open_pr(REPO, 1)
     seen(c, gh)
-    assert effects(c, task_id) == [("queue_pr", "owed")]
+    assert effects(c, task_id) == [("act", "owed")]
 
 
 def test_a_draft_that_reaches_merge_is_marked_ready_and_queued(company):
@@ -275,7 +275,7 @@ def test_failed_calls_are_tried_three_times_then_github_refused_is_the_owner_s(c
     gh.fail_next("enqueue")
     assert MQ.run(company, gh, H.shift(now, seconds=400)) == 1
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "failed")]
+        assert effects(c, task_id) == [("act", "failed")]
         assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, "GitHub refused the merge: GitHub is unavailable")
         assert any(":queue_refused:" in key for key, _ in X.wakes(c, task_id, RM))
 
@@ -302,7 +302,7 @@ def test_a_merge_the_branch_rules_refuse_is_told_once_and_not_tried_again(compan
     assert [call[0] for call in gh.calls].count("enqueue") == 1  # a permanent refusal is not retried
     reason = "At least 1 approving review is required by reviewers with write access."
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "failed")]
+        assert effects(c, task_id) == [("act", "failed")]
         assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, f"GitHub refused the merge: {reason}")
         assert len([key for key, _ in X.wakes(c, task_id, RM) if ":queue_refused:" in key]) == 1
 
@@ -326,11 +326,11 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (woken[0],)).fetchone()[0]
         assert "e2e" in body and "https://ci/9" in body and f"tico task queue {task_id}" in body
         assert X.events(c, task_id).count("pr_queue_removed") == 1
-        assert effects(c, task_id) == [("queue_pr", "done")]
+        assert effects(c, task_id) == [("act", "done")]
     gh.push(REPO, 1)  # a fix pushed in Merge: the task stays in Merge and nothing queues it by itself
     F.refresh(company, gh, later(30))
     with company.transaction() as c:
-        assert stage(c, task_id) == "Merge" and effects(c, task_id) == [("queue_pr", "done")]
+        assert stage(c, task_id) == "Merge" and effects(c, task_id) == [("act", "done")]
         assert any(":changed_after_ok:" in key for key, _ in X.wakes(c, task_id, EM))
 
 
@@ -588,8 +588,8 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
         refused(lambda: go(v=version - 1), "task_changed")
         refused(lambda: go(by=B), "task_requirement")  # not the owner, the manager or a person
         owed = go()
-        assert [(e["state"], e["head_sha"]) for e in owed] == [("owed", head)]
-        assert effects(c, task_id) == [("queue_pr", "moot"), ("queue_pr", "owed")]
+        assert [(e["state"], e["pinned"]) for e in owed] == [("owed", head)]
+        assert effects(c, task_id) == [("act", "moot"), ("act", "owed")]
         assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "Queuing the PR")
         assert E.task(c, task_id)["version"] == version + 1
     MQ.run(company, gh)
@@ -613,10 +613,10 @@ def test_moving_back_takes_the_pr_out_of_the_queue_once(company):
     MQ.run(company, gh)
     with company.transaction() as c:
         back(c, task_id)
-        assert effects(c, task_id) == [("queue_pr", "done"), ("dequeue_pr", "owed")]
+        assert effects(c, task_id) == [("act", "done"), ("undo", "owed")]
     assert MQ.run(company, gh) == 1
     with company.transaction() as c:
-        assert effects(c, task_id)[-1] == ("dequeue_pr", "done")
+        assert effects(c, task_id)[-1] == ("undo", "done")
         assert F.pr(c, REPO, 1)["queue_state"] == "none"
         assert "pr_dequeued" in X.events(c, task_id)
         assert not [b for b in NS.rules_hold(c) if b.startswith("5:")]
@@ -626,7 +626,7 @@ def test_closing_before_github_queued_it_makes_the_queue_moot(c):
     gh = FakeGitHub()
     task_id = in_merge(c, gh, 1)
     E.move(c, task_id, "closed", X.ANA, "Not needed")
-    assert effects(c, task_id) == [("queue_pr", "moot")]
+    assert effects(c, task_id) == [("act", "moot")]
     assert not [b for b in NS.rules_hold(c) if b.startswith("5:")]
 
 
@@ -654,7 +654,7 @@ def test_a_pr_someone_else_queued_first_settles_the_owed_queue_without_a_call(co
     assert MQ.run(company, gh) == 1
     assert [call[0] for call in gh.calls] == []
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "done")]
+        assert effects(c, task_id) == [("act", "done")]
         assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
 
 
@@ -714,7 +714,7 @@ def test_leaving_while_github_queues_it_takes_it_out_again(company):
     gh.enqueue = slow
     MQ.run(company, gh)
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "moot"), ("dequeue_pr", "owed")]
+        assert effects(c, task_id) == [("act", "moot"), ("undo", "owed")]
     MQ.run(company, gh)
     assert gh.prs[(REPO, 1)]["queue_state"] == "none"
 
@@ -828,5 +828,5 @@ def test_the_heartbeat_steps_are_quiet_without_a_github_app():
     class Ctx:
         github_app = None
 
-    assert HB.pr_facts(Ctx()) == ("No GitHub app", True)
-    assert HB.merge_queue_effects(Ctx()) == ("No GitHub app", True)
+    assert HB.item_metadata(Ctx()) == ("No GitHub app", True)
+    assert HB.source_actions(Ctx()) == ("No GitHub app", True)
