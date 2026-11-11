@@ -310,6 +310,9 @@ whole change. Members can add seats under themselves or someone below them; only
   *Waiting* while the team waits on a computer or provider, *Setting up* until a starter's repository exists, then its
   **Set up** button; *Active*; or a link to the setup task BotOps is working.
 - **AI providers**: the first link opens Settings > Models so bots can start working.
+- **Add a Claude or Codex subscription**: recommended, never required (getting started's `subscription` item, skippable).
+  Its link opens Settings > Computers, and the line goes once a plan is signed in on one of the company's computers.
+  It is for your own bots, within the provider's terms.
 - **Strategy: a draft. Publish your strategy**: a link to Strategy, until a version is published (Getting started's
   `strategy` step).
 - **GitHub: not backed up. Connect GitHub**: for the owner only, while GitHub is not connected and installed, a row with a

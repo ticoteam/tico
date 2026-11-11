@@ -1,7 +1,12 @@
 """Getting started: every tick is computed from live state, and each person keeps their own choices."""
 
 from backend.tests.helpers.onboarding import as_person, environment, signed_in
+from backend.tests.helpers import model_subscriptions as subs
+from backend.tests.helpers.api import headers as bearer, post
+from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.getting_started import add_bot
+
+OWNER = "ana-test"  # the fictional company's owner (backend/tests/helpers/api.py)
 
 
 def items(api, headers=None):
@@ -27,6 +32,7 @@ def test_each_person_sees_only_what_they_can_act_on(environment):
         "signed_in",
         "computer",
         "model",
+        "subscription",
         "github",
         "botops",
         "first_bot",
@@ -97,3 +103,69 @@ def test_the_market_box_is_a_task_for_the_librarian(environment):
     assert task["id"] == made.json()["task_id"] and "https://northwind.example" in task["body"]
     # Only the owner asks, and the box may not be empty.
     assert api.post("/api/v2/getting-started/market", json=ask, headers=as_person(api, "quinn")).status_code == 403
+
+
+def plan_step(api):
+    return items(api, bearer(OWNER))[1]["subscription"]
+
+
+def report_claude(api, m, claude):
+    """A computer's word on its Claude login, as its heartbeat sends it."""
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": [subs.MS.CAPABILITY],
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {"claude": claude, "codex": {"installed": True, "authenticated": "missing"}},
+                "bots": {},
+            },
+        },
+        token=m["token"],
+    )
+
+
+def test_a_new_company_is_recommended_a_subscription_as_an_optional_step(api):
+    row = plan_step(api)
+    assert row["label"] == "Add a Claude or Codex subscription"
+    assert (row["done"], row["optional"], row["skipped"]) == (False, True, False)
+    assert row["why"] == "Recommended. Use your own subscription for your own bots, within the provider's terms."
+    assert (row["href"], row["tab"]) == ("#/settings", "devices")
+
+
+def test_a_plan_signed_in_on_a_computer_ticks_the_step_and_signing_out_unticks_it(api):
+    m = subs.machine(api)
+    report_claude(api, m, {"installed": True, "authenticated": "ready"})
+    assert plan_step(api)["done"] is True and plan_step(api)["why"] == ""
+    report_claude(api, m, {"installed": True, "authenticated": "missing"})
+    assert plan_step(api)["done"] is False
+
+
+def test_an_api_key_on_a_computer_is_not_a_subscription(api):
+    m = subs.machine(api)
+    report_claude(api, m, {"installed": True, "authenticated": "ready", "account": {"kind": "api_key"}})
+    assert plan_step(api)["done"] is False
+
+
+def test_a_company_api_key_given_to_a_computer_does_not_count_but_a_company_plan_does(api):
+    setup(api)
+    subs.company(api)
+    m = subs.machine(api)
+    key = subs.add(api, "anthropic_key", "sk-ant-api-" + "c" * 24, name="Company API")["id"]
+    subs.give(api, m, "claude", key)  # billed per use, not a subscription
+    assert plan_step(api)["done"] is False
+    plan = subs.add(api, name="Company Max")["id"]
+    subs.give(api, m, "claude", plan)
+    assert plan_step(api)["done"] is True
+
+
+def test_the_step_never_blocks_setup_and_can_be_set_aside(api):
+    before = items(api, bearer(OWNER))[0]["done"]
+    post(api, "getting-started/state", {"skip": "subscription"}, token=OWNER)
+    body, _ = items(api, bearer(OWNER))
+    assert body["done"] == before + 1  # a skipped step is settled, like the GitHub one
+    assert plan_step(api)["skipped"] is True and plan_step(api)["done"] is False
+    post(api, "getting-started/state", {"skip": "model"}, token=OWNER, expected=422)  # required steps are not skippable

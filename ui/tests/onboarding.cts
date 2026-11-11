@@ -157,6 +157,14 @@ const CATALOG: Card[] = [
   bot('pr-reviewer', 'Senior Software Engineer', 'engineering', 'code_blocks', 'common', 'Reviews every pull request before a person does.'),
 ];
 
+// Getting started with only the recommended subscription step open (backend/getting_started.py). The tour is marked
+// seen, so it does not start by itself.
+const GETTING_STARTED = {
+  items: [{id: 'subscription', label: 'Add a Claude or Codex subscription', done: false, optional: true, skipped: false,
+    why: "Recommended. Use your own subscription for your own bots, within the provider's terms.", href: '#/settings',
+    tab: 'devices', action: ''}],
+  done: 0, total: 1, complete: false, dismissed: false, tour_seen: true, can_build: true};
+
 const READY_STRATEGY = {draft: {id: 'v-d', status: 'draft', summary: '', vision: '', sections: {not: 'No enterprise deals.', extra: {}}, revision: 3},
   current: null, label: 'Bets', label_one: 'Bet', may_edit: true, goals_by_bet: {}, health_by_bet: {},
   bets: [{id: 'b-1', statement: 'Studios pay for the software, listeners use the app free.', rules_out: 'Ads to listeners.',
@@ -311,6 +319,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
                   bots: BOTS_AFTER.map(bot => ({...bot})), machine};
         return json({...record, home: 'human:ana'});
       }
+      if (p === '/api/v2/setup/getting-started' && request.method() === 'GET') return json(GETTING_STARTED);
       if (p === '/api/v2/setup/getting-started/state') { tourPosts.push(request.postDataJSON()); return json({tour: true, checklist: false, cards: [], skipped: []}); }
       if (p === '/api/v2/enrollments') { enrollments.push(request.postDataJSON()); return json({code: enrollCode, expires_at: '2026-09-16T10:15:00Z'}); }
       if (p === '/api/v2/bots' && request.method() === 'POST') { created.push(request.postDataJSON()); return json({bot: {slug: request.postDataJSON().slug}}); }
@@ -971,6 +980,11 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     assert.match((await page.locator('#fr-providers').textContent())!, /AI providers: subscriptions plus Tico Gateway\./);
     // Setup saved a strategy draft; publishing it is the owner's click on the Strategy page.
     assert.equal((await page.locator('#fr-strategy a').getAttribute('href'))!, '#/strategy');
+    // The recommended subscription: one link to Settings > Computers, then one quiet line; nothing is required.
+    assert.equal((await page.locator('#fr-subscription a').getAttribute('href'))!, '#/settings');
+    assert.equal((await page.locator('#fr-subscription a').getAttribute('data-gs-tab'))!, 'devices');
+    assert.equal((await page.locator('#fr-subscription').textContent())!.replace(/\s+/g, ' ').trim(),
+      "Add a Claude or Codex subscription Recommended. Use your own subscription for your own bots, within the provider's terms.");
     assert.equal(await page.evaluate(() => frProvidersName({providers: {preset: 'subscriptions', providers: []}})), 'subscriptions only');
     assert.equal(await page.evaluate(() => frProvidersName({providers: {preset: 'gateway', providers: []}})), 'Tico Gateway only');
     assert.equal(await page.evaluate(() => frProvidersName({providers: {enabled: ['openai'], providers: [{id: 'openai', label: 'OpenAI'}]}})), 'OpenAI');
