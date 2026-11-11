@@ -669,8 +669,12 @@ The commands of the last release keep working for one more release, hidden: each
 notice on stderr and runs the new command (RENAMED below). A command that is gone (REMOVED below) prints one
 line naming what to use instead and exits 1.
 
-Exit codes: 0 fine, 2 `{"refused": <rule>, "detail": "..."}` or a non-retryable API error,
-1 `{"error": "..."}` (bad arguments, no identity, or the API could not be reached).
+Exit codes (docs/cli.md, clients/cli_plumbing.py): 0 fine; 1 may retry (the API could not be reached, 5xx, 429, or an
+unexpected error); 2 refused (`{"error": ..., "detail": "..."}`, a non-retryable API error or a task refusal); 3 a
+worktree wait; 4 needs sign-in (no credential or profile, 401); 5 not found (404); 64 usage; 124 a waiter's timeout.
+
+Profiles (docs/cli.md): `--profile NAME` anywhere on the line, or `TICO_PROFILE`, uses a saved company and token
+(`tico auth add|list|use|remove`); `--fields a,b.c` anywhere on the line prints only those fields of the answer.
 
 Identity (§3): a bot is `HUB_BOT` + `HUB_TOKEN` from the run's environment (`HUB_EMPLOYEE` is the old name for
 `HUB_BOT`, still read); the runner sets both, with `HUB_API_URL` and `HUB_WORKSPACE` (where this company's bot
@@ -693,6 +697,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # run as a script: python clients/hubcli.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from clients import cli_plumbing
 
 # Mirrors of the server's vocabulary, so a typo is refused by the parser before a request is made. The server is the
 # authority when they disagree.
@@ -706,6 +711,14 @@ ASKED = (
 
 class CliError(Exception):
     """Anything the arguments or the environment got wrong: exit 1."""
+
+
+class NoCredential(CliError):
+    """No company to talk to, or a profile that cannot be used: the sign-in exit (clients/cli_plumbing.py)."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
 
 
 def thumb(value):
@@ -1095,7 +1108,8 @@ def parser():
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
 
-    sub.add_parser("whoami").set_defaults(fn="whoami")
+    sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
+    cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
 
     alerts = sub.add_parser('alerts', help='your own phone and paid alert preferences').add_subparsers(dest='sub')
     for action in ('show', 'remove', 'confirm', 'verify', 'test', 'set', 'company'):
@@ -5386,6 +5400,7 @@ COMPUTER_WORDS = {("status",): "status", ("update",): "update"}
 
 def main(argv):
     argv, who = split_human(argv)
+    argv, profile, fields = cli_plumbing.split_globals(argv)
     if argv == ["help"]:  # `tico help` reads like `tico --help`
         argv = ["--help"]
     word = COMPUTER_WORDS.get(tuple(argv))
@@ -5398,19 +5413,24 @@ def main(argv):
     argv, renamed = rename_argv(argv)
     if renamed:
         print(f"{PROG}: {renamed}; the old name stops working in the next release", file=sys.stderr)
-    return run(argv, who)
+    extras = {k: v for k, v in (("profile", profile), ("fields", fields)) if v}
+    return run(argv, who, **extras)
 
 
-def run(argv, who):
-    """One command line in its current spelling: parsed here, then answered here or sent to the hub."""
+def run(argv, who, profile=None, fields=None):
+    """One command line in its current spelling: parsed here, then answered here or sent to the hub. `profile` and
+    `fields` are the global --profile and --fields main() took off the line (clients/cli_plumbing.py)."""
     p = parser()
     try:
         args = parse(p, argv)
     except SystemExit as e:  # argparse already said what was wrong, or printed help
-        return 0 if not e.code else 1
+        return 0 if not e.code else cli_plumbing.EXIT_USAGE
     if not getattr(args, "fn", None):
         p.print_help(sys.stderr)
-        return 1
+        return cli_plumbing.EXIT_USAGE
+    local = cli_plumbing.local_command(args)  # tico auth add|list|use|remove: no company needed
+    if local is not None:
+        return local
     try:
         if args.fn == "task create" and args.dry_run:  # never reaches remotecli: nothing to send
             return cmd_task_dry_run(args, who)
@@ -5442,11 +5462,17 @@ def run(argv, who):
             except (tool_call.CallError, ValueError) as e:
                 print(json.dumps({"error": str(e)}, indent=2))
                 return 1
+        from clients import profiles
+
+        try:
+            profiles.resolve(profile)  # --profile, TICO_PROFILE, else HUB_API_URL, else the default profile
+        except profiles.ProfileError as e:
+            raise NoCredential(str(e), "profile") from None
         if not os.environ.get("HUB_API_URL"):
             local = args.fn in READ_OUTSIDE_A_TURN and not (args.fn == "tool list" and args.bot)
             credential = runner_credential(os.environ.get("HUB_RUNNER_CONFIG")) if local else None
             if not credential:
-                raise CliError(
+                raise NoCredential(
                     "HUB_API_URL is not set: `tico` talks to the Tico API and runs inside a "
                     "bot turn, where the runner sets HUB_API_URL, HUB_TOKEN and HUB_BOT"
                     + (
@@ -5454,8 +5480,10 @@ def run(argv, who):
                         if local
                         else ""
                     )
+                    + cli_plumbing.credential_hint()
                 )
             os.environ["HUB_API_URL"], os.environ["HUB_TOKEN"] = credential
+            profiles.ACTIVE.update(profile=None, source="runner")
         if (args.fn in WORKSPACE_COMMANDS or args.fn == "bot create" and not args.record_only) and not os.environ.get(
             "HUB_WORKSPACE"
         ):
@@ -5465,7 +5493,16 @@ def run(argv, who):
             )
         from clients import remotecli
 
-        return remotecli.main(args, who)
+        if args.fn == "events tail":
+            from clients.tico import Client
+
+            return cli_plumbing.events_tail(
+                Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", "")), args, fields
+            )
+        return remotecli.main(args, who, **({"fields": fields} if fields else {}))
+    except NoCredential as e:
+        print(json.dumps({"error": e.code, "detail": str(e)} if e.code else {"error": str(e)}, indent=2))
+        return cli_plumbing.EXIT_SIGN_IN
     except CliError as e:
         print(json.dumps({"error": str(e)}, indent=2))
         return 1

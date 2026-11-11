@@ -91,6 +91,7 @@ CLI_TOOL_ALIASES = {
     "tico_market_size_accept": ("tico_market_size_decide",),
     "tico_market_size_reject": ("tico_market_size_decide",),
     "tico_market_size_params": ("tico_market_size_decide",),
+    "tico_auth_status": ("tico_whoami",),  # `tico auth status` is `tico whoami`, as `gh auth status`
 }
 
 
@@ -185,6 +186,47 @@ from clients.tico import APIError
 )
 def whoami(api, args):
     return api.get("me")
+
+
+# A person's own API tokens (backend/personal_tokens.py, docs/connect-an-agent.md). A token reads and revokes its
+# person's tokens; minting one takes a signed-in browser, so a leaked token cannot extend its own life.
+@tool(
+    "tico_token_list",
+    "Your personal API tokens: label, created, last used, expires, revoked; never a secret. `all`: everyone's "
+    "(owner and admins, from a signed-in browser).",
+    {"all": {"type": "boolean", "description": "Everyone's tokens, with whose each is (owner and admins)"}},
+)
+def token_list(api, args):
+    return api.get("access/tokens" if args.get("all") else "me/tokens")
+
+
+@tool(
+    "tico_token_create",
+    "Make a personal API token for yourself; the answer shows it once. Only from a signed-in browser session: a "
+    "token cannot make tokens.",
+    {
+        "label": _s("What the token is for, shown in Settings > Computers > API tokens", maxLength=80),
+        "expires_in_days": {"type": "integer", "minimum": 1, "maximum": 365, "description": "90 unless given"},
+    },
+    required=("label",),
+    writes=True,
+)
+def token_create(api, args):
+    body = {"label": args["label"]}
+    if args.get("expires_in_days") is not None:
+        body["expires_in_days"] = args["expires_in_days"]
+    return api.post("me/tokens", body, key=_key(args))
+
+
+@tool(
+    "tico_token_revoke",
+    "Stop one of your personal API tokens at once (the owner and admins: anyone's, from a signed-in browser).",
+    {"id": _s("The token's id, from tico_token_list")},
+    required=("id",),
+    writes=True,
+)
+def token_revoke(api, args):
+    return api.post("me/tokens/" + quote(str(args["id"]), safe="") + "/revoke", {}, key=_key(args))
 
 
 VISUALS = {
@@ -11212,6 +11254,12 @@ SHELL_ONLY = {
     "tico_service_key_list",
     "tico_service_key_revoke",
     "tico_team_icon",
+    # This shell's own profiles (clients/profiles.py) and a live stream no MCP call can hold (clients/events_tail.py).
+    "tico_auth_add",
+    "tico_auth_list",
+    "tico_auth_use",
+    "tico_auth_remove",
+    "tico_events_tail",
 }
 
 
@@ -13018,6 +13066,7 @@ AUDIENCE = {
     "tico_bot_repo_create": ("owner", "botops"),
     # Finish setup (backend/onboarding.py): the owner finishes it, and an admin reads it. A person's own agent, handed over
     # from setup (docs/connect-an-agent.md), uses these with their personal token.
+    **{name: PEOPLE for name in ("tico_token_list", "tico_token_create", "tico_token_revoke")},  # people's own
     "tico_setup_show": ("owner", "admin"),
     "tico_setup_complete": ("owner",),
     "tico_setup_invite": ("owner",),

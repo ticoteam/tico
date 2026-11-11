@@ -234,8 +234,8 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             **({"slug": slug} if slug else {}),
         }
 
-    # A person's own API tokens (backend/personal_tokens.py). Managed only from a browser
-    # sign-in: a token is that person everywhere else, but it cannot mint or revoke tokens.
+    # A person's own API tokens (backend/personal_tokens.py). Made only from a browser sign-in: a token is that
+    # person everywhere else and may list and revoke its person's tokens, but it cannot mint one.
     @app.get("/api/v2/me/tokens")
     def my_tokens(request: Request):
         with store.read() as c:

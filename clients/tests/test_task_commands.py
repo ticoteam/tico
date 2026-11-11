@@ -225,7 +225,7 @@ def test_a_relation_is_a_note_and_a_blocking_one_says_what_to_do_instead(monkeyp
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
     cli = Recorder()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
-    assert remotecli.main(hubcli.parser().parse_args(["task", "relate", "T1", "T2", "--kind", "blocks"])) == 1
+    assert remotecli.main(hubcli.parser().parse_args(["task", "relate", "T1", "T2", "--kind", "blocks"])) == 64
     assert json.loads(capsys.readouterr().out)["detail"] == hubtools.BLOCKING_GONE and cli.writes() == []
 
 
@@ -240,7 +240,7 @@ def test_give_takes_the_person_as_to_or_as_a_third_word_and_needs_one(monkeypatc
     assert sent[0] == sent[1] == [("POST", "tasks/T1/asks/r9/give", {"to": "ben", "version": 3})]
     cli = Recorder()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: cli)
-    assert remotecli.main(hubcli.parser().parse_args(["task", "give", "T1", "r9", "--version", "3"])) == 1
+    assert remotecli.main(hubcli.parser().parse_args(["task", "give", "T1", "r9", "--version", "3"])) == 64
     assert json.loads(capsys.readouterr().out)["detail"] == "Say who it goes to: --to <person>" and not cli.writes()
 
 
@@ -293,11 +293,11 @@ def test_without_a_version_a_change_says_to_add_the_version_and_sends_nothing(na
     }
 
 
-def test_without_a_version_the_cli_prints_the_same_line_and_exits_one(monkeypatch, capsys):
+def test_without_a_version_the_cli_prints_the_same_line_and_exits_with_the_usage_code(monkeypatch, capsys):
     monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
     api = Recorder()
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: api)
-    assert remotecli.main(hubcli.parser().parse_args(["task", "done", "T1", "-m", "x"])) == 1
+    assert remotecli.main(hubcli.parser().parse_args(["task", "done", "T1", "-m", "x"])) == 64
     printed = json.loads(capsys.readouterr().out)
     assert printed == {"error": "usage", "detail": hubtools.version_needed("T1"), "retryable": False}
     assert api.writes() == []

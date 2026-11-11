@@ -355,6 +355,8 @@ def run(args, who=None):
         )
     if args.cmd == "settings":
         return via_tool(client, args)
+    if fn in ("token list", "token create", "token revoke"):  # clients/cli_plumbing.py
+        return via_tool(client, args)
     if args.cmd == "feedback":
         return via_tool(client, args)
     if args.cmd == "call":
@@ -735,7 +737,9 @@ def run(args, who=None):
 
     cmd, sub = args.cmd, getattr(args, "sub", None)
     if cmd == "whoami":
-        return identity
+        from clients import cli_plumbing
+
+        return cli_plumbing.identity(client, identity)  # plus the company, its address and the profile in use
     if fn == "message send":
         from clients import hubtools
 
@@ -1839,12 +1843,18 @@ def contacts_text(fn, result):
     return json.dumps(result, indent=2)
 
 
-def main(args, who=None):
-    from clients import hubtools
+def main(args, who=None, fields=None):
+    """Run one parsed command and print its answer. `fields`: the global --fields (clients/profiles.py pick), which
+    prints only those fields as JSON, in place of any text rendering. Returns the exit code (clients/cli_plumbing.py)."""
+    from clients import cli_plumbing, hubtools
 
     try:
         result = run(args, who)
-        if (
+        if fields:
+            from clients import profiles
+
+            print(json.dumps(profiles.pick(result, fields), indent=2, default=str))
+        elif (
             args.cmd == "email"
             and args.sub
             in (
@@ -1933,10 +1943,10 @@ def main(args, who=None):
                 indent=2,
             )
         )
-        return 1 if exc.retryable else 2
+        return cli_plumbing.exit_code(exc)
     except ValueError as exc:
         if args.cmd != "task":
             raise
         # What the command needs first, in its own words ("Add --version N: ..."), as the MCP tool says it.
         print(json.dumps({"error": "usage", "detail": str(exc), "retryable": False}, indent=2))
-        return 1
+        return cli_plumbing.EXIT_USAGE

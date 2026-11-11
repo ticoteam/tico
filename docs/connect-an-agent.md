@@ -46,8 +46,9 @@ For a correction to your active BotOps request, send `tico_message_send` with `i
 the original message id, or `steer: true` in the same thread. The message stays queued until
 the Computer delivers it into the active run; thread status shows when the follow-up is added.
 
-The token cannot create or revoke tokens, make other credentials (a bot's agent credential, a pairing approval) or click
-Confirm cards. Those need the human signed in to Tico.
+The token cannot create tokens, make other credentials (a bot's agent credential, a pairing approval) or click
+Confirm cards. Those need the human signed in to Tico. It can list its human's own tokens and revoke them
+(`tico token list`, `tico token revoke <id>`, or `tico_token_list` / `tico_token_revoke`), itself included.
 Ask BotOps to collect Credential values through your thread card. The API pass-through retains the
 human's existing Credential permissions, including storing or revealing values when authorized. A Credential administrator can import a bot's existing Credential with
 `tico_credential_import`, grant or revoke access, and delete it with `tico_credential_delete`; values never pass through the
