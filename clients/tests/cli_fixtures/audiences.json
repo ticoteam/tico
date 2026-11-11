@@ -1,0 +1,77 @@
+[
+ {
+  "argv": [
+   "audiences"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "audiences",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico audiences: error: argument sub: invalid choice: 'nope' (choose from list) Did you mean: tico audiences list?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "audiences",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_audiences_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "audiences",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "audiences",
+   "list",
+   "--limit",
+   "5",
+   "--offset",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_audiences_list",
+    {
+     "limit": 5,
+     "offset": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "audiences?limit=5&offset=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

@@ -48,7 +48,6 @@ from clients.commands.goals import goal_read_back, goal_save
 from clients.commands.strategy import LENS_WAIT_MAX, lens_list, lens_run, lens_runs, lens_show
 from clients.commands.market import market_day, market_define, market_size_add, market_size_decide
 from clients.commands.tools import query_search, repo_list, repo_review, repo_update
-from clients.commands.webhooks import webhook_options
 from clients.commands._requester import (
     COUNSEL,
     RULES_OWNER_BOT,
@@ -191,6 +190,5 @@ __all__ = [
     "thread_upload",
     "tool",
     "version_needed",
-    "webhook_options",
     "write_fixture",
 ]

@@ -1,13 +1,17 @@
 """Finance.
 
-Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
+Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together. `tico finance` is made
+from these tools (clients/cli_spec.py), at the end."""
 
+import argparse
 import json
+import sys
 from urllib.parse import quote
-from clients.tico import APIError
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
+from clients.tico import APIError
 
 
 # ----------------------------------------------------------------------------- Finance (docs/finance-tools.md)
@@ -501,7 +505,7 @@ def finance_act(api, args):
 @tool(
     "tico_finance_action",
     "A Finance action's status and result (yours, one you decide, or one your view covers).",
-    {"action_id": _s("The action id from tico_finance_act")},
+    {"action_id": _s("The action id, from `finance act`")},
     ("action_id",),
 )
 def finance_action(api, args):
@@ -537,3 +541,49 @@ def finance_inbox(api, args):
 )
 def finance_card_fill(api, args):
     raise APIError("not_available", "Card fill is not available yet")
+
+
+# ----------------------------------------------------------------------------- `tico finance` (clients/cli_spec.py)
+def _payload(text):
+    """`--payload`: a JSON object, or `-` to read it from stdin."""
+    try:
+        value = json.loads(sys.stdin.read() if text == "-" else text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--payload is not JSON ({exc})") from None
+    if not isinstance(value, dict):
+        raise argparse.ArgumentTypeError("--payload must be a JSON object")
+    return value
+
+
+CLI = (
+    Group("finance", "the books, as you: search, reports, metrics, actions, your work queue (docs/finance-tools.md)"),
+    Command(
+        "finance search",
+        "entries, bank and card rows, bills, invoices, contacts and rules you may see",
+        args=(
+            Arg("active", action="store", type=lambda v: v.lower() in ("1", "true", "yes", "on"), metavar="true|false"),
+        ),
+        example="tico finance search --kind bill --q 'Summit Leasing'",
+    ),
+    Command(
+        "finance report",
+        "one report cut to your view; rows past --top-n fold into Other",
+        example="tico finance report pnl --start 2026-10-01 --end 2026-10-31",
+    ),
+    Command(
+        "finance metric", "one number you may see, with when it was worked out", example="tico finance metric cash"
+    ),
+    Command("finance brief", "what changed in the money you may see: a few short lines", example="tico finance brief"),
+    Command(
+        "finance act",
+        "ask for one Finance action (help lists kinds)",
+        args=(
+            Arg("payload", type=_payload, metavar="JSON|-"),
+            Arg("dry_run", default=None),
+            Arg("operation_id", "--operation-id"),
+        ),
+        example="""tico finance act bill_approve --payload '{"bill_id": "b1"}' --operation-id bill-approve:b1""",
+    ),
+    Command("finance action", "an action's status and result", example="tico finance action fa_1"),
+    Command("finance inbox", "your Finance work queue", example="tico finance inbox --kind bill_due"),
+)

@@ -1,0 +1,36 @@
+[
+ {
+  "argv": [
+   "company-page"
+  ],
+  "tools": [
+   [
+    "tico_company_page",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "company-page",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "company-page",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico company-page: error: unrecognized arguments: nope Did you mean: tico company-page, tico goal company?",
+  "exit": 64
+ }
+]

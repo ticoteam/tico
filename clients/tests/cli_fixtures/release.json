@@ -1,0 +1,294 @@
+[
+ {
+  "argv": [
+   "release"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "release",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico release: error: argument sub: invalid choice: 'nope' (choose from now, schedule) Did you mean: tico release now, tico release schedule?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "release",
+   "now"
+  ],
+  "tools": [
+   [
+    "tico_release_now",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "release/now",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "release",
+   "now",
+   "--note",
+   "note-1"
+  ],
+  "tools": [
+   [
+    "tico_release_now",
+    {
+     "note": "note-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "release/now",
+    {
+     "note": "note-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "release",
+   "schedule"
+  ],
+  "tools": [
+   [
+    "tico_release_schedule",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "release-schedule",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "release",
+   "schedule",
+   "--on",
+   "--time",
+   "times-1",
+   "--time",
+   "times-1b",
+   "--manager",
+   "ana",
+   "--writer",
+   "writer-1"
+  ],
+  "tools": [
+   [
+    "tico_release_schedule",
+    {
+     "bot": "ana",
+     "on": true,
+     "operation_id": null,
+     "times": [
+      "times-1",
+      "times-1b"
+     ],
+     "writer": "writer-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "release-schedule",
+    {
+     "on": true,
+     "times": [
+      "times-1",
+      "times-1b"
+     ],
+     "bot": "ana",
+     "writer": "writer-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "release",
+   "schedule",
+   "--off"
+  ],
+  "tools": [
+   [
+    "tico_release_schedule",
+    {
+     "on": false,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "release-schedule",
+    {
+     "on": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "release",
+   "schedule",
+   "--on",
+   "--off"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico release schedule: error: argument --off: not allowed with argument --on",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "release",
+   "schedule",
+   "--manager",
+   ""
+  ],
+  "tools": [
+   [
+    "tico_release_schedule",
+    {
+     "bot": "",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "release-schedule",
+    {
+     "bot": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "release",
+   "schedule",
+   "--time",
+   "09:00",
+   "--time",
+   "15:00",
+   "--time",
+   "18:00"
+  ],
+  "tools": [
+   [
+    "tico_release_schedule",
+    {
+     "operation_id": null,
+     "times": [
+      "09:00",
+      "15:00",
+      "18:00"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "release-schedule",
+    {
+     "times": [
+      "09:00",
+      "15:00",
+      "18:00"
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

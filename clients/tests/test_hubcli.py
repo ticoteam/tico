@@ -1721,10 +1721,13 @@ def test_settings_cli_passes_an_id_addressed_routine_as_the_requester(monkeypatc
 
 def test_a_plain_webhook_header_sends_no_secret_key():
     """BotOps' requests refuse any key named like a secret (backend/botops_act.py), so a plain header leaves it out."""
-    from clients import hubtools
-
-    fields = hubtools.webhook_options({"header": ["X-Team: acme"], "secret_header": ["X-Key: k"]})
-    assert fields["headers"] == [{"name": "X-Team", "value": "acme"}, {"name": "X-Key", "secret": True, "value": "k"}]
+    args = hubcli.parser().parse_args(
+        ["webhook", "update", "ep_1", "--header", "X-Team: acme", "--secret-header", "X-Key: k"]
+    )
+    assert cli_spec.of(args).prepare(args)[1]["headers"] == [
+        {"name": "X-Team", "value": "acme"},
+        {"name": "X-Key", "secret": True, "value": "k"},
+    ]
 
 
 def test_file_approved_by_path_asks_with_the_path_and_digest_as_query_fields(tmp_path, monkeypatch):

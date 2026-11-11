@@ -255,41 +255,12 @@ def delivery_of(args):
     return {"delivery": args.delivery} if getattr(args, "delivery", None) else {}
 
 
-def quiet_hours(word):
-    """0 to 24, whole hours."""
-    try:
-        hours = int(word)
-    except ValueError:
-        hours = -1
-    if not 0 <= hours <= 24:
-        raise argparse.ArgumentTypeError("use a whole number of hours from 0 to 24")
-    return hours
-
-
-def on_off(word):
-    """`on` or `off` as the boolean the tool takes."""
-    if word not in ("on", "off"):
-        raise argparse.ArgumentTypeError("use on or off")
-    return word == "on"
-
-
 def _pair(text):
     """`KEY=VALUE` on a command line, split at the first `=`: a match, a value or an option of `tico contacts`."""
     key, sep, value = str(text).partition("=")
     if not sep or not key.strip():
         raise argparse.ArgumentTypeError(f"{text} is not KEY=VALUE")
     return key.strip(), value
-
-
-def _finance_payload(text):
-    """`tico finance act --payload`: a JSON object, or `-` to read it from stdin."""
-    try:
-        value = json.loads(sys.stdin.read() if text == "-" else text)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(f"--payload is not JSON ({exc})") from None
-    if not isinstance(value, dict):
-        raise argparse.ArgumentTypeError("--payload must be a JSON object")
-    return value
 
 
 def thread_page_flags(s, key="next_cursor"):
@@ -456,7 +427,7 @@ def parser():
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
-    from clients.commands import threads as thread_commands, webhooks
+    from clients.commands import company_page, finance, threads as thread_commands, webhooks
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
@@ -560,34 +531,7 @@ def parser():
 
     cli_spec.add(sub, mail_commands.CLI)  # tico email: clients/commands/mail.py
 
-    # The Company page, read-only (docs/company-page.md): owners and admins; nothing here publishes or changes a reader.
-    sub.add_parser('company-page', help='the Company page: transparency, address, last update').set_defaults(
-        fn='company-page'
-    )
-    audiences = sub.add_parser('audiences', help='the Company page\'s audiences').add_subparsers(dest='sub')
-    item = audiences.add_parser('list')
-    item.set_defaults(fn='audiences list')
-    item.add_argument('--limit', type=int)
-    item.add_argument('--offset', type=int)
-    editions = sub.add_parser('editions', help='the Company page\'s editions: drafts and published').add_subparsers(
-        dest='sub'
-    )
-    item = editions.add_parser('list')
-    item.set_defaults(fn='editions list')
-    item.add_argument('--audience')
-    item.add_argument('--status')
-    item.add_argument('--before')
-    item.add_argument('--limit', type=int)
-    item = editions.add_parser('show')
-    item.set_defaults(fn='editions show')
-    item.add_argument('id')
-    readers = sub.add_parser('readers', help='the Company page\'s readers (owners and admins)').add_subparsers(
-        dest='sub'
-    )
-    item = readers.add_parser('list')
-    item.set_defaults(fn='readers list')
-    item.add_argument('--limit', type=int)
-    item.add_argument('--cursor', type=int)
+    cli_spec.add(sub, company_page.CLI)  # tico company-page, audiences, editions, readers
 
     meeting = sub.add_parser(
         "meeting", help="search meetings, read transcripts, import a transcript from another tool"
@@ -2386,25 +2330,7 @@ def parser():
     )
     s.set_defaults(fn="event-types")
     cli_spec.add(sub, webhooks.CLI)  # tico trigger: clients/commands/webhooks.py
-    relay_top = sub.add_parser("relay", help="webhooks through Tico Gateway").add_subparsers(dest="sub")
-    s = relay_top.add_parser(
-        "status", help="the Gateway key, the addresses, the last pull and what waits at the Gateway"
-    )
-    s.set_defaults(fn="relay status")
-    s = relay_top.add_parser("set", help="whether a delivery to a trigger's Gateway address starts a sleeping server")
-    s.add_argument("trigger", help="the trigger id from `tico trigger list`")
-    s.add_argument(
-        "--wake", type=on_off, metavar="on|off", required=True, help="start the server on a delivery (on) or not (off)"
-    )
-    s.set_defaults(fn="relay set")
-    wake_url = relay_top.add_parser(
-        "wake-url", help="an address Tico Gateway knocks on to start a server you run when a webhook waits for it"
-    ).add_subparsers(dest="subsub")
-    wake_url.add_parser("show", help="the address, who set it and when").set_defaults(fn="relay wake-url show")
-    wake_url.add_parser("off", help="stop knocking").set_defaults(fn="relay wake-url off")
-    s = wake_url.add_parser("set", help="set the address; the signing secret is shown once")
-    s.add_argument("url", help="an https address you run")
-    s.set_defaults(fn="relay wake-url set")
+    cli_spec.add(sub, webhooks.RELAY)  # tico relay: clients/commands/webhooks.py
     call = sub.add_parser(
         "call", help="Tico Meet: audio and screen share in a thread, with a transcript posted to it"
     ).add_subparsers(dest="sub")
@@ -2445,17 +2371,7 @@ def parser():
     s.add_argument("call_id")
     s.add_argument("bot")
     s.set_defaults(fn="call bot remove")
-    sleep = sub.add_parser("sleep", help="Sleep when idle: a hosted server stops after quiet hours").add_subparsers(
-        dest="sub"
-    )
-    s = sleep.add_parser("status", help="hosted or not, the hours, what keeps the server up and Tico's last answer")
-    s.set_defaults(fn="sleep status")
-    s = sleep.add_parser("set", help="turn it on (1-24 quiet hours) or off (0); an owner or an admin")
-    s.add_argument("--hours", type=quiet_hours, metavar="N", help="quiet hours before it sleeps; 0 turns it off")
-    s.add_argument(
-        "--runners", type=on_off, metavar="on|off", help="stop the bot computers with the server (default on)"
-    )
-    s.set_defaults(fn="sleep set")
+    cli_spec.add(sub, webhooks.SLEEP)
 
     oks = sub.add_parser("ok", help="an OK you asked for with --for: use it once, just before you act").add_subparsers(
         dest="sub"
@@ -2466,9 +2382,7 @@ def parser():
     s.add_argument("--content", type=json_value, required=True, help="exactly the content it was asked for, as JSON")
     s.add_argument("-m", "--note", help="what was done, in a sentence")
     s.set_defaults(fn="ok use")
-    notice = sub.add_parser("notice", help="notices from Tico Team").add_subparsers(dest="sub")
-    s = notice.add_parser("list", help="the notices Tico Team sent, newest first")
-    s.set_defaults(fn="notice list")
+    cli_spec.add(sub, webhooks.NOTICE)
 
     catalogue = sub.add_parser(
         "settings", help="find, read and change a control in Settings by its words (docs/permissions.md)"
@@ -2491,157 +2405,8 @@ def parser():
         target.add_argument("--id", help="the one thing it sets: a trigger, webhook, rule, routine, repository...")
         target.add_argument("--person", help="the person's id, for a setting set per person")
         s.set_defaults(fn="settings " + leaf)
-    release = sub.add_parser(
-        "release", help="the team's releases: ask for one now, or set the daily hour"
-    ).add_subparsers(dest="sub")
-    s = release.add_parser(
-        "now",
-        help="ask the Release Owner to release what waits for a release now (hotfix, "
-        "midday release); one task listing the tasks",
-    )
-    s.add_argument("--note", help="why now; goes in the task; a person's note asks even with nothing waiting")
-    s.set_defaults(fn="release now")
-    s = release.add_parser("schedule", help="show the daily release, or change it")
-    on = s.add_mutually_exclusive_group()
-    on.add_argument("--on", dest="on", action="store_true", default=None, help="turn the daily release on")
-    on.add_argument("--off", dest="on", action="store_false", help="turn the daily release off")
-    s.add_argument(
-        "--time",
-        dest="times",
-        action="append",
-        metavar="HH:MM",
-        help="a release time in company time; give it twice for two (replaces the times)",
-    )
-    s.add_argument("--manager", dest="bot", help="the Release Owner's bot slug; empty finds it by starter template")
-    s.add_argument("--writer", help="the Technical Writer's bot slug; empty finds it by starter template")
-    s.set_defaults(fn="release schedule")
-
-    webhook = sub.add_parser(
-        "webhook", help="outgoing webhooks: Tico posts events to an address you choose (Tools › Webhooks)"
-    ).add_subparsers(dest="sub")
-    s = webhook.add_parser("list", help="the endpoints you may see, with 7-day delivered and failed counts")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--offset", type=int)
-    s.set_defaults(fn="webhook list")
-    s = webhook.add_parser(
-        "create", help="make an endpoint; the signing secret is printed once. A bot asks a person to OK it first"
-    )
-    s.add_argument("--name", required=True)
-    s.add_argument("--url", required=True, help="an https address")
-    s.add_argument("--events", nargs="+", help="event names, groups (task.*) or * (default all)")
-    s.add_argument("--rate-per-hour", dest="rate_per_hour", type=int, help="most sends an hour (default 600)")
-    s.add_argument(
-        "--allow-http",
-        dest="allow_http",
-        action="store_true",
-        default=None,
-        help="owner only: plain http to localhost, for development",
-    )
-    s.add_argument("--departments", nargs="+", help="only events about work in these departments (default all)")
-    s.add_argument("--bots", nargs="+", help="only events that involve these bots (default all)")
-    s.add_argument(
-        "--pipelines", nargs="+", help="only events about tasks in these pipelines, by id or name (default all)"
-    )
-    s.add_argument(
-        "--header", action="append", help='a header to send, "Name: value" (up to 10; every use replaces the list)'
-    )
-    s.add_argument(
-        "--secret-header",
-        dest="secret_header",
-        action="append",
-        help='like --header, the value is sealed and never shown; "Name" alone keeps the value it has',
-    )
-    s.set_defaults(fn="webhook create")
-    s = webhook.add_parser("show", help="one endpoint and its last attempts")
-    s.add_argument("id")
-    s.set_defaults(fn="webhook show")
-    s = webhook.add_parser("update", help="change an endpoint")
-    s.add_argument("id")
-    s.add_argument("--name")
-    s.add_argument("--url")
-    s.add_argument("--events", nargs="+")
-    s.add_argument("--rate-per-hour", dest="rate_per_hour", type=int)
-    s.add_argument("--allow-http", dest="allow_http", action=argparse.BooleanOptionalAction, default=None)
-    s.add_argument(
-        "--expected-revision", dest="expected_revision", type=int, help="the revision you read; needed with --url"
-    )
-    s.add_argument(
-        "--credentials",
-        choices=("keep", "clear"),
-        help="a new address for another destination: keep sends the saved secret headers there, clear removes them",
-    )
-    s.add_argument("--departments", nargs="+", help="only events about work in these departments (default all)")
-    s.add_argument("--bots", nargs="+", help="only events that involve these bots (default all)")
-    s.add_argument(
-        "--pipelines", nargs="+", help="only events about tasks in these pipelines, by id or name (default all)"
-    )
-    s.add_argument(
-        "--header", action="append", help='a header to send, "Name: value" (up to 10; every use replaces the list)'
-    )
-    s.add_argument(
-        "--secret-header",
-        dest="secret_header",
-        action="append",
-        help='like --header, the value is sealed and never shown; "Name" alone keeps the value it has',
-    )
-    s.add_argument(
-        "--no-filter", dest="no_filter", action="store_true", help="send every event the endpoint listens for"
-    )
-    s.add_argument("--no-headers", dest="no_headers", action="store_true", help="remove every custom header")
-    s.set_defaults(fn="webhook update")
-    s = webhook.add_parser("rotate", help="a new signing secret, printed once; the old one signs for 24 more hours")
-    s.add_argument("id")
-    s.set_defaults(fn="webhook rotate")
-    s = webhook.add_parser("pause", help="stop sending; queued sends wait")
-    s.add_argument("id")
-    s.add_argument("--reason")
-    s.set_defaults(fn="webhook pause")
-    s = webhook.add_parser("resume", help="send again")
-    s.add_argument("id")
-    s.set_defaults(fn="webhook resume")
-    s = webhook.add_parser("delete", help="delete the endpoint and cancel its queued sends")
-    s.add_argument("id")
-    s.set_defaults(fn="webhook delete")
-    s = webhook.add_parser("send", help="send a custom event (custom.<name>) to one endpoint")
-    s.add_argument("id")
-    s.add_argument("--type", required=True, help="custom.<name>")
-    s.add_argument("--data", help="JSON, or @file with the JSON")
-    s.add_argument("--subject")
-    s.set_defaults(fn="webhook send")
-    s = webhook.add_parser("sends", help="an endpoint's send log; --send ID shows one send with its attempts")
-    s.add_argument("id")
-    s.add_argument("--send")
-    s.add_argument("--state", choices=["ready", "sending", "delivered", "failed", "canceled", "withheld"])
-    s.add_argument("--limit", type=int)
-    s.add_argument("--offset", type=int)
-    s.set_defaults(fn="webhook sends")
-    s = webhook.add_parser("retry", help="send a failed, canceled or delivered send again now")
-    s.add_argument("id")
-    s.add_argument("send")
-    s.set_defaults(fn="webhook retry")
-    s = webhook.add_parser("recover", help="send again every send that gave up since a date (same ids and bodies)")
-    s.add_argument("id")
-    s.add_argument("--since", required=True, help="a date like 2026-10-20 or a time")
-    s.set_defaults(fn="webhook recover")
-    s = webhook.add_parser(
-        "replay", help="send the events since a date that the endpoint should have had and has no send for"
-    )
-    s.add_argument("id")
-    s.add_argument("--since", required=True, help="a date like 2026-10-20 or a time")
-    s.add_argument(
-        "--after", help="with --since: continue where a round that said `more` stopped (its next_since and next_after)"
-    )
-    s.set_defaults(fn="webhook replay")
-    s = webhook.add_parser(
-        "enable",
-        help="turn an endpoint back on; after Tico turned it off for failing, it offers to send again what it held back",
-    )
-    s.add_argument("id")
-    s.set_defaults(fn="webhook enable")
-    s = webhook.add_parser("example", help="send an event type's example to one endpoint")
-    s.add_argument("id")
-    s.add_argument("--type", help="an event name (default custom.example)")
-    s.set_defaults(fn="webhook example")
+    cli_spec.add(sub, webhooks.RELEASE)
+    cli_spec.add(sub, webhooks.WEBHOOK)
 
     s = sub.add_parser("brief", help="alerts, who needs the person, what bots said since --since")
     s.add_argument("--since", help="an ISO date-time; default the last 12 hours")
@@ -3496,110 +3261,7 @@ def parser():
     s = support.add_parser("send", help="send a report a person OK'd; filed as the person who OK'd it")
     s.add_argument("--ok", required=True, help="the OK id `support report` printed")
     s.set_defaults(fn="support send")
-    fin = sub.add_parser(
-        "finance", help="the books, as you: search, reports, metrics, actions, your work queue (docs/finance-tools.md)"
-    ).add_subparsers(dest="sub")
-    s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts and rules you may see")
-    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card", "account"])
-    s.add_argument("--q")
-    for flag in (
-        "--status",
-        "--contact-id",
-        "--vendor",
-        "--account-id",
-        "--money-account-id",
-        "--start",
-        "--end",
-        "--cursor",
-    ):
-        s.add_argument(flag)
-    s.add_argument("--aging", choices=["current", "1_30", "31_60", "61_90", "over_90"])
-    s.add_argument("--contact-kind", choices=["vendor", "customer", "both"])
-    s.add_argument("--rule-kind", choices=["gate", "posting"])
-    s.add_argument("--active", type=lambda v: v.lower() in ("1", "true", "yes", "on"), help="contacts: true or false")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="finance search")
-    s = fin.add_parser("report", help="one report cut to your view; rows past --top-n fold into Other")
-    s.add_argument(
-        "kind",
-        choices=[
-            "pnl",
-            "balance_sheet",
-            "cash_flow",
-            "budget_vs_actual",
-            "ap_aging",
-            "ar_aging",
-            "spend_by",
-            "close",
-            "sales_tax",
-            "1099",
-        ],
-    )
-    s.add_argument("--start")
-    s.add_argument("--end")
-    s.add_argument("--year", type=int, help="sales_tax, 1099: the calendar year (this year when omitted)")
-    s.add_argument("--period", choices=["day", "week", "month", "quarter", "year"])
-    s.add_argument("--basis", choices=["cash", "accrual"])
-    s.add_argument("--compare", choices=["prior"])
-    s.add_argument("--top-n", type=int)
-    s.add_argument("--by", choices=["department", "team", "teammate", "bot", "person", "vendor", "account"])
-    s.add_argument("--month", help="close: the month, YYYY-MM")
-    s.set_defaults(fn="finance report")
-    s = fin.add_parser("metric", help="one number you may see, with when it was worked out")
-    s.add_argument(
-        "name",
-        choices=[
-            "cash",
-            "burn",
-            "runway_months",
-            "revenue",
-            "spend",
-            "budget_remaining",
-            "budget_pct_used",
-            "ap_due",
-            "ar_overdue",
-            "uncategorized_count",
-            "unreconciled_days",
-            "duplicate_charges",
-            "price_increases",
-        ],
-    )
-    for flag in ("--budget-id", "--start", "--end", "--account-id", "--team", "--teammate"):
-        s.add_argument(flag)
-    s.add_argument("--days", type=int)
-    s.set_defaults(fn="finance metric")
-    s = fin.add_parser("brief", help="what changed in the money you may see: a few short lines")
-    s.set_defaults(fn="finance brief")
-    s = fin.add_parser("act", help="ask for one Finance action (help lists kinds)")
-    s.add_argument("kind")
-    s.add_argument("--payload", type=_finance_payload, help="the kind's fields as JSON, or - to read stdin")
-    s.add_argument("--dry-run", action="store_true", default=None)
-    s.add_argument("--operation-id", help="the action's key (default: HUB_OPERATION_ID)")
-    s.set_defaults(fn="finance act")
-    s = fin.add_parser("action", help="an action's status and result")
-    s.add_argument("action_id")
-    s.set_defaults(fn="finance action")
-    s = fin.add_parser("inbox", help="your Finance work queue")
-    s.add_argument(
-        "--kind",
-        choices=[
-            "uncategorized",
-            "bill_to_enter",
-            "unmatched_receipt",
-            "missing_receipt",
-            "bill_due",
-            "invoice_overdue",
-            "budget_near_limit",
-            "sync_failed",
-            "period_ready",
-            "unreconciled",
-            "bill_email",
-        ],
-        help="only this kind, paged on with --cursor past its first 200",
-    )
-    s.add_argument("--cursor")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="finance inbox")
+    cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
     contacts = sub.add_parser(
         "contacts",

@@ -1,0 +1,77 @@
+[
+ {
+  "argv": [
+   "readers"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "readers",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico readers: error: argument sub: invalid choice: 'nope' (choose from list) Did you mean: tico readers list?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "readers",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_readers_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "readers",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "readers",
+   "list",
+   "--limit",
+   "5",
+   "--cursor",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_readers_list",
+    {
+     "cursor": 5,
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "readers?limit=5&cursor=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]
