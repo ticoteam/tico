@@ -228,7 +228,8 @@ def _may_answer_page(
     conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, value: str, notes: str | None
 ) -> None:
     """A page takes ok or no, and only once Jev has looked and it waits on someone: the person it names after Jev passed
-    it, or a person deciding what Jev was unsure of or could not check. Never Jev's turn, never the owner's."""
+    it, a person deciding what Jev was unsure of or could not check, or the manager bot deciding what Jev was unsure of
+    twice (task_requirements._unsure_to_bots), who says why either way. Never Jev's turn, never the owner's."""
     task_id = row["id"]
     if value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "A page takes ok or no. To change it, attach a new version.", task_id)
@@ -246,6 +247,8 @@ def _may_answer_page(
         _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
     if value == NO and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say what to change", task_id)
+    if value == OK and standing.line.startswith(R.DECIDE) and not (notes or "").strip():
+        _refuse(conn, by, "task_why", "Say why it meets the check", task_id)
 
 
 def _page_version(

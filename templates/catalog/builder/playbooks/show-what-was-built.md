@@ -31,4 +31,6 @@ yes or no in a minute.
   new version.
 - **The person sent it back:** their notes are on the task. Fix what they asked, push, publish the page again and attach
   it.
+- **Jev is unsure, or you want the person's OK:** attach the new version; Tico asks the person. Never ask your own OK
+  of this page, or "OK to merge?": Tico refuses it, and an answer to it passes nothing.
 - **New commits after the OK:** the page is for one head. Publish a new version for the new head and attach it.
