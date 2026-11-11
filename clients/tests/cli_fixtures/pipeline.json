@@ -693,5 +693,67 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "pipeline",
+   "show",
+   "growth-experiments"
+  ],
+  "tools": [
+   [
+    "tico_pipeline_show",
+    {
+     "operation_id": null,
+     "pipeline": "growth-experiments"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "pipelines",
+    null
+   ],
+   [
+    "GET",
+    "bots",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"not_found\",\n  \"detail\": \"No pipeline 'growth-experiments'; the pipelines are: \",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 5
+ },
+ {
+  "argv": [
+   "pipeline",
+   "show",
+   "growth-monitoring"
+  ],
+  "tools": [
+   [
+    "tico_pipeline_show",
+    {
+     "operation_id": null,
+     "pipeline": "growth-monitoring"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "pipelines",
+    null
+   ],
+   [
+    "GET",
+    "bots",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"not_found\",\n  \"detail\": \"No pipeline 'growth-monitoring'; the pipelines are: \",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 5
  }
 ]
