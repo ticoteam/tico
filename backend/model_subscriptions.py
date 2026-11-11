@@ -1573,9 +1573,9 @@ def connected(c, vault, settings, who, login_id, body):
     if login["state"] not in model_login.ACTIVE:
         raise Problem("state", "That sign-in has ended", 409)
     target = c.execute("SELECT * FROM subscription_connects WHERE login_id=?", (login_id,)).fetchone()
-    state, message = "done", ""
+    state, message, category = "done", "", ""
     if not target:
-        state, message = "failed", "That sign-in has ended"
+        state, message, category = "failed", "That sign-in has ended", "ended"
     else:
         write = SubscriptionWrite(
             kind=target["kind"],
@@ -1594,14 +1594,26 @@ def connected(c, vault, settings, who, login_id, body):
                 target["subscription_id"] or None,
             )
         except Problem as problem:
-            state, message = "failed", model_login.redact(problem.detail)
+            # A fixed word for the history: never the value, nor what the provider said about it.
+            state, message, category = "failed", model_login.redact(problem.detail), "value_refused"
     c.execute(
         "UPDATE model_logins SET state=?, message=?, url='', user_code='', pending_code=NULL, lines='[]', "
         "updated_at=? WHERE id=?",
         (state, message, H.now(), login_id),
     )
     c.execute("DELETE FROM subscription_connects WHERE login_id=?", (login_id,))
-    H.event(c, "runner:" + who.runner_id, "runner.login." + state, who.runner_id, {"runtime": login["runtime"]})
+    H.event(
+        c,
+        "runner:" + who.runner_id,
+        "runner.login." + state,
+        who.runner_id,
+        {
+            "runtime": login["runtime"],
+            "login_id": login_id,
+            "kind": "connect",
+            **({"category": category} if category else {}),
+        },
+    )
     return {"state": state, "message": message}
 
 

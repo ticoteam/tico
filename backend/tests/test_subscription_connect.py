@@ -246,6 +246,14 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
     assert seen["state"] == "failed" and seen["message"]
     assert get(api, "model-subscriptions")["subscriptions"] == []
+    with api.app.state.store.read() as c:
+        said = c.execute("SELECT detail FROM events WHERE action='runner.login.failed' ORDER BY rowid DESC").fetchone()
+    assert json.loads(said["detail"]) == {
+        "runtime": "claude",
+        "login_id": login["id"],
+        "kind": "connect",
+        "category": "value_refused",
+    }
     # A failed sign-in the computer reports says why, and keeps no line of what the CLI printed.
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"})
     post(
