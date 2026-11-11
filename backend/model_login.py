@@ -145,13 +145,16 @@ def clean_lines(lines):
 
 _WORD = re.compile(r"[a-z][a-z0-9_]{0,39}")
 _LINK = re.compile(r"https?://\S*")
+# The tail of a code a CLI echoes masked, and a piece of a token a repaint split: too short for `redact`.
+_MASKED = re.compile(r"\*{8,}\S*")
+_TOKEN_RUN = re.compile(r"[A-Za-z0-9_\-]{20,}")
 MAX_PHASES = 60
 
 
 def clean_trace(trace, hide=""):
     """A failed Connect's trace as it is kept (the `runner.login.failed` event): fixed words for the category and each
-    phase, numbers, and the last screen scrubbed here again (links, `hide` (a code still waiting), anything
-    token-shaped), at most MAX_LINE characters. None when the computer sent none."""
+    phase, numbers, and the last screen scrubbed here again (links, `hide` (a code still waiting), a masked code's
+    tail, anything token-shaped or a piece of it), at most MAX_LINE characters. None when the computer sent none."""
     if trace is None:
         return None
     word = lambda text: text if _WORD.fullmatch(text or "") else ""
@@ -165,7 +168,7 @@ def clean_trace(trace, hide=""):
             for p in trace.phases[:MAX_PHASES]
             if word(p.phase)
         ],
-        "screen": redact(screen),
+        "screen": redact(_TOKEN_RUN.sub("[redacted]", _MASKED.sub("********", screen))),
     }
 
 

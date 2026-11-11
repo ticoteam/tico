@@ -273,7 +273,8 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
         {"phase": f"Leaked {TOKEN}", "elapsed_ms": 9200},
         {"phase": "provider_refused", "elapsed_ms": 9200},
     ]
-    screen = f"typedcode#state https://claude.example/authorize?code=abc {TOKEN} this policy does not permit"
+    pieces = f"{TOKEN[:30]} Qq7Qq7Qq7Qq7Qq7Qq7Qq7 Zz9Zz9Zz9Zz9Zz9Zz9Zz9"  # a token a repaint split in three
+    screen = f"typedcode#state ************d-code https://claude.example/authorize?code=abc {TOKEN} {pieces} this policy does not permit"
     post(
         api,
         f"runner-logins/{login['id']}/report",
@@ -298,7 +299,16 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
         ("provider_refused", 9200, None),
     ]
     assert kept["trace"]["screen"].endswith("this policy does not permit") and "[link]" in kept["trace"]["screen"]
-    for leak in (TOKEN, TOKEN[:20], "typedcode", "claude.example/authorize?code", "Leaked"):
+    for leak in (
+        TOKEN,
+        TOKEN[:20],
+        "typedcode",
+        "claude.example/authorize?code",
+        "Leaked",
+        "Qq7Qq7",
+        "Zz9Zz9",
+        "d-code",
+    ):
         assert leak not in everything, leak
     before = json.loads(rows[-2][0])  # a report with no trace keeps none, and still says which sign-in failed
     assert "trace" not in before and (before["kind"], before["category"]) == ("connect", "") and before["login_id"]

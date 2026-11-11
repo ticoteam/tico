@@ -71,6 +71,8 @@ struct Patterns {
     link: Regex,
     alnum: Regex,
     newline: Regex,
+    masked: Regex,
+    token_run: Regex,
     secrets: Vec<Regex>,
 }
 
@@ -92,6 +94,8 @@ fn patterns() -> &'static Patterns {
             link: r(r"https?://\S*"),
             alnum: r(r"[A-Za-z0-9]"),
             newline: r("\r\n|\n|\r"),
+            masked: r(r"\*{8,}\S*"),
+            token_run: r(r"[A-Za-z0-9_\-]{20,}"),
             secrets: vec![
                 r(r"\beyJ[\w-]{6,}\.[\w-]{6,}(?:\.[\w-]*)?"),
                 r(r"\b(?:sk|pk|rk|ghp|gho|ghs|github_pat|xox[abprs]|AIza)[-_][A-Za-z0-9_\-]{8,}"),
@@ -148,15 +152,17 @@ fn printed_token(raw: &str, prefix: &str, ended: bool) -> Option<String> {
         .contains(prefix)
         .then(|| token_in(&plain(raw), prefix, ended))
         .flatten();
-    direct.or_else(|| {
-        ended
-            .then(|| {
-                screen(raw)
-                    .iter()
-                    .find_map(|row| token_in(row, prefix, true))
-            })
-            .flatten()
-    })
+    if !ended {
+        return direct;
+    }
+    // A move after the token's 90th character leaves `direct` a token cut short: the longer reading is the token.
+    let shown = screen(raw)
+        .iter()
+        .find_map(|row| token_in(row, prefix, true));
+    match (direct, shown) {
+        (Some(a), Some(b)) => Some(if b.len() > a.len() { b } else { a }),
+        (a, b) => a.or(b),
+    }
 }
 
 fn token_in(text: &str, prefix: &str, ended: bool) -> Option<String> {
@@ -328,8 +334,8 @@ fn oauth_failure(raw: &str) -> &'static str {
 /// What a person reads for a Connect that ended in `category` (`oauth_failure`). Never the CLI's own text.
 fn failure_message(category: &str, waiting: bool) -> &'static str {
     match category {
-        "provider_refused" => "Claude did not give this account a token. Its organization's settings may not allow it.",
-        "account_on_hold" => "Claude did not give this account a token. The account is on hold.",
+        "provider_refused" => "This account was not given a token. Its organization's settings may not allow it.",
+        "account_on_hold" => "This account was not given a token. The account is on hold.",
         _ if waiting => "The sign-in could not finish. Choose Try again and use the code from the new sign-in page.",
         _ => "The sign-in command stopped without signing in",
     }
@@ -741,7 +747,12 @@ fn screen_digest(raw: &str, typed: &str) -> String {
     if !typed.is_empty() {
         text = text.replace(typed, "");
     }
-    let text = squash(&redact(&patterns().link.replace_all(&text, "[link]")));
+    let p = patterns();
+    let text = redact(&p.link.replace_all(&text, "[link]"));
+    // A code the CLI echoes masked keeps its last characters, and a token a repaint split leaves pieces too short for
+    // `redact`: neither leaves this computer.
+    let text = p.masked.replace_all(&text, "********");
+    let text = squash(&p.token_run.replace_all(&text, "[redacted]"));
     let skip = text.chars().count().saturating_sub(240);
     text.chars().skip(skip).collect()
 }
@@ -2719,6 +2730,12 @@ mod tests {
         }
         let long = "word ".repeat(200);
         assert!(screen_digest(&long, "").chars().count() <= 240);
+        // The masked code's tail, and pieces of a split token too short for the secret patterns.
+        let digest = screen_digest(
+            "Code: ************a1B2c3 ok\r\nabcdefghij0123456789_\x1b[1Cklmnopqrstuvwxyz-01234 end",
+            "",
+        );
+        assert_eq!(digest, "Code: ******** ok [redacted] [redacted] end");
     }
 
     #[test]
@@ -2766,6 +2783,22 @@ mod tests {
         assert_eq!(
             printed_token(&repaint, "sk-ant-oat", true).as_deref(),
             Some(token.as_str())
+        );
+        // Stepped over after its 90th character: the stream alone reads a token cut short, the screen all of it.
+        let late = format!(
+            "{}Q\r{}\x1b[1C{}\r\n",
+            " ".repeat(95),
+            &token[..95],
+            &token[96..]
+        );
+        let late_token = format!("{}Q{}", &token[..95], &token[96..]);
+        assert_eq!(
+            token_in(&plain(&late), "sk-ant-oat", true).map(|t| t.len()),
+            Some(95)
+        );
+        assert_eq!(
+            printed_token(&late, "sk-ant-oat", true).as_deref(),
+            Some(late_token.as_str())
         );
         // Text a repaint erased is not on the screen.
         assert_eq!(
@@ -2818,7 +2851,8 @@ mod tests {
         assert_eq!(oauth_failure("Opening browser to sign in"), "cli_stopped");
         for category in ["provider_refused", "account_on_hold"] {
             for waiting in [false, true] {
-                assert!(failure_message(category, waiting).starts_with("Claude did not give"));
+                assert!(failure_message(category, waiting)
+                    .starts_with("This account was not given a token."));
             }
         }
         assert_eq!(
@@ -2859,7 +2893,9 @@ case "$*" in
     fi
     if test -e "$HOME/refuses"; then
       # Like the real CLI when the account's organization holds the token back: no retry, it ends by itself.
-      printf "\033[2C%s https://claude.example/authorize?x=1 sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123\r\n" "$code"
+      # Its last screen has the masked code with its tail, a link, and a token a repaint split into three pieces.
+      printf "\033[2C%s ************d-code https://claude.example/authorize?x=1\r\n" "$code"
+      printf "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123\033[1CQq7Qq7Qq7Qq7Qq7Qq7Qq7\033[1CZz9Zz9Zz9Zz9Zz9Zz9Zz9\r\n"
       printf "\033[2CThis\033[1Cstep creates a long-lived token, which this policy does\033[1Cnot permit.\r\n"
       exit 0
     fi
@@ -2933,6 +2969,9 @@ esac
                 !diagnostics.contains("pasted-code")
                     && !diagnostics.contains("sk-ant-oat")
                     && !diagnostics.contains("abcdefghijklmnop")
+                    && !diagnostics.contains("Qq7Qq7")
+                    && !diagnostics.contains("Zz9Zz9")
+                    && !diagnostics.contains("d-code")
                     && !diagnostics.contains("https://claude.example"),
                 "secret in diagnostics: {diagnostics}"
             );
@@ -3077,7 +3116,7 @@ esac
             state(&login),
             (
                 "failed".to_string(),
-                "Claude did not give this account a token. Its organization's settings may not allow it."
+                "This account was not given a token. Its organization's settings may not allow it."
                     .to_string()
             )
         );
@@ -3105,6 +3144,9 @@ esac
             !shown.contains("pasted-code")
                 && !shown.contains("sk-ant")
                 && !shown.contains("abcdefghijklmnop")
+                && !shown.contains("Qq7Qq7")
+                && !shown.contains("Zz9Zz9")
+                && !shown.contains("d-code")
                 && !shown.contains("https://"),
             "{shown}"
         );
