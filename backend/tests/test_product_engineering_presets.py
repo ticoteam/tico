@@ -569,7 +569,7 @@ def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_perso
     time_machine.move_to(datetime(2026, 11, 10, 9, tzinfo=timezone.utc), tick=False)
     row, rid = _sign_off(c, stage_id)
     # Fixes 2's checks need GitHub: met here by taking them off, so the person's OK is all the task waits on.
-    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id=? AND kind='checks_pass'", (H.now(), stage_id))
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id=? AND kind='item'", (H.now(), stage_id))
     row = E.task(c, row["id"])
     page = next(s for s in R.standings(c, row) if s.requirement["id"] == rid)
     assert (page.state, page.on) == (R.WAITING, ANA)
