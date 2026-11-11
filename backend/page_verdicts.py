@@ -253,6 +253,36 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
                 else (f'Jev sent back "{R.name_of(requirement)}"')
             )
             E.tell_owner(conn, task_id, line, f"jev:{verdict['id']}")
+        elif said == "unsure":
+            _unsure_wake(conn, task_id, page, f"jev:{verdict['id']}")
+
+
+def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str) -> None:
+    """Jev unsure on a stage a bot holds goes to bots first (task_requirements._unsure_to_bots): wake the bot it is back
+    with, with Jev's reason and the check line, or the manager bot that decides it. A person's turn wakes nobody."""
+    from . import task_engine as E
+    from . import task_requirements as R
+    from . import task_wakes
+
+    row = E.task(conn, task_id)
+    requirement = R.get(conn, page["requirement_id"])
+    if not row or not requirement or row["status"] != "open" or row.get("snooze"):
+        return
+    answer = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
+    standing = R.standing(conn, row, requirement, answer)
+    name = R.name_of(requirement)
+    if standing.state == R.NOT_MET and standing.line.startswith(R.FIX_OR_EXPLAIN):
+        E.tell_owner(conn, task_id, f'Jev is unsure of "{name}": {standing.line}', what)
+    elif standing.state == R.WAITING and standing.line.startswith(R.DECIDE) and standing.on:
+        lead = f'Jev was unsure of "{name}" twice: you decide it, as the pipeline\'s manager.'
+        task_wakes.add(
+            conn,
+            row,
+            standing.on,
+            row["visit"],
+            task_wakes.body(conn, row, lead, to=standing.on),
+            wake_key=f"{row['id']}:{row['visit']['id']}:{what}",
+        )
 
 
 def run(store: Any, now: str | None = None) -> int:

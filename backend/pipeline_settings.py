@@ -199,7 +199,8 @@ PRESETS["engineering"] = {
             "engineering-fixes-2",
             "Fixes 2",
             "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
-            "newest commit and what both reviewers found.",
+            "newest commit and what both reviewers found. A person OKs that page: to change it, attach the new "
+            "version; Tico asks the person. Never ask your own OK of it.",
             240,
             [
                 github("checks_pass"),

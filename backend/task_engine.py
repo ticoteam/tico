@@ -1455,6 +1455,10 @@ def add_requirement(
         _refuse(conn, by, "task_requirement", "Nobody answers their own ask: ask someone else", task_id)
     if kind == "ok" and not is_human(person):
         _refuse(conn, by, "task_requirement", "An OK is asked of a person", task_id)
+    if is_bot(by):
+        page = _people_page(conn, row, kind, shows, choices)
+        if page:
+            _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
     _may_name(conn, by, person, task_id)
     unshared = not_shared(conn, row, str(person))
     if unshared:
@@ -1492,6 +1496,28 @@ def add_requirement(
     # has one.
     task_wakes.ask(conn, out, R.get(conn, requirement_id))
     return out
+
+
+def _people_page(
+    conn: "sqlite3.Connection", row: Row, kind: str, shows: object, choices: list[str] | None
+) -> str | None:
+    """The name of the stage's people-only page requirement a bot's ask would duplicate, or None: an OK, or a yes/no
+    question, that shows that page or shows nothing, while the stage has one. A person OKs that page already, every
+    version, so the bot's ask adds a second one and nothing passes on it."""
+    yes_no = kind == "answer" and sorted(str(c).strip().lower() for c in (choices or [])) == ["no", "yes"]
+    if kind != "ok" and not yes_no:
+        return None
+    from . import task_pages as P
+
+    refs = [str(ref) for ref in cast("list[object]", shows)] if isinstance(shows, list) else []
+    for requirement in R.for_visit(conn, row["visit"]):
+        if requirement["kind"] != "page" or not requirement.get("stage_id") or not R.people_only(requirement):
+            continue
+        attached = P.current(conn, row["visit"]["id"], requirement["id"])
+        named = bool(attached) and any(str(attached["file_id"]) in ref for ref in refs)
+        if named or not refs:
+            return R.name_of(requirement)
+    return None
 
 
 def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: str, ts: str) -> None:

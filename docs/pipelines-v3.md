@@ -314,7 +314,13 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - If not: 3 tries, then the manager bot, then a person.
 5. **Jev is checking**
    - Starts: A page is attached.
-   - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with reasons. Unsure: a person.
+   - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with reasons. Unsure: on a page a person OKs
+     anyway (people only, or naming someone), that person at once, every version, with Jev's reason; after a send
+     back, the person who sent it back, with their words. On a stage a bot holds: back to that bot once, "not yet
+     met: fix it or explain it on the page", with Jev's reason and the check; the next unsure in the same visit goes
+     to the pipeline's manager bot, who OKs it or sends it back and says why; with no manager bot, or when the
+     manager holds the stage, a person as before. A bot never asks its own OK of a page a person OKs already: it
+     attaches the new version. (Changed Nov 11 by the two sign-offs rule.)
    - If not: Retried 3 times, then a person.
 6. **GitHub**
    - Starts: Checks are running, the PR is in the merge queue, or it merged and waits for a release.

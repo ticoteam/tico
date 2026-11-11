@@ -714,6 +714,37 @@ def jev_unsure(r: SoftRig) -> None:
     r.at(p, "In development")
 
 
+@case(
+    "jev-unsure-bot-first",
+    "Jev unsure of a Review page: back to the reviewer once, then the Pipeline Manager decides with why; no person",
+)
+def jev_unsure_bot_first(r: SoftRig) -> None:
+    from backend import answers as A
+    from backend import task_requirements as R
+
+    _, e = r.to_development("Tags")
+    r.pr(e, 1)
+    r.settle(r.gh.ci_s)
+    r.at(e, "Review 1")
+    review = r.page(REVIEWER_1, "Review 1: tags", verdict=UNSURE)
+    r.attach(e, review, REVIEWER_1)
+    r.jev()
+    r.check()
+    r.says(e, R.FIX_OR_EXPLAIN)
+    expect(r.waits(e) == [("bot", REVIEWER_1)], f"Jev's first unsure left it waiting on {r.waits(e)}")
+    r.attach(e, r.page(REVIEWER_1, "Review 1: tags, read and run", verdict=UNSURE, page=review), REVIEWER_1)
+    r.jev()
+    r.check()
+    r.says(e, R.DECIDE)
+    expect(r.waits(e) == [("bot", EM)], f"Jev's second unsure left it waiting on {r.waits(e)}, not the manager")
+    rid = r.requirement(e, "page")
+    version = r.version(e)
+    why = "It names the head, says what was run, and nothing blocks"
+    r.ok(EM, lambda c: A.answer(c, e, rid, EM, "ok", why, seen_version=version), "the manager OKs the review")
+    r.settle()
+    r.at(e, "Fixes 1")
+
+
 # ----------------------------------------------------------------------------- built on the base
 @case(
     "webhooks-out-of-order", "Webhooks repeated and out of order: the newest fact wins, each taken once", covers=(32,)
