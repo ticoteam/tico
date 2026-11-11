@@ -207,7 +207,7 @@ def test_a_request_goes_from_typed_to_released_with_two_sign_offs(co, webhooks):
 
 def test_a_new_commit_after_the_review_page_goes_back_to_the_same_reviewer(co):
     """The Builder pushes right after Reviewer 1 attached its page: the review of the old commit does not carry the PR
-    on. The reviewer is woken once more (two minutes later), told the new commit, and its second page moves the task."""
+    on. The reviewer is woken at once, told the new commit, and its second page moves the task."""
     _, engineering = to_build(co)
     head = build(co, engineering)
     reviewer = co.handoff(engineering, "Review 1", "reviewer-1")
@@ -221,9 +221,6 @@ def test_a_new_commit_after_the_review_page_goes_back_to_the_same_reviewer(co):
     assert co.task(engineering)["stage"]["name"] == "Review 1", (
         f"a review of the old commit carried the PR past Review 1. {co.line(engineering)}"
     )
-    # The reviewer's run had ended, so the wake for the new commit is the two-minute one for a stopped owner.
-    co.later(3)
-    co.beat()
     review(co, engineering, "Review 1", "reviewer-1", newer, "Nothing blocking.")
     co.handoff(engineering, "Fixes 1", "builder").end()
     co.clean()
@@ -345,4 +342,81 @@ def test_a_question_to_the_person_waits_in_their_list_and_the_answer_wakes_the_a
     owner = co.handoff(product, "Spec", "product-owner")
     assert "Integers only." in owner.wake + owner.show(), "the Product Owner is not shown the person's answer"
     owner.end()
+    co.clean()
+
+
+def to_sign_off(co, engineering):
+    """An Engineering task taken from Build to the pre-release sign-off. Returns the PR's head commit."""
+    head = build(co, engineering)
+    review(co, engineering, "Review 1", "reviewer-1", head, "One blocking issue: no test for negate(0).")
+    head = fix(co, engineering, "Fixes 1")
+    review(co, engineering, "Review 2", "reviewer-2", head, "Nothing blocking.")
+    builder = co.handoff(engineering, "Fixes 2", "builder")
+    built, _ = builder.page("built.html", "What was built: negate", f"Built at {head}; checks pass; both reviews done.")
+    builder.attach("Review page", built)
+    builder.end()
+    co.beat()
+    return head
+
+
+def test_the_merge_queue_drops_the_pr_and_the_release_owner_queues_it_again(co):
+    """GitHub takes the signed-off PR out of the merge queue: the Release Owner is woken with why, puts it back with
+    `tico task queue`, and it merges."""
+    before = co.needs_you()
+    _, engineering = to_build(co)
+    to_sign_off(co, engineering)
+    co.sign_off(engineering, "Ship it.")
+    co.beat()
+    assert co.github.prs[(REPO, 1)]["queue_state"] == "queued", "Tico did not put the signed-off PR in the merge queue"
+    co.github.drop(REPO, 1, "Checks failed in the merge queue", check="tests")
+    co.heard(1)
+    assert co.task(engineering)["stage"]["name"] == "Merge", f"a dropped PR's task left Merge. {co.line(engineering)}"
+    woken = [bot for bot, task in co.queued() if task == engineering]
+    assert woken == ["release-owner"], f"after the queue dropped the PR, the queued wakes are {woken}"
+    releaser = co.turn_on("release-owner", engineering, "after the merge queue dropped its PR")
+    assert "Checks failed in the merge queue" in releaser.wake, (
+        f"the Release Owner is not told why: {releaser.wake[:400]}"
+    )
+    releaser.cli("task", "queue", engineering, "--version", releaser.version())
+    releaser.end()
+    co.beat()
+    assert co.github.prs[(REPO, 1)]["queue_state"] == "queued", "`tico task queue` did not put the PR back in the queue"
+    co.github.merge(REPO, 1)
+    co.heard(1)
+    assert co.task(engineering)["stage"]["name"] == "Release", (
+        f"the merged PR's task is not in Release. {co.line(engineering)}"
+    )
+    assert co.new_in_list(before) == [], "a PR dropped from the queue and queued again reached the person's list"
+    co.clean()
+
+
+def test_the_person_says_no_before_release_and_the_second_round_is_signed_off_once_more(co):
+    """The person sends the build back at the pre-release sign-off: the Builder is woken with the reason, fixes it,
+    attaches the page again, and one more sign-off takes the same task to the merge queue."""
+    before = co.needs_you()
+    product, engineering = to_build(co)
+    to_sign_off(co, engineering)
+    asks = [i for i in co.needs_you() if i["task_id"] == engineering and i["kind"] == "ask"]
+    assert len(asks) == 1 and "no" in asks[0]["ask"]["may"], f"the person cannot send the build back: {asks}"
+    answer = f"tasks/{engineering}/asks/{asks[0]['requirement_id']}/answer"
+    co.person("POST", answer, {"value": "no", "note": "negate(None) must raise."})
+    co.beat()
+    assert co.new_in_list(before) == [], "a build sent back is still in the person's list"
+    builder = co.handoff(engineering, "Fixes 2", "builder")
+    assert "negate(None) must raise." in builder.wake + builder.show(), "the Builder is not shown why it came back"
+    head = co.github.push(REPO, 1, head=co.commit())
+    co.github.set_checks(REPO, head, "success")
+    co.heard(1)
+    built, _ = builder.page("built.html", "What was built: negate", f"Built at {head}; negate(None) raises.")
+    builder.attach("Review page", built)
+    builder.end()
+    co.beat()
+    assert co.new_in_list(before) == [("ask", engineering)], "the second round did not reach the person once"
+    co.sign_off(engineering, "Ship it.")
+    co.beat()
+    assert co.task(engineering)["stage"]["name"] == "Merge", (
+        f"the second sign-off did not reach Merge. {co.line(engineering)}"
+    )
+    assert co.github.prs[(REPO, 1)]["queue_state"] == "queued", "Tico did not queue the PR after the second sign-off"
+    assert len(co.task(product)["filed"]) == 1, "the second round made a second Engineering task"
     co.clean()

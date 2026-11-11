@@ -376,6 +376,10 @@ def asked_to_decide(standing: Standing, by: object) -> bool:
 PAGE_OK_HINT = "Attach the new version; Tico asks the person."
 
 
+# A page `at_head` attached for an older commit of a linked PR than its newest one.
+STALE_REVIEW = "New commits since the review"
+
+
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
     exact version when the requirement names one or is people only. An answer counts only for the page version it was given on.
@@ -396,7 +400,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         return Standing(requirement, NOT_MET, owner, "No page attached")
     settings: Row = requirement.get("settings") or {}
     if settings.get("at_head") and json.loads(page["item_versions"] or "{}") != F.heads(conn, task["id"]):
-        return Standing(requirement, NOT_MET, owner, "New commits since the review")
+        return Standing(requirement, NOT_MET, owner, STALE_REVIEW)
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         answer = None  # given on an earlier page
     if answer and answer["answer"] == "ok":

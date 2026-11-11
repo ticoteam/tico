@@ -1020,7 +1020,8 @@ late. Nothing depends on the exact 10 seconds.
   whichever GitHub lists first. A re-run stays in its suite, so only its newest run counts (a re-run that goes green
   passes; one that goes red fails). A skipped or neutral run fails nothing, but it is not a pass: when every check was
   skipped, Checks pass is not met, and it is the owner's turn ("No checks ran on ...: every check was skipped").
-- **A new commit during Review** puts the review back to Waiting on the reviewer.
+- **A new commit during Review** puts the review back to Waiting on the reviewer. A commit that lands after the
+  review page was attached wakes the reviewer at once, once per commit.
 - **A merge conflict before Merge** is the Builder's (the Build stage's owner bot), whoever holds the stage: "No merge
   conflict" is not met and is the Builder's turn. The Builder is woken at once, once per PR and conflicting commit, to
   rebase on the PR's base branch, keep both sides' work, push with `git push --force-with-lease` (never a plain force)
