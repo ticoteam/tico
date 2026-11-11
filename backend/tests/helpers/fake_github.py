@@ -30,6 +30,7 @@ class FakeGitHub:
         self.groups = {}  # (repo, merge group head sha) -> [PR numbers], first in the queue first
         self._fail = {}
         self._shas = (f"{n:040x}" for n in itertools.count(1))
+        self._run_ids = itertools.count(1)  # check run ids only grow, as GitHub's do
 
     # ------------------------------------------------------------------ what a test does to it
     def sha(self):
@@ -65,6 +66,12 @@ class FakeGitHub:
             {"name": f"check-{i}", "app": "tico" if tico else "ci", "state": s, "url": "", "tico": tico}
             for i, s in enumerate(states, 1)
         ]
+
+    def run(self, repo, sha, name, state, *, suite=1, app="ci"):
+        """One more check run on a commit, as GitHub lists them: `suite` is its check suite (one per workflow run), and
+        a run in a suite that already has that name is a re-run. Its id is newer than every run before it."""
+        row = {"name": name, "app": app, "state": state, "url": "", "tico": False, "suite": suite}
+        self.checks.setdefault((repo, sha), []).append({**row, "id": next(self._run_ids)})
 
     def close(self, repo, number):
         self.prs[(repo, number)]["state"] = "closed"
@@ -146,7 +153,9 @@ class FakeGitHub:
 
     def read_checks(self, repo, sha):
         self._call("read_checks", repo, sha)
-        return [dict(c) for c in self.checks.get((repo, sha), [])]
+        from backend.item_sources import github as GS
+
+        return [dict(c) for c in GS.latest_checks(self.checks.get((repo, sha), []))]
 
     def read_releases(self, repo):
         self._call("read_releases", repo)

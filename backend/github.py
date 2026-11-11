@@ -2140,6 +2140,9 @@ class AppGitHub:
         return None
 
     def read_checks(self, repo, sha):
+        """Every check run (`filter=latest`: GitHub's newest run of each name in each check suite) and commit status on
+        `sha`, one row per check (`item_sources.github.latest_checks`). Two runs with one name in two suites (two
+        workflows, or two Apps) are two checks; a red one is never hidden behind a green one of the same name."""
         from .item_sources import github as GS
 
         slug = ""
@@ -2148,38 +2151,16 @@ class AppGitHub:
             slug = str(row["slug"] or "")
         permissions = {"checks": "read", "statuses": "read", "metadata": "read"}
         base = f"/commits/{quote(sha, safe='')}"
-        checks = {}
+        checks = []
         for page in range(1, 11):
-            got = self._get(repo, base + "/check-runs", permissions, {"per_page": 100, "page": page}).json()
-            runs = got.get("check_runs") or []
-            for run in runs:
-                app_slug = str((run.get("app") or {}).get("slug") or "")
-                name = str(run.get("name") or "Checks")[:200]
-                checks.setdefault(
-                    name,
-                    {
-                        "name": name,
-                        "app": app_slug,
-                        "state": GS.check_state(run.get("status"), run.get("conclusion")),
-                        "url": run.get("html_url") or run.get("details_url") or "",
-                        "tico": bool(slug) and app_slug == slug,
-                    },
-                )
+            params = {"per_page": 100, "page": page, "filter": "latest"}
+            runs = self._get(repo, base + "/check-runs", permissions, params).json().get("check_runs") or []
+            checks.extend(GS.run_check(run, slug) for run in runs)
             if len(runs) < 100:
                 break
         for status in self._get(repo, base + "/status", permissions, {"per_page": 100}).json().get("statuses") or []:
-            name = str(status.get("context") or "Checks")[:200]
-            checks.setdefault(
-                name,
-                {
-                    "name": name,
-                    "app": "status",
-                    "state": GS.check_state(status.get("state"), status.get("state")),
-                    "url": status.get("target_url") or "",
-                    "tico": False,
-                },
-            )
-        return list(checks.values())
+            checks.append(GS.status_check(status))
+        return GS.latest_checks(checks)
 
     def read_releases(self, repo):
         response = self._get(repo, "/releases", {"contents": "read", "metadata": "read"}, {"per_page": 100}, (200, 404))

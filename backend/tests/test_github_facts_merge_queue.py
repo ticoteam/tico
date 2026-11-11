@@ -110,6 +110,159 @@ def test_checks_pass_reads_the_checks_at_the_newest_commit(c):
     assert line(c, task_id, "checks_pass") == (R.MET, None, "Checks pass")
 
 
+def read(c, gh, number=1):
+    """GitHub's PR and the checks at its head, saved as the re-read saves them, without moving the task on."""
+    F.save_pr(c, REPO, number, F.read_pr(gh, REPO, number), F.version_now())
+
+
+FAILED = (R.NOT_MET, B, "Checks failed on acme/app#1: checks")
+PASSED = (R.MET, None, "Checks pass")
+SKIPPED = (R.NOT_MET, B, "No checks ran on acme/app#1: every check was skipped")
+
+
+@pytest.mark.parametrize("first", ["success", "failure"])
+def test_two_checks_with_one_name_in_two_suites_fail_when_either_is_red(c, first):
+    """ticoteam/pipeline-sandbox PR #15: two workflows each make a check run named `checks`; GitHub blocks the PR on
+    the red one whichever it lists first."""
+    engineering(c)
+    task_id = new(c, 1)
+    gh = FakeGitHub()
+    head = gh.open_pr(REPO, 1)
+    gh.run(REPO, head, "checks", first, suite=1)
+    gh.run(REPO, head, "checks", "failure" if first == "success" else "success", suite=2)
+    read(c, gh)
+    assert line(c, task_id, "checks_pass") == FAILED
+
+
+@pytest.mark.parametrize(
+    ("runs", "want"),
+    [
+        (("failure", "success"), PASSED),  # a re-run that went green
+        (("success", "failure"), FAILED),  # a re-run that went red
+        (("success", "pending"), (R.WAITING, "github", "Checks running")),
+    ],
+)
+def test_a_re_run_in_the_same_suite_is_the_same_check_and_its_newest_run_counts(c, runs, want):
+    engineering(c)
+    task_id = new(c, 1)
+    gh = FakeGitHub()
+    head = gh.open_pr(REPO, 1)
+    for state in runs:
+        gh.run(REPO, head, "checks", state, suite=1)
+    read(c, gh)
+    assert line(c, task_id, "checks_pass") == want
+
+
+@pytest.mark.parametrize(
+    ("states", "want"),
+    [
+        (("skipped",), SKIPPED),
+        (("skipped", "skipped"), SKIPPED),
+        (("success", "skipped"), PASSED),
+        (("skipped", "failure"), (R.NOT_MET, B, "Checks failed on acme/app#1: check-2")),
+        (("skipped", "pending"), (R.WAITING, "github", "Checks running")),
+    ],
+)
+def test_a_skipped_check_fails_nothing_but_alone_it_is_not_passing(c, states, want):
+    """ticoteam/pipeline-sandbox PR #11: GitHub counts a skipped check as passing; Tico wants one that ran and passed."""
+    engineering(c)
+    task_id = new(c, 1)
+    gh = FakeGitHub()
+    gh.set_checks(REPO, gh.open_pr(REPO, 1), *states)
+    read(c, gh)
+    assert line(c, task_id, "checks_pass") == want
+
+
+def test_neutral_and_skipped_runs_read_as_skipped_and_a_tico_run_does_not_rescue_them(c):
+    assert [F.check_state("completed", r) for r in ("success", "neutral", "skipped", "cancelled")] == [
+        "success",
+        "skipped",
+        "skipped",
+        "failure",
+    ]
+    engineering(c)
+    task_id = new(c, 1)
+    checks = [{"name": "lint", "state": "skipped"}, {"name": "t", "state": "success", "tico": True}]
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": checks}, 1)
+    assert line(c, task_id, "checks_pass") == SKIPPED
+
+
+def test_check_run_webhooks_keep_two_suites_apart_and_a_late_older_run_changes_nothing(c):
+    engineering(c)
+    new(c, 1)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "h1", "checks": []}, 1)
+
+    def hook(run_id, suite, conclusion):
+        run = {
+            "id": run_id,
+            "name": "checks",
+            "head_sha": "h1",
+            "status": "completed",
+            "conclusion": conclusion,
+            "app": {"slug": "github-actions"},
+            "check_suite": {"id": suite},
+        }
+        F.webhook(c, "check_run", {"check_run": run, "repository": {"full_name": REPO}})
+        return F.pr(c, REPO, 1)["checks_state"]
+
+    assert hook(10, 1, "success") == "success"
+    assert hook(11, 2, "failure") == "failure"  # another workflow's `checks`, red
+    assert hook(12, 1, "success") == "failure"  # suite 1 re-run green: suite 2 is still red
+    assert hook(13, 2, "success") == "success"  # suite 2 re-run green
+    assert hook(11, 2, "failure") == "success"  # suite 2's old red run, delivered late, is older than its re-run
+    assert len(F.pr(c, REPO, 1)["checks"]) == 2
+
+
+def test_the_app_reads_every_check_run_and_never_keeps_only_the_first_of_a_name():
+    """backend/github.py AppGitHub.read_checks on GitHub's answer for sandbox PR #15: ci's green `checks` listed first,
+    shadow's red `checks` second (two suites), plus a re-run in ci's suite and a commit status."""
+    from backend.github import AppGitHub
+
+    asked = []
+
+    class Answer:
+        status_code = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def json(self):
+            return self.body
+
+    def run(run_id, suite, conclusion, slug="github-actions"):
+        return {
+            "id": run_id,
+            "name": "checks",
+            "status": "completed",
+            "conclusion": conclusion,
+            "app": {"slug": slug},
+            "check_suite": {"id": suite},
+            "html_url": f"https://github.com/acme/app/runs/{run_id}",
+        }
+
+    class Service:
+        def row(self):
+            return {"slug": "tico-app"}
+
+        def mint(self, repos, permissions):
+            return "token", None
+
+        def _call(self, method, path, headers=None, params=None):
+            asked.append((path, params))
+            if path.endswith("/check-runs"):
+                return Answer({"check_runs": [run(5, 1, "failure"), run(7, 1, "success"), run(6, 2, "failure")]})
+            return Answer({"statuses": [{"id": 9, "context": "checks", "state": "success"}]})
+
+    checks = AppGitHub(Service()).read_checks(REPO, "h1")
+    assert asked[0][1]["filter"] == "latest"
+    assert [(c["app"], c["suite"], c["state"]) for c in checks] == [
+        ("github-actions", 1, "success"),
+        ("github-actions", 2, "failure"),
+        ("status", None, "success"),
+    ]
+    assert F._checks_state(checks) == "failure"
+
+
 def test_with_many_prs_the_first_unmet_in_link_order_gives_the_line(c):
     engineering(c)
     task_id = new(c, 1, 2)
