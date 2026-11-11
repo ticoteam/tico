@@ -107,9 +107,12 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
 
 
 def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
-    """A wait as JSON for a reader (`unnamed`), without `about`: which task a line came from is the server's."""
+    """A wait as JSON for a reader (`unnamed`), without `about`: which task a line came from is the server's. `href` only
+    when the line has a page to fix it on."""
     out = asdict(unnamed(wait, shown))
     del out["about"], out["fix"]
+    if out["href"] is None:
+        del out["href"]
     return out
 
 
