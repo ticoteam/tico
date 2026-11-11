@@ -131,6 +131,7 @@ NOT_PROVEN = {
     "bot.cloud_machine": "tap 409: the fixture company is not on Tico Cloud",
     "bot.cloud_machine.replace": "tap 409: the fixture company is not on Tico Cloud",
     "cloud.shared_machine": "tap 409: the fixture company is not on Tico Cloud",
+    "cloud.shared_machine.replace": "tap 409: the fixture company is not on Tico Cloud",
     "mail.address.order": "422: the body shape (an address order with its Idempotency-Key)",
 }
 
