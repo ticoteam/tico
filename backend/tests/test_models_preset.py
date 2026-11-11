@@ -667,3 +667,43 @@ def test_a_bot_the_gateway_runs_before_sign_in_is_not_reported_as_needing_a_logi
         assert "gateway" not in location["readiness"]
         assert can["can_run"] is False and can["sign_in"] is True and can["problem"] == "Claude login required", can
         assert label == ("Saved — Claude login required", "model_sign_in"), label
+
+
+def test_a_task_turn_on_the_gateway_before_sign_in_names_the_gateways_harness_on_its_session(api, monkeypatch):
+    """Acme rc.3 bug 9: the task's session link said harness `claude` for a turn the Gateway ran (pi)."""
+    from backend.store import H
+
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "session": "task"})
+    machine = runner(api)
+    assign(api, machine, "ops")
+    readiness = {
+        "schema_version": 1,
+        "runtimes": {
+            "claude": {"installed": True, "authenticated": "missing"},
+            "pi": {"installed": True, "authenticated": "missing"},
+        },
+        "bots": {
+            "ops": {
+                "ready": False,
+                "runtime": "claude",
+                "model": CLAUDE["model"],
+                "repository_present": True,
+                "configuration_valid": True,
+                "problems": ["claude is not signed in"],
+            }
+        },
+        "isolated": True,
+    }
+    body = {"version": "test", "platform": "test", "readiness": readiness, "capabilities": ["task_lanes_v2"]}
+    post(api, "runners/heartbeat", body, token=machine["token"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the task folder", "body": "Use only the fixture"})
+    got = post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert (got["config"]["runtime"], got["config"]["waiting_for_sign_in"]) == ("pi", "claude")
+    post(api, f"attempts/{got['id']}/started", {"thread_id": "pi-thread"}, machine["token"])
+    with api.app.state.store.read() as c:
+        sessions = [json.loads(link["detail"]) for link in H.task_links(c, task["id"]) if link["kind"] == "session"]
+    assert [(s["harness"], s["primary"]) for s in sessions] == [("pi", True)]

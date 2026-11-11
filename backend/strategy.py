@@ -562,6 +562,8 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
         if "vision" in changes:
             _vision_event(c, actor, row["vision"], changes["vision"])
         sync_vision(c)
+    if "vision" in changes or "summary" in changes:
+        settle_vision(c)
     H.event(c, actor, "strategy.draft", "", {"fields": sorted(changes)})
     return draft(c)
 
@@ -901,6 +903,7 @@ def publish(c, actor, note="", revision=None):
     if last and last["vision"] != row["vision"]:
         _vision_event(c, actor, last["vision"], row["vision"])
     sync_vision(c)
+    settle_vision(c)
     _event(c, actor, "published", {"n": n, "note": note})
     H.event(c, actor, "strategy.publish", f"v{n}", {"n": n})
     published = version(c, n)
@@ -1002,6 +1005,22 @@ def settle_card(c, actor, proposal_id, note):
         # The decision stands whether or not its task can be closed now.
         H.attempt(c, H.task_close, actor, task["id"], note, task["version"])
     c.execute("DELETE FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
+
+
+def settle_vision(c):
+    """The vision ask ("Tell your Strategy Owner what this team is for", backend/goal_asks.py) closes once a vision is
+    saved, at once, as the Strategy Owner: a draft saved with one, or the strategy published. Not at the next hourly
+    pass (kpi_asks), which left it in Needs you for up to an hour after the owner had done it."""
+    if not vision(c, editor=True):
+        return
+    from . import goal_asks as GA
+    from . import goals as G
+
+    for ref, owner, task_id in c.execute("SELECT ref, owner, task_id FROM goal_asks WHERE kind='vision'").fetchall():
+        task = H.task(c, task_id)
+        if task and task["status"] in GA.LIVE:
+            H.attempt(c, H.task_close, G.AUTO_ACTOR, task["id"], GA._resolved(c, "vision", ref), task.get("version"))
+        c.execute("DELETE FROM goal_asks WHERE kind='vision' AND ref=? AND owner=?", (ref, owner))
 
 
 def card_view(c, proposal):

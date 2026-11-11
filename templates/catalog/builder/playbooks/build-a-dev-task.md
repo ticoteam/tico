@@ -4,7 +4,9 @@ Triggered when a task you own enters Build. Budget as long as the change needs; 
 past it the task is Late and the Engineering Pipeline Manager looks at it.
 
 Inputs: the task and its conversation (`tico task show <id>`), the Spec page it links (`page:<file id>@<version>`,
-read with `tico file read <file id>`), `knowledge/standards.md` and `knowledge/patterns.md`.
+read with `tico file read <file id>`), the person's notes on the spec under it in the task's body (what they said with
+their OK: it answers the spec's open questions, so do not ask them again), `knowledge/standards.md` and
+`knowledge/patterns.md`.
 
 Outcome: one pull request linked to the task, opened as a draft and marked ready once, with the checks passing at its
 head. Build leaves by itself when the pull request is open and the checks pass; it then goes to Review 1.

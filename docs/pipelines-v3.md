@@ -368,7 +368,10 @@ Anything else is "stopped early", and the never-stuck check wakes it again.
 
 - Entering In development files one Engineering task, linked. The owner may file more.
 - The filed task has the Product task's title and body, and a link to the Spec page at the version that was OK'd
-  (`page:<file id>@<version>`). Its requester is the Product Owner. It starts in On deck.
+  (`page:<file id>@<version>`), then what each person said with their OK, marked as their notes on the spec. Its
+  requester is the Product Owner. It starts in On deck.
+- After any sign-off, what the person said with their OK is in every wake of the stages that follow, up to the next
+  sign-off or a move back: the Release Owner reads the pre-release OK's notes in Merge and Release.
 - The Product task leaves when every task filed in this visit ended Done.
 - If one ends Closed, the Product task stays and it is its owner's turn, with the reason shown.
 - **Not validated:** the owner moves the task back to In development with a reason. That is a new visit, so a new
