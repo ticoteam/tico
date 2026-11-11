@@ -338,3 +338,23 @@ def test_an_allowed_unsure_is_left_out_of_the_bar_but_a_wrong_answer_on_it_is_no
     assert unsure["passes_bar"] and unsure["excused"] == [case["id"]] and unsure["cases"] == 3
     assert not run.score("j", judge(0.1), [case, *others])["passes_bar"], "not met on a good page is still a mistake"
     assert run.problems([{**case, "expected": "not_met"}])[0].endswith("only a met case may allow unsure")
+
+
+def test_the_long_spec_cases_are_read_whole_with_the_shipped_spec_rubric():
+    """Specs of the length bots write (rc.5, Nov 11: 6,147 and 6,581 characters came back unsure only for being cut):
+    the judge is shown every character, so its answer stands."""
+    from backend.pipeline_settings import SPEC_RUBRIC
+
+    cases = {c["id"]: c for c in run.chosen(run.load(), "long-spec-*")}
+    assert {k: c["expected"] for k, c in cases.items()} == {
+        "long-spec-6500": "met",
+        "long-spec-12000": "met",
+        "long-spec-trap-no-done": "not_met",
+    }
+    assert 6_000 < len(cases["long-spec-6500"]["attachment"]["text"]) < 7_000
+    assert 11_500 < len(cases["long-spec-12000"]["attachment"]["text"]) < 12_500
+    for case in cases.values():
+        assert len(case["attachment"]["text"]) > 6_000, "longer than the old cap"
+        state = adapter.state_for(case)
+        assert state["requirement"]["rubric"] == SPEC_RUBRIC
+        assert state["attachment"]["truncated"] is False and state["attachment"]["text"] == case["attachment"]["text"]

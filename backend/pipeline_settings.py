@@ -157,10 +157,12 @@ FIXES_2_RUBRIC = (
     "to OK it without opening the code."
 )
 # A spec with no acceptance criteria passed the old line at p 0.72 to 0.81 (rc.4 eval, Nov 11); the scope's in and out
-# and checkable criteria are what a builder builds from.
+# and checkable criteria are what a builder builds from. "Only these three count" (rc.5, Nov 11): good specs of the
+# length bots write (6,500 to 25,000 characters) scored 0.66 to 0.82 on the line without it, as if every extra section
+# were a doubt; with it 0.88 to 0.95, and a spec with no criteria stays at 0.15 to 0.22.
 SPEC_RUBRIC = (
     "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone "
-    "can check."
+    "can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
 )
 # "What was run or looked at there, and what it gave" keeps a page that only says it works from passing (p 0.66 to 0.74
 # on the old line), and a page that shows it scores higher.
@@ -314,7 +316,11 @@ EARLIER: dict[str, tuple[str, ...]] = {
         "Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening "
         "the code.",
     ),
-    "product-spec/page/rubric": ("Covers goal, scope, what done looks like",),
+    "product-spec/page/rubric": (
+        "Covers goal, scope, what done looks like",
+        "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria "
+        "someone can check.",
+    ),
     "product-validate/page/rubric": (
         "Names the version production runs and shows the change working there. If that version is older than the "
         "release that holds this work, it is not yet.",

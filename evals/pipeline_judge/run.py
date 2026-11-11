@@ -1,18 +1,19 @@
 """Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
-cases.json holds 66 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
-text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
-unsure. 49 are Dev (tests pass, screenshots match spec, review done, spec, pre-release and Checked in production pages)
-and 17 Marketing (lead has company and contact, campaign brief approved, landing page live). The page cases are real pages
-from the Acme test company, built as the page step builds them (attachment kind "page", backend/page_verdicts.py
-`job_of`) with the stage's shipped rubric: five `acme-*` (rc.3) and nineteen `live-*` (rc.4, three tasks from Spec to
-Validate, all good pages), with `trap-*` cut from them. `--only acme-*,live-*,trap-*` runs just those. Traps: a missing
-file, an older work_version, the wrong screen, a lead with no email, a draft, a placeholder page, a self-review, a
-pre-release page without the reviews, without the checks or with the checks of an older commit, a review of an older
-commit or with nothing run, a Validate page on an older version or showing nothing, a spec with no acceptance criteria.
-A case may be `allow_unsure` (met is right, unsure is allowed): an unsure answer on it is left out of the bar's counts
-(live-c-fixes-2-v2, a pre-release page whose reviews are of an earlier commit than its checks). No customer data belongs in
-cases.json.
+cases.json holds 83 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment
+as text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
+unsure. 52 are Dev (tests pass, screenshots match spec, review done, spec, pre-release and Checked in production pages)
+and 31 Marketing (lead has company and contact, campaign brief approved, landing page live, Growth go-live and results
+pages). The page cases are real pages from the Acme test company, built as the page step builds them (attachment kind
+"page", backend/page_verdicts.py `job_of`) with the stage's shipped rubric: five `acme-*` (rc.3) and nineteen `live-*`
+(rc.4, three tasks from Spec to Validate, all good pages) and `long-spec-*` (the rc.4 spec grown to about 6,500 and
+12,000 characters, the length bots write), with `trap-*` cut from them. `--only acme-*,live-*,long-*,trap-*` runs just
+those. Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a draft, a placeholder
+page, a self-review, a pre-release page without the reviews, without the checks or with the checks of an older commit, a
+review of an older commit or with nothing run, a Validate page on an older version or showing nothing, a spec with no
+acceptance criteria (and a long one with none). A case may be `allow_unsure` (met is right, unsure is allowed): an
+unsure answer on it is left out of the bar's counts (live-c-fixes-2-v2, a pre-release page whose reviews are of an
+earlier commit than its checks). No customer data belongs in cases.json.
 
 Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.8 or more,
 not_met at 0.2 or less, and unsure between (the engine's rule: unsure passes the call up to a person and never passes the
