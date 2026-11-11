@@ -503,7 +503,7 @@ async function connectPlan(browser: Browser) {
   await onStep(page, 'signin');
   assert.equal(await dialog.locator('[data-plan-code]').innerText(), 'WXYZ-9876');
   // A sign-in the server no longer has (it restarted for a new release) has ended: the sheet says so and offers Try again.
-  data.login = undefined;
+  delete data.login;
   await onStep(page, 'failed');
   assert.equal(await dialog.locator('[data-plan-retry]').count(), 1);
   await dialog.locator('[data-plan-retry]').click();
