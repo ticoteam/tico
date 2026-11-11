@@ -1422,6 +1422,10 @@ class GitHubApp:
             token = user  # the owner's user token: the empty repository is made as them, in their own account
         else:
             token, _ = self.mint(None, CREATE_PERMISSIONS)
+        from .repositories import note_asked
+
+        with self.store.transaction() as c:
+            note_asked(c, f"{row['org']}/{name}")
         if empty:
             # For a bot whose history already exists on a computer: nothing generated, the runner pushes into it.
             body = {
@@ -1442,12 +1446,7 @@ class GitHubApp:
             if r.status_code == 422:
                 return self._existing(row, name, slug, empty=True)
             if r.status_code >= 300:
-                raise Problem(
-                    "github_create_failed",
-                    f"GitHub would not create {row['org']}/{name} "
-                    f"(HTTP {r.status_code}). Create it manually if this persists.",
-                    502,
-                )
+                raise self._create_failed(r, f"{row['org']}/{name}")
             data = r.json()
             from .repositories import MADE, note_repository, reachable
 
@@ -1476,12 +1475,7 @@ class GitHubApp:
         if r.status_code == 422:
             return self._existing(row, name, slug)
         if r.status_code >= 300:
-            raise Problem(
-                "github_create_failed",
-                f"GitHub would not create {row['org']}/{name} from {template} "
-                f"(HTTP {r.status_code}). Create it manually if this persists.",
-                502,
-            )
+            raise self._create_failed(r, f"{row['org']}/{name} from {template}")
         data = r.json()
         from .repositories import MADE, note_repository, reachable
 
@@ -1494,6 +1488,44 @@ class GitHubApp:
             "note": "If the app is installed on selected repositories only, add this repository to the installation.",
         }
 
+    def _create_failed(self, r, what):
+        """GitHub's refusal of a create. Its own failure or a rate limit passes: the same call works later."""
+        limited = rate_limited(r)
+        if limited or r.status_code >= 500:
+            why = "GitHub is limiting requests" if limited else f"GitHub answered HTTP {r.status_code}"
+            return Problem(
+                "github_create_failed",
+                f"GitHub did not create {what}: {why}. Nothing is wrong here; try again in a few minutes.",
+                502,
+                retryable=True,
+                extra={"github_status": r.status_code, "rate_limited": limited},
+            )
+        return Problem(
+            "github_create_failed",
+            f"GitHub would not create {what} (HTTP {r.status_code}). Create it manually if this persists.",
+            502,
+        )
+
+    def _made_since_asked(self, repository):
+        """Whether GitHub made `repository` after Tico first asked for it (give or take the clocks): a create whose
+        answer was lost, or one made twice at once. One GitHub has had for longer is someone else's."""
+        from .repositories import ASKED, MADE_BEFORE_SLACK, metadata
+
+        with self.store.read() as c:
+            asked = metadata(c, ASKED).get(repository.lower())
+        if not asked:
+            return False
+        try:
+            wide = self.mint(None, {"metadata": "read"})[0]
+            r = self._call("GET", "/repos/" + repository, headers={"Authorization": "Bearer " + wide})
+            made = H.parse_ts(r.json().get("created_at")) if r.status_code < 300 else None
+        except (Problem, ValueError, AttributeError):
+            made = None
+        if not made:
+            # GitHub will not say: leave the question open, so the next try asks again, and mark nothing.
+            raise Problem("github_unreachable", "GitHub could not be reached; try again shortly", 502, retryable=True)
+        return made.timestamp() >= float(asked) - MADE_BEFORE_SLACK
+
     def _existing(self, row, name, slug, empty=False):
         """GitHub already has `name`. This company's own (an earlier create of it, or one a person pointed the bot at) is
         the answer a retry wants. Anyone else's is never taken over: it is remembered as not this company's, so no
@@ -1503,6 +1535,13 @@ class GitHubApp:
         repository = f"{row['org']}/{name}"
         with self.store.read() as c:
             ours = made_here(c, repository)
+        if not ours and self._made_since_asked(repository):
+            from .repositories import MADE, reachable
+
+            with self.store.transaction() as c:
+                reachable(c, [repository])
+                note_repository(c, MADE, repository)
+            ours = True
         if ours:
             return {
                 "repository": repository,
@@ -1909,8 +1948,11 @@ def install_github_app(app, settings, store):
         administration = service.can_create_repos(refresh=refresh)
         personal = account_kind(row) == PERSONAL
         authorized = service.user_authorized() if personal else False
+        from . import bot_repo_maker
+
         with store.read() as c:
             fix = fixes(c, row)
+            made = bot_repo_maker.progress(c, service, settings)
         page = links(row)
         return {
             "connected": True,
@@ -1928,6 +1970,7 @@ def install_github_app(app, settings, store):
             "permissions_url": fix["permissions_url"],
             "create_url": fix["create_url"],
             "uninstall_url": page["uninstall_url"],
+            "bot_repositories": made,
         }
 
     @app.get("/api/v2/github/app")
@@ -2037,19 +2080,30 @@ def install_github_app(app, settings, store):
             "github_state", "This GitHub setup link is not valid or has expired; start again from Tools", 400
         )
 
+    def stale_return(request):
+        """GitHub's return with a state that is used up or too old: a second return, Back to GitHub's Create page, or a
+        slow one. A browser lands on Tools > GitHub, which says which in one sentence (`again` when the App is already
+        saved: nothing was changed, and a second App GitHub made on the way is never saved here); an agent gets the
+        refusal."""
+        if "text/html" not in request.headers.get("accept", ""):
+            raise invalid_state()
+        word = "again" if service.row() else "expired"
+        return RedirectResponse("/#/tools/github?github=" + word, status_code=302)
+
     def park(request, code, state):
         """GitHub's return with no owner session of this state: the code is kept on the state's row, unexchanged, for the
         owner to finish. The first code parked wins. The state is not used up here: `finish` takes it."""
         with store.transaction() as c:
             row = live_state(c, state)
-            if not row:
-                raise invalid_state()
-            if not code:
+            if row and not code:
                 raise Problem("github_exchange", "GitHub did not send a setup code", 400)
-            c.execute(
-                "UPDATE github_app_states SET code=?, returned_at=? WHERE nonce=? AND (code IS NULL OR code='')",
-                (code, time.time(), state),
-            )
+            if row:
+                c.execute(
+                    "UPDATE github_app_states SET code=?, returned_at=? WHERE nonce=? AND (code IS NULL OR code='')",
+                    (code, time.time(), state),
+                )
+        if not row:
+            return stale_return(request)
         if "text/html" in request.headers.get("accept", ""):
             sign_in = _sign_in_path(getattr(app.state, "auth", None))
             if sign_in:
@@ -2072,7 +2126,7 @@ def install_github_app(app, settings, store):
         if who is None or row is None or not mine:
             return park(request, code, state)
         if time.time() - row["created_at"] > STATE_TTL or not secrets.compare_digest(row["nonce"], state):
-            raise invalid_state()
+            return stale_return(request)
         code = code or row["code"] or ""  # back from the sign-in with the state alone: the code parked before it
         if not code:
             raise Problem("github_exchange", "GitHub did not send a setup code", 400)
