@@ -191,6 +191,7 @@ def browser_back(api, args):
     "file (default ./screenshots/<site>-<time>.jpg).",
     {"site": SITE, "out": _s("The JPEG file to write")},
     required=("site",),
+    writes=True,  # it writes a file here
     local=True,
 )
 def browser_screenshot(api, args):
@@ -212,6 +213,7 @@ def browser_screenshot(api, args):
     "the answer is its path. `out` is the folder (default ./downloads). A file of the same name is never overwritten.",
     {"site": SITE, "out": _s("The folder to save it in")},
     required=("site",),
+    writes=True,  # it writes a file here
     local=True,
 )
 def browser_download(api, args):

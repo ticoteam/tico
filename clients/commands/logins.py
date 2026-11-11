@@ -49,6 +49,7 @@ def login_copy(api, args):
     "without showing it. Refused for a central-only site.",
     {"site": SITE},
     required=("site",),
+    writes=True,  # logged and counted against the account's hourly limit
 )
 def login_code(api, args):
     return command(api, args, "code")
