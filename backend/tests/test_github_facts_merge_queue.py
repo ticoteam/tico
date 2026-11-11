@@ -291,6 +291,38 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
         assert any(":changed_after_ok:" in key for key, _ in X.wakes(c, task_id, EM))
 
 
+def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_person(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+
+    def drop(n, by=RM):
+        gh.drop(REPO, 1, "The merge group's checks failed", check="e2e")
+        F.refresh(company, gh, later(10 * n))
+        with company.transaction() as c:
+            visit = E.task(c, task_id)["visit"]
+            told = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
+            out = (visit["level"], len(told), MQ.drops_in_visit(c, task_id, visit["id"]))
+            if n < 4:
+                MQ.requeue(c, task_id, by, seen_version=E.task(c, task_id)["version"])
+        MQ.run(company, gh)
+        return out
+
+    assert drop(1) == ("owner", 1, 1)
+    assert drop(2) == ("owner", 2, 2)
+    assert drop(3, by=EM) == ("manager", 2, 3)  # the Release Manager is not told a third time: its manager has it
+    with company.transaction() as c:
+        assert any(":manager:1:" in key for key, _ in X.wakes(c, task_id, EM))
+        assert stage(c, task_id) == "Merge" and F.pr(c, REPO, 1)["queue_state"] == "queued"  # EM queued it again
+    assert drop(4) == ("person", 2, 4)
+    with company.transaction() as c:
+        assert F.pr(c, REPO, 1)["queue_state"] == "removed"  # Tico never queues it by itself
+        moved_back = E.move(c, task_id, "Build", X.ANA, "Needs the Builder")
+        E.move(c, task_id, "Merge", X.ANA, "Again", seen_version=moved_back["version"])
+        assert MQ.drops_in_visit(c, task_id, E.task(c, task_id)["visit"]["id"]) == 0  # a new visit counts afresh
+
+
 def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
     gh = FakeGitHub()
     with company.transaction() as c:
