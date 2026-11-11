@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, replace
 from itertools import chain
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from . import hubdb_core, pipeline_rights, read_cache, task_wakes
+from . import hubdb_core, pipeline_rights, pr_conflicts, read_cache, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 
@@ -388,6 +388,10 @@ def of(
             # A bound OK's line may name what it is for: what the task waits on goes to everyone who reads the task,
             # its lists and briefs, so it only says that it waits on a person (task_asks.PRIVATE_LINE).
             line = _private_line()
+        if requirement["kind"] == pr_conflicts.KIND:
+            # A PR that conflicts before Merge is the bot's that built it, whoever has the stage (pr_conflicts).
+            out.append(_turn(conn, row, standing.on or has, line, None, since, False, seen))
+            continue
         if standing.state == R.WAITING and requirement["kind"] == "linked_done":
             if standing.on not in on_tasks:
                 on_tasks.add(standing.on or "")

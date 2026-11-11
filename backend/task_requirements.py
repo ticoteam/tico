@@ -180,7 +180,11 @@ def prime(conn: "sqlite3.Connection", tasks: Iterable[Row]) -> None:
     values = read_cache.cache(conn)
     if values is None:
         return
+    tasks = list(tasks)
     visits = [visit for visit in (task.get("visit") for task in tasks) if visit]
+    from . import pr_conflicts
+
+    pr_conflicts.prime(conn, [str(task["id"]) for task in tasks if task.get("visit")])
     for what, sql, column, keys in (
         ("requirements_on_stage", STAGE_SQL, "stage_id", {str(v["stage_id"]) for v in visits}),
         ("requirements_on_visit", VISIT_SQL, "visit_id", {str(v["id"]) for v in visits}),
@@ -592,12 +596,18 @@ def standing(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Ro
 
 
 def standings(conn: "sqlite3.Connection", task: Row) -> list[Standing]:
-    """Every requirement of the task's open visit with where it stands, stage's first."""
+    """Every requirement of the task's open visit with where it stands, stage's first; before them a merge conflict on
+    an open PR of the task while it is before Merge (pr_conflicts: not a stored requirement)."""
     visit = task.get("visit")
     if not visit:
         return []
     answers = newest_answers(conn, visit["id"])
-    return [standing(conn, task, r, answers.get(r["id"])) for r in for_visit(conn, visit)]
+    out = [standing(conn, task, r, answers.get(r["id"])) for r in for_visit(conn, visit)]
+    from . import pr_conflicts
+
+    # A PR that conflicts with its base branch before Merge: the bot that built it rebases it first (pr_conflicts).
+    conflict = pr_conflicts.standing(conn, task)
+    return [conflict, *out] if conflict else out
 
 
 def unmet(conn: "sqlite3.Connection", task: Row) -> list[Standing]:

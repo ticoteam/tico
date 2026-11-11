@@ -2597,7 +2597,7 @@ SCHEMAS = {
         inputs=items(
             obj(
                 {
-                    "kind": {"enum": ["pr", "page", "done", "missing"]},
+                    "kind": {"enum": ["pr", "page", "done", "missing", "signoff"]},
                     "line": "s",
                     "stage": "s",
                     "by": "n",
@@ -2605,14 +2605,18 @@ SCHEMAS = {
                     "file_id": "s",
                     "version": "i",
                     "ref": "s",
+                    "answer": {"enum": ["ok", "no"]},
+                    "notes": "s",
+                    "task_id": "s",
                 },
                 required=["kind", "line"],
             )
         )
         | {
             "description": "On the task's own read: what earlier stages handed on, oldest first (stage_inputs.of): "
-            "its PRs, each earlier stage's page, what an owner said when it said done, and a page that was never "
-            "attached"
+            "its PRs, each earlier stage's page, what an owner said when it said done, a page that was never "
+            "attached, and each OK or send back a person gave on work this task filed (`signoff`: answer, notes, "
+            "the page version)"
         },
         next={
             "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],

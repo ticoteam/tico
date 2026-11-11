@@ -12,9 +12,13 @@ read (task_calls.task_view, which `tico task show` prints under "From earlier st
 - `done`: what the owner said when it said an earlier stage's work was done (Fixes 1's "fixed ...; declined ...").
 - `missing`: a page requirement of a stage before this one that has no page on any visit (it was pushed past, or the
   task was moved over it). The bot says so as a blocker instead of working without it.
+- `signoff`: each OK or send back a person gave on a page or an OK of a task this one filed (Fixes 2's pre-release
+  sign-off), with their notes and the page version, oldest first (Acme, Nov 11: the Product task never heard them). The
+  task's own sign-offs are not here: the one that let it into its stage is said on the way in
+  (stage_effects.notes_on_the_way_in).
 
 Each entry has `line`, the words a bot reads, without any person's name (`by` names who, for the reader's own
-rendering). A read: it writes nothing.
+rendering). A filed task the reader may not name (`shown`) hands on nothing. A read: it writes nothing.
 """
 
 from collections.abc import Callable
@@ -44,6 +48,19 @@ _FILER = "SELECT from_task_id, created_at FROM links WHERE to_task_id=?"
 _FILED = (
     "SELECT l.to_task_id FROM links l WHERE l.from_task_id=? AND EXISTS (SELECT 1 FROM task_links tl "
     "WHERE tl.task_id = l.to_task_id AND tl.source='github' AND tl.item_type='pr') ORDER BY l.created_at, l.id"
+)
+# Every OK or send back of a stage's page or OK on the tasks this one filed (not an OK a bot added to ask someone: its
+# words may be private, task_asks), one statement however many it filed, oldest first per task; with the page the
+# answer was given on, when it was on a page.
+_SIGNOFFS = (
+    "SELECT l.to_task_id, t.title, a.answer, a.notes, a.by_id, a.page_version, a.created_at, v.stage_id, "
+    "a.requirement_id, (SELECT p.file_id FROM requirement_pages p WHERE p.visit_id = a.visit_id "
+    "AND p.requirement_id = a.requirement_id AND p.version = a.page_version ORDER BY p.created_at DESC LIMIT 1) "
+    "AS file_id FROM links l JOIN tasks t ON t.id = l.to_task_id JOIN visits v ON v.task_id = l.to_task_id "
+    "JOIN answers a ON a.visit_id = v.id JOIN requirements r ON r.id = a.requirement_id "
+    "WHERE l.from_task_id=? AND a.answer IN ('ok', 'no') AND a.undone_at IS NULL AND r.kind IN ('page', 'ok') "
+    "AND r.stage_id IS NOT NULL "
+    "ORDER BY l.created_at, l.id, a.created_at, a.id"
 )
 _RELEASES = (
     "SELECT r.tag FROM github_release_commits rc JOIN github_releases r ON r.id = rc.release_id "
@@ -134,6 +151,45 @@ def _newest(rows: list[Row]) -> list[Row]:
     return list(newest.values())
 
 
+def _note(text: object) -> str:
+    """What a person or a bot said, on one line, cut at NOTE_CHARS (the whole of it is on the task's history)."""
+    note = " ".join(str(text or "").split())
+    return note[: NOTE_CHARS - 1].rstrip() + "…" if len(note) > NOTE_CHARS else note
+
+
+def _signoffs(conn: "sqlite3.Connection", task_id: str, shown: Callable[[str], bool]) -> dict[str, list[Row]]:
+    """A person's OKs and send backs on the tasks this one filed that the reader may name, by filed task."""
+    from . import task_requirements as R
+
+    H = _h()
+    out: dict[str, list[Row]] = {}
+    for found in _rows(conn, _SIGNOFFS, (task_id,)):
+        filed = str(found["to_task_id"])
+        if not H.is_human(found["by_id"]) or not shown(filed):
+            continue
+        name = R.name_of(_requirement(conn, str(found["requirement_id"])))
+        stage = _stage_name(conn, str(found["stage_id"]))
+        said = "OK'd" if found["answer"] == "ok" else "sent back"
+        entry: Row = {
+            "kind": "signoff",
+            "stage": stage,
+            "task_id": filed,
+            "answer": found["answer"],
+            "notes": found.get("notes") or "",
+            "by": found["by_id"],
+            "filed": True,
+        }
+        if found.get("file_id") and found.get("page_version") is not None:
+            version = int(found["page_version"])
+            entry.update(file_id=found["file_id"], version=version, ref=f"page:{found['file_id']}@{version}")
+            said += f" at {entry['ref']}"
+        note = _note(found.get("notes"))
+        title = str(found.get("title") or "work this task filed")
+        line = f"{name} from {stage} ({title}, work this task filed): {said}"
+        out.setdefault(filed, []).append({**entry, "line": f"{line}: {note}" if note else f"{line}, with no notes"})
+    return out
+
+
 def _filer_pages(conn: "sqlite3.Connection", task_id: str, readable: Callable[[Row], bool]) -> list[Row]:
     """The pages of the task that filed this one, from visits that began before it was filed."""
     from . import task_engine
@@ -194,23 +250,26 @@ def of(
     for found in _rows(conn, _DONE, (task["id"],)):
         if found["visit_id"] == visit_id:
             continue
-        note = " ".join(str(found.get("notes") or "").split())
-        if len(note) > NOTE_CHARS:
-            note = note[: NOTE_CHARS - 1].rstrip() + "…"
+        note = _note(found.get("notes"))
         stage = _stage_name(conn, str(found["stage_id"]))
         line = f"{stage} was said done: {note}" if note else f"{stage} was said done, with no note"
         at = (str(found["entered_at"]), str(found["created_at"]))
         earlier.append((at, {"kind": "done", "stage": stage, "by": found["by_id"], "line": line}))
     out += [entry for _at, entry in sorted(earlier, key=lambda pair: pair[0])]
     out += _missing(conn, task, attached)
+    # The work this task filed: its PRs, then what a person said when they signed it off, per filed task.
+    signed = _signoffs(conn, task["id"], shown)
     for (filed_id,) in conn.execute(_FILED, (task["id"],)).fetchall():
         if shown(str(filed_id)):
             out += _prs(conn, str(filed_id), filed=True)
+            out += signed.pop(str(filed_id), [])
+    for rest in signed.values():  # filed work that links no PR
+        out += rest
     return out
 
 
 def lines(conn: "sqlite3.Connection", entries: list[Row]) -> list[str]:
-    """The entries as a bot reads them in its wake: each line, with who attached a page or said done."""
+    """The entries as a bot reads them in its wake: each line, with who attached a page, said done or signed off."""
     H = _h()
     out: list[str] = []
     for entry in entries:
