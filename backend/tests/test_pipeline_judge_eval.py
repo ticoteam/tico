@@ -283,3 +283,36 @@ def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped
         assert cut["expected"] == "not_met" and cut["requirement"]["rubric"] == FIXES_2_RUBRIC
         assert len(cut["attachment"]["text"]) < len(cases["acme-fixes-2"]["attachment"]["text"])
     assert run.chosen(run.load(), "acme-spec,dev-review-done") and len(run.chosen(run.load(), "acme-spec")) == 1
+
+
+def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_the_newest_commits():
+    """The nineteen good pages Jev was too often unsure of on rc.4 (Nov 11) and the traps cut from them: each with the
+    stage's shipped rubric, the page shown as made for the work as it is now, and a pre-release page with the PR's newest
+    commit beside it (task_pages.judged_against)."""
+    from backend.pipeline_settings import FIXES_2_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
+
+    shipped = {FIXES_2_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
+    live = run.chosen(run.load(), "live-*")
+    traps = run.chosen(run.load(), "trap-*")
+    assert len(live) == 19 and all(c["expected"] == "met" for c in live)
+    assert len(traps) == 6 and all(c["expected"] == "not_met" and c["trap"] for c in traps)
+    for case in live + traps + run.chosen(run.load(), "acme-*,dev-prerelease-*"):
+        state = adapter.state_for(case)
+        assert state["requirement"]["rubric"] in shipped, case["id"]
+        assert state["attachment"]["work_version"] == state["work"]["work_version"] > 0, case["id"]
+        if state["requirement"]["rubric"] == FIXES_2_RUBRIC:
+            assert state["work"]["context"]["heads"], case["id"]
+    assert [c["id"] for c in run.load() if c.get("allow_unsure")] == ["live-c-fixes-2-v2"]
+
+
+def test_an_allowed_unsure_is_left_out_of_the_bar_but_a_wrong_answer_on_it_is_not():
+    case = next(c for c in run.load() if c.get("allow_unsure"))
+    others = [c for c in run.load() if c["id"].startswith("live-")][:3]
+
+    def judge(p):
+        return lambda c: ((p if c is case else 0.9), 0.0, 5)
+
+    unsure = run.score("j", judge(0.7), [case, *others])
+    assert unsure["passes_bar"] and unsure["excused"] == [case["id"]] and unsure["cases"] == 3
+    assert not run.score("j", judge(0.1), [case, *others])["passes_bar"], "not met on a good page is still a mistake"
+    assert run.problems([{**case, "expected": "not_met"}])[0].endswith("only a met case may allow unsure")

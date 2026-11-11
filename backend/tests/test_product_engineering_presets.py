@@ -151,7 +151,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
     assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_only")
-    assert spec["settings"]["rubric"] == "Covers goal, scope, what done looks like"
+    assert "acceptance criteria someone can check" in spec["settings"]["rubric"]
     validate = stages["product-validate"]["requirements"][0]
     assert (validate["person_id"], validate["settings"]["with_release"]) == (None, True)  # Jev only; G15
     fixes_2 = stages["engineering-fixes-2"]["requirements"][1]
