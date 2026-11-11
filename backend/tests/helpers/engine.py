@@ -105,6 +105,21 @@ def github(condition, **fields):
     return {"kind": "item", "source": "github", "condition": condition, **fields}
 
 
+def github_installed(c):
+    """The company's GitHub App, connected and installed: a task with no PR linked is its bot's to open one, not
+    Paused on Connect GitHub (item_sources.github.installed)."""
+    from backend.github_app import SCHEMA
+
+    for statement in SCHEMA.split(";"):
+        if statement.strip():
+            c.execute(statement)
+    c.execute(
+        "INSERT OR REPLACE INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,"
+        "ciphertext,nonce,created_at,created_by) VALUES('app',1,'tico','client','acme',0,1,'',x'00',x'00',?,?)",
+        (H.now(), ANA),
+    )
+
+
 def _general(c, manager):
     """General from its preset (backend/pipeline_settings.py), with its fixed ids, managed by `manager`."""
     record = PS.preset(c, "general")

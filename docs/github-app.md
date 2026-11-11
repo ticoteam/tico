@@ -105,6 +105,12 @@ since that bot's files and memory live on its computer with no backup. A bot's p
 show a card with **Connect GitHub** for the owner; anyone else who sees it is asked to ask the owner. The card
 goes away once the app is connected and installed.
 
+Nothing asks at setup. The first task that reaches a stage reading its PRs (Engineering's Build, Merge and Release)
+puts one **Connect GitHub** row in the company owner's Needs you, linked to this page. Every other such task waits on
+the same row: its bot shows Paused on "Connect GitHub", and no bot is woken or asked to snooze it meanwhile. Once the
+app is installed the row goes by itself, and each task's bot is woken once to carry on. A bot that has the app but
+no repository is a different case: see Bot repository access.
+
 1. As the owner, open Tools, GitHub. Enter the GitHub account or organization (a personal account
    works too; Tico tells which one it is) and optionally rename the app. **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
    create every bot's repository by hand. Select Connect GitHub.

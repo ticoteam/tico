@@ -247,8 +247,8 @@ def _people() -> dict[str, Any]:
 
 def _fill(c: sqlite3.Connection, software: bool = False) -> None:
     """People, four bots on one computer, General managed by the Manager bot, and the Work pipeline. A software company
-    also has the role bots, each with its template, a finished setup, and the presets the end of setup makes
-    (`ensure_presets`): Product and Engineering."""
+    also has the role bots, each with its template, a finished setup, the presets the end of setup makes
+    (`ensure_presets`): Product and Engineering, and its GitHub App installed."""
     from backend import bot_settings as BS
     from backend import pipeline_settings as PS
     from backend import task_engine as E
@@ -284,6 +284,9 @@ def _fill(c: sqlite3.Connection, software: bool = False) -> None:
 
         O.Onboarding._store(c, {**O.load(c), "completed": H.now()}, "human:ana")
         PS.ensure_presets(c)
+        from backend.tests.helpers import engine as X
+
+        X.github_installed(c)
 
 
 def template(software: bool = False) -> Path:

@@ -605,6 +605,7 @@ def test_what_the_person_says_with_the_pre_release_ok_reaches_whoever_acts_after
     """The other direction: the OK of what was built moves the task on to Merge and Release, and every wake there
     carries the person's notes; moved back, it no longer does."""
     row, rid = _sign_off(c, "engineering-fixes-2")
+    X.github_installed(c)  # Merge and Release need GitHub: with no App the Release Owner would wait on Connect GitHub
     c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id='engineering-fixes-2' AND kind='item'", (H.now(),))
     said = "Say in the release notes that negate(-0.0) is 0.0"
     A.answer(c, row["id"], rid, ANA, "ok", said)

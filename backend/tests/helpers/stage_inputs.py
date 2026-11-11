@@ -99,6 +99,7 @@ def _product_task(c):
         (json.dumps({"answers": {"software_product": "yes"}, "completed": at}),),
     )
     PS.ensure_presets(c)
+    X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
     row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="product", lint=False)
     E.move(c, row["id"], "product-spec", ANA)
     _attach(c, row["id"], "f-spec", "bot:pm", version=3)

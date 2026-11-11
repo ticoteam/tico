@@ -326,9 +326,10 @@ def later(minutes=10):
 
 def engineering(c, release=None):
     """Build (PR open, Checks pass) -> Merge (queues PRs; PR merged) -> Release (In a release), managed by EM: the
-    pipeline test_github_facts_merge_queue.py drives."""
+    pipeline test_github_facts_merge_queue.py drives, in a company whose GitHub App is installed."""
     for slug in ("builder", "release", "eng-manager"):
         X.bot(c, slug)
+    X.github_installed(c)
     return X.pipeline(
         c,
         "eng",
