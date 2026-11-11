@@ -19,6 +19,7 @@ from backend import page_verdicts as V
 from backend import pipeline_presets_more as more
 from backend import pipeline_seats as S
 from backend import pipeline_settings as PS
+from backend import task_calls as TC
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend import waiting_on as W
@@ -673,3 +674,41 @@ def test_the_software_factory_guide_and_routing_playbook_name_the_seats_template
         assert f"`{S.TEMPLATES[role]}`" in guide
     assert f"`{S.TEMPLATES[S.RELEASE_MANAGER]}` (Release Owner)" in playbook
     assert f"`{S.TEMPLATES[S.PRODUCT_OWNER]}` (Product Owner)" in playbook
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "before", "past"),
+    [
+        (
+            "engineering",
+            ("on-deck", "build", "review-1", "fixes-1", "review-2"),
+            ("merge", "release", "done"),
+        ),
+        ("product", ("ideas",), ("in-development", "validate", "done")),
+    ],
+)
+def test_no_bot_jumps_a_task_over_a_sign_off_from_any_earlier_stage(c, pipeline, before, past):
+    """A forward move counts every stage it jumps as not met, so a bot's jump over Fixes 2 or Spec meets the
+    people-only OK and is refused: no merge is queued, and no Engineering task is filed without the spec OK."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    manager = "bot:" + (EPM if pipeline == "engineering" else PPM)
+    bots = ("bot:builder", "bot:rm", "bot:pm", manager, X.bot(c, "assistant"), X.bot(c, "botops"))
+    for stage in before:
+        row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline=pipeline, lint=False)
+        if E.task(c, row["id"])["stage_id"] != f"{pipeline}-{stage}":
+            E.move(c, row["id"], f"{pipeline}-{stage}", ANA, "Here for this test")
+        for bot in bots:
+            # Each bot as the task's owner, so only the sign-off stands in its way.
+            E.reassign(c, row["id"], bot, ANA)
+            effects = c.execute("SELECT COUNT(*) FROM effects").fetchone()[0]
+            tasks = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            for to in past:
+                seen = E.task(c, row["id"])["version"]
+                with pytest.raises(H.Refused, match="task_needs_person"):
+                    TC.task_move(c, bot, row["id"], f"{pipeline}-{to}", "Ship it", seen)
+            assert E.task(c, row["id"])["stage_id"] == f"{pipeline}-{stage}"
+            assert c.execute("SELECT COUNT(*) FROM effects").fetchone()[0] == effects
+            assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == tasks
+    assert not c.execute("SELECT 1 FROM answers WHERE answer='pushed_past'").fetchone()
