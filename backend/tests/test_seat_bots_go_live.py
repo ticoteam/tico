@@ -110,8 +110,8 @@ def test_every_seat_bot_goes_live_by_itself_once_its_computer_has_the_repository
         assert state["state"] == "active" and not state["onboarding_state"], (slug, state)
     assert not rows(api, "SELECT 1 FROM events WHERE action='bot.needs_onboarding'")
     assert _turn(api, task["id"])["state"] == "bot"
-    work = _claim(api, computer, builder)
-    assert work and work["task"]["id"] == task["id"], work
+    work = _claim(api, computer, builder)  # its own setup first (bug 12), then this task
+    assert work and work["task"]["title"] == "Set yourself up", work
 
 
 def test_botops_cannot_close_a_seat_bots_setup_task_until_the_bot_is_live(environment):
@@ -186,4 +186,89 @@ def test_a_bot_held_by_onboarding_says_so_and_claims_the_moment_it_is_marked_com
     with api.app.state.store.read() as c:
         assert W.cannot_run(c, "bot:" + builder) is None
     work = _claim(api, computer, builder)
-    assert work and work["task"]["id"] == task["id"], work
+    assert work and work["task"]["title"] in ("Set yourself up", "Add negate"), work
+
+
+# What each default-org seat's template setup writes (its `playbooks/onboarding.md`, "## 4. Record").
+SETUP_FILES = {
+    "pipeline-manager": ["knowledge/pipeline.md"],
+    "segment-product-owner": [
+        "knowledge/segment.md",
+        "knowledge/spec-format.md",
+        "knowledge/launch-checklist.md",
+        "knowledge/problems.md",
+        "knowledge/briefs.md",
+    ],
+    "builder": ["knowledge/standards.md", "knowledge/patterns.md"],
+    "pr-reviewer": ["knowledge/standards.md", "knowledge/patterns.md"],
+    "qa-owner": ["knowledge/thresholds.md", "knowledge/suites.md"],
+    "release-owner": [
+        "knowledge/thresholds.md",
+        "knowledge/merge-gates.md",
+        "knowledge/versioning.md",
+        "knowledge/voice.md",
+        "knowledge/labels.md",
+    ],
+    "legal-owner": [
+        "knowledge/intake.md",
+        "knowledge/escalation.md",
+        "knowledge/obligations.md",
+        "knowledge/policies.md",
+        "knowledge/requests.md",
+    ],
+}
+
+
+def test_each_seat_bot_runs_its_template_setup_by_itself_with_no_person_once_live(environment):
+    """Acme bug 12: a seat bot went live without its template's setup ever running (a person's first message starts it,
+    and nobody chats with a seat bot), so the Product Owner wrote its first spec with no knowledge files. Going live
+    now gives each seat bot its own setup task, first in its queue, from BotOps: it names the files the template's setup
+    writes, says to take the defaults and ask nothing now, and raises no onboarding prompt or person ask. Once only."""
+    api, computer, seats = _company(environment)
+    builder, _ = _seat(seats, "builder")
+    with api.app.state.store.transaction() as c:
+        waiting = H.task_create(
+            c, "human:owner", "Add negate", "negate(x) returns -x.", "bot:" + builder, allow_planned=True
+        )
+    attempt = _claim(api, computer, "botops")
+    for slug, _ in seats.values():
+        assert act(api, attempt, "POST", f"bots/{slug}/go-live", {}).status_code == 202
+    _report(api, computer, present=list(seats))
+
+    found = rows(
+        api,
+        "SELECT b.id, b.slug, s.template, (SELECT t.id FROM tasks t WHERE t.owner_id='bot:'||b.id "
+        "AND t.title='Set yourself up') AS task FROM bots b JOIN bot_settings s ON s.bot_id=b.id "
+        "WHERE json_extract(s.extra,'$.goes_live_on_setup')",
+    )
+    assert {row["template"] for row in found} >= set(SETUP_FILES)
+    for row in found:
+        expected = SETUP_FILES.get(row["template"])
+        if expected is None:
+            continue
+        task = rows(api, "SELECT * FROM tasks WHERE id=?", (row["task"],))
+        assert task, row
+        task = task[0]
+        assert task["status"] == "open" and task["owner_id"].endswith(row["id"]), (row["slug"], task)
+        assert task["requester_id"].endswith("botops"), task["requester_id"]
+        for name in expected:
+            assert f"`{name}`" in task["body"], (row["slug"], name)
+        assert "ask nothing" in task["body"] and "Not yet told:" in task["body"]
+        assert _turn(api, task["id"])["state"] == "bot", row["slug"]
+    po = next(row for row in found if row["slug"] == "product-owner")
+    assert "Product (" in rows(api, "SELECT body FROM tasks WHERE id=?", (po["task"],))[0]["body"]
+
+    assert not rows(api, "SELECT 1 FROM events WHERE action='bot.needs_onboarding'")
+    assert not rows(api, "SELECT 1 FROM messages WHERE body LIKE '%set you up%'")
+    with api.app.state.store.read() as c:
+        from backend import waiting_on
+
+        asked = waiting_on.needs_by_person(c)
+    assert not any(row["task"] in str(asked) for row in found if row["task"]), asked
+
+    first = _claim(api, computer, builder)
+    own = next(row["task"] for row in found if row["slug"] == "builder")
+    assert first, "the Builder claims work"
+    assert (first["task"]["id"], own) != (waiting["id"], own) and first["task"]["id"] == own, (first["task"], own)
+    again = act(api, attempt, "POST", "bots/builder/go-live", {})
+    assert again.status_code == 200 and "own_setup_task_id" not in again.json(), again.text
