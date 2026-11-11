@@ -7,7 +7,7 @@ import json
 import os
 import re
 from urllib.parse import quote
-from clients.cli_spec import Command, Group
+from clients.cli_spec import Arg, Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import tool
@@ -507,16 +507,16 @@ def _page_fields(args):
     "Publish .html; scripts/external loads are removed. Lead with key facts for cards. "
     "Reusing a name versions changes; task pins it.",
     {
-        "name": {"type": "string"},
-        "text": {"type": "string"},
-        "title": {"type": "string"},
+        "name": _s("The file's name, ending .html"),
+        "text": _s("The HTML"),
+        "title": _s("Its title"),
         "cadence": CADENCE,
         "audience": _s("everyone clears; person,group:legal,bot:analyst narrows. Omit to keep."),
         "as_of": _s("YYYY-MM-DD"),
-        "task": {"type": "string"},
-        "replaces": {"type": "string"},
-        "scope": {"enum": ["task", "bot"]},
-        "path": _s("Repo-relative path"),
+        "task": _s("The task it is for; it shows at the top of that task"),
+        "replaces": _s("The id of an older page this one takes the place of"),
+        "scope": {"enum": ["task", "bot"], "description": "bot keeps it with the bot, not the turn's task"},
+        "path": _s("The .html file's path in this checkout"),
         "spec": {"type": "boolean", "description": "A visual spec for the Product roadmap card in task"},
     },
     required=("name", "text"),
@@ -528,9 +528,10 @@ def pages_publish(api, args):
 
 
 @tool("tico_page_list", "Readable pages, newest first. Follow next_cursor.",
-      {"bot": {"type": "string"}, "task": {"type": "string"},
-       "archived": {"type": "boolean"},
-       "limit": {"type": "integer", "minimum": 1, "maximum": 50}, "cursor": {"type": "string"}})  # fmt: skip
+      {"bot": _s("Only this bot's pages"), "task": _s("Pages filed on or pinned to this task"),
+       "archived": {"type": "boolean", "description": "The archived pages instead"},
+       "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Pages in this page, 1-50"},
+       "cursor": _s("The page after this one: a page's next_cursor")})  # fmt: skip
 def pages_list(api, args):
     return api.get(
         "pages",
@@ -545,7 +546,7 @@ def pages_list(api, args):
 @tool(
     "tico_page_show",
     "Page status and pins. Read HTML with tico_file_read.",
-    {"id": {"type": "string"}},
+    {"id": _s("Page id")},
     required=("id",),
 )
 def pages_show(api, args):
@@ -843,6 +844,26 @@ def docs_fetch(api, args):
     except doc_fetch.FetchError as exc:
         return {"error": exc.code, "detail": exc.message, "retryable": exc.code in ("timeout", "network", "dns")}
 
+
+PAGE = (
+    Group("page", "pages: HTML a bot keeps up to date, with Tico's updated line"),
+    Command(
+        "page publish",
+        "publish an .html file from this checkout; again adds a version",
+        args=(Arg("path", positional=True),),
+        omit=("name", "text"),  # the file's own, read from `path`
+        run=pages_publish_path,
+        example="tico page publish reports/weekly.html --title 'Weekly review' --cadence weekly",
+    ),
+    Command("page list", "pages you may read, newest first", example="tico page list --task T1"),
+    Command("page show", "one page's status", example="tico page show p1"),
+    Command("page access", "show or change who can see a page", example="tico page access p1 --audience everyone"),
+    Command(
+        "page archive",
+        "hide a page from lists and search, or --restore it",
+        example="tico page archive p1 --restore",
+    ),
+)
 
 CARD = (
     Group("card", "Tico's built-in cards on the Dashboard, team pages, sidebars and tasks"),

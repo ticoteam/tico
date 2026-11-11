@@ -32,6 +32,8 @@ A spec says only what differs:
 - A field is omitted when its flag is left out. `default=False` sends false; `NULL` as a flag's const sends null.
 - `Command.tool_for(fields)` picks another tool by the arguments (`rules read` without `--from` reads one rule); every
   tool it may pick is in `tools`, whose properties the command takes too.
+- `Command.run(client, fields)` is what the command line does where it cannot call the tool: `page publish` sends a
+  file's bytes, the tool its text. The flags are still the tool's, and so is the help.
 - `Command.render(args, result)` prints text in place of JSON; such a command also takes `--json`.
 - `Group.default` is the leaf a group runs when no word follows (`tico rules due` lists, as `tico rules due list`).
 
@@ -101,6 +103,7 @@ class Command:
     omit: tuple[str, ...] = ()  # properties the command line does not take
     convert: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     tool_for: Callable[[dict[str, Any]], str] | None = None
+    run: Callable[[Any, dict[str, Any]], Any] | None = None  # in place of the tool's function, with its arguments
     render: Callable[[argparse.Namespace, Any], str] | None = None
 
     def __post_init__(self):
@@ -171,11 +174,11 @@ class Command:
         return out
 
     def call(self, client, args):
-        """Run the tool with the parsed line's arguments; the answer is the tool's."""
+        """Run the tool (or `run`) with the parsed line's arguments; the answer is its answer."""
         from clients import hubtools
 
         tool, fields = self.prepare(args)
-        return hubtools.BY_NAME[tool]["fn"](client, fields)
+        return self.run(client, fields) if self.run else hubtools.BY_NAME[tool]["fn"](client, fields)
 
     def prepare(self, args):
         """(the tool to run, its arguments) for a parsed line: the flags given, converted, with the tool `tool_for`
