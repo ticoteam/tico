@@ -570,6 +570,28 @@ impl Session {
             },
             None,
         );
+        // A failed Connect's phases in one line that joins the heartbeat's `recent_errors`: the lines above stay in this
+        // computer's log. Fixed words and numbers only.
+        if self.kind == "connect" && state == "failed" {
+            let steps: Vec<String> = self
+                .diag
+                .lock()
+                .unwrap()
+                .phases
+                .iter()
+                .map(|p| {
+                    let exit = p["exit_code"]
+                        .as_i64()
+                        .map(|c| format!("={c}"))
+                        .unwrap_or_default();
+                    format!("{}@{}{exit}", text_of(&p["phase"]), p["elapsed_ms"])
+                })
+                .collect();
+            crate::util::diagnostic(&format!(
+                "Tico runner: model sign-in {}",
+                json!({"login_id": self.id, "runtime": self.runtime, "phase": "failed_steps", "steps": steps.join(" ")})
+            ));
+        }
         // Whatever the verdict, the next heartbeat asks the profile's CLI again instead of a cached answer.
         crate::profiles::forget_report();
         if state == "signed_in" {
@@ -3067,7 +3089,12 @@ esac
         assert!(
             recent
                 .iter()
-                .any(|l| l.contains("final_screen") && l.contains("provider_refused")),
+                .any(|l| l.contains("final_screen") && l.contains("provider_refused"))
+                && recent.iter().any(|l| l.contains("failed_steps")
+                    && l.contains("\"login_id\":\"refused\"")
+                    && l.contains("cli_started@")
+                    && l.contains(" enter_written@")
+                    && l.contains("=0 provider_refused@")),
             "the heartbeat carries the category: {recent:?}"
         );
         // What the server is told: the phases in order, the category and the scrubbed screen, with no link, typed

@@ -911,7 +911,13 @@ def report(c, runner_id, lid, body, settings=None):
                 "UPDATE model_logins SET state='failed', message=?, updated_at=? WHERE id=?",
                 (redact(_in_use(bots)), H.now(), lid),
             )
-            H.event(c, "runner:" + runner_id, "runner.login.failed", runner_id, {"runtime": row["runtime"]})
+            H.event(
+                c,
+                "runner:" + runner_id,
+                "runner.login.failed",
+                runner_id,
+                {"runtime": row["runtime"], "login_id": lid, "kind": row["kind"], "category": "in_use"},
+            )
             return {"state": "failed"}
     if body.state == "finishing" and row["state"] != "finishing":
         # From here it cannot be canceled, and it has a little time of its own to finish in.
@@ -941,10 +947,14 @@ def report(c, runner_id, lid, body, settings=None):
     )
     if terminal:
         detail = {"runtime": row["runtime"]}
-        # Why a Connect failed stays with its audit row, so nobody has to read the computer's own log for it.
-        trace = clean_trace(body.trace, row["pending_code"] or "") if state == "failed" else None
-        if trace and row["kind"] == "connect":
-            detail.update(login_id=lid, trace=trace)
+        if state == "failed":
+            # Which sign-in failed and why stay with its audit row (the login's own row is gone after a day), so a
+            # list of failures can show it and nobody has to read the computer's own log: the login, its kind, the
+            # category ("" when the computer named none) and, for a Connect, the scrubbed trace.
+            trace = clean_trace(body.trace, row["pending_code"] or "")
+            detail.update(login_id=lid, kind=row["kind"], category=(trace or {}).get("category", ""))
+            if trace and row["kind"] == "connect":
+                detail["trace"] = trace
         H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], detail)
     # Switch to API key: only now is the key this computer's and the switch's marks lifted (confirm). Until the runner
     # says so the subscription is what the login runs on, so a failure after its commit point, which the runner undoes

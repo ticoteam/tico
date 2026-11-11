@@ -290,7 +290,8 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
         everything = json.dumps([dict(r) for r in c.execute("SELECT * FROM events")]) + json.dumps(
             [dict(r) for r in c.execute("SELECT * FROM model_logins")]
         )
-    assert kept["login_id"] == login["id"] and kept["trace"]["category"] == "provider_refused"
+    assert (kept["login_id"], kept["kind"], kept["category"]) == (login["id"], "connect", "provider_refused")
+    assert kept["trace"]["category"] == "provider_refused"
     assert [(p["phase"], p["elapsed_ms"], p["exit_code"]) for p in kept["trace"]["phases"]] == [
         ("cli_started", 4, None),
         ("cli_exited", 9100, 0),
@@ -299,7 +300,8 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     assert kept["trace"]["screen"].endswith("this policy does not permit") and "[link]" in kept["trace"]["screen"]
     for leak in (TOKEN, TOKEN[:20], "typedcode", "claude.example/authorize?code", "Leaked"):
         assert leak not in everything, leak
-    assert "trace" not in json.loads(rows[-2][0])  # a report with no trace keeps none
+    before = json.loads(rows[-2][0])  # a report with no trace keeps none, and still says which sign-in failed
+    assert "trace" not in before and (before["kind"], before["category"]) == ("connect", "") and before["login_id"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] == 0
 
