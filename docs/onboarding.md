@@ -40,7 +40,11 @@ Finance Owner (the bookkeeper) keeps a seat on its line in the team its file giv
 itself, so a Corporate Manager hired later takes it along.
 Import retries do not duplicate a seat, and an import cannot replace a company whose setup is complete.
 
-A file named at install (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts. If it
+A file named at install (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts, and that
+completes setup: there is nothing for the owner to fill in. Their first visit opens one **Welcome to <company>** screen in
+the same modal instead of the tour: the team as the chart has it (each team's lead first, open seats muted), what the bots
+run on (the computer, ticked on Tico Cloud, and the Claude or Codex subscription line until one is signed in), and
+**Start**. Start, ✕ or Escape close it where it opened and mark the tour seen; the tour stays in the account menu. If it
 cannot be read or applied, the server still starts, **no sample team is set up in its place**, and setup opens on its
 first step as usual; the Your team step shows the default team, picked, with one line above it giving the server's
 reason. Health shows "Company file from setup not imported" until it is over: an import works (the same file again
@@ -320,8 +324,8 @@ setup  ->  tour (once; the owner's is marked seen at Create)  ->  "Ask to add or
 
 Six spotlight steps: Updates, Tasks, your bots (the team list), Docs, Strategy, Meetings. **Next** moves
 on, **Skip** or **Esc** closes it, and focus stays inside it. On a phone it opens the navigation drawer
-and shows the same steps. It never opens over setup. The owner's is marked seen when the team is created; anyone else's
-opens by itself once on their first visit. It can be replayed
+and shows the same steps. It never opens over setup. The owner's is marked seen when the team is created, or replaced by
+the welcome when the team came from the company file at install; anyone else's opens by itself once on their first visit. It can be replayed
 from the account menu with **Take the tour**. That it was seen is kept per human.
 
 ### Bots

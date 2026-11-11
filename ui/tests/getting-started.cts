@@ -3,7 +3,7 @@
 // resume; the last one asks for research, and a notice shows until the market has content), and a quiet empty
 // state for everyone else; one line under the org list
 // points at BotOps while there are no bots of your own; the tour is replayable from Help, traps focus, closes
-// on Escape and works in the phone drawer. Fixtures only - no server.
+// on Escape and works in the phone drawer; the owner of a team from the company file gets the welcome instead. Fixtures only - no server.
 // TICO_SCREENSHOT_DIR=<dir> saves the review screenshots (the market's empty states and the sidebar line in both
 // themes, and a phone).
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -58,13 +58,18 @@ const checklist = () => [
 ];
 const bots = [['assistant', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: '', owner_id: 'ana'}));
+// A team that came in from the company file: its lead listed after a report, so the welcome's order is its own.
+const importedBots = [['support-triage', 'Support Triage', 'support-lead'], ['support-lead', 'Support Lead', 'human:ana']].map(([name, display_name, reports_to]) =>
+  ({id: name, name, slug: name, display_name, status: 'active', can_chat: true, team: 'support', reports_to, owner_id: 'ana'}));
+const importedChart = {org_groups: [{id: 'support', name: 'Support', lead: 'bot:support-lead', order: 1}, {id: 'built-in', name: 'Built-in', order: 99}],
+  seats: [{id: 's1', kind: 'seat', title: 'Support Writer', team: 'support', reports_to: 'bot:support-lead', stage: 'recruiting'}]};
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 800}, serviceWorkers: 'block'});
     const calls: {p: string; body: Body}[] = [];
-    let items = checklist(), role = 'owner', canBuild = true;
+    let items = checklist(), role = 'owner', canBuild = true, imported = false;
     let dismissed = {tour: true, checklist: false, skipped: [] as string[]};
     let librarianOff = false, polls: number[] = [], held: {gate: Promise<unknown>; body?: Body} | null = null;
     let setup: Setup = {can_answer: true, answers: {sell: '', buyers: '', competitors: '', watch: ''}, step: 0, skipped: false, task: null};
@@ -83,12 +88,14 @@ const bots = [['assistant', 'Ace'], ['botops', 'BotOps']].map(([name, display_na
       const ui = p.match(/\/tico\/ui\/((?:app\/|styles\/)?[^/]+\.(?:js|ts|css))$/);
       if (ui) { const file = uiFile(ui[1]!); if (fs.existsSync(file)) return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(file, 'utf8')}); }
       if (p.startsWith('/vendor/fonts/') && p.endsWith('.woff2')) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(path.join(__dirname, '..', p))});
-      if (p === '/api/employees') return json(bots);
+      if (p === '/api/employees') return json(imported ? [...bots, ...importedBots] : bots);
       if (p === '/api/issues') return json([]);
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', email: 'ana@acme.example', role, cloud: true});
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
+      if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}], ...(imported ? importedChart : {})});
+      if (p === '/api/v2/setup' && imported) return json({completed: '2026-11-11T08:00:00Z', company_import: {seats: 3}, names: {company_name: 'Acme'},
+        machine: {runners: [], enrolled: false, cloud: true}, bots: [], default_chart: []});
       if (p === '/api/v2/updates/unread') return json({unread: 0});
       if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
       if (p === '/api/v2/tasks') return json({tasks: []});
@@ -411,6 +418,30 @@ const bots = [['assistant', 'Ace'], ['botops', 'BotOps']].map(([name, display_na
     // gsBoot decides on the tour in the same turn GS lands; GS says it was seen.
     await page.waitForFunction(() => GS?.tour_seen === true, null, {timeout: t(5000)});
     assert.equal(await page.locator('.gs-tour').count(), 0);
+    await page.close();
+
+    // The owner of a team that came in from the company file gets one welcome screen in place of the tour: the team as
+    // it is, what the bots run on, Start. It stays on the page it opened over, and closing it is the tour seen.
+    dismissed.tour = false; imported = true;
+    page = await open('#/updates');
+    const welcome = page.locator('#onb[open]');
+    await welcome.waitFor();
+    assert.equal(await page.locator('.gs-tour').count(), 0);
+    assert.equal(await welcome.locator('#onb-count').textContent(), '');
+    assert.deepEqual(await welcome.locator('[data-onb-team-row] strong').allTextContents(), ['Support']);
+    assert.deepEqual(await welcome.locator('.onb-team-roles > span').allTextContents(), ['Support Lead', 'Support Triage', 'Support Writer']);
+    assert.equal(await welcome.locator('.onb-team-roles .onb-team-open').textContent(), 'Support Writer');
+    assert.equal(await welcome.locator('input, [data-onb-team]').count(), 0, 'nothing to switch: the team is set up');
+    assert.equal(await welcome.locator('#onb-machine-status').getAttribute('data-onb-machine'), 'cloud');
+    assert.equal(await welcome.locator('#onb-subscription a').getAttribute('href'), '#/settings');
+    const welcomeSaved = page.waitForResponse(r => r.url().endsWith('/api/v2/setup/getting-started/state')
+      && r.request().method() === 'POST' && r.request().postDataJSON()?.tour === true);
+    await welcome.locator('#onb-next').click();
+    assert.equal((await welcomeSaved).ok(), true);
+    await page.locator('#onb').waitFor({state: 'detached'});
+    assert.equal(await page.evaluate(() => location.hash), '#/updates');
+    assert.equal(await page.locator('.gs-tour').count(), 0);
+    imported = false;
     await page.close();
 
     // Skip is the same as closing, and the tour works on a phone, through the drawer.

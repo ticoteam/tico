@@ -15,6 +15,8 @@
 .onb-count{font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .onb-dlg .tmodal-body{padding:18px 20px 16px}
 .onb-step-title{margin:0 0 var(--s4);font-size:var(--t-xl);line-height:var(--lh-tight);letter-spacing:var(--track-tight)}
+/* The welcome's second heading, under the team list. */
+.onb-teams + .onb-step-title{margin-top:var(--s5)}
 .onb-failed{margin:0 0 var(--s4);padding:var(--s2) var(--s3);border-left:3px solid var(--fail);background:color-mix(in srgb,var(--fail) 10%,transparent);border-radius:6px;font-size:var(--t-base);overflow-wrap:anywhere}
 .onb-failed .linkish{margin-left:6px}
 /* Your team: a switch per team, its bots' titles after it, the count at the end. */

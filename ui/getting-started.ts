@@ -166,9 +166,11 @@ function gsTourEnd(): void {
 window.gsStartTour = gsTourStart;
 window.gsBoot = function () {
   // The first look around, once per person, never over setup: the owner who set the team up has it marked seen
-  // (ui/app/welcome.ts) and finds it in the account menu; someone who joins later gets it on their first visit.
-  void gsRefresh().then(seen => {
-    if (seen && !seen.tour_seen && !S.config?.onboarding_needed && S.route !== '#/welcome') gsTourStart();
+  // (ui/app/welcome.ts) and finds it in the account menu; someone who joins later gets it on their first visit. The
+  // owner of a team that came in from the company file gets the welcome (onbWelcome) in its place.
+  void gsRefresh().then(async seen => {
+    if (!seen || seen.tour_seen || S.config?.onboarding_needed || S.route === '#/welcome') return;
+    if (!(await onbWelcome())) gsTourStart();
   });
   // What is set up changes seldom, and this tab's own steps write it at once (gsState): every 5 minutes is enough.
   setInterval(() => { if (!document.hidden && S.me?.cloud) void gsRefresh(); }, 300000);
