@@ -297,3 +297,29 @@ def api_database(tmp_path_factory, request):
             source.backup(target)
     snapshot.with_suffix(".building").replace(snapshot)
     return snapshot
+
+
+@pytest.fixture(scope="session")
+def app_snapshots(tmp_path_factory, request):
+    """This worker's kept app databases (backend/tests/app_snapshots.py): ({fingerprint: path or None}, their folder),
+    or None when --fresh-api-databases or no --api-database-snapshots."""
+    if request.config.getoption("--fresh-api-databases") or not request.config.getoption("--api-database-snapshots"):
+        return None
+    return {}, tmp_path_factory.mktemp("app-snapshots")
+
+
+@pytest.fixture(autouse=True)
+def apps_start_from_snapshot(request, monkeypatch, app_snapshots):
+    """An app a test builds on a new database file starts from a copy of the same app's database built earlier in this
+    worker, as the `api` fixture's start from its schema snapshot (backend/tests/app_snapshots.py): the helper fixtures
+    (tasks_board, onboarding, github_app and others) each migrated an empty file, most of a 3.4 s median test. A test
+    that must migrate an empty file through create_app takes @pytest.mark.fresh_database."""
+    if app_snapshots is None or request.node.get_closest_marker("fresh_database"):
+        return
+    import backend.app
+    from backend.tests.app_snapshots import snapshot_store
+
+    kept, folder = app_snapshots
+    monkeypatch.setattr(
+        backend.app, "Store", snapshot_store(backend.app.Store, kept, folder, monkeypatch, (backend.app, "Store"))
+    )
