@@ -320,7 +320,7 @@ function onbTeamMode(state: OnbState, mode: OnbState['mode']) {
 }
 
 // ----------------------------------------------------------------- What your bots run on
-// The models choice while none is made, the computer in one line, and the Claude or Codex subscription Getting started
+// The models choice while none is made, the computer in one line, and the Claude or ChatGPT subscription Getting started
 // recommends (backend/getting_started.py `subscription`) until one is signed in or skipped. Done lands on Tasks.
 function onbRunHTML(state: OnbState): string {
   const hide = state.reopened ? '<button class="ghost" type="button" id="onb-hide">Don\'t remind me</button>' : '';
@@ -330,8 +330,8 @@ function onbRunLinesHTML(state: OnbState): string {
   const sub = state.subscription;
   const subscription = sub && (sub.done || sub.skipped) ? '' : `<div class="onb-line" id="onb-subscription">
       <span class="onb-mark" aria-hidden="true"></span><span class="onb-line-text">
-      <a href="#/settings" data-gs-tab="devices">Add a Claude or Codex subscription</a>
-      <small class="muted">Recommended. Use your own subscription for your own bots, within the provider's terms.</small></span></div>`;
+      <button type="button" class="linkish" data-onb-subscription>Add a Claude or ChatGPT subscription</button>
+      <small class="muted">Recommended</small></span></div>`;
   return `<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${subscription}</div>`;
 }
 const ONB_CARET = '<span class="nav-icon onb-caret" aria-hidden="true">expand_more</span>';
@@ -482,6 +482,9 @@ function onbWireComputer(state: OnbState) {
   const commands = onbCommands(state);
   state.dialog?.querySelectorAll<HTMLButtonElement>('[data-onb-copy]').forEach(button => button.onclick = () =>
     void copyText(commands[Number(button.dataset.onbCopy)]?.[1] || '').then(() => toast('Command copied')));
+  // The same sheet as Settings > Models, over this one; once it has saved, the line reads the item again and goes.
+  const plan = $('[data-onb-subscription]');
+  if (plan) plan.onclick = () => { planSignIn({onDone: () => onbRunStarted(state)}); };
   const codeCopy = $('#onb-code-copy');
   if (codeCopy) codeCopy.onclick = () => void copyText(state.code || '').then(() => toast('Code copied'));
   const box = $('#onb-computer');

@@ -204,31 +204,6 @@ def chosen_grant(value):
     return {"full_name": name, "access": access, **flags}
 
 
-MARKET_SPEND = (
-    "market define",
-    "market segment add",
-    "market segment tree",
-    "market size add",
-    "market size decide",
-    "market size list",
-    "market figure add",
-    "market sources",
-    "market spend",
-    "market research",
-)
-
-
-def market_spend(client, args, tool):
-    """The spend commands run the MCP tool of the same name; `sources --add-file` reads its YAML here."""
-    fn = args.fn
-    if fn == "market sources" and args.add_file:
-        import yaml
-
-        loaded = yaml.safe_load(Path(args.add_file).read_text())
-        args.add = loaded if isinstance(loaded, list) else [loaded]
-    return tool(client, args)
-
-
 def counsel_held(args):
     """The Rules Owner runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
     search or fetch, a message, and every other command outside that list are refused before anything is sent."""
@@ -301,8 +276,6 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd == "call":
         return via_tool(client, args)
-    if args.cmd in ("card", "pin"):
-        return via_tool(client, args)
     if fn == "event-types":
         return via_tool(client, args)
     if fn == "team icon":
@@ -358,19 +331,6 @@ def run(args, who=None):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
     if fn == "tool report":
         return via_tool(client, args, tools=json.loads(args.tools))
-    if args.cmd == "tag":
-        more = {}
-        if getattr(args, "markdown_file", None):
-            more["markdown"] = Path(args.markdown_file).read_text()
-        if getattr(args, "metadata", None) is not None:
-            more["metadata"] = json.loads(args.metadata)
-            if not isinstance(more["metadata"], dict):
-                raise APIError("kind", "Tag metadata must be a JSON object")
-        fields = vars(args).copy()
-        fields.pop("markdown_file", None)
-        from argparse import Namespace
-
-        return via_tool(client, Namespace(**fields), **more)
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
         return bots(client, args)
     if fn in (
@@ -417,10 +377,6 @@ def run(args, who=None):
         "slack channel add",
         "slack channel remove",
         "slack channel import",
-        "seat list",
-        "seat create",
-        "seat update",
-        "seat close",
         "setup show",
         "setup complete",
         "setup invite",
@@ -476,16 +432,7 @@ def run(args, who=None):
             "general-manager bot": {"bot": getattr(args, "state", None)},
         }[fn]
         return hubtools.general_manager_set(client, {**change, "operation_id": op})
-    if fn in ("support report", "support send"):
-        from clients import hubtools
-
-        key = os.environ.get("HUB_OPERATION_ID")
-        if fn == "support send":
-            return hubtools.support_send(client, {"ok": args.ok, "operation_id": key})
-        text = Path(args.file).read_text(encoding="utf-8") if args.file else args.message
-        report = {"message": text, "include_ids": not args.no_ids, "task": args.task, "operation_id": key}
-        return hubtools.support_report(client, report)
-    if args.cmd in ("api", "credential", "support") or fn == "message redact":
+    if args.cmd in ("api", "credential") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":
         from clients import hubtools
@@ -531,14 +478,6 @@ def run(args, who=None):
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         if fn == "file publish":
             return hubtools.files_publish_path(client, fields)
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
-    if args.cmd == "page":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn == "page publish":
-            return hubtools.pages_publish_path(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "doc":
         from clients import hubtools
@@ -605,16 +544,6 @@ def run(args, who=None):
 
     def target(value):
         return actor if value in ("me", "self") else value
-
-    def tool(client, args):
-        """The market spend commands run the MCP tool of the same name, so both say the same thing."""
-        from clients import hubtools
-
-        fields = {
-            k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn", "json") and v is not None
-        }
-        fields["operation_id"] = key
-        return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
     def refs(values):
         out = {}
@@ -829,113 +758,6 @@ def run(args, who=None):
             except UnicodeDecodeError:
                 body["content_base64"] = base64.b64encode(data).decode("ascii")
             return post(f"tasks/{args.id}/files", body)
-    if fn.startswith("market watch "):
-        return via_tool(client, args)
-    if fn == "market briefing latest":
-        return via_tool(client, args)
-    if fn == "market briefing post":
-        body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
-        items = json.loads(Path(args.items_file).read_text()) if args.items_file else []
-        answers = json.loads(Path(args.answers_file).read_text()) if args.answers_file else None
-        return via_tool(client, args, body=body, items=items, answers=answers)
-    if cmd == "market" and fn in MARKET_SPEND:
-        return market_spend(client, args, tool)
-    if cmd == "market":
-        if sub == "show":
-            return client.get("market/entities/" + args.id)
-        if sub == "find":
-            return client.get("market/entities", q=args.text)
-        if sub == "edges":
-            return client.get("market/edges", src=args.src, dst=args.dst, rel=args.rel, as_of=args.as_of)
-        if sub == "delta":
-            return client.get("market/delta", since=args.since)
-        if sub == "ask":
-            return post("market/ask", {"question": args.question})
-        if sub == "report":
-            return post(
-                "market/insights",
-                {
-                    "kind": args.kind,
-                    "about": args.about or "",
-                    "claim": args.claim,
-                    "source_url": args.source or "",
-                    "quote": args.quote or "",
-                    "confidence": args.confidence or "medium",
-                    "urgent": bool(args.urgent),
-                    "source_ref": getattr(args, "source_ref", None) or None,
-                },
-            )
-        if sub == "resolve":
-            return post(
-                f"market/insights/{args.id}/resolve",
-                {"status": args.status, "resolution": args.resolution or "", "applied_events": args.events or []},
-            )
-        if sub == "apply":
-            body = {
-                "evidence": {
-                    "source_url": args.source or "",
-                    "source_kind": args.source_kind or "other",
-                    "quote": args.quote or "",
-                    "our_read": args.our_read or "",
-                }
-            }
-            verified = None
-            if args.last_verified_at:
-                from clients import hubtools
-
-                try:
-                    verified = hubtools.market_day(args.last_verified_at)
-                except ValueError as exc:
-                    raise APIError("date", str(exc), 422) from None
-            if args.entity_type and args.entity_name:
-                body["entity"] = {"type": args.entity_type, "name": args.entity_name, "summary": args.summary or ""}
-                if args.tier:
-                    body["entity"]["tier"] = args.tier
-                if args.new_id:
-                    body["entity"]["id"] = args.new_id
-                if verified:
-                    body["entity"]["last_verified_at"] = verified
-            if args.entity_id:
-                body["entity_id"] = args.entity_id
-                if args.summary is not None:
-                    body["summary"] = args.summary
-                if verified:
-                    body["last_verified_at"] = verified
-            if verified and "entity" not in body and "entity_id" not in body:
-                raise APIError(
-                    "entity",
-                    "--last-verified-at needs --entity-id, or --entity-type and --entity-name for a new entity",
-                )
-            if args.edge_src and args.edge_rel and args.edge_dst:
-                body["edge"] = {"src": args.edge_src, "rel": args.edge_rel, "dst": args.edge_dst}
-            return post(f"market/insights/{args.id}/apply", body)
-        if sub == "import":
-            text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8-sig")
-            return post(
-                "market/import",
-                {
-                    "name": "" if args.file == "-" else Path(args.file).name,
-                    "lines": text,
-                    "note": args.note or "",
-                    "dry_run": bool(args.preview),
-                },
-            )
-        if sub == "refresh":
-            return post("market/delta/refresh", {"today": args.today})
-        if sub == "page":
-            if not args.body_file:
-                return client.get("market/pages/" + args.name)
-            if args.body_file == "-":
-                text = sys.stdin.read()
-            else:
-                with open(args.body_file) as f:
-                    text = f.read()
-            return post("market/pages/" + args.name, {"body": text})
-        unverified = []
-        for item in args.unverified or []:
-            entity_id, _, look = str(item).partition("=")
-            unverified.append({"id": entity_id, "look_for": look})
-        return post("market/curator/sweep", {"today": args.today, "unverified": unverified})
     if cmd == "listening":
         if fn == "listening save":
             text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
@@ -990,8 +812,7 @@ def run(args, who=None):
 
 
 def botops_tools(client, args):
-    """`tico api`, `tico credential ...`, `tico message redact`, `tico support file`: the
-    tool of the same name. A secret is read from standard input, never from the command line."""
+    """`tico api`, `tico credential ...`, `tico message redact`: the tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
 
     key = os.environ.get("HUB_OPERATION_ID")

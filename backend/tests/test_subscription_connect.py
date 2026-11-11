@@ -144,7 +144,6 @@ def test_only_a_person_who_may_save_starts_one_and_only_for_a_plan(api):
     )
     post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"}, "assistant", expected=403)
     post(api, "model-subscriptions/connect", {"kind": "anthropic_key", "name": "Key"}, expected=422)
-    post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "  "}, expected=422)
     post(api, "model-subscriptions/connect", {"subscription": "nope"}, expected=404)
 
 
@@ -247,6 +246,14 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
     assert seen["state"] == "failed" and seen["message"]
     assert get(api, "model-subscriptions")["subscriptions"] == []
+    with api.app.state.store.read() as c:
+        said = c.execute("SELECT detail FROM events WHERE action='runner.login.failed' ORDER BY rowid DESC").fetchone()
+    assert json.loads(said["detail"]) == {
+        "runtime": "claude",
+        "login_id": login["id"],
+        "kind": "connect",
+        "category": "value_refused",
+    }
     # A failed sign-in the computer reports says why, and keeps no line of what the CLI printed.
     login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"})
     post(
@@ -257,6 +264,63 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     )
     seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
     assert seen["state"] == "failed" and seen["message"] == "It stopped" and seen["lines"] == []
+    # Why it failed is kept with the audit row: the phases, the category and the last screen, scrubbed here again
+    # whatever the computer sent (a token-shaped string, a link, the code still waiting, a made-up phase).
+    login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"})
+    post(
+        api,
+        f"runner-logins/{login['id']}/report",
+        {"state": "waiting", "url": "https://claude.example/authorize"},
+        m["token"],
+    )
+    post(api, f"runners/{m['runner_id']}/logins/{login['id']}/code", {"code": "typedcode#state"})
+    phases = [
+        {"phase": "cli_started", "elapsed_ms": 4, "exit_code": None},
+        {"phase": "cli_exited", "elapsed_ms": 9100, "exit_code": 0},
+        {"phase": f"Leaked {TOKEN}", "elapsed_ms": 9200},
+        {"phase": "provider_refused", "elapsed_ms": 9200},
+    ]
+    pieces = f"{TOKEN[:30]} Qq7Qq7Qq7Qq7Qq7Qq7Qq7 Zz9Zz9Zz9Zz9Zz9Zz9Zz9"  # a token a repaint split in three
+    screen = f"typedcode#state ************d-code https://claude.example/authorize?code=abc {TOKEN} {pieces} this policy does not permit"
+    post(
+        api,
+        f"runner-logins/{login['id']}/report",
+        {
+            "state": "failed",
+            "message": "No token",
+            "trace": {"category": "provider_refused", "phases": phases, "screen": screen},
+        },
+        m["token"],
+    )
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT detail FROM events WHERE action='runner.login.failed' ORDER BY created_at").fetchall()
+        kept = json.loads(rows[-1][0])
+        everything = json.dumps([dict(r) for r in c.execute("SELECT * FROM events")]) + json.dumps(
+            [dict(r) for r in c.execute("SELECT * FROM model_logins")]
+        )
+    assert (kept["login"], kept["kind"], kept["category"]) == (login["id"], "connect", "provider_refused")
+    assert (kept["step"], kept["exit_code"], kept["elapsed_ms"]) == ("cli_exited", 0, 9100)
+    assert kept["lines"] == [kept["trace"]["screen"]] and len(kept["lines"][0]) <= 200
+    assert kept["trace"]["category"] == "provider_refused"
+    assert [(p["phase"], p["elapsed_ms"], p["exit_code"]) for p in kept["trace"]["phases"]] == [
+        ("cli_started", 4, None),
+        ("cli_exited", 9100, 0),
+        ("provider_refused", 9200, None),
+    ]
+    assert kept["trace"]["screen"].endswith("this policy does not permit") and "[link]" in kept["trace"]["screen"]
+    for leak in (
+        TOKEN,
+        TOKEN[:20],
+        "typedcode",
+        "claude.example/authorize?code",
+        "Leaked",
+        "Qq7Qq7",
+        "Zz9Zz9",
+        "d-code",
+    ):
+        assert leak not in everything, leak
+    before = json.loads(rows[-2][0])  # a report with no trace keeps none, and still says which sign-in failed
+    assert "trace" not in before and (before["kind"], before["category"]) == ("connect", "") and before["login"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] == 0
 
@@ -280,3 +344,25 @@ def test_connect_saves_the_owner_named_up_front_and_refuses_one_who_is_not_a_per
     login = post(api, "model-subscriptions/connect", {"subscription": saved[0]["id"]})
     assert send(api, m, login, OTHER)["state"] == "done"
     assert get(api, "model-subscriptions")["subscriptions"][0]["owner_id"] == "human:ben"
+
+
+def test_a_plan_added_with_no_name_is_named_after_its_plan_and_numbered_from_the_second(api):
+    setup(api)
+    company(api)
+    m = computer(api)
+    first = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
+    assert first["name"] == "Claude" and first["waking"] is False
+    # Asked again with no name (a reloaded page): the same sign-in, under the name it was given.
+    assert post(api, "model-subscriptions/connect", {"kind": "claude_token"})["id"] == first["id"]
+    assert send(api, m, first)["state"] == "done"
+    second = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
+    assert second["name"] == "Claude 2"
+    assert send(api, m, second, OTHER)["state"] == "done"
+    assert post(api, "model-subscriptions/connect", {"kind": "codex_login"})["name"] == "ChatGPT"
+    # A pasted key with no name gets its provider's; one given is kept.
+    key = post(api, "model-subscriptions", {"kind": "anthropic_key", "secret": "sk-ant-api03-" + "k" * 40})
+    named = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": " Team Max "})
+    assert (key["name"], named["name"]) == ("Anthropic API", "Team Max")
+    saved = [s for s in get(api, "model-subscriptions")["subscriptions"] if s["kind"] == "claude_token"]
+    assert sorted(s["name"] for s in saved) == ["Claude", "Claude 2", "Team Max"]
+    assert {s["owner_id"] for s in saved} == {"human:ana"}

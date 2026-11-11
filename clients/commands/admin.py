@@ -3,6 +3,7 @@
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
 from urllib.parse import quote
+from clients.cli_spec import Command, Group
 from clients.tico import APIError
 
 from clients.commands._registry import tool
@@ -217,7 +218,7 @@ def seat_create(api, args):
     "Change a Recruiting seat's title, job description, reporting line or group, as a person "
     "it reports up to (or the owner).",
     {
-        "seat": _s("The seat id"),
+        "seat": _s("The seat id, from `seat list`"),
         "title": _s("New title"),
         "description": _s("New job description"),
         "reports_to": _s("A bot's slug or human:<id>"),
@@ -234,7 +235,7 @@ def seat_update(api, args):
 @tool(
     "tico_seat_close",
     "Take a Recruiting seat off the org chart, as a person it reports up to (or the owner).",
-    {"seat": _s("The seat id")},
+    {"seat": _s("The seat id, from `seat list`")},
     required=("seat",),
     writes=True,
 )
@@ -652,3 +653,20 @@ def live_stats(api, args):
 )
 def origin_show(api, args):
     return api.get("origins/" + args["ref"])
+
+
+SEAT = (
+    Group("seat", "Recruiting seats: roles on the chart with no bot yet"),
+    Command("seat list", "the Recruiting seats", example="tico seat list"),
+    Command(
+        "seat create",
+        "add a seat under you or someone below you (a person)",
+        example="tico seat create 'Support lead' --description 'Answers customers'",
+    ),
+    Command(
+        "seat update",
+        "change a seat's title, job description, reporting line or group (a person)",
+        example="tico seat update s1 --reports-to human:ana",
+    ),
+    Command("seat close", "take a seat off the chart (a person)", example="tico seat close s1"),
+)

@@ -362,7 +362,39 @@ def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata
     tasks = linked_tasks(conn, repo, number)
     metadata_changed(conn, tasks, after, before)
     _nudge(conn, tasks)
+    if before and before.get("head_sha") and after.get("head_sha") != before["head_sha"] and after["state"] == "open":
+        review_again(conn, tasks, after)
     return 1
+
+
+def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row) -> int:
+    """A new commit on a PR whose review page was for an older one: the page no longer counts ("New commits since the
+    review"), so the stage's owner bot is woken now, once per commit, instead of by the two-minute wake for an owner
+    that stopped. A bot still in its run on the task is not woken: it sees the new commit when it attaches. Returns
+    how many wakes were added."""
+    from .. import task_requirements as R
+    from .. import task_wakes
+
+    E = _engine()
+    ref = pr_ref(str(metadata["repo"]), int(metadata["number"]))
+    head = str(metadata.get("head_sha") or "")
+    added = 0
+    for task_id in task_ids:
+        row: Row | None = E.task(conn, task_id)
+        if not row or row["status"] != "open" or row.get("snooze") or not row.get("visit"):
+            continue
+        owner = row.get("owner_id")
+        if not E.is_bot(owner) or task_wakes.live_run(conn, row, str(owner)):
+            continue
+        if not any(s.line == R.STALE_REVIEW and s.on == owner for s in R.unmet(conn, row)):
+            continue
+        visit = row["visit"]
+        lead = f"{ref} has a new commit ({head[:12]}) since your review. Review it at that commit and attach the page again."
+        body = task_wakes.body(conn, row, lead, to=str(owner))
+        key = f"{task_id}:{visit['id']}:review_again:{ref}:{head}"
+        if task_wakes.add(conn, row, str(owner), visit, body, wake_key=key):
+            added += 1
+    return added
 
 
 # ----------------------------------------------------------------------------- webhooks

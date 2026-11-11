@@ -594,6 +594,9 @@ interface TaskCreateOptions {
   /** The pipeline it goes in, by id: General when none is named. */
   pipeline?: string | null | undefined;
 }
+// What was typed into New task and not yet created: closing the modal (the ✕, a tap outside, the phone's Back) keeps
+// it for the next open; a created task clears it.
+let TASK_CREATE_DRAFT = {title: '', body: ''};
 function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   const d = taskCreateModal();
   const parent = opts.parent || null;
@@ -616,6 +619,9 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   $('[data-modal-close]', d).onclick = () => d.close();
   const form: HTMLFormElement = $('#task-create-form', d);
   const field = <T extends Element>(name: string) => form.elements.namedItem(name) as T;
+  field<HTMLInputElement>('title').value = TASK_CREATE_DRAFT.title;
+  field<HTMLTextAreaElement>('body').value = TASK_CREATE_DRAFT.body;
+  form.oninput = () => { TASK_CREATE_DRAFT = {title: field<HTMLInputElement>('title').value, body: field<HTMLTextAreaElement>('body').value}; };
   const pick = field<HTMLSelectElement>('pipeline');
   const fill = (list: PipelineRec[]) => {
     const want = opts.pipeline || '';
@@ -636,6 +642,7 @@ function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
       const made = await taskCreate({title, body, owner: who.includes(':') ? who : 'bot:' + who,
         ...(pick.value ? {pipeline: pick.value} : {}), ...(parent ? {parent: parent.id} : {}),
         ...(labels.length ? {labels} : {}), ...(parent?.private ? {private: true} : {})});
+      TASK_CREATE_DRAFT = {title: '', body: ''};
       d.close();
       if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       await v2Refresh();

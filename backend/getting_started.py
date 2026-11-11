@@ -251,7 +251,7 @@ def checklist(c, who, settings, github):
         ),
         _item(
             "subscription",
-            "Add a Claude or Codex subscription",
+            "Add a Claude or ChatGPT subscription",
             _plan_signed_in(c),
             "Recommended. Use your own subscription for your own bots, within the provider's terms.",
             "#/settings",

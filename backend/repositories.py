@@ -168,6 +168,7 @@ CREATED_ON_GITHUB = 'repositories-created'  # {owner/name lowercased: GitHub's c
 MADE = 'bot-repositories-made'  # {owner/name lowercased: when}: bot repositories this company's App created
 CHOSEN = 'bot-repositories-chosen'  # {owner/name lowercased: when}: a person pointed a bot at it
 TAKEN = 'bot-repositories-taken'  # {owner/name lowercased: when}: GitHub already had it when Tico went to create it
+ASKED = 'bot-repositories-asked'  # {owner/name lowercased: epoch seconds}: when Tico first asked GitHub to create it
 # Why a bot's repository is not used: the App is on chosen repositories only and not this one; or another company has it.
 CHOSEN_ONLY, NOT_OURS = 'chosen_only', 'not_ours'
 HOME_WORDS = {
@@ -191,6 +192,19 @@ def note_repository(c, key, repository):
         taken = metadata(c, TAKEN)
         if taken.pop(name, None) is not None:
             save_metadata(c, TAKEN, taken)
+    asked = metadata(c, ASKED)  # the ask is settled either way
+    if asked.pop(name, None) is not None:
+        save_metadata(c, ASKED, asked)
+
+
+def note_asked(c, repository):
+    """Remember when Tico first asked GitHub to create `repository`, until it is made or found taken. A create whose
+    answer was lost is told from someone else's repository by it (GitHubApp._existing)."""
+    name = str(repository or '').strip().lower()
+    asked = metadata(c, ASKED)
+    if name not in asked:
+        asked[name] = time.time()
+        save_metadata(c, ASKED, asked)
 
 
 def note_chosen(c, repo, default_owner=''):

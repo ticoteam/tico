@@ -794,12 +794,40 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     question = lambda h=None: api.get("/api/v2/config", headers=h or signed_in()).json()["feedback_question"]
     with store.transaction() as c:  # everyone so far acted before any result
         c.execute("UPDATE events SET created_at=?", (H.shift(H.now(), days=-3),))
-    complete_a_bot_turn(api, H.shift(H.now(), days=-1))
+    from backend import onboarding
+
+    def setup(done):
+        with store.transaction() as c:
+            record = {**onboarding.load(c), "completed": H.shift(H.now(), days=-3) if done else None}
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (onboarding.KEY, json.dumps(record)),
+            )
+
+    def task(requester):
+        with store.transaction() as c:
+            c.execute(
+                "INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at) VALUES(?,'Run payroll',?,'payroll','open',?)",
+                ("t-" + requester, requester, H.shift(H.now(), days=-2)),
+            )
+            c.execute("UPDATE attempts SET task_id=? WHERE bot_id='payroll'", ("t-" + requester,))
+
+    setup(True)
+    complete_a_bot_turn(api, H.shift(H.now(), days=-2))
     assert question() is None  # only the Assistant has answered
-    complete_a_bot_turn(api, H.shift(H.now(), hours=2), bot="payroll")
-    assert question() is None  # a result stamped ahead of this clock waits
+    complete_a_bot_turn(api, H.shift(H.now(), days=-2), bot="payroll")
+    assert question() is None  # a new company's bots go live by themselves: nobody has used Tico yet
+    task("payroll")
+    assert question() is None  # nor is a task one bot gave another a person's use of it
+    task("human:test")
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='payroll'", (H.shift(H.now(), hours=-2),))
+    assert question() is None  # a person's first result today: the question waits a day
     with store.transaction() as c:
         c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='payroll'", (H.shift(H.now(), days=-1),))
+    setup(False)
+    assert question() is None  # never before the first-run setup is complete
+    setup(True)
     assert question() == {"moment": "first_result", "question": "How is Tico working for you?"}
     assert api.get("/api/v2/config", headers=as_bot(api)).json()["feedback_question"] is None
     r = api.post(

@@ -22,6 +22,7 @@ from backend.store import Problem, encode
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
 from backend.tests.helpers.github_app import (
+    EVENT_PERMISSIONS,
     FakeGitHub,
     KEY,
     PEM,
@@ -33,6 +34,7 @@ from backend.tests.helpers.github_app import (
     connect,
     gh,
     manifest,
+    manifest_refusal,
     product_repo_request,
     put_extras,
     runner_token,
@@ -98,6 +100,56 @@ def test_manifest_asks_for_checks_write_and_the_merge_group_event_for_tico_merge
     asked = manifest(api)["manifest"]
     assert asked["default_permissions"]["checks"] == "write"  # the server's own token; no turn token carries it
     assert "merge_group" in asked["default_events"]  # the merge queue asks for tico/merge-ok on its group's commit
+    assert asked["default_permissions"]["merge_queues"] == "read"  # GitHub requires it for that event
+
+
+@pytest.mark.parametrize("administration", [True, False])
+@pytest.mark.parametrize("personal", [True, False])
+def test_every_event_the_manifest_subscribes_to_is_covered_by_a_permission_it_asks_for(administration, personal):
+    """GitHub refuses the whole manifest otherwise, and nobody can connect (v0.6.0-rc.7: `merge_group` without
+    `merge_queues`). EVENT_PERMISSIONS is GitHub's rule per event, from its webhook events page."""
+    body = G.manifest(SimpleNamespace(public_url=PUBLIC), "Acme Tico", administration, personal=personal)
+    assert body["default_events"], "the manifest subscribes to no event"
+    for event in body["default_events"]:
+        assert event in EVENT_PERMISSIONS, f"add {event} and the permission GitHub requires for it to EVENT_PERMISSIONS"
+        assert body["default_permissions"].get(EVENT_PERMISSIONS[event]) in ("read", "write"), event
+    assert manifest_refusal(body) == ""
+
+
+def test_fake_github_refuses_a_manifest_as_github_does_so_connecting_fails_in_tests(api, gh, monkeypatch):
+    real = G.manifest
+
+    def rc7(*args, **kw):  # the manifest v0.6.0-rc.7 shipped
+        body = real(*args, **kw)
+        del body["default_permissions"]["merge_queues"]
+        return body
+
+    monkeypatch.setattr(G, "manifest", rc7)
+    with pytest.raises(AssertionError, match="Default events are not supported by permissions: merge_group"):
+        connect(api)
+    assert not gh.of("/conversions")  # GitHub made no App, so nothing came back to Tico
+    monkeypatch.setattr(G, "manifest", lambda *a, **kw: {**real(*a, **kw), "default_events": ["push", "deployment"]})
+    with pytest.raises(AssertionError, match="unknown to the fake GitHub.*deployment"):
+        connect(api)
+
+
+def test_no_token_names_merge_queues_so_an_app_made_before_it_keeps_working(api, gh):
+    """An App made before the manifest asked for Merge queues: its installation reports none, and GitHub refuses a token
+    naming a permission the installation lacks. Turn, read and check tokens never name it."""
+    connect(api)
+    gh.permissions = {name: level for name, level in manifest_permissions().items() if name != "merge_queues"}
+    asked = []
+    gh.on_token = lambda body: asked.append((body or {}).get("permissions") or {})
+    runner_token(api, "cpo")
+    assert turn_token(api).status_code == 200
+    assert api.app_state.github_app.mint_checks("Acme/emp-cpo")
+    assert len(asked) >= 2 and not any("merge_queues" in permissions for permissions in asked)
+    assert "merge_queues" not in {**G.TURN_READS, **G.TURN_PERMISSIONS, **G.READ_PERMISSIONS, **G.CHECKS_PERMISSIONS}
+    assert not token_health(api)
+
+
+def manifest_permissions():
+    return G.manifest(SimpleNamespace(public_url=PUBLIC), "Acme Tico", True)["default_permissions"]
 
 
 def test_missing_repo_permission_is_refused_with_both_fixes_and_botops_creates_it_once_granted(api, gh):
@@ -127,6 +179,23 @@ def test_missing_repo_permission_is_refused_with_both_fixes_and_botops_creates_i
     assert checked.status_code == 200 and checked.json()["administration"] is True, checked.text
     made = create()
     assert made.status_code == 200 and gh.created_repositories == {"Acme/bot-newbie"}, made.text
+
+
+def test_a_first_repository_list_that_fails_is_named_by_its_code_on_the_install_event(api, gh, monkeypatch):
+    from backend import repositories
+
+    connect(api)
+    secret = "ghs_PLANTEDsecret0123456789abcdef"
+
+    def refused(service):
+        raise Problem("github_repositories", "GitHub answered " + secret, 502)
+
+    monkeypatch.setattr(repositories, "sync", refused)
+    assert api.get("/api/v2/github/app/installed", headers=auth()).status_code == 302
+    with api.app_state.store.read() as c:
+        rows = [r["detail"] for r in c.execute("SELECT detail FROM events WHERE action='github.app_installed'")]
+    assert json.loads(rows[-1]) == {"installed": True, "sync_failed": "github_repositories"}
+    assert secret not in "".join(rows)
 
 
 def test_state_is_single_use_and_bound_to_session(api, gh):

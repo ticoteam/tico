@@ -31,6 +31,38 @@ PEM = KEY.private_bytes(
 PUBLIC = "https://tico.acme.example"
 
 
+# The repository permission GitHub requires before an App may subscribe to a webhook event: "To subscribe to this
+# event, a GitHub App must have at least read-level access for the ... repository permission", per event, at
+# https://docs.github.com/en/webhooks/webhook-events-and-payloads (read Nov 11, 2026). GitHub's Create GitHub App page
+# refuses a whole manifest with one uncovered event ("Default events are not supported by permissions: merge_group",
+# v0.6.0-rc.7). An event the manifest gains must be added here from that page.
+EVENT_PERMISSIONS = {
+    "pull_request": "pull_requests",
+    "pull_request_review": "pull_requests",
+    "pull_request_review_comment": "pull_requests",
+    "check_run": "checks",
+    "check_suite": "checks",
+    "workflow_run": "actions",
+    "status": "statuses",
+    "push": "contents",
+    "release": "contents",
+    "merge_group": "merge_queues",
+}
+
+
+def manifest_refusal(body):
+    """What GitHub's Create GitHub App page says to a manifest it refuses, or "" for one it accepts."""
+    permissions = body.get("default_permissions") or {}
+    unknown = [e for e in body.get("default_events") or [] if e not in EVENT_PERMISSIONS]
+    if unknown:  # the fake cannot say GitHub would accept an event it has no permission on record for
+        return "Default events unknown to the fake GitHub (add them to EVENT_PERMISSIONS): " + ", ".join(unknown)
+    events = body.get("default_events") or []
+    bare = [e for e in events if permissions.get(EVENT_PERMISSIONS[e]) not in ("read", "write")]
+    if bare:
+        return "Default events are not supported by permissions: " + ", ".join(bare)
+    return ""
+
+
 class FakeGitHub:
     def __init__(self):
         self.calls, self.installations = [], [{"id": 77, "account": {"login": "Acme"}}]
@@ -50,6 +82,9 @@ class FakeGitHub:
         self.create_response_message = ""
         self.history = set()  # repositories that hold commits; any other answers "empty"
         self.lose_next_product_create_response = False
+        self.lose_next_create_response = False  # a bot repository's create is made, and its answer never arrives
+        self.create_refusal = None  # (status, headers) every bot repository create answers, as a limit or an outage
+        self.made_at = {}  # owner/name: when GitHub made it (GET /repos/...); anything else is years old
         self.refuse_actions_write = False  # refuse Actions: write whatever the live permissions say
         self.refuse_workflows_write = False  # refuse Workflows: write whatever the live permissions say
         self.on_token = None  # called with each token request's body before it is answered
@@ -154,7 +189,11 @@ class FakeGitHub:
         if path.startswith("/repos/") and path.count("/") == 3:
             if request.method == "DELETE":
                 return httpx.Response(self.delete_status)
-            return httpx.Response(404 if path.split("/")[3] in self.missing else 200, json={})
+            name = path.split("/")[2] + "/" + path.split("/")[3]
+            return httpx.Response(
+                404 if path.split("/")[3] in self.missing else 200,
+                json={"created_at": self.made_at.get(name, "2020-01-01T00:00:00Z")},
+            )
         if path.endswith("/access_tokens"):
             if self.on_token:
                 self.on_token(body)
@@ -193,11 +232,16 @@ class FakeGitHub:
             repository = path.split("/")[2] + "/" + body["name"]
             if self.generate_status >= 300:
                 return httpx.Response(self.generate_status, json={"message": self.create_response_message})
-            if repository in self.taken or (
-                body.get("description") == "Tico product repository" and repository in self.created_repositories
-            ):
+            product = body.get("description") == "Tico product repository"
+            if self.create_refusal and not product:
+                return httpx.Response(self.create_refusal[0], headers=self.create_refusal[1], json={"message": ""})
+            if repository in self.taken or repository in self.created_repositories:
                 return httpx.Response(422, json={"message": "name already exists"})
             self.created_repositories.add(repository)
+            self.made_at[repository] = datetime.fromtimestamp(self.clock(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if self.lose_next_create_response and not product:
+                self.lose_next_create_response = False
+                raise httpx.ReadTimeout("synthetic response timeout", request=request)
             if body.get("description") == "Tico product repository" and self.lose_next_product_create_response:
                 self.lose_next_product_create_response = False
                 raise httpx.ReadTimeout("synthetic response timeout", request=request)
@@ -256,6 +300,14 @@ class FakeGitHub:
 
     def of(self, suffix):
         return [c for c in self.calls if c[1].endswith(suffix)]
+
+    def create_app(self, body):
+        """The person's browser posting the manifest to GitHub's Create GitHub App page: the code GitHub redirects back
+        with, or the error page GitHub shows instead (no App is made and the person never returns to Tico)."""
+        refusal = manifest_refusal(body)
+        if refusal:
+            raise AssertionError("GitHub refused the App manifest: " + refusal)
+        return "the-code"
 
 
 @pytest.fixture
@@ -337,8 +389,9 @@ def manifest(api, **params):
 
 
 def connect(api, **params):
-    state = manifest(api, **params)["state"]
-    r = api.get("/api/v2/github/app/callback", params={"code": "the-code", "state": state}, headers=auth())
+    asked = manifest(api, **params)
+    code = G.TRANSPORT.handler.create_app(asked["manifest"])  # GitHub makes the App only from a manifest it accepts
+    r = api.get("/api/v2/github/app/callback", params={"code": code, "state": asked["state"]}, headers=auth())
     assert r.status_code == 302, r.text
     return r
 

@@ -9,7 +9,6 @@
 type SubsListAnswer = Partial<import('../types/api').ModelSubscriptionList> & {connect?: string[]; error?: unknown};
 // A kind: the server's rows, or SUBS_KINDS when it sends none.
 interface SubsKindRow {kind: string; label: string; runtime: string; secret_label?: string; owned?: boolean; connect?: boolean; help?: string}
-interface SubsExample {name?: string; secret?: string; help?: string}
 interface SubsUsage {used_pct?: number | null; resets_at?: string | null; window?: string | null; reason?: string | null; cost_usd_month?: number | null}
 // A computer as the server names it: {runner_id, label}, or a bare runner id.
 type SubsComputer = string | {runner_id: string; label?: string};
@@ -18,17 +17,12 @@ interface SubsAssignment {runner_id: string; runtime: string; subscription_id: s
 interface SubsState {rows: SubsRow[]; kinds: SubsKindRow[]; connect: string[] | null; assignments: SubsAssignment[]; capable: string[] | null; listed: boolean; error: string; loaded: boolean; pending: Promise<void> | null}
 // A refusal's extra facts; `detail` is the message (an object with the count on an older server).
 interface SubsProblem {code?: unknown; running?: unknown; detail?: unknown}
-// POST /v2/model-subscriptions/connect: the sign-in a computer runs for the plan.
-interface SubsConnectStart {runner_id: string; runtime: string; computer?: string; not_yours?: boolean}
 // A computer on Settings > Computers, with what its Tico says about each AI tool's sign-in.
 type SubsMachine = SettingsMachine & {readiness?: {runtimes?: Record<string, {authenticated?: unknown} | undefined> | null} | null};
 // A person who may own a plan.
 interface SubsPerson {id: string; name?: string; email?: string; hidden?: boolean; sign_in?: unknown}
-// The kind box and its options always carry data-kind (subsKindComboHTML).
-interface SubsKindInput extends HTMLInputElement {readonly dataset: DOMStringMap & {kind: string}}
-interface SubsKindOption extends HTMLElement {readonly dataset: DOMStringMap & {kind: string}}
-// The dialog's form: Name (not on Reconnect), Owner (a plan) and the secret (not on Edit).
-interface SubsFormFields extends HTMLFormControlsCollection {name?: HTMLInputElement; secret?: HTMLInputElement | HTMLTextAreaElement; owner?: HTMLSelectElement}
+// The Edit dialog's form: Name and, for a plan, Owner.
+interface SubsFormFields extends HTMLFormControlsCollection {name?: HTMLInputElement; owner?: HTMLSelectElement}
 interface SubsForm extends HTMLFormElement {readonly elements: SubsFormFields}
 type SubsAsk = (running: number) => {title: string; text: string; ok?: string; danger?: boolean};
 
@@ -53,12 +47,6 @@ const SUBS_KINDS: [SubsKindRow, ...SubsKindRow[]] = [
   {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json", owned: true},
   {kind: 'anthropic_key', label: 'Anthropic API key', runtime: 'claude', secret_label: 'API key'},
   {kind: 'openai_key', label: 'OpenAI API key', runtime: 'codex', secret_label: 'API key'}];
-// Example values for the fields, and the one line of help each kind gets.
-const SUBS_EXAMPLE: Record<string, SubsExample> = {
-  claude_token: {name: 'Claude Max', secret: 'sk-ant-oat01-…', help: 'Run claude setup-token on any computer signed in to the plan, then paste the token.'},
-  codex_login: {name: 'ChatGPT Pro', secret: '{"auth_mode": "chatgpt", "tokens": {…}}', help: 'Paste ~/.codex/auth.json from a computer where codex login is signed in.'},
-  anthropic_key: {name: 'Anthropic API', secret: 'sk-ant-api03-…'},
-  openai_key: {name: 'OpenAI API', secret: 'sk-proj-…'}};
 const subsToolName = (runtime: string | undefined) => harnessRow(runtime)?.name || harnessWords(runtime);
 const subsKind = (kind: string): SubsKindRow => SUBS.kinds.find(row => row.kind === kind) || SUBS_KINDS.find(row => row.kind === kind) || {kind, label: kind, runtime: ''};
 // A plan has an owner; an API key has none.
@@ -147,7 +135,7 @@ async function renderSettingsSubs() {
   await subsLoad();
   if (!el.isConnected) return;
   const add = $('#subs-add');
-  if (add) { add.hidden = !SUBS.listed || !subsMayEdit(); add.onclick = () => subsDialog('add'); }
+  if (add) { add.hidden = !SUBS.listed || !subsMayEdit(); add.onclick = () => { planSignIn(); }; }
   let html;
   if (!SUBS.listed) html = `<p class="${SUBS.error ? 'err' : 'muted'}">${esc(SUBS.error || 'This server does not keep subscriptions yet.')}</p>`;
   else if (!SUBS.rows.length) html = `<div class="subs-empty"><span class="muted">No subscriptions yet.</span>${subsMayEdit() ? '<button type="button" class="ghost" data-subs-add>Add subscription</button>' : ''}</div>`;
@@ -157,9 +145,9 @@ async function renderSettingsSubs() {
   patchHTML(el, html);
   restore();
   el.onclick = (event: MouseEvent) => {
-    if (eventElement(event)?.closest('[data-subs-add]')) { subsDialog('add'); return; }
+    if (eventElement(event)?.closest('[data-subs-add]')) { planSignIn(); return; }
     const reconnect = eventElement(event)?.closest<HTMLElement>('[data-subs-reconnect]');
-    if (reconnect) { subsDialog('reconnect', subsById(reconnect.dataset.subsReconnect)); return; }
+    if (reconnect) { const sub = subsById(reconnect.dataset.subsReconnect); if (sub) planSignIn({sub}); return; }
     const more = eventElement(event)?.closest<HTMLElement>('[data-subs-more]');
     if (more) subsMenu(more, subsById(more.dataset.subsMore));
   };
@@ -188,91 +176,12 @@ function subsMenu(anchor: HTMLElement, sub: SubsRow | undefined) {
     const act = eventElement(event)?.closest<HTMLElement>('[data-subs-act]')?.dataset.subsAct;
     if (!act) return;
     pop.hidePopover();
-    if (act === 'remove') void subsRemove(sub); else subsDialog(act, sub);
+    if (act === 'remove') void subsRemove(sub); else if (act === 'reconnect') planSignIn({sub}); else subsDialog(sub);
   };
   pop.showPopover();
   anchor.setAttribute('aria-expanded', 'true');
   tasksMenuPlace(pop, anchor);
   pop.querySelector('.tl-mi')?.focus();
-}
-// The secret field for a kind: Codex's auth.json is a few lines of JSON, everything else one token or key.
-// Connect: a computer runs the plan's sign-in and Tico saves the result, so there is nothing to paste
-// (backend/model_subscriptions.py `connect`). A plan whose sign-in has no computer to run on says so; a server that
-// does not say which can (`SUBS.connect`) has no such route, so no button.
-function subsConnectHTML(kind: string) {
-  if (!subsKind(kind).connect || !SUBS.connect) return '';
-  const ready = SUBS.connect.includes(kind);
-  return `<div class="subs-connect"><button class="primary" type="button" data-subs-connect${ready ? '' : ' disabled'}>Connect ${esc(subsKind(kind).label)}</button>
-    ${ready ? '<span class="subs-connect-or">or paste</span>' : '<span class="subs-connect-or">Needs a computer online. Or paste:</span>'}</div>`;
-}
-function subsSecretHTML(kind: string) {
-  const row = subsKind(kind), example: SubsExample = SUBS_EXAMPLE[kind] || {};
-  const label = row.secret_label || SUBS_KINDS.find(k => k.kind === kind)?.secret_label || 'Token or key';
-  const help = row.help || example.help || '';
-  const field = kind === 'codex_login'
-    ? `<textarea name="secret" rows="4" spellcheck="false" autocomplete="off" required placeholder="${esc(example.secret || '')}"></textarea>`
-    : `<input name="secret" type="password" spellcheck="false" autocomplete="off" required placeholder="${esc(example.secret || '')}">`;
-  return `${subsConnectHTML(kind)}<div class="subs-field" data-subs-secret><span class="k"><label for="subs-secret">${esc(label)}</label>${help ? ` ${helpBubble(help)}` : ''}</span>${field.replace('name="secret"', 'name="secret" id="subs-secret"')}</div>`;
-}
-// The kind: a search box over the kinds, Claude plan first. Typing filters; arrows move; Enter or a click picks.
-function subsKindComboHTML(kind: string) {
-  const rows = SUBS.kinds.length ? SUBS.kinds : SUBS_KINDS;
-  return `<div class="subs-combo" data-subs-combo>
-    <input type="text" role="combobox" aria-expanded="false" aria-controls="subs-kind-list" aria-autocomplete="list" autocomplete="off" spellcheck="false"
-      id="subs-kind" value="${esc(subsKind(kind).label)}" data-kind="${esc(kind)}">
-    <ul class="subs-combo-list" id="subs-kind-list" role="listbox" aria-label="Kind" hidden>${rows.map(row =>
-      `<li role="option" id="subs-kind-${esc(row.kind)}" data-kind="${esc(row.kind)}" aria-selected="${row.kind === kind}">${esc(row.label)}</li>`).join('')}</ul></div>`;
-}
-function subsKindComboWire(form: ParentNode, onPick: (kind: string) => void) {
-  const box = form.querySelector('[data-subs-combo]');
-  if (!box) return;
-  const input = box.querySelector<SubsKindInput>('input'), list = box.querySelector<HTMLElement>('[role=listbox]');
-  if (!input || !list) return;
-  const options = () => [...list.querySelectorAll<SubsKindOption>('[role=option]')];
-  const visible = () => options().filter(o => !o.hidden);
-  let active = -1;
-  const mark = (i: number) => {
-    const shown = visible(); active = shown.length ? (i + shown.length) % shown.length : -1;
-    options().forEach(o => o.classList.remove('on'));
-    const cur = shown[active];
-    if (cur) { cur.classList.add('on'); input.setAttribute('aria-activedescendant', cur.id); cur.scrollIntoView({block: 'nearest'}); }
-    else input.removeAttribute('aria-activedescendant');
-  };
-  const open = (filter = '') => {
-    const q = filter.trim().toLowerCase();
-    options().forEach(o => { o.hidden = !!q && !o.textContent.toLowerCase().includes(q); });
-    list.hidden = false; input.setAttribute('aria-expanded', 'true');
-    mark(Math.max(0, visible().findIndex(o => o.dataset.kind === input.dataset.kind)));
-  };
-  const close = () => { list.hidden = true; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); };
-  const pick = (option: SubsKindOption | null | undefined) => {
-    if (!option) return;
-    const changed = option.dataset.kind !== input.dataset.kind;
-    input.dataset.kind = option.dataset.kind; input.value = option.textContent;
-    options().forEach(o => o.setAttribute('aria-selected', String(o === option)));
-    close();
-    if (changed) onPick(option.dataset.kind);
-  };
-  input.onfocus = () => { input.select(); };
-  input.onclick = () => { if (list.hidden) open(); };
-  input.oninput = () => open(input.value);
-  input.onkeydown = event => {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
-      if (list.hidden) open(); else mark(active + (event.key === 'ArrowDown' ? 1 : -1));
-    } else if (event.key === 'Enter') {
-      if (!list.hidden) { event.preventDefault(); pick(visible()[active]); }
-    } else if (event.key === 'Escape') {
-      // Escape closes the list first; the dialog closes on the next one.
-      if (!list.hidden) { event.preventDefault(); event.stopPropagation(); close(); input.value = subsKind(input.dataset.kind).label; }
-    }
-  };
-  input.onblur = () => setTimeout(() => {
-    if (box.contains(document.activeElement)) return;
-    close(); input.value = subsKind(input.dataset.kind).label;
-  }, 120);
-  list.onmousedown = event => event.preventDefault();   // keeps focus in the box while a click picks
-  list.onclick = event => pick(eventElement(event)?.closest<SubsKindOption>('[role=option]'));
 }
 // A plan's owner: a person of the company whose sign-in is on (the server checks). Ids here are bare; the server's are
 // `human:<id>`. A saved one's owner who has since left stays listed so the field shows who it is.
@@ -289,94 +198,44 @@ const subsOwnerPicked = (form: SubsForm) => {
   const o = form.elements.owner;
   return o && !o.closest<HTMLElement>('[data-subs-owned]')!.hidden && o.value && o.value !== o.dataset.current ? {owner_id: 'human:' + o.value} : {};
 };
-// Add (kind, name, owner, value), Edit (name, owner) or Reconnect (a new value) in one small dialog. Giving a
-// subscription to computers is on the Computers tab.
-function subsDialog(mode: string, sub: SubsRow | null | undefined = null) {
-  if (mode !== 'add' && !sub) return;
-  const kind = sub?.kind || (SUBS.kinds[0] || SUBS_KINDS[0]).kind;
-  const title = mode === 'add' ? 'Add subscription' : mode === 'edit' ? `Edit ${sub?.name}` : `Reconnect ${sub?.name}`;
+// Edit: the name and, for a plan, its owner. Adding one and reconnecting it are the sign-in sheet (app/plan-signin.ts);
+// giving a subscription to computers is on the Computers tab.
+function subsDialog(sub: SubsRow | null | undefined) {
+  if (!sub) return;
+  const title = `Edit ${sub.name}`;
   const dialog = document.createElement('dialog');
   dialog.className = 'tmodal tmodal-shell subs-dialog'; dialog.setAttribute('aria-label', title);
-  dialog.innerHTML = `<form data-subs-form="${mode}" novalidate><header><h2>${esc(title)}</h2><button class="ghost" type="button" data-close>Close</button></header>
+  dialog.innerHTML = `<form data-subs-form="edit" novalidate><header><h2>${esc(title)}</h2><button class="ghost" type="button" data-close>Close</button></header>
     <div class="tmodal-body subs-form">
-      ${mode === 'add' ? `<div class="subs-field"><span class="k"><label for="subs-kind">Kind</label></span>${subsKindComboHTML(kind)}</div>` : ''}
-      ${mode !== 'reconnect' ? `<label class="subs-field"><span class="k">Name</span><input name="name" type="text" required maxlength="80" autocomplete="off" value="${esc(sub?.name || '')}" placeholder="${esc(SUBS_EXAMPLE[kind]?.name || '')}"></label>` : ''}
-      ${mode === 'add' || (mode === 'edit' && subsOwned(kind)) ? subsOwnerHTML(mode === 'add' ? S.me?.id || '' : subsPersonId(sub?.owner_id), subsOwned(kind)) : ''}
-      ${mode !== 'edit' ? `<div data-subs-secret-slot>${subsSecretHTML(kind)}</div>` : ''}
-      ${mode === 'add' ? `<p class="muted subs-note" data-subs-owned${subsOwned(kind) ? '' : ' hidden'}>Only use your subscription on your own bots, not shared ones.</p>` : ''}
+      <label class="subs-field"><span class="k">Name</span><input name="name" type="text" required maxlength="80" autocomplete="off" value="${esc(sub.name || '')}"></label>
+      ${subsOwned(sub.kind) ? subsOwnerHTML(subsPersonId(sub.owner_id), true) : ''}
     </div>
     <div class="tmodal-foot onb-actions"><button class="ghost" type="button" data-close>Cancel</button><span class="spacer"></span><button class="primary" type="submit">Save</button></div></form>`;
   const form = dialog.querySelector<SubsForm>('form');
   if (!form) return;
   dialog.querySelectorAll<HTMLElement>('[data-close]').forEach(button => { button.onclick = () => dialog.close(); });
-  // One primary button: Connect, until there is a value to Save.
-  const saveLook = () => {
-    const paste = !form.querySelector('[data-subs-connect]:not([disabled])') || !!form.elements.secret?.value.trim();
-    form.querySelector('button[type=submit]')!.className = paste ? 'primary' : 'ghost';
-  };
-  if (mode === 'add') subsKindComboWire(form, next => {
-    form.querySelector('[data-subs-secret-slot]')!.innerHTML = subsSecretHTML(next);
-    form.elements.name!.placeholder = SUBS_EXAMPLE[next]?.name || '';
-    form.querySelectorAll<HTMLElement>('[data-subs-owned]').forEach(el => { el.hidden = !subsOwned(next); });
-    saveLook();
-  });
   // A red line goes once the person types in that field again.
-  form.oninput = event => { const field = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement; if (field.name) settingsFieldClear(field); saveLook(); };
-  saveLook();
-  form.onclick = async event => {
-    const button = eventElement(event)?.closest<HTMLButtonElement>('[data-subs-connect]');
-    if (!button || button.disabled) return;
-    form.querySelectorAll('[data-field-err]').forEach(line => line.remove());
-    const name = form.elements.name?.value.trim();
-    if (form.elements.name && !name) { settingsFieldError(form.elements.name, 'Enter a name'); form.elements.name.focus(); return; }
-    const chosen = mode === 'add' ? form.querySelector<SubsKindInput>('#subs-kind')?.dataset.kind : sub?.kind, owner = subsOwnerPicked(form);
-    const start = (confirm: boolean): Promise<SubsConnectStart> => post('/v2/model-subscriptions/connect', mode === 'add' ? {kind: chosen, name, ...owner} : confirm ? {subscription: sub?.id, confirm} : {subscription: sub?.id});
-    button.disabled = true;
-    try {
-      // A new value restarts the runs on each computer given it: with runs going, the page asks before the sign-in.
-      const first = await subsConfirmed(start, running => ({title: `Reconnect ${sub?.name}?`, text: `${subsStopWords(running)}, and their sessions start fresh.`, ok: 'Reconnect', danger: false}));
-      if (!first) { button.disabled = false; return; }
-      // Closed while that was on its way: nobody is left to finish the sign-in it started.
-      if (!dialog.open) { await TicoModelLogin.cancel(first); return; }
-      TicoModelLogin.open({into: dialog, runnerId: first.runner_id, runtime: first.runtime, machine: first.computer || '', connect: {
-        title: mode === 'add' ? `Connect ${name}` : `Reconnect ${sub?.name}`, first, start: () => start(true),
-        done: mode === 'add' ? `${name} added` : `${sub?.name} reconnected`}});
-    } catch (error) {
-      button.disabled = false;
-      const fields: Record<string, HTMLInputElement | HTMLSelectElement | undefined> = {name: form.elements.name, owner: form.elements.owner};
-      const field = fields[errorCode(error)];
-      if (field) { settingsFieldError(field, errorMessage(error, '')); field.focus(); } else toast(errorMessage(error, ''), true);
-    }
-  };
+  form.oninput = event => { const field = event.target as HTMLInputElement | HTMLSelectElement; if (field.name) settingsFieldClear(field); };
   form.onsubmit = async event => {
     event.preventDefault();
     form.querySelectorAll('[data-field-err]').forEach(line => line.remove());
-    const name = form.elements.name?.value.trim(), secret = form.elements.secret?.value.trim();
+    const name = form.elements.name?.value.trim();
     if (form.elements.name && !name) { settingsFieldError(form.elements.name, 'Enter a name'); form.elements.name.focus(); return; }
-    if (form.elements.secret && !secret) { settingsFieldError(form.elements.secret, 'Paste the token or key'); form.elements.secret.focus(); return; }
     const button = form.querySelector<HTMLButtonElement>('button[type=submit]'); if (!button) return; button.disabled = true;
     try {
-      if (mode === 'add') await post('/v2/model-subscriptions', {kind: form.querySelector<SubsKindInput>('#subs-kind')?.dataset.kind, name, ...subsOwnerPicked(form), secret});
-      else if (mode === 'edit') await post(`/v2/model-subscriptions/${encodeURIComponent(String(sub?.id))}`, {name, ...subsOwnerPicked(form)});
-      else {
-        // A new value restarts the runs on each computer given it: with runs going, the page asks first.
-        const done = await subsConfirmed((confirm: boolean): Promise<import('../types/api').ModelSubscription> => post(`/v2/model-subscriptions/${encodeURIComponent(String(sub?.id))}`, confirm ? {secret, confirm} : {secret}),
-          running => ({title: `Reconnect ${sub?.name}?`, text: `${subsStopWords(running)}, and their sessions start fresh.`, ok: 'Reconnect', danger: false}));
-        if (!done) { button.disabled = false; return; }
-      }
-      if (form.elements.secret) form.elements.secret.value = '';   // nothing on the page keeps the value once sent
-      toast(mode === 'add' ? `${name} added` : mode === 'edit' ? 'Saved' : `${sub?.name} reconnected`);
+      await post(`/v2/model-subscriptions/${encodeURIComponent(sub.id)}`, {name, ...subsOwnerPicked(form)});
+      toast('Saved');
       dialog.close();
     } catch (error) {
       const code = subsProblem(error).code;
-      const field = code === 'name' ? form.elements.name : code === 'owner' ? form.elements.owner : code === 'kind' ? form.querySelector<HTMLInputElement>('#subs-kind') : code === 'secret' ? form.elements.secret : null;
+      const field = code === 'name' ? form.elements.name : code === 'owner' ? form.elements.owner : null;
       if (field) { settingsFieldError(field, errorMessage(error, '')); field.focus(); } else toast(errorMessage(error, ''), true);
       button.disabled = false;
     }
   };
   dialog.onclose = () => { dialog.remove(); void subsRefresh(); };
   document.body.appendChild(dialog); dialog.showModal();
-  (form.elements.name || form.elements.secret)?.focus();
+  form.elements.name?.focus();
 }
 // A write that may stop runs: send it; when the server answers 409 confirm_restart, ask in the page with the count
 // (`ask(running)` gives the settingsConfirm options) and, on yes, send it again with confirm (a new body, so a fresh

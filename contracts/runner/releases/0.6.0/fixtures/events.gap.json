@@ -1,0 +1,22 @@
+{
+ "answer": {
+  "error": {
+   "code": "event_gap",
+   "detail": "Expected event 1",
+   "retryable": false
+  }
+ },
+ "endpoint": "events",
+ "request": {
+  "events": [
+   {
+    "kind": "delta",
+    "payload": {
+     "text": "late"
+    },
+    "seq": 3
+   }
+  ]
+ },
+ "status": 409
+}

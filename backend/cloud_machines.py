@@ -49,7 +49,9 @@ machine; a shared machine's facts are its member bots' together:
     want     a bot of the machine is active and in cloud mode, and has a turn out, claimable queued work (the claim's
              own rule, execution.bot_claimable, on the machine's last report; a reason only a stopped machine leaves
              stale wakes it too), a watcher due (its last run plus its interval), or it waits to move here; or the
-             machine is Always on. On the shared machine any member's want wakes it, the newest work first. Failing
+             machine is Always on. On the shared machine any member's want wakes it, the newest work first, and so
+             does a person signing a plan in with no computer online (`signin_wake`: it is made for that if the
+             company has none yet); the sign-in then holds it on until it ends (`signin_live`). Failing
              those, a stopped machine whose computer reports an older release than this server's is wanted to update
              (`update:<release>`, `runner_behind`: never for a blank, dev or unparsed release, nor pinned or blocked),
              once its `spread` (0..UPDATE_SPREAD_S, per runner and release) after this server first ran the release
@@ -171,8 +173,14 @@ ENROLL_TRIES = 3  # machines made in a row that never enrolled before it waits f
 STOP_HOLD = 120  # a stop's reservation lapses this late: a server that died mid-stop strands no work
 DEAD = ("deleted", "failed")  # HQ's word for a machine that is gone or never got a computer: a want makes a new one
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
+SIGNIN_WANT = "signin:"  # the shared machine's want while a person signs a plan in with no computer online
+SIGNIN_KEY = "cloud-signin-want"  # {since, seen}: when that person first asked, and last asked (epoch seconds)
+SIGNIN_ASK = 45  # the page asks every few seconds: a want not asked for again this long is over
+SIGNIN_START = 5 * 60  # a machine not up this long after the first ask is not coming: the page stops waiting
 UPDATE_WANT = "update:"  # a stopped machine's want to update, keyed "update:" and this server's release
 UPDATE_STALE = 15 * 60  # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
+UPDATE_RETRY = 6 * 3600  # a runner tries a failed update again this long after it failed (runner-rs follow.rs)
+UPDATE_AGAIN = ":again"  # ends the want of a stopped machine's one more start to try a failed update again
 UPDATE_SPREAD_S = 600  # update wakes spread over this long after a release (`update_due`): no start storm
 GROW_FREE_PCT = 15  # a disk under this much free (percent), or under GROW_FREE_GB, grows (`low_disk`)
 GROW_FREE_GB = 10
@@ -585,6 +593,34 @@ def home(c, bot, current=None):
     if not current or current["mode"] != "cloud":
         return None
     return row(c, SHARED) if current["placement"] == "shared" else current
+
+
+def first_home(c, bot):
+    """The computer (`runners_with_state` row) a cloud-mode bot with no computer goes on first (place_now), or None:
+    its own machine's when that has enrolled, else the shared machine's. A bot set to its own machine has none until
+    it has work, and it has no work until it is live; BotOps builds its repository on the shared machine, so it
+    starts there, and its want to move (`bot_want`) makes its own machine and moves it once its history is on GitHub."""
+    current = row(c, bot)
+    if not current or current["mode"] != "cloud":
+        return None
+    machine, shared = home(c, bot, current), row(c, SHARED)
+    for found in (machine, shared):
+        if found and found["runner_id"] and not found.get("deleting"):
+            runner = c.execute(
+                "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (found["runner_id"],)
+            ).fetchone()
+            if runner:
+                return runner
+    return None
+
+
+def asked_again(c, bot):
+    """A person asked for `bot`'s waiting work again (Run now on a task whose run is already queued): the wake its
+    stopped machine spent on that work is forgotten, so the next look starts it once more. Nothing changes for a
+    machine that is up, was never woken, or is held for another reason (out of credit, never connected, a refusal)."""
+    machine = home(c, bot)
+    if machine and machine["wake_key"] and machine["state"] not in ON and machine["problem"] in ("", "stuck"):
+        save(c, machine["bot"], wake_key=None, problem="", problem_at=None)
 
 
 def cloud_runners(c, but=None):
@@ -1048,14 +1084,25 @@ def facts(c, settings, current, at):
         out["retry_now"] = bool(
             said.get("checked") and current["problem_at"] and said["checked"] > current["problem_at"]
         )
-    best = None
+    ranked = []
     for bot in bots:
         active, want, rank, since = bot_want(c, settings, bot, runner_id, at)
         out["active"] = out["active"] or active
         out["want_at"] = max(out["want_at"], since)
-        if want and (best is None or rank > best[0]):
-            best = (rank, want)
-    out["want"] = best[1] if best else None
+        if want:
+            ranked.append((rank, want))
+    # Every bot's want, first one first: a list, so one bot's want that a wake was already spent on never hides
+    # another's (`wake_for`), and a want of another kind can join it.
+    out["wants"] = [want for _, want in sorted(ranked, key=lambda found: found[0], reverse=True)]
+    if key == SHARED:
+        # A person signing a plan in comes before its bots' work: they are waiting at the page. The want lasts while
+        # the page asks, and a sign-in running on its computer is activity until it ends, so neither idles under them.
+        asked = _signin_asked(c, at)
+        if asked:
+            out["wants"].insert(0, SIGNIN_WANT + str(int(asked["since"])))
+        if asked or (runner_id and signin_live(c, runner_id, at)):
+            out["active"], out["want_at"] = True, max(out["want_at"], at)
+    out["want"] = out["wants"][0] if out["wants"] else None
     if (
         out["active"]
         and runner_id
@@ -1065,6 +1112,17 @@ def facts(c, settings, current, at):
         and at >= update_due(c, runner_id, releases.version())
     ):
         out["update"] = UPDATE_WANT + releases.version()
+    elif (
+        out["active"]
+        and runner_id
+        and current["state"] == "stopped"
+        and current["machine_id"]
+        and (failed := update_failed(c, runner_id))
+        and at - (epoch(failed["update_since"]) or at) >= UPDATE_RETRY
+    ):
+        # Its runner tries a failed update again after UPDATE_RETRY, but only while it runs: a stopped machine with no
+        # work would stay on the old release for good. One more start per release, under a key of its own.
+        out["update"] = UPDATE_WANT + releases.version() + UPDATE_AGAIN
     out["updating"] = bool(runner_id) and runner_updating(c, runner_id, at)
     return out
 
@@ -1087,6 +1145,19 @@ def runner_behind(c, runner_id):
     return not (found["update_state"] in ("failed", "rolled_back") and target == want)
 
 
+def update_failed(c, runner_id):
+    """Computer `runner_id`'s runner_versions row when it is behind this server's release and its update to that same
+    release failed or was rolled back, else None."""
+    found = c.execute(
+        "SELECT release,update_state,update_target,update_error,update_since FROM runner_versions WHERE runner_id=?",
+        (runner_id,),
+    ).fetchone()
+    have, want = releases.parse(found["release"]) if found else None, releases.parse(releases.version())
+    if not (have and want and have < want) or found["update_state"] not in ("failed", "rolled_back"):
+        return None
+    return found if releases.parse(found["update_target"]) == want else None
+
+
 def spread(runner_id, release):
     """A machine's update wake's offset, 0..UPDATE_SPREAD_S seconds: the same for a computer and a release, whatever
     restarts, and different across computers. Keyed by the runner (unique across companies), not the machine's key:
@@ -1104,6 +1175,62 @@ def update_due(c, runner_id, release):
     return since + spread(runner_id, release) if since else 0
 
 
+def _signin_asked(c, at):
+    """{since, seen} of the sign-in want still being asked for, or None."""
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (SIGNIN_KEY,)).fetchone()
+    try:
+        value = json.loads(found["value"]) if found else None
+        return value if value and at - value["seen"] < SIGNIN_ASK else None
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
+def signin_wake(c, settings):
+    """A person is signing a plan in (Settings > Models, backend/model_subscriptions.py `connect`) and no computer is
+    online to run the sign-in: the shared machine is wanted for it (`facts`), made first if the company has none yet,
+    for as long as the page keeps asking. Returns whether it is on its way: never out of credit, off a cloud company,
+    after machines that never enrolled, once it is up (it is online and still cannot run the sign-in), or SIGNIN_START
+    after the first ask."""
+    from .getting_started import ONLINE_SECONDS
+
+    if not offered(c, settings) or cloud_access.frozen(c):
+        return False
+    ensure_shared(c)
+    current = row(c, SHARED)
+    if not current or current["enroll_fails"] >= ENROLL_TRIES or current["problem"] in ("no_enroll", "replacing"):
+        return False
+    if (
+        current["runner_id"]
+        and c.execute(
+            "SELECT 1 FROM runners_with_state WHERE id=? AND revoked_at IS NULL AND last_seen_at>?",
+            (current["runner_id"], H.shift(H.now(), seconds=-ONLINE_SECONDS)),
+        ).fetchone()
+    ):
+        return False
+    at = now()
+    asked = _signin_asked(c, at)
+    since = asked["since"] if asked else at
+    if at - since >= SIGNIN_START:
+        return False
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (SIGNIN_KEY, json.dumps({"since": since, "seen": at})),
+    )
+    return True
+
+
+def signin_live(c, runner_id, at):
+    """Whether a plan's sign-in is running on computer `runner_id`: a person is at the provider's page, so its machine
+    stays on until that ends (done, failed, canceled, or its lifetime)."""
+    return bool(
+        c.execute(
+            "SELECT 1 FROM model_logins WHERE runner_id=? AND kind='connect' "
+            "AND state IN ('requested','starting','waiting','finishing') AND expires_at>=? LIMIT 1",
+            (runner_id, stamp(at)),
+        ).fetchone()
+    )
+
+
 def covers(woke_for, key):
     """Whether a machine woken for `woke_for` was woken for `key`: an update wake names the work want it stood in for
     ("update:0.5.21 job:..."), so neither is woken for again while nothing runs."""
@@ -1118,12 +1245,18 @@ def wake_for(current, found):
         return "always_on", False
     fresh = (found["activity"] or 0) > (current["woke_at"] or 0)
     spent = lambda k: covers(current["wake_key"], k) and current["state"] not in DEAD and not fresh
-    want, update = found["want"], found.get("update")
-    if want and not spent(want):
-        return want, False
+    update = found.get("update")
+    wants = found.get("wants") or ([found["want"]] if found["want"] else [])
+    # The key names the want it wakes for first, then every other bot's queued work waiting at this moment: all of it
+    # is woken for now, so none of it is woken for again if nothing runs, and work that turns up later still is.
+    also = [w for w in wants if w.startswith("job:") or w == wants[0]]
+    rest = lambda first: " ".join([first] + [w for w in also if w != first])
+    for want in wants:
+        if not spent(want):
+            return rest(want), False
     if update and not spent(update):
-        return (update + " " + want) if want else update, False
-    return None, bool(want)
+        return rest(update), False
+    return None, bool(wants)
 
 
 def runner_updating(c, runner_id, at):
@@ -1422,6 +1555,17 @@ class Manager:
         try:
             listed = hq.list()
         except Refused as refused:
+            if refused.code not in (self.list_refused, "not_configured"):
+                # Once per change: with no list the cloud option is hidden and nothing else says why. Cloud machines
+                # being off is not a failure.
+                with self.store.transaction() as c:
+                    H.event(
+                        c,
+                        H.KEEPER,
+                        "cloud_machine.list_refused",
+                        "",
+                        {"code": str(refused.code)[:60], "status": refused.status},
+                    )
             self.list_refused = refused.code
             if refused.status == 503 and refused.code == "not_configured":  # off, or turned off for this company
                 with self.store.transaction() as c:
@@ -1701,6 +1845,7 @@ class Manager:
         with self.store.read() as c:
             found = facts(c, self.settings, current, at)
         action, problem = decide(current, found, at, pause_after(current))
+        woke_for = (current or {}).get("wake_key")
         if problem is not None and problem != current["problem"] and not action:
             with self.store.transaction() as c:
                 save(c, key, problem=problem, problem_at=H.now())
@@ -1708,7 +1853,7 @@ class Manager:
             problem is None
             and not action
             and current["problem"] == "stuck"
-            and not covers(current["wake_key"], found["want"])
+            and not any(covers(woke_for, want) for want in found["wants"])
         ):
             with self.store.transaction() as c:
                 save(c, key, problem="", problem_at=None)
@@ -2597,6 +2742,14 @@ def health(c, settings=None):
             lines.append(
                 f"{machine_name(c, key)}: waiting {int(now() - current['drain_started_at']) // 60} minutes for "
                 f"its turns to finish before it restarts at {cloud_size_name(current['size'])}."
+            )
+    for key, current in sorted(rows(c).items()):
+        failed = update_failed(c, current["runner_id"]) if current["runner_id"] and current["mode"] == "cloud" else None
+        if failed and (key == SHARED or key in active):
+            why = str(failed["update_error"] or "").strip()[:120]
+            lines.append(
+                f"{machine_name(c, key)}: still on Tico {failed['release']}; its update to {failed['update_target']} "
+                f"failed{' (' + why + ')' if why else ''}. It tries again when it next starts."
             )
     if not stuck and not old and not lines:
         return None

@@ -26,13 +26,16 @@
    "show",
    "id-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_show",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/entities/id-1",
@@ -60,13 +63,16 @@
    "find",
    "Shipped it"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_find",
+    {
+     "operation_id": null,
+     "text": "Shipped it"
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/entities?q=Shipped+it",
@@ -93,13 +99,15 @@
    "market",
    "edges"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_edges",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/edges",
@@ -123,13 +131,19 @@
    "--as-of",
    "as-of-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_edges",
+    {
+     "as_of": "as-of-1",
+     "dst": "dst-1",
+     "operation_id": null,
+     "rel": "rel-1",
+     "src": "src-1"
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/edges?src=src-1&dst=dst-1&rel=rel-1&as_of=as-of-1",
@@ -145,13 +159,15 @@
    "market",
    "delta"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_delta",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/delta?since=7d",
@@ -169,13 +185,16 @@
    "--since",
    "since-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_delta",
+    {
+     "operation_id": null,
+     "since": "since-1"
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/delta?since=since-1",
@@ -192,13 +211,16 @@
    "ask",
    "question-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_ask",
+    {
+     "operation_id": null,
+     "question": "question-1"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/ask",
@@ -231,13 +253,18 @@
    "--claim",
    "claim-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_report",
+    {
+     "claim": "claim-1",
+     "kind": "new-entity",
+     "operation_id": null,
+     "urgent": false
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights",
@@ -277,13 +304,23 @@
    "--source-ref",
    "source-ref-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_report",
+    {
+     "about": "about-1",
+     "claim": "claim-1",
+     "confidence": "high",
+     "kind": "new-entity",
+     "operation_id": null,
+     "quote": "quote-1",
+     "source_ref": "source-ref-1",
+     "source_url": "spend=Google Ads",
+     "urgent": true
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights",
@@ -311,13 +348,17 @@
    "--status",
    "applied"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_resolve",
+    {
+     "id": "id-1",
+     "operation_id": null,
+     "status": "applied"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights/id-1/resolve",
@@ -346,13 +387,22 @@
    "--event",
    "events-1b"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_resolve",
+    {
+     "applied_events": [
+      "events-1",
+      "events-1b"
+     ],
+     "id": "id-1",
+     "operation_id": null,
+     "resolution": "resolution-1",
+     "status": "applied"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights/id-1/resolve",
@@ -387,13 +437,16 @@
    "apply",
    "id-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_apply",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights/id-1/apply",
@@ -446,13 +499,7 @@
    "edge-dst-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"date\",\n  \"detail\": \"last_verified_at must be a date (YYYY-MM-DD)\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
@@ -475,13 +522,7 @@
    "file-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -496,13 +537,7 @@
    "note-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -523,13 +558,15 @@
    "market",
    "sweep"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_sweep",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/curator/sweep",
@@ -554,13 +591,26 @@
    "--unverified",
    "unverified-1b"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_sweep",
+    {
+     "operation_id": null,
+     "today": "today-1",
+     "unverified": [
+      {
+       "id": "unverified-1",
+       "look_for": ""
+      },
+      {
+       "id": "unverified-1b",
+       "look_for": ""
+      }
+     ]
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/curator/sweep",
@@ -588,13 +638,15 @@
    "market",
    "refresh"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_refresh",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/delta/refresh",
@@ -614,13 +666,16 @@
    "--today",
    "today-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_refresh",
+    {
+     "operation_id": null,
+     "today": "today-1"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/delta/refresh",
@@ -639,13 +694,16 @@
    "page",
    "name-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_page",
+    {
+     "name": "name-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/pages/name-1",
@@ -665,16 +723,10 @@
    "body-file-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'body-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market page: error: argument --body-file: cannot read body-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -700,18 +752,12 @@
     "tico_market_watch_add",
     {
      "entity_id": "entity-id-1",
-     "kind": "other",
      "operation_id": null,
      "url": "url-1"
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/watches",
@@ -748,11 +794,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/watches",
@@ -796,11 +837,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "market/watches",
     null
    ]
@@ -829,11 +865,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "market/watches?entity_id=entity-id-1",
     null
    ]
@@ -859,11 +890,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/watches/id-1/stop",
@@ -902,11 +928,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/watches/check",
     {}
@@ -929,16 +950,10 @@
    "body-file-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'body-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market briefing post: error: argument --body-file: cannot read body-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -957,16 +972,10 @@
    "answers-file-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'body-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market briefing post: error: argument --body-file: cannot read body-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -983,11 +992,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "market/briefings/latest",
@@ -1012,11 +1016,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "PUT",
     "market/definition",
@@ -1084,13 +1083,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"'params-1': use name=number\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
@@ -1112,11 +1105,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/segments",
@@ -1154,11 +1142,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/segments",
@@ -1202,11 +1185,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "market/spend",
     null
    ]
@@ -1242,11 +1220,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/sizes",
@@ -1349,13 +1322,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"'params-1': use name=number\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
@@ -1378,11 +1345,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/sizes/id-1/accept",
@@ -1423,11 +1385,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/sizes/id-1/reject",
@@ -1475,13 +1432,7 @@
     }
    ]
   ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"'params-1': use name=number\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
@@ -1515,11 +1466,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "market/spend",
     null
    ]
@@ -1546,11 +1492,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "market/spend",
@@ -1591,11 +1532,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/figures",
@@ -1665,11 +1601,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/figures",
     {
@@ -1712,11 +1643,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "market/sources",
     null
    ]
@@ -1733,16 +1659,10 @@
    "add-file-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'add-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market sources: error: argument --add-file: cannot read add-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -1758,11 +1678,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "market/spend",
@@ -1798,11 +1713,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "market/spend?dimension=offering&basis=product&year=5",
     null
    ]
@@ -1827,11 +1737,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/spend/research",
@@ -1872,13 +1777,16 @@
    "find",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_find",
+    {
+     "operation_id": null,
+     "text": "1"
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/entities?q=1",
@@ -1895,13 +1803,16 @@
    "show",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_show",
+    {
+     "id": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/entities/1",
@@ -1950,13 +1861,19 @@
    "--our-read",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_apply",
+    {
+     "id": "1",
+     "operation_id": null,
+     "our_read": "1",
+     "quote": "1",
+     "source_kind": "1"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights/1/apply",
@@ -1999,13 +1916,7 @@
    "1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -2016,13 +1927,16 @@
    "page",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_page",
+    {
+     "name": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/pages/1",
@@ -2042,16 +1956,10 @@
    "1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market page: error: argument --body-file: cannot read 1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -2087,11 +1995,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/watches/1/stop",
     {}
@@ -2114,16 +2017,10 @@
    "1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market briefing post: error: argument --body-file: cannot read 1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -2188,13 +2085,16 @@
    "--today",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_refresh",
+    {
+     "operation_id": null,
+     "today": "1"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/delta/refresh",
@@ -2213,13 +2113,16 @@
    "page",
    "customer-themes"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_page",
+    {
+     "name": "customer-themes",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/pages/customer-themes",
@@ -2247,13 +2150,22 @@
    "--source-ref",
    "meeting:1:1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_report",
+    {
+     "about": "customer theme: 1",
+     "claim": "1",
+     "kind": "other",
+     "operation_id": null,
+     "quote": "1",
+     "source_ref": "meeting:1:1",
+     "source_url": "1",
+     "urgent": false
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights",
@@ -2285,13 +2197,19 @@
    "--our-read",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_apply",
+    {
+     "id": "1",
+     "operation_id": null,
+     "our_read": "1",
+     "quote": "1",
+     "source_kind": "meeting"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights/1/apply",
@@ -2318,16 +2236,10 @@
    "1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market page: error: argument --body-file: cannot read 1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -2344,13 +2256,21 @@
    "--quote",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_report",
+    {
+     "about": "1",
+     "claim": "1",
+     "kind": "new-entity",
+     "operation_id": null,
+     "quote": "1",
+     "source_url": "1",
+     "urgent": false
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights",
@@ -2392,13 +2312,24 @@
    "--summary",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_apply",
+    {
+     "entity_name": "1",
+     "entity_type": "organization",
+     "id": "1",
+     "new_id": "company/self",
+     "operation_id": null,
+     "our_read": "1",
+     "quote": "1",
+     "source_kind": "site",
+     "source_url": "1",
+     "summary": "1"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights/1/apply",
@@ -2448,13 +2379,26 @@
    "--edge-dst",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_apply",
+    {
+     "edge_dst": "1",
+     "edge_rel": "1",
+     "edge_src": "1",
+     "entity_name": "1",
+     "entity_type": "1",
+     "id": "1",
+     "operation_id": null,
+     "our_read": "1",
+     "quote": "1",
+     "source_kind": "1",
+     "source_url": "1",
+     "summary": "1"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights/1/apply",
@@ -2505,11 +2449,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/watches",
     {
@@ -2546,11 +2485,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/watches",
     {
@@ -2586,11 +2520,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/watches",
@@ -2644,11 +2573,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "PUT",
     "market/definition",
     {
@@ -2692,11 +2616,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/segments",
     {
@@ -2730,11 +2649,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "market/segments",
@@ -2800,11 +2714,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/sizes",
     {
@@ -2853,11 +2762,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "PUT",
     "market/definition",
@@ -2912,11 +2816,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/figures",
     {
@@ -2960,11 +2859,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "market/sizes/1/accept",
     {}
@@ -2996,13 +2890,18 @@
    "--resolution",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_resolve",
+    {
+     "id": "1",
+     "operation_id": null,
+     "resolution": "1",
+     "status": "merged"
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights/1/resolve",
@@ -3024,13 +2923,16 @@
    "--since",
    "1d"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_delta",
+    {
+     "operation_id": null,
+     "since": "1d"
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/delta?since=1d",
@@ -3058,16 +2960,10 @@
    "answers.json"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'briefing.md'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market briefing post: error: argument --body-file: cannot read briefing.md (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -3075,13 +2971,16 @@
    "page",
    "overview"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_page",
+    {
+     "name": "overview",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/pages/overview",
@@ -3102,13 +3001,7 @@
    "Deep research: 1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
+  "http": [],
   "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
   "stderr": "",
   "exit": 1
@@ -3126,13 +3019,20 @@
    "--source",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_report",
+    {
+     "about": "1",
+     "claim": "1",
+     "kind": "other",
+     "operation_id": null,
+     "source_url": "1",
+     "urgent": false
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "market/insights",
@@ -3158,13 +3058,16 @@
    "show",
    "company/self"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_market_show",
+    {
+     "id": "company/self",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "market/entities/company/self",

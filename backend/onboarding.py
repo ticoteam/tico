@@ -482,7 +482,13 @@ def setup_body(slug, choice, answers):
             + choice["display_name"]
             + " up.",
             "",
-            "- slug: " + slug,
+            "- slug: "
+            + slug
+            + " (already registered: pass it, `tico bot create "
+            + slug
+            + " --template "
+            + choice["template"]
+            + "`, or a second bot is made)",
             "- template: " + choice["template"],
             "- display name: " + choice["display_name"],
             "- requested description and limits: " + (choice.get("description") or "not specified"),
@@ -827,6 +833,10 @@ class Onboarding:
                 self.admin.update_bot(
                     c, who, bot_id, M.BotDefinitionUpdate(reports_to=parent, expected_revision=row["revision"])
                 )
+        if first:
+            # A new company's built-ins take their lines from setup, not from the seed roster: each one whose pick
+            # names no manager gets the built-ins' own (ensure_general_team).
+            self.ensure_general_team(c, laid=[slug for slug, choice in plan.items() if not choice.get("reports_to")])
         # The team builder builds the chart by group: each bot goes in the group of its template, made if the team
         # has none yet (backend/groups.py).
         before = set(Groups._roster(c)["org_groups"])
@@ -1265,21 +1275,25 @@ class Onboarding:
         audit starts off and goes on when its setup is done (`onboarded`)."""
         return self._ensure_builtin(c, H.DESIGN_OWNER, "Design Owner", "brand_owner.turned_on")
 
-    def ensure_general_team(self, c):
+    def ensure_general_team(self, c, laid=()):
         """Every built-in has one manager: the General Manager's team (Groups.GENERAL_TEAM) reports to it, and it, the
         Assistant and the Finance Owner report to the owner. Only a line nobody set is filled, so a built-in added in a later release
-        gets its manager on the next start and a line a person changed stays. The General group gets no lead: a
+        gets its manager on the next start and a line a person changed stays. `laid` names the built-ins a new company's
+        setup lays out now (complete()): theirs replaces the line the seed roster gave (BotOps is seeded under the
+        Assistant, before the General Manager exists), which nobody chose. The General group gets no lead: a
         lead sets its group's reach and limits (backend/reach.py, backend/usage.py), which stay with people."""
         manager, owner = H.bot(c, Groups.GENERAL_MANAGER), self.auth.owner_id(c)
         if not owner or not manager or manager["state"] == "archived":
             return
         who, top = self.auth.owner_identity(c), "human:" + owner
-        lines = {slug: Groups.GENERAL_MANAGER for slug in Groups.GENERAL_TEAM}
+        lines = {slug: manager["id"] for slug in Groups.GENERAL_TEAM}
         lines |= {Groups.GENERAL_MANAGER: top, self.settings.assistant_bot: top, "finance-owner": top}
         for slug, line in lines.items():
             bot = H.bot(c, slug)
             row = c.execute("SELECT revision, reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
-            if not bot or bot["state"] == "archived" or not row or row["reports_to"]:
+            if not bot or bot["state"] == "archived" or not row:
+                continue
+            if row["reports_to"] == line or (row["reports_to"] and slug not in laid):
                 continue
             self.admin.update_bot(
                 c, who, slug, M.BotDefinitionUpdate(reports_to=line, expected_revision=row["revision"])

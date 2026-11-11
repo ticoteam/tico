@@ -426,10 +426,12 @@ def parser():
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
+    from clients.commands import market as market_commands
     from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
     from clients.commands import webhooks
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
     from clients.commands import gateway as gateway_commands, goals as goal_commands
+    from clients.commands import admin as admin_commands, content as content_commands, task_work as task_work_commands
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -721,85 +723,9 @@ def parser():
     s.add_argument("--task", required=True, help="the task the review is for")
     s.add_argument("--note", help="what to change, or why it is approved")
     s.set_defaults(fn="file review")
-    page = sub.add_parser("page", help="pages: HTML a bot keeps up to date, with Tico's updated line").add_subparsers(
-        dest="sub"
-    )
-    s = page.add_parser("publish", help="publish an .html file from this checkout; again adds a version")
-    s.add_argument("path")
-    s.add_argument("--title")
-    s.add_argument("--cadence", choices=["none", "daily", "weekly", "monthly"])
-    s.add_argument("--as-of", dest="as_of", help="the date the data is from, YYYY-MM-DD")
-    s.add_argument("--task", help="the task it is for; it shows at the top of that task")
-    s.add_argument("--replaces", help="the id of an older page this one takes the place of")
-    s.add_argument("--scope", choices=["task", "bot"])
-    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
-    s.add_argument(
-        "--spec",
-        action="store_true",
-        help="a visual spec for the Product roadmap card named by --task; styles are inlined, tickets under it get its text",
-    )
-    s.set_defaults(fn="page publish")
-    s = page.add_parser("list", help="pages you may read, newest first")
-    s.add_argument("--bot")
-    s.add_argument("--task", help="pages filed on or pinned to this task")
-    s.add_argument("--archived", action="store_true", default=None)
-    s.add_argument("--limit", type=int)
-    s.add_argument("--cursor")
-    s.set_defaults(fn="page list")
-    s = page.add_parser("show", help="one page's status")
-    s.add_argument("id")
-    s.set_defaults(fn="page show")
-    s = page.add_parser("access", help="show or change who can see a page")
-    s.add_argument("id")
-    s.add_argument("--audience", help="everyone, or ben,group:legal,bot:analyst")
-    s.set_defaults(fn="page access")
-    s = page.add_parser("archive", help="hide a page from lists and search, or --restore it")
-    s.add_argument("id")
-    s.add_argument("--restore", action="store_true", default=None)
-    s.set_defaults(fn="page archive")
-    cards = sub.add_parser(
-        "card", help="Tico's built-in cards on the Dashboard, team pages, sidebars and tasks"
-    ).add_subparsers(dest="sub")
-    s = cards.add_parser("list", help="what is pinned at a place, with what each card shows you")
-    s.add_argument("--place")
-    thread_page_flags(s, "next")
-    s.set_defaults(fn="card list")
-    for name, helptext in (
-        ("add", "add a built-in card, pinned at --place"),
-        ("update", "change a card's heading or settings"),
-    ):
-        s = cards.add_parser(name, help=helptext)
-        s.add_argument("template" if name == "add" else "card")
-        s.add_argument("--title")
-        s.add_argument("--team")
-        s.add_argument("--weeks", type=int)
-        s.add_argument("--count", type=int)
-        s.add_argument("--kpi")
-        s.add_argument("--metric")
-        s.add_argument("--channel")
-        s.add_argument("--months", type=int)
-        if name == "add":
-            s.add_argument("--place")
-            s.add_argument("--size", choices=["small", "medium", "large"])
-        s.set_defaults(fn="card " + name)
-    s = cards.add_parser("remove", help="remove a card and its pins")
-    s.add_argument("card")
-    s.set_defaults(fn="card remove")
-    pins = sub.add_parser("pin", help="pin a page or a card at a place").add_subparsers(dest="sub")
-    s = pins.add_parser("add", help="pin page:<file id> or card:<id> at a place")
-    s.add_argument("place")
-    s.add_argument("item")
-    s.add_argument("--size", choices=["small", "medium", "large"])
-    s.add_argument("--position", type=int)
-    s.set_defaults(fn="pin add")
-    s = pins.add_parser("update", help="resize or move a pin")
-    s.add_argument("pin")
-    s.add_argument("--size", choices=["small", "medium", "large"])
-    s.add_argument("--position", type=int)
-    s.set_defaults(fn="pin update")
-    s = pins.add_parser("remove", help="unpin")
-    s.add_argument("pin")
-    s.set_defaults(fn="pin remove")
+    cli_spec.add(sub, content_commands.PAGE)  # tico page: clients/commands/content.py
+    cli_spec.add(sub, content_commands.CARD)  # tico card
+    cli_spec.add(sub, content_commands.PIN)  # tico pin
     docs = sub.add_parser(
         "doc", help="read and search team docs and external sources, write internal docs, ask the Librarian"
     ).add_subparsers(dest="sub")
@@ -902,35 +828,7 @@ def parser():
     s.add_argument("--proposer", choices=["botops", "assistant"], default=None, help="only the cards one proposed")
     s.add_argument("--owner", default=None, help="only one person's cards, e.g. human:ana")
     s.set_defaults(fn="assistant proposals")
-    # Tags keep the existing task --label key contract.
-    tag = sub.add_parser("tag", help="tags and checklist templates").add_subparsers(dest="sub")
-    s = tag.add_parser("list")
-    s.add_argument("--templates", dest="is_template", action="store_const", const=True, default=None)
-    s.add_argument("--instances", dest="is_template", action="store_const", const=False)
-    s.set_defaults(fn="tag list")
-    s = tag.add_parser("show")
-    s.add_argument("id", help="tag key or id")
-    s.add_argument("--offset", type=int)
-    s.set_defaults(fn="tag show")
-    s = tag.add_parser("create")
-    s.add_argument("key")
-    s.add_argument("--label")
-    s.add_argument("--metadata", help="JSON object")
-    s.add_argument("--markdown")
-    s.add_argument("--markdown-file")
-    s.add_argument("--template", dest="is_template", action="store_const", const=True, default=None)
-    s.add_argument("--from-template", dest="template_id")
-    s.add_argument("--owner")
-    s.set_defaults(fn="tag create")
-    s = tag.add_parser("update")
-    s.add_argument("id", help="tag key or id")
-    s.add_argument("--version", type=int, required=True)
-    s.add_argument("--label")
-    s.add_argument("--metadata", help="JSON object; replaces metadata")
-    s.add_argument("--markdown")
-    s.add_argument("--markdown-file")
-    s.add_argument("--owner")
-    s.set_defaults(fn="tag update")
+    cli_spec.add(sub, task_work_commands.TAG)  # tico tag: clients/commands/task_work.py
 
     task = sub.add_parser("task", aliases=["tasks"]).add_subparsers(dest="sub")
     s = task.add_parser("child", help="create a subtask")
@@ -1393,237 +1291,7 @@ def parser():
 
     cli_spec.add(sub, strategy_commands.LENS)  # tico lens: clients/commands/strategy.py
 
-    market = sub.add_parser(
-        "market", help="the shared market graph: read it, report into it, curate it"
-    ).add_subparsers(dest="sub")
-    s = market.add_parser("show", help="one entity, its edges both ways, the evidence, the last ten events")
-    s.add_argument("id")
-    s.set_defaults(fn="market show")
-    s = market.add_parser("find", help="names, aliases, summaries, and evidence")
-    s.add_argument("text")
-    s.set_defaults(fn="market find")
-    s = market.add_parser("edges", help="graph rows; symmetric relations are returned from either end")
-    s.add_argument("--from", dest="src")
-    s.add_argument("--to", dest="dst")
-    s.add_argument("--rel")
-    s.add_argument("--as-of", dest="as_of")
-    s.set_defaults(fn="market edges")
-    s = market.add_parser("delta", help="what changed, grouped by entity")
-    s.add_argument("--since", default="7d")
-    s.set_defaults(fn="market delta")
-    s = market.add_parser("ask", help="a question answered from the graph, with citations")
-    s.add_argument("question")
-    s.set_defaults(fn="market ask")
-    s = market.add_parser("report", help="prose only; this does not change the graph")
-    s.add_argument(
-        "--kind", required=True, choices=["new-entity", "edge", "property-change", "correction", "question", "other"]
-    )
-    s.add_argument("--about", default="")
-    s.add_argument("--claim", required=True)
-    s.add_argument("--source", default="")
-    s.add_argument("--quote", default="")
-    s.add_argument("--confidence", default="medium", choices=["high", "medium", "low"])
-    s.add_argument("--urgent", action="store_true")
-    s.add_argument("--source-ref", dest="source_ref", help="where it came from, e.g. the intake item id")
-    s.set_defaults(fn="market report")
-    s = market.add_parser("resolve", help="close an insight: applied, merged, rejected, or needs-human")
-    s.add_argument("id")
-    s.add_argument("--status", required=True, choices=["applied", "merged", "rejected", "needs-human"])
-    s.add_argument("--resolution", default="")
-    s.add_argument("--event", action="append", dest="events", default=[])
-    s.set_defaults(fn="market resolve")
-    s = market.add_parser("apply", help="write evidence first, then the entity or edge, and mark the insight applied")
-    s.add_argument("id")
-    s.add_argument("--source", default="")
-    s.add_argument("--source-kind", dest="source_kind", default="other")
-    s.add_argument("--quote", default="")
-    s.add_argument("--our-read", dest="our_read", default="")
-    s.add_argument("--entity-type", dest="entity_type")
-    s.add_argument("--entity-name", dest="entity_name")
-    s.add_argument("--entity-id", dest="entity_id")
-    s.add_argument("--summary")
-    s.add_argument("--tier", choices=["core", "lookalike", "phrase-stealer", "secondary"], help="for a new company")
-    s.add_argument(
-        "--new-id",
-        dest="new_id",
-        help="the id for a new entity when the default type/name-slug is wrong, e.g. company/self",
-    )
-    s.add_argument(
-        "--last-verified-at",
-        dest="last_verified_at",
-        metavar="YYYY-MM-DD",
-        help="the date the entity was last checked: set on --entity-id, or on a new entity; YYYY-MM-DD only, a timestamp is refused",
-    )
-    s.add_argument("--edge-src", dest="edge_src")
-    s.add_argument("--edge-rel", dest="edge_rel")
-    s.add_argument("--edge-dst", dest="edge_dst")
-    s.set_defaults(fn="market apply")
-    s = market.add_parser(
-        "import", help="apply a verified batch: one JSON entity or edge per line, each with its evidence"
-    )
-    s.add_argument("file", help="the JSONL file, at most 2000 non-blank lines (split larger ones); - reads stdin")
-    s.add_argument("--dry-run", dest="preview", action="store_true", help="report what would change and keep nothing")
-    s.add_argument("--note", default="", help="one sentence on where the batch came from")
-    s.set_defaults(fn="market import")
-    s = market.add_parser("sweep", help="one owner task for needs-human, listening tasks for unverified stale entities")
-    s.add_argument("--today")
-    s.add_argument("--unverified", action="append", default=[], help="entity-id=what to look for")
-    s.set_defaults(fn="market sweep")
-    s = market.add_parser("refresh", help="rewrite the weekly delta from market events; only a Monday changes it")
-    s.add_argument("--today")
-    s.set_defaults(fn="market refresh")
-    s = market.add_parser(
-        "page", help="read one market page (overview, coverage-universe, ...), or rewrite it from a Markdown file"
-    )
-    s.add_argument(
-        "name",
-        help="overview, structure-and-size, coverage-universe, people-who-matter, channels, "
-        "regulation-and-catalysts, theses, open-questions or customer-themes",
-    )
-    s.add_argument(
-        "--body-file", dest="body_file", help="the whole page in Markdown; - reads stdin; omit to read the page"
-    )
-    s.set_defaults(fn="market page")
-    watch = market.add_parser(
-        "watch", help="watch a competitor's public page; the server reads it daily and files an insight on a change"
-    ).add_subparsers(dest="subsub")
-    s = watch.add_parser("add", help="watch one page of an entity")
-    s.add_argument("entity_id")
-    s.add_argument("url")
-    s.add_argument(
-        "--kind",
-        default="other",
-        choices=["pricing", "careers", "changelog", "docs", "home", "other", "release"],
-        help="release: the URL is github:owner/repo or a release feed, read through the Gateway",
-    )
-    s.set_defaults(fn="market watch add")
-    s = watch.add_parser("list", help="the watched pages and when each was last read")
-    s.add_argument("--entity", dest="entity_id")
-    s.set_defaults(fn="market watch list")
-    s = watch.add_parser("stop", help="stop watching a page (the row is kept)")
-    s.add_argument("id")
-    s.set_defaults(fn="market watch stop")
-    s = watch.add_parser("check", help="read the watched pages now (the longest unchecked first, at most 50)")
-    s.set_defaults(fn="market watch check")
-    briefing = market.add_parser("briefing", help="the weekly market briefing").add_subparsers(dest="subsub")
-    s = briefing.add_parser("post", help="post the week's briefing; the same week again replaces it")
-    s.add_argument("--week", required=True, help="ISO week, like 2026-W44")
-    s.add_argument("--title", required=True)
-    s.add_argument("--body-file", dest="body_file", required=True, help="the briefing in Markdown; - reads stdin")
-    s.add_argument(
-        "--items-file", dest="items_file", help="JSON list of {text, kind: change|signal|theme|size, entity_ids}"
-    )
-    s.add_argument(
-        "--answers-file",
-        dest="answers_file",
-        help="JSON object of one-line answers: {changed, money, players, reach, saying}",
-    )
-    s.set_defaults(fn="market briefing post")
-    s = briefing.add_parser("latest", help="the newest briefing, its items and the bets it touches")
-    s.set_defaults(fn="market briefing latest")
-    s = market.add_parser(
-        "define", help="Librarian or owner: define the market (what it is, what is in and out, how to count)"
-    )
-    s.add_argument("--description")
-    s.add_argument("--root-name", dest="root_name", help="the root segment's name, the first time")
-    s.add_argument(
-        "--include", action="append", dest="includes", metavar="TEXT", help="what is in; repeatable, replaces the list"
-    )
-    s.add_argument(
-        "--exclude", action="append", dest="excludes", metavar="TEXT", help="what is out; repeatable, replaces the list"
-    )
-    s.add_argument(
-        "--rule",
-        action="append",
-        dest="counting_rules",
-        metavar="TEXT",
-        help="a counting rule; repeatable, replaces the list",
-    )
-    s.add_argument("--year", type=int)
-    s.add_argument("--geography")
-    s.add_argument(
-        "--param",
-        action="append",
-        dest="params",
-        metavar="NAME=NUMBER",
-        help="a shared parameter formulas read as $NAME; repeatable",
-    )
-    s.set_defaults(fn="market define")
-    s = market.add_parser("segment", help="the market's segments: add one, or print the tree").add_subparsers(
-        dest="subsub"
-    )
-    s2 = s.add_parser("add", help="Librarian or owner: a segment under the root, or under --parent")
-    s2.add_argument("name")
-    s2.add_argument("--parent", dest="parent_id", metavar="SEGMENT_ID")
-    s2.add_argument("--summary")
-    s2.set_defaults(fn="market segment add")
-    s2 = s.add_parser("tree", help="the segments, indented, with their sizes")
-    s2.set_defaults(fn="market segment tree")
-    s = market.add_parser(
-        "size", help="a segment's yearly spend: add an estimate, accept or reject one, list them"
-    ).add_subparsers(dest="subsub")
-    s2 = s.add_parser("add", help="Librarian or owner: file an estimate, proposed unless --accept")
-    s2.add_argument("--segment", dest="segment_id", required=True, metavar="SEGMENT_ID")
-    s2.add_argument("--method", required=True, choices=["top_down", "bottom_up", "player_sum", "owner"])
-    s2.add_argument("--spend", dest="spend_usd", type=float, metavar="USD", help="omit when --formula gives it")
-    s2.add_argument("--low", dest="low_usd", type=float, required=True, metavar="USD")
-    s2.add_argument("--high", dest="high_usd", type=float, required=True, metavar="USD")
-    s2.add_argument("--formula", help="arithmetic over numbers, --param names and shared $names")
-    s2.add_argument("--param", action="append", dest="params", metavar="NAME=NUMBER")
-    s2.add_argument("--arithmetic", help="the working, in words")
-    s2.add_argument("--growth", dest="growth_pct", type=float, metavar="PERCENT")
-    s2.add_argument("--year", type=int)
-    s2.add_argument("--dimension", choices=["offering", "buyer"])
-    s2.add_argument("--basis", choices=["product", "platform"])
-    s2.add_argument("--confidence", choices=["high", "medium", "low"])
-    s2.add_argument("--overlaps")
-    s2.add_argument("--spread", help="analyst headline figures, as text")
-    s2.add_argument("--evidence", action="append", dest="evidence_ids", metavar="EVIDENCE_ID")
-    s2.add_argument("--evidence-url", dest="evidence_url")
-    s2.add_argument("--quote")
-    s2.add_argument("--source-kind", dest="source_kind")
-    s2.add_argument("--our-read", dest="our_read")
-    s2.add_argument("--accept", action="store_true", default=None)
-    s2.set_defaults(fn="market size add")
-    for word, help_text in (("accept", "the estimate becomes the segment's size"), ("reject", "the estimate is out")):
-        s2 = s.add_parser(word, help=help_text)
-        s2.add_argument("id")
-        s2.set_defaults(fn="market size decide", decision=word)
-    s2 = s.add_parser("params", help="owner only: change an estimate's parameter; files a new accepted owner estimate")
-    s2.add_argument("id")
-    s2.add_argument("--param", action="append", dest="params", required=True, metavar="NAME=NUMBER")
-    s2.set_defaults(fn="market size decide", decision="params")
-    s2 = s.add_parser("list", help="the estimates, optionally one segment's")
-    s2.add_argument("--segment", metavar="SEGMENT_ID")
-    s2.set_defaults(fn="market size list")
-    s = market.add_parser("figure", help="a player's revenue, ARR, customers or seats in a segment").add_subparsers(
-        dest="subsub"
-    )
-    s2 = s.add_parser("add", help="Librarian or owner: one dated figure with its evidence")
-    s2.add_argument("--entity", dest="entity_id", required=True, metavar="ENTITY_ID")
-    s2.add_argument("--segment", dest="segment_id", required=True, metavar="SEGMENT_ID")
-    s2.add_argument("--metric", required=True, choices=["revenue", "arr", "customers", "seats"])
-    s2.add_argument("--value", type=float)
-    s2.add_argument("--text", help="when there is no number")
-    s2.add_argument("--kind", required=True, choices=["reported", "estimated", "claimed"])
-    s2.add_argument("--as-of", dest="as_of", required=True, metavar="YYYY-MM[-DD]")
-    s2.add_argument("--evidence", dest="evidence_id", metavar="EVIDENCE_ID")
-    s2.add_argument("--evidence-url", dest="evidence_url")
-    s2.add_argument("--quote")
-    s2.add_argument("--source-kind", dest="source_kind")
-    s2.add_argument("--our-read", dest="our_read")
-    s2.set_defaults(fn="market figure add")
-    s = market.add_parser("sources", help="where to look when sizing the market: the catalog and the team's additions")
-    s.add_argument("--add-file", dest="add_file", help="a YAML file of sources to add (a list, or one)")
-    s.set_defaults(fn="market sources")
-    s = market.add_parser("spend", help="the market by spend: the tree with sizes (JSON has every estimate)")
-    s.add_argument("--dimension", choices=["offering", "buyer"])
-    s.add_argument("--basis", choices=["product", "platform"])
-    s.add_argument("--year", type=int)
-    s.set_defaults(fn="market spend")
-    s = market.add_parser("research", help="owner only: ask the Librarian to define and size the market")
-    s.add_argument("description")
-    s.set_defaults(fn="market research")
+    cli_spec.add(sub, market_commands.CLI)  # tico market: clients/commands/market.py
 
     listen = sub.add_parser(
         "listening", help="Listening's sources: the ones due a read, and saving what a read found"
@@ -1978,26 +1646,7 @@ def parser():
             help=f"runs allowed per {window} for bots with no budget of their own; 0 for no limit",
         )
     s.set_defaults(fn="team budget")
-    seat = sub.add_parser("seat", help="Recruiting seats: roles on the chart with no bot yet").add_subparsers(
-        dest="sub"
-    )
-    seat.add_parser("list", help="the Recruiting seats").set_defaults(fn="seat list")
-    s = seat.add_parser("create", help="add a seat under you or someone below you (a person)")
-    s.add_argument("title")
-    s.add_argument("--description", help="its job description")
-    s.add_argument("--reports-to", dest="reports_to", help="a bot's slug or human:<id>; you by default")
-    s.add_argument("--team", help="a group id")
-    s.set_defaults(fn="seat create")
-    s = seat.add_parser("update", help="change a seat's title, job description, reporting line or group (a person)")
-    s.add_argument("seat")
-    s.add_argument("--title")
-    s.add_argument("--description")
-    s.add_argument("--reports-to", dest="reports_to")
-    s.add_argument("--team")
-    s.set_defaults(fn="seat update")
-    s = seat.add_parser("close", help="take a seat off the chart (a person)")
-    s.add_argument("seat")
-    s.set_defaults(fn="seat close")
+    cli_spec.add(sub, admin_commands.SEAT)  # tico seat: clients/commands/admin.py
     cli_spec.add(sub, org_commands.ORG)  # tico org: clients/commands/org.py
     cli_spec.add(sub, computers.HEALTH)  # tico health: clients/commands/computers.py
     changelog = sub.add_parser("changelog", help="shipped product changes and your own read state").add_subparsers(
@@ -2667,24 +2316,7 @@ def parser():
     chan.add_parser("import", help="store the channels of the old registry/slack-channels.yaml").set_defaults(
         fn="slack channel import"
     )
-    support = sub.add_parser("support", help="tell the Tico team about a gap or a fault").add_subparsers(dest="sub")
-    s = support.add_parser("file", help="a Confirm card shows the message; nothing is sent until the person confirms")
-    s.add_argument("message")
-    s.set_defaults(fn="support file")
-    s = support.add_parser(
-        "report", help="send a Tico bug report (a person OKs it first, unless the team lets bots send)"
-    )
-    text = s.add_mutually_exclusive_group(required=True)
-    text.add_argument("--message", help="the whole report: what failed, since when, the exact error, what you tried")
-    text.add_argument("--file", help="a file holding the report (UTF-8)")
-    s.add_argument(
-        "--no-ids", dest="no_ids", action="store_true", help="send only the message: not the version and install ID"
-    )
-    s.add_argument("--task", help="the task the report belongs to; the OK is asked on it")
-    s.set_defaults(fn="support report")
-    s = support.add_parser("send", help="send a report a person OK'd; filed as the person who OK'd it")
-    s.add_argument("--ok", required=True, help="the OK id `support report` printed")
-    s.set_defaults(fn="support send")
+    cli_spec.add(sub, computers.SUPPORT)  # tico support: clients/commands/computers.py
     cli_spec.add(sub, finance.CLI)  # tico finance: clients/commands/finance.py
     # Contacts (backend/entities/routes.py): every reader sees what the read rule lets it see; writes name their actor.
     contacts = sub.add_parser(

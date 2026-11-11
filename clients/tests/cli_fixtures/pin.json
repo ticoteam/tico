@@ -1,0 +1,281 @@
+[
+ {
+  "argv": [
+   "pin"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "pin",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico pin: error: argument sub: invalid choice: 'nope' (choose from add, update, remove) Did you mean: tico pin update, tico pin remove?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "pin",
+   "add"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico pin add <place> <item>\ntico pin add: error: the following arguments are required: place, item",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "pin",
+   "add",
+   "dashboard"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico pin add <place> <item>\ntico pin add: error: the following arguments are required: item",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "pin",
+   "add",
+   "dashboard",
+   "card:c1"
+  ],
+  "tools": [
+   [
+    "tico_pin_add",
+    {
+     "item": "card:c1",
+     "operation_id": null,
+     "place": "dashboard"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "pins",
+    {
+     "place": "dashboard",
+     "item": "card:c1",
+     "size": "medium"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "pin",
+   "add",
+   "dashboard",
+   "page:f1",
+   "--size",
+   "small",
+   "--position",
+   "0"
+  ],
+  "tools": [
+   [
+    "tico_pin_add",
+    {
+     "item": "page:f1",
+     "operation_id": null,
+     "place": "dashboard",
+     "position": 0,
+     "size": "small"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "pins",
+    {
+     "place": "dashboard",
+     "item": "page:f1",
+     "size": "small",
+     "position": 0
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "pin",
+   "add",
+   "dashboard",
+   "page:f1",
+   "--size",
+   "huge"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico pin add: error: argument --size: invalid choice: 'huge' (choose from small, medium, large)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "pin",
+   "add",
+   "dashboard",
+   "page:f1",
+   "--position",
+   "first"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico pin add: error: argument --position: invalid int value: 'first'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "pin",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico pin update <pin>\ntico pin update: error: the following arguments are required: pin",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "pin",
+   "update",
+   "p1"
+  ],
+  "tools": [
+   [
+    "tico_pin_update",
+    {
+     "operation_id": null,
+     "pin": "p1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "pins/p1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "pin",
+   "update",
+   "p1",
+   "--size",
+   "large",
+   "--position",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_pin_update",
+    {
+     "operation_id": null,
+     "pin": "p1",
+     "position": 2,
+     "size": "large"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "pins/p1",
+    {
+     "size": "large",
+     "position": 2
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "pin",
+   "remove"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico pin remove <pin>\ntico pin remove: error: the following arguments are required: pin",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "pin",
+   "remove",
+   "p1"
+  ],
+  "tools": [
+   [
+    "tico_pin_remove",
+    {
+     "operation_id": null,
+     "pin": "p1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "DELETE",
+    "pins/p1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

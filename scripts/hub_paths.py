@@ -58,7 +58,6 @@ HAND_READ_PATHS = (
     "calendar upcoming",
     "call list",
     "call show",
-    "card list",
     "catalog",
     "computers",
     "contacts describe",
@@ -92,11 +91,6 @@ HAND_READ_PATHS = (
     "integrations",
     "listening sources",
     "live stats",
-    "market find",
-    "market segment tree",
-    "market show",
-    "market size list",
-    "market watch list",
     "mcp stats",
     "meeting granola status",
     "meeting read",
@@ -105,19 +99,14 @@ HAND_READ_PATHS = (
     "note list",
     "notes",
     "origin show",
-    "page list",
-    "page show",
     "recent",
     "replay show",
     "repo list",
     "run list",
-    "seat list",
     "service-key list",
     "settings find",
     "settings show",
     "slack channel list",
-    "tag list",
-    "tag show",
     "task caps",
     "task context",
     "task deleted",
@@ -181,8 +170,9 @@ def spec_paths():
     return out
 
 
-# Spec'd commands whose tools neither write nor run on this computer, but spend from the company's Gateway cap.
-PAID = ("gateway search", "gateway fetch", "gateway digest")
+# Spec'd commands whose tools neither write nor run on this computer, but spend: from the company's Gateway cap, or
+# (`market ask`) a model call on the server's key.
+PAID = ("gateway search", "gateway fetch", "gateway digest", "market ask")
 
 
 def read_paths():

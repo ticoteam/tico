@@ -497,6 +497,21 @@ def test_a_create_whose_answer_was_lost_is_not_taken_for_a_machine_that_never_en
     assert "delete" not in cloud.hq.actions()
 
 
+def test_a_refused_list_leaves_one_event_per_change_and_cloud_being_off_leaves_none(cloud):
+    def events():
+        with cloud.store.read() as c:
+            return [json.loads(r["detail"]) for r in c.execute("SELECT detail FROM events WHERE action=?", (kind,))]
+
+    kind = "cloud_machine.list_refused"
+    cloud.hq.list = lambda: (_ for _ in ()).throw(CM.Refused("boat_error", 502))
+    for _ in range(2):
+        cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert events() == [{"code": "boat_error", "status": 502}]
+    cloud.hq.list = lambda: (_ for _ in ()).throw(CM.Refused("not_configured", 503))
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert len(events()) == 1
+
+
 def test_a_machine_hq_marked_failed_is_made_again_not_started(cloud):
     adopt(cloud)
     work(cloud)
@@ -3656,3 +3671,95 @@ def test_a_failing_look_never_hides_a_named_problem_and_a_listed_outage_clears_w
         CM.save(c, "ops", problem="hq:unreachable", problem_at=H.now())  # said while a create waited on the list
     cloud.manager.synced = None  # (this server has no memory of the outage: a restart)
     assert cloud.tick(10) == [] and cloud.row()["problem"] == ""  # the list is back; no work, nothing made
+
+
+def _beat(cloud, token):
+    """The shared machine's runner checks in, able to run a plan's sign-in."""
+    tools = {name: {"installed": True, "authenticated": "missing"} for name in ("claude", "codex")}
+    body = {
+        "version": "test",
+        "platform": "linux",
+        "capabilities": [MS.CAPABILITY, "model_sign_out_v1", "model_connect_v1"],
+    }
+    post(cloud.api, "runners/heartbeat", {**body, "readiness": {"schema_version": 1, "runtimes": tools}}, token=token)
+
+
+def _quiet(cloud, runner_id):
+    """Its runner has not checked in for a while, as on a stopped machine."""
+    with cloud.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.shift(H.now(), minutes=-6), runner_id)
+        )
+
+
+def _connect(cloud, expected=200):
+    return post(cloud.api, "model-subscriptions/connect", {"kind": "claude_token"}, expected=expected)
+
+
+def _shared_up(cloud):
+    """The shared machine made for a sign-in and enrolled: (its computer's id, its token)."""
+    assert _connect(cloud)["waking"] is True
+    assert cloud.tick() == ["create"] and cloud.hq.calls[-1][1] == CM.SHARED
+    up = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    _beat(cloud, up["token"])
+    return up["runner_id"], up["token"]
+
+
+def test_a_sign_in_makes_the_shared_machine_when_the_company_has_none_and_runs_once_it_is_up(cloud):
+    setup(cloud.api)
+    company(cloud.api)
+    asked = _connect(cloud)
+    assert (asked["id"], asked["waking"], asked["name"]) == ("", True, "Claude")
+    assert cloud.tick() == ["create"] and cloud.hq.calls[-1][1] == CM.SHARED
+    assert _connect(cloud)["waking"] is True  # still on its way: no second machine
+    assert cloud.tick(10) == ["create"]
+    up = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    _beat(cloud, up["token"])
+    login = _connect(cloud)
+    assert login["id"] and login["waking"] is False and login["runner_id"] == up["runner_id"]
+    assert [row["id"] for row in get(cloud.api, "runner-logins", up["token"])["logins"]] == [login["id"]]
+
+
+def test_a_sign_in_starts_the_stopped_shared_machine_and_holds_it_on_until_it_ends(cloud):
+    setup(cloud.api)
+    company(cloud.api)
+    computer, token = _shared_up(cloud)
+    # Nobody finished that sign-in: the want lapses, and the machine pauses when idle.
+    cloud.hq.calls.clear()
+    assert cloud.tick(300)[-1] == "stop" and cloud.row(CM.SHARED)["state"] == "stopped"
+    _quiet(cloud, computer)
+    cloud.hq.calls.clear()
+    assert cloud.tick(60) == []
+    # A person signs in again: it starts, and the sign-in is queued once its runner is back.
+    assert _connect(cloud)["waking"] is True
+    assert cloud.tick() == ["start"]
+    _beat(cloud, token)
+    login = _connect(cloud)
+    assert login["id"] and login["runner_id"] == computer
+    # Long past its pause, with the person still at the provider's page: it stays on.
+    cloud.hq.calls.clear()
+    assert "stop" not in cloud.tick(400)
+    # Canceled: the hold goes at once, and the machine pauses at its next look.
+    post(cloud.api, f"computers/{computer}/logins/{login['id']}/cancel", {})
+    assert cloud.tick(10)[-1] == "stop" and cloud.row(CM.SHARED)["state"] == "stopped"
+    # Neither the ended sign-in nor the want it came from wakes it again.
+    _quiet(cloud, computer)
+    cloud.hq.calls.clear()
+    assert cloud.tick(60) == [] and cloud.tick(600) == []
+
+
+def test_a_failed_sign_in_lets_the_machine_pause_and_out_of_credit_starts_nothing(cloud):
+    setup(cloud.api)
+    company(cloud.api)
+    computer, token = _shared_up(cloud)
+    login = _connect(cloud)
+    cloud.hq.calls.clear()
+    assert "stop" not in cloud.tick(600)
+    post(cloud.api, f"runner-logins/{login['id']}/report", {"state": "failed", "message": "It stopped"}, token=token)
+    assert cloud.tick(10)[-1] == "stop"
+    # Out of credit: a sign-in starts no machine, and the page is told there is no computer.
+    _quiet(cloud, computer)
+    cloud_access.apply(cloud.store, cloud_access.parse(signals("frozen")))
+    cloud.hq.calls.clear()
+    assert _connect(cloud, expected=409)["error"]["code"] == "offline"
+    assert "start" not in cloud.tick(10)

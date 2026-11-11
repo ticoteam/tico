@@ -16,6 +16,7 @@ changes; bots keep using whatever git access their computer already has.
 | Actions | read and write | Tico itself runs a repository's release workflow when the Release Owner asks (`tico task release`; see [Cutting a release](#cutting-a-release)). A bot's run token carries Actions read only: it reads workflow runs, such as whether a deploy succeeded, and cannot start, rerun or cancel them unless an Owner lets it; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
 | Workflows | none (read and write to edit workflow files) | not in the manifest. Add it only for a bot that must create or change `.github/workflows` files; see [Letting a bot edit workflow files](#letting-a-bot-edit-workflow-files) |
 | Checks | read and write | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. Write is the server's alone: Tico posts its `tico/merge-ok` check with it ([Require Tico's merge check](#require-ticos-merge-check)). No bot's run token carries Checks or Commit statuses write, whatever its grant |
+| Merge queues | read | GitHub requires it before an App may receive the Merge group event, which Tico answers with `tico/merge-ok` on a merge queue group's commit. No token Tico mints carries it |
 | Commit statuses | read | a bot reads a pull request's commit statuses. It cannot create or change them |
 | Deployments | read | a bot reads deployments, such as a pull request's preview link, in any repository it can read. It cannot create or change them |
 | Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
@@ -128,6 +129,16 @@ same terms.
    you. Tico then makes no bot repositories (GitHub would not let the App reach them): bots work from their
    computers as usual, their history is not backed up to GitHub, and Health says so in one line. Settings
    then shows the app as installed.
+
+Back in Tico, the GitHub card asks at once **Which repository does your team work on?**, with a **Use** button on each
+product repository the organization has (a lone one is the main button). One tap puts it In use; nothing is ticked for
+you. While Tico makes the bots' own repositories the card says how many are made, and why the rest wait when GitHub
+said why.
+
+A second return from GitHub (Back to its Create page and Create again, the same return loaded twice, or one more
+than an hour old) lands on this card with one sentence and changes nothing: the app Tico saved stays, and the second
+return's code is never exchanged. If GitHub made a second app on the way, delete it on GitHub; Tico never used it. If
+GitHub says the app's name is taken, change it on GitHub's page: Tico takes whatever name GitHub gives back.
 
 Once a repository is In use, the pipeline seats reach it by role with no further step: the Builder and the Release
 Owner write, the reviewers, QA Owner, Product Owner, Product Manager and Engineering Manager read ([Repositories](repositories.md#bot-repository-access)).
@@ -345,8 +356,9 @@ What it needs on the App:
   check refuses every queue, and the owner of each task in Merge is told with GitHub's reason. While a pipeline queues
   pull requests and GitHub last reported the installation without Checks: write, Health warns "Tico can't post its
   merge check", once for the organization, with a link to the App's permissions page.
-- **The Merge group event.** New Apps subscribe to it. For an older App, check **Merge group** under **Subscribe to
-  events**. Without it Tico never hears that a group needs its checks: on a repository that requires the check, each
+- **The Merge group event.** New Apps subscribe to it. For an older App, set **Merge queues** to **Read-only** under
+  **Repository permissions** (GitHub offers the event only with it), check **Merge group** under **Subscribe to
+  events**, then accept the updated permissions on the installation. Without it Tico never hears that a group needs its checks: on a repository that requires the check, each
   group waits until the merge queue's check timeout and is then removed, and each task's owner hears of the removal.
 
 The ruleset an organization administrator adds on the product repository (after the App has Checks write and the
@@ -366,6 +378,15 @@ Merge group event, and after Tico has posted one `tico/merge-ok` there):
 Tick the team's repositories in Settings → General → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
 
 ## Creating bot repositories
+
+Tico makes each bot's repository by itself when the app may (installed on all repositories, Administration accepted,
+and for a personal account the owner's authorization): the bots a company has when it connects GitHub, and every bot
+made later. The server's poll makes a few at a time as empty private repositories, audited as `github.repo_created`
+by the system, and each bot's computer publishes its history on its next run. A create whose answer was lost is found
+again on the next try, never made twice and never taken for someone else's (GitHub made it after Tico first asked).
+When GitHub fails or limits requests, Tico waits a minute, then two, up to an hour, and Tools, GitHub says why. A
+refused permission stops it until the permission is back. A name someone else already has is left alone, as below.
+Nobody needs to ask BotOps; the commands below are the by-hand path.
 
 With administration allowed, the owner can create `<org>/bot-<slug>` privately from a template:
 
@@ -601,7 +622,7 @@ app from its settings page.
 New GitHub Apps include the task events and read permissions automatically. For an existing
 App, enable webhook events for Pull requests, Pull request reviews,
 Pull request review comments, Check runs, Check suites, Workflow runs and Commit statuses, plus Push for
-deploy tracking, Merge group for [Tico's merge check](#require-ticos-merge-check), and Release: Tico saves a published
+deploy tracking, Merge group (it needs read access to Merge queues) for [Tico's merge check](#require-ticos-merge-check), and Release: Tico saves a published
 release when it hears of it, for the tasks a Release stage holds (without it, the 5-minute read finds it) and for
 automations' `release.published`. The webhook remains `POST /api/v2/github/webhook` with signature verification.
 Checks need read access to Checks and commit statuses need read access to Commit statuses in

@@ -127,7 +127,7 @@ fn auth_rejected_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
-            r"(?i)incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)|not logged in|please run /login|invalid authentication credentials|authentication_error|oauth session expired and could not be refreshed|missing meta credentials",
+            r"(?i)incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)|not logged in|please run /login|invalid authentication credentials|authentication_error|oauth session expired and could not be refreshed|missing meta credentials|missing bearer or basic authentication",
         )
         .unwrap()
     })
@@ -1996,6 +1996,9 @@ mod tests {
             "unexpected status 401 Unauthorized: Invalid API key"
         ));
         assert!(is_auth_rejected("Invalid API key · Please run /login"));
+        // Codex with no login at all (codex 0.167, cli_contract.rs): nothing was sent, so no retry can help.
+        let no_login = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
+        assert!(is_auth_rejected(no_login) && !is_auth_retryable(no_login));
         assert_eq!(
             rejection_reason("x\nInvalid API key sk-ant-abcdefghijk"),
             "Invalid API key [redacted]"

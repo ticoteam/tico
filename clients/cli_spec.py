@@ -19,9 +19,21 @@ A spec says only what differs:
 - An `Arg` with `into=` is a flag of the command line alone that `Command.convert` folds into that property (`--who`
   and `--everyone` into the Who scope object); it is not passed on itself. Its help is the description of `part` (its
   name by default) inside that object property.
+- `Command.fixed` is what the path itself says: `market size accept` is `decision: accept` of its tool. A fixed
+  property is always sent and takes no argument. `Command.omit` names properties the command line does not take at
+  all: one `convert` fills (`market import` names the batch after its file), or one only another path of the tool
+  uses.
+- `Command.exclusive` lists properties at most one of which may be given, `Command.one_of` properties exactly one of
+  which must be (`--message` or `--file`, an id or `--all`). A member is a property, with every flag that sets it, or a
+  local flag. In a `one_of` no flag is required by itself, and a positional takes `nargs="?"`.
+- An `Arg` with `local=True` is a flag of the command line that is not sent: it shapes what is printed or what runs
+  on this computer (`--text`, `--list`), read from the parsed line by `render` or by the CLI. Not being in the schema,
+  it carries its own `help`; no other `Arg` may.
 - A field is omitted when its flag is left out. `default=False` sends false; `NULL` as a flag's const sends null.
 - `Command.tool_for(fields)` picks another tool by the arguments (`rules read` without `--from` reads one rule); every
   tool it may pick is in `tools`, whose properties the command takes too.
+- `Command.run(client, fields)` is what the command line does where it cannot call the tool: `page publish` sends a
+  file's bytes, the tool its text. The flags are still the tool's, and so is the help.
 - `Command.render(args, result)` prints text in place of JSON; such a command also takes `--json`.
 - `Group.default` is the leaf a group runs when no word follows (`tico rules due` lists, as `tico rules due list`).
 
@@ -65,6 +77,8 @@ class Arg:
     choices: tuple[str, ...] | None = None  # the words it takes when they are not the property's values (on, off)
     into: str | None = None  # the property `convert` folds this flag into
     part: str | None = None  # with `into`: the key inside it whose description is the help; the name by default
+    local: bool = False  # a flag of the command line alone: parsed, never sent
+    help: str | None = None  # a local flag's help; every other argument's is its schema description
 
 
 @dataclass(frozen=True)
@@ -84,8 +98,12 @@ class Command:
     tools: tuple[str, ...] = ()  # the other tools `tool_for` may pick; their properties are the command's too
     args: tuple[Arg, ...] = ()
     exclusive: tuple[tuple[str, ...], ...] = ()  # properties no two of which may be given together
+    one_of: tuple[tuple[str, ...], ...] = ()  # properties exactly one of which must be given
+    fixed: tuple[tuple[str, Any], ...] = ()  # (property, value) pairs the path itself says; they take no argument
+    omit: tuple[str, ...] = ()  # properties the command line does not take
     convert: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     tool_for: Callable[[dict[str, Any]], str] | None = None
+    run: Callable[[Any, dict[str, Any]], Any] | None = None  # in place of the tool's function, with its arguments
     render: Callable[[argparse.Namespace, Any], str] | None = None
 
     def __post_init__(self):
@@ -115,10 +133,17 @@ class Command:
         props, required = self.properties()
         given = {}
         for a in self.args:
-            if not a.into:
+            if a.help and not a.local:
+                raise ValueError(f"{self.path}: {a.name} is in the schema, so its help is its description there")
+            if a.local and (a.into or a.name in props):
+                raise ValueError(f"{self.path}: {a.name} is local, so it is neither a property nor folded into one")
+            if not a.into and not a.local:
                 given.setdefault(a.name, []).append(a)
-        if unknown := set(given) - set(props):
+        no_argument = {name for name, _value in self.fixed} | set(self.omit)
+        if unknown := (set(given) | no_argument) - set(props):
             raise ValueError(f"{self.path}: {sorted(unknown)} are not properties of {self.tool}")
+        if both := set(given) & no_argument:
+            raise ValueError(f"{self.path}: {sorted(both)} are fixed or omitted, so they take no argument")
         folded = {}
         for a in self.args:
             if a.into:
@@ -127,6 +152,8 @@ class Command:
                 folded.setdefault(a.into, []).append(a)
         out = []
         for name, prop in props.items():
+            if name in no_argument:
+                continue
             if name in folded:
                 parts = prop.get("properties", {})
                 out += [_argument(a, parts.get(a.part or a.name, {}), False, suppress) for a in folded[name]]
@@ -137,24 +164,30 @@ class Command:
                         f"{self.path}: {name} is an object; give it flags with into={name!r}, or take it whole with type="
                     )
                 out += [_argument(a, prop, name in required, suppress) for a in spelled]
+        return out
+
+    def local_arguments(self, suppress=False):
+        """(option strings, add_argument keywords) for the flags that are not sent: the local ones, and `--json`."""
+        out = [_argument(a, {"description": a.help}, False, suppress) for a in self.args if a.local]
         if self.render:
             out.append((["--json"], {"action": "store_true", "help": "print the answer as JSON"}))
         return out
 
     def call(self, client, args):
-        """Run the tool with the parsed line's arguments; the answer is the tool's."""
+        """Run the tool (or `run`) with the parsed line's arguments; the answer is its answer."""
         from clients import hubtools
 
         tool, fields = self.prepare(args)
-        return hubtools.BY_NAME[tool]["fn"](client, fields)
+        return self.run(client, fields) if self.run else hubtools.BY_NAME[tool]["fn"](client, fields)
 
     def prepare(self, args):
         """(the tool to run, its arguments) for a parsed line: the flags given, converted, with the tool `tool_for`
         picks."""
-        dests = [kw.get("dest", names[0]) for names, kw in self.arguments() if names != ["--json"]]
+        dests = [kw.get("dest", names[0]) for names, kw in self.arguments()]
         fields = {d: getattr(args, d) for d in dests if getattr(args, d, None) is not None}
         fields = {k: None if v is NULL else v for k, v in fields.items()}
         fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
+        fields.update(self.fixed)
         if self.convert:
             fields = self.convert(fields)
         for a in self.args:
@@ -217,11 +250,21 @@ def _range(prop):
 
 
 def _fill(parser, command, suppress=False):
-    exclusive = {}
-    for names in command.exclusive:
-        exclusive.update(dict.fromkeys(names, parser.add_mutually_exclusive_group()))
-    for names, keywords in command.arguments(suppress):
-        (exclusive.get(keywords.get("dest", names[0])) or parser).add_argument(*names, **keywords)
+    groups = {}
+    for members, required in [(m, False) for m in command.exclusive] + [(m, True) for m in command.one_of]:
+        groups.update(dict.fromkeys(members, parser.add_mutually_exclusive_group(required=required)))
+    arguments = command.arguments(suppress) + command.local_arguments(suppress)
+    if unknown := set(groups) - {keywords.get("dest", names[0]) for names, keywords in arguments}:
+        raise ValueError(f"{command.path}: {sorted(unknown)} in exclusive or one_of are not its arguments")
+    for names, keywords in arguments:
+        group = groups.get(keywords.get("dest", names[0]))
+        if group is None:
+            parser.add_argument(*names, **keywords)
+            continue
+        keywords.pop("required", None)  # the group says how many; argparse refuses a required member
+        if not names[0].startswith("-") and keywords.get("nargs") != "?":
+            raise ValueError(f"{command.path}: {names[0]} is a positional in an either-or, so it takes nargs='?'")
+        group.add_argument(*names, **keywords)
     parser.set_defaults(fn=command.fn, _spec=command)
 
 
