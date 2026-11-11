@@ -575,7 +575,7 @@ def _may(
     if kind == "answer" and not standing.met and asked:
         out.append("answer")
     # A page is answered once Jev has looked: by whom it waits on, or any person when it names nobody (answers).
-    if kind == "page" and standing.state == R.WAITING and standing.on not in (R.JEV, R.GITHUB):
+    if kind == "page" and standing.state == R.WAITING and not R.outside(standing.on):
         if viewer == standing.on or (standing.on is None and human):
             out += ["ok", "no"]
     # Give: whoever it waits on, whoever asked it, or someone who works the task (may_handle_ask); the owner's own work

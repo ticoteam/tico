@@ -46,7 +46,10 @@ def test_every_kind_is_built_and_has_its_settings():
     assert {fn.__name__ for fn in R.KINDS.values()} == {f"_{kind}" for kind in R.KINDS}
     assert set(R.SETTINGS) == set(R.KINDS)
     assert R.SETTINGS["page"] == ("rubric", "at_head", "with_release")
-    assert R.SETTINGS["in_release"] == ("release_repo", "prereleases")
+    assert R.settings_of({"kind": "item", "source": "github", "condition": "in_release"}) == (
+        "release_repo",
+        "prereleases",
+    )
 
 
 def test_every_role_has_a_template_and_a_chart_seat():

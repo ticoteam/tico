@@ -77,7 +77,7 @@ def _owners(record):
 
 
 def _kinds(record):
-    return {s["id"]: [r["kind"] for r in s["requirements"]] for s in record["stages"]}
+    return {s["id"]: [r["condition"] or r["kind"] for r in s["requirements"]] for s in record["stages"]}
 
 
 # ----------------------------------------------------------------------------- seats
@@ -185,7 +185,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         for s in ("engineering-review-1", "engineering-review-2")
         for r in stages[s]["requirements"]
     )
-    never = [r for s in stages.values() for r in s["requirements"] if r["kind"] in ("pr_merged", "in_release")]
+    never = [r for s in stages.values() for r in s["requirements"] if r["condition"] in ("pr_merged", "in_release")]
     assert len(never) == 2 and not any(r["can_push_past"] for r in never)
 
 
@@ -288,10 +288,10 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
                 "name": "Ship",
                 "on_enter": {"act": "github.queue"},
                 "requirements": [
-                    {"kind": "pr_open"},
-                    {"kind": "checks_pass"},
-                    {"kind": "pr_merged"},
-                    {"kind": "in_release", "settings": {"release_repo": "acme/app", "prereleases": True}},
+                    PS.github("pr_open"),
+                    PS.github("checks_pass"),
+                    PS.github("pr_merged"),
+                    PS.github("in_release", release_repo="acme/app", prereleases=True),
                 ],
             },
         ],

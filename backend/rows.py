@@ -1432,12 +1432,15 @@ class VisitRow(TypedDict):
 
 
 class RequirementRow(TypedDict):
-    """What a task needs to leave a stage: on the stage (every task) or on one visit (this task, this time)."""
+    """What a task needs to leave a stage: on the stage (every task) or on one visit (this task, this time). Kind `item`
+    names the `source` and its `condition` (backend/item_sources)."""
 
     id: str
     stage_id: str | None
     visit_id: str | None
     kind: str
+    source: str | None
+    condition: str | None
     settings: str
     can_push_past: int
     who_oks: str

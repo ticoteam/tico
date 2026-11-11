@@ -469,7 +469,8 @@ def refresh_conflicts(service: Any) -> int:
 
 
 def _engine_speaks(c, task_id):
-    """Whether the task is on a pipeline stage that waits on GitHub (a PR open, checks, a merge, a release) or queues
+    """Whether the task is on a pipeline stage that waits on GitHub (an item requirement of source `github`: a PR
+    open, checks, a merge, a release) or queues
     its PRs (backend/item_sources/github.py). There the engine tells the stage's owner of a removal from the queue, a merge
     (the move on) and a close (the standing it leaves unmet): this module's wakes for those would be a second message
     about the same event, in other words. The webhook saves the engine's facts first (`_task_facts`), so a merge
@@ -483,7 +484,7 @@ def _engine_speaks(c, task_id):
         return False
     if GS.queues_prs(row.get("stage")):
         return True
-    return any(r["kind"] in GS.PR_KINDS for r in R.for_visit(c, row["visit"]))
+    return any(r["kind"] == "item" and r.get("source") == GS.SOURCE for r in R.for_visit(c, row["visit"]))
 
 
 def _settle_removal(c, link_id, pr):

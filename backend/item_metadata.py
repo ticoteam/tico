@@ -155,7 +155,7 @@ _WAITING_TASKS = (
     "JOIN stages s ON s.id = t.stage_id WHERE t.status='open' AND t.pipeline_id IS NOT NULL AND ("
     "COALESCE(json_extract(CASE WHEN json_valid(s.on_enter) THEN s.on_enter END, '$.act'), '') LIKE ? || '.%' "
     "OR EXISTS (SELECT 1 FROM requirements r WHERE (r.stage_id = t.stage_id OR r.visit_id = v.id) "
-    "AND r.withdrawn_at IS NULL AND (? = 'github' AND r.kind IN ('pr_open', 'checks_pass', 'pr_merged', 'in_release') "
+    "AND r.withdrawn_at IS NULL AND (r.kind = 'item' AND r.source = ? "
     "OR r.kind = 'page' AND COALESCE(json_extract(CASE WHEN json_valid(r.settings) THEN r.settings END, "
     "'$.at_head'), 0))))"
 )

@@ -49,7 +49,7 @@ STAGE_FIELDS = (
     "expected_bots_only",
     "on_enter",
 )
-REQUIREMENT_FIELDS = ("kind", "settings", "can_push_past", "who_oks", "person_id", "line")
+REQUIREMENT_FIELDS = ("kind", "source", "condition", "settings", "can_push_past", "who_oks", "person_id", "line")
 WHO_OKS = ("none", "people_only", "people_with_exceptions")
 OK_KINDS = ("ok", "page")  # the kinds whose "Who OKs" switch means something on a stage (kinds 2 and 3)
 NAMES_PERSON = ("ok", "page")  # only a requirement met with a button names someone (C29): a person or a bot
@@ -106,6 +106,12 @@ def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements:
     }
 
 
+def github(condition: str, **settings: object) -> Row:
+    """A requirement of kind `item` on the task's GitHub PRs (backend/item_sources/github.py CONDITIONS)."""
+    out: Row = {"kind": "item", "source": "github", "condition": condition}
+    return {**out, "settings": settings} if settings else out
+
+
 def _page(line: str, rubric: str, **settings: bool) -> Row:
     return {"kind": "page", "line": line, "settings": {"rubric": rubric, **settings}}
 
@@ -133,7 +139,7 @@ PRESETS["engineering"] = {
             "Build",
             "Build it in its own thread, open a PR and link it, and get the checks green.",
             1440,
-            [{"kind": "pr_open"}, {"kind": "checks_pass"}],
+            [github("pr_open"), github("checks_pass")],
             task_limit=3,
         ),
         _stage(
@@ -148,7 +154,7 @@ PRESETS["engineering"] = {
             "Fixes 1",
             "Fix what the review found, push, and say done once the checks are green.",
             240,
-            [{"kind": "owner_done"}, {"kind": "checks_pass"}],
+            [{"kind": "owner_done"}, github("checks_pass")],
         ),
         _stage(
             "engineering-review-2",
@@ -163,7 +169,7 @@ PRESETS["engineering"] = {
             "Fix what the second review found and attach a Review page that shows what was built.",
             240,
             [
-                {"kind": "checks_pass"},
+                github("checks_pass"),
                 _page(
                     "Review page",
                     "Shows what was built, with screenshots or output, and how it was checked. Enough for a person "
@@ -177,7 +183,7 @@ PRESETS["engineering"] = {
             "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send "
             "the task back to Fixes 2.",
             120,
-            [{"kind": "pr_merged"}],
+            [github("pr_merged")],
             on_enter={"act": "github.queue"},
         ),
         _stage(
@@ -185,7 +191,7 @@ PRESETS["engineering"] = {
             "Release",
             "Waits for a published release that holds the merge.",
             1440,
-            [{"kind": "in_release"}],
+            [github("in_release")],
         ),
     ],
     "done": {"id": "engineering-done"},
@@ -302,6 +308,8 @@ def _requirement_out(row: Row) -> Row:
     return {
         "id": row["id"],
         "kind": row["kind"],
+        "source": row.get("source"),
+        "condition": row.get("condition"),
         "settings": _loads(row.get("settings")) or {},
         "can_push_past": bool(row.get("can_push_past")),
         "who_oks": row.get("who_oks") or "none",
@@ -401,8 +409,10 @@ def _list(value: object, sentence: str, problems: list[str]) -> list[Any]:
 def _requirement_in(raw: object, stage_name: str, problems: list[str]) -> Row:
     item = _dict(raw, f"A requirement on {stage_name} is not a requirement.", problems)
     kind = _text(item.get("kind"), f"A requirement's kind on {stage_name}", problems)
+    source = _ref(item.get("source"), f"A requirement's source on {stage_name}", problems)
+    condition = _ref(item.get("condition"), f"A requirement's condition on {stage_name}", problems)
     ok_kind = kind in OK_KINDS
-    never = kind in R.NEVER_PUSHED_PAST
+    never = R.never_pushed_past({"kind": kind, "source": source, "condition": condition})
     push = _flag(item.get("can_push_past"), f"Can be pushed past on {stage_name}", problems, default=not never)
     who = _text(item.get("who_oks"), f"Who OKs on {stage_name}", problems) or (
         "people_with_exceptions" if ok_kind else "none"
@@ -410,6 +420,8 @@ def _requirement_in(raw: object, stage_name: str, problems: list[str]) -> Row:
     return {
         "id": _ref(item.get("id"), f"A requirement id on {stage_name}", problems),
         "kind": kind,
+        "source": source,
+        "condition": condition,
         "settings": _dict(item.get("settings"), f"A requirement's settings on {stage_name} are not a set.", problems),
         "can_push_past": push,
         "who_oks": who,
@@ -483,15 +495,17 @@ def _actor_exists(conn: "sqlite3.Connection", actor: str) -> bool:
     return False
 
 
-def _kind_name(kind: str) -> str:
-    return R.KIND_NAMES.get(kind, kind)
+def _kind_name(req: Row) -> str:
+    found = R.condition_of(req)
+    return found.name if found else str(R.KIND_NAMES.get(req["kind"], req["kind"]))
 
 
 def _check_settings(req: Row, label: str, problems: list[str]) -> None:
-    """A requirement's settings: only its kind's keys (task_requirements.SETTINGS), each of its type."""
-    name = _kind_name(req["kind"])
+    """A requirement's settings: only its kind's keys, or its condition's (task_requirements.settings_of), each of its
+    type."""
+    name = _kind_name(req)
     for key, value in req["settings"].items():
-        if key not in R.SETTINGS.get(req["kind"], ()):
+        if key not in R.settings_of(req):
             problems.append(f"{name} has no setting {key} (on {label}).")
         elif key in ("at_head", "with_release", "prereleases") and not isinstance(value, bool):
             problems.append(f"{key} on {label} is on or off.")
@@ -508,11 +522,17 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     if kind not in R.KINDS:
         problems.append(f"{kind or 'A blank kind'} is not a requirement kind (on {label}).")
         return
-    name = _kind_name(kind)
+    if kind == "item" and R.condition_of(req) is None:
+        what = f"{req['source']}.{req['condition']}" if req["source"] or req["condition"] else "A blank condition"
+        problems.append(f"{what} is not a source's condition (on {label}).")
+        return
+    if kind != "item" and (req["source"] or req["condition"]):
+        problems.append(f"Only an item requirement names a source and a condition (on {label}).")
+    name = _kind_name(req)
     if kind == "answer":
         problems.append(f"Answer from someone is never set on a stage (on {label}). Add it to one task instead.")
     _check_settings(req, label, problems)
-    if kind in R.NEVER_PUSHED_PAST and req["can_push_past"]:
+    if R.never_pushed_past(req) and req["can_push_past"]:
         problems.append(f"{name} can't be pushed past (C3), on {label}.")
     if req["who_oks"] not in WHO_OKS:
         problems.append(f"Who OKs on {label} is people only or people, with exceptions.")
@@ -528,10 +548,12 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     elif kind == "ok" and not person:
         problems.append(f"An OK from someone on {label} names the person or bot who OKs it.")
     if req["id"]:
-        found = _h()._one(conn, "SELECT stage_id, visit_id, kind FROM requirements WHERE id=?", (req["id"],))
+        found = _h()._one(
+            conn, "SELECT stage_id, visit_id, kind, source, condition FROM requirements WHERE id=?", (req["id"],)
+        )
         if found and (found.get("visit_id") or found.get("stage_id") != stage["id"]):
             problems.append(f"Requirement {req['id']} belongs to another stage, not {label}.")
-        elif found and found["kind"] != kind:
+        elif found and (found["kind"], found["source"], found["condition"]) != (kind, req["source"], req["condition"]):
             problems.append(f"A requirement's kind can't change on {label}: remove it and add a new one.")
 
 
@@ -801,6 +823,8 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
     for position, req in enumerate(reqs):
         values = (
             req["kind"],
+            req["source"],
+            req["condition"],
             H._dump(req["settings"]),
             1 if req["can_push_past"] else 0,
             req["who_oks"],
@@ -811,7 +835,8 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
         found = req["id"] and conn.execute("SELECT 1 FROM requirements WHERE id=?", (req["id"],)).fetchone()
         if found:
             conn.execute(
-                "UPDATE requirements SET kind=?, settings=?, can_push_past=?, who_oks=?, person_id=?, line=?, "
+                "UPDATE requirements SET kind=?, source=?, condition=?, settings=?, can_push_past=?, who_oks=?, "
+                "person_id=?, line=?, "
                 "position=?, withdrawn_at=NULL WHERE id=?",
                 (*values, req["id"]),
             )
@@ -819,8 +844,8 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
             continue
         rid = req["id"] or H.new_id()
         conn.execute(
-            "INSERT INTO requirements (kind, settings, can_push_past, who_oks, person_id, line, position, id, "
-            "stage_id, added_by_id, by_bot, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO requirements (kind, source, condition, settings, can_push_past, who_oks, person_id, line, "
+            "position, id, stage_id, added_by_id, by_bot, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (*values, rid, stage_id, str(by), 1 if is_bot(by) else 0, ts),
         )
         kept.append(rid)

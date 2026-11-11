@@ -450,10 +450,6 @@ def _open_at_head(conn: "sqlite3.Connection", repo: str, sha: str) -> list[int]:
     return out
 
 
-# The kinds that read a PR fact. A page reads one only when it is for the newest commit (`at_head`).
-PR_KINDS = ("pr_open", "checks_pass", "pr_merged", "in_release")
-
-
 def due_reads(conn: "sqlite3.Connection", now: str, limit: int = REREAD_BATCH) -> list[tuple[str, int]]:
     """The PRs an open task waits on whose fact is missing or older than REREAD_S, oldest read first, at most `limit`.
     A merged or closed PR is final for what a task waits on, so it is not read again (a webhook still brings a reopen).
@@ -517,7 +513,8 @@ def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
     for task_id, settings in conn.execute(
         "SELECT t.id, r.settings FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
         "JOIN requirements r ON (r.stage_id = t.stage_id OR r.visit_id = v.id) AND r.withdrawn_at IS NULL "
-        "AND r.kind='in_release' WHERE t.status='open' AND t.pipeline_id IS NOT NULL"
+        "AND r.kind='item' AND r.source='github' AND r.condition='in_release' "
+        "WHERE t.status='open' AND t.pipeline_id IS NOT NULL"
     ).fetchall():
         try:
             setting: Row = json.loads(settings or "{}") or {}
@@ -1076,12 +1073,13 @@ def _merged_anyway(conn: "sqlite3.Connection", task_id: str, visit_id: str, ref:
     )
 
 
-# ----------------------------------------------------------------------------- the four GitHub requirement kinds
-# (were in backend/task_requirements.py)
-from ..task_requirements import GITHUB, MET, NOT_MET, WAITING, Standing
+# ----------------------------------------------------------------------------- GitHub's four conditions
+# (were requirement kinds of their own in backend/task_requirements.py; now kind `item` with source `github`)
+from ..task_requirements import MET, NOT_MET, WAITING, Standing
+from . import Condition, Item
 
 
-# The four GitHub kinds read saved facts only (backend/item_sources/github.py) and, for "PR merged", the Merge stage's effects
+# The four conditions read saved metadata only (backend/item_sources/github.py) and, for "PR merged", the Merge stage's effects
 # (backend/item_sources/github.py). With many PRs, the first one not met, in link order, gives the line. A PR closed without
 # merging is left out while another is linked; when every one is, the owner is told. A wait on GitHub ends: when GitHub
 # has said nothing about the PR (or the releases it waits for) for 2 hours, it is the owner's turn (`_silent`).
@@ -1110,7 +1108,7 @@ def _first(requirement: Row, found: list[Standing]) -> Standing:
 
 
 def _reading(requirement: Row) -> Standing:
-    return Standing(requirement, WAITING, GITHUB, "Reading the PR from GitHub")
+    return Standing(requirement, WAITING, SOURCE, "Reading the PR from GitHub")
 
 
 def _seconds_since(ts: object) -> float | None:
@@ -1124,7 +1122,7 @@ def _silent(task: Row, requirement: Row, link: Row, found: Standing, heard: obje
     no read of the PR got through (GitHub down or refusing, or the PR gone). `heard` is when GitHub last answered, when
     the caller knows better than the PR's fact (its releases' read); else the fact's last read, else when it was
     linked. Every wait on GitHub so ends in a bot's turn, whatever the stage's expected time."""
-    if found.state != WAITING or found.on != GITHUB:
+    if found.state != WAITING or found.on != SOURCE:
         return found
     fact: Row = link.get("fact") or {}
     read = None if fact.get("due_at") else fact.get("read_at")  # marked for a full read: heard of when saved
@@ -1167,11 +1165,11 @@ def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
         running = _seconds_since(fact.get("checks_started_at"))
         if running is not None and running >= CHECKS_TOO_LONG_S:
             return Standing(requirement, NOT_MET, task.get("owner_id"), "Checks still running after 2 hours")
-        return Standing(requirement, WAITING, GITHUB, "Checks running")
+        return Standing(requirement, WAITING, SOURCE, "Checks running")
     if state == "none":
         seen = _seconds_since(fact.get("head_seen_at"))
         if seen is None or seen < NO_CHECKS_AFTER_S:
-            return Standing(requirement, WAITING, GITHUB, "Waiting for checks")
+            return Standing(requirement, WAITING, SOURCE, "Waiting for checks")
         return Standing(requirement, MET, line="No checks on this repo")  # C13
     return Standing(requirement, MET, line="Checks pass")
 
@@ -1196,17 +1194,17 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     queues = queues_prs(task.get("stage"))
     effect = newest(conn, task["visit"]["id"], ref) if queues else None
     if fact["queue_state"] in ("queued", "auto_merge"):  # queued, by Tico or anyone: an owed queue_pr is then done
-        return Standing(requirement, WAITING, GITHUB, "In the merge queue")
+        return Standing(requirement, WAITING, SOURCE, "In the merge queue")
     if effect and effect["state"] == "owed":
-        return Standing(requirement, WAITING, GITHUB, "Queuing the PR")
+        return Standing(requirement, WAITING, SOURCE, "Queuing the PR")
     if effect and effect["state"] == "failed":
         return Standing(requirement, NOT_MET, owner, f"GitHub refused the merge: {effect.get('last_error') or ref}")
     if fact["queue_state"] == "removed":
         return Standing(requirement, NOT_MET, owner, removed_line(fact))
     if effect:
-        return Standing(requirement, WAITING, GITHUB, "In the merge queue")
+        return Standing(requirement, WAITING, SOURCE, "In the merge queue")
     if queues:
-        return Standing(requirement, WAITING, GITHUB, "Queuing the PR")  # owed as soon as its head is known
+        return Standing(requirement, WAITING, SOURCE, "Queuing the PR")  # owed as soon as its head is known
     return Standing(requirement, NOT_MET, owner, "Not merged yet")
 
 
@@ -1224,18 +1222,18 @@ def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Sta
     if not fact:
         return _reading(requirement)
     if fact["state"] != "merged" or not fact.get("merged_sha"):
-        return Standing(requirement, WAITING, GITHUB, "Not merged yet")
+        return Standing(requirement, WAITING, SOURCE, "Not merged yet")
     settings: Row = requirement.get("settings") or {}
     repo = release_repo(settings, str(link["repo"]))
     publishes = publishes_releases(conn, repo)
     if publishes is None:
-        return Standing(requirement, WAITING, GITHUB, "Reading releases")
+        return Standing(requirement, WAITING, SOURCE, "Reading releases")
     if not publishes:
         return Standing(requirement, MET, line="This repo doesn't publish releases")  # C31
     for release in reversed(releases(conn, repo, prereleases=bool(settings.get("prereleases")))):
         if included(conn, release["id"], str(fact["merged_sha"])):
             return Standing(requirement, MET, line=f"In {release['tag']}")
-    return Standing(requirement, WAITING, GITHUB, f"Waiting for a release of {repo}")
+    return Standing(requirement, WAITING, SOURCE, f"Waiting for a release of {repo}")
 
 
 def in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
@@ -1254,3 +1252,17 @@ def _release_silent(conn: "sqlite3.Connection", task: Row, requirement: Row, lin
         return _silent(task, requirement, link, found)
     repo = release_repo(requirement.get("settings") or {}, str(link["repo"]))
     return _silent(task, requirement, link, found, releases_read_at(conn, repo) or fact.get("updated_at"))
+
+
+NAME = "GitHub"
+ITEMS = {PR: Item(PR, "PR")}
+CONDITIONS = {
+    "pr_open": Condition("pr_open", "PR open", PR, pr_open),
+    "checks_pass": Condition("checks_pass", "Checks pass", PR, checks_pass),
+    "pr_merged": Condition("pr_merged", "PR merged", PR, pr_merged, can_push_past="never"),
+    # `release_repo` ("owner/name"; empty means the server's release repo, else each PR's own repo) and `prereleases`
+    # (a pre-release counts, D3; off by default).
+    "in_release": Condition(
+        "in_release", "In a release", PR, in_release, ("release_repo", "prereleases"), can_push_past="never"
+    ),
+}

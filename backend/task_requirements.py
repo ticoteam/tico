@@ -1,9 +1,11 @@
 # pyright: strict
-"""What a task needs before it leaves a stage (docs/pipelines-v3.md, "The nine requirement kinds").
+"""What a task needs before it leaves a stage (docs/pipelines-v3.md, "The six requirement kinds").
 
 A requirement sits on a stage (every task that visits it) or on one visit (this task, this time). Each kind answers one
 question for a task's open visit: met, waiting on something named, or not met and why. A kind reads tables only. It never
-calls GitHub, Jev or a computer, so a move and the never-stuck check can't be stalled by the outside.
+calls GitHub, Jev or a computer, so a move and the never-stuck check can't be stalled by the outside. Kind `item` asks a
+`condition` of the items a task links in a `source` (backend/item_sources: GitHub's PR open, Checks pass, PR merged and
+In a release); the source's condition says where it stands.
 
 What met a requirement is its newest answer on the visit that is not undone (`answers`):
 
@@ -31,21 +33,17 @@ if TYPE_CHECKING:
 Row = dict[str, Any]
 
 MET, WAITING, NOT_MET = "met", "waiting", "not_met"
-# What a requirement waits on when it is not a person or a task: `Standing.on` for the kinds that read saved facts.
-JEV, GITHUB = "jev", "github"
+# What a requirement waits on when it is not a person or a task: `Standing.on` is `jev` for a page Jev has not judged,
+# and the source's id (`github`) for an item whose metadata a source has yet to bring.
+JEV = "jev"
 KIND_NAMES = {
     "owner_done": "Owner says done",
     "ok": "OK from someone",
     "page": "A page",
-    "pr_open": "PR open",
-    "checks_pass": "Checks pass",
-    "pr_merged": "PR merged",
-    "in_release": "In a release",
+    "item": "An item",
     "linked_done": "Linked work done",
     "answer": "Answer from someone",
 }
-# Kinds that can never be pushed past, whatever the row says (C3).
-NEVER_PUSHED_PAST = ("pr_merged", "in_release")
 # Kinds whose "Who OKs" switch means something. Elsewhere it reads as `none`.
 OK_KINDS = ("ok", "page", "answer")
 # Answers that steer an OK instead of meeting it: a send back, a look again, a give. They mean that only on the kinds
@@ -90,7 +88,7 @@ def _active_ids(conn: "sqlite3.Connection") -> frozenset[str]:
 
 @dataclass
 class Standing:
-    """Where one requirement stands for one visit. `on` is who or what it waits on: an actor, `jev`, `github`, or a
+    """Where one requirement stands for one visit. `on` is who or what it waits on: an actor, `jev`, a source, or a
     task id. `line` is one sentence: what is missing, or what met it. `about` is the task it filed whose title (and
     why it was closed) the line says, so a reader who may not open that task is not told them (waiting_on.unnamed)."""
 
@@ -110,8 +108,28 @@ class Standing:
 
 
 def name_of(requirement: Row) -> str:
-    """What a requirement is called on a task: its own line if it has one, else its kind."""
-    return (requirement.get("line") or "").strip() or KIND_NAMES.get(requirement["kind"]) or requirement["kind"]
+    """What a requirement is called on a task: its own line if it has one, else its condition's name (an item), else its
+    kind's."""
+    found = condition_of(requirement)
+    named = found.name if found else KIND_NAMES.get(requirement["kind"])
+    return (requirement.get("line") or "").strip() or named or requirement["kind"]
+
+
+def condition_of(requirement: Row) -> Any:
+    """The source's condition an `item` requirement asks (item_sources.Condition), or None (another kind, or a source
+    or condition that does not exist)."""
+    if requirement.get("kind") != "item":
+        return None
+    from . import item_sources
+
+    return item_sources.condition(requirement.get("source"), requirement.get("condition"))
+
+
+def outside(on: object) -> bool:
+    """Whether a requirement waits on something outside the company's people and tasks: Jev, or a source."""
+    from . import item_sources
+
+    return on == JEV or on in item_sources.SOURCES
 
 
 def _rows(cursor: "sqlite3.Cursor") -> list[Row]:
@@ -338,27 +356,13 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     return Standing(requirement, MET, line="Jev passed it")
 
 
-# The four GitHub kinds are the GitHub source's (backend/item_sources/github.py).
-def _github() -> Any:
-    from .item_sources import github
-
-    return github
-
-
-def _pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _github().pr_open(conn, task, requirement, answer)
-
-
-def _checks_pass(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _github().checks_pass(conn, task, requirement, answer)
-
-
-def _pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _github().pr_merged(conn, task, requirement, answer)
-
-
-def _in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
-    return _github().in_release(conn, task, requirement, answer)
+def _item(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
+    """A condition of the items the task links in a source: the source's condition says where it stands."""
+    found = condition_of(requirement)
+    if found is None:
+        return Standing(requirement, NOT_MET, task.get("owner_id"), "No such condition")
+    standing: Standing = found.standing(conn, task, requirement, answer)
+    return standing
 
 
 KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standing]] = {
@@ -367,28 +371,36 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
     "answer": _answer,
     "linked_done": _linked_done,
     "page": _page,
-    "pr_open": _pr_open,
-    "checks_pass": _checks_pass,
-    "pr_merged": _pr_merged,
-    "in_release": _in_release,
+    "item": _item,
 }
 # The keys a requirement's `settings` may hold, by kind. Anything else is refused at save (pipeline_settings).
 # - page: `rubric` (Jev's "what to check"; empty means the requirement's line), `at_head` (the page is for the newest
 #   commit of every linked PR: a new commit puts it back to the owner), `with_release` (Jev is also shown the release
 #   of the tasks this task filed, so "production is older than the release" is judged against a fact).
-# - in_release: `release_repo` ("owner/name"; empty means the server's release repo, else each PR's own repo) and
-#   `prereleases` (a pre-release counts, D3; off by default).
+# - item: its condition's (item_sources.Condition.settings, `settings_of`).
 SETTINGS: dict[str, tuple[str, ...]] = {
     "owner_done": (),
     "ok": (),
     "answer": (),
     "linked_done": (),
     "page": ("rubric", "at_head", "with_release"),
-    "pr_open": (),
-    "checks_pass": (),
-    "pr_merged": (),
-    "in_release": ("release_repo", "prereleases"),
+    "item": (),
 }
+
+
+def settings_of(requirement: Row) -> tuple[str, ...]:
+    """The keys a requirement's `settings` may hold: its kind's, or for an item its condition's."""
+    found = condition_of(requirement)
+    if found is not None:
+        keys: tuple[str, ...] = found.settings
+        return keys
+    return SETTINGS.get(requirement.get("kind") or "", ())
+
+
+def never_pushed_past(requirement: Row) -> bool:
+    """A requirement no one may move a task on without, whatever its row says (C3): its condition says never."""
+    found = condition_of(requirement)
+    return found is not None and found.can_push_past == "never"
 
 
 def standing(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None = None) -> Standing:
@@ -412,7 +424,7 @@ def unmet(conn: "sqlite3.Connection", task: Row) -> list[Standing]:
 
 
 def can_push_past(requirement: Row) -> bool:
-    return bool(requirement.get("can_push_past")) and requirement["kind"] not in NEVER_PUSHED_PAST
+    return bool(requirement.get("can_push_past")) and not never_pushed_past(requirement)
 
 
 def people_only(requirement: Row) -> bool:

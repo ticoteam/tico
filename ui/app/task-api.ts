@@ -27,6 +27,9 @@ interface TaskStageV3 { id: string; name: string; kind: 'work' | 'done' | 'close
 interface PipelineReqRec {
   id?: string;
   kind: string;
+  /** An item's source and condition (kind `item`, e.g. github and pr_merged); null on every other kind. */
+  source?: string | null;
+  condition?: string | null;
   settings: Record<string, unknown>;
   can_push_past: boolean;
   who_oks: 'none' | 'people_only' | 'people_with_exceptions';

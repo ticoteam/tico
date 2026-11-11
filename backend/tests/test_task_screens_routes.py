@@ -135,7 +135,12 @@ def _releasing(api):
     """A Delivery pipeline whose Ship stage waits for a release, and ops as the Release Manager."""
     stages = [
         {"id": "build", "name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-        {"id": "ship", "name": "Ship", "owner": "assignee", "requirements": [{"kind": "in_release"}]},
+        {
+            "id": "ship",
+            "name": "Ship",
+            "owner": "assignee",
+            "requirements": [{"kind": "item", "source": "github", "condition": "in_release"}],
+        },
     ]
     post(api, "pipelines/delivery", {"name": "Delivery", "stages": stages})
     patched = api.patch("/api/v2/release-schedule", json={"bot": "ops"}, headers=headers())
