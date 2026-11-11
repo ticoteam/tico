@@ -592,9 +592,21 @@ page          no page attached                          not_met  owner   No page
                 manager bot, the manager holds it)                        not_met on the owner)
               met, person_id set, no OK for this version waiting  person  [Version <n>, after the send back: "<notes>". ]
                                                                           OK <name> (version <n>)
-              person said no for this version            not_met  owner   Sent back: <notes>
+              person said no for this version            not_met  owner   Sent back: <notes>[ Attach the new version; Tico
+                                                                          asks the person.] (one end mark, never two)
               met and OK'd for this version              met              OK'd
               met, no person                             met              Jev passed it
+```
+
+A page a person OKs that is not `at_head` (Fixes 2's Review page) also says, before the OK, when a linked PR's newest
+commit is not one a met Review page (`at_head`, Jev passed or OK'd) was attached at: "New commits since the reviews
+(now at <sha>): not reviewed by a bot." (`task_requirements.unreviewed`, from `item_versions` and the PR's head; Tico
+keeps no commit count). The bot's wake on that stage says it too. A waiting page's `since` is when that version was
+asked (its attach, or Jev's verdict when later), not when the stage began. The manager bot asked to decide answers with
+`tico task answer <id> <requirement> ok|no -m "<why>"`; its forward move with a reason is kept as that OK, not a push
+past.
+
+```
 pr_open       no PR linked                               not_met  owner   No PR linked
               no metadata yet                            waiting  github  Reading the PR from GitHub
               every PR closed without merging            not_met  owner   <ref> was closed without merging

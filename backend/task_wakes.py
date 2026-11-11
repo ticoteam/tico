@@ -65,15 +65,37 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
         lines.append("From earlier stages (read each before you act):")
         lines += stage_inputs.lines(conn, handed)
         lines.append(stage_inputs.IF_MISSING)
-    missing = [s for s in R.standings(conn, task) if not s.met]
+    standings = R.standings(conn, task)
+    fresh = _unreviewed(conn, task, standings)
+    if fresh:
+        lines.append(f"{fresh} Say so on the page the person OKs.")
+    missing = [s for s in standings if not s.met]
     if missing:
         lines.append("Missing to leave this stage:")
         for s in (W.unnamed(each, shown) for each in missing):
             waits = f" Waiting on {s.on}." if s.state == R.WAITING and s.on else ""
-            lines.append(f"- {s.name}: {s.line}.{waits}" if s.line and s.line != s.name else f"- {s.name}.{waits}")
+            said = s.line if s.line and s.line != s.name else ""
+            lines.append(f"- {R.sentences(f'{s.name}: {said}' if said else s.name)}{waits}")
+            if R.asked_to_decide(s, to):
+                lines.append(f"  {R.decide_commands(str(task['id']), str(s.requirement['id']))}")
     lines.append(f"Version {task.get('version')}. Send it with every command on this task.")
     lines.append(ENDINGS)
     return "\n".join(lines)
+
+
+def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standing]) -> str | None:
+    """On a stage where a person OKs a page that is not a review (Fixes 2's Review page), the commits no bot reviewed
+    (task_requirements.unreviewed), so the page the bot writes says it. Not when the ask already says it."""
+    page: list[R.Standing] = []
+    for s in standings:
+        settings: Row = s.requirement.get("settings") or {}
+        if s.requirement.get("kind") != "page" or settings.get("at_head"):
+            continue
+        if s.requirement.get("person_id") or R.people_only(s.requirement):
+            page.append(s)
+    if not page or any(R.NOT_REVIEWED in s.line for s in page):
+        return None
+    return R.unreviewed(conn, task)
 
 
 def told(conn: "sqlite3.Connection", task: Row, to: str | None) -> Callable[[str], bool]:

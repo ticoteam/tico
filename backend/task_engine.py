@@ -733,6 +733,20 @@ def _push_past(
     return pushed
 
 
+def _decide(conn: "sqlite3.Connection", by: str, row: Row, why: str | None, decided: list[R.Standing]) -> None:
+    """Record a move by the bot asked to decide a page (task_requirements.asked_to_decide) as its OK of the version
+    attached now, with the move's reason, as `answers.answer` keeps one."""
+    if not decided:
+        return
+    from . import answers
+    from . import task_pages as P
+
+    for standing in decided:
+        page = P.current(conn, row["visit"]["id"], standing.requirement["id"])
+        version = int(page["version"]) if page else None
+        answers._write(conn, row, standing.requirement["id"], by, "ok", why, version)  # pyright: ignore[reportPrivateUsage]
+
+
 def _may_go_back_to(conn: "sqlite3.Connection", by: str, row: Row, target: Row, kind: str) -> None:
     """Only a person moves a task back into a stage that queues its PRs (from a later stage, where a new PR may have
     been linked). Anyone else moves it back to the stage before that one, where what it needs is asked again."""
@@ -813,8 +827,14 @@ def move(
     ts = H.now()
     visit = row["visit"]
     pushed: list[Row] = []
+    decided: list[R.Standing] = []
     if kind in ("forward", "done"):
         missing = R.unmet(conn, row) + _skipped(conn, row, target)
+        if is_bot(by) and (why or "").strip():
+            # The bot asked to decide a page Jev was unsure of moved it on with a reason: that is its decision, an OK
+            # with its why on the requirement, not a check skipped.
+            decided = [s for s in missing if R.asked_to_decide(s, by)]
+            missing = [s for s in missing if not R.asked_to_decide(s, by)]
         _may_push_past(conn, by, row, why, missing, target["id"])
         if target["kind"] == "work" and not has_room(conn, target):
             # From a stage tasks leave by hand the task stays put until someone moves it again, unless it is a
@@ -835,6 +855,7 @@ def move(
                 then=("snooze", "close"),
                 version=row.get("version"),
             )
+        _decide(conn, by, row, why, decided)
         pushed = _push_past(conn, by, row, why, missing, ts)
     elif kind == "reopen":
         _need_why(conn, by, why, "reopen it", task_id, everyone=True)

@@ -31,7 +31,8 @@ yes or no in a minute.
 - **Jev sent it back:** the reasons are in `tico task show`. Fix the page (or the change), publish again and attach the
   new version.
 - **The person sent it back:** their notes are on the task. Fix what they asked, push, publish the page again and attach
-  it.
+  it. A commit pushed here was not reviewed by Reviewer 1 or 2: say so on the page, with the new head. Tico says it on
+  the person's ask too.
 - **Jev is unsure, or you want the person's OK:** attach the new version; Tico asks the person. Never ask your own OK
   of this page, or a yes/no that shows it ("OK to merge?"): Tico refuses it, and an answer to it passes nothing.
 - **New commits after the OK:** the page is for one head. Publish a new version for the new head and attach it.
