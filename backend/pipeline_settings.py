@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import access as Access
 from . import hubdb_core, pipeline_rights, task_engine
+from . import pipeline_presets_more as more
 from . import pipeline_seats as S
 from . import task_requirements as R
 from .hubdb_core import KEEPER as SYSTEM
@@ -273,6 +274,9 @@ ROLES: dict[str, Row] = {
         "ok": ("product-spec",),
     },
 }
+# Growth Experiments, Lead, Opportunity, Customer and Success Experiments, with their Growth and Success factories.
+PRESETS.update(more.PRESETS)
+ROLES.update(more.ROLES)
 
 
 def _h() -> Any:
@@ -998,12 +1002,12 @@ def preset(conn: "sqlite3.Connection", key: str) -> Row:
     roles = ROLES.get(key)
     if not roles:
         return record
-    who = S.resolve(conn)
+    who = {**S.resolve(conn), **more.resolve(conn)}
     record["manager_id"] = who.get(roles["manager"]) or _task_manager(conn)
     person = S.ok_person(conn, record["manager_id"])
     for stage in record["stages"]:
         role = roles["stages"].get(stage["id"])
-        stage["owner"] = (who.get(role) or record["manager_id"]) if role else None
+        stage["owner"] = (who.get(role) or record["manager_id"]) if role else stage["owner"]
         if stage["id"] in roles["ok"]:
             for req in stage["requirements"]:
                 if req["kind"] == "page":
@@ -1111,6 +1115,9 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     - Product and Engineering are made for a company that builds software (`makes_software`: a blank answer is yes),
       once its setup finished, so their roles find the bots setup made. With them comes the Product factory. A company
       that says no gets its untouched pair retired; saying yes again brings that pair back.
+    - Growth Experiments, Lead, Opportunity, Customer and Success Experiments (pipeline_presets_more) are made for every
+      company once its setup finished, each with its Growth or Success factory. A company set up before they existed
+      gets them at its next start.
     - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with one exception:
       while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is
       filled in once the bot or person for it exists.
@@ -1133,6 +1140,10 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
             if not _set_up(conn):
                 continue
             _ensure_factory(conn)
+        elif key in more.PRESETS:
+            if not _set_up(conn):
+                continue
+            more.ensure_factory(conn, PRESETS[key]["factory_id"], _h().now())
         record = preset(conn, key)
         if check(conn, record):
             continue

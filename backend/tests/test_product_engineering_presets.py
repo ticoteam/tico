@@ -13,12 +13,19 @@ import pytest
 from backend import bot_settings as BS
 from backend import company_import
 from backend import never_stuck as N
+from backend import pipeline_presets_more as more
 from backend import pipeline_seats as S
 from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend.store import H
 from backend.tests.helpers import engine as X
+
+
+def _made(c):
+    """What ensure_presets made, leaving out the Growth and Success pipelines (test_default_pipelines_more.py)."""
+    return [p for p in PS.ensure_presets(c) if p not in more.PRESETS]
+
 
 ANA, BEN = X.ANA, "human:ben"
 ROLE_BOTS = {
@@ -115,8 +122,8 @@ def test_the_ok_person_is_the_first_person_above_the_manager_else_the_owner(c):
 def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles(c):
     _team(c)
     _answers(c, software="")  # a blank answer is yes (D7)
-    assert PS.ensure_presets(c) == ["engineering", "product"]
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == ["engineering", "product"]
+    assert _made(c) == []
     product, engineering = PS.read(c, "product"), PS.read(c, "engineering")
     assert (product["name"], product["prefix"], product["manager_id"], product["factory_id"]) == (
         "Product",
@@ -192,13 +199,13 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
 def test_presets_wait_for_setup_and_a_company_that_builds_no_software_gets_neither(c):
     _team(c)
     _answers(c, software="", completed=False)
-    assert PS.ensure_presets(c) == []  # setup not finished: only General, as every start makes it
+    assert _made(c) == []  # setup not finished: only General, as every start makes it
     _answers(c, software="no")
-    assert PS.ensure_presets(c) == []
-    assert [r[0] for r in c.execute("SELECT id FROM pipelines")] == ["general"]
+    assert _made(c) == []
+    assert [r[0] for r in c.execute("SELECT id FROM pipelines") if r[0] not in more.PRESETS] == ["general"]
     assert not c.execute("SELECT 1 FROM factories WHERE id='product'").fetchone()
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]
+    assert _made(c) == ["engineering", "product"]
 
 
 def test_an_rc1_company_with_general_only_gets_the_pair_and_nothing_else_changes(c):
@@ -209,10 +216,10 @@ def test_an_rc1_company_with_general_only_gets_the_pair_and_nothing_else_changes
     before = PS.read(c, "general")
     events = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]
+    assert _made(c) == ["engineering", "product"]
     assert PS.read(c, "general") == before
     after = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
-    assert after == events + 2
+    assert after == events + 2 + len(more.PRESETS)  # with the Growth and Success pipelines
 
 
 def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
@@ -220,11 +227,11 @@ def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
     _answers(c, software="yes")
     PS.ensure_presets(c)
     _answers(c, software="no")
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     assert PS.read(c, "product")["retired_at"] and PS.read(c, "engineering")["retired_at"]
     assert company_import.new_company(c)
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     assert not PS.read(c, "product")["retired_at"] and not PS.read(c, "engineering")["retired_at"]
     # A pair someone changed stays when the answer is no: Product as changed, and Engineering, which it files into.
     product = PS.read(c, "product")
@@ -237,7 +244,7 @@ def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
 
 def test_an_untouched_preset_gets_its_roles_once_their_bots_appear_and_a_changed_one_does_not(c):
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]  # setup finished before any role was hired
+    assert _made(c) == ["engineering", "product"]  # setup finished before any role was hired
     assert set(_owners(PS.read(c, "engineering")).values()) == {None}
     _role_bot(c, "builder", "builder")
     _seat(c, "Builder", "builder", "builder")

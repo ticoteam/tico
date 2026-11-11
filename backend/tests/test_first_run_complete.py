@@ -5,6 +5,7 @@ General had no manager and BotOps no "Sweep stuck tasks" routine until the serve
 import pytest
 
 from backend import company_file as C
+from backend import pipeline_presets_more as more
 from backend import routines
 from backend.tests.helpers.sample_company import (  # noqa: F401
     booted,
@@ -86,7 +87,12 @@ def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_no
     # chart's Product Manager and Engineering Manager where setup started them (pipeline_settings.ensure_presets).
     slugs = {f"bot:{r['id']}": r["slug"] for r in rows(api, "SELECT id, slug FROM bots")}
     managers = {r["id"]: slugs.get(r["manager_id"], r["manager_id"]) for r in after_setup["managers"]}
-    assert managers == {"general": "task-manager", **MANAGERS[first_run.__name__]}
+    # The Growth and Success pipelines' managers: each its own Pipeline Manager once the chart has it, else the
+    # Task Manager (pipeline_presets_more).
+    others = {
+        p: more.manager_role(p) if more.manager_role(p) in slugs.values() else "task-manager" for p in more.PRESETS
+    }
+    assert managers == {"general": "task-manager", **MANAGERS[first_run.__name__], **others}
     assert {"bot": "botops", "routine_key": routines.SWEEP_KEY} in after_setup["routines"]
     restarted = environment(seed_roster=False)
     assert whole(restarted) == after_setup
