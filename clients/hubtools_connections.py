@@ -40,6 +40,23 @@ def _path(value):
     return quote(str(value), safe="")
 
 
+def _not_listed(repository):
+    return APIError(
+        "not_found",
+        f"{repository} is not in the team's repository list; tico repo refresh reads it from GitHub "
+        "(the App must be installed on it)",
+        404,
+    )
+
+
+def _listed(api, repository):
+    """The repository's owner/repo as the team's list spells it; not_found when the list does not have it."""
+    row = _repo_row(api.get("repositories"), repository)
+    if not row:
+        raise _not_listed(repository)
+    return row["full_name"]
+
+
 # ----------------------------------------------------------------------------- GitHub App
 def _github_view(app, repos=None):
     """The App's status in plain words: what is connected, to which account, on which repositories, what is missing."""
@@ -341,12 +358,7 @@ def repo_show(api, args):
     listing = person.get("repositories")
     row = _repo_row(listing, args["repository"])
     if not row:
-        raise APIError(
-            "not_found",
-            f"{args['repository']} is not in the team's repository list; tico repo refresh reads it from GitHub "
-            "(the App must be installed on it)",
-            404,
-        )
+        raise _not_listed(args["repository"])
     name = row["full_name"]
     bots = []
     for bot in _bots(person):
@@ -407,12 +419,7 @@ def repo_grant(api, args):
         raise ValueError("Running workflows and editing workflow files need write access")
     row = _repo_row(person.get("repositories"), args["repository"])
     if not row:
-        raise APIError(
-            "not_found",
-            f"{args['repository']} is not in the team's repository list; tico repo refresh reads it from GitHub "
-            "(the App must be installed on it)",
-            404,
-        )
+        raise _not_listed(args["repository"])
     name = row["full_name"]
     current = person.get(f"bots/{_path(bot)}/repositories")
     out = {"bot": bot, "repository": name, "access": access, "ticked": bool(row.get("enabled")), "was": current["mode"]}
@@ -520,9 +527,9 @@ def repo_default(api, args):
     writes=True,
 )
 def repo_setup_command(api, args):
-    return H._as_person(api).call(
-        "PUT", "repositories/" + str(args["repository"]).strip(), {"setup_command": args["command"]}, key=_key(args)
-    )
+    person = H._as_person(api)
+    name = _listed(person, args["repository"])
+    return person.call("PUT", "repositories/" + name, {"setup_command": args["command"]}, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- is the company able to work
