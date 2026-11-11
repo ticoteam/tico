@@ -144,7 +144,6 @@ def test_only_a_person_who_may_save_starts_one_and_only_for_a_plan(api):
     )
     post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"}, "assistant", expected=403)
     post(api, "model-subscriptions/connect", {"kind": "anthropic_key", "name": "Key"}, expected=422)
-    post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "  "}, expected=422)
     post(api, "model-subscriptions/connect", {"subscription": "nope"}, expected=404)
 
 
@@ -337,3 +336,25 @@ def test_connect_saves_the_owner_named_up_front_and_refuses_one_who_is_not_a_per
     login = post(api, "model-subscriptions/connect", {"subscription": saved[0]["id"]})
     assert send(api, m, login, OTHER)["state"] == "done"
     assert get(api, "model-subscriptions")["subscriptions"][0]["owner_id"] == "human:ben"
+
+
+def test_a_plan_added_with_no_name_is_named_after_its_plan_and_numbered_from_the_second(api):
+    setup(api)
+    company(api)
+    m = computer(api)
+    first = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
+    assert first["name"] == "Claude" and first["waking"] is False
+    # Asked again with no name (a reloaded page): the same sign-in, under the name it was given.
+    assert post(api, "model-subscriptions/connect", {"kind": "claude_token"})["id"] == first["id"]
+    assert send(api, m, first)["state"] == "done"
+    second = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
+    assert second["name"] == "Claude 2"
+    assert send(api, m, second, OTHER)["state"] == "done"
+    assert post(api, "model-subscriptions/connect", {"kind": "codex_login"})["name"] == "ChatGPT"
+    # A pasted key with no name gets its provider's; one given is kept.
+    key = post(api, "model-subscriptions", {"kind": "anthropic_key", "secret": "sk-ant-api03-" + "k" * 40})
+    named = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN, "name": " Team Max "})
+    assert (key["name"], named["name"]) == ("Anthropic API", "Team Max")
+    saved = [s for s in get(api, "model-subscriptions")["subscriptions"] if s["kind"] == "claude_token"]
+    assert sorted(s["name"] for s in saved) == ["Claude", "Claude 2", "Team Max"]
+    assert {s["owner_id"] for s in saved} == {"human:ana"}

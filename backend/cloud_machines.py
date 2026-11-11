@@ -49,7 +49,9 @@ machine; a shared machine's facts are its member bots' together:
     want     a bot of the machine is active and in cloud mode, and has a turn out, claimable queued work (the claim's
              own rule, execution.bot_claimable, on the machine's last report; a reason only a stopped machine leaves
              stale wakes it too), a watcher due (its last run plus its interval), or it waits to move here; or the
-             machine is Always on. On the shared machine any member's want wakes it, the newest work first. Failing
+             machine is Always on. On the shared machine any member's want wakes it, the newest work first, and so
+             does a person signing a plan in with no computer online (`signin_wake`: it is made for that if the
+             company has none yet); the sign-in then holds it on until it ends (`signin_live`). Failing
              those, a stopped machine whose computer reports an older release than this server's is wanted to update
              (`update:<release>`, `runner_behind`: never for a blank, dev or unparsed release, nor pinned or blocked),
              once its `spread` (0..UPDATE_SPREAD_S, per runner and release) after this server first ran the release
@@ -171,6 +173,10 @@ ENROLL_TRIES = 3  # machines made in a row that never enrolled before it waits f
 STOP_HOLD = 120  # a stop's reservation lapses this late: a server that died mid-stop strands no work
 DEAD = ("deleted", "failed")  # HQ's word for a machine that is gone or never got a computer: a want makes a new one
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
+SIGNIN_WANT = "signin:"  # the shared machine's want while a person signs a plan in with no computer online
+SIGNIN_KEY = "cloud-signin-want"  # {since, seen}: when that person first asked, and last asked (epoch seconds)
+SIGNIN_ASK = 45  # the page asks every few seconds: a want not asked for again this long is over
+SIGNIN_START = 5 * 60  # a machine not up this long after the first ask is not coming: the page stops waiting
 UPDATE_WANT = "update:"  # a stopped machine's want to update, keyed "update:" and this server's release
 UPDATE_STALE = 15 * 60  # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
 UPDATE_SPREAD_S = 600  # update wakes spread over this long after a release (`update_due`): no start storm
@@ -1067,6 +1073,14 @@ def facts(c, settings, current, at):
     # Every bot's want, first one first: a list, so one bot's want that a wake was already spent on never hides
     # another's (`wake_for`), and a want of another kind can join it.
     out["wants"] = [want for _, want in sorted(ranked, key=lambda found: found[0], reverse=True)]
+    if key == SHARED:
+        # A person signing a plan in comes before its bots' work: they are waiting at the page. The want lasts while
+        # the page asks, and a sign-in running on its computer is activity until it ends, so neither idles under them.
+        asked = _signin_asked(c, at)
+        if asked:
+            out["wants"].insert(0, SIGNIN_WANT + str(int(asked["since"])))
+        if asked or (runner_id and signin_live(c, runner_id, at)):
+            out["active"], out["want_at"] = True, max(out["want_at"], at)
     out["want"] = out["wants"][0] if out["wants"] else None
     if (
         out["active"]
@@ -1114,6 +1128,62 @@ def update_due(c, runner_id, release):
     nothing: there is no moment to spread from."""
     since = next((epoch(r.get("since")) for r in reversed(releases.history(c)) if r.get("version") == release), None)
     return since + spread(runner_id, release) if since else 0
+
+
+def _signin_asked(c, at):
+    """{since, seen} of the sign-in want still being asked for, or None."""
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (SIGNIN_KEY,)).fetchone()
+    try:
+        value = json.loads(found["value"]) if found else None
+        return value if value and at - value["seen"] < SIGNIN_ASK else None
+    except (ValueError, TypeError, KeyError):
+        return None
+
+
+def signin_wake(c, settings):
+    """A person is signing a plan in (Settings > Models, backend/model_subscriptions.py `connect`) and no computer is
+    online to run the sign-in: the shared machine is wanted for it (`facts`), made first if the company has none yet,
+    for as long as the page keeps asking. Returns whether it is on its way: never out of credit, off a cloud company,
+    after machines that never enrolled, once it is up (it is online and still cannot run the sign-in), or SIGNIN_START
+    after the first ask."""
+    from .getting_started import ONLINE_SECONDS
+
+    if not offered(c, settings) or cloud_access.frozen(c):
+        return False
+    ensure_shared(c)
+    current = row(c, SHARED)
+    if current["enroll_fails"] >= ENROLL_TRIES or current["problem"] in ("no_enroll", "replacing"):
+        return False
+    if (
+        current["runner_id"]
+        and c.execute(
+            "SELECT 1 FROM runners_with_state WHERE id=? AND revoked_at IS NULL AND last_seen_at>?",
+            (current["runner_id"], H.shift(H.now(), seconds=-ONLINE_SECONDS)),
+        ).fetchone()
+    ):
+        return False
+    at = now()
+    asked = _signin_asked(c, at)
+    since = asked["since"] if asked else at
+    if at - since >= SIGNIN_START:
+        return False
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (SIGNIN_KEY, json.dumps({"since": since, "seen": at})),
+    )
+    return True
+
+
+def signin_live(c, runner_id, at):
+    """Whether a plan's sign-in is running on computer `runner_id`: a person is at the provider's page, so its machine
+    stays on until that ends (done, failed, canceled, or its lifetime)."""
+    return bool(
+        c.execute(
+            "SELECT 1 FROM model_logins WHERE runner_id=? AND kind='connect' "
+            "AND state IN ('requested','starting','waiting','finishing') AND expires_at>=? LIMIT 1",
+            (runner_id, stamp(at)),
+        ).fetchone()
+    )
 
 
 def covers(woke_for, key):
