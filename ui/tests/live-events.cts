@@ -19,7 +19,7 @@ const {t}: {t: (ms: number) => number} = (() => { try { return require('./suppor
 type Route = import('playwright').Route;
 
 declare const S: {route: string; v2: {needs: {id: string; kind: string; line?: string}[]; needsVersion: string; needsNext: string; needsCount: number; needsBots: unknown; status: Record<string, unknown>}};
-declare const LIVE: {es: {url: string} | null; after: string | null; taskKey: unknown};
+declare const LIVE: {es: {url: string; topics: string[]} | null; after: string | null; taskKey: unknown};
 declare const V2C: {rendered: boolean; liveOff: boolean; reading: boolean; readAgain: boolean};
 declare const LIVE_SOON: Map<string, unknown>;
 declare const TASKS_ST: {loading: boolean; cursor: string};
@@ -217,8 +217,12 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
     await page.setViewportSize({width, height: 820});
     await page.goto(`https://tico-ui.test/?tooltip=${width}#/bot/ops`);
     await page.locator('.bot-ident [data-tip-bot="ops"]').waitFor();
-    // The page's stream for this bot: once the thread has subscribed, it holds the stream it keeps.
-    await page.waitForFunction(() => LIVE.es?.url.includes('thread='));
+    // The page's stream for this bot. A fresh page reconnects twice as it settles: when the thread subscribes
+    // (`thread=`) and when the Threads list's first read lands and adds the `threads` topic (threads.ts threadsLoad ->
+    // live.ts liveTopicAdd), each 30 ms later (liveRestart). Answering the stream before the second has replaced it
+    // answers one the page has closed, and the stream that follows is never answered. Once both are in, it holds the
+    // stream it keeps.
+    await page.waitForFunction(() => LIVE.es?.url.includes('thread=') && LIVE.es.topics.includes('threads'));
     // The thread's first render can scroll; a scroll intentionally dismisses a tooltip.
     // Open it after that render and the thread subscription have settled.
     await page.waitForFunction(() => BOT?.slug === 'ops' && [...THV_VIEWS]
