@@ -84,8 +84,8 @@ the person sees them first.
 
 ## 8. Check the routines
 
-Setting you up switched on your first routine, Watch. Check it with `tico automation list`; if it shows off, run
-`tico automation update <id> --enable`. Then turn on Find ideas the same way, by its id from that list. Tell the human in
+Setting you up switched on both routines, Watch and Find ideas. Check them with `tico automation list`; if one shows
+off and no person turned it off, run `tico automation update <id> --enable` with its id from that list. Tell the human in
 one line what each does: "Each morning I check the campaigns we kept, and on Mondays the search terms; each Tuesday I
 file up to three search ads ideas." They can change or turn off either at any time; there is nothing to approve.
 

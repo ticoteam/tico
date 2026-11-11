@@ -59,8 +59,8 @@ If `state.md` says setup has not finished, do this before any other work:
    kept campaign in Growth Monitoring.
 4. Publish the Search Ads playbook page, suggest the cutoff rule, set up your KPI and file your first ideas, as
    `playbooks/onboarding.md` says.
-5. Check both routines with `tico automation list`, turn on Find ideas, tell the human what each does and that they can
-   change it or turn it off, and log it in `memory/decisions.md`. Then run `tico bot setup-done`: it clears your "Needs
+5. Check both routines are on with `tico automation list`, tell the human what each does and that they can change it
+   or turn it off, and log it in `memory/decisions.md`. Then run `tico bot setup-done`: it clears your "Needs
    setup" mark.
 
 ## Sending

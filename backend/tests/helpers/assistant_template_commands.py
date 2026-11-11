@@ -20,9 +20,9 @@ VERSION = re.compile(r"--version N\b")  # the version the bot was shown, written
 def commands_in(path):
     """(line number, command text) for each `hub` command written in the file.
 
-    A backticked span is read across the lines of its paragraph, so a command that wraps is still checked. Whitespace inside
-    the span is collapsed. Fenced lines that start with `hub`, and indented code lines (four spaces after a blank line or
-another code line), are read one line at a time."""
+        A backticked span is read across the lines of its paragraph, so a command that wraps is still checked. Whitespace inside
+        the span is collapsed. Fenced lines that start with `hub`, and indented code lines (four spaces after a blank line or
+    another code line), are read one line at a time."""
     found, paragraph, start, fenced, continued = [], [], 0, False, False
 
     def flush():

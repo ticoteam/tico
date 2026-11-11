@@ -54,11 +54,10 @@ def section(template, heading):
 
 
 @pytest.mark.parametrize("template", sorted(PACKS))
-def test_a_pack_runs_exactly_watch_and_find_ideas_on_its_cadence_off_until_setup(template):
+def test_a_pack_runs_exactly_watch_and_find_ideas_on_its_cadence_off_until_setup_turns_both_on(template):
     folder = CATALOG / template
     routines = validate_schedules(manifest(template)["routines"], lambda rel: (folder / rel).read_text())
     assert {r["id"]: r["cron"] for r in routines} == PACKS[template][1]
-    assert [r["id"] for r in routines][0] == "watch", "setup arms the first routine: Watch"
     assert all(r["enabled"] is False for r in routines)
     assert {r["template"] for r in routines} == {"playbooks/watch.md", "playbooks/find-ideas.md"}
 
