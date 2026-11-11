@@ -1,0 +1,103 @@
+[
+ {
+  "argv": [
+   "company"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "company",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico company: error: argument sub: invalid choice: 'nope' (choose from show) Did you mean: tico company show?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "company",
+   "show"
+  ],
+  "tools": [
+   [
+    "tico_company_show",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "config",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "bots",
+    null
+   ],
+   [
+    "GET",
+    "pipelines",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"company\": {\n    \"name\": null,\n    \"url\": null,\n    \"release\": null\n  },\n  \"me\": {\n    \"actor\": \"bot:ana\",\n    \"name\": null,\n    \"role\": null,\n    \"kind\": null\n  },\n  \"pipelines\": [],\n  \"bots\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "company",
+   "show",
+   "--retired"
+  ],
+  "tools": [
+   [
+    "tico_company_show",
+    {
+     "operation_id": null,
+     "retired": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "config",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "bots",
+    null
+   ],
+   [
+    "GET",
+    "pipelines",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"company\": {\n    \"name\": null,\n    \"url\": null,\n    \"release\": null\n  },\n  \"me\": {\n    \"actor\": \"bot:ana\",\n    \"name\": null,\n    \"role\": null,\n    \"kind\": null\n  },\n  \"pipelines\": [],\n  \"bots\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

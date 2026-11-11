@@ -1,0 +1,105 @@
+[
+ {
+  "argv": [
+   "upgrade"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "upgrade",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico upgrade: error: argument sub: invalid choice: 'nope' (choose from status, check, start) Did you mean: tico upgrade check, tico upgrade start?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "upgrade",
+   "status"
+  ],
+  "tools": [
+   [
+    "tico_upgrade_status",
+    {}
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "system/update",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "upgrade",
+   "check"
+  ],
+  "tools": [
+   [
+    "tico_upgrade_check",
+    {}
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "system/update/check",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "upgrade",
+   "start",
+   "version-1"
+  ],
+  "tools": [
+   [
+    "tico_upgrade_start",
+    {
+     "version": "version-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "system/update",
+    {
+     "version": "version-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "upgrade",
+   "start"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico upgrade start <version>\ntico upgrade start: error: the following arguments are required: version",
+  "exit": 64
+ }
+]

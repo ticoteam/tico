@@ -1,0 +1,172 @@
+[
+ {
+  "argv": [
+   "cloud"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "cloud",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico cloud: error: argument sub: invalid choice: 'nope' (choose from show, set, replace) Did you mean: tico cloud set, tico cloud show?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "cloud",
+   "show"
+  ],
+  "tools": [
+   [
+    "tico_cloud_show",
+    {}
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "cloud-machines",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"offered\": false,\n  \"detail\": \"Cloud machines are for Tico Cloud companies; this one runs on its own computers\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "cloud",
+   "set"
+  ],
+  "tools": [
+   [
+    "tico_cloud_set",
+    {}
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: Name something to change: --size, --always-on/--no-always-on, --pause-minutes or --grow-storage\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "cloud",
+   "set",
+   "--size",
+   "size-1",
+   "--pause-minutes",
+   "5",
+   "--always-on",
+   "--grow-storage"
+  ],
+  "tools": [
+   [
+    "tico_cloud_set",
+    {
+     "always_on": true,
+     "grow_storage": true,
+     "pause_minutes": 5,
+     "size": "size-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "cloud-machines/shared",
+    {
+     "size": "size-1",
+     "always_on": true,
+     "pause_minutes": 5,
+     "grow_storage": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "cloud",
+   "replace",
+   "--confirm",
+   "confirm-1"
+  ],
+  "tools": [
+   [
+    "tico_cloud_replace",
+    {
+     "confirm": "confirm-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "cloud-machines",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"offered\": false,\n  \"detail\": \"Cloud machines are for Tico Cloud companies; this one runs on its own computers\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "cloud",
+   "set",
+   "--no-always-on"
+  ],
+  "tools": [
+   [
+    "tico_cloud_set",
+    {
+     "always_on": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "cloud-machines/shared",
+    {
+     "always_on": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

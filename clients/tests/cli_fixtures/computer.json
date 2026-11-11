@@ -1,0 +1,443 @@
+[
+ {
+  "argv": [
+   "computer"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico computer: error: argument sub: invalid choice: 'nope' (choose from list, performance, turns-at-once, browser-exit, restart, versions) Did you mean: tico computer list, tico computer restart?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_computer_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "computers",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"computers\": [],\n  \"services\": [],\n  \"detail\": \"One computer in full: tico_computer_list computer=<label or id>\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "computer",
+   "list",
+   "--computer",
+   "computer-1",
+   "--section",
+   "assigned",
+   "--offset",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_computer_list",
+    {
+     "computer": "computer-1",
+     "offset": 5,
+     "operation_id": null,
+     "section": "assigned"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "computers",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"ValueError: No computer named 'computer-1'; tico computer list names them\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "computer",
+   "performance",
+   "computer-1"
+  ],
+  "tools": [
+   [
+    "tico_computer_performance",
+    {
+     "computer": "computer-1",
+     "hours": 24,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "computers/computer-1/performance?hours=24",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "computer",
+   "performance",
+   "computer-1",
+   "--hours",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_computer_performance",
+    {
+     "computer": "computer-1",
+     "hours": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "computers/computer-1/performance?hours=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"computer\": null,\n  \"performance\": null,\n  \"hours\": null,\n  \"summary\": null,\n  \"overloads\": null,\n  \"busiest\": null,\n  \"columns\": null,\n  \"mem_total\": null,\n  \"disk_total\": null,\n  \"scope\": null,\n  \"runs\": 0,\n  \"points\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "computer",
+   "performance"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico computer performance <computer>\ntico computer performance: error: the following arguments are required: computer",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "turns-at-once",
+   "computer-1",
+   "limit-1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico computer turns-at-once: error: argument limit: invalid <lambda> value: 'limit-1'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "turns-at-once"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico computer turns-at-once <computer> <limit>\ntico computer turns-at-once: error: the following arguments are required: computer, limit",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "browser-exit",
+   "computer-1"
+  ],
+  "tools": [
+   [
+    "tico_computer_browser_exit",
+    {
+     "computer": "computer-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "computers/computer-1/browser-exit",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "computer",
+   "browser-exit",
+   "computer-1",
+   "on",
+   "--bots",
+   "bots-1",
+   "--cap-gb",
+   "2.5",
+   "--usage"
+  ],
+  "tools": [
+   [
+    "tico_computer_browser_exit",
+    {
+     "bots": [
+      "bots-1"
+     ],
+     "computer": "computer-1",
+     "daily_cap_gb": 2.5,
+     "operation_id": null,
+     "sharing": "on",
+     "usage": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "computers/computer-1/browser-exit",
+    {
+     "sharing": true,
+     "bots": [
+      "bots-1"
+     ],
+     "daily_cap_bytes": 2500000000
+    }
+   ],
+   [
+    "GET",
+    "computers/computer-1/browser-exit",
+    null
+   ],
+   [
+    "GET",
+    "computers/computer-1/browser-exit/usage?days=7&limit=100",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true,\n  \"usage\": {\n    \"ok\": true\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "computer",
+   "browser-exit"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico computer browser-exit <computer> {on|off}\ntico computer browser-exit: error: the following arguments are required: computer",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "restart",
+   "computer-1"
+  ],
+  "tools": [
+   [
+    "tico_computer_restart",
+    {
+     "computer": "computer-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "computers",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"not_found\",\n  \"detail\": \"No computer named 'computer-1'; tico computer list names them\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 5
+ },
+ {
+  "argv": [
+   "computer",
+   "restart"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico computer restart <computer>\ntico computer restart: error: the following arguments are required: computer",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "versions"
+  ],
+  "tools": [
+   [
+    "tico_computer_versions",
+    {}
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "computers",
+    null
+   ],
+   [
+    "GET",
+    "system/update",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"summary\": \"Server None (None); computers: no computers.\",\n  \"server\": {},\n  \"computers\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "computer",
+   "turns-at-once",
+   "mac-1",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_computer_turns_at_once",
+    {
+     "computer": "mac-1",
+     "limit": 3,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "computers/mac-1/turns-at-once",
+    {
+     "turns_at_once": 3
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "computer",
+   "turns-at-once",
+   "mac-1",
+   "automatic"
+  ],
+  "tools": [
+   [
+    "tico_computer_turns_at_once",
+    {
+     "computer": "mac-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'limit'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "computer",
+   "browser-exit",
+   "mac-1",
+   "sideways"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico computer browser-exit: error: argument sharing: invalid choice: 'sideways' (choose from on, off)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "computer",
+   "list",
+   "--section",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico computer list: error: argument --section: invalid choice: 'nope' (choose from assigned, repositories, bots, runtimes, harnesses, recent_errors)",
+  "exit": 64
+ }
+]
