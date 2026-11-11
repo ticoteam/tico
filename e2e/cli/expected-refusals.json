@@ -95,6 +95,7 @@
  "ok use": "validation",
  "org reports-to": "ValueError: Name the teammate as bot:<slug> or human:<id>",
  "origin show": "not_found",
+ "pipeline show": "not_found",
  "proposal create": "lint",
  "proposal decide": "not_found",
  "rules add": "validation",
