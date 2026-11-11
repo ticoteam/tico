@@ -1,0 +1,572 @@
+[
+ {
+  "argv": [
+   "brand"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "brand",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico brand: error: argument sub: invalid choice: 'nope' (choose from show, summary, check, draft, publish) Did you mean: tico brand show, tico brand check?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "brand",
+   "show"
+  ],
+  "tools": [
+   [
+    "tico_brand_show",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "brand",
+    null
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "show",
+   "--section",
+   "name",
+   "--version",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_brand_show",
+    {
+     "operation_id": null,
+     "section": "name",
+     "version": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "brand/versions/5",
+    null
+   ]
+  ],
+  "stdout": "section: name\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "show",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_brand_show",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "brand",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "summary"
+  ],
+  "tools": [
+   [
+    "tico_brand_summary",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "brand/summary",
+    null
+   ]
+  ],
+  "stdout": "Nothing published yet.\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "summary",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_brand_summary",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "brand/summary",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "check",
+   "file-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "brand",
+   "check",
+   "file-1",
+   "--json"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "brand",
+   "check"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico brand check <file>\ntico brand check: error: the following arguments are required: file",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "brand",
+   "draft",
+   "--section",
+   "name",
+   "--body",
+   "Hello all"
+  ],
+  "tools": [
+   [
+    "tico_brand_draft",
+    {
+     "body": "Hello all",
+     "operation_id": null,
+     "section": "name"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"body\",\n  \"detail\": \"--body must be JSON: a string in quotes, a list or an object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "brand",
+   "draft",
+   "--section",
+   "name",
+   "--body",
+   "Hello all",
+   "--revision",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_brand_draft",
+    {
+     "body": "Hello all",
+     "operation_id": null,
+     "revision": 5,
+     "section": "name"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"body\",\n  \"detail\": \"--body must be JSON: a string in quotes, a list or an object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "brand",
+   "draft",
+   "--section",
+   "name",
+   "--body",
+   "Hello all",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_brand_draft",
+    {
+     "body": "Hello all",
+     "operation_id": null,
+     "section": "name"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"body\",\n  \"detail\": \"--body must be JSON: a string in quotes, a list or an object\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "brand",
+   "publish"
+  ],
+  "tools": [
+   [
+    "tico_brand_publish",
+    {
+     "note": "",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "brand/publish",
+    {
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "publish",
+   "--note",
+   "note-1"
+  ],
+  "tools": [
+   [
+    "tico_brand_publish",
+    {
+     "note": "note-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "brand/publish",
+    {
+     "note": "note-1"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "publish",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_brand_publish",
+    {
+     "note": "",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "brand/publish",
+    {
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "check",
+   "-"
+  ],
+  "tools": [
+   [
+    "tico_brand_check",
+    {
+     "operation_id": null,
+     "text": "Plain words, no hype.\n"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "brand/check",
+    {
+     "text": "Plain words, no hype.\n"
+    }
+   ]
+  ],
+  "stdout": "No brand published yet.\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "show",
+   "--section",
+   "claims"
+  ],
+  "tools": [
+   [
+    "tico_brand_show",
+    {
+     "operation_id": null,
+     "section": "claims"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "brand",
+    null
+   ]
+  ],
+  "stdout": "section: claims\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "show",
+   "--section",
+   "naming"
+  ],
+  "tools": [
+   [
+    "tico_brand_show",
+    {
+     "operation_id": null,
+     "section": "naming"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "brand",
+    null
+   ]
+  ],
+  "stdout": "section: naming\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "brand",
+   "check",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ }
+]

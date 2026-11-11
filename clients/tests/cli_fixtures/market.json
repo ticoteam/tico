@@ -1,0 +1,3178 @@
+[
+ {
+  "argv": [
+   "market"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market: error: argument sub: invalid choice: 'nope' (choose from show, find, edges, delta, ask, report, resolve, apply, import, sweep, refresh, page, watch, briefing, define, segment, size, figure, sources, spend, research) Did you mean: tico market page, tico market spend?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "show",
+   "id-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/entities/id-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market show <id>\ntico market show: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "find",
+   "Shipped it"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/entities?q=Shipped+it",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "find"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market find <text>\ntico market find: error: the following arguments are required: text",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "edges"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/edges",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "edges",
+   "--from",
+   "src-1",
+   "--to",
+   "dst-1",
+   "--rel",
+   "rel-1",
+   "--as-of",
+   "as-of-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/edges?src=src-1&dst=dst-1&rel=rel-1&as_of=as-of-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "delta"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/delta?since=7d",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "delta",
+   "--since",
+   "since-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/delta?since=since-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "ask",
+   "question-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/ask",
+    {
+     "question": "question-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "ask"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market ask <question>\ntico market ask: error: the following arguments are required: question",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "report",
+   "--kind",
+   "new-entity",
+   "--claim",
+   "claim-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights",
+    {
+     "kind": "new-entity",
+     "about": "",
+     "claim": "claim-1",
+     "source_url": "",
+     "quote": "",
+     "confidence": "medium",
+     "urgent": false,
+     "source_ref": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "report",
+   "--kind",
+   "new-entity",
+   "--about",
+   "about-1",
+   "--claim",
+   "claim-1",
+   "--source",
+   "spend=Google Ads",
+   "--quote",
+   "quote-1",
+   "--confidence",
+   "high",
+   "--urgent",
+   "--source-ref",
+   "source-ref-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights",
+    {
+     "kind": "new-entity",
+     "about": "about-1",
+     "claim": "claim-1",
+     "source_url": "spend=Google Ads",
+     "quote": "quote-1",
+     "confidence": "high",
+     "urgent": true,
+     "source_ref": "source-ref-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "resolve",
+   "id-1",
+   "--status",
+   "applied"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights/id-1/resolve",
+    {
+     "status": "applied",
+     "resolution": "",
+     "applied_events": []
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "resolve",
+   "id-1",
+   "--status",
+   "applied",
+   "--resolution",
+   "resolution-1",
+   "--event",
+   "events-1",
+   "--event",
+   "events-1b"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights/id-1/resolve",
+    {
+     "status": "applied",
+     "resolution": "resolution-1",
+     "applied_events": [
+      "events-1",
+      "events-1b"
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "resolve"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market resolve <id>\ntico market resolve: error: the following arguments are required: id, --status",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "apply",
+   "id-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights/id-1/apply",
+    {
+     "evidence": {
+      "source_url": "",
+      "source_kind": "other",
+      "quote": "",
+      "our_read": ""
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "apply",
+   "id-1",
+   "--source",
+   "spend=Google Ads",
+   "--source-kind",
+   "source-kind-1",
+   "--quote",
+   "quote-1",
+   "--our-read",
+   "our-read-1",
+   "--entity-type",
+   "entity-type-1",
+   "--entity-name",
+   "entity-name-1",
+   "--entity-id",
+   "entity-id-1",
+   "--summary",
+   "summary-1",
+   "--tier",
+   "core",
+   "--new-id",
+   "new-id-1",
+   "--last-verified-at",
+   "last-verified-at-1",
+   "--edge-src",
+   "edge-src-1",
+   "--edge-rel",
+   "edge-rel-1",
+   "--edge-dst",
+   "edge-dst-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"date\",\n  \"detail\": \"last_verified_at must be a date (YYYY-MM-DD)\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "market",
+   "apply"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market apply <id>\ntico market apply: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "import",
+   "file-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "import",
+   "file-1",
+   "--dry-run",
+   "--note",
+   "note-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "import"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market import <file>\ntico market import: error: the following arguments are required: file",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "sweep"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/curator/sweep",
+    {
+     "today": null,
+     "unverified": []
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "sweep",
+   "--today",
+   "today-1",
+   "--unverified",
+   "unverified-1",
+   "--unverified",
+   "unverified-1b"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/curator/sweep",
+    {
+     "today": "today-1",
+     "unverified": [
+      {
+       "id": "unverified-1",
+       "look_for": ""
+      },
+      {
+       "id": "unverified-1b",
+       "look_for": ""
+      }
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "refresh"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/delta/refresh",
+    {
+     "today": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "refresh",
+   "--today",
+   "today-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/delta/refresh",
+    {
+     "today": "today-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "page",
+   "name-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/pages/name-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "page",
+   "name-1",
+   "--body-file",
+   "body-file-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'body-file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "page"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market page <name>\ntico market page: error: the following arguments are required: name",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "add",
+   "entity-id-1",
+   "url-1"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_add",
+    {
+     "entity_id": "entity-id-1",
+     "kind": "other",
+     "operation_id": null,
+     "url": "url-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/watches",
+    {
+     "entity_id": "entity-id-1",
+     "url": "url-1",
+     "kind": "other"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "add",
+   "entity-id-1",
+   "url-1",
+   "--kind",
+   "pricing"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_add",
+    {
+     "entity_id": "entity-id-1",
+     "kind": "pricing",
+     "operation_id": null,
+     "url": "url-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/watches",
+    {
+     "entity_id": "entity-id-1",
+     "url": "url-1",
+     "kind": "pricing"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "add"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market watch add <entity_id> <url>\ntico market watch add: error: the following arguments are required: entity_id, url",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/watches",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "list",
+   "--entity",
+   "entity-id-1"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_list",
+    {
+     "entity_id": "entity-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/watches?entity_id=entity-id-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "stop",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_stop",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/watches/id-1/stop",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "stop"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market watch stop <id>\ntico market watch stop: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "check"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_check",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/watches/check",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "briefing",
+   "post",
+   "--week",
+   "week-1",
+   "--title",
+   "Launch",
+   "--body-file",
+   "body-file-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'body-file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "briefing",
+   "post",
+   "--week",
+   "week-1",
+   "--title",
+   "Launch",
+   "--body-file",
+   "body-file-1",
+   "--items-file",
+   "items-file-1",
+   "--answers-file",
+   "answers-file-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'body-file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "briefing",
+   "latest"
+  ],
+  "tools": [
+   [
+    "tico_market_briefing_latest",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/briefings/latest",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "define"
+  ],
+  "tools": [
+   [
+    "tico_market_define",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "market/definition",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "define",
+   "--description",
+   "description-1",
+   "--root-name",
+   "root-name-1",
+   "--include",
+   "includes-1",
+   "--include",
+   "includes-1b",
+   "--exclude",
+   "excludes-1",
+   "--exclude",
+   "excludes-1b",
+   "--rule",
+   "counting-rules-1",
+   "--rule",
+   "counting-rules-1b",
+   "--year",
+   "5",
+   "--geography",
+   "geography-1",
+   "--param",
+   "params-1",
+   "--param",
+   "params-1b"
+  ],
+  "tools": [
+   [
+    "tico_market_define",
+    {
+     "counting_rules": [
+      "counting-rules-1",
+      "counting-rules-1b"
+     ],
+     "description": "description-1",
+     "excludes": [
+      "excludes-1",
+      "excludes-1b"
+     ],
+     "geography": "geography-1",
+     "includes": [
+      "includes-1",
+      "includes-1b"
+     ],
+     "operation_id": null,
+     "params": [
+      "params-1",
+      "params-1b"
+     ],
+     "root_name": "root-name-1",
+     "year": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"'params-1': use name=number\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "market",
+   "segment",
+   "add",
+   "name-1"
+  ],
+  "tools": [
+   [
+    "tico_market_segment_add",
+    {
+     "name": "name-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/segments",
+    {
+     "name": "name-1",
+     "parent_id": null,
+     "summary": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "segment",
+   "add",
+   "name-1",
+   "--parent",
+   "parent-id-1",
+   "--summary",
+   "summary-1"
+  ],
+  "tools": [
+   [
+    "tico_market_segment_add",
+    {
+     "name": "name-1",
+     "operation_id": null,
+     "parent_id": "parent-id-1",
+     "summary": "summary-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/segments",
+    {
+     "name": "name-1",
+     "parent_id": "parent-id-1",
+     "summary": "summary-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "segment",
+   "add"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market segment add <name>\ntico market segment add: error: the following arguments are required: name",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "segment",
+   "tree"
+  ],
+  "tools": [
+   [
+    "tico_market_segment_tree",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/spend",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"tree\": [\n    \"Total 2026: $3.00B ($2.50B to $4.00B)\",\n    \"Office software [all]: not sized\",\n    \"  Small offices [smb]: $3.00B ($2.50B to $4.00B), top_down, medium, proposed  DISAGREE\"\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "add",
+   "--segment",
+   "segment-id-1",
+   "--method",
+   "top_down",
+   "--low",
+   "2.5",
+   "--high",
+   "2.5"
+  ],
+  "tools": [
+   [
+    "tico_market_size_add",
+    {
+     "high_usd": 2.5,
+     "low_usd": 2.5,
+     "method": "top_down",
+     "operation_id": null,
+     "segment_id": "segment-id-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/sizes",
+    {
+     "segment_id": "segment-id-1",
+     "method": "top_down",
+     "low_usd": 2.5,
+     "high_usd": 2.5,
+     "evidence": []
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"s1\",\n  \"segment\": \"smb\",\n  \"method\": \"top_down\",\n  \"low\": 2.5,\n  \"high\": 4.0,\n  \"status\": \"proposed\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "add",
+   "--segment",
+   "segment-id-1",
+   "--method",
+   "top_down",
+   "--spend",
+   "2.5",
+   "--low",
+   "2.5",
+   "--high",
+   "2.5",
+   "--formula",
+   "formula-1",
+   "--param",
+   "params-1",
+   "--param",
+   "params-1b",
+   "--arithmetic",
+   "arithmetic-1",
+   "--growth",
+   "2.5",
+   "--year",
+   "5",
+   "--dimension",
+   "offering",
+   "--basis",
+   "product",
+   "--confidence",
+   "high",
+   "--overlaps",
+   "overlaps-1",
+   "--spread",
+   "spread-1",
+   "--evidence",
+   "evidence-ids-1",
+   "--evidence",
+   "evidence-ids-1b",
+   "--evidence-url",
+   "evidence-url-1",
+   "--quote",
+   "quote-1",
+   "--source-kind",
+   "source-kind-1",
+   "--our-read",
+   "our-read-1",
+   "--accept"
+  ],
+  "tools": [
+   [
+    "tico_market_size_add",
+    {
+     "accept": true,
+     "arithmetic": "arithmetic-1",
+     "basis": "product",
+     "confidence": "high",
+     "dimension": "offering",
+     "evidence_ids": [
+      "evidence-ids-1",
+      "evidence-ids-1b"
+     ],
+     "evidence_url": "evidence-url-1",
+     "formula": "formula-1",
+     "growth_pct": 2.5,
+     "high_usd": 2.5,
+     "low_usd": 2.5,
+     "method": "top_down",
+     "operation_id": null,
+     "our_read": "our-read-1",
+     "overlaps": "overlaps-1",
+     "params": [
+      "params-1",
+      "params-1b"
+     ],
+     "quote": "quote-1",
+     "segment_id": "segment-id-1",
+     "source_kind": "source-kind-1",
+     "spend_usd": 2.5,
+     "spread": "spread-1",
+     "year": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"'params-1': use name=number\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "accept",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_market_size_decide",
+    {
+     "decision": "accept",
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/sizes/id-1/accept",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"s1\",\n  \"segment\": \"smb\",\n  \"method\": \"top_down\",\n  \"low\": 2.5,\n  \"high\": 4.0,\n  \"status\": \"proposed\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "accept"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market size accept <id>\ntico market size accept: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "reject",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_market_size_decide",
+    {
+     "decision": "reject",
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/sizes/id-1/reject",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"s1\",\n  \"segment\": \"smb\",\n  \"method\": \"top_down\",\n  \"low\": 2.5,\n  \"high\": 4.0,\n  \"status\": \"proposed\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "reject"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market size reject <id>\ntico market size reject: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "params",
+   "id-1",
+   "--param",
+   "params-1",
+   "--param",
+   "params-1b"
+  ],
+  "tools": [
+   [
+    "tico_market_size_decide",
+    {
+     "decision": "params",
+     "id": "id-1",
+     "operation_id": null,
+     "params": [
+      "params-1",
+      "params-1b"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"'params-1': use name=number\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "params"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market size params <id>\ntico market size params: error: the following arguments are required: id, --param",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_market_size_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/spend",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"sizes\": [\n    {\n      \"id\": \"s1\",\n      \"segment\": \"Small offices\",\n      \"method\": \"top_down\",\n      \"low\": 2.5,\n      \"high\": 4.0,\n      \"status\": \"proposed\",\n      \"segment_id\": \"smb\"\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "list",
+   "--segment",
+   "segment-1"
+  ],
+  "tools": [
+   [
+    "tico_market_size_list",
+    {
+     "operation_id": null,
+     "segment": "segment-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/spend",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"sizes\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "figure",
+   "add",
+   "--entity",
+   "entity-id-1",
+   "--segment",
+   "segment-id-1",
+   "--metric",
+   "revenue",
+   "--kind",
+   "reported",
+   "--as-of",
+   "as-of-1"
+  ],
+  "tools": [
+   [
+    "tico_market_figure_add",
+    {
+     "as_of": "as-of-1",
+     "entity_id": "entity-id-1",
+     "kind": "reported",
+     "metric": "revenue",
+     "operation_id": null,
+     "segment_id": "segment-id-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/figures",
+    {
+     "entity_id": "entity-id-1",
+     "segment_id": "segment-id-1",
+     "metric": "revenue",
+     "kind": "reported",
+     "as_of": "as-of-1",
+     "evidence": []
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"f1\",\n  \"entity\": \"acme\",\n  \"segment\": \"smb\",\n  \"value\": 2.5\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "figure",
+   "add",
+   "--entity",
+   "entity-id-1",
+   "--segment",
+   "segment-id-1",
+   "--metric",
+   "revenue",
+   "--value",
+   "2.5",
+   "--text",
+   "Shipped it",
+   "--kind",
+   "reported",
+   "--as-of",
+   "as-of-1",
+   "--evidence",
+   "evidence-id-1",
+   "--evidence-url",
+   "evidence-url-1",
+   "--quote",
+   "quote-1",
+   "--source-kind",
+   "source-kind-1",
+   "--our-read",
+   "our-read-1"
+  ],
+  "tools": [
+   [
+    "tico_market_figure_add",
+    {
+     "as_of": "as-of-1",
+     "entity_id": "entity-id-1",
+     "evidence_id": "evidence-id-1",
+     "evidence_url": "evidence-url-1",
+     "kind": "reported",
+     "metric": "revenue",
+     "operation_id": null,
+     "our_read": "our-read-1",
+     "quote": "quote-1",
+     "segment_id": "segment-id-1",
+     "source_kind": "source-kind-1",
+     "text": "Shipped it",
+     "value": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/figures",
+    {
+     "entity_id": "entity-id-1",
+     "segment_id": "segment-id-1",
+     "metric": "revenue",
+     "value": 2.5,
+     "text": "Shipped it",
+     "kind": "reported",
+     "as_of": "as-of-1",
+     "evidence_id": "evidence-id-1",
+     "evidence": [
+      {
+       "source_url": "evidence-url-1",
+       "source_kind": "source-kind-1",
+       "quote": "quote-1",
+       "our_read": "our-read-1"
+      }
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"f1\",\n  \"entity\": \"acme\",\n  \"segment\": \"smb\",\n  \"value\": 2.5\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "sources"
+  ],
+  "tools": [
+   [
+    "tico_market_sources",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/sources",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "sources",
+   "--add-file",
+   "add-file-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'add-file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "spend"
+  ],
+  "tools": [
+   [
+    "tico_market_spend",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/spend",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"year\": 2026,\n  \"total\": {\n    \"spend_usd\": 3000000000.0,\n    \"low_usd\": 2500000000.0,\n    \"high_usd\": 4000000000.0\n  },\n  \"segments\": [\n    {\n      \"id\": \"all\",\n      \"name\": \"Office software\",\n      \"depth\": 0,\n      \"size\": null,\n      \"estimates\": []\n    },\n    {\n      \"id\": \"smb\",\n      \"name\": \"Small offices\",\n      \"depth\": 1,\n      \"estimates\": [\n        {\n          \"id\": \"s1\",\n          \"segment\": \"smb\",\n          \"method\": \"top_down\",\n          \"low\": 2.5,\n          \"high\": 4.0,\n          \"status\": \"proposed\"\n        }\n      ],\n      \"disagree\": true,\n      \"size\": {\n        \"id\": \"s1\",\n        \"segment\": \"smb\",\n        \"method\": \"top_down\",\n        \"low\": 2.5,\n        \"high\": 4.0,\n        \"status\": \"proposed\",\n        \"spend_usd\": 3000000000.0,\n        \"low_usd\": 2500000000.0,\n        \"high_usd\": 4000000000.0,\n        \"confidence\": \"medium\"\n      }\n    }\n  ],\n  \"tree\": [\n    \"Total 2026: $3.00B ($2.50B to $4.00B)\",\n    \"Office software [all]: not sized\",\n    \"  Small offices [smb]: $3.00B ($2.50B to $4.00B), top_down, medium, proposed  DISAGREE\"\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "spend",
+   "--dimension",
+   "offering",
+   "--basis",
+   "product",
+   "--year",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_market_spend",
+    {
+     "basis": "product",
+     "dimension": "offering",
+     "operation_id": null,
+     "year": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/spend?dimension=offering&basis=product&year=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"year\": 2026,\n  \"total\": {\n    \"spend_usd\": 3000000000.0,\n    \"low_usd\": 2500000000.0,\n    \"high_usd\": 4000000000.0\n  },\n  \"segments\": [\n    {\n      \"id\": \"all\",\n      \"name\": \"Office software\",\n      \"depth\": 0,\n      \"size\": null,\n      \"estimates\": []\n    },\n    {\n      \"id\": \"smb\",\n      \"name\": \"Small offices\",\n      \"depth\": 1,\n      \"estimates\": [\n        {\n          \"id\": \"s1\",\n          \"segment\": \"smb\",\n          \"method\": \"top_down\",\n          \"low\": 2.5,\n          \"high\": 4.0,\n          \"status\": \"proposed\"\n        }\n      ],\n      \"disagree\": true,\n      \"size\": {\n        \"id\": \"s1\",\n        \"segment\": \"smb\",\n        \"method\": \"top_down\",\n        \"low\": 2.5,\n        \"high\": 4.0,\n        \"status\": \"proposed\",\n        \"spend_usd\": 3000000000.0,\n        \"low_usd\": 2500000000.0,\n        \"high_usd\": 4000000000.0,\n        \"confidence\": \"medium\"\n      }\n    }\n  ],\n  \"tree\": [\n    \"Total 2026: $3.00B ($2.50B to $4.00B)\",\n    \"Office software [all]: not sized\",\n    \"  Small offices [smb]: $3.00B ($2.50B to $4.00B), top_down, medium, proposed  DISAGREE\"\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "research",
+   "description-1"
+  ],
+  "tools": [
+   [
+    "tico_market_research",
+    {
+     "description": "description-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/spend/research",
+    {
+     "description": "description-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "research"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market research <description>\ntico market research: error: the following arguments are required: description",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "report"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market report\ntico market report: error: the following arguments are required: --kind, --claim",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "find",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/entities?q=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "show",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/entities/1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "report",
+   "--kind",
+   "1",
+   "--claim",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market report: error: argument --kind: invalid choice: '1' (choose from new-entity, edge, property-change, correction, question, other)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "apply",
+   "1",
+   "--source-kind",
+   "1",
+   "--quote",
+   "1",
+   "--our-read",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights/1/apply",
+    {
+     "evidence": {
+      "source_url": "",
+      "source_kind": "1",
+      "quote": "1",
+      "our_read": "1"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "resolve",
+   "1",
+   "--status",
+   "1",
+   "--resolution",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market resolve: error: argument --status: invalid choice: '1' (choose from applied, merged, rejected, needs-human)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "import",
+   "1",
+   "--note",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "page",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/pages/1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "page",
+   "1",
+   "--body-file",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "add",
+   "1",
+   "1",
+   "--kind",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market watch add: error: argument --kind: invalid choice: '1' (choose from pricing, careers, changelog, docs, home, other, release)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "stop",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_stop",
+    {
+     "id": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/watches/1/stop",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "briefing",
+   "post",
+   "--week",
+   "1",
+   "--title",
+   "1",
+   "--body-file",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "segment"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "size"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "figure"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "report",
+   "--kind",
+   "1",
+   "--about",
+   "1",
+   "--claim",
+   "1",
+   "--source",
+   "1",
+   "--quote",
+   "1",
+   "--source-ref",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico market report: error: argument --kind: invalid choice: '1' (choose from new-entity, edge, property-change, correction, question, other)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "refresh",
+   "--today",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/delta/refresh",
+    {
+     "today": "1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "page",
+   "customer-themes"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/pages/customer-themes",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "report",
+   "--kind",
+   "other",
+   "--about",
+   "customer theme: 1",
+   "--claim",
+   "1",
+   "--source",
+   "1",
+   "--quote",
+   "1",
+   "--source-ref",
+   "meeting:1:1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights",
+    {
+     "kind": "other",
+     "about": "customer theme: 1",
+     "claim": "1",
+     "source_url": "1",
+     "quote": "1",
+     "confidence": "medium",
+     "urgent": false,
+     "source_ref": "meeting:1:1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "apply",
+   "1",
+   "--source-kind",
+   "meeting",
+   "--quote",
+   "1",
+   "--our-read",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights/1/apply",
+    {
+     "evidence": {
+      "source_url": "",
+      "source_kind": "meeting",
+      "quote": "1",
+      "our_read": "1"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "page",
+   "customer-themes",
+   "--body-file",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "report",
+   "--kind",
+   "new-entity",
+   "--about",
+   "1",
+   "--claim",
+   "1",
+   "--source",
+   "1",
+   "--quote",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights",
+    {
+     "kind": "new-entity",
+     "about": "1",
+     "claim": "1",
+     "source_url": "1",
+     "quote": "1",
+     "confidence": "medium",
+     "urgent": false,
+     "source_ref": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "apply",
+   "1",
+   "--source",
+   "1",
+   "--source-kind",
+   "site",
+   "--quote",
+   "1",
+   "--our-read",
+   "1",
+   "--entity-type",
+   "organization",
+   "--entity-name",
+   "1",
+   "--new-id",
+   "company/self",
+   "--summary",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights/1/apply",
+    {
+     "evidence": {
+      "source_url": "1",
+      "source_kind": "site",
+      "quote": "1",
+      "our_read": "1"
+     },
+     "entity": {
+      "type": "organization",
+      "name": "1",
+      "summary": "1",
+      "id": "company/self"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "apply",
+   "1",
+   "--source",
+   "1",
+   "--source-kind",
+   "1",
+   "--quote",
+   "1",
+   "--our-read",
+   "1",
+   "--entity-type",
+   "1",
+   "--entity-name",
+   "1",
+   "--summary",
+   "1",
+   "--edge-src",
+   "1",
+   "--edge-rel",
+   "1",
+   "--edge-dst",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights/1/apply",
+    {
+     "evidence": {
+      "source_url": "1",
+      "source_kind": "1",
+      "quote": "1",
+      "our_read": "1"
+     },
+     "entity": {
+      "type": "1",
+      "name": "1",
+      "summary": "1"
+     },
+     "edge": {
+      "src": "1",
+      "rel": "1",
+      "dst": "1"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "add",
+   "organization/1",
+   "https://1/pricing",
+   "--kind",
+   "pricing"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_add",
+    {
+     "entity_id": "organization/1",
+     "kind": "pricing",
+     "operation_id": null,
+     "url": "https://1/pricing"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/watches",
+    {
+     "entity_id": "organization/1",
+     "url": "https://1/pricing",
+     "kind": "pricing"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "add",
+   "organization/1",
+   "https://1/changelog",
+   "--kind",
+   "changelog"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_add",
+    {
+     "entity_id": "organization/1",
+     "kind": "changelog",
+     "operation_id": null,
+     "url": "https://1/changelog"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/watches",
+    {
+     "entity_id": "organization/1",
+     "url": "https://1/changelog",
+     "kind": "changelog"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "watch",
+   "add",
+   "organization/1",
+   "https://1/careers",
+   "--kind",
+   "careers"
+  ],
+  "tools": [
+   [
+    "tico_market_watch_add",
+    {
+     "entity_id": "organization/1",
+     "kind": "careers",
+     "operation_id": null,
+     "url": "https://1/careers"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/watches",
+    {
+     "entity_id": "organization/1",
+     "url": "https://1/careers",
+     "kind": "careers"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "define",
+   "--description",
+   "...",
+   "--root-name",
+   "...",
+   "--include",
+   "...",
+   "--exclude",
+   "...",
+   "--rule",
+   "...",
+   "--year",
+   "2026"
+  ],
+  "tools": [
+   [
+    "tico_market_define",
+    {
+     "counting_rules": [
+      "..."
+     ],
+     "description": "...",
+     "excludes": [
+      "..."
+     ],
+     "includes": [
+      "..."
+     ],
+     "operation_id": null,
+     "root_name": "...",
+     "year": 2026
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "market/definition",
+    {
+     "description": "...",
+     "root_name": "...",
+     "includes": [
+      "..."
+     ],
+     "excludes": [
+      "..."
+     ],
+     "counting_rules": [
+      "..."
+     ],
+     "year": 2026
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "segment",
+   "add",
+   "Name",
+   "--summary",
+   "one sentence"
+  ],
+  "tools": [
+   [
+    "tico_market_segment_add",
+    {
+     "name": "Name",
+     "operation_id": null,
+     "summary": "one sentence"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/segments",
+    {
+     "name": "Name",
+     "parent_id": null,
+     "summary": "one sentence"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "segment",
+   "add",
+   "Sub-segment",
+   "--parent",
+   "segment/name"
+  ],
+  "tools": [
+   [
+    "tico_market_segment_add",
+    {
+     "name": "Sub-segment",
+     "operation_id": null,
+     "parent_id": "segment/name"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/segments",
+    {
+     "name": "Sub-segment",
+     "parent_id": "segment/name",
+     "summary": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "add",
+   "--segment",
+   "segment/name",
+   "--method",
+   "bottom_up",
+   "--formula",
+   "buyers * adoption * price",
+   "--param",
+   "buyers=4000000",
+   "--param",
+   "price=300",
+   "--low",
+   "600000000",
+   "--high",
+   "2400000000",
+   "--evidence-url",
+   "https://...",
+   "--quote",
+   "what the source said",
+   "--arithmetic",
+   "the working, in words",
+   "--confidence",
+   "medium"
+  ],
+  "tools": [
+   [
+    "tico_market_size_add",
+    {
+     "arithmetic": "the working, in words",
+     "confidence": "medium",
+     "evidence_url": "https://...",
+     "formula": "buyers * adoption * price",
+     "high_usd": 2400000000.0,
+     "low_usd": 600000000.0,
+     "method": "bottom_up",
+     "operation_id": null,
+     "params": [
+      "buyers=4000000",
+      "price=300"
+     ],
+     "quote": "what the source said",
+     "segment_id": "segment/name"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/sizes",
+    {
+     "segment_id": "segment/name",
+     "method": "bottom_up",
+     "low_usd": 600000000.0,
+     "high_usd": 2400000000.0,
+     "formula": "buyers * adoption * price",
+     "arithmetic": "the working, in words",
+     "confidence": "medium",
+     "params": {
+      "buyers": 4000000.0,
+      "price": 300.0
+     },
+     "evidence": [
+      {
+       "source_url": "https://...",
+       "source_kind": "other",
+       "quote": "what the source said",
+       "our_read": ""
+      }
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"s1\",\n  \"segment\": \"smb\",\n  \"method\": \"top_down\",\n  \"low\": 2.5,\n  \"high\": 4.0,\n  \"status\": \"proposed\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "define",
+   "--param",
+   "smb_share=0.35"
+  ],
+  "tools": [
+   [
+    "tico_market_define",
+    {
+     "operation_id": null,
+     "params": [
+      "smb_share=0.35"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "market/definition",
+    {
+     "params": {
+      "smb_share": 0.35
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "figure",
+   "add",
+   "--entity",
+   "organization/name",
+   "--segment",
+   "segment/name",
+   "--metric",
+   "arr",
+   "--value",
+   "12000000",
+   "--kind",
+   "claimed",
+   "--as-of",
+   "2026-03",
+   "--evidence-url",
+   "https://...",
+   "--quote",
+   "..."
+  ],
+  "tools": [
+   [
+    "tico_market_figure_add",
+    {
+     "as_of": "2026-03",
+     "entity_id": "organization/name",
+     "evidence_url": "https://...",
+     "kind": "claimed",
+     "metric": "arr",
+     "operation_id": null,
+     "quote": "...",
+     "segment_id": "segment/name",
+     "value": 12000000.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/figures",
+    {
+     "entity_id": "organization/name",
+     "segment_id": "segment/name",
+     "metric": "arr",
+     "value": 12000000.0,
+     "kind": "claimed",
+     "as_of": "2026-03",
+     "evidence": [
+      {
+       "source_url": "https://...",
+       "source_kind": "other",
+       "quote": "...",
+       "our_read": ""
+      }
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"f1\",\n  \"entity\": \"acme\",\n  \"segment\": \"smb\",\n  \"value\": 2.5\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "size",
+   "accept",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_market_size_decide",
+    {
+     "decision": "accept",
+     "id": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/sizes/1/accept",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"s1\",\n  \"segment\": \"smb\",\n  \"method\": \"top_down\",\n  \"low\": 2.5,\n  \"high\": 4.0,\n  \"status\": \"proposed\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "report",
+   "--urgent"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico market report\ntico market report: error: the following arguments are required: --kind, --claim",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "market",
+   "resolve",
+   "1",
+   "--status",
+   "merged",
+   "--resolution",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights/1/resolve",
+    {
+     "status": "merged",
+     "resolution": "1",
+     "applied_events": []
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "delta",
+   "--since",
+   "1d"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/delta?since=1d",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "briefing",
+   "post",
+   "--week",
+   "2026-W44",
+   "--title",
+   "1",
+   "--body-file",
+   "briefing.md",
+   "--items-file",
+   "items.json",
+   "--answers-file",
+   "answers.json"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'briefing.md'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "page",
+   "overview"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/pages/overview",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "import",
+   "1",
+   "--dry-run",
+   "--note",
+   "Deep research: 1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "market",
+   "report",
+   "--kind",
+   "other",
+   "--about",
+   "1",
+   "--claim",
+   "1",
+   "--source",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "market/insights",
+    {
+     "kind": "other",
+     "about": "1",
+     "claim": "1",
+     "source_url": "1",
+     "quote": "",
+     "confidence": "medium",
+     "urgent": false,
+     "source_ref": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "market",
+   "show",
+   "company/self"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "market/entities/company/self",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]
