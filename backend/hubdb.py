@@ -4456,6 +4456,16 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
             "UPDATE task_links SET repo=?,number=?,updated_at=? WHERE id=?",
             (match.group(1) + "/" + match.group(2), int(match.group(3)), now(), link["id"]),
         )
+        from .item_sources import match_link
+
+        item = match_link(url)
+        if item:
+            # The item the link is (backend/item_sources), once per task: a second link to it keeps none.
+            conn.execute(
+                "UPDATE task_links SET source=?,item_type=?,item_key=? WHERE id=? AND NOT EXISTS (SELECT 1 FROM "
+                "task_links d WHERE d.task_id=? AND d.source=? AND d.item_type=? AND d.item_key=?)",
+                (*item, link["id"], task_id, *item),
+            )
         link = _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
     _task_event(conn, task_id, actor, "link", None, url, title)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))

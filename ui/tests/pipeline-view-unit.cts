@@ -142,7 +142,7 @@ const factories = (async () => {
 {
   const state = {id: 'product', pipelines: [{id: 'product', name: 'Product'}, {id: 'engineering', name: 'Engineering'}],
     draft: rec({stages: [stage('spec', 'Spec', {requirements: [{...req('page'), who_oks: 'people_with_exceptions'}]}),
-      stage('release', 'Release', {requirements: [req('in_release')]})]})};
+      stage('release', 'Release', {requirements: [{...req('item'), source: 'github', condition: 'in_release'}]})]})};
   const kinds = ctx.peReqHTML(state.draft.stages[0]!.requirements[0]!, 0, 0);
   assert.doesNotMatch(kinds, /later|disabled>/, 'every kind may be picked');
   assert.match(kinds, /<option value="in_release">In a release<\/option>/);
@@ -166,14 +166,23 @@ const factories = (async () => {
   assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {}, 'a switch off is not saved');
 
   const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]!);
-  assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="queue_prs">Queue PRs<\/option>/,
+  assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="act:github.queue">Queue PRs<\/option>/,
     'a stage files into another pipeline, not its own');
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'on_enter'}, 'file_into:engineering'));
   assert.deepEqual(plain(state.draft.stages[0]!.on_enter), {file_into: 'engineering'});
   assert.match(ctx.peOnEnterOptions(state, state.draft.stages[0]!), /value="file_into:engineering" selected/);
-  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'queue_prs'));
-  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {queue_prs: true});
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'act:github.queue'));
+  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {act: 'github.queue'});
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, ''));
   assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {});
+
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peRi: '0', peRf: 'kind'}, 'pr_merged'));
+  const merged = plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
+  assert.deepEqual([merged['kind'], merged['source'], merged['condition']], ['item', 'github', 'pr_merged'],
+    'a GitHub condition is saved as an item of source github');
+  assert.match(ctx.peReqHTML(state.draft.stages[0]!.requirements[0]!, 0, 0), /<option value="pr_merged" selected>/);
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peRi: '0', peRf: 'kind'}, 'owner_done'));
+  const done = plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
+  assert.deepEqual([done['kind'], done['source'], done['condition']], ['owner_done', null, null]);
 }
 factories.then(() => console.log('pipeline-view-unit: ok'), error => { console.error(error); process.exitCode = 1; });

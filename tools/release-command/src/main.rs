@@ -266,7 +266,7 @@ fn validate_and_tag(
         .run
         .ok_or("Dispatch not visible yet; inspect Actions and resume with --run")?;
     verify_run(state, candidate, id, false)?;
-    // Release Manager runs this in the background; the durable record resumes the same run after interruption.
+    // The Release Owner runs this in the background; the durable record resumes the same run after interruption.
     loop {
         let status = Command::new("gh")
             .args([

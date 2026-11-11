@@ -401,7 +401,7 @@ def _fit(card, t):
     )
     if kind and not SAME_KIND.get(kind, {kind}) & name and not ranked_here:
         # A designer is not the UX Writer, an engineer not a specialist; a job of one kind may be a template named by
-        # rank on the work itself ("Release Engineer" is the Release Manager, "Social Media Coordinator" the Social
+        # rank on the work itself ("Release Engineer" is the Release Owner, "Social Media Coordinator" the Social
         # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's, and only in the
         # departments its words name ("Software Development Engineer" is not the Learning and Development Specialist;
         # "Brand Designer" may be Marketing's Brand Owner).

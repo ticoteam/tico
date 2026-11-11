@@ -87,7 +87,7 @@ def _owners(record):
 
 
 def _kinds(record):
-    return {s["id"]: [r["kind"] for r in s["requirements"]] for s in record["stages"]}
+    return {s["id"]: [r["condition"] or r["kind"] for r in s["requirements"]] for s in record["stages"]}
 
 
 # ----------------------------------------------------------------------------- seats
@@ -188,7 +188,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         for s in ("engineering-build", "engineering-review-1", "engineering-fixes-2", "engineering-merge")
     ] == [1440, 120, 240, 120]
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
-    assert stages["engineering-merge"]["on_enter"] == {"queue_prs": True}
+    assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
     assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_with_exceptions")
     assert spec["settings"]["rubric"] == "Covers goal, scope, what done looks like"
@@ -201,7 +201,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         for s in ("engineering-review-1", "engineering-review-2")
         for r in stages[s]["requirements"]
     )
-    never = [r for s in stages.values() for r in s["requirements"] if r["kind"] in ("pr_merged", "in_release")]
+    never = [r for s in stages.values() for r in s["requirements"] if r["condition"] in ("pr_merged", "in_release")]
     assert len(never) == 2 and not any(r["can_push_past"] for r in never)
 
 
@@ -304,12 +304,12 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
             },
             {
                 "name": "Ship",
-                "on_enter": {"queue_prs": True},
+                "on_enter": {"act": "github.queue"},
                 "requirements": [
-                    {"kind": "pr_open"},
-                    {"kind": "checks_pass"},
-                    {"kind": "pr_merged"},
-                    {"kind": "in_release", "settings": {"release_repo": "acme/app", "prereleases": True}},
+                    PS.github("pr_open"),
+                    PS.github("checks_pass"),
+                    PS.github("pr_merged"),
+                    PS.github("in_release", release_repo="acme/app", prereleases=True),
                 ],
             },
         ],
@@ -326,7 +326,7 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
         "The release repo on Ship is owner/name, or empty for the server's.",
     ]
     saved = PS.save(c, ANA, record)
-    assert saved["stages"][1]["on_enter"] == {"queue_prs": True}
+    assert saved["stages"][1]["on_enter"] == {"act": "github.queue"}
 
 
 # ----------------------------------------------------------------------------- the handoff
@@ -334,7 +334,7 @@ def _spec_page(c, task, version=3):
     """The Spec page that counted on the task's visit to Spec, as task_pages.attach leaves it (track B)."""
     rid = c.execute("SELECT id FROM requirements WHERE stage_id='product-spec' AND kind='page'").fetchone()[0]
     c.execute(
-        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, heads, attached_by_id, "
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",
         (H.new_id(), task["visit"]["id"], rid, "f-spec", version, "{}", "bot:pm", H.now()),
     )

@@ -124,9 +124,8 @@ def pending(c: Any, visible_sql: str | None = None) -> list[str]:
         r[0]
         for r in c.execute(
             "SELECT t.id FROM tasks t WHERE t.status='open' AND EXISTS (SELECT 1 FROM requirements r "
-            "WHERE r.stage_id=t.stage_id AND r.kind='in_release' AND r.withdrawn_at IS NULL)"
-            + seen
-            + " ORDER BY t.created_at, t.id"
+            "WHERE r.stage_id=t.stage_id AND r.kind='item' AND r.source='github' AND r.condition='in_release' "
+            "AND r.withdrawn_at IS NULL)" + seen + " ORDER BY t.created_at, t.id"
         )
     ]
 
@@ -152,7 +151,8 @@ def may_release(c: Any, who: Any) -> bool:
         H.actor_id(row[0]) == me
         for row in c.execute(
             "SELECT DISTINCT p.manager_id FROM pipelines p JOIN stages s ON s.pipeline_id=p.id "
-            "JOIN requirements r ON r.stage_id=s.id WHERE r.kind='in_release' AND p.manager_id IS NOT NULL"
+            "JOIN requirements r ON r.stage_id=s.id WHERE r.kind='item' AND r.source='github' "
+            "AND r.condition='in_release' AND p.manager_id IS NOT NULL"
         )
     )
 

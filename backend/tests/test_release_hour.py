@@ -13,7 +13,11 @@ from backend.tests.helpers import engine as X
 ANA = X.ANA
 SHIP = (
     {"name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-    {"name": "Ship", "owner": "assignee", "requirements": [{"kind": "in_release"}]},
+    {
+        "name": "Ship",
+        "owner": "assignee",
+        "requirements": [{"kind": "item", "source": "github", "condition": "in_release"}],
+    },
 )
 
 

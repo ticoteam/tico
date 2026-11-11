@@ -1,12 +1,12 @@
-"""GitHub for the fault rig: `task_facts.GitHub` over the shared fake (backend/tests/helpers/fake_github.py, track C's),
+"""GitHub for the fault rig: `item_sources.github.GitHub` over the shared fake (backend/tests/helpers/fake_github.py, track C's),
 with webhooks, CI, a merge queue that lands or drops PRs, and the faults.
 
 - Every change (a PR opened, a push, checks finishing, a close, a merge, a queue removal, a release) sends a webhook:
   a `Delivery` with its own delivery id and the fact as GitHub had it then, at a version taken when it was sent.
   `deliver` takes the ones that are due the way the server's webhook does (contract section 7): drop a delivery id seen
-  before (`task_facts.seen_delivery`), then `task_facts.save_and_settle` (a PR) or `save_release` (a release).
+  before (`item_sources.github.seen_delivery`), then `item_sources.github.save_and_settle` (a PR) or `save_release` (a release).
 - With faults on, a webhook may be lost, sent twice, or late (so they arrive out of order), and GitHub may be down for a
-  while: every call raises, and webhooks wait until it is back. Only the 5-minute re-read (`task_facts.refresh`) finds
+  while: every call raises, and webhooks wait until it is back. Only the 5-minute re-read (`item_sources.github.refresh`) finds
   what a lost webhook said.
 - CI: checks start pending on a new commit and finish later (`ci`). The merge queue (`land`) merges a queued PR whose
   checks pass after a few minutes, or, as a fault, takes it out with the check that failed there.
@@ -92,7 +92,7 @@ class RigGitHub:
     _version: int = 0
     log: Callable[[str], None] = lambda _text: None
 
-    # ------------------------------------------------------------------ task_facts.GitHub
+    # ------------------------------------------------------------------ item_sources.github.GitHub
     def _up(self, call: str) -> None:
         self.stats[f"call {call}"] += 1
         if self.is_down():
@@ -280,7 +280,7 @@ class RigGitHub:
         self._send(event, repo, number=number, fact=fact)
 
     def _send(self, event: str, repo: str, **what: Any) -> None:
-        from backend import task_facts as TF
+        from backend.item_sources import github as TF
 
         H = _h()
         self._n += 1
@@ -313,11 +313,11 @@ class RigGitHub:
             return 0
         now = _h().now()
         due = sorted((d for d in self.outbox if d.due <= now), key=lambda d: (d.due, d.seq))
-        from backend import task_facts as TF
+        from backend.item_sources import github as TF
 
         for d in due:
             self.outbox.remove(d)
-            # As on the server (task_facts.webhook): a pull_request webhook's version is when GitHub sent it, any
+            # As on the server (item_sources.github.webhook): a pull_request webhook's version is when GitHub sent it, any
             # other's is when it arrives, so a late check run or release is newer than what came before it.
             self._version = max(TF.version_now(), self._version + 1)
             if d.event != "pull_request":
@@ -339,7 +339,8 @@ def take(c: Any, d: Delivery) -> bool:
     """One webhook, as the server's webhook takes it: False for a delivery seen before."""
     from backend import release_schedule_routes as RS
     from backend import task_engine as E
-    from backend import task_facts as TF
+    from backend import item_metadata as IM
+    from backend.item_sources import github as TF
 
     if TF.seen_delivery(c, d.id, d.event):
         return False
@@ -349,21 +350,20 @@ def take(c: Any, d: Delivery) -> bool:
         tasks = list(RS.pending(c))
     else:
         assert d.fact is not None and d.number is not None
-        # What the server's webhook does with a PR's fact (task_facts.webhook, then save_and_settle): save it, the one
+        # What the server's webhook does with a PR's fact (item_sources.github.webhook, then save_and_settle): save it, the one
         # wake when it left the queue, the Merge stage's reactions (a late fact queued, "Changed after OK"), and a
         # nudge of the tasks that link it. A pull_request webhook's fact is the whole PR, as the re-read sees it; one
         # older than the saved fact is not saved, and an open PR is read in full on the next pass. A check run only
         # changes the checks of a PR whose saved head it is on; on a head not saved yet it has the PR read in full.
         old = TF.pr(c, d.repo, d.number)
-        reread = "UPDATE pr_facts SET read_at='' WHERE repo=? AND number=? AND state='open'"
         if d.event == "check_run":
             if old and old["state"] == "open" and old["head_sha"] == d.fact["head_sha"]:
                 TF.save_and_settle(c, d.repo, d.number, {"checks": d.fact["checks"]}, d.version)
             elif old:
-                c.execute(reread, (d.repo, d.number))
+                IM.mark_due(c, TF.SOURCE, TF.PR, TF.pr_key(d.repo, d.number))
             return True
-        if old and int(old["fact_version"]) > d.version:
-            c.execute(reread, (d.repo, d.number))
+        if old and int(old["metadata_version"]) > d.version:
+            IM.mark_due(c, TF.SOURCE, TF.PR, TF.pr_key(d.repo, d.number))
             return True
         TF.save_and_settle(c, d.repo, d.number, d.fact, d.version)
         return True
@@ -377,9 +377,9 @@ def linked(c: Any, repo: str, number: int) -> list[str]:
     return [
         str(r[0])
         for r in c.execute(
-            "SELECT DISTINCT l.task_id FROM task_links l JOIN tasks t ON t.id = l.task_id WHERE l.kind='pr' "
-            "AND lower(l.repo)=lower(?) AND l.number=? AND t.status='open' AND t.pipeline_id IS NOT NULL "
+            "SELECT DISTINCT l.task_id FROM task_links l JOIN tasks t ON t.id = l.task_id WHERE l.source='github' "
+            "AND l.item_type='pr' AND l.item_key=? AND t.status='open' AND t.pipeline_id IS NOT NULL "
             "ORDER BY l.task_id",
-            (repo, int(number)),
+            (f"{repo}#{int(number)}",),
         ).fetchall()
     ]

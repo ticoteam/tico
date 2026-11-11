@@ -100,7 +100,7 @@ def idea_to_done(r: SoftRig) -> None:
     r.pr(e, 2)
     r.settle()
     r.says(e, "Checks running")
-    expect(("github", None) in r.waits(e), f"running checks wait on {r.waits(e)}, not GitHub")
+    expect(("source", "github") in r.waits(e), f"running checks wait on {r.waits(e)}, not GitHub")
     r.settle(r.gh.ci_s)
 
     # 4. Review 1 at the head; a new commit puts it back to the reviewer (scenario 28), who attaches again.
@@ -231,9 +231,9 @@ def presets(r: SoftRig) -> None:
     want = {"Build": BUILDER, "Review 1": REVIEWER_1, "Review 2": REVIEWER_2, "Merge": RELEASE, "Release": RELEASE}
     expect(owners == want, f"owners {owners}")
     expect(stages["In development"]["on_enter"] == {"file_into": ENGINEERING}, "In development files")
-    expect(stages["Merge"]["on_enter"] == {"queue_prs": True}, "Merge queues")
+    expect(stages["Merge"]["on_enter"] == {"act": "github.queue"}, "Merge queues")
     for name, kind in (("Merge", "pr_merged"), ("Release", "in_release")):
-        found = [q for q in stages[name]["requirements"] if q["kind"] == kind]
+        found = [q for q in stages[name]["requirements"] if q["condition"] == kind]
         expect(found and not found[0]["can_push_past"], f"{name}'s {kind} can be pushed past")
 
 
@@ -608,7 +608,7 @@ def queue_entry_vanishes(r: SoftRig) -> None:
     "A webhook sent before the merge arrives after it, its PR still open: merged stays merged",
 )
 def late_webhook_after_merge(r: SoftRig) -> None:
-    from backend import task_facts as TF
+    from backend.item_sources import github as TF
 
     r.preset(ENGINEERING)
     e = r.task(ANA, "Late hook", ENGINEERING)
@@ -672,7 +672,7 @@ def github_5xx_for_hours(r: SoftRig) -> None:
     r.gh.down_until = S._h().shift(r.w.now(), seconds=6 * 3600)
     r.settle(3600)
     r.says(e, "In the merge queue")
-    expect(("github", None) in r.waits(e), f"an hour of 5xx waits on {r.waits(e)}, not GitHub")
+    expect(("source", "github") in r.waits(e), f"an hour of 5xx waits on {r.waits(e)}, not GitHub")
     r.settle(3600 + 10)
     r.says(e, f"GitHub hasn't answered about {REF_1} for 2 hours")
     expect(r.waits(e) == [("bot", RELEASE)], f"two hours of 5xx wait on {r.waits(e)}, not the Release Owner")
@@ -718,7 +718,7 @@ def jev_unsure(r: SoftRig) -> None:
     "webhooks-out-of-order", "Webhooks repeated and out of order: the newest fact wins, each taken once", covers=(32,)
 )
 def webhooks_out_of_order(r: SoftRig) -> None:
-    from backend import task_facts as TF
+    from backend.item_sources import github as TF
 
     task = r.task(ANA, "Wire up the API", assignee=BUILDER)
     r.pr(task, 7)
