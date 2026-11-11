@@ -341,6 +341,11 @@ def run(args, who=None):
 
     if fn in ORG_COMMANDS:  # people, bots, the org chart, usage, billing and reach (clients/hubtools_org.py)
         return via_tool(client, args)
+
+    from clients import hubtools_connections
+
+    if fn in hubtools_connections.COMMANDS:
+        return hubtools_connections.run_command(client, args)
     if args.cmd == "inbound":
         return via_tool(client, args)
     if args.cmd == "rules":
@@ -1864,7 +1869,7 @@ def contacts_text(fn, result):
 def main(args, who=None, fields=None):
     """Run one parsed command and print its answer. `fields`: the global --fields (clients/profiles.py pick), which
     prints only those fields as JSON, in place of any text rendering. Returns the exit code (clients/cli_plumbing.py)."""
-    from clients import cli_plumbing, hubtools
+    from clients import cli_plumbing, hubtools, hubtools_connections
 
     try:
         result = run(args, who)
@@ -1932,6 +1937,8 @@ def main(args, who=None, fields=None):
             print(json.dumps(result, indent=2))
         if args.fn == "file approved":
             return 0 if isinstance(result, dict) and result.get("approved") else 1
+        if (code := hubtools_connections.exit_code(args.fn, result)) is not None:
+            return code
         if isinstance(result, dict) and result.get("readback"):  # what a relation write stored, direction and all
             for line in result["readback"]:
                 print("tico: stored: " + str(line), file=sys.stderr)
