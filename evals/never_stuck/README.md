@@ -42,9 +42,7 @@ fails on a known bug is a strict expected failure: when the bug is fixed the tes
 
 ## Known engine bugs
 
-| Name | Seen in | What happens |
-| --- | --- | --- |
-| `mention-not-in-needs` | scenario 43 | An @ of a person on a task puts nothing in their Needs you (C28 is not built). |
+None.
 
 A sweep tags each failure with the bug it matches, so a new one stands out as `[NEW]`; `--allow-known` makes only new
 ones fail the run. When a bug is fixed, drop it from `sim.KNOWN_BUGS` or `scenarios.FAILING`.
