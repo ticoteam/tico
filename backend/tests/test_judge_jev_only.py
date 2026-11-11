@@ -60,9 +60,8 @@ def test_no_judge_call_reaches_a_model_other_than_jev(api, wire):
     with store.read() as c:
         engine = B.server_engine(store, c, api.app.state.judge)
     assert engine.model == J.GATEWAY_MODEL
-    # A caller that names a higher level (backend/pipeline_judges.py names Low) still gets Jev.
     with pytest.raises(J.JudgeError) as failed:
-        engine({"team": "Acme"}, QUESTIONS, "mail-triage@1", level="high")
+        engine({"team": "Acme"}, QUESTIONS, "mail-triage@1")
     assert failed.value.code == "unavailable"
     assert [r["url"] for r in wire["requests"]] == [GATEWAY, J.URL]
     _jev_only(wire["requests"])
@@ -126,3 +125,65 @@ def test_a_draft_still_runs_on_the_companys_own_model_and_sends_only_its_two_tex
     cursor = {"runtime": "cursor", "model": "cursor-auto", "enabled": ["cursor", "moonshot"]}
     assert updates.own_model(cursor, env={"OPENROUTER_API_KEY": "synthetic"})[2] == "moonshotai/kimi-k3"
     assert updates.own_model(cursor, env={}) is None
+
+
+def test_jev_failing_on_a_page_verdict_is_retried_then_a_persons_never_met(api, wire, monkeypatch):
+    """The Heartbeat's Jev step (page_verdicts.run, through the server's own engine) asks only Jev; a Jev that does not
+    answer is a try, never a verdict, and after TRIES the page is a person's to decide."""
+    import uuid
+
+    from backend import page_verdicts as V
+    from backend import task_engine as E
+    from backend import task_pages as TP
+    from backend import task_requirements as R
+    from backend.blobs import Blobs
+    from backend.store import H
+    from backend.tests.helpers import engine as X
+
+    store = api.app.state.store
+    store.blobs = Blobs(store.settings)
+    monkeypatch.setattr(P, "ENGINE", None)
+    monkeypatch.setattr(P, "_installed_store", store)
+    stages = ({"name": "Spec", "owner": "bot:writer", "requirements": [{"kind": "page", "line": "Spec page"}]},)
+    with store.transaction() as c:
+        for slug in ("writer", "manager"):
+            X.bot(c, slug)
+        X.pipeline(c, "product", "Product", stages, manager="bot:manager")
+        row = X.new_task(c, X.ANA, "Importer spec", "product", assignee="bot:writer")
+        data = b"<h1>Spec</h1><p>Done means the importer runs nightly.</p>"
+        digest, now, blob, fid = (
+            store.blobs.put(data, "text/html"),
+            H.now(),
+            H.new_id(),
+            "file-" + uuid.uuid4().hex[:24],
+        )
+        c.execute(
+            "INSERT INTO blobs (id, owner, digest, size, name, content_type, created_at) VALUES (?,?,?,?,?,?,?)",
+            (blob, "bot:writer", digest, len(data), "spec.html", "text/html", now),
+        )
+        c.execute(
+            "INSERT INTO bot_files (id, bot_id, scope, identity, title, kind, mime, locator, first_activity_at, "
+            "last_activity_at, current_version) VALUES (?,?,?,?,?,'file','text/html','tico_blob',?,?,1)",
+            (fid, "writer", "bot", fid, "Spec", now, now),
+        )
+        c.execute(
+            "INSERT INTO bot_file_versions (file_id, version, blob_id, digest, size, name, mime, actor, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (fid, 1, blob, digest, len(data), "spec.html", "text/html", "bot:writer", now),
+        )
+        seen = E.task(c, row["id"])["version"]
+        made = TP.attach(c, row["id"], "Spec page", "page:" + fid, "bot:writer", seen_version=seen)
+    at = H.now()
+    for tries in range(1, V.TRIES + 1):
+        at = H.shift(at, seconds=V.RETRY_S[-1] + 1)
+        assert V.run(store, at) == (1 if tries == V.TRIES else 0)
+        with store.read() as r:
+            verdict = V.get(r, made["file_id"], made["version"], made["rubric_hash"])
+        assert verdict["tries"] == tries and verdict["verdict"] in (None, "failed")
+    assert verdict["verdict"] == "failed" and verdict["p"] is None
+    assert wire["requests"]
+    _jev_only(wire["requests"])
+    with store.read() as r:
+        (standing,) = R.standings(r, E.task(r, row["id"]))
+        assert standing.line == "Jev couldn't check this"
+        assert E.task(r, row["id"])["stage"]["name"] == "Spec"

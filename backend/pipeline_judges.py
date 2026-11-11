@@ -43,10 +43,9 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger("tico.pipeline_judges")
 
-# The judge model: the name -> the Gateway's model id. Jev is Decide Low (clients/judge.py's level). It is the only judge.
+# The judge model: the name -> the Gateway's model id. Jev is the only judge.
 MODELS: dict[str, str] = {"jev": "tico-decide-low"}
 DEFAULT_MODEL = "jev"
-DECIDE_LEVELS = {"jev": "low"}
 QUESTION_SET = "pipeline-requirement"
 MET_AT, NOT_MET_AT = 0.8, 0.2
 REASON_BYTES = 500
@@ -179,7 +178,7 @@ def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], d
 
 
 def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]]":
-    """The engine the server asks: Decide's Low model (Jev) through judge.server_engine."""
+    """The engine the server asks: Jev, through judge.server_engine."""
 
     db: Any = store
 
@@ -188,7 +187,7 @@ def live_engine(store: "Store") -> "Callable[[str, dict[str, Any], dict[str, Any
             asks = judge.server_engine(store, c, judge.primary_engine(store.settings, store))
         if asks is None:
             raise JudgeError("unconfigured", "no decision model is configured on this server")
-        result = asks(state, questions, label, level=DECIDE_LEVELS[model])
+        result = asks(state, questions, label)
         p = _probability(result["answers"]["met"]["noul"])
         if p is None:
             raise JudgeError("shape", "the decision model's answer has no probability")
