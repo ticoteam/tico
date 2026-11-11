@@ -21,7 +21,9 @@ LIBRARIAN = "librarian"
 MARKET_TASK = "Set up the market map"
 ONLINE_SECONDS = 120
 # The checklist items a person may skip.
-OPTIONAL = ("github",)
+OPTIONAL = ("github", "subscription")
+# The tools a Claude or ChatGPT plan signs in to (model_subscriptions.KINDS with billing "subscription").
+PLAN_RUNTIMES = ("claude", "codex")
 
 
 def _person(who):
@@ -118,6 +120,25 @@ def _login_target(runners, wanted, c=None):
             ):
                 return {"runner_id": runner["id"], "runtime": name, "machine": runner["label"]}
     return None
+
+
+def _plan_signed_in(c):
+    """Whether a Claude or ChatGPT plan is signed in on one of the company's computers: the computer's own login for
+    that tool, when it is not an API key, or a company plan given to the computer that bills by subscription
+    (backend/model_subscriptions.py). A computer that is offline keeps its last report, so its sign-in still counts."""
+    from .model_subscriptions import KINDS, in_effect
+    from .readiness import api_key_login, computer_login
+
+    for runner in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
+        readiness = readiness_document(runner["readiness"])
+        for runtime in PLAN_RUNTIMES:
+            login = computer_login(readiness, runtime)
+            if login.get("installed") and login.get("authenticated") == "ready" and not api_key_login(login):
+                return True
+            given = in_effect(c, runner["id"], runtime)
+            if given and KINDS.get(given["kind"], {}).get("billing") == "subscription":
+                return True
+    return False
 
 
 def built_in(settings):
@@ -227,6 +248,15 @@ def checklist(c, who, settings, github):
             "#/settings",
             "devices" if wanted else "models",
             login=_login_target(runners, wanted, c),
+        ),
+        _item(
+            "subscription",
+            "Add a Claude or Codex subscription",
+            _plan_signed_in(c),
+            "Recommended. Use your own subscription for your own bots, within the provider's terms.",
+            "#/settings",
+            "devices",
+            optional=True,
         ),
         _item(
             "github",

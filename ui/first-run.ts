@@ -194,9 +194,13 @@ function frNextHTML(state: FrState): string {
   // Getting started's "Publish your strategy" (backend/getting_started.py): setup saved a draft, and publishing is a
   // deliberate click on the Strategy page.
   const strategy = GS?.items?.find(item => item.id === 'strategy');
+  // Getting started's subscription item (backend/getting_started.py): recommended, never required, so its line leaves once a
+  // plan is signed in on a computer or the item is skipped. Getting started loads on hosted installs only.
+  const plan = GS?.items?.find(item => item.id === 'subscription');
   // AI providers stays first: without one no bot runs.
   return `<p class="fr-providers" id="fr-providers"><strong>AI providers:</strong> ${esc(frProvidersName(state))}.
       <a href="#/settings" data-gs-tab="models">${S.config?.providers_configured === false ? 'Add an AI provider' : 'Change'}</a></p>
+    ${plan && !plan.done && !plan.skipped ? frSubscriptionHTML() : ''}
     ${strategy?.done ? '' : '<p class="fr-strategy" id="fr-strategy"><strong>Strategy:</strong> a draft. <a href="#/strategy">Publish your strategy</a></p>'}
     ${frGithubHTML()}
     <details class="fr-owners" id="fr-owners"><summary><span>${bots.length ? `You own all ${bots.length} bots.` : 'No bots yet.'}</span> <span class="linkish">Change</span></summary>
@@ -210,6 +214,11 @@ function frNextHTML(state: FrState): string {
       <p><a href="#/tools/keys" data-fr-link="credentials">Keys</a> · <a href="#/tools" data-fr-link="integrations">Tools</a></p>
       <p class="fr-secrets" data-fr-secrets><strong>Enter credentials in Tools › Keys, never in a chat with a bot.</strong> One pasted into a chat is leaked: rotate it.</p></details>`;
 }
+// The subscription line: a link to Settings > Computers, where a plan is signed in on a computer, and one quiet line
+// after it (docs/onboarding.md, After Create).
+const frSubscriptionHTML = () => `<p class="fr-subscription" id="fr-subscription">
+      <a href="#/settings" data-gs-tab="devices">Add a Claude or Codex subscription</a>
+      <span class="muted">Recommended. Use your own subscription for your own bots, within the provider's terms.</span></p>`;
 // The owner's line to connect GitHub (ui/app/github-nudge.ts). It is filled from the nudge's once-per-page answer, so
 // nothing polls and no screen waits on it; anyone else gets no line.
 const frGithubHTML = () => (S.me?.role === 'owner' ? '<p class="fr-github" id="fr-github" hidden></p>' : '');

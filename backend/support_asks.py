@@ -29,6 +29,7 @@ STEPS = {
     "signed_in": "signing in",
     "computer": "a computer online",
     "model": "a model signed in",
+    "subscription": "a Claude or Codex subscription",
     "github": "GitHub",
     "botops": "BotOps active",
     "first_bot": "a first bot",
