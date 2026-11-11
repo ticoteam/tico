@@ -122,7 +122,7 @@ async function scenario(browser: import('playwright').Browser, engine: string, m
     })().catch(error => { serverErrors.push(error.message); if (!response.headersSent) response.writeHead(500); response.end(); });
   });
   const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
-  const stored = () => step('read saved drafts and return snapshot', () => page.evaluate(() => ({draft: chatDrafts().coo, otherDraft: chatDrafts().other,
+  const stored = () => step('read saved drafts and return snapshot', () => page.evaluate(() => ({draft: chatDrafts().assistant, otherDraft: chatDrafts().other,
     fields: (JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null') as {fields?: Field[]} | null)?.fields || []})));
   const frames = (label: string) => step(label, () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)))));
   const readsSettled = (label: string) => step(label, async () => {
