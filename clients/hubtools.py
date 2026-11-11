@@ -194,17 +194,3 @@ __all__ = [
     "webhook_options",
     "write_fixture",
 ]
-
-
-# The connection tools (GitHub App, repositories and who may use them, whether the company can work) live in their own
-# module and register into this table, TOOLS, BY_NAME and AUDIENCE, when it is imported; last, so all of the above exists.
-from clients.commands import connections as hubtools_connections  # noqa: F401
-
-
-from clients.commands import computer_upkeep as hubtools_computers  # noqa: F401  (computers, runners, cloud machines, subscriptions)
-
-
-# ----------------------------------------------------------------------------- side modules
-# An area's tools live in their own module (clients/hubtools_<area>.py), which defines them with `tool` and joins
-# AUDIENCE, SHELL_ONLY and BY_NAME at its end. Imported last, so everything they read here is already defined.
-import clients.commands.pipelines  # noqa: F401

@@ -1,7 +1,7 @@
 """Computer tools: restart a computer's runner, which release each computer runs, this installation's own update, the
 shared Tico Cloud machine and the company's AI subscriptions. Each is a `tico` command and an MCP tool of the same name
-(`tico computer restart` is `tico_computer_restart`), registered into the one table in `clients/hubtools.py`, which
-imports this module at its end, after clients/commands/connections.py whose helpers it shares.
+(`tico computer restart` is `tico_computer_restart`), registered into the one table like any other module listed in
+clients/commands/__init__.py; it shares clients/commands/connections.py's command helpers.
 
 A computer is the machine (a Mac, a server, a cloud machine); its runner is the Tico software on it. Every tool composes
 the ordinary routes with the caller's own token (backend/computers_routes.py, backend/cloud_machines.py,
@@ -10,15 +10,17 @@ backend/model_subscriptions.py, the system/update routes). Pure stdlib, like hub
 
 from urllib.parse import quote
 
-from clients import hubtools as H
 from clients.tico import APIError
 
-tool, _s, _key = H.tool, H._s, H._key
-_FIRST = len(H.TOOLS)  # the tools below are H.TOOLS[_FIRST:]
+from clients.commands._registry import TOOLS, tool
+from clients.commands._requester import PEOPLE, REQUESTER, _as_person
+from clients.commands._schemas import _key, _s
+
+_FIRST = len(TOOLS)  # the tools below are TOOLS[_FIRST:]
 
 # As in clients/commands/connections.py. Nothing is imported from it at load: either module may be imported first.
-ADMINS = H.REQUESTER
-OWNER_ONLY = H.PEOPLE
+ADMINS = REQUESTER
+OWNER_ONLY = PEOPLE
 
 
 def _bots(api):
@@ -59,7 +61,7 @@ def _computer(rows, wanted):
     writes=True,
 )
 def computer_restart(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     row = _computer(_computers(person), args["computer"])
     done = person.post(f"computers/{_path(row['id'])}/restart", {}, key=_key(args))
     return {
@@ -79,7 +81,7 @@ def computer_restart(api, args):
     {},
 )
 def computer_versions(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     rows = []
     for r in _computers(person):
         update = r.get("update") if isinstance(r.get("update"), dict) else {}
@@ -165,7 +167,7 @@ def _not_cloud():
     {},
 )
 def cloud_show(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     seen = person.get("cloud-machines")
     if not seen.get("offered"):
         return _not_cloud()
@@ -208,7 +210,7 @@ def cloud_set(api, args):
         raise ValueError(
             "Name something to change: --size, --always-on/--no-always-on, --pause-minutes or --grow-storage"
         )
-    return H._as_person(api).post("cloud-machines/shared", body, key=_key(args))
+    return _as_person(api).post("cloud-machines/shared", body, key=_key(args))
 
 
 @tool(
@@ -221,7 +223,7 @@ def cloud_set(api, args):
     writes=True,
 )
 def cloud_replace(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     seen = person.get("cloud-machines")
     if not seen.get("offered"):
         return _not_cloud()
@@ -248,7 +250,7 @@ def cloud_replace(api, args):
     {},
 )
 def subscription_list(api, args):
-    person = H._as_person(api)
+    person = _as_person(api)
     subs = person.get("model-subscriptions")
     given = person.get("computer-subscriptions")
     labels = {r.get("id"): r.get("label") for r in _computers(person)}
@@ -271,7 +273,7 @@ def subscription_list(api, args):
 
 
 # ----------------------------------------------------------------------------- registration
-MINE = H.TOOLS[_FIRST:]
+MINE = TOOLS[_FIRST:]
 AUDIENCE = {
     **{t["name"]: ADMINS for t in MINE},
     **{
@@ -279,8 +281,6 @@ AUDIENCE = {
         for name in ("tico_upgrade_status", "tico_upgrade_check", "tico_upgrade_start", "tico_subscription_list")
     },
 }
-H.BY_NAME.update({t["name"]: t for t in MINE})
-H.AUDIENCE.update(AUDIENCE)
 
 
 # ----------------------------------------------------------------------------- the `tico` commands

@@ -2,6 +2,7 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+from clients.commands import computer_upkeep, connections, pipelines
 from clients.commands import org as hubtools_org
 
 from clients.commands._registry import TOOLS, tool
@@ -296,7 +297,10 @@ AUDIENCE = {
 }
 
 
-AUDIENCE.update(hubtools_org.AUDIENCE)
+# Modules that keep their own AUDIENCE (and SHELL_ONLY) lines next to their tools.
+for _module in (hubtools_org, connections, computer_upkeep, pipelines):
+    AUDIENCE.update(_module.AUDIENCE)
+SHELL_ONLY |= pipelines.SHELL_ONLY
 
 
 COUNSEL_TOOLS = frozenset(

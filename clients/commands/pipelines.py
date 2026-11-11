@@ -6,14 +6,9 @@ person's OK or send back on the task that waits on them, and `tico task wait` (a
 call that blocks for minutes has no place in a bot's turn or an MCP call). Every read and write is an ordinary API
 call made as the caller, so the server decides who may do what.
 
-A side module of the tool table. How one joins it (clients/commands/connections.py and computer_upkeep.py do the same):
-
-  1. define tools here with `hubtools.tool`; they append to `hubtools.TOOLS` like any other;
-  2. end with `_register()`: the module's AUDIENCE and SHELL_ONLY lines join hubtools', and BY_NAME is refreshed;
-  3. hubtools.py imports the module on its last line, so every client of the table (the CLI, both MCP doors, the
-     tests) sees its tools; importing the module first works too;
-  4. the command lines live in clients/hubcli_pipelines.py (stdlib only, so `tico --help` stays fast), called once from
-     hubcli.parser(); remotecli.run sends its COMMANDS through `via_tool`.
+Listed in clients/commands/__init__.py like any other tool module; `_access` merges its AUDIENCE and SHELL_ONLY lines.
+The command lines live in clients/hubcli_pipelines.py (stdlib only, so `tico --help` stays fast), called once from
+hubcli.parser(); remotecli.run sends its COMMANDS through `via_tool`.
 """
 
 import json
@@ -23,8 +18,10 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from clients import cli_plumbing
-from clients import hubtools as T
-from clients.hubtools import PEOPLE, TASK_ID, _key, _s, task_create, tool
+from clients.commands._registry import tool
+from clients.commands._requester import PEOPLE
+from clients.commands._schemas import TASK_ID, _key, _s
+from clients.commands.tasks import task_create
 from clients.tico import APIError
 
 PIPELINE = _s("The pipeline: its id or its name, any case (product, Engineering)")
@@ -993,12 +990,3 @@ AUDIENCE = {
     )
 }
 SHELL_ONLY = {"tico_task_wait"}
-
-
-def _register():
-    T.AUDIENCE.update(AUDIENCE)
-    T.SHELL_ONLY.update(SHELL_ONLY)
-    T.BY_NAME.update({t["name"]: t for t in T.TOOLS})
-
-
-_register()
