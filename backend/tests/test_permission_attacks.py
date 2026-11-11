@@ -180,8 +180,9 @@ def test_a_member_reads_no_hidden_bots_activity_and_no_registry_through_sql_or_g
 
 # ------------------------------------------------------------------ the company's own bots
 def test_a_member_cannot_take_a_company_bot_name_and_an_admin_cannot_edit_a_built_in_bot(api, botops):
-    for slug in ("assistant", "librarian"):
-        assert call(api, "post", "bots/register", "cara-test", {"slug": slug}).status_code == 403
+    # The built-in Assistant's slug is taken (409); a built-in name not made yet is a company name (403).
+    assert call(api, "post", "bots/register", "cara-test", {"slug": "assistant"}).status_code == 409
+    assert call(api, "post", "bots/register", "cara-test", {"slug": "librarian"}).status_code == 403
     assert call(api, "post", "bots/register", "ben-test", {"slug": "librarian"}).status_code == 200
     with api.app.state.store.read() as c:
         revision = c.execute("SELECT revision FROM bot_config WHERE bot='botops'").fetchone()[0]
