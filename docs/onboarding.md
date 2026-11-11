@@ -5,11 +5,11 @@ pages are behind it, dimmed, and the heading reads **Set up <company>** with **S
 and one primary button each:
 
 1. **What are you building?** The website and one line. The strategy research starts from them in the background.
-2. **Your team.** The default team, one switch per team, with each team's top seat first and the seats under it after
-   it. **Create team** makes it. **Change** opens the detailed [team builder](#the-team-builder); **I have a company
+2. **Your team.** The default team, one switch per team, each team's manager first and the seats under it after it; a
+   team of built-ins only is always on. **Create team** makes it. **Change** opens the detailed [team builder](#the-team-builder); **I have a company
    file** takes a company file instead.
-3. **What your bots run on.** The computer as one line, and **Add a Claude or Codex subscription** (recommended). Both are
-   optional; **Done** lands on Tasks.
+3. **What your bots run on.** Two rows: the computer, and **Add a Claude or Codex subscription** (recommended). Both
+   are optional; **Done** lands on Tasks. The model plan is a default, chosen in Settings > Models, not a step.
 
 Every team gets the assistant, BotOps, the Librarian and the Strategy Owner, and none of them can be archived.
 **Setup picks the chart, not the bots:** the built-ins and any seat marked `live` are the bots on day one, and they work
@@ -18,7 +18,7 @@ repository, computer slot or BotOps task until someone picks a bot for it ([A bo
 first team and get the most from it, read the [setup guide](onboarding-guide.md).
 
 Nobody else sees setup. Only the owner may write it, and the sidebar entry **Finish setup** appears only while it is
-unfinished; it opens the modal again. Before the team is created the modal has no close button and Escape does nothing;
+unfinished; it opens the modal again. Behind the modal the page is Tasks, so Tasks is the sidebar's current row. Before the team is created the modal has no close button and Escape does nothing;
 from step 3 on, ✕ or Escape closes it and lands on Tasks. On a phone the modal is a full page.
 
 While setup is open on a new install, **What's new** and its count wait, the phone's bottom bar and Ask's button are
@@ -47,8 +47,7 @@ reason. Health shows "Company file from setup not imported" until it is over: an
 included), the team is created in setup, or the server starts with the file fixed back to the one already applied or
 with no company file at all. A server start with the same broken file shows it again, until the company's setup is
 complete: once its team is in, a server start leaves it alone whatever the file says, and never shows a company file
-failure (one recorded before then is on setup's last step with **Dismiss**,
-`POST /api/v2/setup/company/import-failure/dismiss`). The reason names the role the file got wrong by its title
+failure (`POST /api/v2/setup/company/import-failure/dismiss` still clears one by hand). The reason names the role the file got wrong by its title
 ("Reviewer 1 names a role template this version of Tico doesn't have: …"); the server log has the field the check
 refused. A file names the template slugs of the release it was made for: a slug a later release renamed reads as its new
 one (`RENAMED` in backend/company_file/draft.py), so a file saved from an older setup page, or a plan HQ writes with an
@@ -100,8 +99,8 @@ returns the record, plus `default_chart` (the default chart by team, below) unti
 | Step | What it asks | What it stores |
 |---|---|---|
 | What are you building? | **Website** (optional) and **What you're building**: the team's one line, or a new idea in a few sentences. **Next** with either starts the strategy research (`POST /api/v2/strategy/draft-from`), which drafts the [strategy](strategy.md#setup) in the background, each section marked unconfirmed; nothing is shown or asked about it in setup. An address that is not a public website keeps you on the step with the reason. To retry interrupted research, see [Recover from interrupted strategy research](#recover-from-interrupted-strategy-research). On a fresh install with no team name yet it also asks the company name, and it asks your name only when Tico does not know it | `names.website` and `answers.building` (the website is stored as an `https://` address; anything that is not a public web address is refused with 422; finishing setup files the Librarian's market task from it), and `names.company_name`, `names.owner_name` when asked |
-| Your team | The default chart (`default_chart`: `[{team, on, roles: [{id, title, live, reports_to}]}]`, the chart formula's own, see [What Create does](#what-create-does)) as one row per team with a switch. A role's `reports_to` is the seat above it in the same team, or null for the team's top seats; a role that is not `live` is a Recruiting seat and is drawn muted. **Create team** makes it. **Change** opens the [team builder](#the-team-builder) and **Back** returns to the default team; **I have a company file** previews a file ([A company file](#a-company-file)) | `answers.teams_off`: the teams switched off. Creating with the default team calls `POST /api/v2/setup/complete` with nothing picked; with the builder, `answers.departments`, `answers.briefings` and `selected` as before; with a file, `POST /api/v2/setup/company/import` |
-| What your bots run on | After the team exists. The computer as one line: the online computers, or Tico Cloud computers on a hosted company, or **Add the computer your bots run on**, which opens the kind of computer (**A Mac**, **A Linux or cloud server (Docker)**), a one-time code or setup file and the commands. **Add a Claude or Codex subscription** opens Settings > Computers (Getting started's `subscription` item; gone once one is signed in or skipped). While no AI provider is chosen yet, the recommended [model choice](ai-gateway.md#choose-how-bots-get-their-models) is one more line, with the other choices behind it. **Done** lands on Tasks | The model choice, as Settings > Models saves it. The step polls `GET /api/v2/setup` every ten seconds and shows a computer once it answers |
+| Your team | The default chart (`default_chart`: `[{team, on, locked, roles: [{id, title, live, reports_to}]}]`, the chart formula's own, see [What Create does](#what-create-does)) as one row per team with a switch, the team's seats on one line (two at most): its top seats first, each followed by the seats under it. A role's `reports_to` is the seat above it in the same team, or null for the team's top seats; a role that is not `live` is a Recruiting seat and is drawn muted. A team whose seats are all built-ins is `locked`: always on, its switch disabled, and never left out by `teams_off`. **Create team** makes it. **Change** opens the [team builder](#the-team-builder) and **Back** returns to the default team; **I have a company file** previews a file ([A company file](#a-company-file)) | `answers.teams_off`: the teams switched off. Creating with the default team calls `POST /api/v2/setup/complete` with nothing picked; with the builder, `answers.departments`, `answers.briefings` and `selected` as before; with a file, `POST /api/v2/setup/company/import` |
+| What your bots run on | After the team exists. Two rows. The computer: the online computers, or Tico Cloud computers on a hosted company (ticked), or **Add the computer your bots run on**, which opens the kind of computer (**A Mac**, **A Linux or cloud server (Docker)**), a one-time code or setup file and the commands. **Add a Claude or Codex subscription** opens Settings > Computers (Getting started's `subscription` item; gone once one is signed in or skipped). The [model choice](ai-gateway.md#choose-how-bots-get-their-models) is not asked: it is in Settings > Models. **Done** lands on Tasks | Nothing. The step polls `GET /api/v2/setup` every ten seconds and shows a computer once it answers |
 
 **Removed from setup, still accepted.** Earlier setups also asked for the first bets (Your bets), names, About the
 team, an external agent and a review, and showed a screen after Create. Setup no longer shows them: the strategy draft

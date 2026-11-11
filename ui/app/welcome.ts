@@ -16,8 +16,9 @@ interface OnbPick { display_name?: string; reports_to?: string; instructions?: u
 interface OnbRunner { id?: string; label?: string | null; online?: boolean }
 /** One team of the default chart (company_import.default_teams): on unless switched off, and its seats. */
 /** One team of the default chart (GET /api/v2/setup `default_chart`): its seats in chart order, each with the seat it
- *  reports to inside the team (null for the team's top seats). The chart's teams and titles are the server's. */
-interface OnbTeam { team: string; on: boolean; roles: {id?: string; title: string; live: boolean; reports_to?: string | null}[] }
+ *  reports to inside the team (null for the team's top seats); `locked`: built-ins only, always on. The chart's teams
+ *  and titles are the server's. */
+interface OnbTeam { team: string; on: boolean; locked?: boolean; roles: {id?: string; title: string; live: boolean; reports_to?: string | null}[] }
 /** The company file the team was set up from. */
 interface OnbImported { seats?: number; deferred?: string[]; people?: {invited_at?: string | null}[] }
 interface OnbRecord {
@@ -241,7 +242,7 @@ function onbTeamHTML(state: OnbState): string {
   if (state.mode === 'file' && state.companyImport) return failed + onbFileTeamHTML(state.companyImport.preview) + onbActions(state, 'Create team');
   const teams = state.record.default_chart || [];
   return `${failed}<div class="onb-teams" role="group" aria-label="Teams">${teams.map(team => `<label class="onb-team" data-onb-team-row="${esc(team.team)}">
-      <input type="checkbox" class="people-switch" data-onb-team="${esc(team.team)}" aria-label="${esc(team.team)}"${team.on ? ' checked' : ''}>
+      <input type="checkbox" class="people-switch" data-onb-team="${esc(team.team)}" aria-label="${esc(team.team)}"${team.on || team.locked ? ' checked' : ''}${team.locked ? ' disabled' : ''}>
       <span class="onb-team-text"><strong>${esc(team.team)}</strong>${onbTeamRolesHTML(team)}</span>
       <span class="onb-team-n tnum" aria-hidden="true">${team.roles.length}</span></label>`).join('')}</div>
     <p class="onb-team-more"><button class="linkish" type="button" id="onb-change">Change</button>
@@ -249,18 +250,14 @@ function onbTeamHTML(state: OnbState): string {
       <input type="file" id="onb-company-file" accept=".yaml,.yml" hidden></p>
     ${onbActions(state, 'Create team')}`;
 }
-// A team's seats in the chart's own shape: each top seat on its own line, everyone under it (depth first) on the
-// indented line after it. A Recruiting seat (no bot yet) is muted.
+// A team's seats in the chart's own order: each top seat (its manager) first, then everyone under it, depth first.
+// A Recruiting seat (no bot yet) is muted.
 function onbTeamRolesHTML(team: OnbTeam): string {
   const ids = new Set(team.roles.map(role => role.id));
-  const under = (id: string | null | undefined) => team.roles.filter(role => (role.reports_to && ids.has(role.reports_to) ? role.reports_to : null) === (id ?? null));
+  const under = (id: string | null) => team.roles.filter(role => (role.reports_to && ids.has(role.reports_to) ? role.reports_to : null) === id);
+  const tree = (id: string | null): OnbTeam['roles'] => under(id).flatMap(role => [role, ...(role.id ? tree(role.id) : [])]);
   const title = (role: OnbTeam['roles'][number]) => `<span${role.live ? '' : ' class="onb-team-open" title="Recruiting"'}>${esc(role.title)}</span>`;
-  return under(null).map(top => {
-    const below = (id: string | undefined): OnbTeam['roles'] => id ? under(id).flatMap(role => [role, ...below(role.id)]) : [];
-    const reports = below(top.id);
-    return `<span class="onb-team-roles">${title(top)}</span>${reports.length
-      ? `<span class="onb-team-roles onb-team-reports">${reports.map(title).join(' · ')}</span>` : ''}`;
-  }).join('');
+  return `<span class="onb-team-roles">${tree(null).map(title).join(' · ')}</span>`;
 }
 const onbImportPending = (fields: string[] | null | undefined): string => (fields || []).map(field => ({goals: 'goals', tool_connections: 'tool connections',
   first_jobs: 'first jobs', model_choices: 'model choices', routines: 'automations',
@@ -316,28 +313,15 @@ function onbTeamMode(state: OnbState, mode: OnbState['mode']) {
 // The models choice while none is made, the computer in one line, and the Claude or Codex subscription Getting started
 // recommends (backend/getting_started.py `subscription`) until one is signed in or skipped. Done lands on Tasks.
 function onbRunHTML(state: OnbState): string {
-  // The recommended models choice is one line; the other choices are behind it.
-  const preset = state.providers?.preset || 'subscriptions-gateway';
-  const providers = state.providers && !state.providers.configured
-    ? `<details class="onb-line onb-models" id="onb-models"><summary><span class="onb-mark ok" aria-hidden="true">✓</span>
-        <span class="onb-line-text" id="onb-models-name">${esc(onbPresetLabel(preset))}</span>${ONB_CARET}</summary>
-        ${providersFormHTML({...state.providers, preset}, state.models, 'onb-prov')}</details>` : '';
   const sub = state.subscription;
   const subscription = sub && (sub.done || sub.skipped) ? '' : `<div class="onb-line" id="onb-subscription">
       <span class="onb-mark" aria-hidden="true"></span><span class="onb-line-text">
       <a href="#/settings" data-gs-tab="devices">Add a Claude or Codex subscription</a>
       <small class="muted">Recommended. Use your own subscription for your own bots, within the provider's terms.</small></span></div>`;
-  return `${onbFailedAfterHTML(state)}<div class="onb-lines">${providers}<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${subscription}</div></div>
+  return `<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${subscription}</div>
     ${onbActions(state, 'Done', false)}`;
 }
 const ONB_CARET = '<span class="nav-icon onb-caret" aria-hidden="true">expand_more</span>';
-const onbPresetLabel = (id: string): string => PROVIDER_PRESETS.find(row => row.id === id)?.label || 'Models';
-// A company already set up whose file from install failed later: the reason, and Dismiss (Health links here for it).
-function onbFailedAfterHTML(state: OnbState): string {
-  const failed = state.record.company_import_failed;
-  return failed && state.record.completed ? `<p class="onb-failed" id="onb-import-failed" role="alert">Your company file wasn't imported: ${esc(failed.reason || '')}
-    <button class="linkish" type="button" id="onb-import-failed-dismiss">Dismiss</button></p>` : '';
-}
 function onbComputerHTML(state: OnbState): string {
   const online = (state.record.machine.runners || []).filter(runner => runner?.online);
   if (online.length) return `<div class="onb-line" id="onb-machine-status" data-onb-machine="online"><span class="onb-mark ok" aria-hidden="true">✓</span>
@@ -436,7 +420,7 @@ function onbRunStarted(state: OnbState) {
   clearInterval(state.poll ?? undefined);
   state.poll = setInterval(() => { if (!document.hidden) void onbPoll(state); }, 5000);
 }
-// The lines only: the models choice and an open enrollment keep what was picked or typed.
+// The lines only: an open enrollment keeps what was picked or typed.
 function onbRedrawLines(state: OnbState) {
   const lines = state.dialog?.querySelector('#onb-run-lines');
   // An open enrollment keeps what was picked, until a computer it set up comes online.
@@ -475,18 +459,7 @@ function onbWire(state: OnbState, key: string) {
     if (pick && file) pick.onclick = () => file.click();
     if (file) file.onchange = () => void onbReadCompanyFile(state, file.files?.[0]);
   }
-  if (key === 'run') {
-    const root = $('#onb-prov');
-    if (root && state.providers) providersWire(root, state.providers, state.models);
-    root?.addEventListener('change', (event: Event) => {
-      const input = event.target;
-      const name = $('#onb-models-name');
-      if (input instanceof HTMLInputElement && input.dataset.providerPreset !== undefined && name) name.textContent = onbPresetLabel(input.value);
-    });
-    onbWireComputer(state);
-    const dismiss = $('#onb-import-failed-dismiss');
-    if (dismiss) dismiss.onclick = () => void onbDismissImportFailure(state, dismiss);
-  }
+  if (key === 'run') onbWireComputer(state);
 }
 function onbWireComputer(state: OnbState) {
   const commands = onbCommands(state);
@@ -519,19 +492,6 @@ function onbRedrawComputer(state: OnbState) {
   box.outerHTML = onbComputerHTML(state);
   onbWireComputer(state);
 }
-// Dismiss is the way out when the owner won't fix the file by importing it (Health links here for it).
-async function onbDismissImportFailure(state: OnbState, button: HTMLButtonElement) {
-  button.disabled = true;
-  try {
-    const record = await post('/v2/setup/company/import-failure/dismiss', {});
-    if (ONB !== state) return;
-    state.record.company_import_failed = record.company_import_failed;
-    $('#onb-import-failed')?.remove();
-  } catch (error) {
-    button.disabled = false;
-    toast(errorMessage(error, ''), true);
-  }
-}
 function onbCollect(state: OnbState, key: string) {
   const r = state.record;
   if (key === 'building' && $('#onb-website')) {
@@ -547,7 +507,7 @@ function onbCollect(state: OnbState, key: string) {
       // The default chart: no roles picked (the server lays it out, company_import.default_chart), less the teams off.
       r.selected = {};
       r.answers = {...r.answers, departments: [], briefings: {},
-        teams_off: (r.default_chart || []).filter(team => !team.on).map(team => team.team)};
+        teams_off: (r.default_chart || []).filter(team => !team.on && !team.locked).map(team => team.team)};
     }
   }
 }
@@ -623,7 +583,7 @@ async function onbAdvance(state: OnbState, key: string) {
     void onbFinish(state);
     return;
   }
-  await onbDone(state);
+  onbDone(state);
 }
 // Create: the team as chosen, then the last step.
 async function onbFinish(state: OnbState) {
@@ -660,27 +620,7 @@ async function onbCompleted(state: OnbState, record: Partial<OnbRecord> | null |
   onbRunStarted(state);
   await refresh(true);                      // the new bots in the sidebar, behind the modal
 }
-// Done: the models choice saved when it is asked, then Tasks. A research run that had no model starts again with one.
-async function onbDone(state: OnbState) {
-  const root = $('#onb-prov');
-  if (root && state.providers) {
-    const chosen = providersCollect(root);
-    if (chosen.enabled.length) {
-      onbBusy(state, true, 'Saving…');
-      try {
-        state.providers = await providersSave(state.providers, chosen);
-        if (ONB !== state) return;
-        applyConfig({...S.config, providers_configured: !!state.providers.enabled?.length});
-        // The newest run, read again: one that had no model starts over now that there is one.
-        state.strat.asked = ''; state.strat.job = null;
-        await ssResearch(state).catch(() => '');
-        if (ONB !== state) return;
-      } catch (error) {
-        if (ONB !== state) return;
-        onbBusy(state, false, onbSaveError(error));
-        return;
-      }
-    }
-  }
+// Done: Tasks. The model plan is a default (Settings > Models), not a step.
+function onbDone(state: OnbState) {
   state.dialog?.close();
 }

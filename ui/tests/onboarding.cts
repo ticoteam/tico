@@ -159,6 +159,8 @@ const DEFAULT_CHART = [
     {id: 'e2', title: 'Beta Maker', live: true, reports_to: 'e1'}, {id: 'e3', title: 'Beta Checker', live: true, reports_to: 'e2'}]},
   {team: 'Growth', on: true, roles: [{id: 'g1', title: 'Gamma Lead', live: true, reports_to: null},
     {id: 'g2', title: 'Gamma Analyst', live: false, reports_to: 'g1'}]},
+  {team: 'General', on: true, locked: true, roles: [{id: 'b1', title: 'Delta Lead', live: true, reports_to: null},
+    {id: 'b2', title: 'Delta Helper', live: true, reports_to: 'b1'}]},
 ];
 // What are you building, left empty (so no research): Next, to Your team.
 async function pastBuilding(page: Page) {
@@ -428,9 +430,12 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     assert.equal(await count(page), 'Step 2 of 3');
     assert.equal((await page.locator('.onb-step-title').textContent())!, 'Your team');
     assert.deepEqual(await page.locator('[data-onb-team-row]').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.onbTeamRow)),
-      ['Product', 'Engineering', 'Growth']);
+      ['Product', 'Engineering', 'Growth', 'General']);
     assert.deepEqual(await page.locator('[data-onb-team-row=Engineering] .onb-team-roles').allTextContents(),
-      ['Beta Lead', 'Beta Maker · Beta Checker']);
+      ['Beta Lead · Beta Maker · Beta Checker']);
+    // A team of built-ins only is always on.
+    assert.equal(await page.locator('[data-onb-team=General]').isDisabled(), true);
+    assert.equal(await page.locator('[data-onb-team=General]').isChecked(), true);
     assert.equal(await page.locator('[data-onb-team-row=Growth] .onb-team-open').count(), 1, 'a seat to recruit is marked');
     assert.equal(await page.locator('#onb-import-failed').count(), 0);
     assert.deepEqual(await page.locator('#onb button.primary').evaluateAll(els => els.map(el => el.id)), ['onb-next']);
@@ -1050,8 +1055,8 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     hq = {available: true, off_by: ''};
     await phone.close();
 
-    // After Create, on a phone, for a team that has not chosen its models: the recommended choice is one line, and the
-    // others are under it. Done saves the choice.
+    // After Create, on a phone, for a team that has not chosen its models: the step is still two rows, the computer and
+    // the subscription; the model plan is a default, in Settings, and Done saves nothing for it.
     BOTS_AFTER.find(bot => bot.slug === 'meeting-notes')!.onboarding_state = 'needs_setup';
     record = {...record, completed: '2026-09-16T10:00:00Z', needed: false, bots: BOTS_AFTER.map(bot => ({...bot})), machine};
     const run = await context.newPage();
@@ -1059,40 +1064,22 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     await run.setViewportSize({width: 390, height: 844});
     const providerSaves: unknown[] = [];
     await run.route('**/v2/providers', r => {
-      if (r.request().method() !== 'GET') { providerSaves.push(r.request().postDataJSON()); return r.fulfill({json: {configured: true, preset: 'subscriptions-gateway'}}); }
-      return r.fulfill({json: {configured: false, preset: 'subscriptions-gateway', enabled: ['anthropic', 'openai'], default: {runtime: 'codex'}, providers: [
-        {id: 'anthropic', label: 'Anthropic', runtime: 'claude'}, {id: 'openai', label: 'OpenAI', runtime: 'codex'},
-        {id: 'openrouter', label: 'OpenRouter', runtime: 'pi'}]}});
+      if (r.request().method() !== 'GET') { providerSaves.push(r.request().postDataJSON()); return r.fulfill({json: {configured: true}}); }
+      return r.fulfill({json: {configured: false, preset: 'subscriptions-gateway', enabled: ['anthropic', 'openai'], default: {runtime: 'codex'}, providers: []}});
     });
     await run.goto('https://tico-ui.test/#/welcome');
-    await run.locator('#onb-models').waitFor();
+    await run.locator('#onb-run-lines').waitFor();
     assert.equal(await count(run), 'Step 3 of 3');
-    assert.equal((await run.locator('#onb-models-name').textContent())!, 'Your Claude and ChatGPT subscriptions, plus Tico Gateway');
-    assert.equal(await run.locator('#onb-models').evaluate((el: HTMLDetailsElement) => el.open), false);
+    const rows = await run.locator('#onb-run-lines > *').evaluateAll(els => els.map(el => el.id));
+    assert.equal(rows.length, 2);
+    assert.equal(rows[1], 'onb-subscription');
+    assert.ok(await run.locator('#onb-run-lines > :first-child #onb-machine-status, #onb-run-lines > #onb-machine-status').count());
+    assert.equal(await run.locator('#onb-models, [data-provider-preset]').count(), 0);
     assert.equal(await fits(run), true);
     await shot(run, 'phone-5-run');
-    await run.locator('#onb-models > summary').click();
-    const details = run.locator('[data-provider-details]');
-    assert.equal(await details.isVisible(), false);
-    assert.equal(await run.locator('[data-provider]:visible, [data-provider-model]:visible, .prov-routed:visible').count(), 0);
-    assert.ok(await run.locator('.prov-preset').evaluateAll(rows => rows.every(row => {
-      const radio = row.querySelector('input')!.getBoundingClientRect();
-      const title = row.querySelector('strong')!.getClientRects()[0]!;
-      return radio.top < title.bottom && radio.bottom > title.top && radio.right < title.left;
-    })), 'each radio is beside the first title line');
-    await run.locator('[data-provider-preset][value=own-keys]').check();
-    assert.equal(await details.isVisible(), true);
-    assert.equal(await run.locator('[data-provider]:visible').count(), 3);
-    assert.equal((await run.locator('#onb-models-name').textContent())!, "Your company's plans or API keys");
-    for (const preset of ['subscriptions', 'gateway', 'subscriptions-gateway']) {
-      await run.locator(`[data-provider-preset][value=${preset}]`).check();
-      assert.equal(await details.isVisible(), false);
-    }
-    assert.equal(await fits(run), true);
-    await shot(run, 'phone-5b-run-models');
     await run.locator('#onb-next').click();
     await run.locator('dialog#onb').waitFor({state: 'detached'});
-    assert.equal(providerSaves.length > 0, true);
+    assert.deepEqual(providerSaves, []);
     await run.goto('https://tico-ui.test/#/bot/support');
     await run.locator('#bot-onboard').waitFor();
     assert.equal(await run.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
@@ -1113,7 +1100,7 @@ function recruitFor({department, briefing, share}: {department: string; briefing
     assert.equal((await failed.locator('#onb-import-failed').textContent())!.trim(),
       "Your company file wasn't imported: teams.yaml line 4: Growth Lead reports to cmo, which is not on the team.");
     assert.equal(await failed.locator('#onb-import-failed button, #onb textarea').count(), 0);
-    assert.deepEqual(await failed.locator('[data-onb-team]:checked').evaluateAll(els => els.map(el => el.dataset.onbTeam)), ['Product', 'Engineering', 'Growth']);
+    assert.deepEqual(await failed.locator('[data-onb-team]:checked').evaluateAll(els => els.map(el => el.dataset.onbTeam)), ['Product', 'Engineering', 'Growth', 'General']);
     await shot(failed, 'desktop-2-team-failed');
     const before = completes.length;
     await failed.locator('#onb-next').click();

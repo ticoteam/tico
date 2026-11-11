@@ -893,14 +893,14 @@ def test_hqs_chart_with_pipeline_managers_starts_one_manager_per_team_running_it
 
 
 def test_every_way_out_of_a_failed_setup_import_clears_it(tmp_path):
-    """Reverse state of the kept start failure, before setup is complete: the file setting removed and the owner's
-    Dismiss each end it; a start with the same broken file shows it again."""
+    """Reverse state of the kept start failure, before setup is complete: the file setting removed and a dismiss
+    through the API each end it; a start with the same broken file shows it again."""
     start, failed = starts(tmp_path)
     broken = unknown_role_plan(company_text())
     with start(error="The company file setup copied to this server can't be read (no access)") as api:
         assert "can't be read" in failed(api)["reason"]
         checks = {row["id"]: row for row in api.get("/api/v2/health", headers=signed_in()).json()["checks"]}
-        assert "dismiss" in checks["company_import"]["summary"]
+        assert checks["company_import"]["status"] == "bad"
     with start(configured=False) as api:  # the file setting is removed
         assert failed(api) is None
     with start(broken) as api:
@@ -1811,6 +1811,7 @@ def test_setup_lists_the_default_chart_by_team_and_leaves_out_the_teams_switched
     view = api.get("/api/v2/setup", headers=signed_in()).json()
     teams = view["default_chart"]
     assert len(teams) >= 2 and all(row["on"] and row["roles"] for row in teams)
+    teams = [row for row in teams if not row["locked"]]
     for row in teams:
         ids = {role["id"] for role in row["roles"]}
         assert all(role["reports_to"] in ids for role in row["roles"] if role["reports_to"])
@@ -1829,6 +1830,21 @@ def test_setup_lists_the_default_chart_by_team_and_leaves_out_the_teams_switched
     others = {role["title"] for row in kept for role in row["roles"]}
     assert titles & others
     assert not titles & ({role["title"] for role in off["roles"]} - others)
+
+
+def test_a_default_team_of_built_ins_only_is_locked():
+    """A team every seat of which is a built-in is always made: setup cannot switch it off."""
+    from backend import company_import
+
+    cards = {"gm": {"required": True}, "ops": {"required": True}, "pm": {"required": False}}
+    rows = [
+        {"team": "General", "template": "gm"},
+        {"team": "General", "template": "ops"},
+        {"team": "Product", "template": "pm"},
+        {"team": "Corporate", "template": "ops"},
+        {"team": "Corporate", "template": "pm"},
+    ]
+    assert company_import.locked_teams(rows, cards) == {"General"}
 
 
 def _reviewer_models(api, enabled):

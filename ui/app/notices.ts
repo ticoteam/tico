@@ -108,15 +108,15 @@ window.ticoAppUpdate = ({state, detail}: {state?: string; detail?: string} = {})
     appUpdateFailed('the update feed does not have it yet');
   }
 };
-// The anonymous usage count (PRIVACY.md): the owner sees this once, and nothing is counted before they have. It
-// would sit over the first-run wizard and its after-Create screen, so it waits for the first other page. Before the
-// first route() (LAST_ROUTE, ui/app/router.ts) there is no page yet: a new install's boot sends it to the wizard after
-// its config is read.
+// The anonymous usage count (PRIVACY.md): the owner sees this once, and nothing is counted before they have. It never
+// shows with setup open (#/welcome, or its modal anywhere), so it waits for the first other page. Before the first
+// route() (LAST_ROUTE, ui/app/router.ts) there is no page yet: a new install's boot sends it to setup after its config
+// is read.
 let usageNoticeShown = false;
 function renderUsageNotice() {
   const bar = $('#usage-notice');
   if (!bar) return;
-  bar.hidden = !S.config.usage_count_notice || !LAST_ROUTE || S.route === WELCOME;
+  bar.hidden = !S.config.usage_count_notice || !LAST_ROUTE || S.route === WELCOME || !!$('#onb');
   if (!bar.hidden && !usageNoticeShown) { usageNoticeShown = true; post('/v2/system/usage-count/notice', {state: 'shown'}).catch(() => {}); }
 }
 document.addEventListener('click', ev => {

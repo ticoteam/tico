@@ -1,8 +1,7 @@
-// Invites and a failed import (bot-lifecycle-spec.md acceptance tests 2 and 3). Settings -> Humans: "Send invite" on a
+// Invites (bot-lifecycle-spec.md acceptance test 2). Settings -> Humans: "Send invite" on a
 // roster row and Invite on each person the setup's company file names post once, and a refusal from Tico's sign-in mail
 // stays on screen in words; a sent one reads "Invited". "Create password" shows only when the issuer makes accounts,
-// shows the password once in a dialog and clears it on close. On a company already set up, a company file that failed
-// to import is one line in setup with Dismiss. Fixtures only, no network.
+// shows the password once in a dialog and clears it on close. Fixtures only, no network.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -14,7 +13,7 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
   release: '', onboarding_needed: false, providers_configured: true};
 type SetupPerson = {id: string; name: string; title: string; seats: string[]; invited_at: string | null; person?: string};
 type SetupRecord = {names: {company_name: string}; completed: string | null; needed: boolean; bots: unknown[];
-  company_import_failed: {at: string; reason: string} | null; company_import: {seats?: number; deferred?: unknown[]; people: SetupPerson[]} | null};
+  company_import_failed: null; company_import: {seats?: number; deferred?: unknown[]; people: SetupPerson[]} | null};
 // Browser-side function the test calls inside page.evaluate.
 declare function agoTick(): void;
 
@@ -25,7 +24,8 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     const calls: unknown[][] = [];
-    let config = CONFIG, refuse = true, invites: Record<string, string> = {}, accountPassword = false, made = 0;
+    const config = CONFIG;
+    let refuse = true, invites: Record<string, string> = {}, accountPassword = false, made = 0;
     const people = [
       {id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'},
       {id: 'ben', name: 'Ben Cole', email: 'ben@acme.example'}];
@@ -82,11 +82,6 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
         if (refuse) { record = {...record, company_import: {...record.company_import, people: setupPeople}}; return json(REFUSED, 422); }
         setupPeople = setupPeople.map(x => x.id === m![1] ? {...x, invited_at: '2026-10-24T09:00:00Z'} : x);
         record = {...record, company_import: {...record.company_import, people: setupPeople}};
-        return json({...record, home: 'human:ana'});
-      }
-      if (p === '/api/v2/setup/company/import-failure/dismiss' && method === 'POST') {
-        calls.push(['dismiss-import-failure']);
-        record = {...record, company_import_failed: null};
         return json({...record, home: 'human:ana'});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -179,19 +174,6 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     await dialog.waitFor({state: 'hidden'});
     await dialog.locator('[data-made-password]').waitFor({state: 'detached'});      // not left in the page
 
-    // A company file that failed on a company already set up: setup's last step says so in one line, with Dismiss as the
-    // way out (Health links there); a new company's failure is onboarding.cts's.
-    record = {...record, company_import_failed: {at: '2026-10-24T08:00:00Z', reason: 'The company file is not valid YAML (line 3).'}};
-    const welcome = await context.newPage();
-    welcome.on('pageerror', e => errors.push(e.message));
-    await welcome.goto('https://tico-ui.test/#/welcome');
-    const failed = welcome.locator('#onb-import-failed');
-    await failed.waitFor();
-    assert.equal(await failed.getAttribute('role'), 'alert');
-    assert.match(await failed.innerText(), /not valid YAML \(line 3\)/);
-    await failed.locator('#onb-import-failed-dismiss').click();
-    await failed.waitFor({state: 'detached'});
-    assert.deepEqual(calls.pop(), ['dismiss-import-failure']);
     assert.deepEqual(errors, []);
     console.log('setup-invites: ok');
   } finally { await browser.close(); }

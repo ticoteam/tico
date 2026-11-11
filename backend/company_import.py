@@ -806,22 +806,23 @@ def default_chart(onboarding, c, home, every_team=False):
     site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
     install lacks is left out, and a seat under it reports to the owner. A company that said software is not its
     product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`), and a team
-    setup's Your team step switched off (`answers.teams_off`) gets none, unless `every_team` (the step lists them all).
-    The Finance Owner's seat is filled by the Finance Owner, as on import."""
+    setup's Your team step switched off (`answers.teams_off`) gets none, unless `every_team` (the step lists them all);
+    a team of built-ins only (`locked_teams`) is never off. The Finance Owner's seat is filled by the Finance Owner, as
+    on import."""
     from .company_file import chart_formula as F
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
     record = O.load(c)
     display = O.display_names(onboarding.settings, record)
     no_software = record["answers"].get("software_product") == "no"
-    off = set() if every_team else set(record["answers"].get("teams_off") or [])
     rows = [
         row
         for row in F.build({})["employees"]
         if row["template"] in cards
-        and row["team"] not in off
         and not (no_software and (row["department"] in SOFTWARE_DEPARTMENTS or row["team"] in SOFTWARE_TEAMS))
     ]
+    off = set() if every_team else set(record["answers"].get("teams_off") or []) - locked_teams(rows, cards)
+    rows = [row for row in rows if row["team"] not in off]
     keys = {row["id"] for row in rows}
     seats = {}
     for row in rows:
@@ -842,16 +843,27 @@ def default_chart(onboarding, c, home, every_team=False):
     return seats
 
 
+def locked_teams(rows, cards):
+    """The default chart's teams made of built-ins only: every company has them, so setup cannot switch them off."""
+    teams = {}
+    for row in rows:
+        teams.setdefault(row["team"], []).append(bool(cards[row["template"]]["required"]))
+    return {team for team, required in teams.items() if all(required)}
+
+
 def default_teams(onboarding, c, home):
     """The default chart by team, for setup's Your team step: each team's name, whether it is on, and its seats in
     chart order (live: a bot works from day one; else a Recruiting seat), each with the seat it reports to inside the
     team (None for the team's top seats), so the step draws the chart's own shape. Every team is listed, the
-    switched-off ones as off."""
+    switched-off ones as off; a team of built-ins only is `locked`, always on."""
     off = set(O.load(c)["answers"].get("teams_off") or [])
     chart = default_chart(onboarding, c, home, every_team=True)
     teams = {}
     for key, seat in chart.items():
-        team = teams.setdefault(seat["team"], {"team": seat["team"], "on": seat["team"] not in off, "roles": []})
+        team = teams.setdefault(
+            seat["team"], {"team": seat["team"], "on": seat["team"] not in off, "locked": True, "roles": []}
+        )
+        team["locked"] = team["locked"] and bool(seat.get("fills"))
         boss = chart.get(seat["reports_to"])
         team["roles"].append(
             {
@@ -861,6 +873,8 @@ def default_teams(onboarding, c, home):
                 "reports_to": seat["reports_to"] if boss and boss["team"] == seat["team"] else None,
             }
         )
+    for team in teams.values():
+        team["on"] = team["on"] or team["locked"]
     return list(teams.values())
 
 
