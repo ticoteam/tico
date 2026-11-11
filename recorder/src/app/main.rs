@@ -511,8 +511,9 @@ fn main() {
     ticker(app.handle().clone(), &recorder);
     update::start(app.handle().clone(), recorder.clone(), updates);
     app.run(|handle: &tauri::AppHandle, event: RunEvent| match event {
-        // `tico-recorder://connect?server=…` from Tico's Connect recorder button, and `tico-recorder://open?server=…`
-        // from Record in the Tico desktop app, also on a cold start.
+        // `tico-recorder://connect?server=…` from Tico's Connect recorder button, `tico-recorder://open?server=…`
+        // from Record in the Tico desktop app, and `tico-recorder://record?server=…&title=…&event=…` from Join on a
+        // Tico calendar event, also on a cold start. The window comes to the front either way.
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         RunEvent::Opened { urls } => {
             let state = handle.state::<Shared>();
