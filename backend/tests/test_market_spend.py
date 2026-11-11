@@ -495,7 +495,7 @@ def test_a_definition_keeps_what_is_not_sent_and_refuses_a_second_root(api):
 
 def test_the_cli_and_mcp_tools_send_what_the_routes_take():
     """`--param name=number`, a flat evidence url and quote, and accept/reject/params all land in the route's body."""
-    from clients import hubcli, hubtools
+    from clients import cli_spec, hubcli, hubtools
 
     class Api:
         def __init__(self):
@@ -541,4 +541,6 @@ def test_the_cli_and_mcp_tools_send_what_the_routes_take():
     with pytest.raises(Exception):
         hubtools.market_define(fake, {"params": ["adoption"]})
     parsed = hubcli.parser().parse_args(["market", "size", "accept", "s1"])
-    assert (parsed.fn, parsed.decision, parsed.id) == ("market size decide", "accept", "s1")
+    tool, fields = cli_spec.of(parsed).prepare(parsed)
+    assert (parsed.fn, tool) == ("market size decide", "tico_market_size_decide")
+    assert (fields["decision"], fields["id"], "params" in fields) == ("accept", "s1", False)
