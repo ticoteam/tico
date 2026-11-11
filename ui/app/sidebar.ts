@@ -779,9 +779,10 @@ function orgTreeWithHelpers(byParent: OrgByParent): OrgByParent {
 // company has it (backend/groups.py BUILT_IN), and the top person's own group dissolved (orgOwnGroupDissolve).
 function sidebarTree(): OrgByParent {
   const raw = orgTreeByParent(), by = orgTreeWithHelpers(raw);
-  if ((S.orgGroups || []).some(g => g.id === BUILT_IN_GROUP))
-    for (const kids of Object.values(raw)) for (const n of kids)
-      if (n.kind === 'bot' && isHelperBot(n) && (isBuiltInBot(n.id) || n.team === BUILT_IN_GROUP)) (by['g:' + BUILT_IN_GROUP] ||= []).push(n);
+  if ((S.orgGroups || []).some(g => g.id === BUILT_IN_GROUP)) {
+    const builtIns = Object.values(raw).flat().filter(n => n.kind === 'bot' && isHelperBot(n) && (isBuiltInBot(n.id) || n.team === BUILT_IN_GROUP));
+    if (builtIns.length) by['g:' + BUILT_IN_GROUP] = [...(by['g:' + BUILT_IN_GROUP] || []), ...builtIns];
+  }
   orgOwnGroupDissolve(by);
   return by;
 }
