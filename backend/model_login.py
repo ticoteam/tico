@@ -143,6 +143,35 @@ def clean_lines(lines):
     return out
 
 
+_WORD = re.compile(r"[a-z][a-z0-9_]{0,39}")
+_LINK = re.compile(r"https?://\S*")
+# The tail of a code a CLI echoes masked, and a piece of a token a repaint split: too short for `redact`.
+_MASKED = re.compile(r"\*{8,}\S*")
+_TOKEN_RUN = re.compile(r"[A-Za-z0-9_\-]{20,}")
+MAX_PHASES = 60
+
+
+def clean_trace(trace, hide=""):
+    """A failed Connect's trace as it is kept (the `runner.login.failed` event): fixed words for the category and each
+    phase, numbers, and the last screen scrubbed here again (links, `hide` (a code still waiting), a masked code's
+    tail, anything token-shaped or a piece of it), at most MAX_LINE characters. None when the computer sent none."""
+    if trace is None:
+        return None
+    word = lambda text: text if _WORD.fullmatch(text or "") else ""
+    screen = _LINK.sub("[link]", trace.screen)
+    if hide:
+        screen = screen.replace(hide, "")
+    return {
+        "category": word(trace.category),
+        "phases": [
+            {"phase": word(p.phase), "elapsed_ms": min(p.elapsed_ms, 10**9), "exit_code": p.exit_code}
+            for p in trace.phases[:MAX_PHASES]
+            if word(p.phase)
+        ],
+        "screen": redact(_TOKEN_RUN.sub("[redacted]", _MASKED.sub("********", screen))),
+    }
+
+
 def clean_url(url):
     url = str(url or "").strip()
     if not url:
@@ -885,7 +914,13 @@ def report(c, runner_id, lid, body, settings=None):
                 "UPDATE model_logins SET state='failed', message=?, updated_at=? WHERE id=?",
                 (redact(_in_use(bots)), H.now(), lid),
             )
-            H.event(c, "runner:" + runner_id, "runner.login.failed", runner_id, {"runtime": row["runtime"]})
+            H.event(
+                c,
+                "runner:" + runner_id,
+                "runner.login.failed",
+                runner_id,
+                {"runtime": row["runtime"], "login": lid, "kind": row["kind"], "category": "in_use"},
+            )
             return {"state": "failed"}
     if body.state == "finishing" and row["state"] != "finishing":
         # From here it cannot be canceled, and it has a little time of its own to finish in.
@@ -914,7 +949,24 @@ def report(c, runner_id, lid, body, settings=None):
         (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid),
     )
     if terminal:
-        H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], {"runtime": row["runtime"]})
+        detail = {"runtime": row["runtime"]}
+        if state == "failed":
+            # Which sign-in failed and why stay with its audit row (the login's own row is gone after a day), so a
+            # list of failures can show it (the support bundle's reads these keys) and nobody has to read the
+            # computer's own log: the login, its kind, the category ("" when the computer named none) and, for a
+            # Connect, the step its command ended on with its exit code, the scrubbed last screen and the whole trace.
+            trace = clean_trace(body.trace, row["pending_code"] or "")
+            detail.update(login=lid, kind=row["kind"], category=(trace or {}).get("category", ""))
+            if trace and row["kind"] == "connect":
+                ended = [p for p in trace["phases"] if p["exit_code"] is not None][-1:] or trace["phases"][-1:]
+                for step in ended:
+                    detail.update(step=step["phase"], elapsed_ms=step["elapsed_ms"])
+                    if step["exit_code"] is not None:
+                        detail["exit_code"] = step["exit_code"]
+                if trace["screen"]:
+                    detail["lines"] = [trace["screen"]]
+                detail["trace"] = trace
+        H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], detail)
     # Switch to API key: only now is the key this computer's and the switch's marks lifted (confirm). Until the runner
     # says so the subscription is what the login runs on, so a failure after its commit point, which the runner undoes
     # on the computer, has nothing to undo here.

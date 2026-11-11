@@ -3067,6 +3067,21 @@ class LoginCode(Contract):
     code: Annotated[str, Field(min_length=1, max_length=700)]
 
 
+class LoginPhase(Contract):
+    phase: str = Field(max_length=60)
+    elapsed_ms: int = Field(default=0, ge=0)
+    exit_code: int | None = None
+
+
+class LoginTrace(Contract):
+    """Why a Connect failed, as its computer saw it (runner-rs/src/login.rs `Diag`); model_login.clean_trace scrubs it
+    again before anything is kept."""
+
+    category: str = Field(default="", max_length=60)
+    phases: list[LoginPhase] = Field(default_factory=list, max_length=80)
+    screen: str = Field(default="", max_length=4000)
+
+
 class LoginReport(Contract):
     state: Literal["starting", "waiting", "finishing", "signed_in", "signed_out", "done", "failed"]
     url: str = Field(default="", max_length=2100)
@@ -3074,6 +3089,7 @@ class LoginReport(Contract):
     lines: list[str] = Field(default_factory=list, max_length=40)
     message: str = Field(default="", max_length=500)
     code_taken: bool = False
+    trace: LoginTrace | None = None
 
 
 class HarnessAction(Contract):

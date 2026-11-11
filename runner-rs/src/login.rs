@@ -71,6 +71,8 @@ struct Patterns {
     link: Regex,
     alnum: Regex,
     newline: Regex,
+    masked: Regex,
+    token_run: Regex,
     secrets: Vec<Regex>,
 }
 
@@ -92,6 +94,8 @@ fn patterns() -> &'static Patterns {
             link: r(r"https?://\S*"),
             alnum: r(r"[A-Za-z0-9]"),
             newline: r("\r\n|\n|\r"),
+            masked: r(r"\*{8,}\S*"),
+            token_run: r(r"[A-Za-z0-9_\-]{20,}"),
             secrets: vec![
                 r(r"\beyJ[\w-]{6,}\.[\w-]{6,}(?:\.[\w-]*)?"),
                 r(r"\b(?:sk|pk|rk|ghp|gho|ghs|github_pat|xox[abprs]|AIza)[-_][A-Za-z0-9_\-]{8,}"),
@@ -139,11 +143,29 @@ const ENTER_AFTER_CODE: Duration = Duration::from_millis(1200);
 
 /// The token `prefix` starts, from what a Connect's command has printed so far. Until the command has `ended` a token
 /// counts only once something follows it: the rest of it may still be arriving.
+///
+/// A renderer that repaints only the cells that changed steps over the others with cursor moves, so a token painted on
+/// a row that already had text can arrive with pieces missing from the stream. Once the command has ended, the rows as
+/// the terminal shows them (`screen`) are read too.
 fn printed_token(raw: &str, prefix: &str, ended: bool) -> Option<String> {
-    if !raw.contains(prefix) {
-        return None;
+    let direct = raw
+        .contains(prefix)
+        .then(|| token_in(&plain(raw), prefix, ended))
+        .flatten();
+    if !ended {
+        return direct;
     }
-    let text = plain(raw);
+    // A move after the token's 90th character leaves `direct` a token cut short: the longer reading is the token.
+    let shown = screen(raw)
+        .iter()
+        .find_map(|row| token_in(row, prefix, true));
+    match (direct, shown) {
+        (Some(a), Some(b)) => Some(if b.len() > a.len() { b } else { a }),
+        (a, b) => a.or(b),
+    }
+}
+
+fn token_in(text: &str, prefix: &str, ended: bool) -> Option<String> {
     let part = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
     text.match_indices(prefix).find_map(|(at, _)| {
         let tail = &text[at..];
@@ -151,6 +173,96 @@ fn printed_token(raw: &str, prefix: &str, ended: bool) -> Option<String> {
         let token = &tail[..end.unwrap_or(tail.len())];
         (token.len() >= MIN_TOKEN && (end.is_some() || ended)).then(|| token.to_string())
     })
+}
+
+/// The pty's size (`spawn`).
+const SCREEN_ROWS: usize = 50;
+const SCREEN_COLS: usize = 500;
+
+/// A terminal's output as the rows it ends up showing: characters land where the cursor is, and cursor moves and
+/// erases are followed instead of dropped. Enough of a terminal for a CLI's repaints; colours and modes are ignored.
+fn screen(raw: &str) -> Vec<String> {
+    let raw = patterns().osc.replace_all(raw, "");
+    let mut rows: Vec<Vec<char>> = vec![vec![]];
+    let (mut row, mut col) = (0usize, 0usize);
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => match chars.next() {
+                Some('[') => {
+                    let mut params = String::new();
+                    let mut last = None;
+                    for c in chars.by_ref() {
+                        if ('@'..='~').contains(&c) {
+                            last = Some(c);
+                            break;
+                        }
+                        params.push(c);
+                    }
+                    let mut nums = params.split(';').map(|n| n.parse::<usize>().ok());
+                    let first = nums.next().flatten();
+                    let n = first.unwrap_or(1).clamp(1, SCREEN_COLS);
+                    let top = rows.len().saturating_sub(SCREEN_ROWS);
+                    match last {
+                        Some('A') => row = row.saturating_sub(n),
+                        Some('B') => row += n.min(SCREEN_ROWS),
+                        Some('C') => col = (col + n).min(SCREEN_COLS - 1),
+                        Some('D') => col = col.saturating_sub(n),
+                        Some('E') => (row, col) = (row + n.min(SCREEN_ROWS), 0),
+                        Some('F') => (row, col) = (row.saturating_sub(n), 0),
+                        Some('G') => col = (n - 1).min(SCREEN_COLS - 1),
+                        Some('H') | Some('f') => {
+                            row = top + (n - 1).min(SCREEN_ROWS - 1);
+                            col = nums.next().flatten().unwrap_or(1).clamp(1, SCREEN_COLS) - 1;
+                        }
+                        Some('K') => {
+                            if let Some(line) = rows.get_mut(row) {
+                                match first.unwrap_or(0) {
+                                    0 => line.truncate(col),
+                                    1 => line.iter_mut().take(col + 1).for_each(|c| *c = ' '),
+                                    _ => line.clear(),
+                                }
+                            }
+                        }
+                        Some('J') => match first.unwrap_or(0) {
+                            0 => {
+                                rows.truncate(row + 1);
+                                if let Some(line) = rows.get_mut(row) {
+                                    line.truncate(col);
+                                }
+                            }
+                            2 | 3 => rows.iter_mut().skip(top).for_each(Vec::clear),
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
+                Some('(' | ')' | '#') => {
+                    chars.next();
+                }
+                _ => {}
+            },
+            '\r' => col = 0,
+            '\n' => (row, col) = (row + 1, 0),
+            '\x08' => col = col.saturating_sub(1),
+            c if c.is_control() => {}
+            c => {
+                if col >= SCREEN_COLS {
+                    (row, col) = (row + 1, 0);
+                }
+                if rows.len() <= row {
+                    rows.resize(row + 1, vec![]);
+                }
+                let line = &mut rows[row];
+                if line.len() <= col {
+                    line.resize(col + 1, ' ');
+                }
+                line[col] = c;
+                col += 1;
+            }
+        }
+    }
+    rows.iter().map(|r| r.iter().collect()).collect()
 }
 
 /// A CLI waiting for Enter after an OAuth error cannot finish without another interactive attempt. Never relay
@@ -166,12 +278,37 @@ fn oauth_retry(raw: &str) -> bool {
 
 /// Only an allowlisted category leaves the terminal. Provider errors can echo the code, URL or credential, and
 /// a rejected code's generic message does not distinguish expired, reused or incomplete codes.
+///
+/// A command that ends by itself after taking the code was refused by the provider: the token was made and then held
+/// back by the account's organization (`provider_refused`), or the account is on hold (`account_on_hold`).
 fn oauth_failure(raw: &str) -> &'static str {
-    let text: String = plain(raw)
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .flat_map(char::to_lowercase)
-        .collect();
+    let squeezed = |text: String| -> String {
+        text.chars()
+            .filter(|c| !c.is_whitespace())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let text = squeezed(plain(raw));
+    // A repaint can step over cells, so the rows as shown are read as well.
+    let shown = squeezed(screen(raw).join(" ")).replace('\u{2019}', "'");
+    let text = text.replace('\u{2019}', "'");
+    let says = |words: &[&str]| words.iter().any(|w| text.contains(w) || shown.contains(w));
+    if says(&[
+        "doesnotpermit",
+        "verifyyourorganization'ssettings",
+        "wasnotshown",
+        "reportedthetokenrevoked",
+    ]) {
+        return "provider_refused";
+    }
+    if says(&[
+        "account_on_hold",
+        "accountisonhold",
+        "accountonhold",
+        "accounthasbeenplacedonhold",
+    ]) {
+        return "account_on_hold";
+    }
     let Some((_, error)) = text.split_once("oautherror:") else {
         return "cli_stopped";
     };
@@ -191,6 +328,16 @@ fn oauth_failure(raw: &str) -> &'static str {
         "oauth_network_error"
     } else {
         "oauth_error"
+    }
+}
+
+/// What a person reads for a Connect that ended in `category` (`oauth_failure`). Never the CLI's own text.
+fn failure_message(category: &str, waiting: bool) -> &'static str {
+    match category {
+        "provider_refused" => "This account was not given a token. Its organization's settings may not allow it.",
+        "account_on_hold" => "This account was not given a token. The account is on hold.",
+        _ if waiting => "The sign-in could not finish. Choose Try again and use the code from the new sign-in page.",
+        _ => "The sign-in command stopped without signing in",
     }
 }
 
@@ -274,6 +421,18 @@ struct Inner {
     seen: usize,
 }
 
+/// Why a Connect failed, for the server (`Session::report`'s `trace`): the phases in order, the allowlisted category
+/// and the scrubbed last screen. A lock of its own: phases are noted while `inner` is held.
+#[derive(Default)]
+struct Diag {
+    phases: Vec<Value>,
+    category: String,
+    screen: String,
+    /// A server from before `trace` refuses a report that carries it: said again without.
+    refused: bool,
+}
+const MAX_PHASES: usize = 60;
+
 /// One login command, from start to a verdict.
 pub struct Session {
     id: String,
@@ -282,6 +441,7 @@ pub struct Session {
     runtime: String,
     profile: String,
     inner: Mutex<Inner>,
+    diag: Mutex<Diag>,
     canceled: AtomicBool,
     /// The server took this switch's `finishing` report: it can no longer be canceled, so the new login goes in.
     confirmed: AtomicBool,
@@ -302,6 +462,7 @@ impl Session {
                 dirty: true,
                 ..Default::default()
             }),
+            diag: Mutex::default(),
             canceled: AtomicBool::new(false),
             confirmed: AtomicBool::new(false),
             started: Instant::now(),
@@ -312,12 +473,50 @@ impl Session {
     /// identifiers are logged; never the CLI's text, account details, URL, code or captured value.
     fn trace(&self, phase: &'static str, exit_code: Option<i32>) {
         if self.kind == "connect" {
+            let elapsed_ms = self.started.elapsed().as_millis() as u64;
             log(&format!(
                 "Tico runner: model sign-in {}",
                 json!({"login_id": self.id, "runtime": self.runtime,
-                "phase": phase, "elapsed_ms": self.started.elapsed().as_millis(), "exit_code": exit_code})
+                "phase": phase, "elapsed_ms": elapsed_ms, "exit_code": exit_code})
             ));
+            let mut d = self.diag.lock().unwrap();
+            if d.phases.len() < MAX_PHASES {
+                d.phases.push(
+                    json!({"phase": phase, "elapsed_ms": elapsed_ms, "exit_code": exit_code}),
+                );
+            }
         }
+    }
+
+    /// A Connect that got no credential: the category of what its command last showed (`oauth_failure`) and that
+    /// screen, scrubbed (`screen_digest`), kept for the failure report and written to the log as a diagnostic line, so
+    /// the heartbeat's `recent_errors` has it too. `since` is how many of the command's last bytes to read.
+    fn why(&self, since: Option<usize>) -> &'static str {
+        let (reason, since, digest) = {
+            let i = self.inner.lock().unwrap();
+            let since = since.unwrap_or(i.seen);
+            let mut from = i.raw.len().saturating_sub(since);
+            while !i.raw.is_char_boundary(from) {
+                from += 1;
+            }
+            (
+                oauth_failure(&i.raw),
+                since,
+                screen_digest(&i.raw[from..], i.typed.as_deref().unwrap_or("")),
+            )
+        };
+        crate::util::diagnostic(&format!(
+            "Tico runner: model sign-in {}",
+            json!({"login_id": self.id, "runtime": self.runtime, "phase": "final_screen", "reason": reason,
+            "elapsed_ms": self.started.elapsed().as_millis() as u64, "bytes": since, "screen": digest})
+        ));
+        {
+            let mut d = self.diag.lock().unwrap();
+            d.category = reason.into();
+            d.screen = digest;
+        }
+        self.trace(reason, None);
+        reason
     }
 
     fn live(&self) -> bool {
@@ -341,6 +540,14 @@ impl Session {
         let mut body = json!({"state": i.state, "message": i.message, "url": i.url, "code": i.code, "lines": i.lines});
         if i.taken {
             body["code_taken"] = json!(true);
+        }
+        // A failed Connect says why, so the reason is on the server and not only in this computer's log.
+        if self.kind == "connect" && i.state == "failed" {
+            let d = self.diag.lock().unwrap();
+            if !d.refused {
+                body["trace"] =
+                    json!({"category": d.category, "phases": d.phases, "screen": d.screen});
+            }
         }
         Some(body)
     }
@@ -369,6 +576,28 @@ impl Session {
             },
             None,
         );
+        // A failed Connect's phases in one line that joins the heartbeat's `recent_errors`: the lines above stay in this
+        // computer's log. Fixed words and numbers only.
+        if self.kind == "connect" && state == "failed" {
+            let steps: Vec<String> = self
+                .diag
+                .lock()
+                .unwrap()
+                .phases
+                .iter()
+                .map(|p| {
+                    let exit = p["exit_code"]
+                        .as_i64()
+                        .map(|c| format!("={c}"))
+                        .unwrap_or_default();
+                    format!("{}@{}{exit}", text_of(&p["phase"]), p["elapsed_ms"])
+                })
+                .collect();
+            crate::util::diagnostic(&format!(
+                "Tico runner: model sign-in {}",
+                json!({"login_id": self.id, "runtime": self.runtime, "phase": "failed_steps", "steps": steps.join(" ")})
+            ));
+        }
         // Whatever the verdict, the next heartbeat asks the profile's CLI again instead of a cached answer.
         crate::profiles::forget_report();
         if state == "signed_in" {
@@ -518,7 +747,12 @@ fn screen_digest(raw: &str, typed: &str) -> String {
     if !typed.is_empty() {
         text = text.replace(typed, "");
     }
-    let text = squash(&redact(&patterns().link.replace_all(&text, "[link]")));
+    let p = patterns();
+    let text = redact(&p.link.replace_all(&text, "[link]"));
+    // A code the CLI echoes masked keeps its last characters, and a token a repaint split leaves pieces too short for
+    // `redact`: neither leaves this computer.
+    let text = p.masked.replace_all(&text, "********");
+    let text = squash(&p.token_run.replace_all(&text, "[redacted]"));
     let skip = text.chars().count().saturating_sub(240);
     text.chars().skip(skip).collect()
 }
@@ -1120,10 +1354,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             ));
         }
         if connect && oauth_retry(&s.inner.lock().unwrap().raw) {
-            let reason = oauth_failure(&s.inner.lock().unwrap().raw);
-            s.trace(reason, None);
+            let reason = s.why(None);
             kill(&mut child);
-            break Some(("failed".into(), "The sign-in could not finish. Choose Try again and use the code from the new sign-in page.".into()));
+            break Some(("failed".into(), failure_message(reason, true).into()));
         }
         // The token is all a Connect wants. The command gets to end by itself, so a failure it reports still counts.
         if !token_prefix.is_empty()
@@ -1210,11 +1443,12 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                     (String::new(), String::new())
                 }
                 None => {
-                    s.trace(oauth_failure(&s.inner.lock().unwrap().raw), None);
-                    (
-                        "failed".into(),
-                        "The sign-in command stopped without signing in".into(),
-                    )
+                    // Why: the last screen since the code went in, scrubbed, and its category.
+                    let since = watch
+                        .as_ref()
+                        .map(|w| s.inner.lock().unwrap().seen.saturating_sub(w.seen_at));
+                    let reason = s.why(since);
+                    ("failed".into(), failure_message(reason, false).into())
                 }
             }
         }
@@ -2382,7 +2616,10 @@ impl Logins {
                     .await
                 {
                     Ok(reply) => reply,
-                    Err(_) => {
+                    Err(e) => {
+                        if !e.retryable && e.status == 422 && body.get("trace").is_some() {
+                            s.diag.lock().unwrap().refused = true;
+                        }
                         s.inner.lock().unwrap().dirty = true; // said again on the next poll
                         continue;
                     }
@@ -2493,6 +2730,12 @@ mod tests {
         }
         let long = "word ".repeat(200);
         assert!(screen_digest(&long, "").chars().count() <= 240);
+        // The masked code's tail, and pieces of a split token too short for the secret patterns.
+        let digest = screen_digest(
+            "Code: ************a1B2c3 ok\r\nabcdefghij0123456789_\x1b[1Cklmnopqrstuvwxyz-01234 end",
+            "",
+        );
+        assert_eq!(digest, "Code: ******** ok [redacted] [redacted] end");
     }
 
     #[test]
@@ -2519,6 +2762,49 @@ mod tests {
             None
         );
         assert_eq!(printed_token("no such thing\n", "sk-ant-oat", true), None);
+        // Painted over a row that had text: the renderer steps over each cell that already shows the right character
+        // (here the prompt's `a`, `e` and `d` land where the token has the same letters), so the stream has gaps.
+        let token = format!("sk-ant-oat01-{}", "paste-code-here_".repeat(6));
+        let old = "Paste code here if prompted > ";
+        let mut repaint = format!("{old}\r\n\x1b[1A\r");
+        let mut skipped = 0;
+        for (at, c) in token.chars().enumerate() {
+            if old.chars().nth(at) == Some(c) {
+                repaint.push_str("\x1b[1C");
+                skipped += 1;
+            } else {
+                repaint.push(c);
+            }
+        }
+        repaint.push_str("\x1b[K\r\n\x1b[2CStore this token securely.\r\n");
+        assert!(skipped > 0, "the case needs a stepped-over cell");
+        assert_eq!(token_in(&plain(&repaint), "sk-ant-oat", true), None);
+        assert_eq!(printed_token(&repaint, "sk-ant-oat", false), None);
+        assert_eq!(
+            printed_token(&repaint, "sk-ant-oat", true).as_deref(),
+            Some(token.as_str())
+        );
+        // Stepped over after its 90th character: the stream alone reads a token cut short, the screen all of it.
+        let late = format!(
+            "{}Q\r{}\x1b[1C{}\r\n",
+            " ".repeat(95),
+            &token[..95],
+            &token[96..]
+        );
+        let late_token = format!("{}Q{}", &token[..95], &token[96..]);
+        assert_eq!(
+            token_in(&plain(&late), "sk-ant-oat", true).map(|t| t.len()),
+            Some(95)
+        );
+        assert_eq!(
+            printed_token(&late, "sk-ant-oat", true).as_deref(),
+            Some(late_token.as_str())
+        );
+        // Text a repaint erased is not on the screen.
+        assert_eq!(
+            screen("one\r\ntwo two\x1b[1A\r\x1b[2K\x1b[3Cup\x1b[1B\r\x1b[4C\x1b[K"),
+            vec!["   up", "two "]
+        );
         // Nor is a piece of one.
         assert_eq!(
             printed_token(&format!("{}\n", &token[..80]), "sk-ant-oat", true),
@@ -2552,6 +2838,27 @@ mod tests {
             oauth_failure("OAuth error: secret response sk-ant-oat01-never-log-this"),
             "oauth_error"
         );
+        // A command that ends by itself: the provider held the token back. Words arrive split by cursor moves.
+        for refused in [
+            "This\x1b[1Cstep creates a long-lived token, which this policy does\x1b[1Cnot\r\npermit \u{2014} use an API key instead.",
+            "Couldn\u{2019}t verify your organization\u{2019}s settings (timeout)",
+            "Anthropic reported the token revoked; it was not shown.",
+            "The token could not be confirmed revoked and was not shown",
+        ] {
+            assert_eq!(oauth_failure(refused), "provider_refused", "{refused}");
+        }
+        assert_eq!(oauth_failure("Your account is on hold."), "account_on_hold");
+        assert_eq!(oauth_failure("Opening browser to sign in"), "cli_stopped");
+        for category in ["provider_refused", "account_on_hold"] {
+            for waiting in [false, true] {
+                assert!(failure_message(category, waiting)
+                    .starts_with("This account was not given a token."));
+            }
+        }
+        assert_eq!(
+            failure_message("cli_stopped", false),
+            "The sign-in command stopped without signing in"
+        );
     }
 
     /// A Connect relays the link, leaves the login it does not need alone, and holds its one result for the server.
@@ -2583,6 +2890,14 @@ case "$*" in
       trap 'touch "$HOME/rejected-stopped"; exit 0' TERM
       printf "\033[31mOAuth error:\033[0m That code wasn't accepted. %s {token}\r\nPress\033[1GEnter to retry." "$code"
       while :; do sleep 0.1; done
+    fi
+    if test -e "$HOME/refuses"; then
+      # Like the real CLI when the account's organization holds the token back: no retry, it ends by itself.
+      # Its last screen has the masked code with its tail, a link, and a token a repaint split into three pieces.
+      printf "\033[2C%s ************d-code https://claude.example/authorize?x=1\r\n" "$code"
+      printf "sk-ant-oat01-abcdefghijklmnopqrstuvwxyz0123\033[1CQq7Qq7Qq7Qq7Qq7Qq7Qq7\033[1CZz9Zz9Zz9Zz9Zz9Zz9Zz9\r\n"
+      printf "\033[2CThis\033[1Cstep creates a long-lived token, which this policy does\033[1Cnot permit.\r\n"
+      exit 0
     fi
     echo 'Your OAuth token:'; echo '{token}'; echo 'Store it safely.'
     test ! -e "$HOME/fails-after-token" || exit 7
@@ -2639,6 +2954,8 @@ esac
                 "code_written",
                 "enter_written",
                 "oauth_code_rejected",
+                "final_screen",
+                "provider_refused",
                 "credential_captured",
                 "cli_exited",
                 "canceled",
@@ -2651,8 +2968,24 @@ esac
             assert!(
                 !diagnostics.contains("pasted-code")
                     && !diagnostics.contains("sk-ant-oat")
+                    && !diagnostics.contains("abcdefghijklmnop")
+                    && !diagnostics.contains("Qq7Qq7")
+                    && !diagnostics.contains("Zz9Zz9")
+                    && !diagnostics.contains("d-code")
                     && !diagnostics.contains("https://claude.example"),
                 "secret in diagnostics: {diagnostics}"
+            );
+            let last = diagnostics
+                .lines()
+                .find(|l| {
+                    l.contains("\"phase\":\"final_screen\"")
+                        && l.contains("\"login_id\":\"refused\"")
+                })
+                .expect("the refused sign-in's last screen is logged");
+            assert!(
+                last.contains("\"reason\":\"provider_refused\"")
+                    && last.contains("this policy does not permit"),
+                "{last}"
             );
             return;
         };
@@ -2769,6 +3102,89 @@ esac
         );
         assert!(!login.inner.lock().unwrap().message.is_empty());
         std::fs::remove_file(root.join("rejects-code")).unwrap();
+
+        // The code is taken, then the command ends by itself with no token and no error to retry: the person reads why,
+        // in Tico's words, and the runner's log keeps the scrubbed last screen.
+        std::fs::write(root.join("refuses"), "").unwrap();
+        let login = Session::new(&json!({"id": "refused", "runtime": "claude", "kind": "connect"}));
+        let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+        let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+        wait_for(|| !login.inner.lock().unwrap().url.is_empty());
+        login.submit("pasted-code");
+        running.join().unwrap();
+        assert_eq!(
+            state(&login),
+            (
+                "failed".to_string(),
+                "This account was not given a token. Its organization's settings may not allow it."
+                    .to_string()
+            )
+        );
+        {
+            let i = login.inner.lock().unwrap();
+            assert!(i.captured.is_none() && i.finished && i.raw.is_empty() && i.lines.is_empty());
+        }
+        let recent = crate::util::recent_errors();
+        assert!(
+            recent
+                .iter()
+                .any(|l| l.contains("final_screen") && l.contains("provider_refused"))
+                && recent.iter().any(|l| l.contains("failed_steps")
+                    && l.contains("\"login_id\":\"refused\"")
+                    && l.contains("cli_started@")
+                    && l.contains(" enter_written@")
+                    && l.contains("=0 provider_refused@")),
+            "the heartbeat carries the category: {recent:?}"
+        );
+        // What the server is told: the phases in order, the category and the scrubbed screen, with no link, typed
+        // code or token-shaped text, and the CLI's words nowhere a person reads them.
+        let body = login.report().unwrap();
+        let shown = body.to_string();
+        assert!(
+            !shown.contains("pasted-code")
+                && !shown.contains("sk-ant")
+                && !shown.contains("abcdefghijklmnop")
+                && !shown.contains("Qq7Qq7")
+                && !shown.contains("Zz9Zz9")
+                && !shown.contains("d-code")
+                && !shown.contains("https://"),
+            "{shown}"
+        );
+        assert!(!body["message"].as_str().unwrap().contains("policy"));
+        let trace = &body["trace"];
+        assert_eq!(trace["category"], "provider_refused");
+        assert!(
+            trace["screen"]
+                .as_str()
+                .unwrap()
+                .contains("this policy does not permit"),
+            "{trace}"
+        );
+        let phases: Vec<&str> = trace["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["phase"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            phases,
+            [
+                "cli_started",
+                "instructions_ready",
+                "code_received",
+                "code_written",
+                "enter_written",
+                "cli_exited",
+                "provider_refused",
+                "failed"
+            ]
+        );
+        assert_eq!(trace["phases"][5]["exit_code"], 0);
+        // A server from before `trace` refused it: the verdict is said again without.
+        login.diag.lock().unwrap().refused = true;
+        login.inner.lock().unwrap().dirty = true;
+        assert!(login.report().unwrap().get("trace").is_none());
+        std::fs::remove_file(root.join("refuses")).unwrap();
 
         // Cancelled: nothing is captured.
         let login = Session::new(&json!({"id": "c3", "runtime": "claude", "kind": "connect"}));
