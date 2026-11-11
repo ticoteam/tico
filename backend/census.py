@@ -27,10 +27,7 @@ DEFAULT_HQ = "https://updates.tico.team"
 WINDOW_DAYS = 7
 NOTE_EVERY = 3600  # a person's activity is written at most this often
 DOC_URL = "https://github.com/ticoteam/tico/blob/main/PRIVACY.md"
-NOTICE = (
-    "Tico counts installs anonymously (no names, no content). "
-    "Turn off in Settings > General > Privacy."
-)
+NOTICE = "Tico counts installs anonymously (no names, no content). Turn off in Settings > General > Privacy."
 FIELDS = ("install_id", "version", "active_people", "active_bots", "first_result")
 _OFF = ("off", "0", "false", "no", "disabled")
 
@@ -123,7 +120,9 @@ class Census:
 
     def ready(self, c):
         """Counting is on and the owner has been shown the notice (as Homebrew does: nothing goes out before it)."""
-        if self.settings.hosted:  # hosted by our team: counted by default, no notice (the company signed up for hosting)
+        if (
+            self.settings.hosted
+        ):  # hosted by our team: counted by default, no notice (the company signed up for hosting)
             return not self.off_reason(c)
         return not self.off_reason(c) and bool(_load(c).get("notice"))
 
