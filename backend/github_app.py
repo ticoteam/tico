@@ -100,6 +100,21 @@ CHECKS_WITHHELD = (
     "Posting Tico's approval check on pull requests needs the GitHub App's Checks permission set to Read and write, "
     "accepted on the installation; until then no check is posted."
 )
+# registry_metadata: the installation's permissions as GitHub last reported them (`live_permissions`), for Health.
+PERMISSIONS_SEEN = "github-app-permissions"
+
+
+def permission_seen(c, name):
+    """The level GitHub last reported for one of the installation's permissions ("write", "read" or "" for none), or
+    None when Tico has not learned the installation's permissions yet. Reads no network."""
+    from .repositories import metadata
+
+    seen = metadata(c, PERMISSIONS_SEEN)
+    if not isinstance(seen.get("permissions"), dict):
+        return None
+    return str(seen["permissions"].get(name) or "")
+
+
 # Each opt-in that raises a write grant's token: the grant flag, the permission raised to write, the `live` key that
 # remembers GitHub refusing it, the reasons a token answer gives, and the answer field that carries them. A grant
 # with both gets one token with both, as the git credential helper picks one token per remote.
@@ -501,6 +516,7 @@ class GitHubApp:
                 kind,
             ),
         )
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (PERMISSIONS_SEEN,))  # a new App's are learned anew
         self.cache.clear()
         self.live.clear()
 
@@ -538,7 +554,9 @@ class GitHubApp:
         c.execute("DELETE FROM github_user_token")
         c.execute("DELETE FROM github_user_states")
         c.execute(
-            "DELETE FROM registry_metadata WHERE key IN ('repositories-reachability-verified','repositories-confirmed-missing')"
+            "DELETE FROM registry_metadata WHERE key IN "
+            "('repositories-reachability-verified','repositories-confirmed-missing',?)",
+            (PERMISSIONS_SEEN,),
         )
         c.execute("DELETE FROM service_health WHERE service=?", (GITHUB_HEALTH,))  # nothing left to be unhealthy
         self.cache.clear()
@@ -894,7 +912,22 @@ class GitHubApp:
             return None
         with self.lock:
             self.live["permissions"] = (time.time() + LIVE_TTL, permissions)
+        self._remember_permissions(permissions)
         return permissions
+
+    def _remember_permissions(self, permissions):
+        """Keep what GitHub reported (PERMISSIONS_SEEN), written only when it changed, so Health says what the App
+        lacks without asking GitHub. Never fails the read it follows."""
+        from .repositories import metadata, save_metadata
+
+        try:
+            with self.store.read() as c:
+                if metadata(c, PERMISSIONS_SEEN).get("permissions") == permissions:
+                    return
+            with self.store.transaction() as c:
+                save_metadata(c, PERMISSIONS_SEEN, {"permissions": permissions, "at": H.now()})
+        except Exception:  # noqa: BLE001 - Health learns it on the next read
+            log.info("The App's permissions were not kept for Health", exc_info=True)
 
     def installation_selection(self, refresh=True):
         """What the App is installed on: "all", "selected", or "" when unknown. GitHub's answer when it gives one (and

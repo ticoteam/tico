@@ -22,11 +22,17 @@ too, so a batch of merged tasks is one release. A tag covers only the task that 
 Nothing waits silently. With no way set, a task waits OWN_WAIT_S after its merge, then it is the Release Owner's turn.
 GitHub refusing the ask, or no release CUT_WAIT_S after it, is the Release Owner's turn with why (it may ask again or
 say why it cannot); a second failure for the repository since the merge, or a permission only a person can grant
-(`MISSING`), is a person's, once. History: `release_asked`, `release_cut`, `release_refused`.
+(`MISSING`), is a person's, once. History: `release_asked`, `release_cut`, `release_refused`, `release_found`.
+
+Never a second release: the repository may publish one with the merge on its own (on every push) before Tico has read
+it. So the tool and the Heartbeat read the repository's releases from GitHub first (item_sources/github.py
+`read_releases_now`), and an ask whose merges a published release already holds is not cut (`found_already`); the tool
+says which release has them.
 """
 
+import json
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .. import source_actions as SA
 
@@ -174,6 +180,72 @@ def failure_line(repo: str, effect: Row) -> str:
     return f"No release of {repo} an hour after Tico ran {said_as(effect)}: see {runs_url(repo, effect)}"
 
 
+def _settings(conn: "sqlite3.Connection", task_id: str, visit_id: str | None = None) -> Row | None:
+    """The In a release settings the task waits on: in visit `visit_id`, else in its newest visit that had one."""
+    found = conn.execute(
+        "SELECT r.settings FROM visits v JOIN requirements r ON (r.stage_id = v.stage_id OR r.visit_id = v.id) "
+        "AND r.withdrawn_at IS NULL AND r.kind='item' AND r.source=? AND r.condition='in_release' "
+        "WHERE v.task_id=? AND (? IS NULL OR v.id=?) ORDER BY v.entered_at DESC, v.rowid DESC LIMIT 1",
+        (SOURCE, task_id, visit_id, visit_id),
+    ).fetchone()
+    if found is None:
+        return None
+    try:
+        value = json.loads(found[0] or "{}")
+    except ValueError:
+        return {}
+    return cast("Row", value) if isinstance(value, dict) else {}
+
+
+def released(
+    conn: "sqlite3.Connection", task_id: str, repo: str | None = None, visit_id: str | None = None
+) -> list[str]:
+    """Where the task's merges (into `repo` alone, when given) are released, as "v1.2.0 of owner/name", from the
+    releases Tico has saved, counted as In a release counts them (pre-releases only when it says so). Empty while any
+    of them is in no release yet, and when nothing merged."""
+    GS = _gs()
+    settings = _settings(conn, task_id, visit_id)
+    if settings is None:
+        return []
+    out: list[str] = []
+    for link in GS.prs_of(conn, task_id):
+        metadata: Row | None = link["metadata"]
+        if not metadata or metadata["state"] != "merged" or not metadata.get("merged_sha"):
+            continue
+        where = str(GS.release_repo(settings, str(link["repo"])))
+        if repo is not None and where.lower() != repo.lower():
+            continue
+        tag = next(
+            (
+                str(release["tag"])
+                for release in reversed(GS.releases(conn, where, prereleases=bool(settings.get("prereleases"))))
+                if GS.included(conn, release["id"], str(metadata["merged_sha"]))
+            ),
+            None,
+        )
+        if tag is None:
+            return []
+        out.append(f"{tag} of {where}")
+    return sorted(set(out))
+
+
+def found_already(conn: "sqlite3.Connection", effect: Row) -> bool:
+    """An ask about to be carried out whose task's merges into its repository a published release already holds: it is
+    not cut (moot), and the task's history says which release has them."""
+    task_id, repo = str(effect["task_id"]), str(effect["item_key"])
+    found = released(conn, task_id, repo, str(effect["visit_id"]))
+    if not found:
+        return False
+    E = _engine()
+    conn.execute(
+        "UPDATE effects SET state='moot', updated_at=? WHERE id=? AND state='owed'", (_h().now(), effect["id"])
+    )
+    data = {"repo": repo, "effect": effect["id"], "releases": found}
+    E._event(conn, task_id, E.SYSTEM, "release_found", None, repo, ", ".join(found), data)
+    E.changed(conn, task_id, E.SYSTEM)
+    return True
+
+
 def standing(conn: "sqlite3.Connection", task: Row, requirement: Row, repo: str, metadata: Row) -> "Standing":
     """In a release for a merged PR that no saved release holds yet, in `repo` that publishes releases."""
     from ..task_requirements import NOT_MET, WAITING, Standing
@@ -279,10 +351,17 @@ def cut(
     def refuse(rule: str, detail: str) -> None:
         E._refuse(conn, by, rule, detail, task_id, row=row, then=("show",), version=row.get("version"))
 
+    def already(found: list[str]) -> None:
+        if found:
+            refuse("task_requirement", f"Already in {', '.join(found)}: there is no release to cut")
+
+    requirement = _release_requirement(conn, row)
+    if row["status"] != "open" or requirement is None:
+        # The merge reached a release first (the task may have just moved on because of it): say which.
+        already(released(conn, task_id))
     if row["status"] != "open":
         refuse("task_ended", f"The task is {row['stage']['name']}. Reopen it first.")
     E.check_version(conn, by, row, seen_version)
-    requirement = _release_requirement(conn, row)
     if requirement is None:
         refuse("task_stage", f"{row['stage']['name']} doesn't wait for a release")
         return []
@@ -330,6 +409,7 @@ def cut(
         if before is None or str(metadata.get("merged_at") or "") > str(before.get("merged_at") or ""):
             wanted[repo] = metadata
     if not wanted:
+        already(released(conn, task_id, visit_id=str(row["visit"]["id"])))
         refuse("task_requirement", "Every merge of this task is in a release already")
     owed: list[Row] = []
     for repo, metadata in wanted.items():

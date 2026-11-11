@@ -993,10 +993,13 @@ late. Nothing depends on the exact 10 seconds.
   out through the App, never a bot's token: the Release Owner's raw `gh workflow run`, tag and `gh release` stay
   denied. Allowed for the stage owner, the pipeline's manager or a person, only on a stage with In a release, and for
   a bot only when a person's OK stands on the people-only sign-off before it (Fixes 2). History: `release_asked`,
-  `release_cut`, `release_refused`. One workflow run asked after a task's merge covers every task waiting on that repo.
+  `release_cut`, `release_refused`, `release_found`. One workflow run asked after a task's merge covers every task
+  waiting on that repo. Never a second release: before the ask is carried out (and before `tico task release` takes
+  one), Tico reads the repo's newest releases; one already published with the merge meets the requirement instead
+  (`release_found`, the ask moot), and the tool answers "Already in <tag> of <repo>".
   GitHub refusing, or no release an hour after the ask, is the Release Owner's turn with why (it asks again or says why
   not); a second failure since the merge, or a permission the App lacks, is a person's, and health warns "Tico can't cut
-  releases". With no way set, the task waits on GitHub for 30 minutes, then it is the Release Owner's turn.
+  releases" while a task waits on a Release with that needs it. With no way set, the task waits on GitHub for 30 minutes, then it is the Release Owner's turn.
 
 ### What gets deleted
 

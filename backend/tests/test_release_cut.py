@@ -286,3 +286,126 @@ def test_release_with_is_checked_when_the_pipeline_is_saved():
     assert (
         not GR.valid("workflow:") and not GR.valid("workflow:../x.yml") and not GR.valid("dispatch") and not GR.valid(1)
     )
+
+
+# ----------------------------------------------------------------------------- never a second release
+def test_a_release_published_since_tico_last_read_is_found_and_none_is_cut(company, gh):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
+    gh.publish(REPO, "v1.0.0")  # someone released the merge before the Heartbeat carried the ask out
+    F.run(company, gh)
+    assert gh.cuts == []
+    with company.transaction() as c:
+        state = c.execute("SELECT state FROM effects WHERE action='release'").fetchone()[0]
+        assert state == "moot"  # not done: no other task counts it as an ask of its own
+        assert "release_found" in X.events(c, task_id)
+        assert stage(c, task_id) == "Done"
+
+
+def test_the_tool_reads_github_first_and_names_the_release_that_already_holds_the_merge(company, gh):
+    task_id = to_release(company, gh)
+    gh.publish(REPO, "v1.0.0")
+    assert F.read_releases_now(company, gh, task_id)  # what the route does before the tool's write
+    with company.transaction() as c:
+        detail = refused(lambda: GR.cut(c, task_id, RM, seen_version=version(c, task_id)), "task_requirement")
+        assert detail == f"Already in v1.0.0 of {REPO}: there is no release to cut"
+    assert gh.cuts == []
+
+
+def test_a_pre_release_the_requirement_does_not_count_is_no_reason_not_to_cut(company, gh):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
+    gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)
+    F.run(company, gh)
+    assert gh.cuts == [(REPO, "workflow", "release.yml", "")]
+    with company.transaction() as c:
+        assert "release_found" not in X.events(c, task_id)
+
+
+# ----------------------------------------------------------------------------- Health: true while it matters
+class App:
+    def row(self, _c):
+        return {"slug": "acme-tico", "org": "acme", "account_type": None}
+
+
+def permissions(company, at=None, **seen):
+    """What GitHub last reported for the installation (github_app.live_permissions keeps it)."""
+    from backend.github_app import PERMISSIONS_SEEN
+    from backend.repositories import save_metadata
+
+    base = {"metadata": "read", "contents": "write", "actions": "write", "checks": "write"}
+    with company.transaction() as c:
+        save_metadata(c, PERMISSIONS_SEEN, {"permissions": {**base, **seen}, "at": at or H.now()})
+
+
+def release_warning(company):
+    from backend import health
+
+    with company.transaction() as c:
+        return health._github_release_cut(c, App())
+
+
+def test_the_release_warning_says_how_many_tasks_wait_and_clears_with_the_setting_or_the_release(company, gh):
+    permissions(company, actions="read")
+    task_id = to_release(company, gh)
+    warned = release_warning(company)
+    assert warned and warned["label"] == "Tico can't cut releases"
+    assert "Actions: write" in warned["summary"] and "1 task in Release waits" in warned["summary"]
+    assert warned["fixes"][0]["href"].endswith("/settings/apps/acme-tico/permissions")
+    with company.transaction() as c:  # the release workflow is no longer Tico's to run
+        c.execute("UPDATE requirements SET settings='{}' WHERE condition='in_release'")
+    assert release_warning(company) is None
+    with company.transaction() as c:
+        c.execute("UPDATE requirements SET settings=? WHERE condition='in_release'", ('{"release_with": "tag"}',))
+    assert release_warning(company) is None  # a tag needs Contents: write, which the App has
+    with company.transaction() as c:
+        c.execute(
+            "UPDATE requirements SET settings=? WHERE condition='in_release'", ('{"release_with": "workflow:r.yml"}',)
+        )
+    assert release_warning(company)
+    gh.publish(REPO, "v1.0.0")
+    F.refresh(company, gh, H.shift(H.now(), minutes=20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Done"
+    assert release_warning(company) is None  # its release came: nothing waits
+
+
+def test_a_refusal_warns_until_github_reports_the_permission_accepted(company, gh):
+    task_id = to_release(company, gh)
+    gh.withheld = {"actions"}
+    with company.transaction() as c:
+        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
+    F.run(company, gh)
+    assert release_warning(company)  # refused, and GitHub has reported nothing newer
+    permissions(company, at=H.shift(H.now(), minutes=-5), actions="")
+    assert release_warning(company)  # an older report changes nothing
+    permissions(company, at=H.shift(H.now(), minutes=5))
+    assert release_warning(company) is None  # a person accepted Actions: write since
+
+
+def test_health_warns_once_when_the_app_cannot_post_tico_merge_ok_and_a_pipeline_queues(company):
+    from backend import health
+
+    def warning():
+        with company.transaction() as c:
+            return health._github_merge_ok(c, App())
+
+    permissions(company, checks="read")
+    assert warning() is None  # no pipeline queues pull requests
+    with company.transaction() as c:
+        engineering(c)
+        X.pipeline(c, "eng2", "Engineering 2", stages=({"name": "Merge", "on_enter": {"act": "github.queue"}},))
+    warned = warning()
+    assert warned and warned["id"] == "github_merge_ok" and "tico/merge-ok" in warned["summary"]
+    assert warned["fixes"][0]["href"].endswith("/settings/apps/acme-tico/permissions")
+    permissions(company)
+    assert warning() is None  # Checks: write accepted
+    with company.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key='github-app-permissions'")
+    assert warning() is None  # nothing learned yet: no guess
+    permissions(company, checks="read")
+    with company.transaction() as c:
+        c.execute("UPDATE pipelines SET retired_at=?", (H.now(),))
+    assert warning() is None

@@ -1832,26 +1832,110 @@ def _github_workflows(c, github):
     return None
 
 
+def _app_lacks(c, permission, refused_since=None):
+    """Whether the GitHub App's installation lacks `permission` at write: what GitHub last reported
+    (github_app.PERMISSIONS_SEEN), unless GitHub refused for want of it (at `refused_since`) after that report, or there
+    is none yet. Reads no network."""
+    from .github_app import PERMISSIONS_SEEN, permission_seen
+    from .repositories import metadata
+
+    seen = permission_seen(c, permission)
+    seen_at = str(metadata(c, PERMISSIONS_SEEN).get("at") or "")
+    if refused_since and (seen is None or seen_at <= refused_since):
+        return True
+    return seen is not None and seen != "write"
+
+
 def _github_release_cut(c, github):
     """Tico cuts a release when the Release Owner asks (item_sources/github_release.py), with a token naming Actions:
-    write (a release workflow) or Contents: write (a tag). When the newest ask failed because the installation has not
-    accepted that permission, say so plainly: only a person can grant it. Reads the asks Tico recorded, no network."""
+    write (a release workflow) or Contents: write (a tag). Only a person can grant that permission, so say so plainly,
+    while it is true and matters: a pipeline's In a release is set to a way that needs a permission the installation
+    lacks (as GitHub last reported it, or as it last refused an ask of that way), and a task waits in that stage now.
+    It clears once the permission is there, the setting is cleared or changed, or no task waits any more (its release
+    came). Reads what Tico recorded, no network."""
     from .github_app import links
     from .item_sources import github_release as GR
 
     row = github.row(c) if github else None
-    newest = c.execute(
-        "SELECT state, last_error, item_key FROM effects WHERE source=? AND action=? AND kind='act' "
-        "AND state IN ('done', 'failed') ORDER BY updated_at DESC, rowid DESC LIMIT 1",
-        (GR.SOURCE, GR.RELEASE),
-    ).fetchone()
-    if not row or not newest or newest[0] != "failed" or not str(newest[1] or "").startswith(GR.MISSING):
+    if not row:
+        return None
+    needs = {"workflow": ("actions", GR.MISSING_ACTIONS), "tag": ("contents", GR.MISSING_CONTENTS)}
+    waiting = {}  # kind -> {stage name: tasks waiting there}
+    for settings, stage_id, stage in c.execute(
+        "SELECT r.settings, s.id, s.name FROM requirements r JOIN stages s ON s.id = r.stage_id "
+        "JOIN pipelines p ON p.id = s.pipeline_id WHERE r.withdrawn_at IS NULL AND r.kind='item' AND r.source=? "
+        "AND r.condition='in_release' AND s.retired_at IS NULL AND p.retired_at IS NULL",
+        (GR.SOURCE,),
+    ).fetchall():
+        try:
+            how = GR.way(json.loads(settings or "{}") or {})
+        except (TypeError, ValueError, AttributeError):
+            how = None
+        if how is None:
+            continue
+        count = c.execute(
+            "SELECT count(*) FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+            "WHERE v.stage_id=? AND t.status='open'",
+            (stage_id,),
+        ).fetchone()[0]
+        if count:
+            places = waiting.setdefault(how[0], {})
+            places[stage] = places.get(stage, 0) + count
+    lines = []
+    for kind, places in sorted(waiting.items()):
+        permission, missing = needs[kind]
+        refused = c.execute(
+            "SELECT updated_at, last_error FROM effects WHERE source=? AND action=? AND kind='act' "
+            "AND state IN ('done', 'failed') AND pinned LIKE ? ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+            (GR.SOURCE, GR.RELEASE, kind + ":%"),
+        ).fetchone()
+        since = str(refused[0]) if refused and str(refused[1] or "").startswith(GR.MISSING) else None
+        if not _app_lacks(c, permission, since):
+            continue
+        total = sum(places.values())
+        where = " and ".join(sorted(places))
+        lines.append(
+            f"{missing}. Until then {total} {'task' if total == 1 else 'tasks'} in {where} "
+            f"{'waits' if total == 1 else 'wait'} for a release Tico can't cut"
+        )
+    if not lines:
         return None
     return _check(
         "github_release_cut",
         "Tico can't cut releases",
         "warn",
-        f"{newest[1]}. Tasks in Release wait for a release of {newest[2]} until then.",
+        ". ".join(lines) + ".",
+        [
+            _fix("Change the App's permissions", links(row)["permissions_url"]),
+            _fix("Open GitHub settings", "#/tools/github"),
+        ],
+    )
+
+
+def _github_merge_ok(c, github):
+    """Tico's Merge stage posts its `tico/merge-ok` check run on each pull request it queues, and on each merge queue
+    group (item_sources/github.py), with the server's own Checks: write token. Without it nothing is posted, so a
+    ruleset that requires the check refuses the merge. One line, while a pipeline queues pull requests and the
+    installation, as GitHub last reported it, lacks Checks: write. Reads no network."""
+    from .github_app import links
+
+    row = github.row(c) if github else None
+    if not row:
+        return None
+    queues = c.execute(
+        "SELECT 1 FROM stages s JOIN pipelines p ON p.id = s.pipeline_id WHERE s.retired_at IS NULL "
+        "AND p.retired_at IS NULL AND json_valid(s.on_enter) AND json_extract(s.on_enter, '$.act') = 'github.queue' "
+        "LIMIT 1"
+    ).fetchone()
+    if not queues or not _app_lacks(c, "checks"):
+        return None
+    return _check(
+        "github_merge_ok",
+        "Tico can't post its merge check",
+        "warn",
+        "Tico's GitHub App lacks Checks: write, so Tico posts no tico/merge-ok check on the pull requests it queues, "
+        "and a ruleset that requires that check refuses their merge. A person sets Checks to Read and write in the "
+        "App's permissions on GitHub and accepts the change for the installation.",
         [
             _fix("Change the App's permissions", links(row)["permissions_url"]),
             _fix("Open GitHub settings", "#/tools/github"),
@@ -3873,6 +3957,8 @@ def view(c, who, settings, auth, github, config):
             checks.append(workflows)
         if release_cut := _github_release_cut(c, github):
             checks.append(release_cut)
+        if merge_ok := _github_merge_ok(c, github):
+            checks.append(merge_ok)
         if edits := _github_workflow_edits(c, github):
             checks.append(edits)
         slack = _slack(c)

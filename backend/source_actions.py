@@ -16,7 +16,9 @@
 States: owed, done, failed, moot. A source module (backend/item_sources) that acts names them in `ACTIONS` and has
 `entered(conn, task, by, action)`, `carry_out(client, effect)`
 (the call, no transaction held: returns what the source said, `{"ok": bool, "reason"?, "how"?}`), `done_already(conn,
-effect)`, `recorded(conn, effect, said, state, version)` and `gave_up(conn, effect, reason)`.
+effect)` (True: no call is made; the action is done, unless the source settled it otherwise itself), `recorded(conn,
+effect, said, state, version)` and `gave_up(conn, effect, reason)`. It may have `look_first(store, client, effect)`, a
+read before `done_already` with no transaction held, so that it decides on what the source says now.
 
 Every function takes the caller's open write transaction and never commits, except `run`.
 """
@@ -227,9 +229,12 @@ def run(store: Any, clients: dict[str, Any], now: str | None = None) -> int:
         if module is None or client is None:
             continue
         if effect["kind"] == ACT:
+            look = getattr(module, "look_first", None)
+            if look is not None:
+                look(store, client, effect)
             with store.transaction() as conn:
-                if module.done_already(conn, effect) and _done(conn, effect):
-                    count += 1
+                if module.done_already(conn, effect):
+                    count += 1 if _done(conn, effect) else 0
                     continue
         version: int = module.version_now()
         try:
