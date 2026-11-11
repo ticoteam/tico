@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import quote
 
+from clients import cli_plumbing
 from clients import hubtools as T
 from clients.hubtools import PEOPLE, TASK_ID, _key, _s, task_create, tool
 from clients.tico import APIError
@@ -342,7 +343,8 @@ def task_send_back(api, args):
 
 # ----------------------------------------------------------------------------- tico task wait (a shell's, not a tool)
 TURN_STATES = ("snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "by_hand")
-EXIT_MET, EXIT_REFUSED, EXIT_ENDED, EXIT_TIMEOUT = 0, 2, 5, 124  # 124: what timeout(1) exits with
+# The CLI's exit codes (clients/cli_plumbing.py, docs/cli.md), and one of the waiter's own: the task ended without it.
+EXIT_MET, EXIT_ENDED, EXIT_TIMEOUT = cli_plumbing.EXIT_OK, 6, cli_plumbing.EXIT_TIMEOUT
 TREE_MAX = 20  # with --tree, at most this many tasks are watched
 
 
@@ -513,7 +515,7 @@ class Watch:
             except APIError as exc:
                 self.emit("error", error=exc.code, detail=exc.detail, retryable=exc.retryable)
                 if not exc.retryable:
-                    return EXIT_REFUSED
+                    return cli_plumbing.exit_code(exc)
 
 
 def task_wait(api, args, **hooks):
@@ -538,13 +540,13 @@ def command(args):
         return task_wait(api, fields)
     except ValueError as exc:
         print(json.dumps({"event": "error", "error": "usage", "detail": str(exc)}), flush=True)
-        return EXIT_REFUSED
+        return cli_plumbing.EXIT_USAGE
     except APIError as exc:
         print(
             json.dumps({"event": "error", "error": exc.code, "detail": exc.detail, "retryable": exc.retryable}),
             flush=True,
         )
-        return 1 if exc.retryable else EXIT_REFUSED
+        return cli_plumbing.exit_code(exc)
 
 
 # ----------------------------------------------------------------------------- joining the table

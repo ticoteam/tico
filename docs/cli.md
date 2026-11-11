@@ -90,6 +90,7 @@ stderr. A bot's turn cannot follow the stream; people and their tokens can.
 | 3 | `tico task worktree add` at the bot's worktree limit: Tico holds the task's place and wakes it | End the turn |
 | 4 | Needs sign-in: no credential (`HUB_API_URL` unset and no profile), a profile that is missing or unreadable, or a token that is invalid, expired or revoked (401, or a sign-in page) | After fixing the credential |
 | 5 | Not found (404): no such thing, or not one this credential may see | No |
+| 6 | `tico task wait`: the task ended (done or closed) without reaching what it waits for | No |
 | 64 | Usage: an unknown command or flag, a missing argument, a task command missing what it needs (`Add --version N`) | No: fix the line |
 | 124 | A waiter's `--timeout` passed before what it waits for happened | Wait again if it should |
 

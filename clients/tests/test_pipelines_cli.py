@@ -261,7 +261,7 @@ def test_a_request_goes_to_the_first_stages_holder_and_a_stage_for_whoever_needs
     assert api.writes()[0][2]["owner"] == "builder" and api.writes()[0][2]["private"] is True
     code, api = cli(["task", "request", "general", "Tidy the docs"])
     out = json.loads(capsys.readouterr().out)
-    assert code == 1 and out["error"] == "usage" and "--owner" in out["detail"] and not api.writes()
+    assert code == 64 and out["error"] == "usage" and "--owner" in out["detail"] and not api.writes()
 
 
 def test_approve_answers_the_one_ok_that_waits_on_you_for_the_page_version_shown(cli, capsys):
@@ -272,14 +272,14 @@ def test_approve_answers_the_one_ok_that_waits_on_you_for_the_page_version_shown
     assert json.loads(capsys.readouterr().out)["answered"]["page"] == "page:file-9@4"
     two = Api(task={"id": "T1", "version": 7, "to_leave": [ask(), ask(rid="r5")]})
     code, api = cli(["task", "approve", "T1", "--version", "6"], two)
-    assert code == 1 and "--requirement" in json.loads(capsys.readouterr().out)["detail"] and not api.writes()
+    assert code == 64 and "--requirement" in json.loads(capsys.readouterr().out)["detail"] and not api.writes()
     code, api = cli(["task", "approve", "T1", "--requirement", "r5", "--version", "6"], two)
     assert api.writes()[0][1:] == ("tasks/T1/asks/r5/answer", {"value": "ok", "version": 6, "page_version": "file-9@4"})
     capsys.readouterr()
     none = Api(task={"id": "T1", "version": 7, "to_leave": [ask(may=()), ask(rid="r6", met=True)]})
     code, api = cli(["task", "approve", "T1"], none)
     detail = json.loads(capsys.readouterr().out)["detail"]
-    assert code == 1 and detail.startswith("Nothing on this task waits for your ok: r1 Spec page") and not api.writes()
+    assert code == 64 and detail.startswith("Nothing on this task waits for your ok: r1 Spec page") and not api.writes()
 
 
 def test_send_back_is_a_no_with_the_note_and_needs_one(cli, capsys):
@@ -292,7 +292,7 @@ def test_send_back_is_a_no_with_the_note_and_needs_one(cli, capsys):
     }
     with pytest.raises(ValueError, match="Say what to change"):
         P.task_send_back(Api(), {"id": "T1", "note": "  "})
-    assert hubcli.main(["task", "send-back", "T1"]) == 1  # argparse: -m is required
+    assert hubcli.main(["task", "send-back", "T1"]) == 64  # argparse: -m is required
 
 
 def test_task_list_narrows_to_a_pipeline_a_stage_and_whose_turn_it_is(cli, capsys):
@@ -412,7 +412,7 @@ def test_wait_with_no_condition_ends_with_the_task_and_with_one_it_never_meets_e
     code, lines = watch(Api(script=script()), {"id": "T1"})
     assert code == 0 and lines[-1] == {**lines[-1], "event": "met", "reason": "status done"}
     code, lines = watch(Api(script=script()), {"id": "T1", "stage": ["engineering-release"]})
-    assert code == P.EXIT_ENDED == 5 and lines[-1]["event"] == "ended"
+    assert code == P.EXIT_ENDED == 6 and lines[-1]["event"] == "ended"
 
 
 def test_wait_for_you_meets_when_an_ok_names_you_and_says_what_you_may_do():
@@ -445,7 +445,7 @@ def test_wait_rides_out_a_passing_error_and_stops_on_a_refusal():
     )
     assert code == 124 and lines[1]["event"] == "error" and lines[1]["retryable"] is True
     code, lines = watch(Flaky(APIError("not_found", "No such task", 404)), {"id": "T1", "status": ["done"]})
-    assert code == P.EXIT_REFUSED and lines[-1] == {**lines[-1], "event": "error", "error": "not_found"}
+    assert code == 5 and lines[-1] == {**lines[-1], "event": "error", "error": "not_found"}  # 404: not found
 
 
 def test_wait_refuses_a_turn_name_it_does_not_know(cli):

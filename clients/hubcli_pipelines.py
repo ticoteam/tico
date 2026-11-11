@@ -11,7 +11,7 @@ holds the tools). Stdlib only: hubcli.parser() calls `add` on every `tico` start
     tico task approve <id> [-m "note"] [--requirement R] [--version N]   your OK on what waits on you
     tico task send-back <id> -m "what to change" [--requirement R] [--version N]   your no, with a note
     tico task wait <id> [--stage S] [--status done] [--turn person] [--needs-me] [--tree] [--timeout 30m] [--every 15s]
-                                           one JSON line per change; exit 0 when met, 5 when the task ended
+                                           one JSON line per change; exit 0 when met, 6 when the task ended
                                            without it, 124 on timeout (a person's shell; a bot's turn never waits)
 """
 
@@ -143,7 +143,7 @@ def add(sub, task):
         "wait",
         WAIT,
         "wait until a task reaches (or passes) a stage, a status or a turn, or needs you; one JSON line per change",
-        "A person's shell (a bot's turn never waits). Exit 0 when met, 5 when the task ended without it, "
+        "A person's shell (a bot's turn never waits). Exit 0 when met, 6 when the task ended without it, "
         "124 on timeout. With no condition it waits until the task ends.",
         "tico task wait 3508775e --tree --stage engineering-release --timeout 2h",
     )

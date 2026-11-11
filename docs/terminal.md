@@ -113,7 +113,8 @@ it still takes to leave the stage) and `yours` (what waits on you, with what you
 Conditions: `--stage` (reached or passed, Done counts), `--status`, `--turn`, `--needs-me`; any one met is enough, on
 the task or, with `--tree`, any task it filed. With no condition it waits until the task ends.
 
-Exit codes: **0** met, **5** the task ended without it, **124** timeout, **2** refused (an unknown task or stage). A
+Exit codes: **0** met, **6** the task ended without it, **124** timeout, **5** no such task, **64** a wrong line
+(an unknown stage or turn); the rest as every command's ([exit codes](cli.md#exit-codes)). A
 bot's turn never waits: there it says how a task waits on a person or another task.
 
 ## Over MCP
