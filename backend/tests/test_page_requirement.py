@@ -137,7 +137,7 @@ def test_no_page_is_the_owners_turn_and_attaching_owes_jev_a_verdict(c, store):
     owed = V.owed(c, H.shift(H.now(), seconds=1))
     assert [(o["file_id"], o["version"], o["rubric_hash"]) for o in owed] == [(fid, 2, made["rubric_hash"])]
     assert "page_attached" in X.events(c, row["id"])
-    assert json.loads(made["judged_against"]) == {"rubric": "Spec page", "context": {}}
+    assert json.loads(made["judged_against"]) == {"rubric": "Spec page", "context": {"task": row["id"]}}
 
 
 def test_attaching_again_replaces_the_page_and_the_same_page_twice_is_one(c, store):
@@ -328,7 +328,7 @@ def test_a_review_page_counts_only_for_the_newest_commit(c, store):
     _push(c, "acme/app", 12, "aaa")
     made = _attach(c, row, "page:" + fid, requirement="review")
     assert json.loads(made["heads"]) == {"acme/app#12": "aaa"}
-    assert json.loads(made["judged_against"])["context"] == {"heads": {"acme/app#12": "aaa"}}
+    assert json.loads(made["judged_against"])["context"] == {"task": row["id"], "heads": {"acme/app#12": "aaa"}}
     _say(c, made, "met")
     assert _standing(c, row).met
     _push(c, "acme/app", 12, "bbb")
@@ -361,7 +361,8 @@ def test_a_validate_page_is_judged_against_the_release_its_filed_work_went_out_i
             (rid, "m1", at),
         )
     made = _attach(c, row, "page:" + _page(c, store)[0])
-    assert json.loads(made["judged_against"])["context"] == {"release": ["v1.1.0"]}, "the first release it is in"
+    context = json.loads(made["judged_against"])["context"]
+    assert context == {"task": row["id"], "release": ["v1.1.0"]}, "the first release it is in"
 
 
 # ----------------------------------------------------------------------------- the Jev step
@@ -392,6 +393,42 @@ def test_the_jev_step_judges_the_page_text_and_moves_the_task(store, seeded, mon
         assert E.task(r, row["id"])["stage"]["name"] == "Done"
         assert "jev_verdict" in X.events(r, row["id"])
     assert V.run(store, H.shift(H.now(), seconds=1)) == 0, "judged once"
+
+
+def test_jev_is_not_told_the_pinned_page_is_out_of_date(store, seeded, monkeypatch):
+    """The question set says evidence made for an older work_version does not count unless older_evidence_ok. A page
+    is pinned by file and version, and the task's version says nothing about it: Jev must not read it as stale."""
+
+    def build(c):
+        _pipeline(c)
+        row = _task(c)
+        _attach(c, row, "page:" + _page(c, store)[0])
+        return row
+
+    seeded(build)
+    calls = []
+    monkeypatch.setattr(PJ, "ENGINE", _engine(0.95, calls))
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 1
+    (state,) = calls
+    assert state["work"]["work_version"] > 0
+    stale = state["attachment"]["work_version"] < state["work"]["work_version"]
+    assert not stale or state["requirement"].get("older_evidence_ok") is True, state
+
+
+def test_the_same_page_on_two_tasks_is_judged_for_each_task(store, seeded, monkeypatch):
+    def build(c):
+        _pipeline(c)
+        fid, _ = _page(c, store)
+        one = _task(c)
+        two = X.new_task(c, ANA, "Billing spec", "product", assignee=WRITER)
+        return _attach(c, one, "page:" + fid), _attach(c, two, "page:" + fid)
+
+    first, second = seeded(build)
+    assert first["rubric_hash"] != second["rubric_hash"]
+    calls = []
+    monkeypatch.setattr(PJ, "ENGINE", _engine(0.95, calls))
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 2
+    assert sorted(state["work"]["title"] for state in calls) == ["Billing spec", "Importer spec"]
 
 
 def test_jevs_send_back_wakes_the_bot_owner_with_the_reasons(store, seeded, monkeypatch):
