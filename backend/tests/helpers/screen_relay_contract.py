@@ -23,23 +23,22 @@ KEY = "fictional-relay-key-for-isolated-tests-only"
 
 
 def relay_binary():
-    """The relay under test: TICO_SCREEN_RELAY_BIN, else this checkout's release build if it is the current sources'."""
+    """The relay under test: TICO_SCREEN_RELAY_BIN, else the build matching this checkout's relay-rs sources, which
+    screen_binary.prepare finds, downloads on a release tag, or builds with cargo (once; concurrent callers wait)."""
     from backend import screen_binary
 
     binary = os.environ.get("TICO_SCREEN_RELAY_BIN", "")
-    if not binary:
-        built = (
-            Path(os.environ.get("CARGO_TARGET_DIR") or screen_binary.ROOT / "relay-rs" / "target")
-            / "release"
-            / "tico-screen-relay"
-        )
-        if screen_binary.current(built, screen_binary.source_id()):
-            return str(built)
-    if not binary or not Path(binary).is_file():
+    if binary:
+        if not Path(binary).is_file():
+            raise RuntimeError(f"TICO_SCREEN_RELAY_BIN is not a file: {binary}")
+        return binary
+    try:
+        return str(screen_binary.prepare())
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
         raise RuntimeError(
-            "Build relay-rs (cd relay-rs && cargo build --release) or set TICO_SCREEN_RELAY_BIN to its executable"
-        )
-    return binary
+            "Build relay-rs (cd relay-rs && cargo build --release) or set TICO_SCREEN_RELAY_BIN to its executable: "
+            f"{error}"
+        ) from error
 
 
 def gateway_origin(process):
