@@ -158,10 +158,11 @@ option B, not A.
 
 A **personal API token** is a long random string that is the human who made it, for scripts and services:
 `Authorization: Bearer tico_pt_...`. Make one signed in on Tico's own page, or with `POST /api/v2/me/tokens` from a
-cookie session:
+cookie session. Like every write, it needs an `Idempotency-Key` header (a new UUID per token):
 
 ```
 POST /api/v2/me/tokens   {"label": "portal-backend", "expires_in_days": 90}
+Idempotency-Key: 7f9c2e4a-0b1d-4c3e-9a8f-2d6b5e1c0a94
 -> {"id": "...", "token": "tico_pt_...", "label": "portal-backend", "expires_at": "..."}
 ```
 

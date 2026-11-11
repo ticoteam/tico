@@ -5,6 +5,7 @@ The record is `pipeline_settings`'s: these routes read and write it whole, and e
 (phase 2) is not built: everyone on the team reads every pipeline.
 """
 
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,12 @@ from .store import Problem
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+
+
+# A pipeline made by its save names its own id: lowercase words joined by dashes. Not one of the paths 0.5 had under
+# /api/v2/pipelines/, so an old client's call there is a 404, never a new pipeline.
+NEW_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+RESERVED = frozenset({"overview", "setup", "decisions", "review", "tasks", "new", "log", "retire"})
 
 
 def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any) -> None:
@@ -45,11 +52,15 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
     @app.post("/api/v2/pipelines/{pipeline_id}")
     def pipeline_save(request: Request, pipeline_id: str, body: M.PipelineRecord):
         """Make the pipeline or change it: the whole record, with the `settings_version` it was read at (a bot must
-        give it; a person may leave it out)."""
+        give it; a person may leave it out). A new pipeline's id is lowercase words joined by dashes, and none of the
+        0.5 paths (RESERVED): those answer 404."""
         who: Any = request.state.identity
         auth.domain(who)
 
         def write(c: Any) -> dict[str, Any]:
+            made = c.execute("SELECT 1 FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
+            if not made and (pipeline_id in RESERVED or not NEW_ID.match(pipeline_id)):
+                raise Problem("not_found", "No such pipeline", 404)
             given = body.model_dump()
             seen = given.pop("settings_version", None)
             given.pop("may_change", None)
