@@ -24,7 +24,14 @@ the release that carries this change, production does not run it yet: snooze to 
 ## 3. Check each criterion in production
 
 For each criterion tagged before release, do it in production, or read the evidence that shows it (a test account, a
-screenshot, a record), and write met or not met with the evidence. For each criterion tagged after launch, write who
+screenshot, a record), and write met or not met with the evidence. To read a pull request's CI, give gh the pull
+request's link, or `-R <owner/name>` with its number: a `git archive` copy has no remote to find the repository from.
+
+    gh pr checks <pull request link>
+    gh run list -R <owner/name> --commit <merge sha>
+    gh run view <run id> -R <owner/name> --log-failed
+
+Your GitHub access reads pull requests, checks, statuses and workflow runs; it never writes them. For each criterion tagged after launch, write who
 watches it, for how long, and the read date from the spec's "How we will know".
 
 ## 4. Write and attach the page

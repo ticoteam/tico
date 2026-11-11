@@ -9,6 +9,10 @@
       "Bash(gh issue view *)",
       "Bash(gh pr list *)",
       "Bash(gh pr view *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh run list *)",
+      "Bash(gh run view *)",
       "Bash(gh release list *)",
       "Bash(gh release view *)",
       "Bash(gh search issues *)"
@@ -23,6 +27,9 @@
       "Bash(gh pr edit *)",
       "Bash(gh pr merge *)",
       "Bash(gh release create *)",
+      "Bash(gh run rerun *)",
+      "Bash(gh run cancel *)",
+      "Bash(gh workflow run *)",
       "Bash(gh repo delete *)",
       "Bash(git push --force*)"
     ]
