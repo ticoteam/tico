@@ -213,6 +213,7 @@
       "goal_id": null,
       "id": "<task>",
       "important_requesters": 0,
+      "inputs": [],
       "internal_requesters": 0,
       "labels": [],
       "lane": "company",
