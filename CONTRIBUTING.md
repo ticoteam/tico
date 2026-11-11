@@ -19,13 +19,13 @@ commit instead (see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.
 ## Running the tests
 
 ```bash
-pip install -r backend/requirements-dev.txt
-python -m pytest -q                            # the default Python suite, in parallel (about a minute)
-
-npm ci
-npx playwright install chromium
+scripts/dev_setup.sh --browser                 # .venv, node_modules, Chromium and the pre-push hook; quick when done
+.venv/bin/python -m pytest -q                  # the default Python suite, in parallel (about a minute)
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cts)
 ```
+
+`scripts/dev_setup.sh` does only what is missing or stale, so run it again after a pull; `--rust` adds the Rust toolchain
+(it does that by itself when your branch touches a Rust crate).
 
 Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
 the merge queue runs them again on the merged result before a change lands. The default run leaves out
@@ -66,7 +66,8 @@ Where the local gate differs from CI:
 
 - Uncommitted and untracked files are checked locally; CI checks only the pushed commit. The hook says so when the tree is dirty.
 - The baselines (ruff, tsc, UI strict, Biome, API paths) compare with origin/main as the hook last fetched it. CI compares with the pull request's base at the time of its run, so a base that moved since the fetch can differ.
-- `check.sh` uses the Python and Node on your PATH. CI uses a pinned Python 3.15 venv and Node 22 with `npm ci`.
+- `check.sh` uses `.venv/bin` first when there is one (`scripts/dev_setup.sh` makes it), then the Python and Node on your
+  PATH. CI uses a pinned Python 3.15 venv and Node 22 with `npm ci`.
 - `check.sh` runs cargo fmt on the Rust crates; CI's static job does not (the merge queue's rust lint does).
 - `check.sh` collects every test file (`pytest --collect-only`, nothing run), so a test that imports a removed module fails before the push; CI finds it only in the test job.
 - Tests, clippy, the desktop app, the recorder and the Caddy checks are not in `check.sh`. The merge queue runs the tests a change reaches; run the ones you touched with `scripts/remote.py`.

@@ -14,7 +14,9 @@
       "Bash(gh pr checks *)",
       "Bash(gh pr list *)",
       "Bash(gh repo view *)",
-      "Bash(gh search prs *)"
+      "Bash(gh search prs *)",
+      "Bash(git push --force-with-lease *)",
+      "Bash(git push --force-with-lease)"
     ],
     "deny": [
       "Bash(gh pr merge *)",
@@ -26,8 +28,16 @@
       "Bash(gh api *)",
       "Bash(gh run rerun *)",
       "Bash(gh run cancel *)",
-      "Bash(git push --force*)",
-      "Bash(git push -f*)"
+      "Bash(git push --force)",
+      "Bash(git push --force *)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force)",
+      "Bash(git push * --force *)",
+      "Bash(git push*--no-verify*)",
+      "Bash(git push*--tags*)",
+      "Bash(git push*--follow-tags*)",
+      "Bash(git push* refs/tags/*)",
+      "Bash(git tag *)"
     ]
   }
 }

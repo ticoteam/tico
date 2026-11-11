@@ -40,7 +40,8 @@ those and use the defaults for the rest, saying which you used.
 Write each answer to `state.md` under `## Answers`, dated. Then write, as present-tense statements with today's date:
 - `knowledge/thresholds.md`: the team's choices (answer 6).
 - `knowledge/merge-gates.md`: one line per gating check, with repository, check name and who it is handed to (answer 1).
-- `knowledge/versioning.md`: the numbering scheme, what counts as breaking, the last release and its date (answers 2 and 5).
+- `knowledge/versioning.md`: the numbering scheme, what counts as breaking, the last release and its date, and whether a
+  person cuts releases by hand (answers 2 and 5).
 - `knowledge/voice.md`: the format and voice, with the two pasted examples, and the changes that never appear (answers 3 and 4).
 - `knowledge/labels.md`: which labels or prefixes mean which section (answer 4).
 

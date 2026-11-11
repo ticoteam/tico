@@ -7,7 +7,9 @@ that exact version.
 Engineering tasks waiting in Release need none of this: a person already signed each off in Fixes 2, and that is the OK.
 Cut their release with `tico task release <id> --version N` (with `--tag <version>` where the repository releases from a
 tag), once for the repository; every task waiting on it moves on when the release is published. The daily release hour's
-task is the same: ask once for a task in Release, then close the hour's task.
+task is the same: ask once for a task in Release, then close the hour's task. Where a person cuts the repository's
+releases by hand (`knowledge/versioning.md`), ask for nothing and tag nothing: the tasks wait for that person's next
+release.
 
 ---
 

@@ -35,7 +35,9 @@ In the order of `knowledge/spec-format.md`, in `specs/<slug>.md`:
 - **Appetite**: the time the problem is worth, and who set it.
 - **Goal** and **How we will know**: the goal in Tico it moves, with the measure, baseline, target, read date and guard
   from `skills/write-how-we-will-know/SKILL.md`.
-- **Scope** and **Non-goals**: bullets. Every non-goal is something someone might reasonably assume.
+- **Scope** and **Non-goals**: bullets. Every non-goal is something someone might reasonably assume. A change to CI
+  workflow files (`.github/workflows/`) is a person's, since bots cannot push them: the spec names it as a person's step,
+  and the Engineering task leaves it out.
 - **Acceptance criteria**: follow `skills/write-acceptance-criteria/SKILL.md`, each tagged before release or after launch.
 - **Open questions**: each with the human who owes the answer and a date.
 - **Risks**: what could make this the wrong bet, and the cheapest check.

@@ -17,6 +17,11 @@
 # cargo fmt for the Rust crates scripts/rust_checks.sh formats (the merge queue runs that one; the static job does not).
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
+# The .venv scripts/dev_setup.sh makes comes first, so the checks find its Python packages and uv with no venv
+# activated (the pre-push hook, a bot's shell); the cargo rustup installs in your home is found too.
+if [ -x .venv/bin/python3 ]; then PATH="$PWD/.venv/bin:$PATH"; fi
+PATH="$PATH:${CARGO_HOME:-$HOME/.cargo}/bin"
+export PATH
 
 ALL=0
 case ${1:-} in
@@ -106,6 +111,7 @@ RUST_TOOLCHAIN=${RUST_TOOLCHAIN:-1.92.0}
 # shellcheck disable=SC2329  # job calls it by name
 rust_fmt() {  # CRATE: cargo fmt --check as rust_checks.sh runs it
   local crate=$1 pending=0 status=0 out
+  if ! command -v cargo >/dev/null 2>&1; then echo "cargo is not installed: run scripts/dev_setup.sh --rust"; return 1; fi
   if grep -qx "$crate" scripts/rust-fmt-pending.txt; then pending=1; fi
   out=$(cd "$crate" && if printf '%s\n' "$(rustup toolchain list 2>/dev/null)" | grep -q "^$RUST_TOOLCHAIN"; then
           cargo +"$RUST_TOOLCHAIN" fmt --check; else cargo fmt --check; fi 2>&1) || status=$?
