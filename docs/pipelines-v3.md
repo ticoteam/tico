@@ -204,7 +204,8 @@ That gives three kinds of stage, and no others:
 4. **An item.** Something a source keeps, read through one of the source's conditions. A source is a Python module
    under `backend/item_sources/`; GitHub is the only one. Its item is a PR and its conditions are:
    - **PR open.** At least one PR is linked, and none was closed without merging.
-   - **Checks pass.** Every linked PR is green at its newest commit. Tico's own check runs are ignored.
+   - **Checks pass.** Every linked PR is green at its newest commit: no check failed, none is running, and at least
+     one ran and passed. Tico's own check runs are ignored.
    - **PR merged.** Every linked PR has merged.
    - **In a release.** Every merge is inside a published release.
 5. **Linked work done.** Every task filed during this visit to the stage ended Done, not Closed. Zero tasks filed means
@@ -876,6 +877,11 @@ late. Nothing depends on the exact 10 seconds.
 - **No stale writes.** Each PR's metadata has a version, compared inside the transaction. An old read can't overwrite a newer
   one.
 - **Checks pass** ignores Tico's own check runs. No checks at all after 10 minutes counts as met (C13).
+- **How checks are read.** Each check run and commit status at the PR's newest commit. A check run is its name inside
+  its check suite: two workflows or two Apps that both name a run `checks` are two checks, and a red one fails the PR
+  whichever GitHub lists first. A re-run stays in its suite, so only its newest run counts (a re-run that goes green
+  passes; one that goes red fails). A skipped or neutral run fails nothing, but it is not a pass: when every check was
+  skipped, Checks pass is not met, and it is the owner's turn ("No checks ran on ...: every check was skipped").
 - **A new commit during Review** puts the review back to Waiting on the reviewer.
 - **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the

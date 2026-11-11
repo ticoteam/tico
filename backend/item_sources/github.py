@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 Row = dict[str, Any]
 
 PR_STATES = ("open", "closed", "merged")
-CHECK_STATES = ("none", "pending", "success", "failure")
+CHECK_STATES = ("none", "pending", "success", "skipped", "failure")  # skipped: every check that counts was skipped
 QUEUE_STATES = ("none", "queued", "auto_merge", "removed")
 QUEUED = ("queued", "auto_merge")  # in GitHub's merge queue, or auto-merge on where the repo has no queue
 NO_CHECKS_AFTER_S = 600  # C13: no checks for a commit 10 minutes after Tico saw it, and Checks pass is met
@@ -61,8 +61,9 @@ class GitHub(Protocol):
         ...
 
     def read_checks(self, repo: str, sha: str) -> list[Row]:
-        """The check runs and statuses on a commit: [{name, app, state: pending|success|failure, url, tico}]. `tico`
-        is true for Tico's own check runs, which Checks pass ignores."""
+        """The check runs and statuses on a commit: [{name, app, state: pending|success|skipped|failure, url, tico,
+        suite, id}], one per check (`latest_checks`: a re-run's newest run only). `tico` is true for Tico's own check
+        runs, which Checks pass ignores. `suite` is a run's check suite id and `id` its run (or status) id."""
         ...
 
     def read_releases(self, repo: str) -> list[Row]:
@@ -221,8 +222,9 @@ def save_pr(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, v
 
 
 def _checks_state(checks: list[Row]) -> str:
-    """failure if any of the checks that count failed, else pending if any runs, else success; none when there are none.
-    Tico's own check runs (`tico`) never count."""
+    """failure if any of the checks that count failed, else pending if any runs, else success if at least one passed;
+    skipped when every one was skipped (or neutral): nothing ran and passed, so that is not passing. none when there
+    are none. Tico's own check runs (`tico`) never count."""
     states = [str(check.get("state") or "") for check in checks if not check.get("tico")]
     if not states:
         return "none"
@@ -230,7 +232,60 @@ def _checks_state(checks: list[Row]) -> str:
         return "failure"
     if "pending" in states:
         return "pending"
-    return "success"
+    if "success" in states:
+        return "success"
+    return "skipped"
+
+
+def check_key(check: Row) -> str:
+    """Which check a check run or commit status is. A status is its context. A check run is its name inside its check
+    suite (GitHub makes one suite per workflow run, or per App run, at a commit), or inside its App when the suite is
+    not known. A re-run keeps its suite and name, so it is the same check; two suites with one name (two workflows, or
+    two Apps, both naming a run `checks`) are two checks, and each counts."""
+    name = str(check.get("name") or "Checks")
+    if check.get("app") == "status":
+        return "status\0" + name
+    suite = check.get("suite")
+    return ("suite\0" + str(suite) if suite else "app\0" + str(check.get("app") or "")) + "\0" + name
+
+
+def latest_checks(checks: list[Row]) -> list[Row]:
+    """One row per check (`check_key`), the newest run of each by its GitHub id (ids only grow); a row with an equal or
+    unknown id replaces the one before it. First-seen order is kept."""
+    out: dict[str, Row] = {}
+    for check in checks:
+        key = check_key(check)
+        old = out.get(key)
+        if old is None or int(check.get("id") or 0) >= int(old.get("id") or 0):
+            out[key] = check
+    return list(out.values())
+
+
+def run_check(run: Row, app_slug: str | None) -> Row:
+    """A check run as GitHub's API or a `check_run` webhook gives it, as one row of metadata `checks`."""
+    slug = str(_obj(run.get("app")).get("slug") or "")
+    return {
+        "name": str(run.get("name") or "Checks")[:200],
+        "app": slug,
+        "state": check_state(run.get("status"), run.get("conclusion")),
+        "url": run.get("html_url") or run.get("details_url") or "",
+        "tico": bool(app_slug) and slug == app_slug,
+        "suite": _obj(run.get("check_suite")).get("id"),
+        "id": run.get("id"),
+    }
+
+
+def status_check(status: Row) -> Row:
+    """A commit status (from the API or a `status` webhook) as one row of metadata `checks`."""
+    return {
+        "name": str(status.get("context") or "Checks")[:200],
+        "app": "status",
+        "state": check_state(status.get("state"), status.get("state")),
+        "url": status.get("target_url") or "",
+        "tico": False,
+        "suite": None,
+        "id": status.get("id"),
+    }
 
 
 def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
@@ -319,12 +374,15 @@ def removal_words(reason: object) -> str:
 
 
 def check_state(status: object, conclusion: object) -> str:
-    """A check run's or status's state as metadata keeps it: pending, success or failure."""
+    """A check run's or status's state as metadata keeps it: pending, success, skipped or failure. A neutral run is
+    skipped: it fails nothing, and it is not a check that ran and passed."""
     if str(status or "completed") not in ("completed", "success", "failure", "error"):
         return "pending"
     result = str(conclusion or status or "")
-    if result in ("success", "neutral", "skipped"):
+    if result == "success":
         return "success"
+    if result in ("neutral", "skipped"):
+        return "skipped"
     if result in ("pending", "queued", "in_progress", "requested", "waiting", ""):
         return "pending"
     return "failure"
@@ -390,23 +448,10 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
         if event == "check_run":
             run: Row = payload.get("check_run") or {}
             sha = str(run.get("head_sha") or "")
-            slug = str(_obj(run.get("app")).get("slug") or "")
-            check: Row = {
-                "name": str(run.get("name") or "Checks")[:200],
-                "app": slug,
-                "state": check_state(run.get("status"), run.get("conclusion")),
-                "url": run.get("html_url") or run.get("details_url") or "",
-                "tico": bool(app_slug) and slug == app_slug,
-            }
+            check = run_check(run, app_slug)
         else:
             sha = str(payload.get("sha") or "")
-            check = {
-                "name": str(payload.get("context") or "Checks")[:200],
-                "app": "status",
-                "state": check_state(payload.get("state"), payload.get("state")),
-                "url": payload.get("target_url") or "",
-                "tico": False,
-            }
+            check = status_check(payload)
         numbers = _open_at_head(conn, repo, sha)
         if event == "check_run":
             # A check run on a commit no metadata has yet came before its `synchronize`: the PRs it names are read in
@@ -419,7 +464,7 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
                     IM.mark_due(conn, SOURCE, PR, pr_key(repo, number))
         for number in numbers:
             old: list[Row] = (pr(conn, repo, number) or {}).get("checks") or []
-            checks = [c for c in old if c.get("name") != check["name"]] + [check]
+            checks = latest_checks(old + [check])  # this one check changes; a newer run already saved stays
             if save_and_settle(conn, repo, number, {"checks": checks}, version):
                 out.append(pr_ref(repo, number))
     elif event == "release":
@@ -1174,6 +1219,8 @@ def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
         return Standing(
             requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {failing_names(metadata)}"
         )
+    if state == "skipped":
+        return Standing(requirement, NOT_MET, task.get("owner_id"), f"No checks ran on {ref}: every check was skipped")
     if state == "pending":
         running = _seconds_since(metadata.get("checks_started_at"))
         if running is not None and running >= CHECKS_TOO_LONG_S:
