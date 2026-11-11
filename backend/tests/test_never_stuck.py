@@ -1120,6 +1120,13 @@ def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_w
     assert all(n.get("task_id") != task_id for n in W.needs(c, ANA))
     assert NS.rules_hold(c) == []
     assert H.task_readers(H.task(c, task_id)) == ["group:ops"]  # nobody was added
+    # The reading is hourly: a task closed since it was taken no longer counts, and an old reading says when it was
+    # read (Globex rc.4: "14 can't run" stood after all 14 were done).
+    E.move(c, task_id, E.CLOSED, REVIEWER, "Not needed", seen_version=H.task(c, task_id)["version"])
+    time_machine.shift(timedelta(minutes=1))
+    closed = health._never_stuck_check(c)
+    assert closed["counts"]["no_one"] == 0 and closed["status"] == "ok" and closed["at"] == check["at"]
+    assert "Read at" in closed["summary"] and "Read at" not in check["summary"]
 
 
 class _Store:

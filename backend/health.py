@@ -2586,6 +2586,7 @@ NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_
 # (backend/sql.py), since they name tasks the Admin may not read.
 NEVER_STUCK_KEY = "health:never_stuck"
 NEVER_STUCK_TASKS_KEY = "health:never_stuck:tasks"
+NEVER_STUCK_FRESH_MINUTES = 10  # an older reading says when it was read
 
 
 def _plate_people(c, auth):
@@ -2747,22 +2748,33 @@ def _never_stuck_check(c, visible_sql=None):
         return json.loads(row[0]) if row else None
 
     reading = stored(NEVER_STUCK_KEY)
-    named = stored(NEVER_STUCK_TASKS_KEY) if visible_sql else None
+    named = stored(NEVER_STUCK_TASKS_KEY)
     if not reading or (visible_sql and not (named and "broken_tasks" in named)):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
-    if visible_sql and named:
+    if named and "broken_tasks" in named:
+        # The reading is up to an hour old: a task done since then no longer counts, so the numbers never say a task
+        # is stuck after it closed. A task that got stuck since then waits for the next reading.
         listed, breaks = named["tasks"], named["broken_tasks"]
         ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
-        readable = _readable(c, visible_sql, sorted(ids))
-        counts = {key: sum(1 for tid in listed.get(key, []) if tid in readable) for key in NEVER_STUCK_COUNTS}
-        # A break counts for a reader of every task it is about; one about no task is the company's alone.
-        counts["broken"] = sum(1 for found in breaks if found and all(tid in readable for tid in found))
+        readable = _readable(c, visible_sql or "1", sorted(ids))
+        still_open = _readable(c, f"status='open' AND ({visible_sql or '1'})", sorted(ids))
+        counts = {key: sum(1 for tid in listed.get(key, []) if tid in still_open) for key in NEVER_STUCK_COUNTS}
+        counts["no_one"] = len({tid for tid in listed.get("no_one", []) if tid in still_open})
+        # A break can be about a done task (a wake queued after it closed), so it counts until the next reading. It
+        # counts for a reader of every task it is about; one about no task is the company's alone.
+        counts["broken"] = (
+            sum(1 for found in breaks if found and all(tid in readable for tid in found))
+            if visible_sql
+            else int(reading.get("broken") or 0)
+        )
     else:
         counts = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
     summary = (
         f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
         f"{counts['manager']} with a manager, {counts['person']} reached a person, {counts['cant_run']} can't run."
     )
+    if reading.get("at") and str(reading["at"]) < H.shift(H.now(), minutes=-NEVER_STUCK_FRESH_MINUTES):
+        summary += f" Read at {str(reading['at'])[11:16]} UTC; tasks closed since are left out."
     if counts["no_one"]:
         # The company's owner and Admins learn how many, never which: no one who reads them can move them.
         them = "it" if counts["no_one"] == 1 else "them"
