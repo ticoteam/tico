@@ -94,6 +94,19 @@ def test_no_github_bot_may_merge(template):
     assert not any("gh pr merge" in rule for rule in rules["allow"])
 
 
+def test_the_product_owner_reads_ci_by_repository_and_never_writes_it():
+    # Validate runs on a `git archive` copy, which has no remote: gh, and the runner's token for the repository, need
+    # the pull request's link or -R to know which repository to read.
+    rules = settings("segment-product-owner")
+    for read in ("gh pr checks", "gh pr diff", "gh run list", "gh run view"):
+        assert f"Bash({read} *)" in rules["allow"], read
+    for write in ("gh pr merge", "gh pr review", "gh run rerun", "gh run cancel", "gh workflow run"):
+        assert f"Bash({write} *)" in rules["deny"], write
+        assert not any(write in rule for rule in rules["allow"]), write
+    playbook = (CATALOG / "segment-product-owner" / "playbooks" / "validate-in-production.md").read_text()
+    assert "gh pr checks <pull request link>" in playbook and "-R <owner/name>" in playbook
+
+
 def test_only_the_release_manager_may_push_a_rebased_branch():
     rules = settings("release-owner")
     lease = "Bash(git push --" + "force-with-lease *)"
