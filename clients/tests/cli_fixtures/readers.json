@@ -1,0 +1,61 @@
+[
+ {
+  "argv": [
+   "readers"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "readers",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico readers: error: argument sub: invalid choice: 'nope' (choose from list) Did you mean: tico readers list?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "readers",
+   "list"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "readers",
+   "list",
+   "--limit",
+   "5",
+   "--cursor",
+   "5"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ }
+]

@@ -1,0 +1,61 @@
+[
+ {
+  "argv": [
+   "audiences"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "audiences",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico audiences: error: argument sub: invalid choice: 'nope' (choose from list) Did you mean: tico audiences list?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "audiences",
+   "list"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "audiences",
+   "list",
+   "--limit",
+   "5",
+   "--offset",
+   "5"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ }
+]

@@ -1,0 +1,29 @@
+[
+ {
+  "argv": [
+   "company-page"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "company-page",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico company-page: error: unrecognized arguments: nope Did you mean: tico company-page, tico goal company?",
+  "exit": 64
+ }
+]

@@ -1,0 +1,107 @@
+[
+ {
+  "argv": [
+   "editions"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "editions",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico editions: error: argument sub: invalid choice: 'nope' (choose from list, show) Did you mean: tico editions show, tico editions list?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "editions",
+   "list"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "editions",
+   "list",
+   "--audience",
+   "audience-1",
+   "--status",
+   "status-1",
+   "--before",
+   "before-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "editions",
+   "show",
+   "id-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"unsupported\",\n  \"detail\": \"This command is not supported by the remote API\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "editions",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico editions show <id>\ntico editions show: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "editions",
+   "list",
+   "--limit",
+   "x"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico editions list: error: argument --limit: invalid int value: 'x'",
+  "exit": 64
+ }
+]

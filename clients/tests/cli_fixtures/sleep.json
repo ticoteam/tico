@@ -1,0 +1,190 @@
+[
+ {
+  "argv": [
+   "sleep"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "sleep",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico sleep: error: argument sub: invalid choice: 'nope' (choose from status, set) Did you mean: tico sleep set, tico sleep status?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "sleep",
+   "status"
+  ],
+  "tools": [
+   [
+    "tico_sleep_status",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "sleep",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"hosted\": true,\n  \"hours\": 4,\n  \"runners\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "sleep",
+   "set"
+  ],
+  "tools": [
+   [
+    "tico_sleep_set",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "sleep",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"hosted\": true,\n  \"hours\": 2,\n  \"runners\": false\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "sleep",
+   "set",
+   "--hours",
+   "hours-1",
+   "--runners",
+   "runners-1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico sleep set: error: argument --hours: use a whole number of hours from 0 to 24",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "sleep",
+   "set",
+   "--hours",
+   "2",
+   "--runners",
+   "off"
+  ],
+  "tools": [
+   [
+    "tico_sleep_set",
+    {
+     "hours": 2,
+     "operation_id": null,
+     "runners": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "sleep",
+    {
+     "hours": 2,
+     "runners": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"hosted\": true,\n  \"hours\": 2,\n  \"runners\": false\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "sleep",
+   "set",
+   "--hours",
+   "0"
+  ],
+  "tools": [
+   [
+    "tico_sleep_set",
+    {
+     "hours": 0,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "sleep",
+    {
+     "hours": 0
+    }
+   ]
+  ],
+  "stdout": "{\n  \"hosted\": true,\n  \"hours\": 2,\n  \"runners\": false\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "sleep",
+   "set",
+   "--hours",
+   "25"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico sleep set: error: argument --hours: use a whole number of hours from 0 to 24",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "sleep",
+   "set",
+   "--runners",
+   "on"
+  ],
+  "tools": [
+   [
+    "tico_sleep_set",
+    {
+     "operation_id": null,
+     "runners": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "sleep",
+    {
+     "runners": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"hosted\": true,\n  \"hours\": 2,\n  \"runners\": false\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]
