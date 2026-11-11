@@ -181,7 +181,14 @@ def _fill(parser, command, suppress=False):
         exclusive.update(dict.fromkeys(names, parser.add_mutually_exclusive_group()))
     for names, keywords in command.arguments(suppress):
         (exclusive.get(keywords.get("dest", names[0])) or parser).add_argument(*names, **keywords)
-    parser.set_defaults(fn=command.fn, spec=command)
+    parser.set_defaults(fn=command.fn, _spec=command)
+
+
+def of(args):
+    """The Command a parsed line was built from, or None for a command the hand parser still builds. Kept under a
+    private dest, so a command's own `--spec` flag (`tico page publish --spec`) cannot shadow it."""
+    command = getattr(args, "_spec", None)
+    return command if isinstance(command, Command) else None
 
 
 def add(sub, specs: Iterable[Group | Command]):

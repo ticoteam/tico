@@ -1016,7 +1016,7 @@ def test_a_document_over_the_bound_is_marked_truncated_in_every_place(api, monke
 
 
 def test_the_cli_cites_the_version_it_names_after_a_newer_version_lands(api):
-    from clients import hubcli
+    from clients import cli_spec, hubcli
 
     org(api)
     counsel_on(api)
@@ -1045,7 +1045,7 @@ def test_the_cli_cites_the_version_it_names_after_a_newer_version_lands(api):
             CONSENT,
         ]
     )
-    _, args = line.spec.prepare(line)
+    _, args = cli_spec.of(line).prepare(line)
     assert args["cite"] == {"file_id": file_id, "section": "4. Messaging", "quote": CONSENT, "version": first}
     r = api.post(
         "/api/v2/rules",
@@ -1058,16 +1058,16 @@ def test_the_cli_cites_the_version_it_names_after_a_newer_version_lands(api):
         ["rules", "add", "--kind", "external", "--text", "x", "--from", "Acme", "--version", "1"]
     )
     with pytest.raises(SystemExit):
-        line.spec.prepare(line)
+        cli_spec.of(line).prepare(line)
 
 
 def test_rules_read_by_id_is_the_single_rule_and_with_from_a_document_read():
-    from clients import hubcli
+    from clients import cli_spec, hubcli
 
     single = hubcli.parser().parse_args(["rules", "read", "rule-1"])
-    assert single.spec.prepare(single)[0] == "tico_rules_get"
+    assert cli_spec.of(single).prepare(single)[0] == "tico_rules_get"
     document = hubcli.parser().parse_args(["rules", "read", "file-1", "--from", "Acme"])
-    assert document.spec.prepare(document)[0] == "tico_rules_read"
+    assert cli_spec.of(document).prepare(document)[0] == "tico_rules_read"
 
 
 def test_the_assistant_is_offered_the_document_read_the_question_and_the_single_rule_read():

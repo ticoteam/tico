@@ -3,12 +3,12 @@
 import json
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.automation_cli import Client
-from clients import hubcli
+from clients import cli_spec, hubcli
 
 
 def cli(api, token, *argv):
     args = hubcli.parser().parse_args(["rules", *argv])
-    return args.spec.call(Client(api, token), args)
+    return cli_spec.of(args).call(Client(api, token), args)
 
 
 def mcp(api, name, arguments=None, token="ana-test"):

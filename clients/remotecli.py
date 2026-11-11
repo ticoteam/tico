@@ -14,7 +14,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import hubcli_pipelines, s3links
+from clients import cli_spec, hubcli_pipelines, s3links
 from clients.tico import APIError, Client
 
 
@@ -282,7 +282,7 @@ def run(args, who=None):
         else 15,
     )
     fn = args.fn
-    if (spec := getattr(args, "spec", None)) is not None:  # a command declared as a spec (clients/cli_spec.py)
+    if (spec := cli_spec.of(args)) is not None:  # a command declared as a spec (clients/cli_spec.py)
         return spec.call(client, args)
     from clients.commands.org import COMMANDS as ORG_COMMANDS
 
@@ -1844,7 +1844,7 @@ def main(args, who=None, fields=None):
             and not args.json
         ):
             print(email_text(result, args.sub))
-        elif (spec := getattr(args, "spec", None)) is not None and spec.render and not args.json:
+        elif (spec := cli_spec.of(args)) is not None and spec.render and not args.json:
             print(spec.render(args, result))
         elif args.cmd == "sql" and not args.json:
             print(sql_csv(result) if args.csv else sql_table(result))

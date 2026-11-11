@@ -50,7 +50,7 @@ def test_a_flag_can_send_an_explicit_null_and_a_folded_flag_is_not_sent_itself(c
         convert=lambda f: f | {"scope": {"names": f["names"]}} if f.get("names") else f,
     )
     args = parse((Group("fake"), show), ["fake", "show", "x", "--limit", "--name", "Ada"])
-    assert (args.fn, args.spec) == ("fake show", show)
+    assert (args.fn, cli_spec.of(args)) == ("fake show", show)
     show.call(None, args)
     assert calls == [{"id": "x", "limit": None, "scope": {"names": ["Ada"]}, "operation_id": "op-1"}]
 
