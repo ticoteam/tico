@@ -4,6 +4,7 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 
 from clients.tico import APIError
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._shared import ASKED
@@ -379,7 +380,7 @@ def rules_due_satisfied(api, args):
     writes=True,
 )
 def rules_check(api, args):
-    body = _present({"text": args.get("text"), "to": args.get("to"), "as": args.get("as") or args.get("as_")})
+    body = _present({"text": args.get("text"), "to": args.get("to"), "as": args.get("as")})
     return api.post("rules/check", body, key=_key(args))
 
 
@@ -405,3 +406,135 @@ def rules_appeal(api, args):
 )
 def rules_withdraw(api, args):
     return api.post(f"rule-holds/{args['id']}/withdraw", {}, key=_key(args))
+
+
+# `tico rules ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+def _scope(names=None, **switches):
+    """A Who or With scope object from the command line's names and switches; None when none was given."""
+    out = ({"names": list(names)} if names else {}) | {k: True for k, on in switches.items() if on}
+    return out or None
+
+
+def _who(fields):
+    who = _scope(
+        fields.get("who_names"),
+        everyone=fields.get("everyone"),
+        all_bots=fields.get("all_bots"),
+        outside_editions=fields.get("outside_editions"),
+    )
+    return fields | ({"who": who} if who else {})
+
+
+def _who_with(fields):
+    fields = _who(fields)
+    return fields | ({"with": {"names": list(fields["with_names"])}} if fields.get("with_names") else {})
+
+
+def _add(fields):
+    """`rules add`: the scopes, and --file, --section, --quote and --version as the quote the rule cites."""
+    fields = _who_with(fields)
+    if fields.get("file_version") and not fields.get("quote"):
+        raise SystemExit("tico rules add: --version goes with --file and --quote")
+    if fields.get("quote"):
+        if not fields.get("file_id"):
+            raise SystemExit("tico rules add: a quote needs --file (the document it is in)")
+        cite = {"file_id": fields["file_id"], "section": fields.get("section") or "", "quote": fields["quote"]}
+        fields["cite"] = cite | ({"version": fields["file_version"]} if fields.get("file_version") else {})
+    return fields
+
+
+WHO = (
+    Arg("who_names", "--who", action="append", metavar="NAME", into="who", help="a group, person or bot by id or name; repeatable"),
+    Arg("everyone", "--everyone", action="store_true", into="who"),
+    Arg("all_bots", "--all-bots", action="store_true", into="who"),
+    Arg("outside_editions", "--outside-editions", action="store_true", into="who", help="what the Company page sends outside (owner and admins only)"),
+)  # fmt: skip
+WITH = (
+    Arg("with_names", "--with", action="append", metavar="NAME", into="with", help="internal: a group, person or bot the rule is about; repeatable"),
+)  # fmt: skip
+CITE = (
+    Arg("file_id", "--file", metavar="FILE_ID", into="cite", help="external: the document the rule rests on"),
+    Arg("section", "--section", into="cite", help="external: the section of the document"),
+    Arg("quote", "--quote", into="cite", help="external: the words of the document the rule rests on (must be in the file)"),
+    Arg("file_version", "--version", type=int, metavar="N", into="cite", help="external: the version of --file the quote is in (the Rules Owner passes the one its task names)"),
+)  # fmt: skip
+FROM = Arg("source_id", "--from", metavar="SOURCE")
+DAY = "YYYY-MM-DD"
+
+CLI = (
+    Group(
+        "rules",
+        "org rules: what teammates follow (internal) and what someone outside requires (external), and their due dates",
+        aliases=("rule",),
+    ),
+    Command(
+        "rules list",
+        "the rules in force; --mine: your bot's rules and its settings as sentences",
+        args=(Arg("mine", help="the rules that apply to your bot, and its settings"),),
+    ),
+    Command(
+        "rules read",
+        "one rule, with its due dates and the quote it cites; with --from, add a document for the Rules Owner to read "
+        "(a file id or a link)",
+        args=(
+            Arg("id", help="a rule id, or with --from a file id or a link"),
+            Arg("source", "--from", required=False, metavar="SOURCE", help="document: the From, by name or id"),
+        ),
+        tool_for=lambda fields: "tico_rules_read" if fields.get("source") else "tico_rules_get",
+    ),
+    Command("rules ask", "a can-I question: the rules that apply, cited, and the Rules Owner's answer on a task"),
+    Command("rules suggested", "the suggestions waiting for a person to accept or skip"),
+    Command(
+        "rules add",
+        "add a rule: a bot's is a suggestion; only owners and admins add Everyone",
+        args=(Arg("kind", positional=False), Arg("text", positional=False), FROM, *WHO, *WITH, *CITE),
+        convert=_add,
+    ),
+    Command(
+        "rules edit",
+        "change a rule, only the fields given, against the version you read",
+        args=(Arg("version", positional=False), FROM, *WHO, *WITH),
+        convert=_who_with,
+    ),
+    Command("rules accept", "a person accepts a suggestion, optionally changing its Who", args=WHO, convert=_who),
+    Command("rules skip", "set a suggestion aside"),
+    Command("rules retire", "retire a rule in force; its due dates come back"),
+    Group("rules due", "due dates on rules: the next ones, add one, mark one satisfied", default="rules due list"),
+    Command(
+        "rules due list",
+        "the due dates of rules in force: overdue first, then those due within --next days",
+        tool="tico_rules_due",
+    ),
+    Command(
+        "rules due add",
+        "a due date on a rule: first day, repeat, owner",
+        tool="tico_rules_due_set",
+        args=(
+            Arg("first_due", "--first", metavar=DAY),
+            Arg("repeats", positional=False),
+            Arg("owner", positional=False),
+        ),
+    ),
+    Command(
+        "rules due edit",
+        "change a due date; a new first day or repeat starts a new one, history kept",
+        args=(Arg("first_due", "--first", metavar=DAY), Arg("no_routine", default=None)),
+        exclusive=(("task_days", "no_routine"),),
+    ),
+    Command(
+        "rules due satisfied",
+        "mark the current occurrence satisfied",
+        args=(Arg("due_on", "--on", metavar=DAY, help="which occurrence, when two are open"),),
+    ),
+    Command(
+        "rules check",
+        "check a draft against the rules that apply to you, as the write it will be",
+        args=(Arg("to", positional=False), Arg("as", default="message")),
+    ),
+    Command(
+        "rules appeal",
+        "ask the reviewer to look at your held output",
+        args=(Arg("why", positional=True, nargs="?", default="", help="why you think the rule does not apply"),),
+    ),
+    Command("rules withdraw", "take back your held write to edit it and send it again (nothing is sent)"),
+)

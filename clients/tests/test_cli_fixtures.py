@@ -94,6 +94,7 @@ RULES = [
     ["rules", "read", "f1", "--from", "Acme", "--kind", "vendor", "--note", "the MSA"],
     ["rules", "read", "https://acme.example/terms", "--from", "Acme"],
     ["rules", "ask", "Can I share the deck with Acme?"],
+    ["rules", "ask", "Can I share the deck with Acme?", "--on-behalf-of", "turn"],
     ["rules", "suggested"],
     ["rules", "suggested", "--cursor", "c1", "--limit", "2"],
     ["rules", "add", "--kind", "internal", "--text", "Reply within a day"],

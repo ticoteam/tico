@@ -33,7 +33,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # run as a script: python clients/hubcli.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import cli_plumbing
+from clients import cli_plumbing, cli_spec
 
 from clients import hubcli_pipelines
 
@@ -143,7 +143,7 @@ def task_problems(actor, owner, title, body, pipeline=None):
     title, body = str(title or "").strip(), str(body or "")
     general = str(pipeline or "").strip().lower() in ("", "general")
     target = owner_from_registry(owner)
-    # Not in the registry is no refusal here: a template name (`--owner growth-team-manager`) still reaches the one live bot
+    # Not in the registry is no refusal here: a template name (`--owner marketing-lead`) still reaches the one live bot
     # built from that template on the server, which this client cannot see. cmd_task_dry_run says so.
     if not title:
         problems.append("give it a title that says what you are asking for")
@@ -455,6 +455,7 @@ def parser():
     )
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
+    from clients.commands import rules as rule_commands, webhooks
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -2038,181 +2039,7 @@ def parser():
     )
     s.set_defaults(fn="proposal decide")
 
-    rules = sub.add_parser(
-        "rules",
-        aliases=["rule"],
-        help="org rules: what teammates follow (internal) and what someone outside requires "
-        "(external), and their due dates",
-    ).add_subparsers(dest="sub")
-    s = rules.add_parser("list", help="the rules in force; --mine: your bot's rules and its settings as sentences")
-    s.add_argument("--kind", choices=["internal", "external"])
-    s.add_argument("--status", choices=["suggested", "active", "retired", "any"])
-    s.add_argument("--who", help="a group, person or bot the rule's Who names")
-    s.add_argument("--with", dest="with", help="a group, person or bot the rule's With names")
-    s.add_argument("--source", help="a From, by name or id")
-    s.add_argument("--bot", help="the rules that apply to this bot")
-    s.add_argument("--mine", action="store_true", help="the rules that apply to your bot, and its settings")
-    s.add_argument("--cursor")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="rules list")
-    s = rules.add_parser(
-        "read",
-        help="one rule, with its due dates and the quote it cites; with --from, add a document "
-        "for the Rules Owner to read (a file id or a link)",
-    )
-    s.add_argument("id", help="a rule id, or with --from a file id or a link")
-    s.add_argument("--from", dest="source", metavar="SOURCE", help="document: the From, by name or id")
-    s.add_argument(
-        "--kind", choices=["vendor", "customer", "government", "other"], help="document: the kind, for a new From"
-    )
-    s.add_argument("--note", help="document: what the document is for")
-    s.set_defaults(fn="rules read")
-    s = rules.add_parser(
-        "ask", help="a can-I question: the rules that apply, cited, and the Rules Owner's answer on a task"
-    )
-    s.add_argument("question")
-    s.set_defaults(fn="rules ask")
-    s = rules.add_parser("suggested", help="the suggestions waiting for a person to accept or skip")
-    s.add_argument("--cursor")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="rules suggested")
-    s = rules.add_parser("add", help="add a rule: a bot's is a suggestion; only owners and admins add Everyone")
-    s.add_argument("--kind", required=True, choices=["internal", "external"])
-    s.add_argument("--text", required=True, help="the rule in one sentence")
-    s.add_argument("--description")
-    s.add_argument(
-        "--who",
-        dest="who_names",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="a group, person or bot by id or name; repeatable",
-    )
-    s.add_argument("--everyone", action="store_true")
-    s.add_argument("--all-bots", dest="all_bots", action="store_true")
-    s.add_argument(
-        "--outside-editions",
-        dest="outside_editions",
-        action="store_true",
-        help="what the Company page sends outside (owner and admins only)",
-    )
-    s.add_argument(
-        "--with",
-        dest="with_names",
-        action="append",
-        default=[],
-        metavar="NAME",
-        help="internal: a group, person or bot the rule is about; repeatable",
-    )
-    s.add_argument(
-        "--where",
-        action="append",
-        default=None,
-        metavar="TERM",
-        help="where it applies: thread:ID, team:GROUP, kind:dm or has_outside_members; repeatable",
-    )
-    s.add_argument("--from", dest="source_id", metavar="SOURCE", help="external: the From, by name or id")
-    s.add_argument("--file", dest="file_id", metavar="FILE_ID", help="external: the document the rule rests on")
-    s.add_argument("--section", help="external: the section of the document")
-    s.add_argument("--quote", help="external: the words of the document the rule rests on (must be in the file)")
-    s.add_argument(
-        "--version",
-        dest="file_version",
-        type=int,
-        metavar="N",
-        help="external: the version of --file the quote is in (the Rules Owner passes the one its task names)",
-    )
-    s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
-    s.add_argument("--reviewer")
-    s.set_defaults(fn="rules add")
-    s = rules.add_parser("edit", help="change a rule, only the fields given, against the version you read")
-    s.add_argument("id")
-    s.add_argument("--version", type=int, required=True)
-    s.add_argument("--text")
-    s.add_argument("--description")
-    s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME")
-    s.add_argument("--everyone", action="store_true")
-    s.add_argument("--all-bots", dest="all_bots", action="store_true")
-    s.add_argument("--outside-editions", dest="outside_editions", action="store_true")
-    s.add_argument("--with", dest="with_names", action="append", default=[], metavar="NAME")
-    s.add_argument(
-        "--where",
-        action="append",
-        default=None,
-        metavar="TERM",
-        help="where it applies (replaces the list): thread:ID, team:GROUP, kind:dm or has_outside_members",
-    )
-    s.add_argument("--from", dest="source_id", metavar="SOURCE")
-    s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
-    s.add_argument("--reviewer")
-    s.set_defaults(fn="rules edit")
-    s = rules.add_parser("accept", help="a person accepts a suggestion, optionally changing its Who")
-    s.add_argument("id")
-    s.add_argument("--version", type=int)
-    s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME")
-    s.add_argument("--everyone", action="store_true")
-    s.add_argument("--all-bots", dest="all_bots", action="store_true")
-    s.add_argument("--outside-editions", dest="outside_editions", action="store_true")
-    s.set_defaults(fn="rules accept")
-    s = rules.add_parser("skip", help="set a suggestion aside")
-    s.add_argument("id")
-    s.add_argument("--version", type=int)
-    s.set_defaults(fn="rules skip")
-    s = rules.add_parser("retire", help="retire a rule in force; its due dates come back")
-    s.add_argument("id")
-    s.add_argument("--version", type=int)
-    s.set_defaults(fn="rules retire")
-    due = rules.add_parser("due", help="due dates on rules: the next ones, add one, mark one satisfied")
-    # The list's flags work on `due` itself and on `list`, which is the same command. SUPPRESS keeps a flag given on
-    # one from being reset by the other's default.
-    due.add_argument("--next", default=argparse.SUPPRESS, help="days ahead to list, such as 90d (default 90d)")
-    due.add_argument("--status", default=argparse.SUPPRESS, choices=["overdue", "due_soon", "upcoming", "satisfied"])
-    due.add_argument("--cursor", default=argparse.SUPPRESS)
-    due.add_argument("--limit", type=int, default=argparse.SUPPRESS)
-    due.set_defaults(fn="rules due")
-    due_sub = due.add_subparsers(dest="subsub")
-    s = due_sub.add_parser(
-        "list", help="the due dates of rules in force: overdue first, then those due within --next days"
-    )
-    s.add_argument("--next", default=argparse.SUPPRESS)
-    s.add_argument("--status", default=argparse.SUPPRESS, choices=["overdue", "due_soon", "upcoming", "satisfied"])
-    s.add_argument("--cursor", default=argparse.SUPPRESS)
-    s.add_argument("--limit", type=int, default=argparse.SUPPRESS)
-    s.set_defaults(fn="rules due")
-    s = due_sub.add_parser("add", help="a due date on a rule: first day, repeat, owner")
-    s.add_argument("id", help="the rule's id")
-    s.add_argument("--first", dest="first_due", required=True, metavar="YYYY-MM-DD")
-    s.add_argument("--repeats", required=True, choices=["once", "weekly", "monthly", "quarterly", "yearly"])
-    s.add_argument("--owner", required=True, help="a bot or person, by name or id")
-    s.add_argument("--timezone")
-    s.add_argument("--task-days", type=int, metavar="N", help="a routine opens the owner's task N days before each one")
-    s.set_defaults(fn="rules due set")
-    s = due_sub.add_parser("edit", help="change a due date; a new first day or repeat starts a new one, history kept")
-    s.add_argument("id", help="the due date's id")
-    s.add_argument("--first", dest="first_due", metavar="YYYY-MM-DD")
-    s.add_argument("--repeats", choices=["once", "weekly", "monthly", "quarterly", "yearly"])
-    s.add_argument("--owner", help="a bot or person, by name or id")
-    s.add_argument("--timezone")
-    routine = s.add_mutually_exclusive_group()
-    routine.add_argument("--task-days", type=int, metavar="N", help="a routine opens the owner's task N days before")
-    routine.add_argument("--no-routine", action="store_true", default=None, help="turn the routine off")
-    s.set_defaults(fn="rules due edit")
-    s = due_sub.add_parser("satisfied", help="mark the current occurrence satisfied")
-    s.add_argument("id", help="a due date's id, or its rule's when it has one due date")
-    s.add_argument("--on", dest="due_on", metavar="YYYY-MM-DD", help="which occurrence, when two are open")
-    s.set_defaults(fn="rules due satisfied")
-    s = rules.add_parser("check", help="check a draft against the rules that apply to you, as the write it will be")
-    s.add_argument("text", help="the draft, whole")
-    s.add_argument("--to", required=True, help="the teammate it goes to")
-    s.add_argument("--as", dest="as_", default="message", choices=["message", "comment", "task", "assign"])
-    s.set_defaults(fn="rules check")
-    s = rules.add_parser("appeal", help="ask the reviewer to look at your held output")
-    s.add_argument("id", help="the hold's id, from the held answer")
-    s.add_argument("why", nargs="?", default="", help="why you think the rule does not apply")
-    s.set_defaults(fn="rules appeal")
-    s = rules.add_parser("withdraw", help="take back your held write to edit it and send it again (nothing is sent)")
-    s.add_argument("id", help="the hold's id, from the held answer")
-    s.set_defaults(fn="rules withdraw")
+    cli_spec.add(sub, rule_commands.CLI)  # tico rules: clients/commands/rules.py
     strategy = sub.add_parser(
         "strategy", help="the team's strategy: its bets, its sections, the versions"
     ).add_subparsers(dest="sub")
@@ -2907,87 +2734,7 @@ def parser():
         "inbound, health, webhook, tico, custom",
     )
     s.set_defaults(fn="event-types")
-    trigger = sub.add_parser(
-        "trigger", help="webhooks that start automations (Automations › Incoming webhooks)"
-    ).add_subparsers(dest="sub")
-    s = trigger.add_parser("list")
-    s.set_defaults(fn="trigger list")
-    s = trigger.add_parser("create", help="make a webhook trigger; the address with its secret is shown once")
-    s.add_argument("name")
-    s.add_argument("--id", help="lowercase letters, digits and dashes; made from the name by default")
-    s.set_defaults(fn="trigger create")
-    s = trigger.add_parser("show")
-    s.add_argument("id")
-    s.set_defaults(fn="trigger show")
-    s = trigger.add_parser("update", help="change a trigger's name or settings")
-    s.add_argument("id")
-    s.add_argument("--name")
-    s.add_argument(
-        "--preset",
-        choices=["none", "hmac", "github", "standard", "stripe", "slack"],
-        help="how calls are verified (needs a signing secret)",
-    )
-    s.add_argument(
-        "--type-from", dest="type_from", help="a header name or a JSON pointer (/type); empty for the preset's default"
-    )
-    s.add_argument("--hourly", type=int, help="calls an hour, 1-600 (60 by default)")
-    s.add_argument(
-        "--keep-days",
-        dest="keep_days",
-        type=int,
-        help="days calls stay readable and can run again, 1-30 (7 by default)",
-    )
-    s.add_argument(
-        "--unheard",
-        choices=["log", "note"],
-        help="note: tell the maker, at most hourly, when no automation or rule acted",
-    )
-    s.set_defaults(fn="trigger update")
-    s = trigger.add_parser("rotate", help="a new secret; the old address stops working")
-    s.add_argument("id")
-    s.set_defaults(fn="trigger rotate")
-    s = trigger.add_parser("sign", help="verify each call with a preset; the signing secret is shown once")
-    s.add_argument("id")
-    s.add_argument(
-        "--preset", choices=["hmac", "github", "standard", "stripe", "slack"], help="the current one, else hmac"
-    )
-    s.add_argument("--secret", help="the sender's own secret (16+ characters); a new one is made when left out")
-    s.add_argument("--off", action="store_true", help="stop checking signatures")
-    s.set_defaults(fn="trigger sign")
-    s = trigger.add_parser("delete")
-    s.add_argument("id")
-    s.set_defaults(fn="trigger delete")
-    s = trigger.add_parser("deliveries", help="the latest calls to a trigger")
-    s.add_argument("id")
-    s.set_defaults(fn="trigger deliveries")
-    s = trigger.add_parser("delivery", help="one stored call: redacted headers and the body (long bodies in parts)")
-    s.add_argument("id")
-    s.add_argument("delivery")
-    s.add_argument("--part", type=int, help="which 20,000-character part of a long body (from 1)")
-    s.set_defaults(fn="trigger delivery")
-    s = trigger.add_parser("replay", help="run a stored call again as a new occurrence")
-    s.add_argument("id")
-    s.add_argument("delivery")
-    s.set_defaults(fn="trigger replay")
-    s = trigger.add_parser(
-        "recover",
-        help="run again, under the current secret and preset, every call refused in the last "
-        "hours whose body is kept; a sender's later retry of one is a duplicate",
-    )
-    s.add_argument("id")
-    s.add_argument("--since", type=int, default=24, help="hours back, 1-720 (24 by default)")
-    s.set_defaults(fn="trigger recover")
-    relay = trigger.add_parser(
-        "relay", help="a second address through Tico Gateway, so nothing is lost while this server is off"
-    ).add_subparsers(dest="subsub")
-    for word, text in (
-        ("create", "make the address; its secret is shown once"),
-        ("rotate", "replace the secret; the old address stops at once"),
-        ("delete", "remove the address; the trigger and its own address stay"),
-    ):
-        s = relay.add_parser(word, help=text)
-        s.add_argument("trigger", help="the trigger id from `tico trigger list`")
-        s.set_defaults(fn="trigger relay " + word)
+    cli_spec.add(sub, webhooks.CLI)  # tico trigger: clients/commands/webhooks.py
     relay_top = sub.add_parser("relay", help="webhooks through Tico Gateway").add_subparsers(dest="sub")
     s = relay_top.add_parser(
         "status", help="the Gateway key, the addresses, the last pull and what waits at the Gateway"

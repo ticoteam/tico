@@ -332,6 +332,37 @@
  {
   "argv": [
    "rules",
+   "ask",
+   "Can I share the deck with Acme?",
+   "--on-behalf-of",
+   "turn"
+  ],
+  "tools": [
+   [
+    "tico_rules_ask",
+    {
+     "question": "Can I share the deck with Acme?",
+     "on_behalf_of": "turn",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "rules/ask",
+    {
+     "question": "Can I share the deck with Acme?"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
    "suggested"
   ],
   "tools": [
@@ -1657,7 +1688,7 @@
     {
      "text": "Sending the deck now",
      "to": "Ada",
-     "as_": "message",
+     "as": "message",
      "operation_id": null
     }
    ]
@@ -1693,7 +1724,7 @@
     {
      "text": "Done",
      "to": "Ada",
-     "as_": "comment",
+     "as": "comment",
      "operation_id": null
     }
    ]
