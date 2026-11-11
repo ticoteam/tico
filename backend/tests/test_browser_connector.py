@@ -1,4 +1,4 @@
-"""The browser connector's gate: Ana's social sessions are Listening's alone (connectors/browser.py)."""
+"""The browser connector's gate: Ana's social sessions are the Social Media Manager's alone (connectors/browser.py)."""
 
 import importlib.util
 from pathlib import Path
@@ -16,9 +16,9 @@ def manifest(sites, can=("read",)):
     return {"access": [{"service": "aside", "sites": list(sites), "can": list(can)}]}
 
 
-def test_only_listening_may_declare_a_social_site():
-    assert B.aside_access(manifest(["x.com", "linkedin.com", "news.google.com"]), "listening")["sites"]
-    with pytest.raises(B.Refused, match="only listening"):
+def test_only_the_social_media_manager_may_declare_a_social_site():
+    assert B.aside_access(manifest(["x.com", "linkedin.com", "news.google.com"]), "social-media-manager")["sites"]
+    with pytest.raises(B.Refused, match="only social-media-manager"):
         B.aside_access(manifest(["upfluence.com", "instagram.com"]), "influencer")
     with pytest.raises(B.Refused):
         B.aside_access(manifest(["www.linkedin.com"]), "business-development")
