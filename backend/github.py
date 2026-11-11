@@ -664,6 +664,14 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             )
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
+        if conflict_wake and match:
+            from . import pr_conflicts
+
+            # Before Merge a conflict is the bot's that built the PR, not the stage's (a reviewer cannot push): it is
+            # woken once per conflicting commit, and the task stays where it is (pr_conflicts).
+            pr_key = f"{match.group(1)}/{match.group(2)}#{match.group(3)}".lower()
+            if pr_conflicts.tell(c, task["id"], pr_key, conflict_head):
+                conflict_wake = False
         closed = state == "closed" and link["state"] != state and link["id"] not in registered
         if closed and not conflict_wake and _engine_speaks(c, task["id"]):
             closed = False

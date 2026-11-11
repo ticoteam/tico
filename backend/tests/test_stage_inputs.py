@@ -6,91 +6,30 @@ Acme rc.3 (case 1): in Fixes 1 the Builder could not see Review 1's page, said d
 engine took it. Synthetic rows only (backend/tests/helpers/engine.py).
 """
 
-import json
-
 import pytest
 
-from backend import bot_settings as BS
-from backend import item_metadata as IM
-from backend import pipeline_settings as PS
 from backend import stage_inputs as SI
 from backend import task_engine as E
 from backend import task_wakes as TW
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.helpers.stage_inputs import (
+    ANA,
+    REPO,
+    _attach,
+    _filed_engineering,
+    _link_pr,
+    _move,
+    _product_task,
+    _push,
+)
 from clients import hubtools
-
-REPO = "acme/app"
-ANA = X.ANA
-# The role bots, each found by its seat as setup seats them (test_product_engineering_presets.py has the full set).
-SEATS = [
-    ("pm", "segment-product-owner", "Product Owner"),
-    ("builder", "builder", "Builder"),
-    ("rev-a", "pr-reviewer", "Reviewer 1"),
-    ("rev-b", "pr-reviewer", "Reviewer 2"),
-    ("rm", "release-owner", None),
-]
 
 
 @pytest.fixture
 def c(company):
     with company.transaction() as conn:
         yield conn
-
-
-def _link_pr(c, task_id, number, head):
-    c.execute(
-        "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
-        "VALUES (?,?,?,?,?,?,'github','pr',?,?)",
-        (
-            H.new_id(),
-            task_id,
-            "pr",
-            f"https://github.com/{REPO}/pull/{number}",
-            REPO,
-            number,
-            f"{REPO}#{number}",
-            H.now(),
-        ),
-    )
-    _push(c, number, head)
-
-
-def _push(c, number, head, state="open", merged_sha=None):
-    key = f"{REPO}#{number}"
-    old = (IM.get(c, "github", "pr", key) or {}).get("fields") or {}
-    IM.save(
-        c,
-        "github",
-        "pr",
-        key,
-        {
-            **old,
-            "state": state,
-            "head_sha": head,
-            "merged_sha": merged_sha,
-            "checks_state": "pending",
-            "queue_state": None,
-        },
-        1,
-    )
-
-
-def _attach(c, task_id, file_id, by, version=1):
-    """The page that counts for the open stage's page requirement, as task_pages.attach leaves it."""
-    row = E.task(c, task_id)
-    rid = c.execute(
-        "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
-    ).fetchone()[0]
-    c.execute(
-        "UPDATE requirement_pages SET replaced_at=? WHERE visit_id=? AND requirement_id=? AND replaced_at IS NULL",
-        (H.now(), row["visit"]["id"], rid),
-    )
-    c.execute(
-        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
-        "created_at) VALUES (?,?,?,?,?,'{}',?,?)",
-        (H.new_id(), row["visit"]["id"], rid, file_id, version, by, H.now()),
-    )
 
 
 def _done(c, task_id, notes):
@@ -100,11 +39,6 @@ def _done(c, task_id, notes):
         (row["stage_id"],),
     ).fetchone()[0]
     X.answer(c, row, rid, "done", row["owner_id"], notes=notes)
-
-
-def _move(c, task_id, stage):
-    """A person moves the task on, past whatever its stage still lacks: the test sets up each stage's output itself."""
-    return E.move(c, task_id, stage, ANA, "moved on for the test")
 
 
 def _wake(c, task_id, to):
@@ -120,37 +54,6 @@ def _wake(c, task_id, to):
 
 def _handed(c, task_id):
     return [e["line"] for e in SI.of(c, E.task(c, task_id))]
-
-
-def _product_task(c):
-    """A Product task in Spec, with the Spec page that counted there (file f-spec, version 3)."""
-    at = H.now()
-    for slug, template, title in SEATS:
-        X.bot(c, slug)
-        BS.update(c, slug, {"template": template})
-        if title:
-            c.execute(
-                "INSERT INTO seats (id, title, template, filled_by, created_at, created_by, updated_at, updated_by, "
-                "closed_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                (H.new_id(), title, template, slug, at, ANA, at, ANA, at),
-            )
-    c.execute(
-        "INSERT INTO registry_metadata VALUES('onboarding',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (json.dumps({"answers": {"software_product": "yes"}, "completed": at}),),
-    )
-    PS.ensure_presets(c)
-    row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="product", lint=False)
-    E.move(c, row["id"], "product-spec", ANA)
-    _attach(c, row["id"], "f-spec", "bot:pm", version=3)
-    return E.task(c, row["id"])
-
-
-def _filed_engineering(c):
-    """The Product task in In development, and the Engineering task it filed with the OK'd Spec page."""
-    product = _product_task(c)
-    E.move(c, product["id"], "product-in-development", ANA, "The spec is OK'd")
-    eng = c.execute("SELECT to_task_id FROM links WHERE from_task_id=?", (product["id"],)).fetchone()[0]
-    return product["id"], eng
 
 
 SPEC = "Spec page from Spec (Product): page:f-spec@3, read it with `tico file read f-spec`"
@@ -307,3 +210,73 @@ def test_tico_task_show_prints_what_earlier_stages_handed_on():
         "  A page you can't open",
     ]
     assert "From earlier stages" not in hubtools.task_text({**task, "inputs": []})
+
+
+def _sign_off(c, task_id, answer, by, version, notes):
+    """A person's OK or send back of the open stage's page at `version`, as answers.answer leaves it."""
+    row = E.task(c, task_id)
+    rid = c.execute(
+        "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
+    ).fetchone()[0]
+    c.execute(
+        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        (H.new_id(), row["visit"]["id"], rid, by, answer, notes, version, H.now()),
+    )
+
+
+SENT_BACK = (
+    "Review page from Fixes 2 (Saved carts, work this task filed): sent back at page:f-built@1: "
+    "the empty cart still shows a total"
+)
+SIGNED = (
+    "Review page from Fixes 2 (Saved carts, work this task filed): OK'd at page:f-built@2: ship it; watch the totals"
+)
+
+
+def test_the_product_task_is_handed_the_pre_release_sign_offs_of_the_work_it_filed(c):
+    """Acme rc.3: a person's notes when they sent back and then OK'd Fixes 2 never reached Product · Validate."""
+    product, eng = _filed_engineering(c)
+    _move(c, eng, "engineering-build")
+    _link_pr(c, eng, 12, "aaa")
+    _move(c, eng, "engineering-fixes-2")
+    _attach(c, eng, "f-built", "bot:builder", version=1)
+    _sign_off(c, eng, "no", ANA, 1, "the empty cart\n still shows a total")
+    _attach(c, eng, "f-built", "bot:builder", version=2)
+    _sign_off(c, eng, "ok", "bot:rev-b", 2, "a bot's OK is not a person's sign-off")
+    _sign_off(c, eng, "ok", ANA, 2, "ship it; watch the totals")
+
+    # In development, while the Product task waits on it: after the filed work's PR, oldest first, each by its person.
+    handed = SI.of(c, E.task(c, product))
+    signoffs = [e for e in handed if e["kind"] == "signoff"]
+    assert [e["line"] for e in handed[-3:]] == [PR_OPEN + "aaa (work this task filed)", SENT_BACK, SIGNED]
+    assert [(e["answer"], e["by"], e["version"], e["task_id"]) for e in signoffs] == [
+        ("no", ANA, 1, eng),
+        ("ok", ANA, 2, eng),
+    ]
+    assert signoffs[1]["notes"] == "ship it; watch the totals"
+    assert signoffs[1]["ref"] == "page:f-built@2"
+
+    # Validate: in the PM's wake, said by whom, and in the task's own read.
+    _move(c, product, "product-validate")
+    wake = _wake(c, product, "bot:pm")
+    assert f"- {SENT_BACK} (" in wake and f"- {SIGNED} (" in wake
+    view = H.task_view(c, product, ANA, inputs=True)
+    assert [e["line"] for e in view["inputs"] if e["kind"] == "signoff"] == [SENT_BACK, SIGNED]
+
+    # A reader who may not name the filed task (a private one, task_wakes.told) is handed none of it.
+    assert not [e for e in SI.of(c, E.task(c, product), shown=lambda task_id: False) if e["kind"] == "signoff"]
+
+
+def test_tico_task_show_prints_a_sign_off_with_its_person():
+    task = {
+        "id": "t1",
+        "title": "Saved carts",
+        "version": 4,
+        "stage": {"name": "Validate"},
+        "to_leave": [],
+        "inputs": [{"kind": "signoff", "line": SIGNED, "by": ANA, "answer": "ok"}],
+    }
+    lines = hubtools.task_text(task, {ANA: "Ana"}).splitlines()
+    at = lines.index("From earlier stages:")
+    assert lines[at + 1] == f"  {SIGNED} (Ana)"

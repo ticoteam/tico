@@ -369,6 +369,9 @@ stages"), lists them, oldest first (backend/stage_inputs.py):
 - **What was said at done**: an owner's note when it said an earlier stage's work was done ("fixed ...; declined ...").
 - **What is missing**: a page requirement of a stage before this one that no visit ever attached, because the task was
   pushed past it or moved over it.
+- **What a person said when they signed off filed work**: a Product task (In development while it waits, then
+  Validate) gets each OK or send back a person gave on a page or OK of an Engineering task it filed (Fixes 2's
+  pre-release sign-off): who, which, the notes and the page version. Left out for a filed task the reader may not name.
 
 A bot that lacks an input it needs does not say done. It moves the task back to the stage the input comes from, saying
 what is missing; its wake says so. A done said with nothing changed is not refused (a review with no findings needs no
@@ -939,6 +942,11 @@ late. Nothing depends on the exact 10 seconds.
   passes; one that goes red fails). A skipped or neutral run fails nothing, but it is not a pass: when every check was
   skipped, Checks pass is not met, and it is the owner's turn ("No checks ran on ...: every check was skipped").
 - **A new commit during Review** puts the review back to Waiting on the reviewer.
+- **A merge conflict before Merge** is the Builder's (the Build stage's owner bot), whoever holds the stage: "No merge
+  conflict" is not met and is the Builder's turn. The Builder is woken at once, once per PR and conflicting commit, to
+  rebase on the default branch, keep both sides' work, push and say so; the task stays in its stage. A bot holding
+  the stage (a reviewer) gets one quiet line that it is not its to fix. The ladder tries the Builder, then the manager
+  bot. With no Builder bot it is the stage owner's, as before. In Merge, the merge queue's drop says it.
 - **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new

@@ -745,6 +745,75 @@ def jev_unsure_bot_first(r: SoftRig) -> None:
     r.at(e, "Fixes 1")
 
 
+def _github_says(r: SoftRig, number: int, conflicts: bool | None) -> None:
+    """GitHub's pull_request webhook for the PR at its head through backend/github.py, which keeps whether it conflicts
+    with its base branch (None: GitHub has not worked it out yet, as after a push). The rig's GitHub sends only what
+    item_metadata reads."""
+    from backend import github as G
+
+    pr: dict[str, Any] = {
+        "html_url": f"https://github.com/{S.REPO}/pull/{number}",
+        "number": number,
+        "state": "open",
+        "head": {"sha": r.gh.head(number), "ref": f"pr-{number}"},
+    }
+    if conflicts is not None:
+        pr["mergeable"] = not conflicts
+    with r.w.tx() as c:
+        G.pull_request(c, {"action": "synchronize", "pull_request": pr}, read_refresh=True)
+
+
+@case("conflict-in-review", "A PR conflicts while a reviewer holds Review 2: the Builder's turn, then the manager's")
+def conflict_in_review(r: SoftRig) -> None:
+    from backend import task_engine as E
+
+    _p, e = r.to_development("Bulk export")
+    r.pr(e, 1)
+    r.settle(r.gh.ci_s)
+    r.at(e, "Review 1")
+    r.ok(ANA, lambda c: E.move(c, e, "Review 2", ANA, "Reviewed in the call"), "Ana drags it to Review 2")
+    r.attach(e, r.page(REVIEWER_2, "Review 2: bulk export", verdict=UNSURE), REVIEWER_2)
+    r.jev()
+    r.check()
+    r.says(e, "Jev is unsure")
+
+    # The PR conflicts (Acme, Nov 11): the Builder is woken at once; the reviewer, who cannot push, gets a quiet line.
+    before = len(r.wakes(e, REVIEWER_2))
+    _github_says(r, 1, conflicts=True)
+    r.check()
+    r.at(e, "Review 2")
+    r.says(e, f"{REF_1} conflicts with its base branch")
+    expect(("bot", BUILDER) in r.waits(e), f"the conflict waits on {r.waits(e)}")
+    told = [w for w in r.wakes(e, BUILDER) if w[0].startswith("conflict:")]
+    expect(len(told) == 1 and "rebase its branch" in told[0][2], f"the Builder was told {told}")
+    noted = [w for w in r.wakes(e, REVIEWER_2) if w[0].startswith("conflict:")]
+    expect(len(noted) == 1 and "not yours to fix" in noted[0][2], f"the reviewer was told {noted}")
+
+    # The Builder's runs end with nothing pushed: the ladder tries it again, then hands it to the manager bot.
+    for _ in range(2000):
+        if (r.visit(e).get("level") or "owner") != "owner":
+            break
+        if r.queued(e, BUILDER):
+            r.ran(e, BUILDER)
+            r.check()
+            continue
+        r.later(10)
+    expect(r.visit(e).get("level") == "manager", f"the ladder left it at {r.visit(e).get('level')}")
+    expect(r.wakes(e, EM), "the manager bot was not told")
+    chased = [w for w in r.wakes(e, REVIEWER_2)[before:] if not w[0].startswith("conflict:")]
+    expect(not chased, f"the reviewer was chased: {chased}")
+    r.at(e, "Review 2")
+
+    # The rebase is pushed: the conflict is gone, and the review is of the old commit, so it is the reviewer's again.
+    r.gh.push(1)
+    r.settle()
+    _github_says(r, 1, conflicts=None)
+    r.check()
+    r.at(e, "Review 2")
+    r.says(e, "New commits since the review")
+    expect(r.waits(e) == [("bot", REVIEWER_2)], f"after the rebase it waits on {r.waits(e)}")
+
+
 # ----------------------------------------------------------------------------- built on the base
 @case(
     "webhooks-out-of-order", "Webhooks repeated and out of order: the newest fact wins, each taken once", covers=(32,)
