@@ -510,7 +510,11 @@ def message_readable(c, actor, message, current=False):
     if not threads.legacy_gate(c, actor, message):
         return False
     carried = H._json(message.get("refs"), {}) or {}
-    if not page_message_readable(c, actor, carried) or not reply_pages_readable(c, actor, message):
+    if (
+        not page_message_readable(c, actor, carried)
+        or not reply_pages_readable(c, actor, message)
+        or not run_pages_readable(c, actor, carried)
+    ):
         return False
     if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
@@ -606,6 +610,8 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
             if not page_message_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
                 return False
             if not reply_pages_readable(c, reader, stored):
+                return False
+            if not run_pages_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
                 return False
         except Problem:
             return False
@@ -894,6 +900,18 @@ def attempt_pages_readable(c, actor, aid):
         )
         for message in messages
     )
+
+
+def run_pages_readable(c, actor, refs):
+    """A message a run wrote (`refs.run` or `refs.turn_id`) inherits that run's file refusal (attempt_pages_readable),
+    as it inherits the run's task and meeting refusals: a bot's reply is read only by those who may read what its run
+    read. Otherwise a reply stays listed while the run it names is refused, and every response carrying it (a comment
+    write's thread) is refused whole by require_payload."""
+    if not isinstance(refs, dict):
+        return True
+    run = refs.get("run")
+    aid = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
+    return not isinstance(aid, str) or not aid or attempt_pages_readable(c, actor, aid)
 
 
 def require_attempt(c, who, aid):
