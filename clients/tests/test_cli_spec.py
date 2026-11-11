@@ -106,10 +106,24 @@ def test_several_flags_may_set_one_property_and_an_object_is_given_whole_as_json
     assert "(sends null)" in capsys.readouterr().out
 
 
+def test_a_fixed_property_is_sent_and_an_omitted_one_is_not_and_neither_takes_an_argument(calls):
+    few = Command("fake few", tool="tico_fake_list", fixed=(("limit", 5),), omit=("days",))
+    specs = (Group("fake"), few)
+    args = parse(specs, ["fake", "few", "x"])
+    assert args.fn == "fake list"  # the tool's words, as for any leaf named otherwise
+    assert few.prepare(args)[1] == {"id": "x", "limit": 5, "operation_id": None}
+    for flag in ("--limit", "--days"):
+        with pytest.raises(SystemExit):
+            parse(specs, ["fake", "few", "x", flag, "9"])
+
+
 @pytest.mark.parametrize(
     ("command", "says"),
     [
         (Command("fake show", args=(Arg("nope"),)), "not properties"),
+        (Command("fake show", fixed=(("nope", 1),)), "not properties"),
+        (Command("fake list", args=(Arg("limit"),), fixed=(("limit", 1),)), "are fixed or omitted"),
+        (Command("fake list", omit=("nope",)), "not properties"),
         (Command("fake show", args=(Arg("x", into="nope"),)), "folds into nope"),
         (Command("fake show", args=(Arg("limit"),)), "scope is an object"),
     ],
@@ -136,14 +150,14 @@ def spec_leaves(p=None, path=()):
 
 
 def test_every_spec_command_has_an_example_that_runs_it(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # a JSON file an example names is read as it parses (`pipeline save --file x.json`)
+    monkeypatch.chdir(tmp_path)  # a file an example names is read as it parses (`pipeline save --file x.json`)
     wrong = []
     for path, _p, command in spec_leaves():
         if " ".join(path) != command.path:
             continue  # a group run bare (`tico rules due`): its default leaf has its own example
         words = shlex.split(command.example)
         for word in words:
-            if word.endswith(".json"):
+            if word.endswith((".json", ".md")):
                 (tmp_path / word).write_text("{}")
         if words[:1] != ["tico"] or cli_spec.of(hubcli.parser().parse_args(words[1:])) is not command:
             wrong.append(f"{command.path}: {command.example!r}")

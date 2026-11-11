@@ -19,6 +19,10 @@ A spec says only what differs:
 - An `Arg` with `into=` is a flag of the command line alone that `Command.convert` folds into that property (`--who`
   and `--everyone` into the Who scope object); it is not passed on itself. Its help is the description of `part` (its
   name by default) inside that object property.
+- `Command.fixed` is what the path itself says: `market size accept` is `decision: accept` of its tool. A fixed
+  property is always sent and takes no argument. `Command.omit` names properties the command line does not take at
+  all: one `convert` fills (`market import` names the batch after its file), or one only another path of the tool
+  uses.
 - A field is omitted when its flag is left out. `default=False` sends false; `NULL` as a flag's const sends null.
 - `Command.tool_for(fields)` picks another tool by the arguments (`rules read` without `--from` reads one rule); every
   tool it may pick is in `tools`, whose properties the command takes too.
@@ -84,6 +88,8 @@ class Command:
     tools: tuple[str, ...] = ()  # the other tools `tool_for` may pick; their properties are the command's too
     args: tuple[Arg, ...] = ()
     exclusive: tuple[tuple[str, ...], ...] = ()  # properties no two of which may be given together
+    fixed: tuple[tuple[str, Any], ...] = ()  # (property, value) pairs the path itself says; they take no argument
+    omit: tuple[str, ...] = ()  # properties the command line does not take
     convert: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     tool_for: Callable[[dict[str, Any]], str] | None = None
     render: Callable[[argparse.Namespace, Any], str] | None = None
@@ -117,8 +123,11 @@ class Command:
         for a in self.args:
             if not a.into:
                 given.setdefault(a.name, []).append(a)
-        if unknown := set(given) - set(props):
+        no_argument = {name for name, _value in self.fixed} | set(self.omit)
+        if unknown := (set(given) | no_argument) - set(props):
             raise ValueError(f"{self.path}: {sorted(unknown)} are not properties of {self.tool}")
+        if both := set(given) & no_argument:
+            raise ValueError(f"{self.path}: {sorted(both)} are fixed or omitted, so they take no argument")
         folded = {}
         for a in self.args:
             if a.into:
@@ -127,6 +136,8 @@ class Command:
                 folded.setdefault(a.into, []).append(a)
         out = []
         for name, prop in props.items():
+            if name in no_argument:
+                continue
             if name in folded:
                 parts = prop.get("properties", {})
                 out += [_argument(a, parts.get(a.part or a.name, {}), False, suppress) for a in folded[name]]
@@ -155,6 +166,7 @@ class Command:
         fields = {d: getattr(args, d) for d in dests if getattr(args, d, None) is not None}
         fields = {k: None if v is NULL else v for k, v in fields.items()}
         fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
+        fields.update(self.fixed)
         if self.convert:
             fields = self.convert(fields)
         for a in self.args:
