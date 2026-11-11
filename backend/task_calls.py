@@ -734,6 +734,7 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
     from . import read_cache
     from . import task_engine as E
     from . import task_relations
+    from . import task_requirements as R
     from . import waiting_on as W
 
     TR: Any = task_relations
@@ -748,6 +749,7 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
         for key, found in _keyed(conn, sql, unread).items():
             values.setdefault((sql, key), found)
     E.prime_stages(conn, [str(row["pipeline_id"]) for row in rows.values() if row.get("pipeline_id")])
+    R.prime_values(conn, ids)
     TR.prime_ancestry(conn, ids)
     if viewer:
         _h().prime_task_delegated(conn, ids, viewer)

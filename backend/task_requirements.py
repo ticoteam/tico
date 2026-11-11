@@ -462,19 +462,38 @@ def typed(requirement: Row, value: str) -> tuple[str | None, str]:
     return value, ""
 
 
+NAMED_SQL = (
+    "SELECT v.task_id, a.name, a.answer, a.value_type, a.by_id, a.created_at, v.stage_id FROM answers a "
+    "JOIN visits v ON v.id = a.visit_id WHERE v.task_id IN (%s) AND a.name IS NOT NULL AND a.undone_at IS NULL "
+    "ORDER BY a.created_at, a.id"
+)
+
+
+def prime_values(conn: "sqlite3.Connection", task_ids: Iterable[str]) -> None:
+    """Read the named answers of many tasks together, for the `values` of each that follow in this snapshot (Needs
+    you shows a task for each ask on it)."""
+    found = read_cache.cache(conn)
+    if found is None:
+        return
+    unread = sorted({str(t) for t in task_ids if ("named_answers", str(t)) not in found})
+    for key, rows in _by(conn, NAMED_SQL, "task_id", unread).items():
+        found.setdefault(("named_answers", key), rows)
+
+
 def values(conn: "sqlite3.Connection", task_id: str) -> dict[str, Row]:
     """{name: {value, type, by, at, stage_id}}: the newest answer by each name a task was given, on any of its visits,
     that was not taken back. A number reads as a whole number."""
     out: dict[str, Row] = {}
-    for row in conn.execute(
-        "SELECT a.name, a.answer, a.value_type, a.by_id, a.created_at, v.stage_id FROM answers a "
-        "JOIN visits v ON v.id = a.visit_id WHERE v.task_id=? AND a.name IS NOT NULL AND a.undone_at IS NULL "
-        "ORDER BY a.created_at, a.id",
-        (task_id,),
-    ).fetchall():
-        name, value, kind, by, at, stage_id = row
+    for row in _cached(conn, "named_answers", NAMED_SQL, "task_id", task_id):
+        kind, value = row["value_type"], row["answer"]
         shown: object = int(value) if kind == "number" and WHOLE.match(str(value)) else value
-        out[str(name)] = {"value": shown, "type": kind or "text", "by": by, "at": at, "stage_id": stage_id}
+        out[str(row["name"])] = {
+            "value": shown,
+            "type": kind or "text",
+            "by": row["by_id"],
+            "at": row["created_at"],
+            "stage_id": row["stage_id"],
+        }
     return out
 
 
