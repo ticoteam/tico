@@ -12,7 +12,8 @@ When create_app opens a file that does not exist yet, the app's fingerprint is l
 The fingerprint is everything initialize reads that a test can vary: the Settings with the test's directory written as
 `<tmp>`, the contents of files the test wrote there (registry, catalog, token), TICO_ environment variables, each
 attribute or item the test monkeypatched (value, or a function's name), and today's date (time_machine moves it). A
-database whose rows hold the test's directory is never kept. A file that exists (an old schema, a copied hub) and a
+database whose rows hold the test's directory is never kept, and a demo build (its ids come from a counter) neither
+keeps nor takes one. A file that exists (an old schema, a copied hub) and a
 Store a test builds itself (the migration tests) are never touched; @pytest.mark.fresh_database turns it off for a test.
 """
 
@@ -21,6 +22,7 @@ import hashlib
 import os
 import re
 import sqlite3
+import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -88,6 +90,12 @@ def holds(path, text):
     return False
 
 
+def deterministic(settings):
+    """A demo build makes its ids from a counter (backend/demo_seed.py swaps uuid4 and hubdb.new_id while it seeds): a
+    copy of an earlier build's rows would hold the ids it is about to make again."""
+    return getattr(settings, "demo", False) or getattr(uuid.uuid4, "__module__", "uuid") != "uuid"
+
+
 def copy(source, target):
     with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as a, closing(sqlite3.connect(target)) as b:
         a.backup(b)
@@ -101,7 +109,7 @@ def snapshot_store(store_class, kept, folder, monkeypatch, own):
         def __init__(self, settings, *args, **kwargs):
             path = Path(settings.db_path)
             self._keep_as = None
-            if not path.exists():
+            if not path.exists() and not deterministic(settings):
                 key = fingerprint(settings, monkeypatch, own)
                 if kept.get(key):
                     path.parent.mkdir(parents=True, exist_ok=True)

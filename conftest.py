@@ -133,6 +133,9 @@ def pytest_configure(config):
     spec.loader.exec_module(heavy_slot)
     heavy_slot.reexec()
     _unix_socket_bind_outside_tmp_path(config)
+    from backend.tests import app_build
+
+    app_build.install()  # every app after a worker's first builds in half the time
     if hasattr(config, "workerinput") or config.option.pyargs:
         return  # --pyargs names modules, not paths
     # The page serves the UI's TypeScript as its compiled JavaScript: compiled here once when this checkout can
