@@ -79,6 +79,7 @@
     "repo_url": "",
     "reports_to": null,
     "revision": 3,
+    "routines": [],
     "runtime": "fake",
     "shared": false,
     "shared_from": "",
