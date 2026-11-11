@@ -338,6 +338,9 @@ WORKTREE_RESERVED = "is waiting for its worktree to be set up"
 # (execution.auto_reconcile records `job.held`; `POST jobs/{id}/reconcile` resumes or dismisses it). Until then the bot
 # claims nothing more on the task (execution.unfenced_sql), so it is Paused, not the bot's turn: never a silent hold.
 RUN_HELD = "has a run held for a check"
+# Or its computer handed back its runs on the task before starting them, start_holds.SAME times for the same reason, and
+# BotOps has a task to find why (backend/start_holds.py). Paused until BotOps closes it: never a silent "Queued" loop.
+CANT_START = "can't start its runs here: BotOps is checking why"
 
 
 def task_cause(
@@ -351,6 +354,12 @@ def task_cause(
     held = _read(conn, _held_runs_sql(), (task_id,))
     if held and held[0] and str(H.actor_id(actor)) in str(held[0]).split(","):
         return RUN_HELD
+    from . import start_holds
+
+    SH: Any = start_holds
+    held = _read(conn, SH.held_sql(), (H.KEEPER, SH.EVENT, task_id))
+    if held and held[0] and str(H.actor_id(actor)) in str(held[0]).split(","):
+        return CANT_START
     if waits is None:
         from . import worktree_waits
 
@@ -1017,6 +1026,12 @@ def prime_holds(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
         return
     held = dict(conn.execute(_held_runs_sql(many=True)).fetchall())
     RC.prime(conn, _held_runs_sql(), {(t,): (held.get(t),) for t in task_ids})
+    from . import start_holds
+
+    SH: Any = start_holds
+    keys = (_h().KEEPER, SH.EVENT)
+    cant = dict(conn.execute(SH.held_sql(many=True), keys).fetchall())
+    RC.prime(conn, SH.held_sql(), {(*keys, t): (cant.get(t),) for t in task_ids})
     if not cast("Any", worktree_waits)._exists(conn):
         return
     holds = worktree_holds(conn, task_ids)

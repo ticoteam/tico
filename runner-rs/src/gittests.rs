@@ -1393,6 +1393,53 @@ async fn a_task_without_an_upstream_reports_that_before_a_leftover_path() {
 }
 
 #[tokio::test]
+async fn an_upstream_the_bot_set_but_never_fetched_is_no_upstream_not_an_unreadable_one() {
+    // Acme, Nov 11: Reviewer 2's repository was made on its computer with no remote. With its GitHub repository out
+    // of the App's reach, the bot added `origin` and set main to track `origin/main` itself; nothing was ever fetched.
+    // Every task turn then waited two minutes for a worktree and was handed back, forever. Git confirms there is no
+    // `origin/main` to share, so the turn runs in the checkout as it did before the bot set the upstream.
+    let tmp = Tmp::new();
+    let projects = tmp.0.join("projects");
+    let main = projects.join("bot-reviewer-2");
+    std::fs::create_dir_all(&main).unwrap();
+    sh(&main, &["init", "-q", "-b", "main"]);
+    std::fs::write(main.join("AGENT.md"), "# Reviewer\n").unwrap();
+    sh(&main, &["add", "-A"]);
+    sh(&main, &["commit", "-qm", "start"]);
+    let unreachable = tmp.0.join("never-fetched.git");
+    sh(
+        &main,
+        &["remote", "add", "origin", unreachable.to_str().unwrap()],
+    );
+    sh(&main, &["config", "branch.main.remote", "origin"]);
+    sh(&main, &["config", "branch.main.merge", "refs/heads/main"]);
+    let env = turn_env(&tmp.0, &[]);
+    assert_eq!(
+        sessions::upstream(&main, &crate::safegit::environment(&env))
+            .await
+            .unwrap(),
+        ""
+    );
+    let task = sessions::path_for(&projects, "reviewer-2", "t1");
+    assert_eq!(
+        sessions::ensure(&main, &task, "t1", &env).await.unwrap(),
+        (String::new(), sessions::NO_UPSTREAM.into())
+    );
+    assert!(!task.exists(), "no task worktree was made");
+
+    // An upstream on a remote that is not configured at all is still unreadable, not proof of none.
+    sh(&main, &["config", "branch.main.remote", "missing-remote"]);
+    let error = match sessions::upstream(&main, &crate::safegit::environment(&env)).await {
+        Err(crate::gitrun::Fault::Io(why)) => why,
+        other => panic!("expected an unreadable upstream, got {other:?}"),
+    };
+    assert!(
+        error.starts_with(sessions::UPSTREAM_LOOKUP_FAILED),
+        "{error}"
+    );
+}
+
+#[tokio::test]
 async fn a_private_meetings_checkout_tracks_nothing_keeps_its_changes_and_goes_whole_when_the_meeting_ends(
 ) {
     let tmp = Tmp::new();

@@ -55,7 +55,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
-from . import company_pause, lifecycle
+from . import company_pause, lifecycle, start_holds
 from .store import H, P, Problem, bot_readiness, digest, encode, readiness_document
 from .config import Settings
 from . import bot_settings as BS
@@ -771,6 +771,18 @@ def last_stop(c, bot, status):
             ),
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "failed":
+        if str(attempt["final_text"] or "").endswith(start_holds.BOTOPS_HAS_IT):
+            # Handed back for the same reason start_holds.SAME times: BotOps has it, so it is no person's to fix.
+            return {
+                "kind": "never_started",
+                "tone": "soft",
+                "needs_person": False,
+                "action": None,
+                "at": at,
+                "attempt_id": attempt["id"],
+                "reason": f"Its computer handed this run back {start_holds.SAME} times for the same reason.",
+                "text": attempt["final_text"],
+            }
         # PRE_START_TRIES lapses: the reason names the computer and what to do about it (expire()).
         return {
             "kind": "never_started",
@@ -4234,11 +4246,14 @@ class Execution:
         computer handed it back (hand_back). Nothing ran, so nothing is held for review and the bot is not crashed:
         the job waits in the queue again and the bot's status line says so softly (last_stop). After PRE_START_TRIES
         such runs within PRE_START_WINDOW_HOURS the job fails instead, with a reason that names the computer, told
-        to the person who asked. Hub cuts and planned pauses do not count; the window survives server restarts."""
-        state, reason = "queued", ""
+        to the person who asked. Hub cuts and planned pauses do not count; the window survives server restarts.
+        A computer that hands the job back start_holds.SAME times in a row for the same reason fails it at once, and
+        BotOps gets it (start_holds.file): no wait clears that."""
+        state, reason, botops = "queued", "", False
         tries = failed_starts(c, row["job_id"])
         bot = H.bot(c, row["bot_id"])
-        if tries >= PRE_START_TRIES:
+        stuck = start_holds.stuck(c, row) if event == "attempt.returned" else ""
+        if tries >= PRE_START_TRIES or stuck:
             computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
             label = (computer["label"] if computer else None) or "its Computer"
             name = (
@@ -4253,6 +4268,9 @@ class Execution:
                 else "check that Computer"
             )
             reason = f"Your {name} couldn't start on {label}; {remedy}"
+            botops = bool(stuck) and bool(start_holds.file(c, row, stuck, label))
+            if botops:
+                reason = f"Your {name} couldn't start on {label}: {stuck}. {start_holds.BOTOPS_HAS_IT}"
             state = "failed"
             c.execute("UPDATE attempts SET state='failed',final_text=? WHERE id=?", (reason, row["id"]))
             job = c.execute(
@@ -4285,7 +4303,7 @@ class Execution:
             settle_status(
                 c,
                 row["bot_id"],
-                "crashed" if state == "failed" else "idle",
+                "crashed" if state == "failed" and not botops else "idle",
                 reason if state == "failed" else "Last run didn't start; it is back in the queue",
                 claimed=row["created_at"],
                 stop=row["id"],

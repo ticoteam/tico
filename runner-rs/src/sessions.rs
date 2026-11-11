@@ -480,7 +480,7 @@ pub fn git_reason(out: &Out) -> String {
 }
 
 /// The main checkout's upstream as a remote-tracking ref (`origin/main`), or "" when Git confirms it has none: HEAD is
-/// on no branch, or its branch names no upstream. Any other failure is an UPSTREAM_LOOKUP_FAILED fault, with Git's
+/// on no branch, its branch names no upstream, or the remote-tracking branch it names is not there. Any other failure is an UPSTREAM_LOOKUP_FAILED fault, with Git's
 /// reason, since a lookup that failed says nothing about whether there is one.
 pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
     let failed = |why: String| {
@@ -525,6 +525,36 @@ pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
     .map_err(looked)?;
     if merge.code == 1 {
         return Ok(String::new()); // the branch names no upstream
+    }
+    // The branch names an upstream on a configured remote whose remote-tracking branch is not there: never fetched
+    // (a bot that set `origin/main` itself while its GitHub repository was out of reach, Acme Nov 11) or since
+    // pruned. Git confirms there is no commit to share, so it is no upstream, as before it was set; every task turn
+    // used to wait two minutes and be handed back for it, forever. Read by ref name, not Git's translated `[gone]`.
+    let named = g(
+        main,
+        env,
+        &[
+            "for-each-ref",
+            "--format=%(upstream)",
+            &format!("refs/heads/{branch}"),
+        ],
+        15,
+    )
+    .await
+    .map_err(looked)?;
+    let tracking = named.stdout.trim();
+    if named.ok() && tracking.starts_with("refs/remotes/") {
+        let present = g(
+            main,
+            env,
+            &["show-ref", "--verify", "--quiet", tracking],
+            15,
+        )
+        .await
+        .map_err(looked)?;
+        if present.code == 1 {
+            return Ok(String::new());
+        }
     }
     Err(failed(git_reason(&done)))
 }
