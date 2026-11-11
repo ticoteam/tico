@@ -250,6 +250,7 @@
  "tico_task_readers_remove": "422 private",
  "tico_task_reassign": "usage",
  "tico_task_relate": "404 not_found",
+ "tico_task_release": "usage",
  "tico_task_requester_remove": "404 not_found",
  "tico_task_run": "422 run-now",
  "tico_task_snooze": "usage",
