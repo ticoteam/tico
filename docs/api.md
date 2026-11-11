@@ -26,6 +26,8 @@ software: a web frontend your team builds, a script, another service. This page 
   `422 ask_default_go_ahead` (do the default and note it on the task; not when the owner turned off
   `bots_go_ahead`), and one an open question to the same person already covers (same task, same words, or nearly)
   returns `422 ask_duplicate` naming it. Nothing is written; a person's own asks are never refused.
+- **Success:** `200` with the answer, a create included: `POST /api/v2/tasks` answers `200 {"task": ...}`, not
+  `201`. The spec gives each route's code.
 - **Errors:** `{"error": {"code", "detail", "retryable"}}`. See [errors](custom-frontend.md#errors).
 
 ## What the spec covers

@@ -6005,7 +6005,11 @@ class Execution:
                 (row["bot_id"], runtime, model, thread_id, who.runner_id, H.now()),
             )
         msg = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0]
-        H.task_session_started(c, row["bot_id"], row["lane"], msg, thread_id, runtime)
+        # The task's session names the harness that really runs the turn: one the claim moved to the Gateway while
+        # the bot's subscription is not signed in (models_preset.main_config) runs on the Gateway's, not the bot's own.
+        handed_model = (gateway_connection.handed(c, row["id"]) or {}).get("model")
+        harness = models_preset.GATEWAY_RUNTIME if gateway_connection.is_tico(handed_model) else runtime
+        H.task_session_started(c, row["bot_id"], row["lane"], msg, thread_id, harness)
         return msg
 
     @staticmethod
