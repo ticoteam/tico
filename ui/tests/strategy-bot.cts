@@ -111,14 +111,15 @@ async function check(page: import('playwright').Page, name = 'Strategy Owner') {
       await page.close();
     }
     // The owner in a group of their own, with a bot that has no manager: what hung under the Strategy Owner hangs under
-    // the owner, in the owner's group, at desktop and phone widths.
+    // the owner, at the top beside them since the owner's own group is not drawn, at desktop and phone widths.
     for (const width of [1280, 390]) {
       const server = {home: true};
       const {page, errors} = await open(browser, server, width);
       assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, `${width}: not on the Team tree`);
-      assert.deepEqual(await above(page, 'b:scribe'), ['p:ana', 'g:home'], `${width}: Scribe under the owner`);
-      assert.deepEqual(await above(page, 'g:marketing'), ['p:ana', 'g:home'], `${width}: Marketing under the owner`);
-      assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing', 'p:ana', 'g:home']);
+      // The owner's own group is not drawn (orgOwnGroupDissolve): what is in it sits at the top, beside the owner.
+      assert.deepEqual(await above(page, 'b:scribe'), [], `${width}: Scribe at the top beside the owner`);
+      assert.deepEqual(await above(page, 'g:marketing'), [], `${width}: Marketing at the top beside the owner`);
+      assert.deepEqual(await above(page, 'b:seo'), ['b:cmo', 'g:marketing']);
       // Goals draws as the Org tab does: the owner on top, so their own group is not a line above them.
       assert.deepEqual(await goalLines(page), ['bot:scribe@1', 'group:Marketing@1', 'bot:cmo@2', 'bot:seo@3']);
       assert.deepEqual(errors, []);
