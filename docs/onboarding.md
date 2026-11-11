@@ -41,7 +41,12 @@ the server still starts, **no sample team is set up in its place**, and the owne
 Health ("Company file from setup not imported") until it is over: an import works (the same file again included), the
 team is set up on the welcome page, the server starts with the file fixed back to the one already applied or with no
 company file at all, or the owner presses **Dismiss** on the welcome page. A server start with the same broken file
-shows it again.
+shows it again, until the company's setup is complete: once its team is in (from an uploaded file or set up on the
+welcome page), a server start leaves it alone whatever the file says, and never shows a company file failure. The reason
+names the role the file got wrong by its title ("Reviewer 1 names a role template this version of Tico doesn't have:
+…"); the server log has the field the check refused. A file names the template slugs of the release it was made for: a
+slug a later release renamed reads as its new one (`RENAMED` in backend/company_file/draft.py), so a file saved from an
+older setup page, or a plan HQ writes with an older chart, still imports.
 
 **Unreleased:** A role's optional `team` (the name of its group) puts it in a group of that name: one group per name, made
 from the file, or the group that already has it. Without one, a role goes in its template's group.

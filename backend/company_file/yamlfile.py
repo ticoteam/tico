@@ -401,14 +401,20 @@ def from_yaml(text):
         for p in people
     ]
     chosen = {}
-    for b in _rows(doc, "employees"):
+    for at, b in enumerate(_rows(doc, "employees")):
+        if isinstance(b.get("template"), str) and b["template"] in D.RETIRED:
+            continue  # its built-in comes with every install, as draft.check lets it go
+        template = D.current(b.get("template"))  # an older release's slug reads as the template that has it now
         role = (
-            next((r for r in D.ROLES if r["slug"] == b.get("template")), None)
-            or next((r for r in D.HELPERS if r["slug"] == b.get("template")), None)
-            or next((dict(r, lead=False, core=False) for r in D.SEATS if r["slug"] == b.get("template")), None)
+            next((r for r in D.ROLES if r["slug"] == template), None)
+            or next((r for r in D.HELPERS if r["slug"] == template), None)
+            or next((dict(r, lead=False, core=False) for r in D.SEATS if r["slug"] == template), None)
         )
         if not role:
-            raise D.DraftError("employees has a template Tico doesn't have: %s" % str(b.get("template"))[:40])
+            raise D.DraftError(
+                "employees has a template Tico doesn't have: %s" % str(b.get("template"))[:40],
+                plain=D.unknown_template(D.role_name(b, at), b.get("template")),
+            )
         bot = {
             "id": _str(b.get("id")),
             "template": role["slug"],

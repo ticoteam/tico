@@ -667,7 +667,7 @@ Twelve presets built from the same parts, in four factories. Customers and manag
 A new org gets General at its first start, and the rest once its setup finishes (Product and Engineering only if it
 builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
 renamed is never made again. Legal and Finance are made only once their owner bot exists (the Legal Owner, the
-Bookkeeper as Finance Owner), the moment it is made; never with the Task Manager standing in. Growth and Success
+Finance Owner), the moment it is made; never with the Task Manager standing in. Growth and Success
 Monitoring are made only where their factory's Experiments pipeline is.
 
 A preset the company has keeps its stages and requirements on an upgrade, but its wording nobody edited follows the
