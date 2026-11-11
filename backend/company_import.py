@@ -875,7 +875,30 @@ def default_teams(onboarding, c, home):
         )
     for team in teams.values():
         team["on"] = team["on"] or team["locked"]
-    return list(teams.values())
+    return [*teams.values(), *general_team(onboarding)]
+
+
+def general_team(onboarding):
+    """The built-ins' own team as setup shows it, always on: the General Manager first, then the built-ins that report to
+    it (groups.GENERAL_TEAM, onboarding.ensure_general_team), under the group's own name. The chart formula leaves the
+    built-ins out (every company has them), and the Assistant reports to its person, so it is in no team."""
+    from . import groups as G
+
+    cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
+    names = [(slug, (cards.get(slug) or {}).get("name")) for slug in (G.GENERAL_MANAGER, *G.GENERAL_TEAM)]
+    roles = [
+        {
+            "id": slug,
+            "title": name,
+            "live": True,
+            "reports_to": None if slug == G.GENERAL_MANAGER else G.GENERAL_MANAGER,
+        }
+        for slug, name in names
+        if name
+    ]
+    if not roles or roles[0]["id"] != G.GENERAL_MANAGER:
+        return []
+    return [{"team": G.BUILT_IN_NAME, "on": True, "locked": True, "roles": roles}]
 
 
 def add_invitee(onboarding, c, who, key, email):

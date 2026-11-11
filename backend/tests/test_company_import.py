@@ -1811,6 +1811,15 @@ def test_setup_lists_the_default_chart_by_team_and_leaves_out_the_teams_switched
     view = api.get("/api/v2/setup", headers=signed_in()).json()
     teams = view["default_chart"]
     assert len(teams) >= 2 and all(row["on"] and row["roles"] for row in teams)
+    # The built-ins' own team, always on: its manager first and every other built-in in it reporting to it; no role is
+    # in two teams, and the Assistant (it reports to its person) is in none.
+    general = [row for row in teams if row["locked"]]
+    assert len(general) == 1 and general[0] == teams[-1]
+    head, *rest = general[0]["roles"]
+    assert head["reports_to"] is None and rest and {role["reports_to"] for role in rest} == {head["id"]}
+    every = [role["title"] for row in teams for role in row["roles"]]
+    assert len(every) == len(set(every))
+    assert "assistant" not in {role["id"] for row in teams for role in row["roles"]}
     teams = [row for row in teams if not row["locked"]]
     for row in teams:
         ids = {role["id"] for role in row["roles"]}
