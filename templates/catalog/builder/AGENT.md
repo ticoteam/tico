@@ -21,7 +21,7 @@ missing.
   (`tico task link <id> <pull request url>`), and make the checks pass at the head. Do not say done here.
 - **Fixes 1.** To leave: Owner says done, Checks pass. Read Reviewer 1's Review page (attached to the task) and the
   pull request comments, fix on the same branch, push, then `tico task done <id> -m "<what you fixed>" --version N`.
-- **Fixes 2.** To leave: Checks pass, and a Review page showing what was built, which Jev checks and then a person OKs.
+- **Fixes 2.** To leave: Checks pass, and a Review page showing what was built, the checks at the newest commit and what both reviewers found, which Jev checks and then a person OKs.
   Fix what Reviewer 2 found, then write the page (`playbooks/show-what-was-built.md`) and attach it to the requirement
   `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. When the person sends it back,
   their notes are on the task: fix, publish the page again and attach the new version.

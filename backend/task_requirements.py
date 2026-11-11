@@ -308,7 +308,7 @@ ASKED_ONCE_SQL = (
 
 def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     """A page attached to this visit (task_pages), Jev's verdict on it (page_verdicts), then the named person's OK of that
-    exact version when the requirement names one. An answer counts only for the page version it was given on. Jev
+    exact version when the requirement names one or is people only. An answer counts only for the page version it was given on. Jev
     unsure, or unable to check, is a person's to decide, once per visit: after a person decided one such page, the next
     one goes back to the owner, so a noisy rubric never fills a person's list."""
     from . import page_verdicts as V
@@ -347,7 +347,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         if conn.execute(ASKED_ONCE_SQL, (visit_id, requirement["id"])).fetchone():
             return Standing(requirement, NOT_MET, owner, line)
         return Standing(requirement, WAITING, person, line)
-    if requirement.get("person_id"):
+    if requirement.get("person_id") or people_only(requirement):
+        # A people-only page that names nobody (or whose person left) is any person's: Jev passing it is never enough.
         from . import hubdb
 
         H: Any = hubdb

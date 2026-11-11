@@ -13,7 +13,8 @@ are on it:
 - A bot's turn: nothing while the bot has a live run or a wake queued for the task. Otherwise the ladder: the bot is
   woken again 2 minutes after it stopped, then 15 minutes, then 1 hour. After 3 tries with no change the pipeline's
   manager bot gets the task on the same 3 tries, then a person. If the task changed, the count goes back to zero.
-- Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them.
+- Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them. A
+  person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`).
 - Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
   lands in one person's list, once.
 - A snooze whose date came ends, and the owner is woken once.
@@ -171,6 +172,7 @@ def check(
         quiet = quiet + 1 if conn.total_changes == changes else 0
     _keeping_reads(conn, "SAVEPOINT never_stuck_room")
     try:
+        done["moved"] += _requests(conn)  # before C10: a person's request takes the room first
         done["woken"] += _room(conn)
     except Exception as error:
         if failures is None or not conn.in_transaction or storage_error(error):
@@ -200,6 +202,35 @@ _FIRST_WAITING = (
     "ORDER BY v.entered_at, v.id LIMIT 1"
 )
 _FREED = "SELECT id FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
+
+
+# A person's request still on its first visit to a by-hand stage (task_engine.not_held_by_hand), oldest first.
+_REQUESTS = (
+    "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+    "JOIN stages s ON s.id = t.stage_id "
+    "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL "
+    "AND v.entered_how='new' AND t.requester_id LIKE 'human:%' "
+    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+    "ORDER BY v.entered_at, v.id"
+)
+
+
+def _requests(conn: "sqlite3.Connection") -> int:
+    """A task a person files into a by-hand stage (Product's Ideas) is not held there: the person already picked it.
+    Once the stage's own requirements are met (Ideas has none) it moves into the next stage as soon as that has room,
+    oldest first, before the by-hand stage's owner is woken
+    about room (C10). Ideas a bot filed stay until someone moves them. Returns how many moved."""
+    moved = 0
+    for (task_id,) in conn.execute(_REQUESTS).fetchall():
+        row = E.task(conn, str(task_id))
+        if not row or not E.not_held_by_hand(conn, row) or R.unmet(conn, row):
+            continue
+        nxt = E.next_stage(conn, row)
+        if not nxt or nxt["kind"] != "work" or not E.has_room(conn, nxt) or E.shut_out(conn, row, nxt):
+            continue
+        E.move(conn, row["id"], nxt["id"], SYSTEM, seen_version=row.get("version"))
+        moved += 1
+    return moved
 
 
 def room_key(stage_id: str, freed_by: str | None) -> str:

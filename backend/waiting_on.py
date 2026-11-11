@@ -418,7 +418,14 @@ def of(
                 continue
             # Not met: whoever has the task's work has this too.
             out.append(_turn(conn, row, has, line, requirement["id"], since, False, seen, standing.about))
-    if by_hand:
+    if by_hand and not unmet and E.not_held_by_hand(conn, row):
+        # A person's request is not held by hand: it waits for room in the next stage (never_stuck._requests).
+        ahead = E.next_stage(conn, row)
+        name = ahead["name"] if ahead else "the next stage"
+        full = bool(ahead) and not E.has_room(conn, ahead)
+        line = f"No room in {name}" if full else f"Moving to {name}"
+        out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
+    elif by_hand:
         out.append(Wait(BY_HAND, stage["id"], f"Leaves {stage['name']} by hand", None, entered))
     elif not unmet:
         # Everything is met. It waits for a slot in the next stage; with room, the engine takes it on its next pass.

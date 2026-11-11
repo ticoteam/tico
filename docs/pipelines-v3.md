@@ -70,9 +70,11 @@ architecture) and C (the screens).
   notes go to the bot.
 - **Person OKs** on the new Tico Team: the spec before it is built, and the review page before merge. The rest is bots
   and Jev.
-- **Person OK setting:** "People only" or "People, with exceptions". Default: with exceptions.
+- **Person OK setting:** "People only" or "People, with exceptions". Default: with exceptions. The two person OKs in
+  the Product and Engineering presets are people only.
 - **Push past** is a switch on each requirement.
-- Tasks leave **Ideas** by hand. Later is dropped.
+- Tasks leave **Ideas** by hand, except a request a person files: it goes into Spec when Spec has room. Later is
+  dropped.
 - **Many PRs** per task. All must merge.
 - **The other existing orgs** are rebuilt from scratch on v3.
 - **Build order:** General, then Product, then Engineering.
@@ -103,7 +105,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   Close. Bots can close tasks that bots asked for.
 - **C9.** General has one stage, To do. *No Doing, Waiting or Review stages. The line under the title says what is going
   on.*
-- **C10.** Ideas: the Product Owner bot gets one wake when Spec has room. It is not chased after that.
+- **C10.** Ideas: the Product Owner bot gets one wake when Spec has room. It is not chased after that. A request a
+  person filed that still waits in Ideas takes the room first, by itself.
 - **C11.** Held actions (send this email, spend, publish) become an Approve ask on the task the bot is working on. If
   there is no task, Tico files one for you in General.
 - **C12.** Stale checks are dropped. *Today a model flags tasks that look forgotten and lists them for you.* Bot tasks
@@ -180,6 +183,8 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
   (C25).
 - **To leave:** a list of requirements. All must be met.
 - **Tasks leave by hand:** a switch. Tasks stay until someone moves them. Nothing there is late and nobody is chased.
+  A person's request (a task a person filed that no task filed) on its first visit is not held: it moves on when the
+  next stage has room, oldest first. Moved back into the stage, or snoozed there, it is held like any other.
 - **On enter:** nothing, "file a linked task into pipeline X", or "queue the PRs to merge". There are no other actions. A
   stage that files a task always has Linked work done among its requirements.
 - **Expected time** and **limit** (how many tasks fit). The first stage of a pipeline has no limit.
@@ -188,7 +193,7 @@ That gives three kinds of stage, and no others:
 
 - **Work stage:** has requirements. It is the owner's turn until they are met.
 - **No requirements:** Tasks move on by themselves when the next stage has room. Engineering's On deck is one.
-- **By hand:** tasks leave when someone moves them. Product's Ideas is one.
+- **By hand:** tasks leave when someone moves them. Product's Ideas is one. A person's request is not held there.
 
 ### The six requirement kinds
 
@@ -210,7 +215,8 @@ Two switches sit on a requirement:
 
 - **Can be pushed past.** On, except for PR merged and In a release (C3).
 - **Who OKs**, on kinds 2 and 3: "People only" or "People, with exceptions". With exceptions is the default: a bot may
-  push past with a reason, and the task shows it.
+  push past with a reason, and the task shows it. People only: no bot OKs it or pushes past it, and only a person
+  changes or removes it in the settings. A people-only page that names nobody waits on a person after Jev passes it.
 
 Requirements are guard rails that keep work visible. They are not security. No refusal about a task counts toward
 quarantining a bot: not a requirement, room, a cap or a rule.
@@ -310,7 +316,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Ends: A slot frees. Oldest first.
    - If not: It turns Late and the manager bot gets it.
 9. **A by-hand stage**
-   - Starts: It enters a stage that tasks leave by hand.
+   - Starts: It enters a stage that tasks leave by hand. A person's request on its first visit is not held: it is in
+     state 8.
    - Ends: Someone picks it, closes it or snoozes it.
    - If not: Nothing. It is a place to wait.
 
@@ -644,9 +651,9 @@ From an idea to something checked in production. Manager: the Product Pipeline M
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
 - **Ideas.** Owner: Product Owner. Tasks leave by hand. The Product Owner is woken once when Spec has room. To park an idea, snooze it with
-  no end date.
-- **Spec.** Owner: Product Owner. To leave: a Spec page. Jev checks it, then **a person OKs it**. Limit 2. Expected
-  time: 2 days.
+  no end date. A request a person files is not held: it goes into Spec as soon as Spec has room, oldest first.
+- **Spec.** Owner: Product Owner. To leave: a Spec page. Jev checks it, then **a person OKs it** (people only: no bot
+  OKs it or pushes past it). Limit 2. Expected time: 2 days.
 - **In development.** On enter: file an Engineering task. To leave: Linked work done. Owner: Product Owner. Expected
   time: 5 days.
 - **Validate.** Owner: Product Owner. To leave: a "Checked in production" page that names the version production runs.
@@ -666,8 +673,8 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **Fixes 1.** Owner: Builder. To leave: Owner says done, Checks pass. Expected time: 4 hours.
 - **Review 2.** Owner: Reviewer 2, a different model: Codex if the company has it, else a different Claude model. To leave: a Review page for the newest commit. Expected time: 2
   hours.
-- **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built. Jev checks it, then **a
-  person OKs it**. Expected time: 4 hours.
+- **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built, that the checks pass at
+  the newest commit, and what both reviewers found. Jev checks it, then **a person OKs it** (people only). Expected time: 4 hours.
 - **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
@@ -1208,7 +1215,7 @@ Today: the pipeline editor.
 - **Bottom row:** "+ Stage" at the left, "Save" (main) at the right.
 
 **A requirement, open:** fields, name then value: Needs "A page ▾"; Jev checks "Covers goal, scope, what done looks
-like"; Then a person "Ana ▾"; Who OKs "People, with exceptions ▾"; Can be pushed past "On".
+like"; Then a person "Ana ▾"; Who OKs "People only ▾"; Can be pushed past "On".
 
 Rules:
 
@@ -1647,8 +1654,8 @@ Numbered in order so they can be cited (scenario 1 to 52).
 17. Anyone tries to push past PR merged: refused, offered Move back and Close.
 18. A task is dragged two stages ahead: every skipped requirement is recorded as pushed past, with one reason.
 19. A new org gets the presets: every work stage has an owner and at least one requirement. On deck has none. Tasks leave
-    Ideas by hand.
-20. Spec empties while Ideas holds tasks: the Product Owner is woken once.
+    Ideas by hand, except a person's request.
+20. Spec empties while Ideas holds tasks: a person's request goes in by itself; else the Product Owner is woken once.
 21. Close a Product task in Spec with the spec unmet: it closes at once with the reason.
 22. Close a Product task in a factory: the Done count doesn't change.
 23. Close the Engineering task of a Product task in In development: Product shows it closed with the reason, and it is

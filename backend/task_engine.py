@@ -524,6 +524,11 @@ def enter(
     first = next((s for s in work if s["id"] == start), None) if start else (work[0] if work else None)
     if not pipe or pipe.get("retired_at") or not first:
         _refuse(conn, by, "task_no_such_stage", "No such pipeline", task_id)
+    if not is_human(by):
+        # Entering further in skips the stages before it, so a bot never starts a task past a person's OK.
+        for skipped in work[: work.index(first)]:
+            if any(R.people_only(r) for r in R.on_stage(conn, skipped["id"])):
+                _refuse(conn, by, "task_needs_person", f"{skipped['name']} needs a person's OK first", task_id)
     above: Row | None = None
     if parent:
         above = task(conn, parent)
@@ -988,6 +993,19 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     if not target or R.unmet(conn, row) or not has_room(conn, target) or shut_out(conn, row, target):
         return None
     return move(conn, task_id, target["id"], SYSTEM, seen_version=row.get("version"))
+
+
+def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
+    """A person's request (one a person asked for that no task filed, as C8 reads it) on its first visit, in a by-hand
+    stage: the person already picked it, so it is not held there. It moves on by itself when the next stage has room,
+    oldest first (never_stuck). One moved back into the stage, or snoozed there, is held like any other."""
+    stage_row: Row = row.get("stage") or {}
+    visit: Row = row.get("visit") or {}
+    if not stage_row.get("by_hand") or visit.get("entered_how") != "new" or row.get("snooze"):
+        return False
+    if not is_human(row.get("requester_id")):
+        return False
+    return not conn.execute("SELECT 1 FROM links WHERE to_task_id=?", (row["id"],)).fetchone()
 
 
 def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None = None) -> list[str]:
