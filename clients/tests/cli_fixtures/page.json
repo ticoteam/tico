@@ -1,0 +1,647 @@
+[
+ {
+  "argv": [
+   "page"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico page: error: argument sub: invalid choice: 'nope' (choose from publish, list, show, access, archive) Did you mean: tico page show, tico page access?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "publish"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico page publish <path>\ntico page publish: error: the following arguments are required: path",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/missing.html"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/missing.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "README.md"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "pages?name=README.md&path=README.md",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_page_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "pages",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "list",
+   "--bot",
+   "ana",
+   "--task",
+   "T1",
+   "--archived",
+   "--limit",
+   "5",
+   "--cursor",
+   "c2"
+  ],
+  "tools": [
+   [
+    "tico_page_list",
+    {
+     "archived": true,
+     "bot": "ana",
+     "cursor": "c2",
+     "limit": 5,
+     "operation_id": null,
+     "task": "T1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "pages?bot=ana&task=T1&archived=True&limit=5&cursor=c2",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "list",
+   "--limit",
+   "many"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico page list: error: argument --limit: invalid int value: 'many'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico page show <id>\ntico page show: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "show",
+   "p1"
+  ],
+  "tools": [
+   [
+    "tico_page_show",
+    {
+     "id": "p1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "pages/p1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "access"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico page access <id>\ntico page access: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "access",
+   "p1"
+  ],
+  "tools": [
+   [
+    "tico_page_access",
+    {
+     "id": "p1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "pages/p1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"ValueError: Only page managers see access\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "page",
+   "access",
+   "p1",
+   "--audience",
+   "everyone"
+  ],
+  "tools": [
+   [
+    "tico_page_access",
+    {
+     "audience": "everyone",
+     "id": "p1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "pages/p1",
+    {
+     "audience": {
+      "everyone": true
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "access",
+   "p1",
+   "--audience",
+   "ben,group:legal,bot:analyst"
+  ],
+  "tools": [
+   [
+    "tico_page_access",
+    {
+     "audience": "ben,group:legal,bot:analyst",
+     "id": "p1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "pages/p1",
+    {
+     "audience": {
+      "people": [
+       "ben"
+      ],
+      "teams": [
+       "legal"
+      ],
+      "bots": [
+       "analyst"
+      ]
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "archive"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico page archive <id>\ntico page archive: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "archive",
+   "p1"
+  ],
+  "tools": [
+   [
+    "tico_page_archive",
+    {
+     "id": "p1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "pages/p1",
+    {
+     "archived": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "archive",
+   "p1",
+   "--restore"
+  ],
+  "tools": [
+   [
+    "tico_page_archive",
+    {
+     "id": "p1",
+     "operation_id": null,
+     "restore": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "pages/p1",
+    {
+     "archived": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "x.html",
+   "--cadence",
+   "hourly"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico page publish: error: argument --cadence: invalid choice: 'hourly' (choose from none, daily, weekly, monthly)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "x.html",
+   "--scope",
+   "team"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico page publish: error: argument --scope: invalid choice: 'team' (choose from task, bot)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "...",
+   "--task",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"... is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/1-go-live.html",
+   "--title",
+   "Go-live: 1",
+   "--task",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/1-go-live.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/content-playbook.html",
+   "--title",
+   "Content playbook",
+   "--cadence",
+   "none",
+   "--scope",
+   "bot"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/content-playbook.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/1-results.html",
+   "--title",
+   "Results: 1",
+   "--task",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/1-results.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/cro-playbook.html",
+   "--title",
+   "CRO playbook",
+   "--cadence",
+   "none",
+   "--scope",
+   "bot"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/cro-playbook.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/email-playbook.html",
+   "--title",
+   "Email playbook",
+   "--cadence",
+   "none",
+   "--scope",
+   "bot"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/email-playbook.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/search-ads-playbook.html",
+   "--title",
+   "Search Ads playbook",
+   "--cadence",
+   "none",
+   "--scope",
+   "bot"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/search-ads-playbook.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "specs/1.html",
+   "--spec",
+   "--task",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"specs/1.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/seo-playbook.html",
+   "--title",
+   "SEO playbook",
+   "--cadence",
+   "none",
+   "--scope",
+   "bot"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/seo-playbook.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/social-ads-playbook.html",
+   "--title",
+   "Social Ads playbook",
+   "--cadence",
+   "none",
+   "--scope",
+   "bot"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/social-ads-playbook.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "reports/weekly.html",
+   "--title",
+   "...",
+   "--cadence",
+   "weekly"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "{\n  \"refused\": \"page\",\n  \"detail\": \"reports/weekly.html is not a regular file\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "README.md",
+   "--title",
+   "Weekly",
+   "--cadence",
+   "weekly",
+   "--as-of",
+   "2026-11-01",
+   "--task",
+   "T1",
+   "--replaces",
+   "p0",
+   "--scope",
+   "task",
+   "--audience",
+   "ben,group:legal",
+   "--spec"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "pages?name=README.md&path=README.md&title=Weekly&cadence=weekly&as_of=2026-11-01&task=T1&replaces=p0&scope=task&spec=True&audience=%7B%22people%22%3A%5B%22ben%22%5D%2C%22teams%22%3A%5B%22legal%22%5D%2C%22bots%22%3A%5B%5D%7D",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "page",
+   "publish",
+   "README.md",
+   "--audience",
+   "everyone"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "POST",
+    "pages?name=README.md&path=README.md&audience=%7B%22everyone%22%3Atrue%7D",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]
