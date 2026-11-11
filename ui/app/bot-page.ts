@@ -143,6 +143,7 @@ function botCantRunFixHTML(slug: string, fix: BotCantRun['fix']): string {
     case 'resume_company': return `<a class="${cls}" href="${BOT_BILLING}">Resume company</a>`;
     case 'unlock_cloud': return `<a class="${cls}" href="${BOT_BILLING}">Unlock</a>`;
     case 'add_credit': return `<a class="${cls}" href="${BOT_BILLING}">Add credit</a>`;
+    case 'open_computers': return `<a class="${cls}" href="#/settings/computers">Computers</a>`;
     default: return '';
   }
 }

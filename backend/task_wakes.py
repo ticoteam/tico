@@ -299,6 +299,12 @@ BEING_SET_UP = "is still being set up"
 ONBOARDING = "is still onboarding: a person above it marks its onboarding complete"
 REMOVED = "was removed"
 NO_COMPUTER = "has no computer"
+# A bot of a Tico Cloud company waits for its cloud machine's computer instead (backend/cloud_machines.py `coming`): on
+# its way by itself (nobody is asked), or failed (a person replaces it in Settings > Computers). `cause_line` names the
+# machine in place of CLOUD_WORDS.
+CLOUD_WORDS = "its cloud computer"
+CLOUD_STARTING = "is waiting for its cloud computer to start"
+CLOUD_FAILED = "can't run: its cloud computer didn't start"
 RUNS_FAILING = "keeps failing its runs"
 LOGIN = "has a login to reconnect"
 COMPANY_PAUSED = "The company is paused"
@@ -311,7 +317,30 @@ def cause_line(conn: "sqlite3.Connection", actor: str | None, cause: str) -> str
     """A cause from `cannot_run` as one sentence: "Builder has no computer", "Tico Cloud is locked"."""
     if cause in COMPANY_WIDE:
         return cause
+    if cause in (CLOUD_STARTING, CLOUD_FAILED):
+        from . import cloud_machines
+
+        machine = cloud_machines.coming(conn, str(_h().actor_id(actor)))
+        if machine:
+            cause = cause.replace(CLOUD_WORDS, machine["label"])
     return f"{_h().actor_name(conn, actor)} {cause}"
+
+
+# Where a person sees, or fixes, what keeps a bot from running: a page of the app, for a link beside the line.
+COMPUTERS_PAGE = "#/settings/computers"
+BILLING_PAGE = "#/settings/billing"
+CAUSE_PAGES = {
+    NO_COMPUTER: COMPUTERS_PAGE,
+    CLOUD_STARTING: COMPUTERS_PAGE,
+    CLOUD_FAILED: COMPUTERS_PAGE,
+    OUT_OF_CREDIT: BILLING_PAGE,
+    CLOUD_LOCKED: BILLING_PAGE,
+}
+
+
+def cause_href(cause: str | None) -> str | None:
+    """The page for a cause from `cannot_run` (CAUSE_PAGES), or None."""
+    return CAUSE_PAGES.get(cause or "")
 
 
 def cannot_run(conn: "sqlite3.Connection", actor: str | None, seen: dict[str, str | None] | None = None) -> str | None:
@@ -365,7 +394,7 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
         # A computer that is offline is not a cause: a cloud computer sleeps until work is queued for it.
         placed = _read(conn, _PLACED, (bot,))
         if not placed or placed[0]:
-            return NO_COMPUTER
+            return _computer_cause(conn, bot) if not placed else NO_COMPUTER
     onboarding = _read(conn, _ONBOARDING, (bot,))
     if onboarding and cast("Any", statuses).is_parked(onboarding[0] or ""):
         return ONBOARDING
@@ -375,6 +404,19 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     if cast("Any", reconnects).bot_open(conn, bot, "login:"):
         return LOGIN  # its computer's sign-in was refused: a person reconnects it (backend/reconnects.py)
     return None
+
+
+def _computer_cause(conn: "sqlite3.Connection", bot: str) -> str:
+    """A bot on no computer: on a Tico Cloud company, what its cloud machine is doing (`cloud_machines.coming`), else
+    NO_COMPUTER. A machine that cannot start while the company is out of credit is the company's cause."""
+    from . import cloud_machines
+
+    machine = cast("Any", cloud_machines).coming(conn, bot)
+    if not machine:
+        return NO_COMPUTER
+    if machine["status"] == "out_of_credit":
+        return OUT_OF_CREDIT
+    return CLOUD_FAILED if machine["status"] == "failed" else CLOUD_STARTING
 
 
 # `_cause`'s reads of one bot, kept for the snapshot (`_read`); `prime_bots` reads them for many bots at once.

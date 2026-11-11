@@ -2257,6 +2257,80 @@ def waiting(c, bot):
     return "starting its cloud machine"
 
 
+# A machine whose computer has not enrolled yet, as `coming` says it: on its way by itself, or held until a person acts.
+COMING_ON_ITS_WAY = ("making", "starting", "stopped")
+COMING_HELD = ("out_of_credit", "failed")
+
+
+def coming_status(c, machine):
+    """(status, words) for a machine whose computer has not enrolled: `making` (HQ has not made it yet), `starting`,
+    `stopped`, `out_of_credit` (nothing starts while the company is frozen) or `failed` (it was not made, did not
+    start or never connected: its problem's words)."""
+    problem = machine["problem"] or ""
+    if problem == "out_of_credit" or cloud_access.frozen(c):
+        return "out_of_credit", PROBLEMS["out_of_credit"]
+    if problem.startswith(("hq:", "error:")) or problem in ("stuck", "no_enroll"):
+        return "failed", problem_words(problem)
+    if machine["state"] in GOING:
+        return "stopped", "Stopped"
+    if not machine["machine_id"] or machine["state"] in ("none", *DEAD):
+        return "making", "Being made"
+    return "starting", "Starting"
+
+
+def coming_key(c, bot, current=None):
+    """The key of the machine a cloud-mode bot with no computer goes on first (`first_home`'s order): its own when that
+    has a computer, else the shared one, else its own. None in computer mode."""
+    current = current or row(c, bot)
+    if not current or current["mode"] != "cloud":
+        return None
+    own = current if current["placement"] == "own" else None
+    if own and own["runner_id"]:
+        return bot
+    return SHARED if row(c, SHARED) else (bot if own else None)
+
+
+def coming(c, bot):
+    """The cloud machine a cloud-mode bot with no computer waits for, or None for a bot in computer mode:
+    {key, label, status, words} (`coming_status`). The bot is assigned to its computer when it enrolls (`enrolled`)."""
+    key = coming_key(c, bot)
+    machine = row(c, key) if key else None
+    if not machine:
+        return None
+    status, words = coming_status(c, machine)
+    return {"key": key, "label": label_for(c, key), "status": status, "words": words}
+
+
+def coming_rows(c):
+    """Settings > Computers' rows for the cloud machines whose computer has not enrolled yet, so a machine being made
+    or started is listed before it is a computer: the shared one while any bot is set to run there, and a bot's own
+    once HQ has been asked for it. Each {key, label, shared, bot, status, words, replace}: `replace` when deleting it
+    and making a fresh one is the way forward (it failed, and HQ has a machine to delete)."""
+    found = rows(c)
+    out = []
+    for key, current in sorted(found.items(), key=lambda item: (item[0] != SHARED, item[0])):
+        if current["runner_id"] or current["deleting"] or current["mode"] != "cloud":
+            continue
+        if key == SHARED:
+            if not members(c):
+                continue
+        elif current["placement"] != "own" or not (current["machine_id"] or current["problem"]):
+            continue
+        status, words = coming_status(c, current)
+        out.append(
+            {
+                "key": key,
+                "label": label_for(c, key),
+                "shared": key == SHARED,
+                "bot": None if key == SHARED else key,
+                "status": status,
+                "words": words,
+                "replace": status == "failed" and present(current),
+            }
+        )
+    return out
+
+
 def homes(c):
     """Each cloud-mode bot's machine state, computer and what keeps it from starting."""
     found = rows(c)

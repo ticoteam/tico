@@ -65,7 +65,9 @@ class Wait:
     OK or an answer); without it the wait is the task's own work, which whoever has the task has. `about` is the task
     it filed whose title (or why it was closed) the line says: it never leaves the server (`view`), and a reader who
     may not open that task is not told them (`unnamed`). `fix` is set on a Paused wait a person fixes before any bot
-    can act (a requirement's `Standing.fix`, such as Connect GitHub): where they fix it. Nobody is woken for it."""
+    can act (a requirement's `Standing.fix`, such as Connect GitHub): where they fix it. Nobody is woken for it. `href`
+    is the page that shows a Paused bot's cause (task_wakes.cause_href: Settings > Computers for a bot with no computer,
+    Billing when out of credit), for a link beside the line; it changes nothing about who is woken."""
 
     state: str
     who: str | None = None
@@ -76,6 +78,7 @@ class Wait:
     ask: bool = False
     about: str | None = None
     fix: str | None = None
+    href: str | None = None
 
 
 # What a reader who may not open a task this one filed is told of it (`unnamed`).
@@ -287,7 +290,15 @@ def _turn(
         return Wait(PERSON, who, line, requirement_id, since, ask=ask, about=about)
     cause = task_wakes.cannot_run(conn, who, seen) or task_wakes.task_cause(conn, row["id"], who)
     if cause:
-        return Wait(PAUSED, who, task_wakes.cause_line(conn, who, cause), requirement_id, since, ask=ask)
+        return Wait(
+            PAUSED,
+            who,
+            task_wakes.cause_line(conn, who, cause),
+            requirement_id,
+            since,
+            ask=ask,
+            href=task_wakes.cause_href(cause),
+        )
     return Wait(BOT, who, line, requirement_id, since, ask=ask, about=about)
 
 
@@ -676,6 +687,8 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
                 continue  # BotOps has the held run's review task (execution._hand_to_maintainer): no person row
             if wait.line.endswith(task_wakes.CANT_START):
                 continue  # BotOps has the task to find why its runs can't start (start_holds.file): no person row
+            if task_wakes.cannot_run(conn, wait.who, seen) == task_wakes.CLOUD_STARTING:
+                continue  # its cloud machine is on its way, and its work starts once it is up: no person row
             if wait.fix:
                 # A cause of the company's (Connect GitHub): its Owner fixes it, once for every task it holds up.
                 fixer = company_person(conn)
@@ -686,8 +699,8 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
             if not fixer:
                 continue
             fresh: Row = {"kind": "paused", "line": wait.line, "bots": [], "tasks": [], "since": wait.since or ""}
-            if wait.fix:
-                fresh["href"] = wait.fix
+            if wait.fix or wait.href:
+                fresh["href"] = wait.fix or wait.href
             entry = paused.setdefault(fixer, {}).setdefault(wait.line, fresh)
             if wait.who not in entry["bots"]:
                 entry["bots"].append(wait.who)

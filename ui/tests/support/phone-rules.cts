@@ -42,15 +42,12 @@ const ALL = ['no-computer', 'no-credit', 'setup-halfway', 'sign-off', 'bot-waiti
 const SET_UP = ALL.filter(state => state !== 'setup-halfway');
 const KNOWN: Record<string, {states: string[]; what: string}> = {
   // Dead ends, reported to the lead on Nov 11 (rc.8 issue hunt, track F).
-  '3 | span "BotOps has no computer"': {states: ['no-computer', 'no-credit'],
-    what: 'a task held up by a bot with no computer says so in plain text, with no link to Settings > Computers, and the cloud computer that is starting is named nowhere (ui/app/task-modal.ts, backend/task_wakes.py NO_COMPUTER)'},
-  '3 | p.muted.task-wait "Out of credit': {states: ['no-credit'],
-    what: 'the task says it is out of credit with no Add credit link beside it (the top strip has one)'},
   '3 | span "Not connected"': {states: ALL,
     what: 'Settings > Models: a plan row says Not connected and names nothing (ui/app/subscriptions.ts, chris/signin-ui)'},
   '5 | dialog onb': {states: ['setup-halfway'],
     what: 'setup cannot be closed until it is finished (ui/app/welcome.ts reopens it): by design today'},
   // Small tap targets that are the only control of their row or card.
+  '6 | a "Tico Cloud is out of credit"': {states: ['no-credit'], what: 'Home, Needs attention: a 19 px text link'},
   '6 | a.dash-big': {states: ALL, what: 'Home cards: the count is 31 px'},
   '6 | a "Tools"': {states: ALL, what: 'Tools > GitHub: the Tools crumb is 17 px'},
   '6 | a.ghost.asst-learned': {states: ALL, what: 'Assistant: What it has learned is 17 px'},
