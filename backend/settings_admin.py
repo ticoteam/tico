@@ -356,23 +356,10 @@ class SettingsAdmin:
             raise Problem("template", f"Unknown template {template}. Use tico_template_list.{hint}", 422)
 
     def template_repo_defaults(self, template):
-        from pathlib import Path
-        import yaml
+        """The repository access the template's card declares for a bot made from it (repositories.card_access)."""
+        from .repositories import card_access
 
-        if not template:
-            return {}
-        try:
-            manifest = yaml.safe_load((Path(self.settings.catalog_dir) / template / "card.yaml").read_text()) or {}
-        except (OSError, yaml.YAMLError):
-            return {}
-        if not isinstance(manifest, dict):
-            return {}
-        mode, access = manifest.get("repo_access_mode"), manifest.get("repo_all_access", "read")
-        return (
-            {"repo_access_mode": mode, "repo_all_access": access}
-            if mode in ("own", "all") and access in ("read", "write")
-            else {}
-        )
+        return card_access(self.settings.catalog_dir, template)
 
     def template_private_default(self, template):
         """The `private_tasks_default` the template's card declares: a bot made from it keeps its tasks private unless
@@ -682,6 +669,11 @@ class SettingsAdmin:
             ),
         )
         BS.write(c, bot_id, config, now)
+        if config.get("repo_access_mode") == "all":
+            # The template's repository access (card.yaml), given by default: audited as any change, and not a choice,
+            # so a seat's default may still follow it (repositories.untouched).
+            access = {"mode": "all", "all_access": config.get("repo_all_access")}
+            H.event(c, who.actor, "bot.repos_changed", bot_id, {"before": None, "after": access, "default": True})
         from .finance import actions as FA
 
         FA.revalidate_org(c)  # a new bot joins the org chart Finance's grants follow (spec 7.5)

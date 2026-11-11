@@ -428,9 +428,10 @@ def access(c, bot, org, reads=None):
     }
 
 
-def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_click=True, owner=False):
+def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_click=True, owner=False, default=False):
     """`own_click` is False when a bot's turn makes the change for a person: it may grant with their rights, but
-    not let a bot run workflows or edit workflow files. `owner`: the Owner is making the change."""
+    not let a bot run workflows or edit workflow files. `owner`: the Owner is making the change. `default`: Tico gives
+    a seat's bot its template's access (`seat_default`); the event says so, and it is not a choice (`untouched`)."""
     from .github_app import repo_of, save_extra_repos
 
     before = access(c, bot, org)
@@ -588,8 +589,73 @@ def set_access(c, bot, body, org, actor, legacy=False, team_list=False, own_clic
         c, bot, [r['full_name'] for r in after['chosen'] if r['access'] == 'write'] if body.mode == 'chosen' else []
     )
     lost = stopped(before, after)
-    H.event(c, actor, 'bot.repos_changed', bot, {'before': before, 'after': after, **lost})
+    detail = {'before': before, 'after': after, **lost, **({'default': True} if default else {})}
+    H.event(c, actor, 'bot.repos_changed', bot, detail)
     return {**after, **lost}
+
+
+def card_access(catalog_dir, template):
+    """The repository access a template's card declares for a bot made from it (templates/catalog/<template>/card.yaml
+    `repo_access_mode`, own or all, and `repo_all_access`, read or write, read when left out), or {} when it declares
+    none. The Builder and the Release Owner push and merge, so theirs is write on every repository In use; the
+    reviewers, the QA Owner, the Product Owner and the Pipeline Managers only read."""
+    from pathlib import Path
+
+    import yaml
+
+    if not template:
+        return {}
+    try:
+        card = yaml.safe_load((Path(catalog_dir) / template / 'card.yaml').read_text()) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(card, dict):
+        return {}
+    mode, level = card.get('repo_access_mode'), card.get('repo_all_access', 'read')
+    if mode not in ('own', 'all') or level not in ('read', 'write'):
+        return {}
+    return {'repo_access_mode': mode, 'repo_all_access': level}
+
+
+def untouched(c, bot):
+    """Whether nobody has chosen the bot's repository access: it has no chosen grant, and every change to it (each is a
+    `bot.repos_changed` event) was a default Tico gave (`default`), never a person's, BotOps' or a bot's for one. A
+    choice stands, an off included, as a routine's does (routines.untouched)."""
+    if c.execute('SELECT 1 FROM bot_repo_access WHERE bot=? LIMIT 1', (bot,)).fetchone():
+        return False
+    for (detail,) in c.execute("SELECT detail FROM events WHERE action='bot.repos_changed' AND target=?", (bot,)):
+        try:
+            said = json.loads(detail or '{}')
+        except ValueError:
+            return False
+        if not (isinstance(said, dict) and said.get('default')):
+            return False
+    return True
+
+
+def _org(c):
+    try:
+        row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    except sqlite3.OperationalError:
+        return ''  # GitHub was never set up here
+    return str(row[0] or '') if row else ''
+
+
+def seat_default(c, catalog_dir, bot, actor):
+    """A seat's bot gets the access its template's card declares (`card_access`) on All repos in use, so every
+    repository In use now and later reaches it at that level, with Run workflows and Edit workflow files off: the
+    Builder pushes to the team's repository, never a fork. Only while nobody has chosen for it: still on Their own repo
+    (where a new bot starts) and `untouched`. Audited as `bot.repos_changed` with `default`. Returns whether it changed
+    the bot."""
+    declared = BS.read(c, bot)
+    want = card_access(catalog_dir, declared.get('template'))
+    if want.get('repo_access_mode') != 'all' or (declared.get('repo_access_mode') or 'own') != 'own':
+        return False
+    if not untouched(c, bot):
+        return False
+    body = RepoAccessUpdate(mode='all', all_access='write' if want['repo_all_access'] == 'write' else 'read')
+    set_access(c, bot, body, _org(c), actor, default=True)
+    return True
 
 
 def stopped(before, after):
@@ -873,12 +939,13 @@ def _sync(service):
         own = {str(repo_of(r[0], row['org']) or '').lower() for r in c.execute('SELECT repo FROM bot_config')}
         previous = {r['full_name'].lower(): dict(r) for r in c.execute('SELECT * FROM repositories')}
         overrides = {name for name, r in previous.items() if r['setup_source'] == 'settings'}
+    picked = picked_on_github(repos, previous, own, chosen)
     for repo in repos:
         if service.repository_stop.is_set():
             return 'stopped'
         old = previous.get(repo['full_name'].lower(), {})
         repo['setup_command'], repo['setup_source'] = old.get('setup_command'), old.get('setup_source')
-        if not old.get('enabled') or repo['full_name'].lower() in overrides:
+        if not (old.get('enabled') or repo['full_name'].lower() in picked) or repo['full_name'].lower() in overrides:
             continue
         absent_files = 0
         for filename in ('tico.json', 'conductor.json'):
@@ -934,6 +1001,7 @@ def _sync(service):
                     H.now(),
                 ),
             )
+        _tick_picked(c, picked)
         save_metadata(c, 'repositories-reachability-verified', {'done': True})
         save_metadata(
             c,
@@ -954,6 +1022,36 @@ def _sync(service):
         save_metadata(c, 'repositories-synced', {'day': H.now()[:10]})
     repository_health(service)
     return 'synced'
+
+
+def picked_on_github(repos, previous, own, chosen):
+    """The repositories to put In use because a person picked them on GitHub: with the App installed on selected
+    repositories, each product repository Tico sees for the first time. Only on first sight, so one a person later takes
+    out of use stays out. Never a bot's repository (a `bot-` name or a bot's own), never an archived one. With an "All
+    repositories" install, none: a person picks in Settings > General › Repositories."""
+    if chosen != 'selected':
+        return set()
+    return {
+        repo['full_name'].lower()
+        for repo in repos
+        if repo['full_name'].lower() not in previous
+        and not repo.get('archived')
+        and not repo['full_name'].split('/')[1].lower().startswith('bot-')
+        and repo['full_name'].lower() not in own
+    }
+
+
+def _tick_picked(c, names):
+    """Put the repositories `picked_on_github` names In use, audited as `repositories.changed` by the system. A seat's
+    bot on All repos in use reaches each at once (`seat_default`)."""
+    for name in sorted(names):
+        before = c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone()
+        if not before:
+            continue
+        c.execute('UPDATE repositories SET enabled=1, updated_at=? WHERE full_name=?', (H.now(), name))
+        after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
+        detail = {'before': dict(before), 'after': after, 'picked_on_github': True}
+        H.event(c, 'system', 'repositories.changed', after['full_name'], detail)
 
 
 def repository_health(service):

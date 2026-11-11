@@ -1188,6 +1188,7 @@ class Onboarding:
             ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),
             ("builtin_routines", self.ensure_builtin_routines),
             ("seat_routines", self.arm_live_seats),
+            ("seat_repositories", self.seat_repositories),
             ("pipelines", pipeline_settings.ensure_presets),
             ("task_sweep", routines.ensure_task_sweep),
         )
@@ -1458,6 +1459,30 @@ class Onboarding:
                 c.execute("ROLLBACK TO seat_routines")
                 c.execute("RELEASE seat_routines")
         return armed
+
+    def seat_repositories(self, c):
+        """At startup (an update) and at the end of a first run: each bot that fills a seat and whose repository access
+        nobody has chosen gets its template's (repositories.seat_default: the Builder and the Release Owner write on
+        every repository In use, the reviewers, QA Owner, Product Owner and Pipeline Managers read). A bot a person
+        changed, or one the company's New bots get put on All repos in use, is left as it is, so this does something
+        once per bot at most. An archived bot is left alone. Audited as the system's. Returns the bots it changed."""
+        from . import repositories
+
+        changed = []
+        for (bot,) in c.execute(
+            "SELECT DISTINCT s.filled_by FROM seats s JOIN bots b ON b.id=s.filled_by "
+            "WHERE s.filled_by<>'' AND b.state<>'archived' ORDER BY s.filled_by"
+        ).fetchall():
+            # Best effort per bot, as arm_live_seats: one bot's failure does not stop the others.
+            c.execute("SAVEPOINT seat_repositories")
+            try:
+                if repositories.seat_default(c, self.settings.catalog_dir, bot, "system"):
+                    changed.append(bot)
+                c.execute("RELEASE seat_repositories")
+            except (Problem, ValueError):
+                c.execute("ROLLBACK TO seat_repositories")
+                c.execute("RELEASE seat_repositories")
+        return changed
 
     def start_setup(self, c, who, slug):
         """A person who manages a parked starter says anything to it: its setup has begun, so its routines go on

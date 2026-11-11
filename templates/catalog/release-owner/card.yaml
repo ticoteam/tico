@@ -65,4 +65,7 @@ first_routine:
   draft_only: true
 example_output: knowledge/examples/delivery-report.md
 reasoning_effort: medium
+# Every repository In use at write: it queues merges and cuts releases (docs/repositories.md).
+repo_access_mode: all
+repo_all_access: write
 recommend_when: [sells_software]

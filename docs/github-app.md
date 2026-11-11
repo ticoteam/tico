@@ -111,8 +111,9 @@ goes away once the app is connected and installed.
 Nothing asks at setup. The first task that reaches a stage reading its PRs (Engineering's Build, Merge and Release)
 puts one **Connect GitHub** row in the company owner's Needs you, linked to this page. Every other such task waits on
 the same row: its bot shows Paused on "Connect GitHub", and no bot is woken or asked to snooze it meanwhile. Once the
-app is installed the row goes by itself, and each task's bot is woken once to carry on. A bot that has the app but
-no repository is a different case: see Bot repository access.
+app is installed the row goes by itself, and each task's bot is woken once to carry on. Installed with no product
+repository In use, the row is **Choose a repository** instead, linked to Settings > General › Repositories, on the
+same terms.
 
 1. As the owner, open Tools, GitHub. Enter the GitHub account or organization (a personal account
    works too; Tico tells which one it is) and optionally rename the app. **Let BotOps create bot repositories** is ticked; leave it ticked unless a person should
@@ -122,9 +123,14 @@ no repository is a different case: see Bot repository access.
 3. On the install page, choose **All repositories** (recommended). Bots then get new repositories
    automatically, with nothing to add each time a bot is created. This does not widen what a bot can
    touch: each bot's token names its own repository plus its repository access (below), and
-   nothing else. Choosing selected repositories works too, but Tico then makes no bot repositories
-   (GitHub would not let the App reach them): bots work from their computers as usual, their history is
-   not backed up to GitHub, and Health says so in one line. Settings then shows the app as installed.
+   nothing else. Then put the repositories the team works on In use in Settings > General › Repositories.
+   Choosing selected repositories works too, and the product repositories you pick there are put In use for
+   you. Tico then makes no bot repositories (GitHub would not let the App reach them): bots work from their
+   computers as usual, their history is not backed up to GitHub, and Health says so in one line. Settings
+   then shows the app as installed.
+
+Once a repository is In use, the pipeline seats reach it by role with no further step: the Builder and the Release
+Owner write, the reviewers, QA Owner, Product Owner and Pipeline Managers read ([Repositories](repositories.md#bot-repository-access)).
 
 If the organization also holds sensitive code, create a separate GitHub organization just for bot
 repositories and connect that one. "All repositories" then covers only what bots should reach, and a

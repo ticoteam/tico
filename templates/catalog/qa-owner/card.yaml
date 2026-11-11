@@ -53,4 +53,7 @@ first_routine:
   draft_only: true
 example_output: knowledge/examples/test-health.md
 reasoning_effort: medium
+# Every repository In use at read: it reads code and pull requests, never pushes (docs/repositories.md).
+repo_access_mode: all
+repo_all_access: read
 recommend_when: [sells_software, uses_github]
