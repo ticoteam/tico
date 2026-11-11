@@ -939,7 +939,13 @@ def run(args, who=None):
     if cmd == "listening":
         if fn == "listening save":
             text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
-            return post("listening/sources/" + quote(args.source, safe="") + "/items", json.loads(text))
+            try:
+                read = json.loads(text)
+            except ValueError as exc:
+                raise APIError("file", f"--file is not JSON ({exc})") from None
+            if not isinstance(read, dict):
+                raise APIError("file", "--file must hold a JSON object")
+            return post("listening/sources/" + quote(args.source, safe="") + "/items", read)
         return client.get("listening/sources", due=1, automation=args.automation)
     if fn == "conversation show":
         page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
