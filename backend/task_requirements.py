@@ -400,15 +400,17 @@ def _pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Ro
     prs, said = _prs(conn, task, requirement)
     if said:
         return said
-    return _first(
-        requirement,
-        [
-            Standing(requirement, MET, line="PR open")
-            if link["fact"]
-            else _silent(task, requirement, link, _reading(requirement))
-            for link in prs
-        ],
-    )
+    return _first(requirement, [_open_one(task, requirement, link) for link in prs])
+
+
+def _open_one(task: Row, requirement: Row, link: Row) -> Standing:
+    """Met once GitHub said the PR exists. An open PR is re-read every few minutes; one GitHub stopped answering about
+    (a deleted PR reads as gone, which saves nothing) is the owner's after the 2-hour silence rule, not met for ever."""
+    quiet = _silent(task, requirement, link, _reading(requirement))
+    fact: Row | None = link["fact"]
+    if not fact or (fact["state"] == "open" and quiet.state == NOT_MET):
+        return quiet
+    return Standing(requirement, MET, line="PR open")
 
 
 def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
@@ -459,13 +461,15 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     owner = task.get("owner_id")
     queues = merge_queue.queues_prs(task.get("stage"))
     effect = merge_queue.newest(conn, task["visit"]["id"], ref) if queues else None
+    if fact["queue_state"] in ("queued", "auto_merge"):  # queued, by Tico or anyone: an owed queue_pr is then done
+        return Standing(requirement, WAITING, GITHUB, "In the merge queue")
     if effect and effect["state"] == "owed":
         return Standing(requirement, WAITING, GITHUB, "Queuing the PR")
     if effect and effect["state"] == "failed":
         return Standing(requirement, NOT_MET, owner, f"GitHub refused the merge: {effect.get('last_error') or ref}")
     if fact["queue_state"] == "removed":
         return Standing(requirement, NOT_MET, owner, merge_queue.removed_line(fact))
-    if fact["queue_state"] in ("queued", "auto_merge") or effect:
+    if effect:
         return Standing(requirement, WAITING, GITHUB, "In the merge queue")
     if queues:
         return Standing(requirement, WAITING, GITHUB, "Queuing the PR")  # owed as soon as its head is known

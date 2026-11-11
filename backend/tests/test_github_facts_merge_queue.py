@@ -632,6 +632,63 @@ def test_a_pr_github_merged_first_stays_merged_and_the_manager_hears_once(compan
         assert [key for key, _ in X.wakes(c, task_id, EM) if ":merged_anyway:" in key] != []
 
 
+def test_a_pr_someone_else_queued_first_settles_the_owed_queue_without_a_call(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+        gh.enqueue(REPO, 1, gh.prs[(REPO, 1)]["head_sha"])  # a person queues it on GitHub before Tico's pass
+        hooked(c, "enqueued", gh)
+        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+    gh.calls.clear()
+    assert MQ.run(company, gh) == 1
+    assert [call[0] for call in gh.calls] == []
+    with company.transaction() as c:
+        assert effects(c, task_id) == [("queue_pr", "done")]
+        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+
+
+def test_a_pr_merged_anyway_after_its_task_closed_is_read_once_more(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.merge(REPO, 1)  # no webhook gets through
+    with company.transaction() as c:
+        E.move(c, task_id, "closed", X.ANA, "Not needed")
+    MQ.run(company, gh)  # the dequeue says merged
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        fact = F.pr(c, REPO, 1)
+        assert (fact["state"], fact["queue_state"]) == ("merged", "none")
+    gh.calls.clear()
+    F.refresh(company, gh, later(30))
+    assert not [call for call in gh.calls if call[0] == "read_pr"]  # once: a closed task's PR is not read again
+
+
+def test_a_pr_deleted_after_it_was_read_is_the_owner_s_after_two_hours(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        engineering(c)
+        task_id = new(c, 1)
+        gh.set_checks(REPO, gh.open_pr(REPO, 1), "pending")
+        seen(c, gh)
+    del gh.prs[(REPO, 1)]  # gone: GitHub answers 404
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, "pr_open") == (R.MET, None, "PR open")  # within the 2 hours
+        c.execute("UPDATE pr_facts SET read_at=?", (H.shift(H.now(), hours=-3),))  # every read since found it gone
+        assert line(c, task_id, "pr_open") == (R.NOT_MET, B, "GitHub hasn't answered about acme/app#1 for 2 hours")
+
+
+def test_two_requirements_missing_for_one_reason_are_one_line(c):
+    from backend import waiting_on as W
+
+    engineering(c)
+    task_id = new(c)  # no PR: PR open and Checks pass both say "No PR linked"
+    lines = [wait.line for wait in W.of(c, E.task(c, task_id))]
+    assert lines.count("No PR linked") == 1, lines
+
+
 def test_leaving_while_github_queues_it_takes_it_out_again(company):
     gh = FakeGitHub()
     with company.transaction() as c:

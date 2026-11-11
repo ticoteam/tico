@@ -389,6 +389,11 @@ def run(store: Any, github: "GitHub", now: str | None = None) -> int:
     count = 0
     for effect in owed:
         repo, number = str(effect["repo"]), int(effect["number"])
+        if effect["kind"] == QUEUE:
+            with store.transaction() as conn:
+                if _queued_already(conn, effect):
+                    count += 1
+                    continue
         version: int = F.version_now()
         try:
             if effect["kind"] == QUEUE:
@@ -403,6 +408,20 @@ def run(store: Any, github: "GitHub", now: str | None = None) -> int:
         with store.transaction() as conn:
             count += _record(conn, effect, said, version)
     return count
+
+
+def _queued_already(conn: "sqlite3.Connection", effect: Row) -> bool:
+    """Someone else queued the PR (or GitHub merged it) before Tico's owed `queue_pr` ran: it is done, with no call."""
+    F = _facts()
+    fact = F.pr(conn, str(effect["repo"]), int(effect["number"]))
+    if not fact or (fact["queue_state"] not in F.QUEUED and fact["state"] != "merged"):
+        return False
+    return bool(
+        conn.execute(
+            "UPDATE effects SET state='done', last_error=NULL, next_try_at=NULL, updated_at=? WHERE id=? AND state='owed'",
+            (_h().now(), effect["id"]),
+        ).rowcount
+    )
 
 
 def _failed_call(conn: "sqlite3.Connection", effect: Row, reason: str, now: str) -> int:

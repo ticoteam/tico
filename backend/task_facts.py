@@ -459,14 +459,17 @@ _WAITING_TASKS = (
 def due_reads(conn: "sqlite3.Connection", now: str, limit: int = REREAD_BATCH) -> list[tuple[str, int]]:
     """The PRs an open task waits on whose fact is missing or older than REREAD_S, oldest read first, at most `limit`.
     A merged or closed PR is final for what a task waits on, so it is not read again (a webhook still brings a reopen).
+    An open PR marked for a full read (`read_at` '') is read once more whatever links it: a task closed while GitHub
+    merged its PR anyway (Tico's dequeue said merged) so leaves no fact saying "open, queued" for ever.
     """
     cutoff = _h().shift(now, seconds=-REREAD_S)
     found = conn.execute(
         "SELECT MIN(l.repo), l.number, MIN(COALESCE(f.read_at, '')) AS seen FROM task_links l "
-        f"JOIN ({_WAITING_TASKS}) w ON w.id = l.task_id "
+        f"LEFT JOIN ({_WAITING_TASKS}) w ON w.id = l.task_id "
         "LEFT JOIN pr_facts f ON f.repo = l.repo AND f.number = l.number "
         "WHERE l.kind='pr' AND l.repo IS NOT NULL AND l.repo <> '' AND l.number IS NOT NULL "
-        "AND (f.id IS NULL OR f.state='open' AND f.read_at < ?) "
+        "AND (w.id IS NOT NULL AND (f.id IS NULL OR f.state='open' AND f.read_at < ?) "
+        "OR f.state='open' AND f.read_at = '') "
         "GROUP BY lower(l.repo), l.number ORDER BY seen, lower(l.repo), l.number LIMIT ?",
         (cutoff, limit),
     ).fetchall()
