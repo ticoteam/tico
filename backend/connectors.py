@@ -342,6 +342,32 @@ def human_of(c, address):
     return None
 
 
+def calendar_allowed(c, who, address, person=None, change=False):
+    """A calendar follows its mailbox (backend/mailbox_access.py): reading needs a level on it, changing it Read and
+    write (the company's Change calendar is checked by the caller). Either the calendar's address or its person's
+    email counts. A bot also reads, never changes, its operator's calendar, as before."""
+    from . import mailbox_access
+
+    email = str(person["email"] or "").strip().lower() if person else ""
+    named = list(dict.fromkeys(a for a in (address, email) if a))
+    levels = [mailbox_access.level(c, who, a) for a in named]
+    if change:
+        if "read_write" in levels:
+            return
+        raise Problem("forbidden", "Changing that calendar needs Read and write on its mailbox", 403)
+    if any(level != "none" for level in levels):
+        return
+    if who.role == "bot":
+        row = c.execute(
+            "SELECT h.email FROM bot_config b JOIN humans h ON h.id=b.owner_id WHERE b.bot=?",
+            (H.actor_id(who.actor),),
+        ).fetchone()
+        operator = str(row["email"] if row else "").strip().lower()
+        if operator and operator in named:
+            return
+    raise Problem("forbidden", "That calendar is not yours to read or schedule on", 403)
+
+
 def install_connectors(app, store, execution, mutate):
     def publisher(c, who):
         runner = execution.runner(c, who)
@@ -584,31 +610,6 @@ def install_connectors(app, store, execution, mutate):
         if rostered:
             address = routines.mailbox_of(rostered, routines.message_bot_mailboxes(c, people))
         return person, address
-
-    def calendar_allowed(c, who, address, person=None, change=False):
-        """A calendar follows its mailbox (backend/mailbox_access.py): reading needs a level on it, changing it Read and
-        write (the company's Change calendar is checked by the caller). Either the calendar's address or its person's
-        email counts. A bot also reads, never changes, its operator's calendar, as before."""
-        from . import mailbox_access
-
-        email = str(person["email"] or "").strip().lower() if person else ""
-        named = list(dict.fromkeys(a for a in (address, email) if a))
-        levels = [mailbox_access.level(c, who, a) for a in named]
-        if change:
-            if "read_write" in levels:
-                return
-            raise Problem("forbidden", "Changing that calendar needs Read and write on its mailbox", 403)
-        if any(level != "none" for level in levels):
-            return
-        if who.role == "bot":
-            row = c.execute(
-                "SELECT h.email FROM bot_config b JOIN humans h ON h.id=b.owner_id WHERE b.bot=?",
-                (H.actor_id(who.actor),),
-            ).fetchone()
-            operator = str(row["email"] if row else "").strip().lower()
-            if operator and operator in named:
-                return
-        raise Problem("forbidden", "That calendar is not yours to read or schedule on", 403)
 
     @app.get("/api/v2/calendar/appointments")
     def appointments(request: Request, calendar: str = ""):

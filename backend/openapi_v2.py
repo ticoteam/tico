@@ -85,6 +85,8 @@ EVENTS_DESCRIPTION = (
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
+    "- `calendar`: `calendar` (the calendar row id, `human:<id>` for time away, `google:<id>` for a Google write), "
+    "`id` and `kind` (event, away, google); refetch the calendar window on screen.\n"
     "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
@@ -11865,6 +11867,191 @@ STABLE.extend(
             "Skills",
             "installSkillForTargets",
             "Install a skill for several bots or people at once, all or nothing",
+            None,
+        ),
+    ]
+)
+
+
+# Calendar (docs/dev/calendar-contract.md, HTTP): one way in for Google, Tico and derived calendars.
+TAGS["Calendar"] = (
+    "Calendars of people, bots, shared calendars and teams: Google read live, Tico events, runs, due dates and time "
+    "away merged into one list of occurrences (docs/dev/calendar-contract.md)."
+)
+_CAL_OBJ = obj({"ref": "s", "type": "s", "id": "s", "name": "s"})
+_CAL_ERRORS = items(obj({"ref": "s", "reason": "s"}))
+SCHEMAS.update(
+    {
+        "CalendarOccurrence": obj(
+            {
+                "occurrence_id": "s",
+                "event_id": "n",
+                "calendar": _CAL_OBJ,
+                "home": {"type": "string", "enum": ["google", "tico", "derived"]},
+                "kind": {"type": "string", "enum": ["event", "run", "due", "away"]},
+                "title": "s",
+                "start": "s",
+                "end": "s",
+                "all_day": "b",
+                "time_zone": "n",
+                "attendees": "a",
+                "response": "n",
+                "busy_only": "b",
+                "recurring": "b",
+                "status": "s",
+                "meeting_url": "n",
+                "open_url": "n",
+                "links": obj({"thread": "n", "meeting": "n", "task": "n", "automation": "n", "attempt": "n"}),
+                "can": obj({"join": "b", "edit": "b"}),
+            }
+        ),
+        "CalendarView": obj(
+            {
+                "ref": "s",
+                "type": "s",
+                "id": "s",
+                "name": "s",
+                "home": "n",
+                "time_zone": "n",
+                "work_starts": "n",
+                "work_ends": "n",
+                "work_days": "n",
+                "can_write": "b",
+            }
+        ),
+        "CalendarEvents": obj(
+            {
+                "from": "s",
+                "to": "s",
+                "calendars": items(ref("CalendarView")),
+                "occurrences": items(ref("CalendarOccurrence")),
+                "errors": _CAL_ERRORS,
+            },
+            month_counts=items(obj({"bot_id": "s", "date": "s", "count": "i"})),
+        ),
+        "CalendarList": obj({"calendars": items(ref("CalendarView")), "errors": _CAL_ERRORS}),
+        "CalendarSearch": obj({"occurrences": items(ref("CalendarOccurrence")), "partial": "b", "errors": _CAL_ERRORS}),
+        "CalendarFree": obj({"slots": items(obj({"start": "s", "end": "s"})), "errors": _CAL_ERRORS}),
+        "CalendarSettingsView": obj(
+            {
+                "time_zone": "s",
+                "time_zone_set": "b",
+                "work_starts": "s",
+                "work_ends": "s",
+                "work_days": "s",
+                "record_on_join": "b",
+            }
+        ),
+    }
+)
+STABLE.extend(
+    [
+        (
+            "/api/v2/calendar/events",
+            "get",
+            "Calendar",
+            "listCalendarEvents",
+            "Occurrences on the calendars in `who` (default you) from `from` to `to`, at most 62 days; `kinds` "
+            "narrows to event, run, due, away. Over 7 days runs come as `month_counts`. A calendar that could not be "
+            "read is in `errors`, never shown as free",
+            "CalendarEvents",
+        ),
+        (
+            "/api/v2/calendar/events",
+            "post",
+            "Calendar",
+            "createCalendarEvent",
+            "Add an event (bots and the Assistant; a person only on their own Tico calendar). A bot booking a "
+            "person needs their book rule; a connected person on it puts it on Google",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
+            "patch",
+            "Calendar",
+            "changeCalendarEvent",
+            "Change an event: `scope` this, following (Tico only) or all",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
+            "delete",
+            "Calendar",
+            "cancelCalendarEvent",
+            "Cancel an event (`scope` query: this, following or all)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}/response",
+            "post",
+            "Calendar",
+            "respondToCalendarEvent",
+            "Accept, decline or tentatively accept an event you attend",
+            None,
+        ),
+        (
+            "/api/v2/calendar/calendars",
+            "get",
+            "Calendar",
+            "listCalendars",
+            "Every calendar you can open: people, bots, shared, teams and your other Google calendars (`q` narrows)",
+            "CalendarList",
+        ),
+        (
+            "/api/v2/calendar/search",
+            "get",
+            "Calendar",
+            "searchCalendar",
+            "Search events, runs and recorded meetings (`q` with with:, bot:, kind:, before:, after:, "
+            "has:transcript, automation:, trigger:, longer:); Google has 3 seconds, past that the answer is `partial`",
+            "CalendarSearch",
+        ),
+        (
+            "/api/v2/calendar/free",
+            "get",
+            "Calendar",
+            "findCalendarFreeTimes",
+            "Times everyone in `who` is free for `minutes` within `within` (such as 5d), in working hours",
+            "CalendarFree",
+        ),
+        (
+            "/api/v2/calendar/settings",
+            "get",
+            "Calendar",
+            "getCalendarSettings",
+            "Your zone, hours and recording",
+            "CalendarSettingsView",
+        ),
+        (
+            "/api/v2/calendar/settings",
+            "put",
+            "Calendar",
+            "setCalendarSettings",
+            "Change your zone, working hours or Record calls I join (send only what changes)",
+            "CalendarSettingsView",
+        ),
+        (
+            "/api/v2/calendar/shared",
+            "post",
+            "Calendar",
+            "createSharedCalendar",
+            "Make a shared calendar (admins)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/shared/{calendar_id}/access",
+            "put",
+            "Calendar",
+            "setSharedCalendarAccess",
+            "Give a person, bot or team read or read_write on a shared calendar, or take it away (admins)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/absences",
+            "post",
+            "Calendar",
+            "addAbsence",
+            "Record days away (yours; admins anyone's)",
             None,
         ),
     ]

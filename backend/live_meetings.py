@@ -43,6 +43,9 @@ class Connect(Contract):
     meeting_model: str | None = Field(default=None, max_length=100)
     # Private: only the owner, people they add and attached bots. Team: anyone on the team may join.
     visibility: Literal["private", "team"] = "team"
+    # The calendar occurrence this call is for (Calendar's Record or Join): the meeting is linked to it, so the event
+    # shows the recording (calendar_event_links, link_type 'meeting').
+    calendar_event: str | None = Field(default=None, min_length=1, max_length=600)
 
     @model_validator(mode="after")
     def nonblank_title(self):
@@ -1865,6 +1868,14 @@ def install_live_meetings(app, store, auth, write):
         who = request.state.identity
         human_only(who)
         auth.domain(who)
+        link = None
+        if body.calendar_event:
+            from . import calendar_api
+
+            # Resolved before the write: a Google occurrence is read live, outside the write lock. A link that does
+            # not resolve leaves the meeting unlinked; the call still starts.
+            with app.state.store.read() as c:
+                link = calendar_api.meeting_link_facts(c, who, body.calendar_event)
 
         def work(c):
             if body.client_id:
@@ -1908,6 +1919,10 @@ def install_live_meetings(app, store, auth, write):
                 ),
             )
             c.execute("INSERT INTO live_meeting_humans VALUES(?,?,?)", (rid, who.actor, stamp))
+            if link:
+                from . import calendar_api
+
+                calendar_api.record_link(c, link, "meeting", rid)
             _event(
                 c,
                 rid,

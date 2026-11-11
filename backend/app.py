@@ -5354,6 +5354,9 @@ def create_app(settings=None):
     from .connectors import install_connectors
 
     install_connectors(app, store, execution, mutate)
+    from .calendar_api import install_calendar
+
+    install_calendar(app, store, mutate)
     from .imports import install_imports
 
     install_imports(app, store, auth, execution, mutate)
