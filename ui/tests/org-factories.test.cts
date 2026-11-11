@@ -198,13 +198,14 @@ test('a private pipeline shows only when the overview returned it', async () => 
   assert.ok(withIt.indexOf('data-org-loose') > withIt.indexOf('data-org-fac="f-success"'), 'after the factories');
 });
 
-test('a pipeline with no manager keeps its chip', async () => {
+test('a pipeline with no manager is titled by its name over an empty manager slot', async () => {
   const {ctx} = await page();
   const map = overview();
   map.pipelines[0] = pipe('marketing', 'Marketing', null, 'f-growth');
   const html = sectionOf(ctx, map);
-  assert.match(box(html, 'f-growth'), /No manager/);
-  assert.match(box(html, 'f-growth'), /<a class="org-fac-chip" href="#\/tasks\?pipeline=marketing"/);
+  assert.match(box(html, 'f-growth'), /<a class="org-fac-open" href="#\/tasks\?pipeline=marketing"[^>]*><b>Marketing<\/b><\/a>/);
+  assert.match(box(html, 'f-growth'), /class="org-fac-empty"/);
+  assert.doesNotMatch(box(html, 'f-growth'), /<b>No manager<\/b>/);
 });
 
 test('names from the overview are escaped', async () => {

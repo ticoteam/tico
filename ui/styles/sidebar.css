@@ -130,7 +130,9 @@ html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #cha
 .tree li{position:relative;--tree-av:16px;--tree-up:0px;margin-top:var(--tree-up);--tree-stub-x:calc(var(--tree-lead) + var(--tree-av) / 2)}
 #tree:not(:has(>li.org-top))>li{--tree-av:20px}
 .tree li:has(>.noderow>.seat){--tree-av:20px}
-.tree li.org-group{--tree-av:0px}
+/* A group's name sits where its siblings' names do, an empty avatar slot before it, so it reads as a row under TEAM and
+   its members hang from that slot. */
+.tree li.org-group{--tree-av:16px}
 .tree ul:not(.node-sources){margin-left:calc(var(--tree-av) / 2 + var(--tree-elbow) + var(--tree-gap))}
 .tree .noderow,.tree ul.node-sources{position:relative}
 .tree .noderow{--tree-from:calc(50% + var(--tree-av) / 2)}
@@ -176,7 +178,8 @@ html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #cha
 #tree [draggable="true"]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .tree .org-no-group{display:none;margin-top:8px;padding:6px 8px;color:var(--muted);font-size:var(--t-sm);border:1px dashed var(--line);border-radius:6px}
 .tree.org-dragging .org-no-group{display:block}
-.tree .dept-label{flex:1;min-width:0;padding:5px 6px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
+/* A group is a child of the TEAM header, as Company › Strategy is: sentence case, muted, normal weight, indented under it. */
+.tree .dept-label{flex:1;min-width:0;padding:5px 6px 5px calc(var(--tree-lead) + var(--tree-av) + var(--s2));color:var(--muted);font-size:var(--t-sm);font-weight:500;user-select:none}
 /* The name is its own box: text-overflow does not apply to a flex label (layout.css), so the ellipsis sits here. */
 .tree .dept-name{display:block;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* A group's name opens its team page (#/team/<group>); the arrow beside it folds the group. */

@@ -110,6 +110,9 @@
 .rdo-row{justify-content:center}
 /* The Built-in group, under the row and centred on the owner (rdoChartHtml); the row's width is the chart's. */
 .rdo-tray{display:flex;justify-content:center;list-style:none;margin:0;padding:var(--rdo-gap) 0 0}
+/* Folded under the row, Built-in is its tab alone, inside the canvas: no empty outline for the tab to sit across. */
+.rdo-tray .rdo-g.folded{min-width:0;padding:0;border:0;background:none}
+.rdo-tray .rdo-g.folded>.rdo-tab{position:static;transform:none}
 /* The lead's and owner's role reads a step under the name. */
 .rdo-card:is(.top,.lead) .rdo-rl{color:var(--muted);font-weight:400}
 /* The tab's chevron points down when the group is open, along when folded; the count shows only folded. */

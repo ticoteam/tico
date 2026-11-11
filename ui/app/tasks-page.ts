@@ -96,6 +96,7 @@ function pageTasks(openId = '') {
         <div class="tl-pair" id="task-layout" role="group" aria-label="Layout" hidden>
           <button type="button" data-layout="list" aria-label="List" title="List">${TL_ICON.list}</button>
           <button type="button" data-layout="columns" aria-label="Columns" title="Columns">${TL_ICON.board}</button></div>
+        <button type="button" class="tl-ib" id="task-manager" aria-pressed="false" aria-label="Manager" title="Manager" hidden>${TL_ICON.chat}</button>
         <button type="button" class="tl-ib" id="task-archive" aria-pressed="false" aria-label="Archive" title="Snoozed, Done and Closed">${TL_ICON.archive}</button>
         <button type="button" class="tl-ib" id="task-play" aria-label="Catch up" title="Catch up"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg></button>
         <button class="primary add-ctl" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
@@ -112,6 +113,7 @@ function pageTasks(openId = '') {
   const signal = state.abort.signal;
   const anchorOf = (ev: Event) => ev.currentTarget as HTMLElement;
   $('#task-scope').onclick = (ev: MouseEvent) => tasksScopeMenu(state, anchorOf(ev));
+  $('#task-manager').onclick = () => pipelineRailToggle();
   $('#task-pipeline-edit').onclick = () => { const p = tasksPipeline(state); if (p) TASK_PAGE_HOOKS.pipeline?.edit?.(p); };
   $('#task-layout').onclick = (ev: MouseEvent) => {
     const b = eventElement(ev)?.closest<HTMLElement>('[data-layout]');
@@ -367,6 +369,7 @@ function tasksHeadPaint(state: TasksPageState) {
   const layout = $('#task-layout');
   layout.hidden = !state.pipeline || !!state.archive;
   for (const b of document.querySelectorAll<HTMLElement>('#task-layout [data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.layout));
+  $('#task-manager').hidden = !p || !!state.archive || !TASK_PAGE_HOOKS.pipeline?.rail || !pipelineRailFor(p);
   $('#task-archive').setAttribute('aria-pressed', String(!!state.archive));
   $('#task-play').hidden = !n;
   const archives = $('#task-archives');
@@ -396,7 +399,7 @@ function tasksRender(state: TasksPageState | null) {
   }
   body.dataset.view = state.archive ? 'archive' : state.pipeline ? 'pipeline' : 'you';
   const p = state.archive ? null : tasksPipeline(state), hooks = TASK_PAGE_HOOKS.pipeline;
-  if (p && hooks?.rail) { const rail = $('#task-rail'); rail.hidden = false; hooks.rail(rail, p); } else tasksRailOff();
+  if (p && hooks?.rail) hooks.rail($('#task-rail'), p); else tasksRailOff();
   if (p && hooks && !state.failed && !(state.loading && !state.kept && !state.tasks.length)) {
     // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound to.
     const html = hooks.html(p, state.tasks, {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches});
@@ -415,6 +418,7 @@ function tasksRender(state: TasksPageState | null) {
 function tasksRailOff() {
   const rail = document.getElementById('task-rail');
   if (rail && !rail.hidden) { rail.hidden = true; rail.replaceChildren(); }
+  rail?.closest('.tasks-page')?.classList.remove('has-rail');
   if (typeof pipelineRailLeave === 'function') pipelineRailLeave();
 }
 const tasksGroupHTML = (name: string, rows: string[]) => !rows.length ? ''
