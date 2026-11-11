@@ -1422,6 +1422,17 @@ class Manager:
         try:
             listed = hq.list()
         except Refused as refused:
+            if refused.code not in (self.list_refused, "not_configured"):
+                # Once per change: with no list the cloud option is hidden and nothing else says why. Cloud machines
+                # being off is not a failure.
+                with self.store.transaction() as c:
+                    H.event(
+                        c,
+                        H.KEEPER,
+                        "cloud_machine.list_refused",
+                        "",
+                        {"code": str(refused.code)[:60], "status": refused.status},
+                    )
             self.list_refused = refused.code
             if refused.status == 503 and refused.code == "not_configured":  # off, or turned off for this company
                 with self.store.transaction() as c:

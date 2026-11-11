@@ -159,6 +159,29 @@ def test_the_bundle_holds_only_allowlisted_facts_and_never_content(environment, 
 
 
 # ------------------------------------------------------------------ the preview is what is sent
+def test_the_bundle_lists_failed_setup_steps_with_labels_and_no_secret(environment, hq):
+    api = environment()
+    secret = "ghs_PLANTEDsecret0123456789abcdef"
+    refused = api.get("/api/v2/github/app/callback", params={"code": secret, "state": secret}, headers=signed_in())
+    assert refused.status_code == 400
+    answer, bundle = bundle_of(api)
+    walk(bundle, D.ALLOWED)
+    (item,) = bundle["failures"]
+    assert item["event"] == "setup.failed" and item["category"] == "github_state" and item["status"] == 400
+    assert item["step"] == "GET /api/v2/github/app/callback" and item["ref"] == refused.json()["error"]["ref"]
+    assert item["who"].startswith("person-") and secret not in answer["text"]
+    # A bot refused on a bot's route: both are labels, as in the rest of the bundle, never a slug (a slug is a name).
+    with api.app.state.store.transaction() as c:
+        step = "POST /api/v2/bots/{bot}/github-repos"
+        other = next(b["slug"] for b in D.H.bots(c) if b["slug"] != "botops")
+        detail = {"category": "forbidden", "step": step, "status": 403, "bot": other, "ref": "sf-00000000"}
+        D.H.event(c, "bot:botops", "setup.failed", step, detail)
+    answer, bundle = bundle_of(api)
+    item = bundle["failures"][0]
+    assert item["who"].startswith("bot-") and item["bot"].startswith("bot-") and item["who"] != item["bot"]
+    assert "botops" not in answer["text"] and other not in answer["text"].replace('"%s":' % other, "")
+
+
 def test_what_the_preview_showed_is_exactly_what_hq_gets(environment, hq):
     api = environment()
     seed(api)

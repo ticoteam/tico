@@ -53,6 +53,32 @@ module/line locations, never values, locals or a raw traceback. Browser errors c
 kind, time, known script filename, line/column and count. No console text, request bodies, prompts or model output is captured.
 These browser groups remain in memory until explicitly captured for an attachment.
 
+### A failed setup step
+
+When a setup step a person started is refused (connecting GitHub, creating a bot's repository, going live, saving a
+subscription or key, adding a computer or a cloud machine, a harness update), the server keeps one `setup.failed` event,
+which outlasts a restart:
+
+- **a category**: the refusal's code from the fixed list in the code (`github_state`, `github_exchange`, `forbidden`,
+  `enrollment`, `server_error`), never a provider's or a program's words;
+- **a short detail**: the step as a route pattern (`POST /api/v2/github/app/finish`), the HTTP status, GitHub's status when
+  GitHub refused, an exception's class for a fault, and a count when the same refusal repeats within a minute;
+- **ids**: who asked, the bot, computer, sign-in or subscription the route names, and a reference (`sf-` and eight hex
+  digits) that the answer carries as `error.ref`, so what a person saw can be matched to its row.
+
+A session that ended (not signed in) is not kept. The request's body, query string and headers, the refusal's sentence, an
+exception's message and anything a provider answered are never kept.
+
+A computer's own failures are events too: `runner.harness.failed` (the request's id, a category, and the computer's last
+error lines as it last reported them, scrubbed on the computer and again on the server), `runner.login.failed`,
+`cloud_machine.refused`, `cloud_machine.list_refused`, `cloud_machine.restart_failed`, `bot.go_live_failed`,
+`subscription.rejected` and `attempt.auth_rejected`. A computer's log file itself never leaves it: the server has only
+the last 50 error lines of its latest heartbeat (`runners[].log`).
+
+**Where to read them.** The owner reads the rows in the `events` table (`POST /api/v2/sql`). Support reads the last
+week's, at most 30, in the diagnostics bundle's `failures` list, on a ticket or through a support session
+(`GET /api/v2/support/diagnostics`), with people, bots and computers as labels.
+
 The buffers are small and reset on process/page restart. A bundle says when server capture started, how many repeats were
 grouped, and how many entries were evicted or omitted. Computer heartbeat time distinguishes old evidence from current health.
 This is redacted technical evidence, not an anonymous ticket: the message and optional email/install ID may identify you.
