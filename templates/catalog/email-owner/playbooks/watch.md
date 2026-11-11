@@ -42,7 +42,10 @@ running, small repairs that put a kept thing back the way a person OK'd it. Do o
 granted Tools. Where no Tool lets you make the change, file it for the person your playbook names, with the exact
 change:
 
-    tico task create --owner <person id> --label <your channel tag> --title "Apply: <the change>" --body-file <body file>
+    tico task create --owner <your manager> --label <your channel tag> --title "Apply: <the change>" --body-file <body file>
+
+The first owner is your Manager, the bot your line in `tico team show` reports to: it checks the task once and
+passes it to the person. A task filed straight to the person is refused.
 
 Write the body to a file first. Its first paragraph is what the person reads first: one or two plain sentences, under 40
 words, saying what to change and where, with no links, ids or file paths. Below it, after a blank line: exactly what to

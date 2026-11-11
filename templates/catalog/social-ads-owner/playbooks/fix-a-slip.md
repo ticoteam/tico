@@ -23,7 +23,10 @@ range was wrong.
 A fix that puts the kept thing back the way a person OK'd it is upkeep: do it within your granted Tools, or file the
 exact change for the person your playbook names and wait for it:
 
-    tico task create --owner <person id> --parent <id> --title "Apply: <the fix>" --body-file <body file>
+    tico task create --owner <your manager> --parent <id> --title "Apply: <the fix>" --body-file <body file>
+
+The first owner is your Manager, the bot your line in `tico team show` reports to: it checks the task once and
+passes it to the person. A task filed straight to the person is refused.
 
 Write the body to a file first. Its first paragraph is what the person reads first: one or two plain sentences, under 40
 words, saying what to change and where, with no links, ids or file paths. Below it, after a blank line: exactly what to

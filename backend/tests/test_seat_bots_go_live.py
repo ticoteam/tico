@@ -279,7 +279,7 @@ SETUP_FILES = {
         "knowledge/decision-log.md",
         "knowledge/pipeline.md",
     ],
-    "engineering-manager": ["knowledge/delivery.md", "knowledge/pipeline.md"],
+    "engineering-manager": ["knowledge/pipeline.md"],
     "growth-manager": [
         "knowledge/workstreams.md",
         "knowledge/team.md",

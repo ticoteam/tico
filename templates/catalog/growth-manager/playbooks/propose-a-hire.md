@@ -17,10 +17,8 @@ Pick the one template whose owned outcome covers that work, from the marketing a
 
 ## 3. Propose
 
-On the task, in five lines: the template and its name; the evidence with counts and dates; the first routine it would run (from its card) and when; who it reports to (you); what it will need connected. Ask with `tico task ask` only when the intended role or owner is missing; otherwise carry out the requested work with your Tools.
+On the task, in five lines: the template and its name; the evidence with counts and dates; the first routine it would run (from its card) and when; who it reports to (you); what it will need connected. Ask your manager with `tico task ask`. A person makes the hire: never ask BotOps to set one up, archive one or restore one.
 
-## 4. Carry out the requested work
-
-    tico task create --owner botops --title "Set up <template>" --body "<why, first routine, reports to growth-manager, requested on task <id>>"
+## 4. Record
 
 Record the proposal, the evidence and the decision in `knowledge/hiring.md`. On a no, record the reason so the same proposal is not made again without new evidence.

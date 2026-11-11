@@ -5,15 +5,15 @@ reads: []
 reasoning_effort: medium
 max_run_minutes: 60
 routines:
-  - id: daily-delivery-check
-    title: Daily delivery check
-    cron: "0 9 * * *"
+  - id: weekly-engineering-summary
+    title: Weekly engineering summary
+    cron: "0 9 * * 1"
     timezone: America/Los_Angeles
-    template: playbooks/daily-delivery-check.md
+    template: playbooks/weekly-engineering-summary.md
     labels: [priority:p2]
     enabled: false
 tools:
   - service: github
     identity: the team's enabled repositories
     can: [read]
-    note: Read code, pull requests, checks and reviews to coordinate the builders and the Engineering owners, and to read what changed after an OK or merged outside the queue. It never writes to GitHub.
+    note: Read code, pull requests, checks and reviews to decide stopped tasks, write the weekly summary, and read what changed after an OK or merged outside the queue. It never writes to GitHub.

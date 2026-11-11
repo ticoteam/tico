@@ -599,3 +599,40 @@ def test_a_direct_report_reaches_the_owner_and_other_people_stay_closed(api):
     task(api, "pd-test", "human:ana", title="From a direct report")
     message(api, "pd-test", "human:ana", "Hello owner.")
     task(api, "pd-test", "human:cara", title="To Cara", expected=409)
+
+
+def test_a_task_for_the_person_goes_through_the_manager_who_passes_it_on_and_the_filer_is_woken_when_it_ends(api):
+    """Initech, Nov 11: the SEO Owner files "Apply: ..." for the person who puts changes live. Two levels down it does
+    not reach them: the refusal names its Manager, the Manager reassigns the task to the person, and the person's done
+    ends the wait the filing bot snoozed its own task on. Here product-design is the filer, cpo its Manager, Ben the
+    person above."""
+    chart(api)
+    as_bot(api, "cpo", "cpo-test")
+    bet = task(api, "ben-test", "bot:product-design", title="Add a sitemap")
+    # Upkeep with no task the person is on (playbooks/watch.md): nothing is shared, so the person is out of reach.
+    refused = task(api, "pd-test", "human:ben", title="Apply: add the sitemap", expected=409)
+    assert refused["error"]["via"] == "bot:cpo" and "who can pass it on" in refused["error"]["detail"], refused
+    filed = task(api, "pd-test", "bot:cpo", title="Apply: add the sitemap", parent=bet["id"])
+
+    def post_task(tid, verb, token, **body):
+        with api.app.state.store.read() as c:
+            version = H.task(c, tid)["version"]
+        r = api.post(f"/api/v2/tasks/{tid}/{verb}", json={**body, "version": version}, headers=headers(token))
+        assert r.status_code == 200, r.text
+
+    post_task(bet["id"], "snooze", "pd-test", until="2099-01-01T08:00:00Z", why="Waiting for the sitemap to be applied")
+    post_task(filed["id"], "owner", "cpo-test", owner="human:ben", why="Only a person can change the site")
+    with api.app.state.store.read() as c:
+        assert H.task(c, filed["id"])["owner_id"] == "human:ben"
+        since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+    post_task(filed["id"], "done", "ben-test")
+    with api.app.state.store.read() as c:
+        from backend import task_engine as E
+
+        assert not E.task(c, bet["id"])["snooze"], "the filing bot's wait ended with the task it filed"
+        woke = c.execute(
+            "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='product-design' AND j.state='queued' AND m.rowid>?",
+            (since,),
+        ).fetchall()
+    assert any("Apply: add the sitemap: Done" in r["body"] for r in woke), [r["body"] for r in woke]
