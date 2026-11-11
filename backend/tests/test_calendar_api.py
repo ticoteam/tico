@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import calendar_api, gcal_live
+from backend import calendar_api, calendar_store, gcal_live
 from backend.store import H, Problem
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.automation_api import as_bot
@@ -279,6 +279,52 @@ def test_a_person_writing_someone_elses_calendar_is_view_only(api, google):
     google.connected.add("ana@acme.example")
     refused = create(api, {"title": "Mine on Google", "start": at(9), "end": at(10)}, "ana-test", 403)
     assert refused["error"]["code"] == "view_only" and google.writes == []
+
+
+def test_a_bot_changes_and_cancels_only_the_event_it_added_to_a_persons_calendar(api, google):
+    people(api)
+    token, _ = bot(api, "planner")
+    other, _ = bot(api, "helper")
+    made = create(api, {"calendar": "human:ben", "title": "1:1", "start": at(9), "end": at(10)}, token)
+    path = "/api/v2/calendar/events/" + made["occurrence_id"]
+    moved = api.patch(path, json={"title": "1:1 moved"}, headers=headers(other))
+    assert moved.status_code == 403 and moved.json()["error"]["code"] == "forbidden", moved.text
+    assert "Only the bot that added it" in moved.json()["error"]["detail"]
+    cancelled = api.delete(path, headers=headers(other))
+    assert cancelled.status_code == 403 and cancelled.json()["error"]["code"] == "forbidden", cancelled.text
+    assert [o["title"] for o in events(api, WINDOW, "ben-test")["occurrences"]] == ["1:1"]
+    assert api.patch(path, json={"title": "1:1 moved"}, headers=headers(token)).status_code == 200
+    assert api.delete(path, headers=headers(token)).status_code == 200
+    assert events(api, WINDOW, "ben-test")["occurrences"] == []
+
+
+def test_a_bot_cannot_move_or_cancel_a_persons_own_event_on_their_tico_calendar(api, google):
+    people(api)
+    token, _ = bot(api, "planner")
+    made = create(api, {"title": "Dentist", "start": at(9), "end": at(10)}, "ana-test")
+    path = "/api/v2/calendar/events/" + made["occurrence_id"]
+    moved = api.patch(path, json={"title": "Moved"}, headers=headers(token))
+    assert moved.status_code == 403 and moved.json()["error"]["code"] == "forbidden", moved.text
+    cancelled = api.delete(path, headers=headers(token))
+    assert cancelled.status_code == 403 and cancelled.json()["error"]["code"] == "forbidden", cancelled.text
+    assert [o["title"] for o in events(api, WINDOW)["occurrences"]] == ["Dentist"]
+
+
+def test_a_bot_with_read_write_on_a_persons_calendar_changes_their_events_and_read_alone_does_not(api, google):
+    people(api)
+    token, bot_id = bot(api, "planner")
+    made = create(api, {"title": "Dentist", "start": at(9), "end": at(10)}, "ana-test")
+    path = "/api/v2/calendar/events/" + made["occurrence_id"]
+    with api.app.state.store.transaction() as c:
+        ana_calendar = calendar_store.calendar_for(c, "human", "ana")["id"]
+        calendar_store.set_access(c, ana_calendar, "bot", bot_id, "read", "human:ana")
+    refused = api.patch(path, json={"title": "Moved"}, headers=headers(token))
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "forbidden", refused.text
+    with api.app.state.store.transaction() as c:
+        calendar_store.set_access(c, ana_calendar, "bot", bot_id, "read_write", "human:ana")
+    assert api.patch(path, json={"title": "Moved"}, headers=headers(token)).status_code == 200
+    assert api.delete(path, headers=headers(token)).status_code == 200
+    assert events(api, WINDOW)["occurrences"] == []
 
 
 def test_a_tico_write_publishes_the_calendar_topic(api, google):

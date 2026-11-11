@@ -1469,6 +1469,12 @@ def _tico_target(c: Any, auth: Any, who: Any, caller: Row, event_id: str) -> Row
     made_it = caller["kind"] != "person" and (series or row).get("created_by") == caller["actor"]
     if refused is not None and not made_it:
         raise refused
+    # A bot may book anyone (_write_refusal, then _check_books), but it changes a person's event only if it added that
+    # event or holds Read and write on the person's calendar: the same rule as _google_target.
+    if caller["kind"] == "bot" and cal["type"] == "human" and not (made_it or _granted(c, caller, _tico_id(c, cal))):
+        raise Problem(
+            "forbidden", "Only the bot that added it, or someone with Read and write, changes this event", 403
+        )
     return {"row": row, "calendar": cal}
 
 
