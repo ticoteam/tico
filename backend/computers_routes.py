@@ -126,12 +126,15 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
             ).fetchall()
             result = []
             company = Providers.load(c, settings)
+            from .repositories import Homes
+
+            homes = Homes(c)
             for row in rows:
                 value = dict(row)
                 from .shared_bots import follow
 
                 value["config"] = Providers.fill(company, follow(c, row["bot"], json.loads(value.pop("config"))))
-                value["repository"] = runner_repository(c, settings, row["bot"])
+                value["repository"] = runner_repository(c, settings, row["bot"], homes=homes)
                 result.append(value)
             return result
 

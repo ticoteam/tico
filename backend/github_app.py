@@ -2246,8 +2246,9 @@ def install_github_app(app, settings, store):
             missing = reads.missing
             # Its own repository only when this company may use it: one the App cannot reach (installed on chosen
             # repositories) or another company's is left out, and the bot works from its computer (R.home).
-            homeless = R.bot_home(c, source, repo)
-            if homeless:
+            homes = R.Homes(c)
+            own_unused = homes.why(source, repo)
+            if own_unused:
                 grants = [g for g in grants if g['full_name'].lower() != repo.lower()]
             extra, runs = botops_extra_repos(c, who) if body.bot == BOTOPS else (set(), [])
             if extra:
@@ -2261,14 +2262,14 @@ def install_github_app(app, settings, store):
                         and name.lower() not in have
                         and name.split("/")[0].lower() == row["org"].lower()
                         and name.lower() not in missing
-                        and not R.bot_home(c, other["bot"], name)
+                        and not homes.why(other["bot"], name)
                     ):
                         have.add(name.lower())
                         grants.append({'full_name': name, 'access': 'write'})
             if who.attempt_id and task_privacy.private_meeting_run(c, who.attempt_id):
                 # A private meeting's turn reads its repositories and pushes to none (task_privacy.PRIVATE_MEETING_WRITES).
                 grants = [{'full_name': g['full_name'], 'access': 'read'} for g in grants]
-            if homeless and not grants:
+            if own_unused and not grants:
                 # Nothing on GitHub for this bot: no token, and no refusal for its computer to report every turn.
                 return {
                     "configured": True,
@@ -2278,7 +2279,7 @@ def install_github_app(app, settings, store):
                     "repositories": [],
                     "tokens": [],
                     "hold": body.bot != BOTOPS,
-                    "history": R.HOME_WORDS[homeless],
+                    "history": R.HOME_WORDS[own_unused],
                 }
         issuer = reviewer.for_bot(body.bot)
         repos = [r['full_name'] for r in grants]
@@ -2505,9 +2506,9 @@ def install_github_app(app, settings, store):
             "token": value,
             "expires_at": expires,
             # The runner publishes the bot's history to this one (git_credentials.publish_history): none when withheld.
-            "repository": "" if homeless else repo,
+            "repository": "" if own_unused else repo,
             "repositories": repos,
-            **({"history": R.HOME_WORDS[homeless]} if homeless else {}),
+            **({"history": R.HOME_WORDS[own_unused]} if own_unused else {}),
             "tokens": response_tokens,
             "hold": body.bot != BOTOPS,
             **{raised.answer: withheld[raised] for raised in RAISES if raised in withheld},

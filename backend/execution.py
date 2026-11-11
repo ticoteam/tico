@@ -2285,15 +2285,15 @@ def _repository_of(c, settings, bot, rows=None, app=None):
     return repo_of(config["repo"] if config else "", (app["org"] if app else "") or settings.github_owner) or "", bot
 
 
-def runner_repository(c, settings, bot, rows=None, app=None):
+def runner_repository(c, settings, bot, rows=None, app=None, homes=None):
     """The repository a bot's computer clones the bot from and publishes its history to (runner-rs/src/fetchrepo.rs):
     bot_repository, or "" when Tico does not use it (repositories.home): the App is installed on chosen repositories
     and not this one, or another company made it. The bot then works from its checkout on that computer, and
     nothing is fetched from or pushed to GitHub for it."""
-    from .repositories import bot_home
+    from .repositories import Homes
 
     repository, owner = _repository_of(c, settings, bot, rows, app)
-    return "" if repository and bot_home(c, owner, repository) else repository
+    return "" if repository and (homes or Homes(c)).why(owner, repository) else repository
 
 
 def _reported(c, runner_id, bot):
@@ -3772,6 +3772,9 @@ class Execution:
         load([row["bot"] for row in rows])
         load(sorted({source_of(_json(r["config"])) for r in configs.values()} - {""} - set(configs)))
         app, creators = (_github_app(c),), {}
+        from .repositories import Homes
+
+        homes = Homes(c)
         for row in rows:
             takes = runner['accepts_member_bots'] and self.auth.member_bot(
                 c, row['bot'], configs.get(row['bot']), creators
@@ -3789,7 +3792,7 @@ class Execution:
                     'computer_label': runner['label'],
                     'computer_logins_v1': True,
                     'config': config,
-                    'repository': runner_repository(c, self.store.settings, row['bot'], configs.get, app),
+                    'repository': runner_repository(c, self.store.settings, row['bot'], configs.get, app, homes),
                     'mail_agent': bool(P.inbox_person(row['bot'], people)),
                     # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
                     **model_subscriptions.assignment_fields(c, runner, config),

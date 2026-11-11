@@ -406,15 +406,20 @@ def _unpublished(c, withheld=()):
 def _withheld(c, settings):
     """{bot: why} for each bot whose history Tico does not back up to GitHub (repositories.home): the App is installed
     on chosen repositories and not the bot's, or another company made a repository with the bot's name."""
-    from .execution import _repository_of
-    from .repositories import bot_home
+    from .execution import _github_app, _repository_of
+    from .repositories import Homes
 
-    out = {}
-    for row in c.execute("SELECT id FROM bots WHERE state<>'archived' ORDER BY id"):
-        repository, owner = _repository_of(c, settings, row["id"])
-        why = bot_home(c, owner, repository) if repository else ""
+    configs = {
+        r["bot"]: r
+        for r in c.execute(f"SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN}")  # read once
+    }
+    bots = [r["id"] for r in c.execute("SELECT id FROM bots WHERE state<>'archived' ORDER BY id")]
+    app, homes, out = (_github_app(c),), Homes(c), {}
+    for bot in bots:
+        repository, owner = _repository_of(c, settings, bot, configs.get, app)
+        why = homes.why(owner, repository) if repository else ""
         if why:
-            out[row["id"]] = why
+            out[bot] = why
     return out
 
 

@@ -220,34 +220,48 @@ def save_selection(c, value):
         save_metadata(c, SELECTION, {'selection': value})
 
 
-def home(c, repository, bot_created_at=None):
-    """Why Tico does not use `repository` (owner/name) as a bot's own repository on GitHub, or "" when it does.
+class Homes:
+    """Why Tico does not use a repository as a bot's own on GitHub (`why`), or "" when it does. What it reads, it
+    reads once for every bot asked about, so a page or an assignment list costs the same however many bots it has.
 
     CHOSEN_ONLY: the App is installed on chosen repositories and this is not one of them. The bot keeps working from
     its computer; nothing is fetched from or pushed to GitHub for it until a person adds the repository to the App.
     NOT_OURS: another company made it. Tico's own create found the name taken, or GitHub made it before the bot
     existed. A repository this company's App made, or one a person pointed the bot at, is always its own."""
-    name = str(repository or '').strip().lower()
-    if '/' not in name:
-        return ''
-    if selection(c) == 'selected':
-        row = c.execute('SELECT reachable FROM repositories WHERE full_name=? COLLATE NOCASE', (name,)).fetchone()
-        if not row or row['reachable'] != 1:
-            return CHOSEN_ONLY
-    if made_here(c, name):
-        return ''
-    if name in metadata(c, TAKEN):
-        return NOT_OURS
-    made, born = H.parse_ts(metadata(c, CREATED_ON_GITHUB).get(name)), H.parse_ts(bot_created_at)
-    if made and born and (born - made).total_seconds() > MADE_BEFORE_SLACK:
-        return NOT_OURS
-    return ''
+
+    def __init__(self, c):
+        self.c, self.selection = c, selection(c)
+        self.ours = {**metadata(c, MADE), **metadata(c, CHOSEN)}
+        self.taken, self.created = metadata(c, TAKEN), metadata(c, CREATED_ON_GITHUB)
+        self.reach = self.born = None
+
+    def why(self, bot, repository):
+        name = str(repository or '').strip().lower()
+        if '/' not in name:
+            return ''
+        if self.selection == 'selected':
+            if self.reach is None:
+                self.reach = {
+                    r[0].lower() for r in self.c.execute('SELECT full_name FROM repositories WHERE reachable=1')
+                }
+            if name not in self.reach:
+                return CHOSEN_ONLY
+        if name in self.ours:
+            return ''
+        if name in self.taken:
+            return NOT_OURS
+        made = H.parse_ts(self.created.get(name))
+        if not made:
+            return ''
+        if self.born is None:
+            self.born = {r[0]: r[1] for r in self.c.execute('SELECT id,created_at FROM bots')}
+        born = H.parse_ts(self.born.get(bot))
+        return NOT_OURS if born and (born - made).total_seconds() > MADE_BEFORE_SLACK else ''
 
 
 def bot_home(c, bot, repository):
-    """`home` for the bot (id) whose own repository `repository` is: the bot's age is its own."""
-    row = c.execute('SELECT created_at FROM bots WHERE id=?', (bot,)).fetchone()
-    return home(c, repository, row['created_at'] if row else None)
+    """Homes.why for one bot (id) whose own repository `repository` is: the bot's age is its own."""
+    return Homes(c).why(bot, repository)
 
 
 def _botops():
