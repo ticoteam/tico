@@ -235,6 +235,21 @@ def test_a_pr_whose_fact_comes_late_is_queued_when_it_comes(c):
     assert effects(c, task_id) == [("queue_pr", "owed")]
 
 
+def test_a_draft_that_reaches_merge_is_marked_ready_and_queued(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        engineering(c)
+        task_id = new(c, 1)
+        gh.set_checks(REPO, gh.open_pr(REPO, 1, draft=True), "success")  # Tico opened it as a draft
+        seen(c, gh)
+        assert stage(c, task_id) == "Merge"
+    assert MQ.run(company, gh) == 1
+    assert [call[0] for call in gh.calls if call[0] in ("ready", "enqueue")] == ["ready", "enqueue"]
+    assert gh.prs[(REPO, 1)]["draft"] is False and gh.prs[(REPO, 1)]["queue_state"] == "queued"
+    with company.transaction() as c:
+        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+
+
 def test_failed_calls_are_tried_three_times_then_github_refused_is_the_owner_s(company):
     gh = FakeGitHub()
     with company.transaction() as c:
@@ -264,6 +279,23 @@ def test_github_saying_no_fails_the_effect_at_once(company):
         assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, "GitHub refused the merge: The head moved")
 
 
+def test_a_merge_the_branch_rules_refuse_is_told_once_and_not_tried_again(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    gh.rule(REPO, 1)  # a required approving review is missing
+    now = H.now()
+    assert MQ.run(company, gh, now) == 1
+    for minutes in (2, 10, 30):
+        assert MQ.run(company, gh, H.shift(now, minutes=minutes)) == 0
+    assert [call[0] for call in gh.calls].count("enqueue") == 1  # a permanent refusal is not retried
+    reason = "At least 1 approving review is required by reviewers with write access."
+    with company.transaction() as c:
+        assert effects(c, task_id) == [("queue_pr", "failed")]
+        assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, f"GitHub refused the merge: {reason}")
+        assert len([key for key, _ in X.wakes(c, task_id, RM) if ":queue_refused:" in key]) == 1
+
+
 def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(company):
     gh = FakeGitHub()
     with company.transaction() as c:
@@ -289,6 +321,237 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
     with company.transaction() as c:
         assert stage(c, task_id) == "Merge" and effects(c, task_id) == [("queue_pr", "done")]
         assert any(":changed_after_ok:" in key for key, _ in X.wakes(c, task_id, EM))
+
+
+def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_person(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+
+    def drop(n, by=RM):
+        gh.drop(REPO, 1, "The merge group's checks failed", check="e2e")
+        F.refresh(company, gh, later(10 * n))
+        with company.transaction() as c:
+            visit = E.task(c, task_id)["visit"]
+            told = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
+            out = (visit["level"], len(told), MQ.drops_in_visit(c, task_id, visit["id"]))
+            if n < 4:
+                MQ.requeue(c, task_id, by, seen_version=E.task(c, task_id)["version"])
+        MQ.run(company, gh)
+        return out
+
+    assert drop(1) == ("owner", 1, 1)
+    assert drop(2) == ("owner", 2, 2)
+    assert drop(3, by=EM) == ("manager", 2, 3)  # the Release Manager is not told a third time: its manager has it
+    with company.transaction() as c:
+        assert any(":manager:1:" in key for key, _ in X.wakes(c, task_id, EM))
+        assert stage(c, task_id) == "Merge" and F.pr(c, REPO, 1)["queue_state"] == "queued"  # EM queued it again
+    assert drop(4) == ("person", 2, 4)
+    with company.transaction() as c:
+        assert F.pr(c, REPO, 1)["queue_state"] == "removed"  # Tico never queues it by itself
+        moved_back = E.move(c, task_id, "Build", X.ANA, "Needs the Builder")
+        E.move(c, task_id, "Merge", X.ANA, "Again", seen_version=moved_back["version"])
+        assert MQ.drops_in_visit(c, task_id, E.task(c, task_id)["visit"]["id"]) == 0  # a new visit counts afresh
+
+
+def test_a_queue_entry_that_vanishes_without_a_word_is_a_drop(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.vanish(REPO, 1)  # no webhook, no removal event: only a read shows it is out
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, "Dropped from the merge queue: GitHub gave no reason")
+        assert len([key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]) == 1
+        MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"])
+    assert gh.prs[(REPO, 1)]["queue_state"] == "none"  # only the owner's queue again queues it
+
+
+def test_a_wait_on_github_with_no_word_for_two_hours_is_the_owner_s(company):
+    gh = FakeGitHub()
+    hours_ago = H.shift(H.now(), hours=-3)
+    with company.transaction() as c:
+        merging = in_merge(c, gh, 2)
+        building = new(c, 1)  # PR 1 was never read: GitHub has been down since it was linked
+        c.execute("UPDATE task_links SET created_at=? WHERE task_id=?", (hours_ago, building))
+        assert line(c, building, "pr_open") == (R.NOT_MET, B, "GitHub hasn't answered about acme/app#1 for 2 hours")
+    MQ.run(company, gh)
+    with company.transaction() as c:
+        assert line(c, merging, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+        c.execute("UPDATE pr_facts SET read_at=? WHERE number=2", (hours_ago,))  # every read since failed
+        assert line(c, merging, "pr_merged") == (R.NOT_MET, RM, "GitHub hasn't answered about acme/app#2 for 2 hours")
+    gh.merge(REPO, 2)
+    with company.transaction() as c:
+        seen(c, gh, 2)
+        assert stage(c, merging) == "Release"
+        assert line(c, merging, "in_release") == (R.WAITING, R.GITHUB, "Reading releases")
+        c.execute("UPDATE pr_facts SET updated_at=? WHERE number=2", (hours_ago,))  # merged 3 hours ago, never read
+        assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
+        release = {"tag": "v1.0.0", "commit_sha": "0" * 40, "prerelease": False, "published_at": H.now()}
+        F.save_release(c, REPO, release, F.version_now())
+        F.saw_releases(c, REPO, F.version_now())  # the releases were read just now: GitHub answers again
+        assert line(c, merging, "in_release") == (R.WAITING, R.GITHUB, "Waiting for a release of acme/app")
+        c.execute("UPDATE release_reads SET read_at=?", (hours_ago,))
+        assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
+
+
+def hooked(c, action, gh, number=1, **over):
+    """GitHub's pull_request webhook as the server takes it: the engine's facts first, then the link's own pass."""
+    from backend import github as G
+
+    pr = gh.prs[(REPO, number)]
+    snapshot = {
+        "number": number,
+        "html_url": f"https://github.com/{REPO}/pull/{number}",
+        "state": "closed" if pr["state"] != "open" else "open",
+        "merged": pr["state"] == "merged",
+        "merge_commit_sha": pr["merged_sha"],
+        "draft": pr["draft"],
+        "head": {"sha": pr["head_sha"], "ref": "feature"},
+    }
+    payload = {"action": action, "pull_request": snapshot, "repository": {"full_name": REPO}, **over}
+    F.webhook(c, "pull_request", payload)
+    G.pull_request(c, payload)
+    return snapshot
+
+
+def another_in_merge(c, gh, number):
+    task_id = new(c, number)
+    gh.set_checks(REPO, gh.open_pr(REPO, number), "success")
+    seen(c, gh, number)
+    assert stage(c, task_id) == "Merge"
+    return task_id
+
+
+def told(c, task_id):
+    """Every message the task's owner has about it: the engine's wakes and the older GitHub burst's items."""
+    from backend.repositories import metadata
+
+    burst = metadata(c, "github-task-wake:" + task_id).get("items", [])
+    return [key for key, _ in X.wakes(c, task_id)] + burst
+
+
+def test_one_message_per_removal_merge_and_close_on_a_queueing_pipeline(company):
+    from backend import github as G
+
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        removal = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    with company.transaction() as c:
+        before = told(c, removal)
+    gh.drop(REPO, 1, "failed_checks")
+    with company.transaction() as c:
+        pr = hooked(c, "dequeued", gh, reason="failed_checks")
+        link = c.execute("SELECT id FROM task_links WHERE task_id=?", (removal,)).fetchone()[0]
+    F.refresh(company, gh)
+    with company.transaction() as c:
+        G._settle_removal(c, link, pr)  # the older pass's read of the same removal
+        added = [m for m in told(c, removal) if m not in before]
+        assert len(added) == 1 and ":queue_removed:" in added[0], added
+
+    with company.transaction() as c:
+        merged = another_in_merge(c, gh, 2)
+    MQ.run(company, gh)
+    gh.merge(REPO, 2)
+    with company.transaction() as c:
+        before = told(c, merged)
+        hooked(c, "closed", gh, 2)
+        assert stage(c, merged) == "Release"
+        added = [m for m in told(c, merged) if m not in before]
+        # The Release Manager owns Release too and waits on GitHub there: no "carry this task on" wake on top.
+        assert len(added) <= 1 and not any("Carry this task on" in m for m in added), added
+
+    with company.transaction() as c:
+        closed = another_in_merge(c, gh, 3)
+    MQ.run(company, gh)
+    gh.close(REPO, 3)
+    with company.transaction() as c:
+        before = told(c, closed)
+        hooked(c, "closed", gh, 3)
+        assert stage(c, closed) == "Merge"
+        added = [m for m in told(c, closed) if m not in before]
+        assert len(added) <= 1 and not any("closed without merging" in m for m in added), added
+
+
+def owner_wakes(c, task_id, who):
+    """(wake key, body) of every wake the engine wrote for the task to `who`, oldest first."""
+    return [
+        (str(key), str(body or ""))
+        for key, body in c.execute(
+            "SELECT wake_key, body FROM messages WHERE wake_key LIKE ? AND recipient_id=? ORDER BY created_at, rowid",
+            (task_id + ":%", who),
+        ).fetchall()
+    ]
+
+
+@pytest.mark.parametrize("where", ["Build", "Merge"])
+def test_a_pr_closed_by_hand_is_the_stage_owner_s_turn_and_wakes_them_once(company, where):
+    """Spec "The ladder": a GitHub wait that turns Not met is the owner's turn; the never-stuck check wakes them once
+    with what is missing (after its first gap, as for a failed check), and not again before its next try."""
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        if where == "Merge":
+            task_id, owner, kind = in_merge(c, gh, 1), RM, "pr_merged"
+        else:
+            engineering(c)
+            task_id, owner, kind = new(c, 1), B, "pr_open"
+            gh.set_checks(REPO, gh.open_pr(REPO, 1), "pending")
+            seen(c, gh)
+    MQ.run(company, gh)
+    now = H.now()
+    with company.transaction() as c:
+        X.ran(c, task_id, owner)  # the Builder's entry wake had its run: it opened the PR, and checks are running
+        NS.check(c, now)
+        waiting = "pr_merged" if where == "Merge" else "checks_pass"
+        assert stage(c, task_id) == where and line(c, task_id, waiting)[:2] == (R.WAITING, R.GITHUB)
+        before = owner_wakes(c, task_id, owner)
+    gh.close(REPO, 1)
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, kind) == (R.NOT_MET, owner, f"{REF} was closed without merging")
+        for seconds in (10, 20, 30, 150, 160, 600):  # the check's passes, every 10 s, then up to 10 minutes on
+            NS.check(c, H.shift(now, seconds=seconds))
+        added = [w for w in owner_wakes(c, task_id, owner) if w not in before]
+        assert len(added) == 1, added
+        assert f"{REF} was closed without merging" in added[0][1]
+        from backend.repositories import metadata
+
+        assert not metadata(c, "github-task-wake:" + task_id).get("items")  # and nothing from the older link pass
+
+
+def test_a_merge_moves_the_task_to_release_where_github_s_wait_wakes_nobody(company):
+    """Spec "Entering a stage" wakes the owner with what is missing, and "It only wakes whoever has the turn": a bot is
+    never woken about a task that waits on GitHub. Release waits on GitHub for a release, so its owner hears nothing
+    until it is their turn."""
+    gh = FakeGitHub()
+    gh.history[REPO] = [gh.sha()]
+    gh.publish(REPO, "v0.9.0")  # the repo publishes releases; none holds the merge yet
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    now = H.now()
+    with company.transaction() as c:
+        NS.check(c, now)
+        before = owner_wakes(c, task_id, RM)
+    gh.merge(REPO, 1)
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release"
+        assert line(c, task_id, "in_release")[:2] == (R.WAITING, R.GITHUB)
+        for seconds in (10, 150, 600):
+            NS.check(c, H.shift(now, seconds=seconds))
+        assert stage(c, task_id) == "Release"
+        assert owner_wakes(c, task_id, RM) == before
+        from backend.repositories import metadata
+
+        assert not metadata(c, "github-task-wake:" + task_id).get("items")
+    gh.publish(REPO, "v1.0.0")
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Done" and owner_wakes(c, task_id, RM) == before
 
 
 def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
@@ -369,6 +632,63 @@ def test_a_pr_github_merged_first_stays_merged_and_the_manager_hears_once(compan
         assert [key for key, _ in X.wakes(c, task_id, EM) if ":merged_anyway:" in key] != []
 
 
+def test_a_pr_someone_else_queued_first_settles_the_owed_queue_without_a_call(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+        gh.enqueue(REPO, 1, gh.prs[(REPO, 1)]["head_sha"])  # a person queues it on GitHub before Tico's pass
+        hooked(c, "enqueued", gh)
+        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+    gh.calls.clear()
+    assert MQ.run(company, gh) == 1
+    assert [call[0] for call in gh.calls] == []
+    with company.transaction() as c:
+        assert effects(c, task_id) == [("queue_pr", "done")]
+        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+
+
+def test_a_pr_merged_anyway_after_its_task_closed_is_read_once_more(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.merge(REPO, 1)  # no webhook gets through
+    with company.transaction() as c:
+        E.move(c, task_id, "closed", X.ANA, "Not needed")
+    MQ.run(company, gh)  # the dequeue says merged
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        fact = F.pr(c, REPO, 1)
+        assert (fact["state"], fact["queue_state"]) == ("merged", "none")
+    gh.calls.clear()
+    F.refresh(company, gh, later(30))
+    assert not [call for call in gh.calls if call[0] == "read_pr"]  # once: a closed task's PR is not read again
+
+
+def test_a_pr_deleted_after_it_was_read_is_the_owner_s_after_two_hours(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        engineering(c)
+        task_id = new(c, 1)
+        gh.set_checks(REPO, gh.open_pr(REPO, 1), "pending")
+        seen(c, gh)
+    del gh.prs[(REPO, 1)]  # gone: GitHub answers 404
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, "pr_open") == (R.MET, None, "PR open")  # within the 2 hours
+        c.execute("UPDATE pr_facts SET read_at=?", (H.shift(H.now(), hours=-3),))  # every read since found it gone
+        assert line(c, task_id, "pr_open") == (R.NOT_MET, B, "GitHub hasn't answered about acme/app#1 for 2 hours")
+
+
+def test_two_requirements_missing_for_one_reason_are_one_line(c):
+    from backend import waiting_on as W
+
+    engineering(c)
+    task_id = new(c)  # no PR: PR open and Checks pass both say "No PR linked"
+    lines = [wait.line for wait in W.of(c, E.task(c, task_id))]
+    assert lines.count("No PR linked") == 1, lines
+
+
 def test_leaving_while_github_queues_it_takes_it_out_again(company):
     gh = FakeGitHub()
     with company.transaction() as c:
@@ -432,6 +752,38 @@ def test_webhooks_keep_only_linked_prs_and_each_check_on_the_head(c):
     assert F.pr(c, REPO, 1)["read_at"] == "" and F.pr(c, REPO, 1)["queue_state"] == "none"
     F.webhook(c, "release", {"action": "published", "release": {"tag_name": "v1.2.0"}, "repository": repo})
     assert [r["tag"] for r in F.releases(c, REPO)] == ["v1.2.0"]
+
+
+def test_webhooks_out_of_order_never_unmerge_and_an_early_check_reads_the_pr(c):
+    engineering(c)
+    new(c, 1)
+    repo = {"full_name": REPO}
+    pr = {"number": 1, "state": "open", "draft": False, "merged": False, "head": {"sha": "a"}}
+    F.webhook(c, "pull_request", {"action": "opened", "pull_request": pr, "repository": repo})
+    # The check run on the new head b comes before its `synchronize`: the PR is read in full on the next pass.
+    run = {"head_sha": "b", "name": "unit", "status": "completed", "conclusion": "success", "app": {"slug": "ci"}}
+    F.webhook(c, "check_run", {"check_run": {**run, "pull_requests": [{"number": 1}]}, "repository": repo})
+    assert F.pr(c, REPO, 1)["read_at"] == ""
+    landed = {**pr, "state": "closed", "merged": True, "merge_commit_sha": "m", "merged_at": "2026-11-10T00:00:00Z"}
+    F.webhook(c, "pull_request", {"action": "closed", "pull_request": landed, "repository": repo})
+    # GitHub's `dequeued` for the merge comes after `closed`, with a snapshot taken while the PR was still open.
+    late = {"action": "dequeued", "reason": "merged", "pull_request": pr, "repository": repo}
+    F.webhook(c, "pull_request", late)
+    F.webhook(c, "pull_request", {"action": "synchronize", "pull_request": pr, "repository": repo})
+    fact = F.pr(c, REPO, 1)
+    assert (fact["state"], fact["merged_sha"], fact["queue_state"]) == ("merged", "m", "none")
+
+
+def test_a_pull_request_webhook_is_as_new_as_github_s_updated_at(c):
+    engineering(c)
+    new(c, 1)
+    repo = {"full_name": REPO}
+    old = {"number": 1, "state": "open", "draft": False, "head": {"sha": "a"}, "updated_at": "2026-11-10T10:00:00Z"}
+    pushed = {**old, "head": {"sha": "b"}, "updated_at": "2026-11-10T10:00:05Z"}
+    F.webhook(c, "pull_request", {"action": "synchronize", "pull_request": pushed, "repository": repo})
+    F.webhook(c, "pull_request", {"action": "opened", "pull_request": old, "repository": repo})  # arrives late
+    fact = F.pr(c, REPO, 1)
+    assert fact["head_sha"] == "b" and fact["read_at"] == ""  # kept, and read in full on the next pass
 
 
 def test_a_webhook_delivered_twice_is_taken_once(hook_api):

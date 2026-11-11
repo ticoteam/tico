@@ -2,7 +2,8 @@
 
 It holds PRs, the checks on each commit, a linear main history per repo (a merge appends its commit) and the published
 releases. Calls are recorded in `calls`. `fail_next(call, reason)` makes the next call of that name raise with the
-reason, as a GitHub error would. The rig (evals/never_stuck/fake_github.py) builds its faults on top: lost, late,
+reason, as a GitHub error would. As on GitHub, enqueue refuses a draft and a PR the base branch's rules refuse
+(`rule`). The rig (evals/never_stuck/fake_github.py) builds its faults on top: lost, late,
 repeated and reordered webhooks, and queue drops.
 """
 
@@ -74,6 +75,12 @@ class FakeGitHub:
         """GitHub takes the PR out of the queue without merging it; `check` is the check that failed there."""
         self._remove(self.prs[(repo, number)], reason, check, url)
 
+    def vanish(self, repo, number):
+        """The PR leaves the queue unmerged and GitHub says nothing of it: no removal event, no reason."""
+        self.prs[(repo, number)].update(
+            queue_state="none", removed_reason=None, failing_check=None, failing_check_url=None
+        )
+
     @staticmethod
     def _remove(pr, reason, check=None, url=None):
         pr.update(queue_state="removed", removed_reason=reason, failing_check=check, failing_check_url=url)
@@ -86,6 +93,11 @@ class FakeGitHub:
         release = {"tag": tag, "commit_sha": head, "prerelease": prerelease, "published_at": at}
         self.published.setdefault(repo, []).insert(0, release)
         return release
+
+    def rule(self, repo, number, reason="At least 1 approving review is required by reviewers with write access."):
+        """The base branch's rules refuse the PR (a required review or check is missing): enqueue answers no with
+        `reason` until `rule(repo, number, None)` lifts it."""
+        self.prs[(repo, number)]["rule"] = reason
 
     def fail_next(self, call, reason="GitHub is unavailable"):
         self._fail[call] = reason
@@ -117,6 +129,12 @@ class FakeGitHub:
             return False
         return line.index(commit_sha) <= line.index(release_sha)
 
+    def ready(self, repo, number):
+        self._call("ready", repo, number)
+        pr = self.prs.get((repo, number))
+        if pr and pr["state"] == "open":
+            pr["draft"] = False
+
     def enqueue(self, repo, number, head_sha):
         self._call("enqueue", repo, number, head_sha)
         pr = self.prs.get((repo, number))
@@ -124,6 +142,10 @@ class FakeGitHub:
             return {"ok": False, "how": None, "reason": "The pull request is not open"}
         if pr["head_sha"] != head_sha:
             return {"ok": False, "how": None, "reason": "The head moved"}
+        if pr["draft"]:  # GitHub queues and merges no draft
+            return {"ok": False, "how": None, "reason": "Pull request is in draft state"}
+        if pr.get("rule"):
+            return {"ok": False, "how": None, "reason": pr["rule"]}
         pr["queue_state"] = "queued" if self.queue else "auto_merge"
         pr.update(removed_reason=None, failing_check=None, failing_check_url=None)
         return {"ok": True, "how": pr["queue_state"], "reason": ""}

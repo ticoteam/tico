@@ -118,6 +118,10 @@ class RigGitHub:
         self._up("contains")
         return self.gh.contains(repo, release_sha, commit_sha)
 
+    def ready(self, repo: str, number: int) -> None:
+        self._up("ready")
+        self.gh.ready(repo, number)
+
     def enqueue(self, repo: str, number: int, head_sha: str) -> dict[str, Any]:
         self._up("enqueue")
         out = self.gh.enqueue(repo, number, head_sha)
@@ -135,9 +139,10 @@ class RigGitHub:
         return out
 
     # ------------------------------------------------------------------ what bots, people and GitHub do
-    def open_pr(self, number: int, repo: str = REPO, checks: str | None = "success") -> str:
-        """A PR is opened. Its checks start running and end in `checks` (None: the repo runs no checks)."""
-        head = self.gh.open_pr(repo, number)
+    def open_pr(self, number: int, repo: str = REPO, checks: str | None = "success", draft: bool = True) -> str:
+        """A PR is opened, a draft as Tico opens it at a branch's first push (backend/github.py `_open_draft`). Its
+        checks start running and end in `checks` (None: the repo runs no checks)."""
+        head = self.gh.open_pr(repo, number, draft=draft)
         if checks:
             self.ci(repo, head, checks)
         self._pr_hook(repo, number)
@@ -193,6 +198,11 @@ class RigGitHub:
         self.gh.drop(repo, number, reason, check, url)
         self._queued.pop((repo, number), None)
         self._pr_hook(repo, number)
+
+    def vanish(self, number: int, repo: str = REPO) -> None:
+        """The PR leaves the merge queue unmerged with no webhook and no removal event: only a read shows it is out."""
+        self.gh.vanish(repo, number)
+        self._queued.pop((repo, number), None)
 
     def publish(self, tag: str, prerelease: bool = False, repo: str = REPO) -> dict[str, Any]:
         """A release of main's newest commit."""
@@ -274,8 +284,8 @@ class RigGitHub:
 
         H = _h()
         self._n += 1
-        # Each webhook's version is later than the one before, as GitHub's clock moves between two events that the
-        # rig's frozen clock puts in the same millisecond.
+        # When GitHub sent it: a pull_request webhook's `updated_at`. Each is later than the one before, as GitHub's
+        # clock moves between two events that the rig's frozen clock puts in the same millisecond.
         self._version = max(TF.version_now(), self._version + 1)
         now = H.now()
         delivery = Delivery(
@@ -303,8 +313,15 @@ class RigGitHub:
             return 0
         now = _h().now()
         due = sorted((d for d in self.outbox if d.due <= now), key=lambda d: (d.due, d.seq))
+        from backend import task_facts as TF
+
         for d in due:
             self.outbox.remove(d)
+            # As on the server (task_facts.webhook): a pull_request webhook's version is when GitHub sent it, any
+            # other's is when it arrives, so a late check run or release is newer than what came before it.
+            self._version = max(TF.version_now(), self._version + 1)
+            if d.event != "pull_request":
+                d.version = self._version
             with world.tx() as c:
                 take(c, d)
             self.taken.append(d)
@@ -332,9 +349,22 @@ def take(c: Any, d: Delivery) -> bool:
         tasks = list(RS.pending(c))
     else:
         assert d.fact is not None and d.number is not None
-        # What the server's webhook and the re-read both do with a PR's fact (task_facts.save_and_settle): save it, the
-        # one wake when it left the queue, the Merge stage's reactions (a late fact queued, "Changed after OK"), and a
-        # nudge of the tasks that link it. The rig's fact is the whole PR, as the re-read sees it.
+        # What the server's webhook does with a PR's fact (task_facts.webhook, then save_and_settle): save it, the one
+        # wake when it left the queue, the Merge stage's reactions (a late fact queued, "Changed after OK"), and a
+        # nudge of the tasks that link it. A pull_request webhook's fact is the whole PR, as the re-read sees it; one
+        # older than the saved fact is not saved, and an open PR is read in full on the next pass. A check run only
+        # changes the checks of a PR whose saved head it is on; on a head not saved yet it has the PR read in full.
+        old = TF.pr(c, d.repo, d.number)
+        reread = "UPDATE pr_facts SET read_at='' WHERE repo=? AND number=? AND state='open'"
+        if d.event == "check_run":
+            if old and old["state"] == "open" and old["head_sha"] == d.fact["head_sha"]:
+                TF.save_and_settle(c, d.repo, d.number, {"checks": d.fact["checks"]}, d.version)
+            elif old:
+                c.execute(reread, (d.repo, d.number))
+            return True
+        if old and int(old["fact_version"]) > d.version:
+            c.execute(reread, (d.repo, d.number))
+            return True
         TF.save_and_settle(c, d.repo, d.number, d.fact, d.version)
         return True
     for task in tasks:

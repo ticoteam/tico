@@ -12,7 +12,9 @@ the Engineering pipeline's Merge stage). Track C owns this file.
 - GitHub removes a PR from the queue without merging it: the fact is saved (task_facts.save_pr: `queue_state` removed,
   `removed_at`, `removed_reason`, `failing_check`, `failing_check_url`). "PR merged" stands NOT_MET on the stage owner
   with "Dropped from the merge queue: <reason>", and the owner gets ONE wake (`removed`), keyed
-  `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself.
+  `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself. The third removal in one
+  visit (any PR, counted from the `pr_queue_removed` history rows) goes up the never-stuck ladder instead: the
+  pipeline's manager bot has it on its 3 tries; a removal after that goes to a person.
 - The owner (Release Manager, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
   `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
@@ -44,6 +46,7 @@ WAKE_REMOVED = "queue_removed"  # the stage owner's one wake per removal
 WAKE_MERGED_ANYWAY = "merged_anyway"
 WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
+DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
 RETRY_S = (60, 300, 900)  # a failed GitHub call is tried again after these; then the effect is `failed`
 TRIES = len(RETRY_S)  # failed calls before the effect is `failed`
 BATCH = 50  # effects carried out per pass at most
@@ -284,6 +287,7 @@ def removed(conn: "sqlite3.Connection", fact: Row) -> int:
             continue
         data = {
             "key": key,
+            "visit": visit["id"],
             "ref": ref,
             "reason": fact.get("removed_reason"),
             "check": fact.get("failing_check"),
@@ -294,6 +298,12 @@ def removed(conn: "sqlite3.Connection", fact: Row) -> int:
         owner = row.get("owner_id")
         if not E.is_bot(owner):
             continue  # a person owner has it in Needs you
+        drops = drops_in_visit(conn, task_id, str(visit["id"]))
+        if drops >= DROPS:
+            _up_the_ladder(
+                conn, task_id, drops, f"GitHub took {ref} out of the merge queue {drops} times in this stage."
+            )
+            continue
         link = f" {fact['failing_check_url']}" if fact.get("failing_check_url") else ""
         lead = (
             f"GitHub took {ref} out of the merge queue. {removed_line(fact)}.{link} Queue it again with "
@@ -304,6 +314,39 @@ def removed(conn: "sqlite3.Connection", fact: Row) -> int:
         if task_wakes.add(conn, fresh, str(owner), visit, body, wake_key=key):
             added += 1
     return added
+
+
+def drops_in_visit(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> int:
+    """How many times GitHub took a PR of the task out of the merge queue during this visit, any PR: its
+    `pr_queue_removed` history rows, one per removal."""
+    found = conn.execute(
+        "SELECT COUNT(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' "
+        "AND json_valid(data) AND json_extract(data, '$.visit')=?",
+        (task_id, visit_id),
+    ).fetchone()
+    return int(found[0]) if found else 0
+
+
+def _up_the_ladder(conn: "sqlite3.Connection", task_id: str, drops: int, why: str) -> None:
+    """The DROPS-th removal in a visit: the never-stuck ladder's next level has the task instead of the stage owner,
+    the pipeline's manager bot on its 3 tries (else a person). Any removal after that: a person, so a PR that keeps
+    falling out is never queued round and round by bots."""
+    NS: Any = _never_stuck()
+    row: Row | None = _engine().task(conn, task_id)
+    if not row or not row.get("visit"):
+        return
+    done = {"woken": 0, "to_manager": 0, "to_person": 0}
+    manager = NS._manager(conn, row, {})
+    if drops == DROPS and manager and manager != row.get("owner_id"):
+        NS._to_manager(conn, row, manager, why, _h().now(), done)
+    else:
+        NS._to_person(conn, row, row["visit"].get("level") or "owner", done)
+
+
+def _never_stuck() -> Any:
+    from . import never_stuck
+
+    return never_stuck
 
 
 def fact_changed(conn: "sqlite3.Connection", task_ids: list[str], after: Row, before: Row | None) -> None:
@@ -346,9 +389,15 @@ def run(store: Any, github: "GitHub", now: str | None = None) -> int:
     count = 0
     for effect in owed:
         repo, number = str(effect["repo"]), int(effect["number"])
+        if effect["kind"] == QUEUE:
+            with store.transaction() as conn:
+                if _queued_already(conn, effect):
+                    count += 1
+                    continue
         version: int = F.version_now()
         try:
             if effect["kind"] == QUEUE:
+                github.ready(repo, number)  # a Builder's draft reaches Merge: GitHub queues no draft
                 said = github.enqueue(repo, number, str(effect["head_sha"]))
             else:
                 said = github.dequeue(repo, number)
@@ -359,6 +408,20 @@ def run(store: Any, github: "GitHub", now: str | None = None) -> int:
         with store.transaction() as conn:
             count += _record(conn, effect, said, version)
     return count
+
+
+def _queued_already(conn: "sqlite3.Connection", effect: Row) -> bool:
+    """Someone else queued the PR (or GitHub merged it) before Tico's owed `queue_pr` ran: it is done, with no call."""
+    F = _facts()
+    fact = F.pr(conn, str(effect["repo"]), int(effect["number"]))
+    if not fact or (fact["queue_state"] not in F.QUEUED and fact["state"] != "merged"):
+        return False
+    return bool(
+        conn.execute(
+            "UPDATE effects SET state='done', last_error=NULL, next_try_at=NULL, updated_at=? WHERE id=? AND state='owed'",
+            (_h().now(), effect["id"]),
+        ).rowcount
+    )
 
 
 def _failed_call(conn: "sqlite3.Connection", effect: Row, reason: str, now: str) -> int:

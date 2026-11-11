@@ -24,8 +24,8 @@ those stages.
 | 8 | Technical Writer | `docs-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
 | 9 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
-Two leads sit above the line. **Head of Product** (`product-lead`) decides *what* to build: it triages feature ideas,
-writes the spec and acceptance tests, and keeps the roadmap. **Head of Engineering** (`engineering-lead`) decides
+Two managers sit above the line. **Product Manager** (`product-manager`) decides *what* to build: it triages feature
+ideas, writes the spec and acceptance tests, and keeps the roadmap. **Engineering Manager** (`engineering-manager`) decides
 *how*: it splits an approved spec into tasks, picks the Builder and sets the merge rules. A small team can
 let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and Reviewer 2, and add the
 rest as your release pace grows.
@@ -53,8 +53,8 @@ approval before merge.
 
 ## Rules that make it work
 
-1. **Product decides what, engineering decides how.** Feature ideas go to Head of Product first. Bugs and small
-   changes go straight to Head of Engineering as a task.
+1. **Product decides what, engineering decides how.** Feature ideas go to the Product Manager first. Bugs and small
+   changes go straight to Engineering as a task.
 2. **Prefer different models for checks.** Reviewers and QA prefer a bot of a different model company than the
    Builder. Set this per bot (its task model, or its model), or use a check model on a sub-task
    (`tico task child <task> --check-model`).
@@ -93,7 +93,7 @@ Security holds a release only for:
 - an exploitable injection or similar hole
 - a new dependency with a known critical flaw
 
-Everything else becomes a follow-up task. Head of Engineering may release anyway, with a written reason on the
+Everything else becomes a follow-up task. The Engineering Manager may release anyway, with a written reason on the
 release.
 
 ## What each release carries
@@ -108,5 +108,5 @@ Nobody is asked to name a private task.
 
 ## After launch
 
-For features with a success measure, the Customer Insights Analyst reports "did it work?" 14 days after launch. Head
-of Product uses that report at the next triage.
+For features with a success measure, the Customer Insights Analyst reports "did it work?" 14 days after launch. The
+Product Manager uses that report at the next triage.

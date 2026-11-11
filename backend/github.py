@@ -468,6 +468,23 @@ def refresh_conflicts(service: Any) -> int:
     return read
 
 
+def _engine_speaks(c, task_id):
+    """Whether the task is on a pipeline stage that waits on GitHub (a PR open, checks, a merge, a release) or queues
+    its PRs (backend/merge_queue.py). There the engine tells the stage's owner of a removal from the queue, a merge
+    (the move on) and a close (the standing it leaves unmet): this module's wakes for those would be a second message
+    about the same event, in other words. The webhook saves the engine's facts first (`_task_facts`), so a merge
+    has already moved the task on to the stage after Merge when this is asked."""
+    from . import merge_queue, task_engine, task_facts
+    from . import task_requirements as R
+
+    row = task_engine.task(c, task_id)
+    if not row or not row.get("visit"):
+        return False
+    if merge_queue.queues_prs(row.get("stage")):
+        return True
+    return any(r["kind"] in task_facts.PR_KINDS for r in R.for_visit(c, row["visit"]))
+
+
 def _settle_removal(c, link_id, pr):
     """Clear a removal's `verify`. A pull request still open at the removed head wakes its owner once."""
     found = H._rows(c.execute("SELECT id,task_id,url,number,detail FROM task_links WHERE id=?", (link_id,)))
@@ -488,6 +505,8 @@ def _settle_removal(c, link_id, pr):
         return
     task = H.task(c, link["task_id"])
     H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
+    if _engine_speaks(c, link["task_id"]):
+        return
     queue_wake(
         c,
         task,
@@ -641,7 +660,10 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             )
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
-        if state == "closed" and link["state"] != state and link["id"] not in registered or conflict_wake:
+        closed = state == "closed" and link["state"] != state and link["id"] not in registered
+        if closed and not conflict_wake and _engine_speaks(c, task["id"]):
+            closed = False
+        if closed or conflict_wake:
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
             queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
         if not read_refresh:
@@ -663,7 +685,7 @@ def _merge_wakes(c, links, url):
     pr_key = f"{match.group(1)}/{match.group(2)}#{match.group(3)}".lower() if match else url.lower()
     for link in links:
         row = H.task(c, link["task_id"])
-        if not row or not H.is_bot(row["owner_id"]) or row["status"] != "open":
+        if not row or not H.is_bot(row["owner_id"]) or row["status"] != "open" or _engine_speaks(c, row["id"]):
             continue
         key = "github-merge-wake:" + row["id"]
         woke = metadata(c, key).get("prs", [])
@@ -1967,6 +1989,7 @@ FACT_AUTO = """mutation($id:ID!,$head:GitObjectID!){
 enablePullRequestAutoMerge(input:{pullRequestId:$id,expectedHeadOid:$head}){clientMutationId}}"""
 FACT_MERGE = """mutation($id:ID!,$head:GitObjectID!,$method:PullRequestMergeMethod!){
 mergePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head,mergeMethod:$method}){clientMutationId}}"""
+FACT_READY = """mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"""
 FACT_DEQUEUE = """mutation($id:ID!){dequeuePullRequest(input:{id:$id}){clientMutationId}}"""
 FACT_AUTO_OFF = """mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}"""
 WRITE_PERMISSIONS = {"contents": "write", "pull_requests": "write", "metadata": "read"}
@@ -2162,6 +2185,14 @@ class AppGitHub:
         return (response.json() or {}).get("status") in ("ahead", "identical")
 
     # ------------------------------------------------------------------ the merge queue
+    def ready(self, repo, number):
+        _, found = self._pull(repo, number, WRITE_PERMISSIONS)
+        if not found or not found.get("isDraft") or found.get("state") != "OPEN":
+            return
+        _, errors = self._graphql(repo, WRITE_PERMISSIONS, FACT_READY, {"id": found["id"]})
+        if errors:
+            raise GitHubRefused(errors)
+
     def enqueue(self, repo, number, head_sha):
         repository, found = self._pull(repo, number, WRITE_PERMISSIONS)
         if not found:

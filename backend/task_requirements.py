@@ -340,7 +340,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
 
 # The four GitHub kinds read saved facts only (backend/task_facts.py) and, for "PR merged", the Merge stage's effects
 # (backend/merge_queue.py). With many PRs, the first one not met, in link order, gives the line. A PR closed without
-# merging is left out while another is linked; when every one is, the owner is told.
+# merging is left out while another is linked; when every one is, the owner is told. A wait on GitHub ends: when GitHub
+# has said nothing about the PR (or the releases it waits for) for 2 hours, it is the owner's turn (`_silent`).
 def _now() -> Any:
     from . import hubdb
 
@@ -377,14 +378,39 @@ def _seconds_since(ts: object) -> float | None:
     return None if at is None or now is None else (now - at).total_seconds()
 
 
+def _silent(task: Row, requirement: Row, link: Row, found: Standing, heard: object = None) -> Standing:
+    """A wait on GitHub about one PR becomes the owner's turn once GitHub has said nothing for SILENT_S: no webhook and
+    no read of the PR got through (GitHub down or refusing, or the PR gone). `heard` is when GitHub last answered, when
+    the caller knows better than the PR's fact (its releases' read); else the fact's last read, else when it was
+    linked. Every wait on GitHub so ends in a bot's turn, whatever the stage's expected time."""
+    from . import task_facts as F
+
+    if found.state != WAITING or found.on != GITHUB:
+        return found
+    fact: Row = link.get("fact") or {}
+    quiet = _seconds_since(heard or fact.get("read_at") or fact.get("updated_at") or link.get("created_at"))
+    if quiet is None or quiet < F.SILENT_S:
+        return found
+    return Standing(
+        requirement, NOT_MET, task.get("owner_id"), f"GitHub hasn't answered about {link['ref']} for 2 hours"
+    )
+
+
 def _pr_open(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
     prs, said = _prs(conn, task, requirement)
     if said:
         return said
-    return _first(
-        requirement,
-        [Standing(requirement, MET, line="PR open") if link["fact"] else _reading(requirement) for link in prs],
-    )
+    return _first(requirement, [_open_one(task, requirement, link) for link in prs])
+
+
+def _open_one(task: Row, requirement: Row, link: Row) -> Standing:
+    """Met once GitHub said the PR exists. An open PR is re-read every few minutes; one GitHub stopped answering about
+    (a deleted PR reads as gone, which saves nothing) is the owner's after the 2-hour silence rule, not met for ever."""
+    quiet = _silent(task, requirement, link, _reading(requirement))
+    fact: Row | None = link["fact"]
+    if not fact or (fact["state"] == "open" and quiet.state == NOT_MET):
+        return quiet
+    return Standing(requirement, MET, line="PR open")
 
 
 def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
@@ -418,7 +444,7 @@ def _checks_pass(conn: "sqlite3.Connection", task: Row, requirement: Row, answer
     prs, said = _prs(conn, task, requirement)
     if said:
         return said
-    found = [_checks_one(task, requirement, link) for link in prs]
+    found = [_silent(task, requirement, link, _checks_one(task, requirement, link)) for link in prs]
     if all(s.met for s in found):
         return Standing(requirement, MET, line=next((s.line for s in found if s.line == "Checks pass"), found[0].line))
     return _first(requirement, found)
@@ -435,13 +461,15 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     owner = task.get("owner_id")
     queues = merge_queue.queues_prs(task.get("stage"))
     effect = merge_queue.newest(conn, task["visit"]["id"], ref) if queues else None
+    if fact["queue_state"] in ("queued", "auto_merge"):  # queued, by Tico or anyone: an owed queue_pr is then done
+        return Standing(requirement, WAITING, GITHUB, "In the merge queue")
     if effect and effect["state"] == "owed":
         return Standing(requirement, WAITING, GITHUB, "Queuing the PR")
     if effect and effect["state"] == "failed":
         return Standing(requirement, NOT_MET, owner, f"GitHub refused the merge: {effect.get('last_error') or ref}")
     if fact["queue_state"] == "removed":
         return Standing(requirement, NOT_MET, owner, merge_queue.removed_line(fact))
-    if fact["queue_state"] in ("queued", "auto_merge") or effect:
+    if effect:
         return Standing(requirement, WAITING, GITHUB, "In the merge queue")
     if queues:
         return Standing(requirement, WAITING, GITHUB, "Queuing the PR")  # owed as soon as its head is known
@@ -452,7 +480,9 @@ def _pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: 
     prs, said = _prs(conn, task, requirement)
     if said:
         return said
-    return _first(requirement, [_merged_one(conn, task, requirement, link) for link in prs])
+    return _first(
+        requirement, [_silent(task, requirement, link, _merged_one(conn, task, requirement, link)) for link in prs]
+    )
 
 
 def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Standing:
@@ -480,7 +510,20 @@ def _in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer:
     prs, said = _prs(conn, task, requirement)
     if said:
         return said
-    return _first(requirement, [_release_one(conn, requirement, link) for link in prs])
+    return _first(requirement, [_release_silent(conn, task, requirement, link) for link in prs])
+
+
+def _release_silent(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
+    """In a release for one PR, with `_silent`: a merged PR is not read again, so once it merged GitHub's word is the
+    read of the release repo's releases (never read yet: since it merged)."""
+    from . import task_facts as F
+
+    found = _release_one(conn, requirement, link)
+    fact: Row = link.get("fact") or {}
+    if fact.get("state") != "merged":
+        return _silent(task, requirement, link, found)
+    repo = F.release_repo(requirement.get("settings") or {}, str(link["repo"]))
+    return _silent(task, requirement, link, found, F.releases_read_at(conn, repo) or fact.get("updated_at"))
 
 
 KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standing]] = {

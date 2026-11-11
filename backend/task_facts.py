@@ -21,6 +21,7 @@ short ones around reads made with no transaction held.
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ QUEUE_STATES = ("none", "queued", "auto_merge", "removed")
 QUEUED = ("queued", "auto_merge")  # in GitHub's merge queue, or auto-merge on where the repo has no queue
 NO_CHECKS_AFTER_S = 600  # C13: no checks for a commit 10 minutes after Tico saw it, and Checks pass is met
 CHECKS_TOO_LONG_S = 7200  # checks still running after 2 hours: the owner's turn
+SILENT_S = 7200  # a wait on GitHub with no word from GitHub for 2 hours (down, refusing, no such PR): the owner's turn
 REREAD_S = 300  # a PR a task waits on is read again when its fact is older than this
 REREAD_BATCH = 50  # at most this many PRs per re-read call
 DELIVERY_DAYS = 7  # how long a webhook delivery id is kept for de-dup
@@ -65,9 +67,15 @@ class GitHub(Protocol):
         """Whether `commit_sha` is in the history of `release_sha` (GitHub's compare: behind or identical)."""
         ...
 
+    def ready(self, repo: str, number: int) -> None:
+        """Mark a draft PR ready for review, as GitHub queues and merges no draft. A PR that is not a draft (or is
+        gone, closed or merged) is left as it is."""
+        ...
+
     def enqueue(self, repo: str, number: int, head_sha: str) -> Row:
         """Put the PR in the merge queue at exactly `head_sha`, or turn on auto-merge where the repo has no queue, or
-        merge it where it has neither. {ok, how: queued|auto_merge|merged, reason}. A head that moved is not ok."""
+        merge it where it has neither. {ok, how: queued|auto_merge|merged, reason}. A head that moved, a draft, or a
+        PR the base branch's rules refuse (a required review or check) is not ok, with GitHub's reason."""
         ...
 
     def dequeue(self, repo: str, number: int) -> Row:
@@ -79,6 +87,20 @@ class GitHub(Protocol):
 def version_now() -> int:
     """A fact version for a read or webhook that begins now: the time in ms."""
     return time.time_ns() // 1_000_000
+
+
+def sent_version(payload: Row, arrived: int) -> int:
+    """A `pull_request` webhook's version: when GitHub last changed the PR (`pull_request.updated_at`), never later than
+    it arrived. GitHub promises no order, so a late webhook carries an older state than the fact may already hold; its
+    arrival time would make it newer. Without a readable time it is when it arrived."""
+    stamp = str(_obj(payload.get("pull_request")).get("updated_at") or "")
+    try:
+        at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return arrived
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return min(arrived, int(at.timestamp() * 1000))
 
 
 def pr_ref(repo: str, number: int) -> str:
@@ -118,14 +140,18 @@ def pr(conn: "sqlite3.Connection", repo: str, number: int) -> Row | None:
 def save_pr(conn: "sqlite3.Connection", repo: str, number: int, fact: Row, version: int) -> bool:
     """Save what GitHub said of a PR, as seen by a read or webhook that began at `version`. `fact` has the keys
     `GitHub.read_pr` gives, and `checks` (`GitHub.read_checks` at its head) when they were read; a key left out keeps
-    the saved value. False, and nothing written, when the saved fact is newer. `checks_state` is worked out here from
-    `checks`, leaving out Tico's own."""
+    the saved value. False, and nothing written, when the saved fact is newer. A merged PR stays merged. `checks_state`
+    is worked out here from `checks`, leaving out Tico's own."""
     H = _h()
     now = H.now()
     old = pr(conn, repo, number)
     if old and int(old["fact_version"]) > version:
         return False
     merged: Row = {**(old or {}), **{k: v for k, v in fact.items() if k != "checks"}}
+    if old and old.get("state") == "merged" and merged.get("state") != "merged":
+        # Merged is for good. A webhook that comes late (a `dequeued` whose snapshot still says open) changes nothing
+        # of it: GitHub promises no order, and its version is only when it arrived.
+        merged.update({k: old.get(k) for k in ("state", "head_sha", "merged_sha", "merged_at", "queue_state")})
     head = merged.get("head_sha")
     moved = not old or old.get("head_sha") != head
     checks: list[Row] = fact["checks"] if "checks" in fact else ([] if moved else list((old or {}).get("checks") or []))
@@ -182,11 +208,12 @@ def _checks_state(checks: list[Row]) -> str:
 
 
 def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
-    """The PRs linked to a task, oldest link first: [{repo, number, url, fact}] where `fact` is `pr()` or None."""
+    """The PRs linked to a task, oldest link first: [{repo, number, url, created_at, fact}] where `fact` is `pr()` or
+    None."""
     out: list[Row] = []
     for link in _rows(
         conn,
-        "SELECT repo, number, url FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
+        "SELECT repo, number, url, created_at FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
         "AND number IS NOT NULL ORDER BY created_at, id",
         (task_id,),
     ):
@@ -344,7 +371,13 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
         ):
             return []
         fact, removal = _pr_fact_of(payload)
-        if save_and_settle(conn, repo, number, fact, version):
+        sent = sent_version(payload, version)
+        saved = pr(conn, repo, number)
+        if saved and int(saved["fact_version"]) > sent:
+            # Older than what is saved (a late webhook, or one beaten by a check that came first): not saved; an open
+            # PR is read in full on the next pass, so what it said is never lost.
+            removal = saved["state"] == "open"
+        elif save_and_settle(conn, repo, number, fact, sent):
             out.append(pr_ref(repo, number))
         if removal:
             conn.execute("UPDATE pr_facts SET read_at='' WHERE repo=? AND number=?", (repo, number))
@@ -369,12 +402,24 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
                 "url": payload.get("target_url") or "",
                 "tico": False,
             }
-        for number in [
+        numbers = [
             int(found[0])
             for found in conn.execute(
                 "SELECT number FROM pr_facts WHERE repo=? AND head_sha=? AND state='open'", (repo, sha)
             ).fetchall()
-        ]:
+        ]
+        if event == "check_run":
+            # A check run on a commit no fact has yet came before its `synchronize`: the PRs it names are read in full
+            # on the next pass, which brings the new head and its checks.
+            named: list[Any] = _obj(payload.get("check_run")).get("pull_requests") or []
+            for entry in named:
+                number = int(_obj(entry).get("number") or 0)
+                if number and number not in numbers:
+                    conn.execute(
+                        "UPDATE pr_facts SET read_at='' WHERE repo=? AND number=? AND state='open' AND head_sha<>?",
+                        (repo, number, sha),
+                    )
+        for number in numbers:
             old: list[Row] = (pr(conn, repo, number) or {}).get("checks") or []
             checks = [c for c in old if c.get("name") != check["name"]] + [check]
             if save_and_settle(conn, repo, number, {"checks": checks}, version):
@@ -414,14 +459,17 @@ _WAITING_TASKS = (
 def due_reads(conn: "sqlite3.Connection", now: str, limit: int = REREAD_BATCH) -> list[tuple[str, int]]:
     """The PRs an open task waits on whose fact is missing or older than REREAD_S, oldest read first, at most `limit`.
     A merged or closed PR is final for what a task waits on, so it is not read again (a webhook still brings a reopen).
+    An open PR marked for a full read (`read_at` '') is read once more whatever links it: a task closed while GitHub
+    merged its PR anyway (Tico's dequeue said merged) so leaves no fact saying "open, queued" for ever.
     """
     cutoff = _h().shift(now, seconds=-REREAD_S)
     found = conn.execute(
         "SELECT MIN(l.repo), l.number, MIN(COALESCE(f.read_at, '')) AS seen FROM task_links l "
-        f"JOIN ({_WAITING_TASKS}) w ON w.id = l.task_id "
+        f"LEFT JOIN ({_WAITING_TASKS}) w ON w.id = l.task_id "
         "LEFT JOIN pr_facts f ON f.repo = l.repo AND f.number = l.number "
         "WHERE l.kind='pr' AND l.repo IS NOT NULL AND l.repo <> '' AND l.number IS NOT NULL "
-        "AND (f.id IS NULL OR f.state='open' AND f.read_at < ?) "
+        "AND (w.id IS NOT NULL AND (f.id IS NULL OR f.state='open' AND f.read_at < ?) "
+        "OR f.state='open' AND f.read_at = '') "
         "GROUP BY lower(l.repo), l.number ORDER BY seen, lower(l.repo), l.number LIMIT ?",
         (cutoff, limit),
     ).fetchall()
@@ -462,9 +510,18 @@ def refresh(store: Any, github: GitHub, now: str | None = None) -> int:
         if fact is None:
             continue
         with store.transaction() as conn:
-            changed += save_and_settle(conn, repo, number, fact, version)
+            changed += save_and_settle(conn, repo, number, vanished(pr(conn, repo, number), fact), version)
     changed += _refresh_releases(store, github, at)
     return changed
+
+
+def vanished(old: Row | None, fact: Row) -> Row:
+    """A re-read that finds an open PR Tico saw queued now neither queued nor removed: it left the merge queue and no
+    webhook or timeline event said so. That is a removal, with no reason, so the Merge stage's owner hears of it at
+    once (merge_queue.removed) instead of "In the merge queue" waiting for ever."""
+    if old and old.get("queue_state") in QUEUED and fact.get("state") == "open" and fact.get("queue_state") == "none":
+        return {**fact, "queue_state": "removed", "removed_reason": removal_words(None)}
+    return fact
 
 
 def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
@@ -606,6 +663,12 @@ def releases(conn: "sqlite3.Connection", repo: str, *, prereleases: bool = False
         "ORDER BY published_at DESC, id",
         (repo, 1 if prereleases else 0),
     )
+
+
+def releases_read_at(conn: "sqlite3.Connection", repo: str) -> str | None:
+    """When a repo's releases were last read in full, or None when never."""
+    found = conn.execute("SELECT read_at FROM release_reads WHERE repo=?", (repo,)).fetchone()
+    return str(found[0]) if found and found[0] else None
 
 
 def publishes_releases(conn: "sqlite3.Connection", repo: str) -> bool | None:
