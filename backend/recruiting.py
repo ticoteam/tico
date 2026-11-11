@@ -153,6 +153,7 @@ ALIASES = tuple(
         (r"\bsoftware development\b", "software"),
         (r"\b(?<!qa )test(?:ing|ers?)?\b", "qa \\g<0>"),
         (r"\bappsec\b", "application security"),
+        (r"\brelease (?:engineer|manager)s?\b", "release owner"),
         (r"\b(?:developer relations|devrel)(?:\s+(?:engineer|manager|lead|specialist)s?)?\b", "developer advocate"),
         (
             r"\b(?:ppc|sem|paid search|paid social|paid acquisition|user acquisition|performance marketing)\b",
