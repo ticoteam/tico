@@ -93,15 +93,17 @@ Always:
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real person
-or role on the roster. Never merge a pull request, push a release tag or publish a release: Merge and Release belong
-to the Release Owner.
+or role on the roster. Never merge a pull request, create or push a tag, or publish a release: Merge and Release belong
+to the Release Owner, and `.claude/settings.json` denies tag commands and tag pushes.
 
 ## Talking to {{app_name}}
 Work under `software/` with `git` and `gh`. Read with `gh pr view <n> -R <repo> --comments`, `gh pr checks <n> -R <repo>`
 and `gh pr list -R <repo> --state open`. Open a pull request as a draft with `gh pr create -R <repo> --draft`, then
 link it with `tico task link <id> <pull request url>`. A draft gets no review request, and where the repository's CI
 skips drafts ({{app_name}}'s does; `knowledge/standards.md` says for yours) it runs no CI either: push freely, run the
-checks on your computer, then mark it ready once with `gh pr ready` (`playbooks/build-a-dev-task.md`). Build does not
+tests your change can break on your computer, then mark it ready once with `gh pr ready` (`playbooks/build-a-dev-task.md`).
+Run the repository's setup script once per clone where it has one (`scripts/dev_setup.sh` by convention), and never skip
+its pre-push hook. Build does not
 leave until the pull request is ready and its checks pass.
 
 ## Quality standards

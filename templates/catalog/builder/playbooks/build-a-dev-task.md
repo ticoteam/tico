@@ -23,22 +23,22 @@ description says what changed, why and how it was tested, and the task links the
 Read the spec page, its acceptance criteria and the last conversation. If the task is unclear, ask once with `tico task ask <id> --to <person> "<question>" --version N`
 and keep going on what is clear. Do not build a behaviour the spec does not state.
 
-## 2. Branch and open a draft
+## 2. Branch, set up and open a draft
 
     git -C software/<repo> fetch origin
-    git -C software/<repo> switch -c <task-number>-<short-name> origin/<base branch>
+    git -C software/<repo> switch -c tico/<first 8 characters of the task id>-<short-name> origin/<base branch>
 
-If `<repo>` is `ticoteam/tico`, turn its pre-push hook on once for that clone (every worktree of the clone shares it):
+The branch name has the shape {{app_name}}'s task worktrees use. If the repository has a setup script
+(`scripts/dev_setup.sh` by convention; its README or CONTRIBUTING file says), run it once in this clone before the first
+push, and again after a pull that changes a lock file: it installs what the repository's checks and pre-push hook need.
+If the repository asks for a pre-push hook and its setup script does not turn it on, turn it on as the repository says.
 
-    git -C software/<repo> config core.hooksPath .githooks
+A push the hook stops is a finding: fix it and push again. Never skip the hook. If it cannot run on this computer (a
+tool it needs is missing and the setup script cannot install it), say on the task which tool, and do not push around it.
 
-From then on each push runs `scripts/check.sh` and the branch conflict check first. A push it stops is a finding: fix it
-and push again. If `check.sh` cannot run on this computer (a tool it needs is missing), say so in the note in step 7 and
-push with `git push --no-verify`; the pull request's static checks run the same checks in CI. Do not change the hook
-setting of any other repository.
-
-Work only on that branch. Never commit to the base branch and never force-push. After the first commit, push and open the
-pull request as a draft, then link it:
+Work only on that branch. Never commit to the base branch. Never force-push, with one exception: after a rebase on the
+base branch (a merge conflict wakes you for one), push your own branch with `git push --force-with-lease`. After the
+first commit, push and open the pull request as a draft, then link it:
 
     git -C software/<repo> push -u origin HEAD
     gh pr create -R <repo> --draft --base <base branch> --title "<title>" --body "<what changes and why>"
@@ -61,10 +61,10 @@ for its requester, not into this pull request.
 
 ## 5. Check on your computer
 
-Run the checks in `knowledge/standards.md` on your own computer, at the head you will hand in: the tests the pull
-request's CI would select for your diff, not only the file you wrote. When the repository has a command for that, use it;
-in {{app_name}}'s own repository it is `python3 scripts/pr_checks.py local`, which prints a receipt line with the head
-commit. Record each command, its result and the head commit. A check you could not run is "not checked", with the reason.
+Run only the tests your change can break, at the head you will hand in: the test files for the code you changed and
+their nearest neighbours, one file at a time, with the commands in `knowledge/standards.md`. Never the whole suite or a
+full local CI run on this computer: the pull request's checks run the rest once it is ready. Record each command, its
+result and the head commit. A check you could not run is "not checked", with the reason.
 
 ## 6. Mark the pull request ready, once
 
@@ -74,8 +74,7 @@ it ready:
     gh pr edit <n> -R <repo> --body "<what changed, why, how it was tested, what was not checked>"
     gh pr ready <n> -R <repo>
 
-In {{app_name}}'s own repository, `python3 scripts/pr_checks.py local --ready` runs step 5 and marks the pull request
-ready after a pass. Every push to a ready pull request runs CI, so batch the fixes that follow.
+Every push to a ready pull request runs CI, so batch the fixes that follow.
 
 ## 7. Let the stage finish
 

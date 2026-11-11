@@ -107,16 +107,20 @@ def test_the_product_owner_reads_ci_by_repository_and_never_writes_it():
     assert "gh pr checks <pull request link>" in playbook and "-R <owner/name>" in playbook
 
 
-def test_only_the_release_manager_may_push_a_rebased_branch():
-    rules = settings("release-owner")
+@pytest.mark.parametrize("template", ["builder", "release-owner"])
+def test_the_builder_and_release_manager_may_push_a_rebased_branch_and_never_a_tag(template):
+    # A conflict wake tells the Builder to rebase and push with a lease; the Release Owner rebases in Merge. A tag is a
+    # release on a repository that releases from tags, and only a person or the approved rollout makes one.
+    rules = settings(template)
     lease = "Bash(git push --" + "force-with-lease *)"
     assert lease in rules["allow"]
-    assert "Bash(gh pr checkout *)" in rules["allow"]
     # A bare force push stays denied, and the lease is not swallowed by a wider deny.
     assert "Bash(git push --" + "force *)" in rules["deny"]
     assert not any(rule.startswith("Bash(git push --" + "force*") for rule in rules["deny"])
-    for template in ("builder", "reviewer"):
-        assert lease not in settings(template)["allow"], template
+    for tag in ("Bash(git tag *)", "Bash(git push*--tags*)", "Bash(git push* refs/tags/*)"):
+        assert tag in rules["deny"], (template, tag)
+    assert lease not in settings("reviewer")["allow"]
+    assert "Bash(gh pr checkout *)" in settings("release-owner")["allow"]
 
 
 def test_the_release_manager_is_named_once():
