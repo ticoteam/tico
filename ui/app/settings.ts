@@ -666,7 +666,7 @@ async function loadSettings() {
     S.emps = namedRoster(employees);
     setPeople(people);
     SETTINGS_DATA = {people: (people.people || []).filter((p: SettingsPerson) => !p.hidden), machines: S.me?.cloud ? SETTINGS_DATA.machines : [],
-      cloudComing: S.me?.cloud ? SETTINGS_DATA.cloudComing : [],
+      cloudComing: S.me?.cloud ? SETTINGS_DATA.cloudComing || [] : [],
       runnable: operations.runnable || {},
       agents: operations.agents || [],
       services: operations.services || [], models: catalog.models || [],
