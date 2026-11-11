@@ -130,7 +130,7 @@ same terms.
    then shows the app as installed.
 
 Once a repository is In use, the pipeline seats reach it by role with no further step: the Builder and the Release
-Owner write, the reviewers, QA Owner, Product Owner and Pipeline Managers read ([Repositories](repositories.md#bot-repository-access)).
+Owner write, the reviewers, QA Owner, Product Owner, Product Manager and Engineering Manager read ([Repositories](repositories.md#bot-repository-access)).
 
 If the organization also holds sensitive code, create a separate GitHub organization just for bot
 repositories and connect that one. "All repositories" then covers only what bots should reach, and a

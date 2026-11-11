@@ -31,7 +31,7 @@ run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser,
   await page.locator('#int-detail h1').filter({hasText: /acme.billing/i}).waitFor({timeout: t(5000)});
   const access = page.locator('.lc-access .lc-who-row');
   await access.first().waitFor();
-  assert.match(await access.first().innerText(), /engineering.team.manager/i, `${tag}: who has it`);
+  assert.match(await access.first().innerText(), /engineering.manager/i, `${tag}: who has it`);
   assert.equal(await access.first().locator('.pill').innerText(), 'Freely', `${tag}: refund is a write`);
   assert.equal(await page.locator('#int-detail .int-meta dd').evaluateAll(dd => dd.filter(d => !d.textContent!.trim()).length), 0,
     `${tag}: no label without a value`);

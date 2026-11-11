@@ -72,7 +72,7 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     const modal = page.locator('#ru-add');
     await modal.locator('textarea[name=text]').fill('Ask before a production deploy');
     await modal.locator('[data-ru-adv]').click();
-    assert.match(await modal.locator(`[data-scope="who"] .ru-chip`).innerText(), /engineering.team.manager/i);
+    assert.match(await modal.locator(`[data-scope="who"] .ru-chip`).innerText(), /engineering.manager/i);
     await modal.locator('[data-scope="with"] [data-seg="groups"]').click();
     await modal.locator('[data-scope="with"] .ru-addsel').selectOption({label: 'Engineering'});
     await modal.locator('button[type=submit]').click();

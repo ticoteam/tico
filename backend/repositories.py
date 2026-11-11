@@ -598,7 +598,8 @@ def card_access(catalog_dir, template):
     """The repository access a template's card declares for a bot made from it (templates/catalog/<template>/card.yaml
     `repo_access_mode`, own or all, and `repo_all_access`, read or write, read when left out), or {} when it declares
     none. The Builder and the Release Owner push and merge, so theirs is write on every repository In use; the
-    reviewers, the QA Owner, the Product Owner and the Pipeline Managers only read."""
+    reviewers, the QA Owner, the Product Owner, the Product Manager and the
+    Engineering Manager only read."""
     from pathlib import Path
 
     import yaml

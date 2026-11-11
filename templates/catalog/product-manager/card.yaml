@@ -70,3 +70,5 @@ first_routine:
 example_output: knowledge/examples/product-summary.md
 reasoning_effort: high
 recommend_when: [sells_software, uses_github, uses_docs, has_pipeline]
+repo_access_mode: all
+repo_all_access: read
