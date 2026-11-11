@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from clients import judge as clients_judge
+
 from backend import blobs as BL
 from backend import hubdb as H
 from backend import judge as backend_judge
@@ -290,6 +292,44 @@ def test_evidence_the_judge_cannot_read_in_full_is_unsure_whatever_the_model_say
     assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.95))["verdict"] == "met"
 
 
+def test_a_page_a_bot_writes_is_read_whole_and_one_too_long_says_how_long_it_may_be():
+    """rc.5: a 6,147-character spec was cut at 6,000 and came back "Tico could not read all of this evidence", which the
+    bot could not act on. A page of a few pages is read whole and judged on the model's word; a longer one is unsure and
+    the owner is told the most Jev reads, so it shortens it rather than attaching it again."""
+    page = {**ATTACHMENT, "source": "page:f1@2"}
+    for chars in (6_500, 12_000, P.TEXT_CHARS):
+        text = ("Scope: the importer reads the CSV. " * 2_000)[:chars]
+        state = P._state(REQ, {**page, "text": text})
+        assert state["attachment"]["text"] == text and state["attachment"]["truncated"] is False, chars
+        assert P.judge_once(None, REQ, {**page, "text": text}, engine=_engine(0.95))["verdict"] == "met", chars
+    too_long = {**page, "text": "x" * (P.TEXT_CHARS + 1)}
+    result = P.judge_once(None, REQ, too_long, engine=_engine(0.95))
+    assert (result["verdict"], result["p"]) == ("unsure", 0.5)
+    assert result["reason"] == "This page is too long for Jev to read: keep it under 40,000 characters."
+    other = P.judge_once(None, REQ, {**ATTACHMENT, "text": "x" * (P.TEXT_CHARS + 1)}, engine=_engine(0.05))
+    assert other["reason"] == "This evidence is too long for Jev to read: keep it under 40,000 characters."
+    bytes_cut = P.judge_once(None, REQ, {**page, "text": "short", "truncated": True}, engine=_engine(0.95))
+    assert bytes_cut["verdict"] == "unsure" and "too long for Jev" in bytes_cut["reason"], "cut bytes are too long too"
+    image = P.judge_once(None, REQ, {**ATTACHMENT, "text": None}, engine=_engine(0.95))
+    assert image["reason"] == P.CANNOT_SEE, "no text is not a length problem"
+
+
+def test_text_that_escapes_long_in_json_is_cut_to_fit_jevs_limit_and_the_owner_is_told_the_length_it_got():
+    """Letters outside ASCII are six characters each in the JSON sent: 40,000 of them would pass Jev's limit. The state
+    is cut to STATE_CHARS, the cut is flagged, and the owner is told the length Jev was shown."""
+    page = {**ATTACHMENT, "source": "page:f1@2", "text": "é" * P.TEXT_CHARS}
+    state = P._state(REQ, page)
+    assert len(json.dumps(state, default=str)) <= P.STATE_CHARS < clients_judge.MAX_STATE_CHARS
+    assert state["attachment"]["truncated"] is True and 0 < len(state["attachment"]["text"]) < P.TEXT_CHARS
+    clients_judge.validate(state, P._questions(), P.QUESTION_SET)  # Jev takes it
+    result = P.judge_once(None, REQ, page, engine=_engine(0.95))
+    shown = len(state["attachment"]["text"]) // 1000 * 1000
+    assert result["reason"] == f"This page is too long for Jev to read: keep it under {shown:,} characters."
+    both = P._state(REQ, {**page, "task_spec": "ü" * P.SPEC_CHARS})
+    assert len(json.dumps(both, default=str)) <= P.STATE_CHARS, "with a spec that escapes long as well"
+    assert len(both["attachment"]["text"]) < len(state["attachment"]["text"]), "the evidence is cut before the spec"
+
+
 def _work_fields(**extra):
     """An attachment dict as the server's waiting read gives it, carrying the work's own fields."""
     return {
@@ -318,8 +358,8 @@ def test_the_judge_state_carries_the_work_title_spec_repo_pr_and_author():
 
 
 def test_a_long_spec_is_cut_and_flagged_and_a_work_with_no_pr_leaves_repo_pr_and_author_out():
-    assert P.SPEC_CHARS == 6000
-    state = P._state(REQ, _work_fields(task_spec="x" * 9000, task_repo=None, task_pr=None, task_author=None))
+    assert P.SPEC_CHARS == 12_000
+    state = P._state(REQ, _work_fields(task_spec="x" * 15_000, task_repo=None, task_pr=None, task_author=None))
     assert len(state["work"]["spec"]) == P.SPEC_CHARS
     assert state["work"]["spec_truncated"] is True
     assert "repo" not in state["work"] and "pr" not in state["work"] and "author" not in state["work"]

@@ -52,11 +52,20 @@ DEFAULT_MODEL = "jev"
 QUESTION_SET = "pipeline-requirement"
 MET_AT, NOT_MET_AT = 0.8, 0.2
 REASON_BYTES = 500
-TEXT_CHARS = 6000  # the most of an attachment's text the judge is sent; a longer text is cut and flagged truncated
-SPEC_CHARS = 6000  # the most of the task's description (its spec) the judge is sent; a longer one is cut and flagged
+# How much of the evidence's text and the task's spec Jev is sent. Jev reads 32k tokens of state (clients/judge.py
+# MAX_STATE_CHARS: 120,000 characters of JSON, about four a token), and the two share it with the rest of the state
+# (the rubric, the goal, the title, the commits and releases: a few thousand). 40,000 + 12,000 is under half of it, so
+# even dense text (three characters a token) fits with room, and a page a bot writes (5,000 to 15,000 characters) is
+# read whole. A longer text is cut and flagged truncated; `_state` cuts further if escaping would pass Jev's limit.
+# Was 6,000 each (Nov 7, never measured): a normal 6,500-character spec came back unsure (rc.5, Nov 11).
+TEXT_CHARS = 40_000
+SPEC_CHARS = 12_000
+STATE_CHARS = clients_judge.MAX_STATE_CHARS * 3 // 4  # the most JSON `_fit` lets through: a quarter of Jev's to spare
 NO_EVIDENCE = "No evidence is attached."
 # What a person sees as the reason when the judge was not shown all of the evidence (Fix L2-2).
 CANNOT_SEE = "Tico could not read all of this evidence, so a person decides."
+# What the owner is told when the text was too long for Jev: what to do, so it shortens it rather than attaching it again.
+TOO_LONG = "This {what} is too long for Jev to read: keep it under {chars:,} characters."
 # What a person sees when the judge said met on a spec it was shown only the start of: the rest may hold what is missing.
 SPEC_CUT = "The judge saw only the start of this work's spec, so a person decides."
 # The engine a test or a harness may set: (model, state, questions, label) -> {p, reason, provider, model, cost_usd,
@@ -157,25 +166,51 @@ def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str,
     if attachment.get("context"):
         # What the page is judged against besides the rubric: the commits a review is for, the release it went out in.
         work["context"] = attachment["context"]
-    return {
-        "requirement": {
-            "name": requirement.get("name") or "",
-            "rubric": requirement.get("rubric") or "",
-            "goal": requirement.get("goal") or "",  # the pipeline's goal (D58)
-            # Present (true) only on a requirement that does not need evidence newer than the work's last change.
-            **({"older_evidence_ok": True} if attachment.get("older_evidence_ok") else {}),
-        },
-        "work": work,
-        "attachment": {
-            "work_version": int(attachment.get("work_version") or 0),
-            "source": attachment.get("source") or "",
-            "digest": attachment.get("digest") or "",
-            "url": attachment.get("url") or "",
-            "file_version": attachment.get("file_version") or 0,
-            "text": text,
-            "truncated": cut or bool(attachment.get("truncated")),
-        },
-    }
+    return _fit(
+        {
+            "requirement": {
+                "name": requirement.get("name") or "",
+                "rubric": requirement.get("rubric") or "",
+                "goal": requirement.get("goal") or "",  # the pipeline's goal (D58)
+                # Present (true) only on a requirement that does not need evidence newer than the work's last change.
+                **({"older_evidence_ok": True} if attachment.get("older_evidence_ok") else {}),
+            },
+            "work": work,
+            "attachment": {
+                "work_version": int(attachment.get("work_version") or 0),
+                "source": attachment.get("source") or "",
+                "digest": attachment.get("digest") or "",
+                "url": attachment.get("url") or "",
+                "file_version": attachment.get("file_version") or 0,
+                "text": text,
+                "truncated": cut or bool(attachment.get("truncated")),
+            },
+        }
+    )
+
+
+def _fit(state: dict[str, Any]) -> dict[str, Any]:
+    """`state`, cut to STATE_CHARS of JSON (three quarters of Jev's limit, clients/judge.py MAX_STATE_CHARS): text that
+    escapes long in JSON (quotes, new lines, letters outside ASCII, up to six characters each) can pass it under
+    TEXT_CHARS. The evidence's text is cut first, then the spec, each to the longest start that fits, and flagged."""
+
+    def size() -> int:
+        return len(json.dumps(state, default=str))
+
+    for part, key, flag in (("attachment", "text", "truncated"), ("work", "spec", "spec_truncated")):
+        whole = state[part].get(key)
+        if size() <= STATE_CHARS:
+            break
+        if not whole:
+            continue
+        low, high = 0, len(whole)  # the longest start of `whole` that fits: low fits (or is 0), high + 1 does not
+        while low < high:
+            mid = (low + high + 1) // 2
+            state[part][key] = whole[:mid]
+            low, high = (mid, high) if size() <= STATE_CHARS else (low, mid - 1)
+        state[part][key] = whole[:low]
+        state[part][flag] = True
+    return state
 
 
 def _questions() -> dict[str, Any]:
@@ -317,8 +352,9 @@ def _ask(
     ]
     if _cannot_see(attachment, state):
         # Enforced here, not only in the prompt: a model that says met on text it was not all shown is still unsure.
-        # The call was made and is paid for, so its cost and latency are kept.
-        verdict, p, reason = "unsure", 0.5, CANNOT_SEE
+        # The call was made and is paid for, so its cost and latency are kept. A text that was cut tells the owner how
+        # long it may be, so it is shortened rather than attached again.
+        verdict, p, reason = "unsure", 0.5, _cannot_see_why(attachment, state)
     elif verdict == "met" and state["work"].get("spec_truncated"):
         # The rubric may need the whole spec, and the judge saw only its start: its met is not trusted. A not met stands.
         verdict, p, reason = "unsure", 0.5, SPEC_CUT
@@ -332,6 +368,16 @@ def _ask(
         "latency_ms": int(result.get("latency_ms") or 0),
         "reason": reason,
     }
+
+
+def _cannot_see_why(attachment: dict[str, Any], state: dict[str, Any]) -> str:
+    """Why Jev could not see all of the evidence: too long (with the length Jev was shown, in thousands, as the most it
+    may be), or no text Tico can read."""
+    evidence = state["attachment"]
+    if evidence["text"] is None:
+        return CANNOT_SEE
+    what = "page" if str(attachment.get("source") or "").startswith("page:") else "evidence"
+    return TOO_LONG.format(what=what, chars=max(1000, len(evidence["text"]) // 1000 * 1000))
 
 
 def _cannot_see(attachment: dict[str, Any], state: dict[str, Any]) -> bool:

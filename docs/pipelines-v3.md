@@ -1368,7 +1368,8 @@ Today: the pipeline editor.
 - **Bottom row:** "+ Stage" at the left, "Save" (main) at the right.
 
 **A requirement, open:** fields, name then value: Needs "A page ▾"; Jev checks "States the goal, the scope (what is
-in and what is out), and what done looks like as acceptance criteria someone can check."; Then a person "Ana ▾"; Who OKs
+in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page
+with all three meets it however long it is and whatever else it holds."; Then a person "Ana ▾"; Who OKs
 "People only ▾"; Can be pushed past "On".
 
 Rules:
