@@ -699,5 +699,56 @@
   "stdout": "{\n  \"error\": \"KeyError: 'proposal'\"\n}\n",
   "stderr": "",
   "exit": 1
+ },
+ {
+  "argv": [
+   "proposal",
+   "create",
+   "--kind",
+   "strategy_draft",
+   "--payload-file",
+   "bet.json",
+   "--reason",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico proposal create: error: argument --payload-file: cannot read bet.json (No such file or directory)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "proposal",
+   "create",
+   "--kind",
+   "strategy_draft",
+   "--payload-file",
+   "draft.json",
+   "--reason",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico proposal create: error: argument --payload-file: cannot read draft.json (No such file or directory)",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "proposal",
+   "create",
+   "--kind",
+   "strategy_draft",
+   "--payload-file",
+   "proof.json",
+   "--reason",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico proposal create: error: argument --payload-file: cannot read proof.json (No such file or directory)",
+  "exit": 64
  }
 ]

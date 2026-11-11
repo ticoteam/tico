@@ -380,5 +380,19 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "run",
+   "1",
+   "--answers-file",
+   "answers.json"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico lens run: error: argument --answers-file: cannot read answers.json (No such file or directory)",
+  "exit": 64
  }
 ]

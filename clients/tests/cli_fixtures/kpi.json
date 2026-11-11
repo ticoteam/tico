@@ -1541,5 +1541,573 @@
   "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
   "stderr": "",
   "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "Signups through a page or post",
+   "--owner",
+   "me",
+   "--direction",
+   "up",
+   "--cadence",
+   "weekly",
+   "--unit",
+   "signups",
+   "--source-note",
+   "Product analytics or signup records, with the page or post each signup came through"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "cadence": "weekly",
+     "direction": "up",
+     "name": "Signups through a page or post",
+     "operation_id": null,
+     "owner": "me",
+     "source_note": "Product analytics or signup records, with the page or post each signup came through",
+     "unit": "signups"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis",
+    {
+     "name": "Signups through a page or post",
+     "goal_id": null,
+     "owner": "bot:ana",
+     "unit": "signups",
+     "direction": "up",
+     "cadence": "weekly",
+     "source_note": "Product analytics or signup records, with the page or post each signup came through",
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "update",
+   "1",
+   "--parent",
+   "1",
+   "--role",
+   "input",
+   "--stage",
+   "acquire"
+  ],
+  "tools": [
+   [
+    "tico_kpi_update",
+    {
+     "growth_role": "input",
+     "id": "1",
+     "operation_id": null,
+     "parent_kpi_id": "1",
+     "stage": "acquire"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "kpis/1",
+    {
+     "name": null,
+     "definition": null,
+     "unit": null,
+     "direction": null,
+     "cadence": null,
+     "source_note": null,
+     "owner": null,
+     "parent_kpi_id": "1",
+     "growth_role": "input",
+     "stage": "acquire"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "--period-start",
+   "1",
+   "--period-end",
+   "1",
+   "--source",
+   "1",
+   "--evidence",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "evidence": "1",
+     "kpi_id": "1",
+     "note": "",
+     "operation_id": null,
+     "period_end": "1",
+     "period_start": "1",
+     "source": "1",
+     "value": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_start": "1",
+     "period_end": "1",
+     "evidence": "1",
+     "source": "1",
+     "value": 1.0,
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "Visits that become signups",
+   "--owner",
+   "me",
+   "--direction",
+   "up",
+   "--cadence",
+   "weekly",
+   "--unit",
+   "percent",
+   "--source-note",
+   "Product analytics: signups divided by visits, same week, same source"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "cadence": "weekly",
+     "direction": "up",
+     "name": "Visits that become signups",
+     "operation_id": null,
+     "owner": "me",
+     "source_note": "Product analytics: signups divided by visits, same week, same source",
+     "unit": "percent"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis",
+    {
+     "name": "Visits that become signups",
+     "goal_id": null,
+     "owner": "bot:ana",
+     "unit": "percent",
+     "direction": "up",
+     "cadence": "weekly",
+     "source_note": "Product analytics: signups divided by visits, same week, same source",
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "Conversions from email",
+   "--owner",
+   "me",
+   "--direction",
+   "up",
+   "--cadence",
+   "weekly",
+   "--unit",
+   "conversions",
+   "--source-note",
+   "The email platform's conversion report, or analytics with email as the source"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "cadence": "weekly",
+     "direction": "up",
+     "name": "Conversions from email",
+     "operation_id": null,
+     "owner": "me",
+     "source_note": "The email platform's conversion report, or analytics with email as the source",
+     "unit": "conversions"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis",
+    {
+     "name": "Conversions from email",
+     "goal_id": null,
+     "owner": "bot:ana",
+     "unit": "conversions",
+     "direction": "up",
+     "cadence": "weekly",
+     "source_note": "The email platform's conversion report, or analytics with email as the source",
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "1",
+   "--period-start",
+   "1",
+   "--period-end",
+   "1",
+   "--supersedes",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "kpi_id": "1",
+     "note": "1",
+     "operation_id": null,
+     "period_end": "1",
+     "period_start": "1",
+     "supersedes": "1",
+     "value": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_start": "1",
+     "period_end": "1",
+     "supersedes": "1",
+     "value": 1.0,
+     "note": "1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "Cost per new customer from search ads",
+   "--owner",
+   "me",
+   "--direction",
+   "down",
+   "--cadence",
+   "weekly",
+   "--unit",
+   "USD",
+   "--source-note",
+   "Spend from the ads account; new customers from the CRM or signup records"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "cadence": "weekly",
+     "direction": "down",
+     "name": "Cost per new customer from search ads",
+     "operation_id": null,
+     "owner": "me",
+     "source_note": "Spend from the ads account; new customers from the CRM or signup records",
+     "unit": "USD"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis",
+    {
+     "name": "Cost per new customer from search ads",
+     "goal_id": null,
+     "owner": "bot:ana",
+     "unit": "USD",
+     "direction": "down",
+     "cadence": "weekly",
+     "source_note": "Spend from the ads account; new customers from the CRM or signup records",
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "Organic clicks, brand terms left out",
+   "--owner",
+   "me",
+   "--direction",
+   "up",
+   "--cadence",
+   "weekly",
+   "--unit",
+   "clicks",
+   "--source-note",
+   "Search Console, Web, brand queries removed"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "cadence": "weekly",
+     "direction": "up",
+     "name": "Organic clicks, brand terms left out",
+     "operation_id": null,
+     "owner": "me",
+     "source_note": "Search Console, Web, brand queries removed",
+     "unit": "clicks"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis",
+    {
+     "name": "Organic clicks, brand terms left out",
+     "goal_id": null,
+     "owner": "bot:ana",
+     "unit": "clicks",
+     "direction": "up",
+     "cadence": "weekly",
+     "source_note": "Search Console, Web, brand queries removed",
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "update",
+   "1",
+   "--parent",
+   "1",
+   "--role",
+   "input",
+   "--stage",
+   "reach"
+  ],
+  "tools": [
+   [
+    "tico_kpi_update",
+    {
+     "growth_role": "input",
+     "id": "1",
+     "operation_id": null,
+     "parent_kpi_id": "1",
+     "stage": "reach"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "kpis/1",
+    {
+     "name": null,
+     "definition": null,
+     "unit": null,
+     "direction": null,
+     "cadence": null,
+     "source_note": null,
+     "owner": null,
+     "parent_kpi_id": "1",
+     "growth_role": "input",
+     "stage": "reach"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "Cost per new customer from social ads",
+   "--owner",
+   "me",
+   "--direction",
+   "down",
+   "--cadence",
+   "weekly",
+   "--unit",
+   "USD",
+   "--source-note",
+   "Ads account spend, divided by new customers from the CRM or signup records"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "cadence": "weekly",
+     "direction": "down",
+     "name": "Cost per new customer from social ads",
+     "operation_id": null,
+     "owner": "me",
+     "source_note": "Ads account spend, divided by new customers from the CRM or signup records",
+     "unit": "USD"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis",
+    {
+     "name": "Cost per new customer from social ads",
+     "goal_id": null,
+     "owner": "bot:ana",
+     "unit": "USD",
+     "direction": "down",
+     "cadence": "weekly",
+     "source_note": "Ads account spend, divided by new customers from the CRM or signup records",
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "45",
+   "18 of 40 new accounts finished setup, 2026-10-19 to 2026-10-25",
+   "--period-start",
+   "2026-10-19",
+   "--period-end",
+   "2026-10-25",
+   "--evidence",
+   "1",
+   "--quality",
+   "measured",
+   "--definition-version",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "definition_version": 2,
+     "evidence": "1",
+     "kpi_id": "1",
+     "note": "18 of 40 new accounts finished setup, 2026-10-19 to 2026-10-25",
+     "operation_id": null,
+     "period_end": "2026-10-25",
+     "period_start": "2026-10-19",
+     "quality": "measured",
+     "value": 45.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_start": "2026-10-19",
+     "period_end": "2026-10-25",
+     "evidence": "1",
+     "quality": "measured",
+     "definition_version": 2,
+     "value": 45.0,
+     "note": "18 of 40 new accounts finished setup, 2026-10-19 to 2026-10-25"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
  }
 ]
