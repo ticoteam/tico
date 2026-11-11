@@ -2,11 +2,12 @@
 // company's saved plan login or API key; a computer holds at most one per AI tool; a bot never picks one.
 //  - Settings has a Models tab after Computers with Subscriptions, Tico Gateway, Defaults and
 //    Limits; old links (AI providers, Subscriptions, Chat, the Models card on Computers) open it;
-//  - Add subscription: a kind search box that starts on Claude plan, a required name, an owner (you unless changed), the
-//    own-bots line, POST {kind, name, secret} (owner_id only when changed); an API key has no owner and no such line;
-//  - Connect: a plan signs in through a computer the server picks, in the same dialog, with Reconnect asking first when
-//    runs would restart; no computer says so; an API key and an older server have no button, and the page never holds a value;
-//    Edit (name, owner), Reconnect and Remove from the row's menu, Reconnect and Remove asking first when runs would restart;
+//  - Add subscription is one sheet (ui/app/plan-signin.ts): pick a plan and its sign-in starts with only the kind sent;
+//    a cloud computer on its way is waited for; Claude takes one code (pasted ones go by themselves), ChatGPT shows
+//    one to copy; done closes the sheet; a failure shows the server's sentence; no computer and Paste instead are the
+//    ways out; an API key is a key and an optional name; the page never keeps a link, code or value;
+//  - Reconnect is the same sheet from its second step, asking first when runs would restart; Edit (name, owner) and
+//    Remove from the row's menu;
 //  - Computers: one row per computer with a picker per AI tool; a switch that stops runs asks in the page first
 //    (409 confirm_restart), then sends confirm; an older computer says Needs update; Gateway off reads None;
 //  - a computer's pop-up still lists one connection per AI tool, its own login, and the queue line;
@@ -42,7 +43,7 @@ type Data = {machines: Machine[]; subs: Sub[]; assignments: {runner_id: string; 
   providers: {[key: string]: unknown; enabled: string[]; default: {runtime: string; model: string}; revision: number; preset: string;
     providers: {id: string; label: string; gateway?: boolean}[]};
   gateway: Record<string, unknown>; models: Record<string, unknown>[]; levels: Record<string, unknown>;
-  connect?: string[]; connectRefused?: string; connectHeld?: Promise<unknown> | null; connectNotYours?: boolean;
+  connect?: string[]; connectRefused?: string; connectWaking?: number; connectBroken?: string; connectState?: string; connectHeld?: Promise<unknown> | null; connectNotYours?: boolean;
   keys?: (string | undefined)[]; login?: Login};
 declare var SETTINGS_TAB: string;
 declare function settingsShow(tab: string): void;
@@ -53,6 +54,8 @@ const KINDS: Kind[] = [
   {kind: 'codex_login', label: 'ChatGPT plan', runtime: 'codex', secret_label: "Codex's auth.json", help: 'Paste ~/.codex/auth.json from a computer where codex login is signed in.', connect: true, owned: true},
   {kind: 'anthropic_key', label: 'Anthropic API key', runtime: 'claude', secret_label: 'API key', help: ''},
   {kind: 'openai_key', label: 'OpenAI API key', runtime: 'codex', secret_label: 'API key', help: ''}];
+
+const PLAN_NAMES: Record<string, string> = {claude_token: 'Claude', codex_login: 'ChatGPT', anthropic_key: 'Anthropic API', openai_key: 'OpenAI API'};
 
 function fixtures(): Data {
   const now = new Date().toISOString();
@@ -154,11 +157,18 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       if (sub?.computers.includes('r1') && !body.confirm)
         return json(problem('confirm_restart', 'Reconnecting restarts running tasks', {running: 1, sessions: 2, computers: sub.computers.length}), 409);
       if (data.connectRefused) return json(problem('offline', data.connectRefused), 409);
+      if (data.connectBroken) return json(problem('setup', data.connectBroken, {ref: 'sf-1a2b3c4d'}), 500);
       if (data.connectHeld) await data.connectHeld;
       const kind = KINDS.find(k => k.kind === (body.kind || sub!.kind))!;
-      data.login = {id: `l${writes.length}`, runner_id: 'r1', runtime: kind.runtime, kind: 'connect', state: 'waiting', url: 'https://sign-in.example/authorize?x=1',
-        code: kind.runtime === 'codex' ? 'ABCD-1234' : '', lines: [], message: '', accepts_code: kind.runtime === 'claude', code_sent: false,
-        created_at: new Date().toISOString(), updated_at: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), target: body.name};
+      // The name the server gives it: the saved one's, or the plan's with the next number.
+      const base = PLAN_NAMES[kind.kind]!, taken = data.subs.filter(s => s.kind === kind.kind).length;
+      const name = sub?.name || (taken ? `${base} ${taken + 1}` : base);
+      // No computer online yet, the cloud one on its way: no sign-in, and the page asks again.
+      if (data.connectWaking) { data.connectWaking -= 1; return json({id: '', kind: 'connect', runner_id: '', runtime: kind.runtime, state: 'requested', computer: '', not_yours: false, name, waking: true}); }
+      const waiting = !data.connectState;
+      data.login = {id: `l${writes.length}`, runner_id: 'r1', runtime: kind.runtime, kind: 'connect', state: data.connectState || 'waiting', url: waiting ? 'https://sign-in.example/authorize?x=1' : '',
+        code: waiting && kind.runtime === 'codex' ? 'ABCD-1234' : '', lines: [], message: '', accepts_code: kind.runtime === 'claude', code_sent: false,
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(), computer: 'Tico Team box', not_yours: Boolean(data.connectNotYours), name, waking: false};
       return json(data.login);
     }
     const signIn = p.match(/^\/api\/v2\/computers\/r1\/logins\/([^/]+)(?:\/(code|cancel))?$/);
@@ -169,10 +179,11 @@ async function open(browser: Browser, {viewport = {width: 1440, height: 900}, th
       if (signIn[2] === 'cancel') Object.assign(data.login!, {state: 'canceled', url: ''});
       return json(data.login);
     }
+    if (signIn) return json({detail: 'Not Found'}, 404);
     if (p === '/api/v2/model-subscriptions' && method === 'POST') {
       const body = req.postDataJSON() as Body; writes.push({p, method, body});
       const kind = KINDS.find(k => k.kind === body.kind)!;
-      const row = {id: 's9', name: body.name!, kind: body.kind!, runtime: kind.runtime, label: kind.label, status: 'new', status_detail: '', computers: [], usage: null, added_by: me.id};
+      const row = {id: `s9${data.subs.length}`, name: body.name || PLAN_NAMES[body.kind!]!, kind: body.kind!, runtime: kind.runtime, label: kind.label, status: 'new', status_detail: '', computers: [], usage: null, added_by: me.id};
       data.subs.push(row);
       return json(row);
     }
@@ -316,48 +327,136 @@ async function modelsTab(browser: Browser) {
   console.log('Models tab cards: ok');
 }
 
+// The sheet that adds or reconnects a subscription (ui/app/plan-signin.ts), and the step it is on.
+const sheet = (page: Page) => page.locator('dialog.plan-sheet[open]');
+const onStep = (page: Page, step: string) => page.locator(`dialog.plan-sheet[open][data-plan-step=${step}]`).waitFor();
+// A code as a provider's page hands it back: long, one word.
+const LONG_CODE = 'c0de-' + 'x'.repeat(40) + '#state';
+// What the page reads from and writes to the clipboard, held by the test.
+async function clipboard(page: Page, text: string | null) {
+  await page.evaluate(held => {
+    const w = window as unknown as {copied: string[]};
+    w.copied = [];
+    Object.defineProperty(navigator, 'clipboard', {configurable: true, value: {
+      readText: () => held === null ? Promise.reject(new Error('denied')) : Promise.resolve(held),
+      writeText: (value: string) => { w.copied.push(value); return Promise.resolve(); }}});
+  }, text);
+}
+
+// Taps the button that opens the provider, without the test opening that page.
+const tapOpen = (dialog: import('playwright').Locator) => dialog.locator('[data-plan-open]').evaluate((el: HTMLElement) => {
+  el.addEventListener('click', event => event.preventDefault(), {once: true});
+  el.click();
+});
+
 async function addSubscription(browser: Browser) {
-  const {page, errors, writes} = await open(browser);
+  const {page, errors, writes, data} = await open(browser);
   await modelsReady(page);
   await page.locator('#subs-add').click();
-  const dialog = page.locator('dialog.subs-dialog[open]');
-  const kind = dialog.locator('#subs-kind');
-  assert.equal(await kind.inputValue(), 'Claude plan', 'starts on Claude plan');
-  assert.equal(await dialog.locator('#subs-secret').getAttribute('type'), 'password');
-  assert.match(await dialog.locator('[data-subs-secret] .k label').innerText(), /Token from claude setup-token/);
-  // No computers to choose here (the server picks one for Connect): only the owner, you unless changed.
-  assert.equal(await dialog.locator('input[type=checkbox]').count(), 0);
-  assert.deepEqual(await dialog.locator('select').evaluateAll(list => list.map(s => (s as HTMLSelectElement).name)), ['owner']);
-  assert.equal(await dialog.locator('select[name=owner]').inputValue(), 'ana');
-  assert.deepEqual(await dialog.locator('select[name=owner] option').allInnerTexts(), ['Ana', 'Sam']);
-  assert.equal(await dialog.locator('.subs-note').innerText(), 'Only use your subscription on your own bots, not shared ones.');
-  assert.deepEqual(await dialog.locator('.tmodal-foot button').allInnerTexts(), ['Cancel', 'Save']);
-  // The name is required.
-  await dialog.locator('#subs-secret').fill('sk-ant-oat01-abc');
-  await dialog.locator('button[type=submit]').click();
-  assert.equal(await dialog.locator('[data-field-err]').innerText(), 'Enter a name');
+  const dialog = sheet(page);
+  // Pick: the two plans, then the two keys, smaller. Nothing to type, nobody to choose, nothing to save.
+  await onStep(page, 'pick');
+  assert.deepEqual(await dialog.locator('[data-plan-kind]').evaluateAll(list => list.map(el => (el as HTMLElement).dataset.planKind)),
+    ['claude_token', 'codex_login', 'anthropic_key', 'openai_key']);
+  assert.deepEqual(await dialog.locator('.plan-pick').evaluateAll(list => list.map(el => (el as HTMLElement).dataset.planKind)), ['claude_token', 'codex_login']);
+  assert.equal(await dialog.locator('input, select, textarea, button[type=submit]').count(), 0);
   assert.equal(writes.length, 0);
-  // The kind is a search box: typing filters, Enter picks; ChatGPT plan takes Codex's auth.json.
-  await kind.click();
-  assert.deepEqual(await dialog.locator('[role=option]').allInnerTexts(), ['Claude plan', 'ChatGPT plan', 'Anthropic API key', 'OpenAI API key']);
-  await kind.fill('chat');
-  assert.deepEqual(await dialog.locator('[role=option]:not([hidden])').allInnerTexts(), ['ChatGPT plan']);
-  await kind.press('Enter');
-  assert.equal(await kind.inputValue(), 'ChatGPT plan');
-  assert.equal(await dialog.locator('textarea#subs-secret').count(), 1);
-  // Escape with the list open closes the list, not the dialog.
-  await kind.press('ArrowDown');
-  await kind.press('Escape');
-  assert.equal(await dialog.isVisible(), true);
-  await dialog.locator('input[name=name]').fill('ChatGPT Team');
-  assert.equal(await dialog.locator('[data-field-err]').count(), 0, 'typing a name clears its error');
-  await dialog.locator('#subs-secret').fill('{"auth_mode": "chatgpt", "tokens": {"id_token": "x"}}');
-  await shot(page, 'add-subscription-desktop-dark', dialog);
+  // A tap on the plan starts its sign-in at once: the kind is all the page sends.
+  await dialog.locator('[data-plan-kind=claude_token]').click();
+  await onStep(page, 'signin');
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token'}});
+  const link = dialog.locator('[data-plan-open]');
+  assert.equal(await link.getAttribute('href'), 'https://sign-in.example/authorize?x=1');
+  assert.equal(await link.getAttribute('target'), '_blank');
+  // One field, for the code the provider's page hands back; no place for a pasted value on this path.
+  assert.deepEqual(await dialog.locator('input, textarea, select').evaluateAll(list => list.map(el => [(el as HTMLInputElement).name, el.getAttribute('autocomplete')])), [['code', 'one-time-code']]);
+  // Nothing is waited for until the provider's page was opened from here; then the line and its clock show.
+  assert.equal(await dialog.locator('[data-plan-wait=tab]').isVisible(), false);
+  await tapOpen(dialog);
+  assert.equal(await dialog.locator('[data-plan-wait=tab]').isVisible(), true);
+  assert.equal(await dialog.locator('[name=code]').count(), 1, 'the tap redraws nothing');
+  assert.equal(await dialog.locator('[data-plan-elsewhere]').count(), 0);
+  // A typed code waits for Sign in.
+  await dialog.locator('[name=code]').fill('typed-code');
+  await page.waitForTimeout(100);
+  assert.equal(writes.length, 1);
+  await dialog.locator('[data-plan-entry] button[type=submit]').click();
+  await until(page, () => writes.at(-1)!.p.endsWith('/code'), 'the typed code');
+  assert.deepEqual(writes.at(-1)!.body, {code: 'typed-code'});
+  await dialog.locator('[data-plan-wait=finish]').waitFor();
+  assert.equal(await dialog.locator('[name=code]').count(), 0);
+  // Failed: the server's sentence as sent; what else it sends beside it is not shown.
+  const rejected = data.login!.id;
+  Object.assign(data.login!, {state: 'failed', url: '', message: 'Claude did not take that code.', category: 'not_a_known_word', trace: 'sk-ant-oat01-not-for-the-page', lines: ['sk-ant-oat01-not-for-the-page']});
+  await onStep(page, 'failed');
+  assert.equal(await dialog.locator('.plan-said').innerText(), 'Claude did not take that code.');
+  assert.doesNotMatch(await dialog.innerText(), /sk-ant-oat|not_a_known_word/);
+  assert.equal(await dialog.locator('[data-plan-retry]').count(), 1);
+  assert.equal(await dialog.locator('[data-plan-paste]').count(), 1);
+  // Try again is a fresh sign-in with its field back. Paste reads the clipboard in the tap, and a whole code goes by itself.
+  await clipboard(page, `  ${LONG_CODE}\n`);
+  await dialog.locator('[data-plan-retry]').click();
+  await onStep(page, 'signin');
+  assert.notEqual(data.login!.id, rejected);
+  await dialog.locator('[data-plan-clip]').click();
+  await until(page, () => writes.at(-1)!.p === `/api/v2/computers/r1/logins/${data.login!.id}/code`, 'the pasted code');
+  assert.deepEqual(writes.at(-1)!.body, {code: LONG_CODE});
+  // Done when the server says so: the check and the name it gave, then the sheet goes by itself and the row is there.
+  data.subs.push({id: 's8', name: 'Claude 4', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'new', status_detail: '', computers: [], usage: null, added_by: 'ana'});
+  Object.assign(data.login!, {state: 'done', url: ''});
+  await onStep(page, 'done');
+  assert.equal(await dialog.locator('.plan-done b').innerText(), 'Claude 4');
+  await dialog.waitFor({state: 'detached'});
+  await page.locator('[data-subs-row=s8]').waitFor();
+  // A browser that will not hand the clipboard over puts the cursor in the field; a paste there goes by itself too.
+  await clipboard(page, null);
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=claude_token]').click();
+  await onStep(page, 'signin');
+  await dialog.locator('[data-plan-clip]').click();
+  await page.waitForFunction(() => (document.activeElement as HTMLInputElement | null)?.name === 'code');
+  await dialog.locator('[name=code]').evaluate((field: HTMLInputElement, code) => { field.value = code; field.dispatchEvent(new Event('paste', {bubbles: true})); }, LONG_CODE);
+  await until(page, () => writes.at(-1)!.p.endsWith('/code'), 'the code pasted in the field');
+  assert.deepEqual(writes.at(-1)!.body, {code: LONG_CODE});
+  await dialog.locator('[data-plan-close]').click();
+  await dialog.waitFor({state: 'detached'});
+  // ChatGPT: the code to type there, large, with Copy above the button that opens it; nothing to type here.
+  await clipboard(page, '');
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=codex_login]').click();
+  await onStep(page, 'signin');
+  assert.equal(await dialog.locator('[data-plan-code]').innerText(), 'ABCD-1234');
+  assert.equal(await dialog.locator('input, textarea').count(), 0);
+  assert.equal(await dialog.locator('[data-plan-copy], [data-plan-open]').evaluateAll(list => list.map(el => el.hasAttribute('data-plan-copy') ? 'copy' : 'open').join()), 'copy,open');
+  await dialog.locator('[data-plan-copy]').click();
+  await page.waitForFunction(() => (window as unknown as {copied: string[]}).copied.length === 1);
+  assert.deepEqual(await page.evaluate(() => (window as unknown as {copied: string[]}).copied), ['ABCD-1234']);
+  data.subs.push({id: 's7', name: 'ChatGPT', kind: 'codex_login', runtime: 'codex', label: 'ChatGPT plan', status: 'new', status_detail: '', computers: [], usage: null, added_by: 'ana'});
+  Object.assign(data.login!, {state: 'done', url: '', code: ''});
+  await dialog.waitFor({state: 'detached'});
+  await page.locator('[data-subs-row=s7]').waitFor();
+  // An API key: the key and a name nobody has to give. No owner.
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=anthropic_key]').click();
+  await onStep(page, 'key');
+  assert.deepEqual(await dialog.locator('input, select, textarea').evaluateAll(list => list.map(el => (el as HTMLInputElement).name)), ['secret', 'name']);
+  assert.equal(await dialog.locator('[name=secret]').getAttribute('type'), 'password');
+  await dialog.locator('button[type=submit]').click();
+  await page.waitForTimeout(100);
+  assert.equal(writes.at(-1)!.p.endsWith('/model-subscriptions'), false, 'an empty key sends nothing');
+  await dialog.locator('[name=secret]').fill('sk-ant-api03-abc');
   await dialog.locator('button[type=submit]').click();
   await dialog.waitFor({state: 'detached'});
-  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions', method: 'POST',
-    body: {kind: 'codex_login', name: 'ChatGPT Team', secret: '{"auth_mode": "chatgpt", "tokens": {"id_token": "x"}}'}});
-  await page.locator('[data-subs-row=s9]').waitFor();
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions', method: 'POST', body: {kind: 'anthropic_key', secret: 'sk-ant-api03-abc'}});
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=openai_key]').click();
+  await dialog.locator('[name=secret]').fill('sk-proj-abc');
+  await dialog.locator('[name=name]').fill('OpenAI (ops)');
+  await dialog.locator('button[type=submit]').click();
+  await dialog.waitFor({state: 'detached'});
+  assert.deepEqual(writes.at(-1)!.body, {kind: 'openai_key', secret: 'sk-proj-abc', name: 'OpenAI (ops)'});
+  // Nothing of a sign-in is kept in the page's storage.
+  assert.doesNotMatch(await page.evaluate(() => JSON.stringify([{...localStorage}, {...sessionStorage}])), /sign-in\.example|ABCD-1234|c0de-|sk-/);
   assert.deepEqual(errors, []);
   await page.close();
   console.log('add subscription: ok');
@@ -366,148 +465,158 @@ async function addSubscription(browser: Browser) {
 async function connectPlan(browser: Browser) {
   const {page, errors, writes, data} = await open(browser);
   await modelsReady(page);
+  const dialog = sheet(page);
+  const connects = () => writes.filter(w => w.p.endsWith('/connect')).length;
+  // No computer online, a cloud computer on its way: the sheet waits and asks again until the sign-in exists.
+  data.connectWaking = 1;
   await page.locator('#subs-add').click();
-  const dialog = page.locator('dialog[open]');
-  const button = dialog.locator('[data-subs-connect]');
-  assert.equal(await button.innerText(), 'Connect Claude plan');
-  // One primary button: Connect, until there is a value to Save.
-  assert.equal(await dialog.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'ghost');
-  await shot(page, 'connect-add-desktop-dark', dialog);
-  await dialog.locator('#subs-secret').fill('sk-ant-oat01-abc');
-  assert.equal(await dialog.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'primary');
-  await dialog.locator('#subs-secret').fill('');
-  // The name comes first, and nothing starts without it.
-  await button.click();
-  assert.equal(await dialog.locator('[data-field-err]').innerText(), 'Enter a name');
-  assert.equal(writes.length, 0);
-  // An API key has no sign-in to run; ChatGPT plan has its own.
-  const kind = dialog.locator('#subs-kind');
-  await kind.fill('anthropic'); await kind.press('Enter');
-  assert.equal(await button.count(), 0);
-  // An API key has no owner, and the own-bots line is for plans only.
-  assert.equal(await dialog.locator('select[name=owner]').isVisible(), false);
-  assert.equal(await dialog.locator('.subs-note').isVisible(), false);
-  assert.equal(await dialog.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'primary');
-  await kind.fill('claude'); await kind.press('Enter');
-  assert.equal(await dialog.locator('select[name=owner]').isVisible(), true);
-  assert.equal(await dialog.locator('.subs-note').isVisible(), true);
-  // A refusal stays in the form.
-  data.connectRefused = 'That computer is offline';
-  await dialog.locator('input[name=name]').fill('Company Max');
-  await button.click();
-  await until(page, () => writes.length === 1, 'the refused start');
-  assert.equal(await dialog.locator('input[name=name]').inputValue(), 'Company Max');
-  await button.and(page.locator(':not([disabled])')).waitFor();
-  data.connectRefused = '';
-  // The sign-in carries on in the same dialog: a link and a pasted code, as on a computer. Another owner goes with it.
-  await dialog.locator('select[name=owner]').selectOption('sam');
-  await button.click();
-  await dialog.locator('[data-link]').waitFor();
-  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token', name: 'Company Max', owner_id: 'human:sam'}});
-  assert.equal(await dialog.locator('h2').innerText(), 'Connect Company Max');
-  assert.equal(await dialog.locator('[data-link]').getAttribute('href'), 'https://sign-in.example/authorize?x=1');
-  await shot(page, 'connect-waiting-desktop-dark', dialog);
-  await dialog.locator('[name=code]').fill('pasted-code');
-  await dialog.locator('[data-paste] button').click();
-  await until(page, () => writes.at(-1)!.p.endsWith('/code'), 'the pasted code');
-  assert.deepEqual(writes.at(-1)!.body, {code: 'pasted-code'});
-  // A code rejected by the CLI ends the attempt even while that command would otherwise wait for Enter.
-  // Try again starts a fresh login and offers its code field, rather than leaving the old code marked sent.
-  const rejectedId = data.login!.id;
-  Object.assign(data.login!, {state: 'failed', url: '', accepts_code: false,
-    message: 'The sign-in could not finish. Choose Try again and use the code from the new sign-in page.',
-    lines: ['sk-ant-oat01-not-for-the-page']});
-  await dialog.locator('[data-retry]').waitFor();
-  assert.match(await dialog.locator('[data-status]').innerText(), /sign-in could not finish/);
-  assert.doesNotMatch(await dialog.innerText(), /sk-ant-oat|Code sent/);
-  await dialog.locator('[data-retry]').click();
-  await dialog.locator('[name=code]').waitFor();
-  assert.notEqual(data.login!.id, rejectedId);
-  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/connect', method: 'POST', body: {kind: 'claude_token', name: 'Company Max', owner_id: 'human:sam'}});
-  await dialog.locator('[name=code]').fill('fresh-code');
-  await dialog.locator('[data-paste] button').click();
-  await until(page, () => writes.at(-1)!.p.endsWith('/code'), 'the fresh code');
-  assert.equal(writes.at(-1)!.p, `/api/v2/computers/r1/logins/${data.login!.id}/code`);
-  assert.deepEqual(writes.at(-1)!.body, {code: 'fresh-code'});
-  // Done when the server says so: the row appears, and the dialog goes by itself.
-  data.subs.push({id: 's8', name: 'Company Max', kind: 'claude_token', runtime: 'claude', label: 'Claude plan', status: 'new', status_detail: '', computers: [], usage: null, added_by: 'ana'});
-  Object.assign(data.login!, {state: 'done', url: ''});
+  await dialog.locator('[data-plan-kind=claude_token]').click();
+  await dialog.locator('[data-plan-wait=computer]').waitFor();
+  assert.equal(await dialog.getAttribute('data-plan-step'), 'starting');
+  assert.match(await dialog.locator('[data-plan-clock]').innerText(), /^\d+:\d\d$/);
+  assert.equal(await dialog.locator('input, [data-plan-open], [data-plan-paste]').count(), 0);
+  await onStep(page, 'signin');
+  assert.equal(connects(), 2);
+  assert.deepEqual(writes.filter(w => w.p.endsWith('/connect')).map(w => w.body), [{kind: 'claude_token'}, {kind: 'claude_token'}]);
+  // Cancel ends the sign-in on the computer and closes the sheet.
+  await dialog.locator('[data-plan-cancel]').click();
   await dialog.waitFor({state: 'detached'});
-  await page.locator('[data-subs-row=s8]').waitFor();
-  // Reconnect with a task running: the page asks before the sign-in starts.
+  assert.ok(writes.at(-1)!.p.endsWith('/cancel'));
+  // Cancel while the computer starts: nothing asks again.
+  data.connectWaking = 5;
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=claude_token]').click();
+  await dialog.locator('[data-plan-wait=computer]').waitFor();
+  const asked = connects();
+  await dialog.locator('[data-plan-cancel]').click();
+  await dialog.waitFor({state: 'detached'});
+  await page.waitForTimeout(3300);
+  assert.equal(connects(), asked);
+  data.connectWaking = 0;
+  // A computer that has not opened the provider's page yet: still starting, with nothing to tap but Cancel.
+  data.connectState = 'starting';
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=codex_login]').click();
+  await dialog.locator('[data-plan-wait=start]').waitFor();
+  data.connectState = '';
+  Object.assign(data.login!, {state: 'waiting', url: 'https://sign-in.example/device', code: 'WXYZ-9876'});
+  await onStep(page, 'signin');
+  assert.equal(await dialog.locator('[data-plan-code]').innerText(), 'WXYZ-9876');
+  // A sign-in the server no longer has (it restarted for a new release) has ended: the sheet says so and offers Try again.
+  delete data.login;
+  await onStep(page, 'failed');
+  assert.equal(await dialog.locator('[data-plan-retry]').count(), 1);
+  await dialog.locator('[data-plan-retry]').click();
+  await onStep(page, 'signin');
+  // Out of time is a failure like any other.
+  Object.assign(data.login!, {state: 'expired', url: '', code: ''});
+  await onStep(page, 'failed');
+  await dialog.locator('[data-plan-close]').click();
+  await dialog.waitFor({state: 'detached'});
+  // A start the server refuses for another reason: its sentence, with its reference after it.
+  data.connectBroken = 'Tico could not start the sign-in.';
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=claude_token]').click();
+  await onStep(page, 'failed');
+  assert.match(await dialog.locator('.plan-said').innerText(), /sf-1a2b3c4d$/);
+  await dialog.locator('[data-plan-close]').click();
+  await dialog.waitFor({state: 'detached'});
+  data.connectBroken = '';
+  // No computer at all: the two ways out, and no field until one is taken.
+  data.connectRefused = 'No computer is online to run the sign-in';
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=claude_token]').click();
+  await onStep(page, 'none');
+  assert.equal(await dialog.locator('[data-plan-computer]').getAttribute('href'), '#/settings');
+  assert.equal(await dialog.locator('[data-plan-computer]').getAttribute('data-gs-tab'), 'devices');
+  assert.equal(await dialog.locator('input, textarea').count(), 0);
+  // Paste instead: one field for the value; an empty one sends nothing and says nothing about any other path.
+  await dialog.locator('[data-plan-paste]').click();
+  await onStep(page, 'paste');
+  assert.deepEqual(await dialog.locator('input, textarea, select').evaluateAll(list => list.map(el => [(el as HTMLInputElement).name, (el as HTMLInputElement).type])), [['secret', 'password']]);
+  const before = writes.length;
+  await dialog.locator('button[type=submit]').click();
+  await page.waitForTimeout(100);
+  assert.equal(writes.length, before);
+  assert.equal(await dialog.locator('[data-plan-err]').isVisible(), false);
+  await dialog.locator('[name=secret]').fill('sk-ant-oat01-abc');
+  await dialog.locator('button[type=submit]').click();
+  await dialog.waitFor({state: 'detached'});
+  assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions', method: 'POST', body: {kind: 'claude_token', secret: 'sk-ant-oat01-abc'}});
+  // ChatGPT's is a file: the picker fills the box.
+  await page.locator('#subs-add').click();
+  await dialog.locator('[data-plan-kind=codex_login]').click();
+  await onStep(page, 'none');
+  await dialog.locator('[data-plan-paste]').click();
+  await dialog.locator('[data-plan-file-input]').setInputFiles({name: 'auth.json', mimeType: 'application/json', buffer: Buffer.from('{"auth_mode": "chatgpt", "tokens": {"id_token": "x"}}')});
+  await page.waitForFunction(() => (document.querySelector('#plan-secret') as HTMLTextAreaElement | null)?.value.includes('chatgpt'));
+  await dialog.locator('button[type=submit]').click();
+  await dialog.waitFor({state: 'detached'});
+  assert.deepEqual(writes.at(-1)!.body, {kind: 'codex_login', secret: '{"auth_mode": "chatgpt", "tokens": {"id_token": "x"}}'});
+  data.connectRefused = '';
+  // Reconnect is the same sheet from its second step. With a task running, the page asks before the sign-in starts.
   await page.locator('[data-subs-more=s1]').click();
   await page.locator('#subs-menu [data-subs-act=reconnect]').click();
-  await page.locator('dialog[open] [data-subs-connect]').click();
   const confirm = page.locator('dialog.settings-confirm[open]');
   await confirm.waitFor();
+  assert.equal(await dialog.getAttribute('data-plan-step'), 'starting');
   await confirm.locator('[data-confirm-ok]').click();
-  await page.locator('dialog.model-login[open] [data-link]').waitFor();
+  await onStep(page, 'signin');
   assert.deepEqual(writes.at(-1)!.body, {subscription: 's1', confirm: true});
-  assert.equal(await page.locator('dialog.model-login[open] h2').innerText(), 'Reconnect Claude Max (Ana)');
   // Closing cancels the sign-in on the computer.
-  await page.locator('dialog.model-login[open] [data-close]').first().click();
-  await page.locator('dialog.model-login[open]').waitFor({state: 'detached'});
+  await dialog.locator('[data-plan-close]').click();
+  await dialog.waitFor({state: 'detached'});
   assert.ok(writes.at(-1)!.p.endsWith('/cancel'));
-  // Someone else's computer: the dialog says so before the person signs in.
-  data.connectNotYours = true;
+  // No to the restart: the sheet goes, and nothing started.
+  const starts = connects();
   await page.locator('[data-subs-more=s1]').click();
   await page.locator('#subs-menu [data-subs-act=reconnect]').click();
-  await page.locator('dialog[open] [data-subs-connect]').click();
-  await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
-  const where = page.locator('dialog.model-login[open] .model-login-where');
-  await where.waitFor();
-  assert.match(await where.innerText(), /Runs on Tico Team box, not your computer/);
-  await shot(page, 'connect-elsewhere-desktop-dark', page.locator('dialog.model-login[open]'));
-  await page.locator('dialog.model-login[open] [data-close]').first().click();
-  await page.locator('dialog.model-login[open]').waitFor({state: 'detached'});
+  await confirm.locator('[data-confirm-cancel]').click();
+  await dialog.waitFor({state: 'detached'});
+  assert.equal(connects(), starts + 1);
+  assert.equal(writes.at(-1)!.body!.confirm, undefined);
+  // Someone else's computer: the sheet says which before the person signs in.
+  data.connectNotYours = true;
+  await page.locator('[data-subs-row=s4] [data-subs-reconnect]').click();
+  await onStep(page, 'signin');
+  assert.deepEqual(writes.at(-1)!.body, {subscription: 's4'});
+  assert.equal(await dialog.locator('[data-plan-elsewhere]').count(), 1);
+  await dialog.locator('[data-plan-close]').click();
+  await dialog.waitFor({state: 'detached'});
   data.connectNotYours = false;
   // Closed while the start is on its way: the sign-in it started is cancelled, not left running out of sight.
   let release!: (value?: unknown) => void; data.connectHeld = new Promise(done => { release = done; });
+  const held = connects();
   await page.locator('#subs-add').click();
-  const closing = page.locator('dialog.subs-dialog[open]');
-  await closing.locator('input[name=name]').fill('Closed early');
-  await closing.locator('[data-subs-connect]').click();
-  await until(page, () => writes.at(-1)!.body?.name === 'Closed early', 'the start');
-  await closing.locator('[data-close], .tmodal-foot button[type=button]').first().click();
-  await closing.waitFor({state: 'detached'});
+  await dialog.locator('[data-plan-kind=claude_token]').click();
+  await until(page, () => connects() === held + 1, 'the start');
+  await dialog.locator('[data-plan-close]').click();
+  await dialog.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1)!.p.endsWith('/cancel'), 'the cancel');
   assert.equal(data.login!.state, 'canceled');
   // The same for Try again after a failure.
   await page.locator('#subs-add').click();
-  const asking = page.locator('dialog.subs-dialog[open]');
-  await asking.locator('input[name=name]').fill('Retried');
-  await asking.locator('[data-subs-connect]').click();
-  const retrying = page.locator('dialog.model-login[open]');
-  await retrying.locator('[data-link]').waitFor();
+  await dialog.locator('[data-plan-kind=claude_token]').click();
+  await onStep(page, 'signin');
   Object.assign(data.login!, {state: 'failed', url: '', message: 'The sign-in command stopped without signing in'});
-  await retrying.locator('[data-retry]').waitFor();
-  const failedLogin = data.login!.id;
+  await dialog.locator('[data-plan-retry]').waitFor();
+  const failedLogin = data.login!.id, again = connects();
   data.connectHeld = new Promise(done => { release = done; });
-  await retrying.locator('[data-retry]').click();
-  await until(page, () => writes.filter(w => w.body?.name === 'Retried').length === 2, 'the second start');
-  await retrying.locator('[data-close]').first().click();
-  await retrying.waitFor({state: 'detached'});
+  await dialog.locator('[data-plan-retry]').click();
+  await until(page, () => connects() === again + 1, 'the second start');
+  await dialog.locator('[data-plan-close]').click();
+  await dialog.waitFor({state: 'detached'});
   release(); data.connectHeld = null;
   await until(page, () => writes.at(-1)!.p.endsWith('/cancel') && data.login!.id !== failedLogin, 'the cancel of the retry');
   assert.equal(data.login!.state, 'canceled');
   assert.deepEqual(errors, []);
   await page.close();
-  // No computer can run it right now: the button says so and paste still works.
-  const none = await open(browser, {mutate: d => { d.connect = []; }});
-  await modelsReady(none.page);
-  await none.page.locator('#subs-add').click();
-  const off = none.page.locator('dialog.subs-dialog[open]');
-  assert.equal(await off.locator('[data-subs-connect]').isDisabled(), true);
-  assert.match(await off.locator('.subs-connect-or').innerText(), /Needs a computer online/);
-  assert.equal(await off.locator('.tmodal-foot button[type=submit]').getAttribute('class'), 'primary');
-  await shot(none.page, 'connect-none-desktop-dark', off);
-  await none.page.close();
   console.log('connect a plan: ok');
 }
 
 async function rowMenu(browser: Browser) {
-  const {page, errors, writes, data} = await open(browser);
+  const {page, errors, writes} = await open(browser);
   await modelsReady(page);
   // Edit: an API key's name only (no owner); a plan's name and owner (only a change is sent). No own-bots line here.
   await page.locator('[data-subs-more=s3]').click();
@@ -529,36 +638,35 @@ async function rowMenu(browser: Browser) {
   await owner.locator('button[type=submit]').click();
   await owner.waitFor({state: 'detached'});
   assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/s1', method: 'POST', body: {name: 'Claude Max (Ana)', owner_id: 'human:sam'}});
-  // Reconnect from the row's pill: a new value only.
+  // Reconnect by pasting, behind the sign-in the row's pill starts: a new value only, and the sign-in is called off.
   await page.locator('[data-subs-row=s4] [data-subs-reconnect]').click();
-  const again = page.locator('dialog.subs-dialog[open]');
+  const again = page.locator('dialog.plan-sheet[open]');
+  await again.locator('[data-plan-open]').waitFor();
+  await again.locator('[data-plan-paste]').click();
+  await until(page, () => writes.at(-1)!.p.endsWith('/cancel'), 'the sign-in called off');
   assert.equal(await again.locator('input[name=name]').count(), 0);
-  await again.locator('#subs-secret').fill('sk-ant-oat01-new');
+  await again.locator('#plan-secret').fill('sk-ant-oat01-new');
   await again.locator('button[type=submit]').click();
   await again.waitFor({state: 'detached'});
   assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/s4', method: 'POST', body: {secret: 'sk-ant-oat01-new'}});
-  // Reconnect with a task running on a computer given it: the page asks first; Cancel keeps the dialog and sends nothing more.
+  // With a task running on a computer given it, the page asks once, before the sign-in; the value pasted after that
+  // carries the yes, with a new Idempotency-Key.
   await page.locator('[data-subs-more=s2]').click();
   await page.locator('#subs-menu [data-subs-act=reconnect]').click();
-  const live = page.locator('dialog.subs-dialog[open]');
-  await live.locator('#subs-secret').fill('{"auth_mode": "chatgpt"}');
-  await live.locator('button[type=submit]').click();
   const ask = page.locator('dialog.settings-confirm[open]');
   await ask.waitFor();
   assert.equal(await ask.locator('.tmodal-title').innerText(), 'Reconnect ChatGPT Pro (Ana)?');
   assert.equal(await ask.locator('p').innerText(), '1 running task stops and restarts, and their sessions start fresh.');
   assert.deepEqual(await ask.locator('button').allInnerTexts(), ['Cancel', 'Reconnect']);
-  await ask.locator('[data-confirm-cancel]').click();
-  await ask.waitFor({state: 'detached'});
-  assert.equal(await live.count(), 1);
-  assert.equal(writes.filter(w => w.body?.confirm).length, 0);
-  // Reconnect sends confirm with a new Idempotency-Key.
+  await ask.locator('[data-confirm-ok]').click();
+  const live = page.locator('dialog.plan-sheet[open]');
+  await live.locator('[data-plan-open]').waitFor();
+  await live.locator('[data-plan-paste]').click();
+  await live.locator('#plan-secret').fill('{"auth_mode": "chatgpt"}');
   await live.locator('button[type=submit]').click();
-  await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
   await live.waitFor({state: 'detached'});
-  const s2 = writes.filter(w => w.p === '/api/v2/model-subscriptions/s2').map(w => w.body);
-  assert.deepEqual(s2, [{secret: '{"auth_mode": "chatgpt"}'}, {secret: '{"auth_mode": "chatgpt"}'}, {secret: '{"auth_mode": "chatgpt"}', confirm: true}]);
-  assert.notEqual(data.keys!.at(-1), data.keys!.at(-2));
+  assert.equal(await page.locator('dialog.settings-confirm[open]').count(), 0);
+  assert.deepEqual(writes.filter(w => w.p === '/api/v2/model-subscriptions/s2').map(w => w.body), [{secret: '{"auth_mode": "chatgpt"}', confirm: true}]);
   // Remove: asks; with runs going, the server says how many restart and the page asks once more.
   await page.locator('[data-subs-more=s1]').click();
   await page.locator('#subs-menu [data-subs-act=remove]').click();
@@ -689,6 +797,94 @@ async function botEditor(browser: Browser) {
   console.log('bot editor: ok');
 }
 
+// Every state of the sheet on a 400 px phone and a desktop, dark and light: it fits without sideways scroll, and on the
+// phone what there is to tap sits in the top half of the screen, clear of an open keyboard.
+async function sheetScreens(browser: Browser) {
+  for (const theme of ['dark', 'light']) {
+    for (const [kind, viewport] of [['desktop', {width: 1280, height: 860}], ['phone', {width: 400, height: 800}]] as [string, {width: number; height: number}][]) {
+      const {page, errors, data} = await open(browser, {viewport, theme});
+      await modelsReady(page);
+      const dialog = sheet(page);
+      const view = async (name: string) => {
+        assert.ok(await page.evaluate(() => { const d = document.querySelector('dialog.plan-sheet[open]')!;
+          return Math.max(document.documentElement.scrollWidth - document.documentElement.clientWidth, d.scrollWidth - d.clientWidth); }) <= 0, `${kind} ${name}: no sideways scroll`);
+        if (!SHOTS) return;
+        fs.mkdirSync(SHOTS, {recursive: true});
+        await page.waitForTimeout(300);   // the sheet's fade-in
+        await page.screenshot({path: path.join(SHOTS, `sheet-${name}-${kind}-${theme}.png`)});
+      };
+      const above = async (what: string, name: string) => {
+        if (kind !== 'phone') return;
+        const box = (await dialog.locator(what).last().boundingBox())!;
+        assert.ok(box.y + box.height <= viewport.height / 2, `${name}: ${what} ends at ${Math.round(box.y + box.height)}, in the top half`);
+      };
+      await page.locator('#subs-add').click();
+      await onStep(page, 'pick');
+      await view('pick');
+      data.connectWaking = 99;
+      await dialog.locator('[data-plan-kind=claude_token]').click();
+      await dialog.locator('[data-plan-wait=computer]').waitFor();
+      await view('starting');
+      await dialog.locator('[data-plan-cancel]').click();
+      await dialog.waitFor({state: 'detached'});
+      data.connectWaking = 0;
+      await page.locator('#subs-add').click();
+      await dialog.locator('[data-plan-kind=claude_token]').click();
+      await onStep(page, 'signin');
+      await above('[data-plan-entry] button[type=submit]', 'Claude');
+      await view('claude');
+      await tapOpen(dialog);
+      await view('claude-opened');
+      Object.assign(data.login!, {state: 'failed', url: '', message: 'Claude did not take that code.'});
+      await onStep(page, 'failed');
+      await above('[data-plan-retry]', 'failed');
+      await view('failed');
+      await dialog.locator('[data-plan-paste]').click();
+      await onStep(page, 'paste');
+      await above('button[type=submit]', 'paste');
+      await view('paste');
+      await dialog.locator('[data-plan-close]').click();
+      await dialog.waitFor({state: 'detached'});
+      await page.locator('#subs-add').click();
+      await dialog.locator('[data-plan-kind=codex_login]').click();
+      await onStep(page, 'signin');
+      await above('[data-plan-open]', 'ChatGPT');
+      await view('chatgpt');
+      await tapOpen(dialog);
+      await view('chatgpt-opened');
+      await dialog.locator('[data-plan-cancel]').click();
+      await dialog.waitFor({state: 'detached'});
+      data.connectRefused = 'No computer is online to run the sign-in';
+      await page.locator('#subs-add').click();
+      await dialog.locator('[data-plan-kind=codex_login]').click();
+      await onStep(page, 'none');
+      await view('no-computer');
+      await dialog.locator('[data-plan-paste]').click();
+      await onStep(page, 'paste');
+      await view('paste-chatgpt');
+      await dialog.locator('[data-plan-back]').click();
+      await onStep(page, 'pick');
+      await dialog.locator('[data-plan-close]').click();
+      await dialog.waitFor({state: 'detached'});
+      data.connectRefused = '';
+      await page.locator('#subs-add').click();
+      await dialog.locator('[data-plan-kind=anthropic_key]').click();
+      await onStep(page, 'key');
+      await view('key');
+      await dialog.locator('[data-plan-back]').click();
+      await dialog.locator('[data-plan-kind=codex_login]').click();
+      await onStep(page, 'signin');
+      Object.assign(data.login!, {state: 'done', url: '', code: ''});
+      await onStep(page, 'done');
+      await view('done');
+      await dialog.waitFor({state: 'detached'});
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+  }
+  console.log('sheet states fit: ok');
+}
+
 async function screens(browser: Browser) {
   for (const theme of ['dark', 'light']) {
     for (const [kind, viewport] of [['desktop', {width: 1280, height: 860}], ['phone', {width: 390, height: 844}]] as [string, {width: number; height: number}][]) {
@@ -719,6 +915,6 @@ async function screens(browser: Browser) {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await navigation(browser); await modelsTab(browser); await addSubscription(browser); await connectPlan(browser); await rowMenu(browser);
-    await computersTable(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await screens(browser);
+    await computersTable(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await screens(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

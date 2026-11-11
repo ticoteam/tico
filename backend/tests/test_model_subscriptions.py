@@ -59,7 +59,6 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
         ).fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE detail LIKE ?", (f"%{TOKEN}%",)).fetchone()
     add(api, token="cara-test", expected=403)  # a member saves nothing
-    add(api, name="  ", expected=422)
     add(api, "claude_token", "not-a-token", expected=422)
     add(api, "codex_login", "{}", expected=422)
     api.app.state.store.settings.test_identities["assistant"] = Identity(
