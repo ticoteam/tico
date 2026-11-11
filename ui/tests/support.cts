@@ -624,10 +624,14 @@ declare function talkToUs(report: unknown): void;
     const ask = v.page.locator('#feedback-ask');
     await ask.waitFor();
     // An open modal has the screen to itself: the question is gone while it is open and back once it closes.
-    await v.page.evaluate(() => { const d = document.createElement('dialog'); d.id = 'any-modal'; document.body.appendChild(d); d.showModal(); });
-    await ask.waitFor({state: 'hidden'});
-    await v.page.evaluate(() => document.getElementById('any-modal')!.remove());
-    await ask.waitFor();
+    // The three a person is mid-step in on day one are all dialogs opened with showModal(): the model sign-in
+    // (ui/model-login.ts), a tmodal sheet (the plan sheet) and the setup modal (ui/app/welcome.ts).
+    for (const shell of ['', 'tmodal tmodal-shell plan-sheet', 'tmodal tmodal-shell onb-dlg']) {
+      await v.page.evaluate(cls => { const d = document.createElement('dialog'); d.id = 'any-modal'; d.className = cls; document.body.appendChild(d); d.showModal(); }, shell);
+      await ask.waitFor({state: 'hidden'});
+      await v.page.evaluate(() => document.getElementById('any-modal')!.remove());
+      await ask.waitFor();
+    }
     await ask.locator('[name=answer]').fill('Faster than I expected');
     await ask.locator('[type=submit]').click();
     await ask.waitFor({state: 'hidden'});
