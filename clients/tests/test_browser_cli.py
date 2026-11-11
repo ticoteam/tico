@@ -174,38 +174,18 @@ def test_an_upload_that_is_too_big_or_not_the_bots_to_send_is_refused_before_any
 
 
 @pytest.mark.parametrize(
-    "refusal, printed",
-    [
-        (
-            APIError("busy", "held", 409, extra={"by": {"name": "Builder"}}),
-            "Builder is using this account; try again in a minute.",
-        ),
-        (APIError("busy", "held", 409), "Another teammate is using this account; try again in a minute."),
-        (
-            APIError("person_in_control", "x", 409, extra={"by": "Ana"}),
-            "Ana has taken control of this browser; try again after they give it back.",
-        ),
-        (
-            APIError("browser_host_offline", "Mac mini is offline", 409, extra={"computer": "Mac mini"}),
-            "Mac mini is offline; try again later, or ask a person to see to it.",
-        ),
-        (APIError("stale_ref", "x", 409), f"That element is gone; read the page again (tico browser read {SITE})."),
-        (
-            APIError("not_on_site", "x", 409),
-            f"That page is not on this website tool's sites; open one of its own pages (tico browser open {SITE}).",
-        ),
-        (APIError("something_new", "The server's own words.", 409), "The server's own words."),
-    ],
+    "code", ["busy", "person_in_control", "browser_host_offline", "stale_ref", "not_on_site", "something_new"]
 )
-def test_a_refusal_prints_one_plain_sentence_and_what_to_do_next(api, capsys, refusal, printed):
-    api.answer = refusal
-    assert run(["browser", "click", SITE, "e1"], capsys) == (2, printed)
+def test_a_refusal_keeps_the_servers_detail_verbatim(api, capsys, code):
+    detail = "The server supplies this refusal; follow its next action."
+    api.answer = APIError(code, detail, 409, extra={"by": {"name": "Builder"}})
+    assert run(["browser", "click", SITE, "e1"], capsys) == (2, detail)
 
 
-def test_a_timeout_says_to_read_the_page_and_exits_as_retryable(api, capsys):
-    api.answer = APIError("browser_timeout", "x", 504, retryable=True)
-    code, out = run(["login", "fill", SITE, "password"], capsys)
-    assert code == 1 and out.startswith("The browser did not answer in time")
+def test_a_timeout_keeps_the_servers_detail_and_exits_as_retryable(api, capsys):
+    detail = "The browser did not answer; read the page and try again."
+    api.answer = APIError("browser_timeout", detail, 504, retryable=True)
+    assert run(["login", "fill", SITE, "password"], capsys) == (1, detail)
 
 
 def test_json_keeps_the_refusal_as_json(api, capsys):

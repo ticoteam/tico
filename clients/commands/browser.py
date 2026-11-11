@@ -22,48 +22,10 @@ REF = _s("An element's ref from `tico browser read`, such as e12")
 MAX_UPLOAD = 10 * 1024 * 1024  # the route's cap on an upload, before base64
 SCROLL = 600  # pixels, about two-thirds of the browser's 900 px window
 
-# What a refusal means for a bot, in a sentence, then what it does next. `{name}` comes from the refusal's `by` (who
-# holds the account), `{said}` is the server's own words (which computer is offline, or has no Chrome); the fallbacks
-# say the same without them.
-SAYS = {
-    "busy": "{name} is using this account; try again in a minute.",
-    "person_in_control": "{name} has taken control of this browser; try again after they give it back.",
-    "browser_host_offline": "{said}; try again later, or ask a person to see to it.",
-    "no_browser": "No computer can open this site right now; ask a person to pick a browser host in Settings.",
-    "not_on_site": "That page is not on this website tool's sites; open one of its own pages "
-    "(tico browser open {site}).",
-    "not_a_password_field": "That field is not a password box; read the page again and pick the password box.",
-    "stale_ref": "That element is gone; read the page again (tico browser read {site}).",
-    "browser_timeout": "The browser did not answer in time; read the page to see where it is, then try again.",
-    "no_account": "You have no account on {site}; ask a person to add one for you or share one with you.",
-    "no_such_site": "No website tool matches {site}; check the name, or ask a person to add the site in Tools.",
-    "slow_down": "This account has had too many sign-in fills this hour; wait, then try again.",
-    "central_only": "{site} is central only: its sign-in cannot be copied or shown here; use tico login fill.",
-    "no_2fa": "This account has no 2FA key; if the site asks for a code, use tico browser needs-you.",
-    "needs_a_task": "Asking a person needs a task; run it in a task's turn.",
-    "no_download": "The browser has no finished download yet; click the download link, wait a moment, then try again.",
-    "too_large": "That download is over 20 MB; ask a person to get it from the site.",
-}
-
-
-def _name(value, fallback):
-    if isinstance(value, dict):
-        value = value.get("name") or value.get("label")
-    return str(value) if value else fallback
-
 
 def plain(exc, site):
-    """The refusal as one plain sentence and what to do next; any other error keeps the server's own words."""
-    says = SAYS.get(exc.code)
-    if says is None:
-        return exc
-    extra = exc.extra or {}
-    sentence = says.format(
-        name=_name(extra.get("by") or extra.get("holder"), "Another teammate"),
-        said=(exc.detail or "").rstrip(". ") or "The browser host is offline",
-        site=site,
-    )
-    return APIError(exc.code, sentence, exc.status, exc.retryable, exc.operation_id, extra)
+    """Keep the server's refusal unchanged across HTTP, CLI and MCP."""
+    return exc
 
 
 def command(api, args, verb, more=None, writes=False):

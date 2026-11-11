@@ -39,6 +39,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import hubdb
+from . import auth as auth_module
 from .models import Contract
 from .store import Problem
 
@@ -46,6 +47,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
 H: Any = hubdb
+AUTH: Any = auth_module
 
 KEY = "browser-host"  # registry_metadata: the company's browser host, a runner id
 CAPABILITY = "browser_v1"
@@ -91,7 +93,6 @@ Verb = Literal[
 LOGGED = ("open", "fill", "copy", "code", "download", "upload")
 FIELDS = ("username", "password", "code")
 REF = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
-ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
 REQUEST_ERRORS = ("not_on_site", "not_a_password_field")
 
 
@@ -184,6 +185,8 @@ class Command:
     value: str | None
     reply: "asyncio.Future[Outcome]"
     by: Who | None = None
+    identity: Any = None
+    cleanup: bool = False
     file: tuple[str, bytes] | None = None
     delivered: bool = False
     at: float = field(default_factory=time.monotonic)
@@ -229,6 +232,8 @@ class SessionFacts:
     by: Who | None = None
     url: str = ""
     title: str = ""
+    sites: list[str] = field(default_factory=list)
+    tool_id: str = ""
 
 
 @dataclass
@@ -250,6 +255,14 @@ class Mailbox:
         self.reset()
 
     def reset(self) -> None:
+        pending = list(getattr(self, "inflight", {}).values())
+        pending += [cmd for queue in getattr(self, "queues", {}).values() for cmd in queue]
+        for cmd in pending:
+            self.soon(
+                lambda cmd=cmd: self.settle(
+                    cmd, Problem("browser_host_offline", "The browser server restarted; open the website again.", 409)
+                )
+            )
         self.loop: asyncio.AbstractEventLoop | None = None
         self.queues: dict[str, list[Command]] = {}
         self.inflight: dict[str, Command] = {}
@@ -327,18 +340,21 @@ class Mailbox:
                 if held.person and not person:
                     raise Problem(
                         "person_in_control",
-                        f"{held.who['name']} has control of this browser; wait until they give it back",
+                        f"{held.who['name']} has control of this browser; wait until they give it back.",
                         409,
                         extra={"by": held.who},
                     )
                 if held.actor != actor and held.person:
                     raise Problem(
-                        "busy", f"{held.who['name']} has control of this browser now", 409, extra={"by": held.who}
+                        "busy",
+                        f"{held.who['name']} has control of this browser; wait until they give it back.",
+                        409,
+                        extra={"by": held.who},
                     )
                 if held.actor != actor and not person:
                     raise Problem(
                         "busy",
-                        f"{held.who['name']} is using this account; try again in a minute",
+                        f"{held.who['name']} is using this account; try again in a minute.",
                         409,
                         extra={"by": held.who},
                     )
@@ -366,7 +382,13 @@ class Mailbox:
         with self.lock:
             queue = self.queues.setdefault(cmd.runner_id, [])
             if len(queue) >= QUEUE_MAX:
-                raise Problem("slow_down", "That computer has too many browser commands waiting; try again soon", 429)
+                refused = Problem(
+                    "slow_down", "That computer has too many browser commands waiting; try again soon.", 429
+                )
+                if not cmd.cleanup:
+                    raise refused
+                # Revocation cleanup takes a bounded slot even when ordinary commands fill the mailbox.
+                self.settle(queue[-1], refused)
             queue.append(cmd)
         self.waker(cmd.runner_id).set()
 
@@ -411,7 +433,74 @@ class Mailbox:
                         facts.where = facts.runner_id = facts.computer = None
                         self.frames.pop(account_id, None)
             for cmd in cmds:
-                self.settle(cmd, Problem("browser_host_offline", "That computer was removed", 409))
+                self.settle(
+                    cmd,
+                    Problem(
+                        "browser_host_offline",
+                        "That computer was removed; open the website again on an available computer.",
+                        409,
+                    ),
+                )
+
+        self.soon(run)
+
+    def close_account(self, account_id: str, refused: Problem | None = None) -> None:
+        """Forget an invalidated account and close its browsers without sending another login value."""
+
+        def run() -> None:
+            with self.lock:
+                pending = [cmd for cmd in self.inflight.values() if cmd.account_id == account_id]
+                pending += [cmd for queue in self.queues.values() for cmd in queue if cmd.account_id == account_id]
+                facts = self.sessions.pop(account_id, None)
+                self.holds.pop(account_id, None)
+                self.frames.pop(account_id, None)
+                spots = {cmd.runner_id: (cmd.label, cmd.central, cmd.tool_id, cmd.sites) for cmd in pending}
+                if facts is not None and facts.runner_id:
+                    spots[facts.runner_id] = (
+                        facts.computer or facts.runner_id,
+                        facts.where == "central",
+                        facts.tool_id,
+                        facts.sites,
+                    )
+            for cmd in pending:
+                self.settle(
+                    cmd,
+                    refused
+                    or Problem(
+                        "no_account", "This account changed; open the website again or ask an admin for access.", 403
+                    ),
+                )
+            loop = self.loop
+            if loop is None or loop.is_closed():
+                return
+            for rid, (label, central, tool_id, sites) in spots.items():
+                close = Command(
+                    uuid.uuid4().hex,
+                    rid,
+                    label,
+                    central,
+                    "",
+                    account_id,
+                    tool_id,
+                    "close",
+                    {},
+                    sites,
+                    None,
+                    loop.create_future(),
+                    cleanup=True,
+                )
+                # Cleanup never carries a secret and never restores session facts or a hold.
+                self.enqueue(close)
+                loop.call_later(
+                    REPLY_WAIT,
+                    self.settle,
+                    close,
+                    Problem(
+                        "browser_timeout",
+                        "The browser did not close in time; ask a person to reconnect the computer.",
+                        504,
+                    ),
+                )
 
         self.soon(run)
 
@@ -420,6 +509,7 @@ class Mailbox:
         """What a report says about the session (and, from the browser host, its newest picture)."""
         with self.lock:
             facts = self.sessions.setdefault(cmd.account_id, SessionFacts())
+            facts.tool_id, facts.sites = cmd.tool_id, cmd.sites
             facts.where = "central" if cmd.central else "own"
             facts.runner_id, facts.computer = cmd.runner_id, cmd.label
             if cmd.by is not None:
@@ -688,12 +778,13 @@ def check_placement(c: sqlite3.Connection, bot: str, runner_id: str) -> None:
     raise Problem(
         "browser_host",
         f"This computer is the browser host, whose signed-in browsers every bot on it could reach, so {slug} cannot "
-        "go there. Pick another computer, or stop using this one as the browser host (Settings > Computers).",
+        "go there; pick another computer, or stop using this one as the browser host (Settings > Computers).",
         409,
     )
 
 
 def set_host(c: sqlite3.Connection, actor: str, runner_id: str, on: bool) -> dict[str, Any]:
+    before = host_id(c)
     if on:
         others = [
             str(r[0])
@@ -705,13 +796,21 @@ def set_host(c: sqlite3.Connection, actor: str, runner_id: str, on: bool) -> dic
             if r[0] != TOOLS_MANAGER
         ]
         if others:
-            raise Problem("browser_host", "Move these bots to another computer first: " + ", ".join(others), 409)
+            raise Problem("browser_host", "Move these bots to another computer first: " + ", ".join(others) + ".", 409)
         c.execute(
             "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (KEY, runner_id),
         )
     else:
         c.execute("DELETE FROM registry_metadata WHERE key=? AND value=?", (KEY, runner_id))
+    if before != host_id(c):
+        with MAILBOX.lock:
+            accounts = [aid for aid, facts in MAILBOX.sessions.items() if facts.where == "central"]
+        for account_id in accounts:
+            MAILBOX.close_account(
+                account_id,
+                Problem("browser_host_offline", "The browser moved to another computer; open the website again.", 409),
+            )
     H.event(c, actor, "runner.browser_host", runner_id, {"on": on})
     return {"on": on}
 
@@ -719,6 +818,10 @@ def set_host(c: sqlite3.Connection, actor: str, runner_id: str, on: bool) -> dic
 def disconnect(runner_id: str) -> None:
     """A removed computer's commands, sessions and frames go (backend/computers.py disconnect)."""
     MAILBOX.disconnect(runner_id)
+
+
+def close_account(account_id: str) -> None:
+    MAILBOX.close_account(account_id)
 
 
 # ----------------------------------------------------------------------------------------------------- placement
@@ -733,12 +836,17 @@ def _offline(row: dict[str, Any] | None) -> Problem:
     if row is None:
         return Problem(
             "browser_host_offline",
-            "No computer is the browser host: an admin picks one in Settings > Computers",
+            "No computer is the browser host; ask an admin to pick one in Settings > Computers.",
             409,
         )
     label = str(row["label"] or row["id"])
     why = f"Chrome is missing on {label}" if _online(row) else f"{label} is offline"
-    return Problem("browser_host_offline", why, 409, extra={"computer": label})
+    return Problem(
+        "browser_host_offline",
+        why + "; ask an admin to check it in Settings > Computers.",
+        409,
+        extra={"computer": label},
+    )
 
 
 def central(c: sqlite3.Connection) -> Place:
@@ -755,9 +863,15 @@ def place(c: sqlite3.Connection, who: Any, picked: Any, verb: str) -> Place:
     own_ok = own is not None and _online(own) and _has_browser(own)
     if verb == "copy":
         if central_only:
-            raise Problem("central_only", "This website's login stays on the browser host: copy is off", 403)
+            raise Problem(
+                "central_only", "This login stays on the browser host; use tico login fill instead of copy.", 403
+            )
         if not own_ok or own is None:
-            raise Problem("no_browser", "This computer cannot run Chrome, so nothing can be copied here", 409)
+            raise Problem(
+                "no_browser",
+                "This computer cannot run Chrome; ask a person to install Chrome here before copying a login.",
+                409,
+            )
         return Place(str(own["id"]), str(own["label"] or own["id"]), False)
     host = _computer(c, host_id(c))
     if host is not None and _online(host) and _has_browser(host):
@@ -766,7 +880,11 @@ def place(c: sqlite3.Connection, who: Any, picked: Any, verb: str) -> Place:
         raise _offline(host)
     if own_ok and own is not None:
         return Place(str(own["id"]), str(own["label"] or own["id"]), False)
-    raise Problem("no_browser", "No computer can run this browser: pick a browser host in Settings > Computers", 409)
+    raise Problem(
+        "no_browser",
+        "No computer can run this browser; ask an admin to pick a browser host in Settings > Computers.",
+        409,
+    )
 
 
 # ----------------------------------------------------------------------------------------------------- verbs
@@ -775,14 +893,14 @@ def _text(args: dict[str, Any], name: str, limit: int, required: bool = True) ->
     if value is None and not required:
         return None
     if not isinstance(value, str) or not value or len(value) > limit:
-        raise Problem("invalid_request", f"{name} is required (at most {limit} characters)", 422)
+        raise Problem("invalid_request", f"Provide {name} as text with 1 to {limit} characters.", 422)
     return value
 
 
 def _ref(args: dict[str, Any], required: bool = True) -> str | None:
     ref = _text(args, "ref", 40, required)
     if ref is not None and not REF.fullmatch(ref):
-        raise Problem("invalid_request", "ref is an element reference from read, like e12", 422)
+        raise Problem("invalid_request", "Use an element reference from tico browser read, such as e12.", 422)
     return ref
 
 
@@ -791,7 +909,11 @@ def clean_args(verb: str, args: dict[str, Any], sites: list[str], site_matches: 
     if verb == "open":
         url = _text(args, "url", 4000, required=False) or first_url(sites)
         if not url.startswith(("https://", "http://")) or not site_matches(sites, url):
-            raise Problem("not_on_site", "That address is not one of this website's sites", 422)
+            raise Problem(
+                "not_on_site",
+                "That address is outside this website tool's sites; open one of its listed sites from Tools.",
+                422,
+            )
         return {"url": url}
     if verb == "click":
         return {"ref": _ref(args)}
@@ -805,12 +927,12 @@ def clean_args(verb: str, args: dict[str, Any], sites: list[str], site_matches: 
     if verb == "scroll":
         dy = args.get("dy", 600)
         if not isinstance(dy, int) or isinstance(dy, bool) or not -100_000 <= dy <= 100_000:
-            raise Problem("invalid_request", "dy is a whole number of pixels", 422)
+            raise Problem("invalid_request", "Provide dy as a whole number of pixels between -100000 and 100000.", 422)
         return {"dy": dy}
     if verb in ("fill", "copy"):
         what = args.get("field")
         if what not in FIELDS:
-            raise Problem("invalid_request", "field is username, password or code", 422)
+            raise Problem("invalid_request", "Choose username, password or code for field.", 422)
         out = {"field": what}
         if verb == "fill" and (ref := _ref(args, required=False)):
             out["ref"] = ref
@@ -818,7 +940,7 @@ def clean_args(verb: str, args: dict[str, Any], sites: list[str], site_matches: 
     if verb == "upload":
         data = _text(args, "data", MAX_UPLOAD * 4 // 3 + 4)
         if data is None or _b64(data) is None:
-            raise Problem("invalid_request", "data is the file's bytes in base64", 422)
+            raise Problem("invalid_request", "Send the file's bytes as base64 in data.", 422)
         return {"ref": _ref(args), "name": _text(args, "name", 255), "data": data}
     return {}
 
@@ -835,28 +957,66 @@ async def wait_reply(request: Request, cmd: Command, within: float) -> BrowserRe
             left = deadline - time.monotonic()
             if left <= 0:
                 raise Problem(
-                    "browser_timeout", f"{cmd.label} did not answer within {int(within)} seconds; try again", 504
+                    "browser_timeout",
+                    f"{cmd.label} did not answer within {int(within)} seconds; read the page to check its state before trying again.",
+                    504,
                 )
             try:
                 outcome = await asyncio.wait_for(asyncio.shield(cmd.reply), min(left, GONE_CHECK))
                 break
             except TimeoutError:
+                check = getattr(request.app.state, "browser_check", None) if hasattr(request, "app") else None
+                if check is not None:
+                    refused = await asyncio.to_thread(check, cmd)
+                    if refused is not None:
+                        MAILBOX.close_account(cmd.account_id, refused)
+                        raise refused from None
                 if await request.is_disconnected():
-                    raise Problem("gone", "The caller went away before the browser answered", 499) from None
+                    raise Problem(
+                        "gone",
+                        "The caller disconnected before the browser answered; reconnect and open the website again.",
+                        499,
+                    ) from None
     finally:
         _idle(request, began)
         if not cmd.reply.done():
-            MAILBOX.settle(cmd, Problem("browser_timeout", "The browser did not answer in time", 504))
+            MAILBOX.settle(
+                cmd,
+                Problem(
+                    "browser_timeout",
+                    "The browser did not answer in time; read the page to check its state before trying again.",
+                    504,
+                ),
+            )
     if isinstance(outcome, Problem):
         raise outcome
     if not outcome.ok:
-        code = outcome.error if outcome.error and ERROR_CODE.fullmatch(outcome.error) else "browser_error"
-        detail = MAILBOX.scrub(cmd.account_id, _scrub(outcome.text, cmd.value)) or {
-            "stale_ref": "That element is gone: read the page again",
-            "not_on_site": "This page is not one of the website's sites, so nothing was filled",
-            "not_a_password_field": "That is not a password field, so nothing was filled",
-        }.get(code, "The browser could not do that")
-        raise Problem(code, detail[:500], 422 if code in REQUEST_ERRORS else 409)
+        # The computer supplies a code, never the refusal sentence: page text and login values cannot become errors.
+        details = {
+            "stale_ref": "That element is gone; run tico browser read and use a current reference.",
+            "not_on_site": "This page is outside the website tool's sites; open a listed site before filling a login.",
+            "not_a_password_field": "That field is not a password box; run tico browser read and choose the password box.",
+            "no_field": "No matching sign-in field was found; run tico browser read and choose a field reference.",
+            "focus_changed": "The page moved focus before filling; run tico browser read and choose the field again.",
+            "no_value": "No login value was supplied; ask a person to replace this account's login in Tools.",
+            "no_history": "This tab has no previous page; open the page you want with tico browser open.",
+            "no_download": "This browser has no finished download; start the download on the page, wait for it to finish and try again.",
+            "too_large": "This file exceeds the size limit; ask a person to transfer it directly on the website.",
+            "upload_failed": "The browser could not attach that file; read the page, choose the file field and try again.",
+            "no_clipboard": "This computer has no available clipboard; use tico login fill instead of copy.",
+            "no_chrome": "Chrome is unavailable on this computer; ask a person to install Chrome or pick another browser host.",
+            "navigation_failed": "The browser could not open that page; check the address and try tico browser open again.",
+            "browser_timeout": "The browser did not finish in time; read the page to check its state before trying again.",
+            "browser_failed": "The browser could not start; ask a person to check Chrome on this computer and try again.",
+            "page_error": "The browser could not read this page; reopen the website and try again.",
+            "bad_request": "The computer could not understand that command; check the browser command's arguments and try again.",
+            "screenshot_failed": "The browser could not capture this page; read or reopen the page and try again.",
+        }
+        code = str(outcome.error) if outcome.error in details else "browser_error"
+        detail = details.get(
+            code, "The browser could not do that; run tico browser read to check the page before trying again."
+        )
+        raise Problem(code, detail, 422 if code in REQUEST_ERRORS else 409)
     return outcome
 
 
@@ -869,13 +1029,14 @@ def _new(
     value: str | None = None,
     attempt_id: str = "",
     by: Who | None = None,
+    identity: Any = None,
 ) -> Command:
     return Command(
         id=uuid.uuid4().hex,
         runner_id=spot.runner_id,
         label=spot.label,
         central=spot.central,
-        attempt_id="" if spot.central else attempt_id,
+        attempt_id=attempt_id,
         account_id=str(picked["account_id"]),
         tool_id=str(picked["tool_id"]),
         verb=verb,
@@ -884,6 +1045,7 @@ def _new(
         value=value,
         reply=loop.create_future(),
         by=by,
+        identity=identity,
     )
 
 
@@ -905,12 +1067,20 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
     def driver(who: Any) -> None:
         """A run's own call: a bot's turn, or the Assistant's turn acting for its person. Never a person's agent token,
         an external agent's credential or a computer."""
-        if who.role == "runner" or not who.attempt_id or not who.runner_id or who.agent:
-            raise Problem("forbidden", "Only a bot's turn drives a website tool's browser", 403)
+        if (
+            who.role not in ("bot", "owner", "human")
+            or not who.attempt_id
+            or not who.runner_id
+            or who.agent
+            or (who.via and who.via != "assistant")
+        ):
+            raise Problem(
+                "forbidden", "Run browser commands from a bot's live turn, or open the browser yourself in Tico.", 403
+            )
 
     def person(who: Any) -> None:
         if who.role not in ("owner", "human") or who.via or who.via_token or who.attempt_id:
-            raise Problem("forbidden", "Open the browser in Tico yourself, signed in", 403)
+            raise Problem("forbidden", "Open the browser yourself while signed in to Tico.", 403)
 
     def log(picked: Any, who: Any, verb: str, page: str, where: str, result: str = "use") -> None:
         with write() as c:
@@ -942,7 +1112,9 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             answer
             if keep
             else Problem(
-                "already_ran", "That command already ran: send it again with a new Idempotency-Key to repeat it", 409
+                "already_ran",
+                "That command already ran; send a new command with a new Idempotency-Key to repeat it.",
+                409,
             )
         )
         return answer
@@ -954,6 +1126,14 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         who = request.state.identity
         driver(who)
         loop = mailbox.bind()
+
+        def allowed() -> None:
+            with read() as c:
+                AUTH.validate_identity(c, who)
+                _wt().pick(c, who, body.site)
+
+        # A retry receipt never overrides a grant revoked since the original command.
+        await asyncio.to_thread(allowed)
         return await once(
             request, who.actor, lambda: run_command(request, who, body, loop), keep=body.verb not in UNKEPT
         )
@@ -963,11 +1143,16 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
 
         def prepare() -> tuple[Any, Command | None, dict[str, Any] | None]:
             with write() as c:
+                AUTH.validate_identity(c, who)
                 picked = wt.pick(c, who, body.site)
                 verb = body.verb
                 if verb == "code":
                     if picked["central_only"]:
-                        raise Problem("central_only", "This website's codes stay on the browser host", 403)
+                        raise Problem(
+                            "central_only",
+                            "This website's codes stay on the browser host; use tico login fill instead of showing the code.",
+                            403,
+                        )
                     code = str(wt.secret(c, vault(), picked["account_id"], "code"))
                     wt.log(c, picked, who, "code", page_of(first_url(list(picked["sites"]))), "own")
                     left = int(wt.expires_in(c, vault(), picked["account_id"]))
@@ -984,7 +1169,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 )
                 if value is not None:
                     mailbox.remember(str(picked["account_id"]), str(args["field"]), value)
-                return picked, _new(loop, spot, picked, verb, args, value, who.attempt_id, by), None
+                return picked, _new(loop, spot, picked, verb, args, value, who.attempt_id, by, who), None
 
         picked, cmd, answered = await asyncio.to_thread(prepare)
         if answered is not None:
@@ -1006,6 +1191,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 mailbox.release(cmd.account_id, who.actor)
         # Scrubbed again here as well as on arrival: a value sent after the report came in is still kept out.
         report = mailbox.scrub_report(cmd.account_id, report)
+        await still_allowed(cmd)
         mailbox.note(cmd, report)
         mailbox.clear_needs_you(cmd.account_id)  # the bot is past what it needed a person for
         if cmd.verb in LOGGED:
@@ -1020,7 +1206,11 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             out["image"] = report.image
         if cmd.verb == "download":
             if cmd.file is None:
-                raise Problem("no_download", "No finished download in this browser yet", 409)
+                raise Problem(
+                    "no_download",
+                    "This browser has no finished download; start the download on the page, wait for it to finish and try again.",
+                    409,
+                )
             name = mailbox.scrub(cmd.account_id, cmd.file[0]) or "download"
             out["file"] = {"name": name, "data": base64.b64encode(cmd.file[1]).decode()}
         if report.url is not None:
@@ -1035,7 +1225,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         browser: an answer ask with Done that shows the live view (`browser:<tool>/<account>`)."""
         who = request.state.identity
         if who.role != "bot" or not who.attempt_id or who.agent:
-            raise Problem("forbidden", "Only a bot's turn on a task asks a person to step in", 403)
+            raise Problem("forbidden", "Ask for browser help from a bot's live turn on a task.", 403)
         wt = _wt()
 
         def work(c: sqlite3.Connection) -> dict[str, Any]:
@@ -1044,7 +1234,11 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             picked = wt.pick(c, who, body.site)
             task = _turn_task(c, who, body.task)
             if task is None:
-                raise Problem("needs_a_task", "Ask for help on a task: file one, then ask there", 409)
+                raise Problem(
+                    "needs_a_task",
+                    "Asking a person needs a task; create a task and ask for browser help from its turn.",
+                    409,
+                )
             holder = str(picked.get("holder") or "")
             person = (
                 holder
@@ -1052,7 +1246,11 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 else cast(Any, reconnects).person_for(c, store.settings, H.actor_id(who.actor), task)
             )
             if not person:
-                raise Problem("no_person", "Nobody who can read this task can take over the browser", 409)
+                raise Problem(
+                    "no_person",
+                    "Nobody who can read this task can take over the browser; ask an admin to assign a person to help.",
+                    409,
+                )
             made = H.task_ask(
                 c,
                 who.actor,
@@ -1095,7 +1293,9 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         Only the browser host's own, and an own session's while its run is live, are handed out."""
         who = request.state.identity
         if who.role != "runner":
-            raise Problem("identity", "A registered runner is required", 403)
+            raise Problem(
+                "identity", "Use this computer's current runner token, or ask a person to reconnect the computer.", 403
+            )
         runner_id = str(who.runner_id)
         mailbox.bind()
         deadline = time.monotonic() + max(0.0, min(wait, POLL_WAIT))
@@ -1104,14 +1304,14 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             waker.clear()
             queued = mailbox.queued(runner_id)
             if queued:
-                allowed = await asyncio.to_thread(may_run, runner_id, queued)
+                refused = await asyncio.to_thread(check_commands, queued)
                 for cmd in queued:
-                    if cmd.id not in allowed:
-                        mailbox.settle(
-                            cmd,
-                            Problem("browser_host_offline", "The browser moved to another computer; try again", 409),
-                        )
-                taken = mailbox.hand_out(runner_id, allowed)
+                    if cmd.id in refused:
+                        if cmd.cleanup:
+                            mailbox.settle(cmd, refused[cmd.id])
+                        else:
+                            mailbox.close_account(cmd.account_id, refused[cmd.id])
+                taken = mailbox.hand_out(runner_id, {cmd.id for cmd in queued if cmd.id not in refused})
                 if taken:
                     return {"commands": [cmd.payload() for cmd in taken]}
             left = deadline - time.monotonic()
@@ -1125,34 +1325,76 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             finally:
                 _idle(request, began)
 
-    def may_run(runner_id: str, cmds: list[Command]) -> set[str]:
-        """The commands this computer may run: the browser host's, and an own session's while its run is live there."""
-        now = H.now()
+    def check_commands(cmds: list[Command]) -> dict[str, Problem]:
+        refused: dict[str, Problem] = {}
         with read() as c:
-            host = host_id(c) == runner_id
-            live = {
-                str(r[0])
-                for r in c.execute(
-                    "SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running') AND lease_until>?",
-                    (runner_id, now),
-                )
-            }
-        return {cmd.id for cmd in cmds if (host if cmd.central else cmd.attempt_id in live)}
+            for cmd in cmds:
+                try:
+                    check(c, cmd)
+                except Problem as problem:
+                    refused[cmd.id] = problem
+        return refused
+
+    def check(c: sqlite3.Connection, cmd: Command) -> None:
+        computer = _computer(c, cmd.runner_id)
+        if computer is None or not _online(computer) or not _has_browser(computer):
+            raise _offline(computer)
+        if cmd.cleanup:
+            return
+        if cmd.central and host_id(c) != cmd.runner_id:
+            raise Problem("browser_host_offline", "The browser moved to another computer; open the website again.", 409)
+        if cmd.identity is not None:
+            AUTH.validate_identity(c, cmd.identity)
+            if cmd.attempt_id:
+                picked = _wt().authorize(c, cmd.identity, cmd.tool_id, cmd.account_id)
+            else:
+                picked = _wt().picked_account(c, cmd.identity, cmd.tool_id, cmd.account_id)
+            if list(picked["sites"]) != cmd.sites or (picked["central_only"] and not cmd.central):
+                raise Problem("no_account", "This website changed; open it again before continuing.", 403)
+        if (
+            not cmd.central
+            and not c.execute(
+                "SELECT 1 FROM attempts WHERE id=? AND runner_id=? AND state IN ('leased','running') AND lease_until>?",
+                (cmd.attempt_id, cmd.runner_id, H.now()),
+            ).fetchone()
+        ):
+            raise Problem("stale_lease", "Execution ownership expired; stop work and reconnect.", 409)
+
+    def check_one(cmd: Command) -> Problem | None:
+        return check_commands([cmd]).get(cmd.id)
+
+    app.state.browser_check = check_one
+
+    async def still_allowed(cmd: Command) -> None:
+        refused = await asyncio.to_thread(check_one, cmd)
+        if refused is not None:
+            if cmd.cleanup:
+                mailbox.settle(cmd, refused)
+            else:
+                mailbox.close_account(cmd.account_id, refused)
+            raise refused
 
     def delivered(request: Request, cid: str) -> Command:
         who = request.state.identity
         if who.role != "runner":
-            raise Problem("identity", "A registered runner is required", 403)
+            raise Problem(
+                "identity", "Use this computer's current runner token, or ask a person to reconnect the computer.", 403
+            )
         with mailbox.lock:
             cmd = mailbox.inflight.get(cid)
         if cmd is None or cmd.runner_id != who.runner_id:
-            raise Problem("not_found", "No such browser command waits for this computer", 404)
+            raise Problem(
+                "not_found",
+                "This browser command no longer waits for this computer; collect a new command instead of reporting it again.",
+                404,
+            )
         return cmd
 
     @app.post("/api/v2/runner-browser-commands/{cid}/report")
     async def runner_browser_report(request: Request, cid: str, body: BrowserReport) -> Any:
         """A computer's answer to one command it collected."""
         cmd = delivered(request, cid)
+        await still_allowed(cmd)
         if body.image is not None and (_b64(body.image) or b"")[:2] != b"\xff\xd8":
             body = body.model_copy(update={"image": None, "ok": False, "error": "screenshot_failed"})
         mailbox.settle(cmd, mailbox.scrub_report(cmd.account_id, body))
@@ -1162,12 +1404,17 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
     async def runner_browser_file(request: Request, cid: str, name: str = "download") -> Any:
         """A download's bytes, sent before its report (at most MAX_FILE bytes)."""
         cmd = delivered(request, cid)
+        await still_allowed(cmd)
         if cmd.verb != "download":
-            raise Problem("not_found", "That command is not a download", 404)
+            raise Problem(
+                "not_found", "This command is not a download; send file bytes only for a download command.", 404
+            )
         data = bytearray()
         async for chunk in request.stream():
             if len(data) + len(chunk) > MAX_FILE:
-                raise Problem("too_large", "A download over 20 MB is not sent", 413)
+                raise Problem(
+                    "too_large", "This download exceeds 20 MB; ask a person to get it directly from the website.", 413
+                )
             data.extend(chunk)
         clean = re.sub(r"[^\w .()-]+", "_", name).strip()[:200] or "download"
         cmd.file = (clean, bytes(data))
@@ -1197,7 +1444,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         sites = list(picked["sites"])
         url = facts.url if facts.url and _wt().site_matches(sites, facts.url) else first_url(sites)
         by = await asyncio.to_thread(lambda: _with_read(lambda c: who_of(c, who.actor)))
-        cmd = _new(loop, spot, picked, "open", {"url": url}, by=by)
+        cmd = _new(loop, spot, picked, "open", {"url": url}, by=by, identity=who)
         mailbox.enqueue(cmd)
         report = await wait_reply(request, cmd, REPLY_WAIT)
         mailbox.note(cmd, report)
@@ -1234,13 +1481,22 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             frame = mailbox.frames.setdefault(account_id, Frame())
             pending = frame.pending
             if pending is not None and now - pending.at > REPLY_WAIT:
-                mailbox.settle(pending, Problem("browser_timeout", "The browser did not answer in time", 504))
+                mailbox.settle(
+                    pending,
+                    Problem(
+                        "browser_timeout",
+                        "The browser did not answer in time; read the page to check its state before trying again.",
+                        504,
+                    ),
+                )
                 pending = frame.pending = None
             issue = pending is None and now - frame.issued >= FRAME_EVERY
             if issue:
                 # The slot and the command in one step: a watcher who comes in now waits for this picture.
                 frame.issued = now
-                frame.pending = pending = cmd = _new(loop, spot, picked, "screenshot", {})
+                frame.pending = pending = cmd = _new(
+                    loop, spot, picked, "screenshot", {}, identity=request.state.identity
+                )
                 cmd.reply.add_done_callback(lambda fut, c=cmd: _noted(c, fut))
         if issue and pending is not None:
             try:
@@ -1300,26 +1556,28 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         picked = await asyncio.to_thread(viewer, request, tool_id, account_id)
         held = mailbox.holder(account_id)
         if held is None or held.actor != who.actor or not held.person:
-            raise Problem("no_control", "Take control first", 409)
+            raise Problem("no_control", "Take control of the browser in Tico before sending input.", 409)
         held.until = time.monotonic() + PERSON_IDLE
         if body.kind == "click":
             if body.x is None or body.y is None:
-                raise Problem("invalid_request", "A click needs x and y", 422)
+                raise Problem(
+                    "invalid_request", "Provide x and y coordinates from the browser frame for this click.", 422
+                )
             verb, args = "input_click", {"x": body.x, "y": body.y}
         elif body.kind == "type":
             if not body.text:
-                raise Problem("invalid_request", "Typing needs text", 422)
+                raise Problem("invalid_request", "Provide text to type into the browser.", 422)
             verb, args = "input_type", {"text": body.text}
         elif body.kind == "key":
             if not body.key:
-                raise Problem("invalid_request", "A key needs its name", 422)
+                raise Problem("invalid_request", "Provide the name of the key to press.", 422)
             verb, args = "input_key", {"key": body.key}
         else:
             verb, args = "input_scroll", {"dy": body.dy if body.dy is not None else 600}
 
         async def run() -> Any:
             spot = await asyncio.to_thread(on_host, picked)
-            cmd = _new(loop, spot, picked, verb, args, by=held.who)
+            cmd = _new(loop, spot, picked, verb, args, by=held.who, identity=who)
             mailbox.enqueue(cmd)
             report = await wait_reply(request, cmd, REPLY_WAIT)
             mailbox.note(cmd, report)
@@ -1339,9 +1597,13 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
 
         def work(c: sqlite3.Connection) -> dict[str, Any]:
             if who.role not in ("owner", "human") or not auth.bot_admin(who):
-                raise Problem("forbidden", "An admin picks the browser host", 403)
+                raise Problem("forbidden", "Ask an admin to pick the browser host in Settings > Computers.", 403)
             if not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone():
-                raise Problem("not_found", "No such computer", 404)
+                raise Problem(
+                    "not_found",
+                    "This computer is unavailable; choose a registered computer in Settings > Computers.",
+                    404,
+                )
             return set_host(c, who.actor, rid, body.on)
 
         return mutate(request, body, work)

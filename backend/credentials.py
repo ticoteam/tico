@@ -595,7 +595,9 @@ class Vault:
             require_seen(c, who, cid, self.admins)
         old = self.row(c, cid) if cid else None
         if old and old['kind'] == LOGIN:
-            raise Problem('website_account', "This is a website tool's account: change it on that tool", 409)
+            raise Problem(
+                'website_account', "This is a website account; use Replace login on its website tool in Tools.", 409
+            )
         if old and body.expected_revision != old['revision']:
             raise Problem('version_conflict', 'Credential changed; refresh before saving', 409)
         if not old and body.expected_revision is not None:
@@ -726,9 +728,13 @@ class Vault:
         if row['kind'] == LOGIN:
             # A website account goes to a person or a bot, never every computer; an own account to no one else.
             if row['holder']:
-                raise Problem('own_account', 'This account is its holder\'s own and is not shared', 409)
+                raise Problem(
+                    'own_account',
+                    'This account belongs to its holder alone; add a shared account to grant someone else access.',
+                    409,
+                )
             if not subject.startswith(('human:', 'bot:')):
-                raise Problem('subject', 'Choose a registered person or bot', 422)
+                raise Problem('subject', 'Choose a registered person or bot.', 422)
         parent = self.grant_authority(c, who, cid, subject)
         inferred = model_env(row['name'], row['kind'], row['env'])
         if inferred and not row['env']:
@@ -812,16 +818,24 @@ class Vault:
         administrator: never a bot, a run, an agent or personal token, BotOps or the Assistant. Never the 2FA key."""
         cid = row['id']
         if not signed_in_person(who):
-            raise Problem('forbidden', 'Only a signed-in person can see a website password', 403)
+            raise Problem(
+                'forbidden', 'Ask a person with account access to reveal the password while signed in to Tico.', 403
+            )
         require_seen(c, who, cid, self.admins)
         if not (
             row['holder'] == who.actor
             or (not row['holder'] and effective_grant(c, cid, who.actor) is not None)
             or administrator(c, who, self.admins)
         ):
-            raise Problem('forbidden', 'You do not have access to this credential', 403)
+            raise Problem(
+                'forbidden', 'You do not have access to this account; ask a credential administrator to share it.', 403
+            )
         if row['ciphertext'] is None:
-            raise Problem('not_connected', 'This connection has no stored password or key', 409)
+            raise Problem(
+                'not_connected',
+                'This account has no stored password; ask its holder or a credential administrator to replace the login.',
+                409,
+            )
         from . import website_tools
 
         website_tools.spend(cid)  # the same 20 an hour as fill, copy and code (429 slow_down)
@@ -1195,6 +1209,10 @@ def install_credentials(app, store, delegate=None, propose=None):
                 (H.now(), who.actor, gid),
             )
             H.event(c, who.actor, 'credential.revoked', cid, {'grant': gid, 'subject': row['subject']})
+            if vault.row(c, cid)['kind'] == LOGIN:
+                from .website_tools import _close
+
+                _close(cid)
             return {'ok': True}
 
     @app.delete('/api/v2/credentials/{cid}')
@@ -1214,6 +1232,10 @@ def install_credentials(app, store, delegate=None, propose=None):
             grants = c.execute('DELETE FROM credential_grants WHERE credential_id=?', (cid,)).rowcount
             c.execute('DELETE FROM credentials WHERE id=?', (cid,))
             api_tools.key_gone(c, who, row, grants)  # credential.deleted keeps its last name, and its tool's event
+            if row['kind'] == LOGIN:
+                from .website_tools import _close
+
+                _close(cid)
             return {'deleted': True, 'id': cid}
 
     @app.post('/api/v2/credentials/{cid}/reveal')

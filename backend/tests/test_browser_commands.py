@@ -54,6 +54,10 @@ class Tools(types.ModuleType):
             raise Problem("not_found", "No such account on this tool", 404)
         return self._picked()
 
+    def authorize(self, conn, who, tool_id, account_id):
+        assert (tool_id, account_id) == ("tool1", "acct1")
+        return self._picked()
+
     def secret(self, conn, vault, account_id, field):
         return {"username": "robot", "password": PASSWORD, "code": CODE}[field]
 

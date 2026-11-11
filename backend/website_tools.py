@@ -140,18 +140,18 @@ def clean_sites(values: Iterable[object] | None) -> list[str]:
             continue
         found = _split(text)
         if found is None or found[0] not in ("", "http", "https"):
-            raise Problem("sites", "A site is a hostname like acme.example", 422)
+            raise Problem("sites", "Enter a full hostname, such as acme.example.", 422)
         scheme, host, port = found
         if not _is_ip(host) and "." not in host:
-            raise Problem("sites", "A site is a full hostname like acme.example, not one word", 422)
+            raise Problem("sites", "Enter a full hostname, such as acme.example, rather than one word.", 422)
         entry = (f"[{host}]" if ":" in host else host) + (f":{port}" if port is not None else "")
         entry = HTTP + entry if scheme == "http" else entry
         if entry not in out:
             out.append(entry)
     if not out:
-        raise Problem("sites", "Add the site's address, like acme.example", 422)
+        raise Problem("sites", "Add the site's full address, such as acme.example.", 422)
     if len(out) > MAX_SITES:
-        raise Problem("sites", f"A website tool lists at most {MAX_SITES} sites", 422)
+        raise Problem("sites", f"Keep at most {MAX_SITES} sites on this website tool.", 422)
     return out
 
 
@@ -222,6 +222,11 @@ def _admin(c: Any, who: Any, admins: Iterable[str] | None = None) -> bool:
     return bool(vaults.administrator(c, who, _admins(admins))) and not getattr(who, "support", None)
 
 
+def _require_admin(c: Any, who: Any, admins: Iterable[str]) -> None:
+    if not _admin(c, who, admins):
+        raise Problem("forbidden", "Ask a credential administrator to make this change in Tools.", 403)
+
+
 def _person(who: Any) -> bool:
     return getattr(who, "role", "") in ("owner", "human") and not getattr(who, "support", None)
 
@@ -229,13 +234,22 @@ def _person(who: Any) -> bool:
 def _tool(c: Any, tool_id: str) -> Any:
     row = c.execute("SELECT * FROM tools WHERE id=? AND kind=?", (str(tool_id or ""), KIND)).fetchone()
     if row is None:
-        raise Problem("not_found", "No such tool", 404)
+        raise Problem(
+            "not_found", "This website tool is unavailable; choose one from Tools or ask an admin for access.", 404
+        )
     return row
 
 
 def _readable(c: Any, who: Any, tool_id: str, admins: Iterable[str] | None = None, auth: Any = None) -> Any:
     """The website tool's row, or a 404 when it does not exist or `who` may not see it."""
-    return api_tools._readable(c, who, tool_id, list(_admins(admins)), _auth(auth), kind=KIND)
+    try:
+        return api_tools._readable(c, who, tool_id, list(_admins(admins)), _auth(auth), kind=KIND)
+    except Problem as refused:
+        if refused.code != "not_found":
+            raise
+        raise Problem(
+            "not_found", "This website tool is unavailable; choose one from Tools or ask an admin for access.", 404
+        ) from None
 
 
 def _accounts(c: Any, tool_id: str) -> list[Any]:
@@ -249,7 +263,9 @@ def _account(c: Any, tool_id: str, account_id: str) -> Any:
         "SELECT * FROM credentials WHERE id=? AND tool_id=? AND kind=?", (str(account_id or ""), tool_id, LOGIN)
     ).fetchone()
     if row is None:
-        raise Problem("not_found", "No such account on this tool", 404)
+        raise Problem(
+            "not_found", "This account is unavailable; choose an account in Tools or ask an admin for access.", 404
+        )
     return row
 
 
@@ -359,16 +375,35 @@ def pick(conn: Any, who: Any, site: str) -> Picked:
     """
     tools = _candidates(conn, who, site)
     if not tools:
-        raise Problem("no_such_site", "No website tool for that site. Ask an admin to add it in Tools", 404)
+        raise Problem(
+            "no_such_site", "No website tool matches that site; check its name or ask an admin to add it in Tools.", 404
+        )
     for tool in tools:
         account = _choose(conn, who.actor, _accounts(conn, tool["id"]))
         if account is not None:
             return _picked(tool, account)
     raise Problem(
         "no_account",
-        f"You have no account on {tools[0]['name']}. Ask an admin to share one in Tools > {tools[0]['name']}",
+        f"You have no account on {tools[0]['name']}; ask an admin to share one in Tools > {tools[0]['name']}.",
         403,
     )
+
+
+def authorize(conn: Any, who: Any, tool_id: str, account_id: str) -> Picked:
+    """Recheck the exact account a command uses; a changed pick never substitutes another login mid-command."""
+    tool = _readable(conn, who, tool_id)
+    account = _account(conn, tool_id, account_id)
+    if not can_use(conn, who.actor, account):
+        raise Problem(
+            "no_account", "You no longer have access to this account; ask an admin to share it in Tools.", 403
+        )
+    return _picked(tool, account)
+
+
+def _close(account_id: str) -> None:
+    module = _browser()
+    if module is not None:
+        module.close_account(account_id)
 
 
 def picked_account(
@@ -378,7 +413,9 @@ def picked_account(
     manages its holder. One who only manages a bot the account is granted to gets it only while a "needs you" ask for
     this account (`browser:<tool>/<account>`) waits on them. Else 404, as for none."""
     if not _person(who):
-        raise Problem("forbidden", "Only a person can open a website tool's browser", 403)
+        raise Problem(
+            "forbidden", "Open the browser yourself while signed in to Tico, or ask a person to open it.", 403
+        )
     tool = _readable(conn, who, tool_id, admins, auth)
     account = _account(conn, tool_id, account_id)
     if not (
@@ -386,7 +423,9 @@ def picked_account(
         or can_manage(conn, who, account, admins, auth)
         or (_bot_user_managed(conn, who, account, auth) and _asked(conn, who.actor, tool["id"], account["id"]))
     ):
-        raise Problem("not_found", "No such account on this tool", 404)
+        raise Problem(
+            "not_found", "This account is unavailable; choose an account in Tools or ask an admin for access.", 404
+        )
     return _picked(tool, account)
 
 
@@ -412,7 +451,7 @@ def spend(account_id: str, now: float | None = None) -> None:
         if len(times) >= SECRET_RATE:
             raise Problem(
                 "slow_down",
-                f"This account was used {SECRET_RATE} times in the last hour. Wait a while and try again",
+                f"This account reached its limit of {SECRET_RATE} secret reads this hour; wait an hour and try again.",
                 429,
                 retryable=True,
             )
@@ -422,7 +461,9 @@ def spend(account_id: str, now: float | None = None) -> None:
 def _login_row(c: Any, account_id: str) -> Any:
     row = c.execute("SELECT * FROM credentials WHERE id=? AND kind=?", (str(account_id or ""), LOGIN)).fetchone()
     if row is None:
-        raise Problem("not_found", "No such account", 404)
+        raise Problem(
+            "not_found", "This account is unavailable; choose an account in Tools or ask an admin for access.", 404
+        )
     return row
 
 
@@ -430,7 +471,11 @@ def _totp_of(c: Any, vault: Any, row: Any) -> T.Totp:
     stored = cast(dict[str, str], vault.open_login(c, row))["totp"]
     found = T.parse_totp(stored) if stored else None
     if found is None:
-        raise Problem("no_2fa", "This account has no 2FA key. Add one with Replace login", 409)
+        raise Problem(
+            "no_2fa",
+            "This account has no 2FA key; add one with Replace login or ask a person to complete sign-in.",
+            409,
+        )
     return found
 
 
@@ -448,7 +493,7 @@ def secret(conn: Any, vault: Any, account_id: str, field: Literal["username", "p
         found = _totp_of(conn, vault, row)
         spend(row["id"])
         return T.code(found)
-    raise Problem("field", "field is username, password or code", 422)
+    raise Problem("field", "Choose username, password or code for field.", 422)
 
 
 def expires_in(conn: Any, vault: Any, account_id: str) -> int:
@@ -794,12 +839,15 @@ def _totp_checked(value: SecretStr | None) -> str:
     """The 2FA setup key as given, once `totp.parse_totp` reads it ('' for none); a refusal never echoes it."""
     text = _secret_text(value).strip()
     if text:
-        T.parse_totp(text)
+        try:
+            T.parse_totp(text)
+        except Problem:
+            raise Problem("totp", "Enter the site's base32 2FA setup key or its otpauth://totp link.", 422) from None
     return text
 
 
 def create_tool(c: Any, who: Any, body: WebsiteToolCreate, admins: Iterable[str]) -> dict[str, Any]:
-    vaults.require_admin(c, who, list(admins))
+    _require_admin(c, who, admins)
     sites = clean_sites(body.sites)
     name = (body.name or "").strip() or _host_of(sites[0])
     now = H.now()
@@ -819,7 +867,7 @@ def update_tool(
     asked = body.model_dump(exclude_none=True, exclude={"audience"})
     audience_set = "audience" in body.model_fields_set
     if asked or not audience_set or getattr(who, "role", "") != "owner":
-        vaults.require_admin(c, who, list(admins))
+        _require_admin(c, who, admins)
     tool = _readable(c, who, tool_id, admins, auth)
     if audience_set:
         value = body.audience.model_dump() if body.audience is not None else None
@@ -842,6 +890,9 @@ def update_tool(
             k: (json.loads(v) if k == "sites" else bool(v) if k == "central_only" else v) for k, v in fields.items()
         }
         H.event(c, who.actor, "tool.updated", tool["id"], shown)
+        if "sites" in fields or "central_only" in fields:
+            for account in _accounts(c, tool["id"]):
+                _close(str(account["id"]))
     return _tool_view(_tool(c, tool["id"]))
 
 
@@ -852,11 +903,11 @@ def _holder(c: Any, value: str | None) -> str | None:
     if text.startswith("bot:"):
         bot = H.resolve_bot(c, text)
         if not bot:
-            raise Problem("holder", "Choose a registered person or bot", 422)
+            raise Problem("holder", "Choose a registered person or bot.", 422)
         return "bot:" + str(bot["id"])
     if text.startswith("human:") and c.execute("SELECT 1 FROM humans WHERE id=?", (text[6:],)).fetchone():
         return text
-    raise Problem("holder", "Choose a registered person or bot", 422)
+    raise Problem("holder", "Choose a registered person or bot.", 422)
 
 
 def add_account(
@@ -869,7 +920,7 @@ def add_account(
     if not (_admin(c, who, admins) or (holder and _manages(c, who, holder, auth))):
         raise Problem(
             "forbidden",
-            "Only a credential administrator adds a shared account; you can add your own, or one for a bot you manage",
+            "Ask a credential administrator to add a shared account, or add your own account or one for a bot you manage.",
             403,
         )
     if (
@@ -878,10 +929,12 @@ def add_account(
             "SELECT 1 FROM credentials WHERE tool_id=? AND kind=? AND holder=?", (tool["id"], LOGIN, holder)
         ).fetchone()
     ):
-        raise Problem("own_account_exists", "That teammate already has an account here. Replace it instead", 409)
+        raise Problem(
+            "own_account_exists", "That teammate already has an account here; use Replace login instead.", 409
+        )
     password = _secret_text(body.password)
     if not password:
-        raise Problem("password", "Enter the password", 422)
+        raise Problem("password", "Enter the password.", 422)
     totp_text = _totp_checked(body.totp)
     aid, now = H.new_id(), H.now()
     ciphertext, nonce = _seal(c, vault, aid, password, totp_text)
@@ -925,7 +978,7 @@ def update_account(
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
     if not can_manage(c, who, account, admins, auth):
-        raise Problem("forbidden", "Only a credential administrator or the account's holder changes it", 403)
+        raise Problem("forbidden", "Ask a credential administrator or the account's holder to replace this login.", 403)
     totp_set = "totp" in body.model_fields_set
     changed_secret = body.password is not None or totp_set
     username = account["username"] if body.username is None else body.username.strip()
@@ -969,8 +1022,11 @@ def delete_account(c: Any, who: Any, tool_id: str, account_id: str, admins: Iter
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
     if not can_manage(c, who, account, admins, auth):
-        raise Problem("forbidden", "Only a credential administrator or the account's holder removes it", 403)
+        raise Problem(
+            "forbidden", "Ask a credential administrator or the account's holder to remove this account.", 403
+        )
     api_tools._drop_key(c, who, account["id"])
+    _close(str(account["id"]))
     with _spent_lock:
         _spent.pop(str(account["id"]), None)
     return {"deleted": True, "id": account["id"]}
@@ -991,20 +1047,36 @@ def set_access(
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
     if account["holder"]:
-        raise Problem("own_account", "An own account is its holder's alone and is not shared", 409)
+        raise Problem(
+            "own_account",
+            "This account belongs to its holder alone; add a shared account to grant someone else access.",
+            409,
+        )
     subject = str(api_tools.subject_of(c, subject))
     if not subject.startswith(("human:", "bot:")):
-        raise Problem("subject", "Choose a person or a bot", 422)
-    if on:
-        vault.grant(c, who, account["id"], subject)
-    else:
-        grants = c.execute(
-            "SELECT * FROM credential_grants WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
-            (account["id"], subject),
-        ).fetchall()
-        for grant in grants:
-            vault.revoke_authority(c, who, account["id"], grant)
-        api_tools._revoke(c, who, account["id"], subject)
+        raise Problem("subject", "Choose a registered person or bot.", 422)
+    try:
+        if on:
+            vault.grant(c, who, account["id"], subject)
+        else:
+            grants = c.execute(
+                "SELECT * FROM credential_grants WHERE credential_id=? AND subject=? AND revoked_at IS NULL",
+                (account["id"], subject),
+            ).fetchall()
+            for grant in grants:
+                vault.revoke_authority(c, who, account["id"], grant)
+            api_tools._revoke(c, who, account["id"], subject)
+            if grants:
+                _close(str(account["id"]))
+    except Problem as refused:
+        code = str(cast(Any, refused).code)
+        if code == "forbidden":
+            raise Problem(
+                "forbidden", "Ask a credential administrator to change access to this account.", 403
+            ) from None
+        if code == "subject":
+            raise Problem("subject", "Choose a registered person or bot.", 422) from None
+        raise
     return {"subject": subject, "on": vaults.effective_grant(c, account["id"], subject) is not None}
 
 
@@ -1014,11 +1086,11 @@ def current_code(
     """The account's current 2FA code, to a signed-in person who uses it or a credential administrator. Logged as
     `code`, without the code."""
     if not vaults.signed_in_person(who):
-        raise Problem("forbidden", "Only a signed-in person can see a 2FA code", 403)
+        raise Problem("forbidden", "Ask a person who uses this account to open its code while signed in to Tico.", 403)
     tool = _readable(c, who, tool_id, admins, auth)
     account = _account(c, tool["id"], account_id)
     if not (can_use(c, who.actor, account) or _admin(c, who, admins)):
-        raise Problem("forbidden", "You do not use this account", 403)
+        raise Problem("forbidden", "You do not use this account; ask an admin to share it in Tools.", 403)
     found = _totp_of(c, vault, account)
     spend(account["id"])
     code = T.code(found)
@@ -1046,10 +1118,10 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
 
     def person(c: Any, w: Any) -> None:
         if not _person(w):
-            raise Problem("forbidden", "Only a person changes a website tool", 403)
+            raise Problem("forbidden", "Ask a person to change this website tool while signed in to Tico.", 403)
 
     def manager(c: Any, w: Any) -> None:
-        vaults.require_admin(c, w, admins())
+        _require_admin(c, w, admins())
 
     def setter(c: Any, w: Any) -> None:
         if w.role != "owner":
@@ -1080,7 +1152,17 @@ def install(app: "FastAPI", store: Any, auth: Any, settings: Any) -> None:
     @app.delete("/api/v2/website-tools/{tool_id}")
     def delete_website_tool(request: Request, tool_id: str) -> Any:
         """The tool, its accounts and their grants, and its Activity."""
-        return plain(request, lambda c, who: api_tools.delete_tool(c, who, tool_id, admins(), kind=KIND))
+
+        def work(c: Any, who: Any) -> Any:
+            _require_admin(c, who, admins())
+            _readable(c, who, tool_id, admins(), auth)
+            accounts = _accounts(c, tool_id)
+            answer = api_tools.delete_tool(c, who, tool_id, admins(), kind=KIND)
+            for account in accounts:
+                _close(str(account["id"]))
+            return answer
+
+        return plain(request, work)
 
     @app.post("/api/v2/website-tools/{tool_id}/accounts")
     def add_website_account(request: Request, tool_id: str, body: WebsiteAccountCreate) -> Any:

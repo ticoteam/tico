@@ -1317,6 +1317,16 @@ class AppDriverReadiness(Contract):
     ] = Field(default_factory=dict)
 
 
+class BrowserReadiness(Contract):
+    """Google Chrome for website tools on this computer (runner-rs/src/browser/): found, its version, how many open."""
+
+    chrome: StrictBool
+    version: (
+        Annotated[str, BeforeValidator(lambda v: v[:80] if isinstance(v, str) else v), Field(max_length=80)] | None
+    ) = None
+    open: int = Field(default=0, ge=0, le=100)
+
+
 class StructuredReadiness(Contract):
     # Physical home of the computer's one login; present only after the computer_logins_v1 handshake.
     computer_profile: str | None = Field(default=None, max_length=80)
@@ -1345,6 +1355,7 @@ class StructuredReadiness(Contract):
     engine: EngineReadiness | None = None
     screen: ScreenReadiness | None = None
     appdriver: AppDriverReadiness | None = None
+    browser: BrowserReadiness | None = None
     # The runner's last WARN/ERROR-like log lines, for a support bundle a person chooses to send (backend/diagnostics.py).
     # Long lines are cut, never refused: a refused report would hide the computer (0.3.2 runners sent 301 characters).
     recent_errors: list[
@@ -1364,6 +1375,7 @@ class StructuredReadiness(Contract):
             "engine",
             "screen",
             "appdriver",
+            "browser",
         ):
             if data.get(field) is None:
                 data.pop(field, None)
