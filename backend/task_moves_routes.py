@@ -336,6 +336,7 @@ def register(
 
     # ------------------------------------------------------------------ set aside, hand back
     def snooze_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        setup_live.refuse_snooze_once_live(c, task_id)  # a seat's setup task waits for its go-live, not after it
         why, version = carry(c, who, task_id, gate, body.why, body.version)
         until = parse_until(body.until)
         done = H.task_snooze(c, who.actor, task_id, why, until, version, mover=mover(c, who) or None)

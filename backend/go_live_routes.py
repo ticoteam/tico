@@ -51,6 +51,8 @@ def register(
         # go-live event name the ones this turned on, and `routines` says which are on now, so a report of them
         # comes from this fact rather than from the template.
         armed = [routine["name"] for routine in onboarding.arm_routines(c, who, bot)]
+        # BotOps' wait on this bot's setup task ends here, and BotOps is woken to say done.
+        setup_live.go_live_ends_botops_wait(c, bot, who.actor)
         # A seat bot nobody chats with runs the same setup on its own, with no person (backend/setup_live.py).
         own = setup_live.start_setup(c, onboarding, bot)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))

@@ -82,6 +82,46 @@ def require_live(c: sqlite3.Connection, task_id: str) -> str | None:
     )
 
 
+def refuse_snooze_once_live(c: sqlite3.Connection, task_id: str) -> None:
+    """Refuse snoozing a seat bot's setup task once the bot is live: a snooze there waits for a go-live that has already
+    happened, and nothing would end it before its date. BotOps reads a bot before it goes live, so it can ask for this
+    after the bot is already live; the task is then marked done instead."""
+    from . import task_engine as E
+
+    bot, declared = bot_of(c, task_id)
+    if not bot or not declared.get(GOES_LIVE):
+        return
+    row = cast("dict[str, Any] | None", cast("Any", H).bot(c, bot))
+    task = E.task(c, task_id)
+    if not row or row["state"] != "active" or not task or task.get("status") != "open":
+        return
+    name = row.get("display_name") or row["slug"]
+    raise Problem("bot_live", f"{name} is already live, so there is nothing to wait for. Mark this task done.", 409)
+
+
+def go_live_ends_botops_wait(c: sqlite3.Connection, bot: str, by: str) -> None:
+    """A go-live ends the wait BotOps set on the bot's setup task while the bot waited for its repository
+    ("waiting to go live"): the snooze ends as the bot goes live, and BotOps is woken to say done, as a done ends the
+    owner's own snooze (backend/answers.py). Only a snooze BotOps set: a person's snooze is theirs to end."""
+    from . import task_engine as E
+
+    found = c.execute(
+        "SELECT json_extract(extra,'$.setup_task_id') FROM bot_settings WHERE bot_id=?", (bot,)
+    ).fetchone()
+    task_id = str(found[0]) if found and found[0] else ""
+    task = E.task(c, task_id) if task_id else None
+    if not task or task.get("status") != "open" or not task.get("snooze"):
+        return
+    # BotOps acts for the person it works for: the snooze row names that person, the history row names BotOps.
+    last = c.execute(
+        "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='snooze' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    if last and last["via"] == "botops":
+        E.unsnooze(c, task_id, by, "Live")
+
+
 def being_set_up(c: sqlite3.Connection, bot: str) -> bool:
     """Whether a planned bot is on its way live: BotOps has its setup task open, or its go-live waits for its
     repository. Such a bot's tasks wait on its setup, not on a person."""
