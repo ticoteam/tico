@@ -24,6 +24,9 @@ Start from what your team does, not from what a bot could do.
 4. **Connect tools when a bot asks.** Finish setup does not ask which tools you use and no bot is held back for a missing one. When you press
    **Set up** on a bot, it tells you what it needs (a mailbox, tickets, a repository, a CRM) and where to connect it.
 
+If your team came from a company file chosen at signup, there is nothing to pick: your first visit shows the team as it
+is, what the bots run on and **Start**.
+
 There is no limit on how many bots to create, but set them up one at a time, in the order they are listed.
 
 ## Set one up, together

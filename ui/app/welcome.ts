@@ -14,7 +14,6 @@ interface OnbAnswers {
 interface OnbPick { display_name?: string; reports_to?: string; instructions?: unknown }
 /** A computer on the record (backend/onboarding.py `_machine`). */
 interface OnbRunner { id?: string; label?: string | null; online?: boolean }
-/** One team of the default chart (company_import.default_teams): on unless switched off, and its seats. */
 /** One team of the default chart (GET /api/v2/setup `default_chart`): its seats in chart order, each with the seat it
  *  reports to inside the team (null for the team's top seats); `locked`: built-ins only, always on. The chart's teams
  *  and titles are the server's. */
@@ -130,7 +129,9 @@ function onbOpen(state: OnbState) {
     if (ONB !== state) return;
     if (!state.record.completed) { dialog.showModal(); return; }
     onbStop();
-    location.hash = TASKS;
+    // The welcome replaces the tour, so closing it is the tour seen; it opened over whatever page the owner came to.
+    if (onbKey(state) === 'welcome') void gsState({tour: true});
+    else location.hash = TASKS;
     // Finish setup stays while a row of the last step is open; hidden for good, it goes now (a fresh read could land
     // before the dismissal is saved).
     if (GS?.dismissed) renderOnboardingNav(); else void gsRefresh();
@@ -203,11 +204,12 @@ function onbRender(state: OnbState) {
   state.busy = false;                       // a fresh screen is never mid-save
   const key = onbKey(state), dialog = state.dialog, host = $('#onb-step');
   dialog.classList.toggle('onb-wide', key === 'team' && state.mode === 'custom');
-  $('#onb-title').textContent = onbHeading(state);
-  $('#onb-count').textContent = `Step ${state.step + 1} of ${state.steps.length}`;
+  const welcome = key === 'welcome';
+  $('#onb-title').textContent = welcome ? `Welcome to ${onbCompany(state) || appName()}` : onbHeading(state);
+  $('#onb-count').textContent = welcome ? '' : `Step ${state.step + 1} of ${state.steps.length}`;
   $('#onb-close').hidden = !state.record.completed;
   host.dataset.onbStep = key;
-  host.innerHTML = `<h3 class="onb-step-title">${esc(ONB_TITLES[key])}</h3>${onbStepHTML(state, key)}`;
+  host.innerHTML = welcome ? onbWelcomeHTML(state) : `<h3 class="onb-step-title">${esc(ONB_TITLES[key])}</h3>${onbStepHTML(state, key)}`;
   onbWire(state, key);
 }
 // A step's one row of buttons: Back when there is a step to go back to, the one primary, and the status between.
@@ -321,13 +323,16 @@ function onbTeamMode(state: OnbState, mode: OnbState['mode']) {
 // The models choice while none is made, the computer in one line, and the Claude or Codex subscription Getting started
 // recommends (backend/getting_started.py `subscription`) until one is signed in or skipped. Done lands on Tasks.
 function onbRunHTML(state: OnbState): string {
+  const hide = state.reopened ? '<button class="ghost" type="button" id="onb-hide">Don\'t remind me</button>' : '';
+  return `${onbRunLinesHTML(state)}${onbActions(state, 'Done', false, hide)}`;
+}
+function onbRunLinesHTML(state: OnbState): string {
   const sub = state.subscription;
   const subscription = sub && (sub.done || sub.skipped) ? '' : `<div class="onb-line" id="onb-subscription">
       <span class="onb-mark" aria-hidden="true"></span><span class="onb-line-text">
       <a href="#/settings" data-gs-tab="devices">Add a Claude or Codex subscription</a>
       <small class="muted">Recommended. Use your own subscription for your own bots, within the provider's terms.</small></span></div>`;
-  return `<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${subscription}</div>
-    ${onbActions(state, 'Done', false, state.reopened ? '<button class="ghost" type="button" id="onb-hide">Don\'t remind me</button>' : '')}`;
+  return `<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${subscription}</div>`;
 }
 const ONB_CARET = '<span class="nav-icon onb-caret" aria-hidden="true">expand_more</span>';
 function onbComputerHTML(state: OnbState): string {
@@ -423,7 +428,7 @@ function onbRunStarted(state: OnbState) {
     const item = answer?.items?.find(row => row.id === 'subscription') || null;
     if (JSON.stringify(item) === JSON.stringify(state.subscription)) return;
     state.subscription = item;
-    if (onbKey(state) === 'run' && !state.busy) onbRedrawLines(state);
+    if ((onbKey(state) === 'run' || onbKey(state) === 'welcome') && !state.busy) onbRedrawLines(state);
   });
   clearInterval(state.poll ?? undefined);
   state.poll = setInterval(() => { if (!document.hidden) void onbPoll(state); }, 5000);
@@ -467,7 +472,8 @@ function onbWire(state: OnbState, key: string) {
     if (pick && file) pick.onclick = () => file.click();
     if (file) file.onchange = () => void onbReadCompanyFile(state, file.files?.[0]);
   }
-  if (key === 'run') onbWireComputer(state);
+  if (key === 'run' || key === 'welcome') onbWireComputer(state);
+  if (key === 'welcome') next?.focus({preventScroll: true});   // the team reads from the top; Start is a key press away
   const hide = $('#onb-hide');
   // For good: Finish setup leaves the sidebar now and stays away (Getting started's dismissal, per person).
   if (hide) hide.onclick = () => { if (GS) GS = {...GS, dismissed: true}; void gsState({checklist: true}); state.dialog?.close(); };
@@ -634,4 +640,54 @@ async function onbCompleted(state: OnbState, record: Partial<OnbRecord> | null |
 // Done: Tasks. The model plan is a default (Settings > Models), not a step.
 function onbDone(state: OnbState) {
   state.dialog?.close();
+}
+
+// ----------------------------------------------------------------- Welcome (a team from the company file)
+// A company whose team came in from the company file at install (hosted signup) has nothing to set up: the owner's first
+// visit is one screen in the same modal, in place of the tour: the team as it is, what the bots run on, Start.
+async function onbWelcome(): Promise<boolean> {
+  if (S.me?.role !== 'owner' || ONB) return false;
+  const record = await get<Partial<OnbRecord> | null>('/v2/setup').catch(() => null);
+  if (!record?.completed || !record.company_import || ONB || S.route === WELCOME) return false;
+  const state: OnbState = {step: 0, steps: ['welcome'], providers: null, models: [], record: JSON.parse(JSON.stringify(ONB_BLANK)),
+    catalog: catalogState([]), busy: false, completing: false, poll: null, org: obBlank(), mode: 'default',
+    enrollment: '', kind: onbDefaultKind(), strat: ssBlank(), subscription: null, dialog: null};
+  ONB = state;
+  onbAdopt(state, record);
+  onbOpen(state);
+  onbRender(state);
+  onbRunStarted(state);
+  return true;
+}
+function onbWelcomeHTML(state: OnbState): string {
+  const teams = onbLiveTeams();
+  return `${teams.length ? `<h3 class="onb-step-title">${esc(ONB_TITLES.team)}</h3>
+    <div class="onb-teams" role="list" aria-label="Teams">${teams.map(team => `<div class="onb-team" role="listitem" data-onb-team-row="${esc(team.team)}">
+      <span class="onb-team-text"><strong>${esc(team.team)}</strong>${onbTeamRolesHTML(team)}</span>
+      <span class="onb-team-n tnum" aria-hidden="true">${team.roles.length}</span></div>`).join('')}</div>` : ''}
+    <h3 class="onb-step-title">${esc(ONB_TITLES.run)}</h3>${onbRunLinesHTML(state)}${onbActions(state, 'Start', false)}`;
+}
+// The chart as the app has it (S.orgGroups, S.emps, S.seats), team by team in the chart's order: the team's lead first,
+// then who reports to whom; an open seat is muted. The built-ins' own group comes last, under the name the server gives
+// it (setup's team step shows it the same way); a group with no name is not shown, so its id never reaches the screen.
+function onbLiveTeams(): OnbTeam[] {
+  // A line may name a bot by id or by slug (`bot:` or bare; a company file's bots have ids apart from their slugs):
+  // every role is keyed by its id, so a line finds it either way.
+  const ids = new Map((S.emps || []).flatMap(bot => [[bot.id, bot.id], [bot.slug || bot.id, bot.id]] as [string, string][]));
+  const idOf = (ref: string | null | undefined) => { const key = String(ref || '').replace(/^bot:/, ''); return ids.get(key) || key; };
+  const last = (group: {id: string}) => Number(group.id === BUILT_IN_GROUP);
+  const groups = [...(S.orgGroups || [])].filter(group => group.name || group.id !== BUILT_IN_GROUP)
+    .sort((a, b) => last(a) - last(b) || (a.order ?? 1e9) - (b.order ?? 1e9));
+  return groups.map(group => {
+    const bots = (S.emps || []).filter(bot => bot.team === group.id)
+      .map(bot => ({id: bot.id, title: botDisplayName(bot.id), live: true, reports_to: idOf(bot.reports_to) || null}));
+    const seats = (S.seats || []).filter(seat => seat.team === group.id)
+      .map(seat => ({id: 'seat:' + seat.id, title: seat.title, live: false, reports_to: idOf(seat.reports_to) || null}));
+    const all = [...bots, ...seats];
+    // A group with no lead (General: no bot leads it) still reads from its head: the role most of the team reports to.
+    const reports = (id: string) => all.filter(role => role.reports_to === id).length;
+    const lead = idOf(group.lead) || [...all].sort((a, b) => reports(b.id) - reports(a.id))[0]?.id;
+    const roles = all.sort((a, b) => Number(b.id === lead) - Number(a.id === lead));
+    return {team: group.name || group.id, on: true, roles};
+  }).filter(team => team.roles.length);
 }
