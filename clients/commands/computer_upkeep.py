@@ -1,7 +1,7 @@
 """Computer tools: restart a computer's runner, which release each computer runs, this installation's own update, the
 shared Tico Cloud machine and the company's AI subscriptions. Each is a `tico` command and an MCP tool of the same name
 (`tico computer restart` is `tico_computer_restart`), registered into the one table in `clients/hubtools.py`, which
-imports this module at its end, after clients/hubtools_connections.py whose helpers it shares.
+imports this module at its end, after clients/commands/connections.py whose helpers it shares.
 
 A computer is the machine (a Mac, a server, a cloud machine); its runner is the Tico software on it. Every tool composes
 the ordinary routes with the caller's own token (backend/computers_routes.py, backend/cloud_machines.py,
@@ -16,7 +16,7 @@ from clients.tico import APIError
 tool, _s, _key = H.tool, H._s, H._key
 _FIRST = len(H.TOOLS)  # the tools below are H.TOOLS[_FIRST:]
 
-# As in clients/hubtools_connections.py. Nothing is imported from it at load: either module may be imported first.
+# As in clients/commands/connections.py. Nothing is imported from it at load: either module may be imported first.
 ADMINS = H.REQUESTER
 OWNER_ONLY = H.PEOPLE
 
@@ -286,7 +286,7 @@ H.AUDIENCE.update(AUDIENCE)
 # ----------------------------------------------------------------------------- the `tico` commands
 def add_commands(sub):
     """Add `tico computer restart|versions`, `tico upgrade`, `tico cloud` and `tico subscription` to the CLI's parser."""
-    from clients.hubtools_connections import _command, _group
+    from clients.commands.connections import _command, _group
 
     computer = _group(sub, "computer")
     s = _command(

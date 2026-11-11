@@ -1,11 +1,12 @@
-"""The connection tools (clients/hubtools_connections.py) through the table and the `tico` CLI, with a stubbed API: the
+"""The connection tools (clients/commands/connections.py) through the table and the `tico` CLI, with a stubbed API: the
 GitHub App steps, repository grants that keep a bot's other repositories, and whether a company can work now."""
 
 import json
 
 import pytest
 
-from clients import hubcli, hubtools, hubtools_connections, remotecli
+from clients import hubcli, hubtools, remotecli
+from clients.commands import connections as hubtools_connections
 from clients.tico import APIError
 
 APP = {

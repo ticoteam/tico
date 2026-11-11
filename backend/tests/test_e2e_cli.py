@@ -130,7 +130,7 @@ def rotation():
         return 0
 
 
-CLI_CODE = ("clients/hub", "clients/remotecli.py", "e2e/cli/")
+CLI_CODE = ("clients/hub", "clients/remotecli.py", "clients/commands/", "e2e/cli/")
 
 
 def live_sample(used):

@@ -337,12 +337,13 @@ def run(args, who=None):
         else 15,
     )
     fn = args.fn
-    from clients.hubtools_org import COMMANDS as ORG_COMMANDS
+    from clients.commands.org import COMMANDS as ORG_COMMANDS
 
-    if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # clients/hubtools_org.py, clients/hubtools_pipelines.py
+    if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # clients/commands/org.py, clients/commands/pipelines.py
         return via_tool(client, args)
 
-    from clients import hubtools_computers, hubtools_connections
+    from clients.commands import computer_upkeep as hubtools_computers
+    from clients.commands import connections as hubtools_connections
 
     if fn in hubtools_connections.COMMANDS or fn in hubtools_computers.COMMANDS:
         return hubtools_connections.run_command(client, args)
@@ -1870,7 +1871,8 @@ def contacts_text(fn, result):
 def main(args, who=None, fields=None):
     """Run one parsed command and print its answer. `fields`: the global --fields (clients/profiles.py pick), which
     prints only those fields as JSON, in place of any text rendering. Returns the exit code (clients/cli_plumbing.py)."""
-    from clients import cli_plumbing, hubtools, hubtools_connections
+    from clients import cli_plumbing, hubtools
+    from clients.commands import connections as hubtools_connections
 
     try:
         result = run(args, who)

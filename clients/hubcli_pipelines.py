@@ -1,4 +1,4 @@
-"""The `tico` command lines for pipelines, stages, the company's shape and following a task (clients/hubtools_pipelines.py
+"""The `tico` command lines for pipelines, stages, the company's shape and following a task (clients/commands/pipelines.py
 holds the tools). Stdlib only: hubcli.parser() calls `add` on every `tico` start, so nothing heavy is imported here.
 
     tico pipeline list [--retired]          the pipelines, each with its manager and stages

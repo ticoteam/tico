@@ -1,4 +1,4 @@
-"""`tico pipeline|stage|company ...`, `tico task request|approve|send-back` and `tico task wait` (clients/hubtools_pipelines.py,
+"""`tico pipeline|stage|company ...`, `tico task request|approve|send-back` and `tico task wait` (clients/commands/pipelines.py,
 docs/terminal.md): each command line runs the tool of its name, both doors send the same requests, and the waiter prints
 one JSON line per change and exits by what happened. The API is a stub; no server, no network."""
 
@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from clients import hubcli, hubcli_pipelines, hubtools, hubtools_pipelines as P, remotecli
+from clients import hubcli, hubcli_pipelines, hubtools, remotecli
+from clients.commands import pipelines as P
 from clients.tico import APIError
 
 PRODUCT_OWNER, BUILDER = "bot:01a-po", "bot:01a-b"

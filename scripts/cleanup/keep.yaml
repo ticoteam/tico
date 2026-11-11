@@ -46,7 +46,7 @@ names:
   examples/custom-frontend/app.js: [next, bot, state, actor]
 keys:
   backend/strategy_setup.py: [started, finished]
-  clients/hubtools.py: [owner, requester, due, from_actor, at]   # a tool's input takes a name or an id
+  clients/commands/*.py: [owner, requester, due, from_actor, at]   # a tool's input takes a name or an id
   clients/remotecli.py: [owner, due]
   ui/app/org-rules.js: [owner, due, replaced_by]   # a rule's due dates and their form
   ui/app/settings-people.js: [owner]   # a person's owner flag, the access view's owner

@@ -1129,8 +1129,9 @@ def main():
         print("scratch copies (before, after):", " ".join(report["scratch"]))
     print("checks a-g passed:", report["identity"]["tools"], "tools, registry", report["identity"]["registry"][:12])
     if opts.write:
+        edited = " ".join(e for e in report["edits"] if e.endswith(".py"))
         print(
-            "written; now: uvx ruff@0.15.9 format clients/commands clients/hubtools.py && "
+            f"written; now: uvx ruff@0.15.9 format clients/commands clients/hubtools.py {edited} && "
             "python3 scripts/lint_baseline.py --write"
         )
     return 0

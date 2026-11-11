@@ -893,7 +893,7 @@ def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypat
             calls.append((path, body))
             return {}
 
-    monkeypatch.setattr(hubtools, "_as_person", lambda api, ref=None: api)
+    monkeypatch.setitem(hubtools.support_file.__globals__, '_as_person', lambda api, ref=None: api)
     hubtools.support_file(Api(), {"message": "Sync fails"})
     assert calls == [("support/tickets", {"message": "[BotOps] Sync fails", "include_ids": True, "source": "botops"})]
 
