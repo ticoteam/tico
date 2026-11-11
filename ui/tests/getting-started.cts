@@ -58,10 +58,14 @@ const checklist = () => [
 ];
 const bots = [['assistant', 'Ace'], ['botops', 'BotOps']].map(([name, display_name]) =>
   ({name, display_name, host: 'keeper', status: 'active', can_chat: true, team: '', owner_id: 'ana'}));
-// A team that came in from the company file: its lead listed after a report, so the welcome's order is its own.
-const importedBots = [['support-triage', 'Support Triage', 'support-lead'], ['support-lead', 'Support Lead', 'human:ana']].map(([name, display_name, reports_to]) =>
-  ({id: name, name, slug: name, display_name, status: 'active', can_chat: true, team: 'support', reports_to, owner_id: 'ana'}));
-const importedChart = {org_groups: [{id: 'support', name: 'Support', lead: 'bot:support-lead', order: 1}, {id: 'built-in', name: 'Built-in', order: 99}],
+// A team that came in from the company file: its lead listed after a report, so the welcome's order is its own. The
+// built-ins' group is ordered first and led by no bot; the welcome still shows it last, under the server's name, from
+// the role most of it reports to.
+const importedBots = [['support-triage', 'Support Triage', 'support-lead', 'support'], ['support-lead', 'Support Lead', 'human:ana', 'support'],
+  ['finance-owner', 'Finance Owner', 'human:ana', 'built-in'], ['librarian', 'Librarian', 'general-manager', 'built-in'],
+  ['general-manager', 'General Manager', 'human:ana', 'built-in']].map(([name, display_name, reports_to, team]) =>
+  ({id: name, name, slug: name, display_name, status: 'active', can_chat: true, team, reports_to, owner_id: 'ana'}));
+const importedChart = {org_groups: [{id: 'built-in', name: 'General', order: 0}, {id: 'support', name: 'Support', lead: 'bot:support-lead', order: 1}],
   seats: [{id: 's1', kind: 'seat', title: 'Support Writer', team: 'support', reports_to: 'bot:support-lead', stage: 'recruiting'}]};
 
 (async () => {
@@ -428,8 +432,9 @@ const importedChart = {org_groups: [{id: 'support', name: 'Support', lead: 'bot:
     await welcome.waitFor();
     assert.equal(await page.locator('.gs-tour').count(), 0);
     assert.equal(await welcome.locator('#onb-count').textContent(), '');
-    assert.deepEqual(await welcome.locator('[data-onb-team-row] strong').allTextContents(), ['Support']);
-    assert.deepEqual(await welcome.locator('.onb-team-roles > span').allTextContents(), ['Support Lead', 'Support Triage', 'Support Writer']);
+    assert.deepEqual(await welcome.locator('[data-onb-team-row] strong').allTextContents(), ['Support', 'General']);
+    assert.deepEqual(await welcome.locator('.onb-team-roles > span').allTextContents(),
+      ['Support Lead', 'Support Triage', 'Support Writer', 'General Manager', 'Librarian', 'Finance Owner']);
     assert.equal(await welcome.locator('.onb-team-roles .onb-team-open').textContent(), 'Support Writer');
     assert.equal(await welcome.locator('input, [data-onb-team]').count(), 0, 'nothing to switch: the team is set up');
     assert.equal(await welcome.locator('#onb-machine-status').getAttribute('data-onb-machine'), 'cloud');

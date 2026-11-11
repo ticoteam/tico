@@ -668,17 +668,23 @@ function onbWelcomeHTML(state: OnbState): string {
     <h3 class="onb-step-title">${esc(ONB_TITLES.run)}</h3>${onbRunLinesHTML(state)}${onbActions(state, 'Start', false)}`;
 }
 // The chart as the app has it (S.orgGroups, S.emps, S.seats), team by team in the chart's order: the team's lead first,
-// then who reports to whom; an open seat is muted. The built-ins' own group is not a team of the company's.
+// then who reports to whom; an open seat is muted. The built-ins' own group comes last, under the name the server gives
+// it (setup's team step shows it the same way); a group with no name is not shown, so its id never reaches the screen.
 function onbLiveTeams(): OnbTeam[] {
   const slug = (ref: string | null | undefined) => String(ref || '').replace(/^bot:/, '');
-  const groups = [...(S.orgGroups || [])].filter(group => group.id !== BUILT_IN_GROUP).sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9));
+  const last = (group: {id: string}) => Number(group.id === BUILT_IN_GROUP);
+  const groups = [...(S.orgGroups || [])].filter(group => group.name || group.id !== BUILT_IN_GROUP)
+    .sort((a, b) => last(a) - last(b) || (a.order ?? 1e9) - (b.order ?? 1e9));
   return groups.map(group => {
-    const lead = slug(group.lead);
     const bots = (S.emps || []).filter(bot => bot.team === group.id)
       .map(bot => ({id: bot.slug || bot.id, title: botDisplayName(bot.slug || bot.id), live: true, reports_to: slug(bot.reports_to) || null}));
     const seats = (S.seats || []).filter(seat => seat.team === group.id)
       .map(seat => ({id: 'seat:' + seat.id, title: seat.title, live: false, reports_to: slug(seat.reports_to) || null}));
-    const roles = [...bots, ...seats].sort((a, b) => Number(b.id === lead) - Number(a.id === lead));
+    const all = [...bots, ...seats];
+    // A group with no lead (General: no bot leads it) still reads from its head: the role most of the team reports to.
+    const reports = (id: string) => all.filter(role => role.reports_to === id).length;
+    const lead = slug(group.lead) || [...all].sort((a, b) => reports(b.id) - reports(a.id))[0]?.id;
+    const roles = all.sort((a, b) => Number(b.id === lead) - Number(a.id === lead));
     return {team: group.name || group.id, on: true, roles};
   }).filter(team => team.roles.length);
 }
