@@ -130,6 +130,16 @@ same terms.
    computers as usual, their history is not backed up to GitHub, and Health says so in one line. Settings
    then shows the app as installed.
 
+Back in Tico, the GitHub card asks at once **Which repository does your team work on?**, with a **Use** button on each
+product repository the organization has (a lone one is the main button). One tap puts it In use; nothing is ticked for
+you. While Tico makes the bots' own repositories the card says how many are made, and why the rest wait when GitHub
+said why.
+
+A second return from GitHub (Back to its Create page and Create again, the same return loaded twice, or one more
+than an hour old) lands on this card with one sentence and changes nothing: the app Tico saved stays, and the second
+return's code is never exchanged. If GitHub made a second app on the way, delete it on GitHub; Tico never used it. If
+GitHub says the app's name is taken, change it on GitHub's page: Tico takes whatever name GitHub gives back.
+
 Once a repository is In use, the pipeline seats reach it by role with no further step: the Builder and the Release
 Owner write, the reviewers, QA Owner, Product Owner, Product Manager and Engineering Manager read ([Repositories](repositories.md#bot-repository-access)).
 
@@ -368,6 +378,15 @@ Merge group event, and after Tico has posted one `tico/merge-ok` there):
 Tick the team's repositories in Settings → General → Repositories, then choose own only, all ticked, or chosen repositories for each bot. Grants can be read or write. Existing extra repositories become chosen write access automatically. See [Repositories](repositories.md) for settings, tokens, tools and the legacy API alias.
 
 ## Creating bot repositories
+
+Tico makes each bot's repository by itself when the app may (installed on all repositories, Administration accepted,
+and for a personal account the owner's authorization): the bots a company has when it connects GitHub, and every bot
+made later. The server's poll makes a few at a time as empty private repositories, audited as `github.repo_created`
+by the system, and each bot's computer publishes its history on its next run. A create whose answer was lost is found
+again on the next try, never made twice and never taken for someone else's (GitHub made it after Tico first asked).
+When GitHub fails or limits requests, Tico waits a minute, then two, up to an hour, and Tools, GitHub says why. A
+refused permission stops it until the permission is back. A name someone else already has is left alone, as below.
+Nobody needs to ask BotOps; the commands below are the by-hand path.
 
 With administration allowed, the owner can create `<org>/bot-<slug>` privately from a template:
 

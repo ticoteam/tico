@@ -82,6 +82,9 @@ class FakeGitHub:
         self.create_response_message = ""
         self.history = set()  # repositories that hold commits; any other answers "empty"
         self.lose_next_product_create_response = False
+        self.lose_next_create_response = False  # a bot repository's create is made, and its answer never arrives
+        self.create_refusal = None  # (status, headers) every bot repository create answers, as a limit or an outage
+        self.made_at = {}  # owner/name: when GitHub made it (GET /repos/...); anything else is years old
         self.refuse_actions_write = False  # refuse Actions: write whatever the live permissions say
         self.refuse_workflows_write = False  # refuse Workflows: write whatever the live permissions say
         self.on_token = None  # called with each token request's body before it is answered
@@ -186,7 +189,11 @@ class FakeGitHub:
         if path.startswith("/repos/") and path.count("/") == 3:
             if request.method == "DELETE":
                 return httpx.Response(self.delete_status)
-            return httpx.Response(404 if path.split("/")[3] in self.missing else 200, json={})
+            name = path.split("/")[2] + "/" + path.split("/")[3]
+            return httpx.Response(
+                404 if path.split("/")[3] in self.missing else 200,
+                json={"created_at": self.made_at.get(name, "2020-01-01T00:00:00Z")},
+            )
         if path.endswith("/access_tokens"):
             if self.on_token:
                 self.on_token(body)
@@ -225,11 +232,16 @@ class FakeGitHub:
             repository = path.split("/")[2] + "/" + body["name"]
             if self.generate_status >= 300:
                 return httpx.Response(self.generate_status, json={"message": self.create_response_message})
-            if repository in self.taken or (
-                body.get("description") == "Tico product repository" and repository in self.created_repositories
-            ):
+            product = body.get("description") == "Tico product repository"
+            if self.create_refusal and not product:
+                return httpx.Response(self.create_refusal[0], headers=self.create_refusal[1], json={"message": ""})
+            if repository in self.taken or repository in self.created_repositories:
                 return httpx.Response(422, json={"message": "name already exists"})
             self.created_repositories.add(repository)
+            self.made_at[repository] = datetime.fromtimestamp(self.clock(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            if self.lose_next_create_response and not product:
+                self.lose_next_create_response = False
+                raise httpx.ReadTimeout("synthetic response timeout", request=request)
             if body.get("description") == "Tico product repository" and self.lose_next_product_create_response:
                 self.lose_next_product_create_response = False
                 raise httpx.ReadTimeout("synthetic response timeout", request=request)

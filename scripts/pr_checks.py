@@ -22,7 +22,7 @@ UI_MAP = {
     "ui/app/chat-outline.js": ["chat", "imported-history"],
     "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],
     "ui/app/visual-media.js": ["visual-media", "visual-media-app"],
-    "ui/github-connect.js": ["github-personal", "settings-forms"],
+    "ui/github-connect.js": ["github-after-connect", "github-personal", "settings-forms"],
 }
 
 

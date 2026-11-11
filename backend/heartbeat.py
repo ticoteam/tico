@@ -177,6 +177,10 @@ def repository_waits(ctx: Context) -> tuple[str, bool]:
     from .repositories import daily
 
     daily(github_app)
+    # Each bot's own repository, made without anyone asking where the App may create them (backend/bot_repo_maker.py).
+    from . import bot_repo_maker
+
+    bot_repo_maker.run(github_app)
     # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
     from . import worktree_waits
 
