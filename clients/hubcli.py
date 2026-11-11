@@ -35,6 +35,8 @@ if __package__ in (None, ""):  # run as a script: python clients/hubcli.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from clients import cli_plumbing
 
+from clients import hubcli_pipelines
+
 # Mirrors of the server's vocabulary, so a typo is refused by the parser before a request is made. The server is the
 # authority when they disagree.
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")  # set by hand; gray is only ever automatic
@@ -1668,6 +1670,11 @@ def parser():
     s.add_argument("--updated-since", help="only tasks changed after this ISO-8601 time with a timezone")
     s.add_argument("--member", help="only tasks this person or bot is on in some role (me, a human id, a bot slug)")
     s.add_argument("--role", help="with --member: only tasks they are on in this role")
+    s.add_argument("--pipeline", help="only this pipeline's tasks: its id (tico pipeline list)")
+    s.add_argument("--stage", help="only the tasks in this stage: its id (tico pipeline show <pipeline>)")
+    s.add_argument(
+        "--waiting-on", help="only open tasks whose turn is this person's or bot's: me, a human id, a bot slug"
+    )
     s.add_argument("--brief", action="store_true", help="leave out bodies")
     s.add_argument("--all", action="store_true", help="every task and every bot you may see, as {tasks, bots}")
     s.add_argument(
@@ -4486,6 +4493,7 @@ def parser():
     from clients import hubtools_computers  # `tico upgrade`, `tico cloud`, `tico subscription`, computer restart
 
     hubtools_computers.add_commands(sub)
+    hubcli_pipelines.add(sub, task)  # pipeline, stage, company; task request|approve|send-back|wait
     return p
 
 
@@ -4657,6 +4665,8 @@ def parse(p, argv):
 
 def removed_notice(argv):
     """The one line for a command that is gone (REMOVED), or None."""
+    if hubcli_pipelines.current(argv):  # `tico pipeline list` is new; `tico pipeline --type` is gone
+        return None
     for old, instead in REMOVED:
         if tuple(argv[: len(old)]) == old:
             return f'{PROG}: "{" ".join(old)}" is gone; {instead}'
@@ -4811,6 +4821,13 @@ def run(argv, who, profile=None, fields=None):
                 "HUB_WORKSPACE is not set: bot repositories live in the workspace this "
                 "machine was enrolled with, which the runner gives every turn"
             )
+        if args.fn == hubcli_pipelines.WAIT:
+            if os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE"):
+                print(f'{PROG}: "task wait" is for a person\'s shell; {WAIT_INSTEAD}', file=sys.stderr)
+                return 1
+            from clients import hubtools_pipelines
+
+            return hubtools_pipelines.command(args)
         from clients import remotecli
 
         if args.fn == "events tail":

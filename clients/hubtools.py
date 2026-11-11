@@ -1626,10 +1626,19 @@ def task_file(api, args):
             "description": "Tasks in this page (500 at most); with limit or offset the answer is `{tasks, next_offset}`",
         },
         "offset": {"type": "integer", "minimum": 0, "description": "Skip this many: a page's next_offset"},
+        "pipeline": _s("Only this pipeline's tasks: its id"),
+        "stage": _s("Only the tasks in this stage: its id (engineering-build)"),
+        "waiting_on": _s("Only open tasks waiting on this person or bot: `me`, a human id or a bot slug"),
     },
 )
 def task_list(api, args):
-    more = {name: args[name] for name in ("sort", "number", "updated_since", "snoozed", "q") if args.get(name)}
+    more = {
+        name: args[name]
+        for name in ("sort", "number", "updated_since", "snoozed", "q", "pipeline", "stage")
+        if args.get(name)
+    }
+    if args.get("waiting_on"):
+        more["waiting_on"] = _target(api, args["waiting_on"])
     paged = args.get("limit") is not None or args.get("offset") is not None
     if paged:
         more.update({name: args[name] for name in ("limit", "offset") if args.get(name) is not None})
@@ -13576,3 +13585,8 @@ class Protocol:
 # module and register into this table, TOOLS, BY_NAME and AUDIENCE, when it is imported; last, so all of the above exists.
 from clients import hubtools_connections  # noqa: F401
 from clients import hubtools_computers  # noqa: F401  (computers, runners, cloud machines, subscriptions)
+
+# ----------------------------------------------------------------------------- side modules
+# An area's tools live in their own module (clients/hubtools_<area>.py), which defines them with `tool` and joins
+# AUDIENCE, SHELL_ONLY and BY_NAME at its end. Imported last, so everything they read here is already defined.
+import clients.hubtools_pipelines  # noqa: F401
