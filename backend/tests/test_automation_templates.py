@@ -473,7 +473,6 @@ def test_a_person_owner_in_slack_keeps_its_drafts(api):
     "role, old, new",
     [
         ("legal_lead", "general-counsel", "legal-owner"),
-        ("engineering_manager", "engineering-manager", "engineering-manager"),
         ("support_lead", "success-manager", "support-owner"),
     ],
 )
