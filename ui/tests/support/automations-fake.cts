@@ -358,7 +358,9 @@ function inboxRuns(now = Date.now()): Run[] {
 // Listening (ui/app/listening.ts): each source's health as GET /api/v2/listening/sources lists it, by the source's id in
 // its listening's trigger: [status, minutes since the last read, the last error]. A source not named here was never read.
 const LISTEN_HEALTH: Record<string, [string, number, string?]> = {s_smb: ['ok', 120], s_agency: ['ok', 120], s_x: ['blocked', 180, 'Sign-in wall'],
-  s_nw: ['ok', 300], s_syften: ['ok', 12]};
+  s_nw: ['ok', 300], s_syften: ['ok', 12], s_acme: ['ok', 60]};
+// Listenings whose posts have waited unscored: the server gives them a hollow dot though every source read well.
+const LISTEN_STALLED = new Set(['au_pricing']);
 const LISTEN_TEXT = `Market listening · Tue Nov 10, 14:00 · 3 of 30
 
 1. competitor  Northwind Team plan is now $15 a seat
@@ -444,12 +446,17 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
     }
     return out;
   });
-  const full = (a: Auto): Json => ({...clone(a), steps: withSets(a.steps)});
+  // A listening's summary as the server gives it: its one dot is filled when every source read well and nothing waits unscored.
+  const heard = (a: Auto): Json => {
+    const t = a.trigger as Json, sources = (t.sources || []) as Json[];
+    return t.type !== 'listening' ? {} : {listening: {dot: sources.length && !LISTEN_STALLED.has(a.id) && sources.every(s => LISTEN_HEALTH[String(s.id)]?.[0] === 'ok') ? 'filled' : 'hollow'}};
+  };
+  const full = (a: Auto): Json => ({...clone(a), steps: withSets(a.steps), ...heard(a)});
   // A list row carries how many versions wait for a person (the Pending pill)
   // and its newest run (the Last run column).
   const row = (a: Auto): Json => {
     const {steps, ...rest} = clone(a), last = db.runs[a.id]?.[0];
-    return {...rest, pending: db.versions[a.id]!.filter(v => v.status === 'pending').length,
+    return {...rest, ...heard(a), pending: db.versions[a.id]!.filter(v => v.status === 'pending').length,
       ...(last && !rest.last_run ? {last_run: {id: last.id, started_at: last.started_at, status: last.status}} : {})};
   };
   const nextN = (id: string) => Math.max(...db.versions[id]!.map(v => v.n)) + 1;

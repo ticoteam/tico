@@ -75,12 +75,9 @@ function lstRowWords(r: LstSourceRow | undefined): string {
   return (r?.status === 'error' && r.last_error) || LST_STATUS[r?.status || 'never'] || 'Not read yet';
 }
 const lstDot = (ok: boolean, words: string): string => `<span class="au-dot ${ok ? 'ok' : 'lst-no'}" role="img" aria-label="${esc(words)}" title="${esc(words)}"></span>`;
-/** A listening's one dot: filled when every source read well and its scoring runs; hollow otherwise, and with no source. */
-function lstOk(a: AuRow, state: AutomationsState): boolean {
-  const rows = state.lstSources?.get(a.id) || [], sources = a.trigger?.sources || [];
-  const scoring = (a as AuRow & {listening?: {scoring?: string | null} | null}).listening?.scoring;
-  return sources.length > 0 && scoring !== 'stopped' && sources.every(s => lstRowOk(lstRowOf(rows, s)));
-}
+/** A listening's one dot, as the server gives it: hollow when a source did not read well, when posts wait unscored,
+ *  and with no source. */
+const lstOk = (a: AuRow): boolean => (a as AuRow & {listening?: {dot?: string | null} | null}).listening?.dot === 'filled';
 
 // ----------------------------------------------------------------------------------------- the list
 function lstListHTML(state: AutomationsState): string {
@@ -89,7 +86,7 @@ function lstListHTML(state: AutomationsState): string {
     .join(' ').toLowerCase().includes(q));
   if (!rows.length) return `<p class="muted au-pad">${all.length ? 'No matches' : 'No listening yet'}</p>`;
   return `<div class="lst-list" role="list">${rows.map(a => {
-    const ok = lstOk(a, state), last = a.last_run?.started_at;
+    const ok = lstOk(a), last = a.last_run?.started_at;
     return `<a class="lst-row${a.enabled === false ? ' off' : ''}" role="listitem" href="${auHref(a.id)}" data-lst="${esc(a.id)}">
       ${lstDot(ok, ok ? 'Reading' : 'Not reading')}<span class="lst-nm">${esc(a.name || 'Untitled')}</span>
       <span class="lst-lim">${esc(lstLimitsWords(a.trigger?.limits))}</span>

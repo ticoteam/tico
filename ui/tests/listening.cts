@@ -61,7 +61,7 @@ type Body = {name?: string; trigger?: Trigger; steps?: {by?: string; paths?: {na
       assert.equal(await page.locator('.au-ph h1').innerText(), 'Listening');
       const row = page.locator('.lst-row[data-lst="au_market"]');
       assert.match((await row.innerText()).replace(/\s+/g, ' '), /^Market listening 3 an hour · 10 a day 20m$/, tag + ': the name, the limits and when it last sent');
-      // One source is blocked, so the listening's one dot is hollow; a listening whose source was never read too.
+      // The dot is the server's: hollow with a blocked source, and hollow with posts waiting unscored though its source read well.
       assert.equal(await page.locator('.lst-row .au-dot.lst-no').count(), 2, tag + ': hollow dots');
       assert.equal(await page.locator('.lst-row.off .lst-nm').innerText(), 'Pricing page watch', tag + ': an off one is dimmed');
       await page.fill('.au-q', 'northwind');
