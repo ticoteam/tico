@@ -1,11 +1,12 @@
-"""The computer tools (clients/hubtools_computers.py) through the table and the `tico` CLI, with a stubbed API: restart
+"""The computer tools (clients/commands/computer_upkeep.py) through the table and the `tico` CLI, with a stubbed API: restart
 a computer's runner, who runs which release, the installation's own update, the shared cloud machine, subscriptions."""
 
 import json
 
 import pytest
 
-from clients import hubcli, hubtools, hubtools_computers, remotecli
+from clients import hubcli, hubtools, remotecli
+from clients.commands import computer_upkeep as hubtools_computers
 from clients.tico import APIError
 
 

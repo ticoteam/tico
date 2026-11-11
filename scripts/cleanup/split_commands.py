@@ -209,7 +209,9 @@ MODULE_DOCS = {
     "webhooks": "Webhooks, triggers, relays, notices, sleeps and releases.",
     "bots": "Bots, agents, skills and templates.",
     "admin": "People, groups, seats, settings, setup, alerts, SQL, audit, tokens, events and the raw API.",
-    "computers": "Computers, health, maintenance and support.",
+    "computers": "Computers (list, detail, performance, turns at once, the browser exit), health, maintenance and "
+    "support. Restarts, releases, this installation's update, the cloud machine and subscriptions are in "
+    "computer_upkeep.",
     "tools": "Tools (the outside services bots reach through Tico), credentials, repositories and Slack.",
     "assistant": "The person's Assistant, Needs you, the brief, updates and runs.",
     "mail": "Email, physical mail and letters.",
@@ -295,7 +297,9 @@ LAST = ("_access", "_mcp")  # imported after every tool module: _mcp builds BY_N
 PATCH_TARGETS = {("backend/tests/test_support.py", "_as_person"): "support_file"}
 # Files that list the CLI's code by path (to decide what a change reaches): each also lists the package.
 PATH_LISTS = {
-    "backend/tests/test_e2e_cli.py": ('"clients/remotecli.py", ', '"clients/remotecli.py", "clients/commands/", ')
+    "backend/tests/test_e2e_cli.py": ('"clients/remotecli.py", ', '"clients/remotecli.py", "clients/commands/", '),
+    # rename.py's kept keys: a tool's input that takes a name or an id now sits in the tool modules
+    "scripts/cleanup/keep.yaml": ("  clients/hubtools.py: [", "  clients/commands/*.py: ["),
 }
 SIDE_MODULE = re.compile(r"^hubtools_\w+$")
 
@@ -756,40 +760,55 @@ def outside_names(root):
             tree = ast.parse(text)
         except (SyntaxError, UnicodeDecodeError, OSError):
             continue
-        aliases = set()
-        for n in ast.walk(tree):
-            if isinstance(n, ast.ImportFrom) and n.module == "clients.hubtools":
-                names.update(a.name for a in n.names if a.name != "*")
-            elif isinstance(n, ast.ImportFrom) and n.module == "clients":
-                aliases.update(a.asname or a.name for a in n.names if a.name == "hubtools")
-            elif isinstance(n, ast.ImportFrom) and n.module is None and n.level:
-                aliases.update(a.asname or a.name for a in n.names if a.name == "hubtools")
-            elif isinstance(n, ast.Import):
-                for a in n.names:
-                    if a.name == "hubtools":
-                        aliases.add(a.asname or "hubtools")
-                    elif a.name == "clients.hubtools" and a.asname:
-                        aliases.add(a.asname)
-        for n in ast.walk(tree):
-            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in aliases:
-                names.add(n.attr)
-            elif (
-                isinstance(n, ast.Attribute)
-                and isinstance(n.value, ast.Attribute)
-                and ast.unparse(n.value) == "clients.hubtools"
-            ):
-                names.add(n.attr)
-            elif isinstance(n, ast.Call) and len(n.args) >= 2 and _is_module(n.args[0], aliases):
-                func = ast.unparse(n.func)
-                if func.split(".")[-1] in ("getattr", "setattr", "hasattr", "delattr", "object"):
-                    key = n.args[1]
-                    if isinstance(key, ast.Constant) and isinstance(key.value, str):
-                        names.add(key.value)
-                    elif f != BEHAVIOUR_TEST:  # it walks `__all__`
-                        raise Stop(f"{f}:{n.lineno} reads clients.hubtools by a computed name: name it")
-            elif isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith("clients.hubtools."):
-                names.add(n.value.split(".")[2])
+        # Code held in a string (a script a test or eval writes out and runs) reads the facade too.
+        trees = [tree, *embedded_code(tree)]
+        for tree in trees:
+            aliases = set()
+            for n in ast.walk(tree):
+                if isinstance(n, ast.ImportFrom) and n.module == "clients.hubtools":
+                    names.update(a.name for a in n.names if a.name != "*")
+                elif isinstance(n, ast.ImportFrom) and n.module == "clients":
+                    aliases.update(a.asname or a.name for a in n.names if a.name == "hubtools")
+                elif isinstance(n, ast.ImportFrom) and n.module is None and n.level:
+                    aliases.update(a.asname or a.name for a in n.names if a.name == "hubtools")
+                elif isinstance(n, ast.Import):
+                    for a in n.names:
+                        if a.name == "hubtools":
+                            aliases.add(a.asname or "hubtools")
+                        elif a.name == "clients.hubtools" and a.asname:
+                            aliases.add(a.asname)
+            for n in ast.walk(tree):
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id in aliases:
+                    names.add(n.attr)
+                elif (
+                    isinstance(n, ast.Attribute)
+                    and isinstance(n.value, ast.Attribute)
+                    and ast.unparse(n.value) == "clients.hubtools"
+                ):
+                    names.add(n.attr)
+                elif isinstance(n, ast.Call) and len(n.args) >= 2 and _is_module(n.args[0], aliases):
+                    func = ast.unparse(n.func)
+                    if func.split(".")[-1] in ("getattr", "setattr", "hasattr", "delattr", "object"):
+                        key = n.args[1]
+                        if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                            names.add(key.value)
+                        elif f != BEHAVIOUR_TEST:  # it walks `__all__`
+                            raise Stop(f"{f}:{n.lineno} reads clients.hubtools by a computed name: name it")
+                elif (
+                    isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith("clients.hubtools.")
+                ):
+                    names.add(n.value.split(".")[2])
     return names
+
+
+def embedded_code(tree):
+    """The Python programs held in `tree`'s string constants that import clients.hubtools."""
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and "import hubtools" in n.value:
+            try:
+                yield ast.parse(n.value)
+            except SyntaxError:
+                continue
 
 
 def _is_module(node, aliases):
@@ -800,13 +819,18 @@ def render_facade(p, root, mods):
     stmts, module, owner = p["stmts"], p["module"], p["owner"]
     tail = [i for i in range(len(stmts)) if module[i] == "__facade__"]
     wanted = outside_names(root).union(*(stmts[i]["uses"] for i in tail))
-    by_mod = collections.defaultdict(list)
+    by_mod, imported = collections.defaultdict(list), collections.defaultdict(list)
     for x in sorted(wanted):
         j = owner.get(x)
-        if j is None or module[j] in ("__facade__", "__import__"):
-            continue  # bound by the tail itself, or a library name nothing reads through the facade
+        if j is None and x and not x.startswith("__"):
+            raise Stop(f"another file reads clients.hubtools.{x}, which clients/hubtools.py does not bind")
+        if j is None or module[j] == "__facade__":
+            continue  # a module attribute (`__file__`), or bound by the tail itself
+        if module[j] == "__import__":
+            imported[j].append(x)  # a library name another file reads here (`hubtools.APIError`): imported again
+            continue
         by_mod[module[j]].append(x)
-    exported = sorted(x for names in by_mod.values() for x in names)
+    exported = sorted([x for names in by_mod.values() for x in names] + [x for xs in imported.values() for x in xs])
     doc = ast.get_docstring(ast.parse(p["src"])) or ""
     text = (
         '"""'
@@ -816,6 +840,10 @@ def render_facade(p, root, mods):
         "\n`hubtools.TOOLS` or `hubtools.AUDIENCE` is a change to the table. A new name read through here goes in"
         "\n`__all__`; code that patches a function a moved module calls patches it in that module.\n" + '"""\n\n'
     )
+    for j in sorted(imported):
+        node = ast.parse(stmts[j]["code"]).body[0]
+        node.names = [a for a in node.names if (a.asname or a.name).split(".")[0] in imported[j]]
+        text += ast.unparse(node) + "\n"
     for m in mods:
         if by_mod.get(m):
             text += f"from clients.commands.{m} import {', '.join(sorted(by_mod[m]))}\n"
@@ -1037,7 +1065,7 @@ def run(root, write=False, plan_out=None, keep=False, strict=True, tests=True):
     """The move, verified; `write` puts it in `root`. Not `strict` (the dry-run test): a noun NOUN_MODULE lacks gets a
     module of its own name, and a patch PATCH_TARGETS lacks is left as it is, so another change does not fail here."""
     root = Path(root).resolve()
-    if not (root / SOURCE).exists() or (root / PACKAGE).exists():
+    if not (root / SOURCE).exists() or (root / PACKAGE / "__init__.py").exists():
         raise Stop(f"nothing to move: {SOURCE} is already the facade over {PACKAGE}")
     p = plan(root, strict)
     rendered, edges = render(p, root)
@@ -1101,8 +1129,9 @@ def main():
         print("scratch copies (before, after):", " ".join(report["scratch"]))
     print("checks a-g passed:", report["identity"]["tools"], "tools, registry", report["identity"]["registry"][:12])
     if opts.write:
+        edited = " ".join(e for e in report["edits"] if e.endswith(".py"))
         print(
-            "written; now: uvx ruff@0.15.9 format clients/commands clients/hubtools.py && "
+            f"written; now: uvx ruff@0.15.9 format clients/commands clients/hubtools.py {edited} && "
             "python3 scripts/lint_baseline.py --write"
         )
     return 0

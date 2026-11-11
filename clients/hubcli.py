@@ -4483,14 +4483,18 @@ def parser():
     s = keys.add_parser("revoke", help="stop a key at once")
     s.add_argument("id")
     s.set_defaults(fn="service-key revoke")
-    from clients import hubtools_org
+    from clients.commands import org as hubtools_org
 
     hubtools_org.add_commands(sub)  # people, bots, the org chart, usage, billing and reach
 
-    from clients import hubtools_connections  # `tico github`, and the connection verbs of `tico repo` and `tico health`
+    from clients.commands import (
+        connections as hubtools_connections,
+    )  # `tico github`, and the connection verbs of `tico repo` and `tico health`
 
     hubtools_connections.add_commands(sub)
-    from clients import hubtools_computers  # `tico upgrade`, `tico cloud`, `tico subscription`, computer restart
+    from clients.commands import (
+        computer_upkeep as hubtools_computers,
+    )  # `tico upgrade`, `tico cloud`, `tico subscription`, computer restart
 
     hubtools_computers.add_commands(sub)
     hubcli_pipelines.add(sub, task)  # pipeline, stage, company; task request|approve|send-back|wait
@@ -4685,7 +4689,7 @@ def rename_argv(argv):
         return ["note", "create"] + argv[1:], '"tico note <bot> <text>" is now "tico note create <bot> <text>"'
     if argv[:1] == ["notice"] and len(argv) > 1 and (argv[1] in NOTICE_COMMANDS or argv[1].startswith("-")):
         return argv, None  # `tico notice list` is new; only `tico notice <text>` is the old send
-    from clients.hubtools_org import ORG_COMMANDS
+    from clients.commands.org import ORG_COMMANDS
 
     if argv[:1] == ["org"] and argv[1:2] and argv[1] in ("order", "reports-to", "models", *ORG_COMMANDS):
         return argv, None  # `tico org` alone is the old `tico team show`; its subcommands are new
@@ -4825,7 +4829,7 @@ def run(argv, who, profile=None, fields=None):
             if os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE"):
                 print(f'{PROG}: "task wait" is for a person\'s shell; {WAIT_INSTEAD}', file=sys.stderr)
                 return 1
-            from clients import hubtools_pipelines
+            from clients.commands import pipelines as hubtools_pipelines
 
             return hubtools_pipelines.command(args)
         from clients import remotecli

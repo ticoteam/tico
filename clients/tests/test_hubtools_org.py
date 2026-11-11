@@ -1,9 +1,10 @@
-"""The company-management tools in clients/hubtools_org.py, through the one tool table and the `tico` CLI: each command's
+"""The company-management tools in clients/commands/org.py, through the one tool table and the `tico` CLI: each command's
 argv becomes the requests its routes take, against a stubbed API (no network). The routes are the server's own tests'."""
 
 import pytest
 
-from clients import hubcli, hubtools, hubtools_org, remotecli
+from clients import hubcli, hubtools, remotecli
+from clients.commands import org as hubtools_org
 from clients.tico import APIError
 
 

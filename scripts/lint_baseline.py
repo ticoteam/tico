@@ -371,6 +371,39 @@ def renamed(pairs, moves):
     return {(moves.get(path, path), code) for path, code in pairs}
 
 
+def imports_from(source, dest):
+    """True when the file `source` (still in the tree) imports from the module that the file `dest` is."""
+    module = dest[: -len(".py")].removesuffix("/__init__").replace("/", ".")
+    try:
+        tree = ast.parse((ROOT / source).read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return False
+    return any(isinstance(n, ast.ImportFrom) and n.module == module for n in ast.walk(tree))
+
+
+def split_out(old_ignores, new_ignores, old_counts, new_counts):
+    """Suppressions that moved when a file was split up, the old file left importing from its parts (a facade over a
+    package): {(part, code): (old file, code)}. Each new suppression comes from a file that held it at the ref, no
+    longer does, and imports from the part. A problem when the parts of one old file together hold more findings of a
+    code than it did: a split moves findings, it does not add any."""
+    gone = sorted(old_ignores - new_ignores)
+    splits = {}
+    for path, code in sorted(new_ignores - old_ignores):
+        source = next((s for s, c in gone if c == code and imports_from(s, path)), None)
+        if source is not None:
+            splits[(path, code)] = (source, code)
+    problems = []
+    for source in sorted(set(splits.values())):
+        parts = [pair for pair, origin in splits.items() if origin == source]
+        total = sum(new_counts[pair] for pair in parts)
+        if total > old_counts[source]:
+            problems.append(
+                f"count grew: {source[1]} split out of {source[0]} {old_counts[source]} -> {total} in "
+                f"{', '.join(path for path, _ in parts)} (fix the findings; a baseline may only shrink)"
+            )
+    return splits, problems
+
+
 def carry_moves(old_ignores, new_ignores, ref):
     """`old_ignores` with each moved file's suppressions transferred (not copied) to its new path."""
     return renamed(old_ignores, moved_since(ref, {path for path, _ in new_ignores}))
@@ -419,14 +452,16 @@ def check_growth(ref):
     def introduced(code):
         return selects(code, new_select) and not selects(code, old_select)
 
-    problems = []
+    old_counts = renamed(collections.Counter(old_counts), moves)
+    splits, problems = split_out(old_ignores, new_ignores, old_counts, collections.Counter(new_counts))
     for code in sorted(old_select - new_select):
         problems.append(f"rule removed from ruff.toml select: {code}")
     for path, code in sorted(new_ignores - old_ignores):
-        if not introduced(code):
+        if not introduced(code) and (path, code) not in splits:
             problems.append(f"new suppression: {code} in {path} (fix it, or get it reviewed as a baseline change)")
-    old_counts = renamed(collections.Counter(old_counts), moves)
     for path, code in sorted(new_counts):
+        if (path, code) in splits:
+            continue  # counted with the other parts of its old file above
         if not introduced(code) and new_counts[(path, code)] > old_counts[(path, code)]:
             problems.append(
                 f"count grew: {path} {code} {old_counts[(path, code)]} -> {new_counts[(path, code)]} "
