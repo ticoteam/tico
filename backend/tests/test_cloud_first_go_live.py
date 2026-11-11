@@ -7,12 +7,49 @@ its go-live found no computer and answered 409 `no_computer`: the first Engineer
 live. HQ is a fake (helpers/cloud_machines.py); the routes, BotOps' turn token, the runner's enroll, report and claim
 are the real ones."""
 
+import uuid
+
 from backend import cloud_access
 from backend.tests.helpers.botops_parity import act
 from backend.tests.helpers.cloud_access import signals
 from backend.tests.helpers.cloud_machines import FakeHQ
 from backend.tests.helpers.sample_company import booted, environment, machine, rows, signed_in  # noqa: F401
-from backend.tests.test_seat_bots_go_live import _claim, _post, _report, _state
+
+
+def _post(api, path, body, token):
+    return api.post(
+        "/api/v2/" + path,
+        json=body,
+        headers={"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())},
+    )
+
+
+def _report(api, computer, present=()):
+    """The machine's heartbeat: every bot assigned to it, BotOps' repository and those in `present` there."""
+    have = {"botops", *present}
+    readiness = {
+        row["bot"]: {
+            "ready": row["bot"] in have,
+            "runtime": "codex",
+            "repository_present": row["bot"] in have,
+            "configuration_valid": True,
+            "problems": [] if row["bot"] in have else ["Missing bot repository or AGENT.md"],
+        }
+        for row in rows(api, "SELECT bot FROM assignments WHERE runner_id=?", (computer["runner_id"],))
+    }
+    body = {"version": "test", "platform": "test", "capacity": 4, "readiness": {"schema_version": 1, "bots": readiness}}
+    done = _post(api, "runners/heartbeat", body, computer["token"])
+    assert done.status_code == 200, done.text
+
+
+def _claim(api, computer, bot):
+    found = _post(api, "jobs/claim", {"bot": bot, "start_places": True}, computer["token"])
+    assert found.status_code == 200, found.text
+    return found.json()["attempt"]
+
+
+def _state(api, bot):
+    return rows(api, "SELECT state FROM bots WHERE id=?", (bot,))[0]
 
 
 def test_botops_takes_the_builder_live_on_a_cloud_company_before_its_own_machine_exists(environment, monkeypatch):
