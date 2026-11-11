@@ -118,3 +118,15 @@ def test_setup_offers_the_six_packs_in_marketing_and_checks_none_by_itself():
     offered = R.rank(built, "marketing", answer)
     assert set(PACKS) <= {row["template_id"] for row in offered["bots"]}
     assert not set(PACKS) & set(offered["suggested_default"])
+
+
+def test_what_the_team_says_it_does_not_do_is_no_reason_to_offer_a_pack():
+    """Initech, Nov 11: "people finding our website on Google. No ads, no email list yet" put the Search Ads Owner
+    first, "Matches “google ads”": a sentence break and a "no" were read past. Neither is a match now."""
+    built = R.build(yaml.safe_load(GROUPS.read_text()), catalog.cards())
+    answer = "Mostly word of mouth and people finding our website on Google. No ads, no email list yet."
+    offered = R.rank(built, "marketing", answer)["bots"]
+    assert not [row for row in offered if row["why"].startswith("Matches")], offered
+    # Said plainly, the same words still match.
+    said = R.rank(built, "marketing", "We run Google ads and an email list")["bots"]
+    assert said[1] == {"template_id": "search-ads-owner", "why": "Matches “google ads”"}

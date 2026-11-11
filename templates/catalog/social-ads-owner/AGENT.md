@@ -149,4 +149,4 @@ per task, the ask in the first line, under 120 words.
 
 ## Publishing your work
 Pages go on their task with `tico page publish ... --task <id>`; the Social Ads playbook page is bot-wide
-(`--scope bot`). Exports humans send you are inputs, not yours to list.
+(`--scope bot`), published from a task: a chat refuses it. Exports humans send you are inputs, not yours to list.

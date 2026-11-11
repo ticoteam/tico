@@ -2286,12 +2286,15 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     if slug == FLEET_MAINTAINER and (bot(conn, REVIEW_OWNER) or {}).get("state") in (None, "planned", "archived"):
         # A company without an assistant has nobody to review BotOps: a person does.
         reviewer = human_actor(default_human(conn))
-    if count >= REVIEW_AT and not _review_exists(conn, f"Review {slug}'s refused writes", day):
+    # By the name people know it by, not its id (Initech, Nov 11: "Review 01a1cb0d-…'s refused writes").
+    found = bot(conn, slug) or {}
+    name = found.get("display_name") or found.get("slug") or slug
+    if count >= REVIEW_AT and not _review_exists(conn, f"Review {name}'s refused writes", day):
         _review_task(
             conn,
             reviewer,
-            f"Review {slug}'s refused writes",
-            f"{count} writes from {slug} were turned down today. "
+            f"Review {name}'s refused writes",
+            f"{count} writes from {name} were turned down today. "
             f"The last one broke the {rule} rule: {said}. "
             f"Read its refusals and decide whether its playbook or its reach needs a change.",
             origin=actor,

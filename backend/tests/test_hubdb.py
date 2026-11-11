@@ -349,8 +349,9 @@ class Rule8Counting(HubCase):
     def reviewed(self, slug):
         """Review tasks opened today for `slug`'s refusals. BotOps receives them, so it must exist."""
         self.assertTrue(H.bot(self.conn, H.FLEET_MAINTAINER), "no reviewer: a review count would be vacuous")
+        name = H.bot(self.conn, slug)["display_name"]  # the title names the bot as people know it, not by its id
         return self.conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE title=?", (f"Review {slug}'s refused writes",)
+            "SELECT COUNT(*) FROM tasks WHERE title=?", (f"Review {name}'s refused writes",)
         ).fetchone()[0]
 
     def test_writes_to_a_quarantined_bot_are_kept_or_refused_without_quarantining_the_sender(self):

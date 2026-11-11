@@ -3,6 +3,7 @@ slug: seo-owner
 name: SEO Owner
 required: false
 bootstrap: false
+live_after_setup: true
 group: marketing
 pack: marketing
 icon: travel_explore

@@ -3,6 +3,7 @@ slug: social-ads-owner
 name: Social Ads Owner
 required: false
 bootstrap: false
+live_after_setup: true
 lead: false
 group: marketing
 pack: marketing

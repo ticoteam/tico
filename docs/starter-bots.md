@@ -271,7 +271,9 @@ not need a blanket OK. A bot may ask a person to OK an uncertain action.
    under Ask first a person approves each one. The bot sends within the requested work and granted Tools.
 5. **Parked until then.** Recruiting a seat creates the starter as `needs_setup`: it answers a human's message and nothing else
    (no routine, task notice, Slack route or bot request wakes it) until its setup playbook ends with `tico bot setup-done`,
-   which it calls once its answers and first result are recorded. **Set up** on its page, or any first message, begins the
+   which it calls once its answers and first result are recorded. A growth channel pack Owner (`live_after_setup` on its
+   card) calls it as soon as its answers are recorded, and that call takes it live, so the ideas it files next are not
+   refused. **Set up** on its page, or any first message, begins the
    conversation. Parked starters do not count toward a member's bot limit. See [A bot's stages](onboarding.md#a-bots-stages).
 
 <a id="what-stops-a-starter-sending-things-outside-the-company"></a>

@@ -288,3 +288,26 @@ def test_renaming_a_seat_to_another_role_drops_the_template_it_was_set_up_with(a
     assert renamed.status_code == 200, renamed.text
     assert template() == ""
     assert len(post(api, f"seats/{seat['id']}/recruit", {})["candidates"]) > 1
+
+
+def test_a_growth_pack_owner_goes_live_at_its_own_setup_done_and_may_file_tasks(api):
+    """Initech, Nov 11: the SEO Owner, hired from a seat, ran its setup, said `tico bot setup-done` and stayed
+    Onboarding, so its first ideas were refused until a person marked it complete. A card that goes live after setup
+    (`live_after_setup`, the six growth channel packs) now goes live on the bot's own call, as a seat bot does."""
+    onboarding(api, "ops")
+    as_member(api, "ben@acme.example")
+    token = as_bot(api, "ops")
+    filed = {"owner": "ops", "title": "Publish the SEO playbook", "body": "x"}
+    assert api.post("/api/v2/tasks", json=filed, headers=headers(token)).status_code >= 400  # still onboarding
+    state = api.app.state.onboarding
+    with api.app.state.store.transaction() as c:
+        declared = state._declared(c, "ops")
+        state._write_config(c, "ops", {**declared, "template": "seo-owner"})
+
+    done = post(api, "bots/ops/onboarded", {"summary": "I know the pages that matter."}, token=token)
+    assert done["stage"] == "active" and done["changed"] is True and done["onboarding_state"] == "onboarded"
+    shown = get(api, "bots/ops", token="ben-test")
+    assert shown["stage"] == "active" and "can_complete_onboarding" not in shown  # nothing left for a person to mark
+    assert api.post("/api/v2/tasks", json=filed, headers=headers(token)).status_code == 200
+    # Saying it again changes nothing.
+    assert post(api, "bots/ops/onboarded", {}, token=token)["changed"] is False

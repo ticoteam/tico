@@ -212,6 +212,9 @@ def _card(document, instructions):
             if isinstance(item, dict)
         ],
         "example_output": str(document.get("example_output") or ""),
+        # A bot from this card goes live at the end of its own setup (`Onboarding.onboarded`), as a seat bot does: the
+        # growth channel packs, whose setup files their first ideas.
+        "live_after_setup": bool(document.get("live_after_setup")),
         "approval_required": [],  # compatibility field; sending follows the sending policy
         "starter": bool(document.get("first_routine")) and bool(document.get("onboarding")),
         "instructions": instructions,
@@ -976,9 +979,11 @@ class Onboarding:
     def onboarded(self, c, who, slug, arm=True, summary=""):
         """Mark onboarding complete: a person above the bot on the org chart (its manager, their managers, the owner)
         says it is done learning, so it becomes Active, its routines run and its work is claimed (backend/lifecycle.py).
-        The bot's own call is its "I'm ready" (`lifecycle.ready`) and changes no stage. A member's bot counts toward
-        their limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
-        company's bots, set up by the sample's own answers)."""
+        The bot's own call is its "I'm ready" (`lifecycle.ready`) and changes no stage, except for a bot whose card
+        goes live after its setup (`live_after_setup`, the growth channel packs): its own call completes onboarding, as
+        a seat bot goes live with no person step, so the ideas its setup files next are not refused. A member's bot
+        counts toward their limit from here on, so the limit is checked now. `arm` False leaves its first routine off
+        (the sample company's bots, set up by the sample's own answers)."""
         slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         if not H.bot(c, slug):
             raise Problem("not_found", "Bot not found", 404)
@@ -996,7 +1001,11 @@ class Onboarding:
             # (no new ready event, `at` unchanged).
             given = str(summary or "").strip()
             earlier = lifecycle.ready_of(self._declared(c, slug))
-            if not given and earlier:
+            live = bool((self._card_of(c, slug) or {}).get("live_after_setup"))
+            if live:
+                if given:
+                    lifecycle.ready(c, who, slug, given)
+            elif not given and earlier:
                 return {
                     "bot": slug,
                     "stage": lifecycle.ONBOARDING,
@@ -1004,12 +1013,13 @@ class Onboarding:
                     "onboarding_state": row["onboarding_state"],
                     "changed": False,
                 }
-            return {
-                **lifecycle.ready(c, who, slug, given),
-                "onboarding_state": row["onboarding_state"],
-                "changed": False,
-            }
-        if not lifecycle.may_complete(self.auth, c, who, slug):
+            else:
+                return {
+                    **lifecycle.ready(c, who, slug, given),
+                    "onboarding_state": row["onboarding_state"],
+                    "changed": False,
+                }
+        elif not lifecycle.may_complete(self.auth, c, who, slug):
             raise Problem(
                 "forbidden",
                 "Only a person above this bot on the org chart (its manager, their managers or "
@@ -1058,14 +1068,20 @@ class Onboarding:
         from .setup_live import GOES_LIVE
 
         declared = self._declared(c, slug)
-        template = declared.get("template")
-        card = next((card for card in read_cards(self.settings) if card["template"] == template), None)
-        if not template or not card:
+        card = self._card_of(c, slug, declared)
+        if not card:
             return None
         if not (card.get("bootstrap") and card.get("starter")) and not declared.get(GOES_LIVE):
             return None
         armed = self.arm_routines(c, who, slug)
         return armed[0]["id"] if armed else None
+
+    def _card_of(self, c, slug, declared=None):
+        """The card of the template the bot was built from, or None."""
+        template = (declared if declared is not None else self._declared(c, slug)).get("template")
+        if not template:
+            return None
+        return next((card for card in read_cards(self.settings) if card["template"] == template), None)
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""
