@@ -123,6 +123,8 @@ RENAMED = {
     "tico-counsel": "rules-owner",
     "travel": "travel-coordinator",
     "video-producer": "video-owner",
+    # Nov 11 (v0.6.0-rc.7): the Task Manager is the General Manager.
+    "task-manager": "general-manager",
 }
 
 
