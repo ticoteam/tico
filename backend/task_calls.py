@@ -456,6 +456,17 @@ def task_requeue(conn: "sqlite3.Connection", actor: str, task_id: str, seen_vers
 
 
 @_task_write()
+def task_release(
+    conn: "sqlite3.Connection", actor: str, task_id: str, tag: str | None = None, seen_version: int | None = None
+) -> list[Row]:
+    """Cut the release the task waits for (item_sources.github_release.cut), as a task write: a private task's refusal
+    keeps none of its words."""
+    from .item_sources import github_release
+
+    return github_release.cut(conn, task_id, actor, tag, seen_version=seen_version)
+
+
+@_task_write()
 def task_page_attach(
     conn: "sqlite3.Connection", actor: str, task_id: str, requirement: str, ref: str, seen_version: int | None = None
 ) -> Row:

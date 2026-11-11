@@ -114,6 +114,7 @@
  "task queue": "usage",
  "task reassign": "usage",
  "task relate": "kind",
+ "task release": "usage",
  "task run": "run-now",
  "task snooze": "usage",
  "thread edit": "not_found",

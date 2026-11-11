@@ -140,7 +140,8 @@ function peReqHTML(state: PeState, req: PipelineReqRec, si: number, ri: number):
     + (okKind ? '<div class="pe-row">' + peF(page ? 'Then OK from' : 'From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, page ? 'Nobody' : 'Choose')}</select>`)
       + peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`) + '</div>' : '')
     + (answer ? peAnswerHTML(req, at) : '')
-    + (needs === 'in_release' ? peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`) : '')
+    + (needs === 'in_release' ? peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`)
+      + peF('Release with', `<input data-pe-rf="release_with" ${at} maxlength="120" value="${esc(String(req.settings['release_with'] ?? ''))}" placeholder="workflow:release.yml or tag" autocomplete="off">`) : '')
     + '<div class="pe-req-foot">' + (PE_SWITCHES[needs] ?? []).map(([key, label]) =>
       `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${req.settings[key] === true ? ' checked' : ''}> ${esc(label)}</label>`).join('')
     + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`
@@ -297,7 +298,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
     req.choices = value === 'choice' ? req.choices ?? [] : null;
     peDraw(state);
   }
-  else if (rf === 'release_repo') req.settings = peSetting(req.settings, rf, value.trim() || null);
+  else if (rf === 'release_repo' || rf === 'release_with') req.settings = peSetting(req.settings, rf, value.trim() || null);
   else if (rf === 'person_id') req.person_id = value || null;
   else if (rf === 'who_oks') req.who_oks = value as PipelineReqRec['who_oks'];
   else if (rf === 'can_push_past') req.can_push_past = checked;

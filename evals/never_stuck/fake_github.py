@@ -138,6 +138,11 @@ class RigGitHub:
         self._up("merge_group_prs")
         return self.gh.merge_group_prs(repo, base_ref, head_sha)
 
+    def cut_release(self, repo: str, kind: str, name: str, sha: str) -> dict[str, Any]:
+        self._up("cut_release")
+        out: dict[str, Any] = self.gh.cut_release(repo, kind, name, sha)
+        return out
+
     def dequeue(self, repo: str, number: int) -> dict[str, Any]:
         self._up("dequeue")
         out = self.gh.dequeue(repo, number)

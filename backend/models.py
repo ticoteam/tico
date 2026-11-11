@@ -299,6 +299,15 @@ class TaskQueue(Contract):
     on_behalf_of: ID | None = None
 
 
+class TaskRelease(Contract):
+    """Ask Tico to cut the release a task waits for, the way its In a release names (github_release.cut). `tag` names
+    the tag when the repository releases from a tag."""
+
+    tag: Annotated[str, Field(min_length=1, max_length=100)] | None = None
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
 class TaskOwner(Contract):
     """Give the task to another owner for this stage (H.task_reassign)."""
 

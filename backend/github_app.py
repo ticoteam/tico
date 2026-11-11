@@ -1684,6 +1684,10 @@ def manifest(settings, name, administration, personal=False):
     public = settings.public_url
     permissions = {**TURN_READS, **TURN_PERMISSIONS}  # a write a bot needs wins over the same read
     permissions.update(CHECKS_PERMISSIONS)  # the server's own tico/merge-ok check; no bot's token carries it
+    # Tico itself runs a repository's release workflow when the Release Owner asks (item_sources/github_release.py),
+    # with a server token naming Actions: write alone. A bot's turn still reads Actions only (TURN_READS, mint_turn),
+    # unless an Owner lets that bot run workflows (`run_workflows`).
+    permissions["actions"] = "write"
     if administration:
         permissions["administration"] = "write"
     body = {

@@ -651,4 +651,16 @@ def register(
 
         return work(request, tid, body, call)
 
+    @app.post("/api/v2/tasks/{tid}/release")
+    def task_release(request: Request, tid: str, body: M.TaskRelease):
+        """Cut the release the task waits for in its Release stage, the way In a release names (`release_with`): Tico
+        runs the release workflow or creates the tag through its GitHub App (backend/item_sources/github_release.py).
+        The stage owner, the pipeline's manager or any person; a bot only once a person signed off before release."""
+
+        def call(c: Any, who: Any, task_id: str) -> Any:
+            owed = H.task_release(c, who.actor, task_id, body.tag, body.version)
+            return {"asked": [{"repo": e["item_key"], "how": e["pinned"].rpartition("#")[0]} for e in owed]}
+
+        return work(request, tid, body, call)
+
     replays()

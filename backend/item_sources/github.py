@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from .. import item_metadata as IM
 from .. import source_actions as SA
+from . import github_release as GR
 
 if TYPE_CHECKING:
     import sqlite3
@@ -99,6 +100,13 @@ class GitHub(Protocol):
     def merge_group_prs(self, repo: str, base_ref: str, head_sha: str) -> list[Row]:
         """The PRs in the merge queue's group whose merge commit is `head_sha`: [{number, head_sha}], the group's own
         entry and every one ahead of it; [] when GitHub names no such group."""
+        ...
+
+    def cut_release(self, repo: str, kind: str, name: str, sha: str) -> Row:
+        """Ask for a release the way the repository makes one (backend/item_sources/github_release.py): `workflow`
+        runs the workflow file `name` on the default branch (`workflow_dispatch`); `tag` creates the tag `name` at
+        `sha`. {ok, how, reason}. Not ok, without raising, when GitHub refuses or Tico's App lacks the permission
+        (the reason then starts with github_release.MISSING)."""
         ...
 
 
@@ -794,8 +802,9 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 # The actions are `effects` rows (owed, done, failed, moot) of source `github`, action `queue`, item type `pr`.
 # Every function takes the caller's open write transaction and never commits, except `run`.
 
-QUEUE = "queue"  # GitHub's one source action: put the PR in the merge queue (undo: take it out)
-ACTIONS = (QUEUE,)
+QUEUE = "queue"  # GitHub's one stage action: put the PR in the merge queue (undo: take it out)
+ACTIONS = (QUEUE,)  # what a stage's on_enter may act; a release is asked for with a tool (github_release.cut)
+RELEASE = GR.RELEASE
 WAKE_REMOVED = "queue_removed"  # the stage owner's one wake per removal
 WAKE_MERGED_ANYWAY = "merged_anyway"
 WAKE_CHANGED = "changed_after_ok"
@@ -1070,7 +1079,10 @@ def _pr_of(effect: Row) -> tuple[str, int]:
 def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
     """GitHub merged the PR before Tico's owed `queue` ran: it is done, with no call. One someone else queued (or set
     to merge by itself) is still carried out, so `tico/merge-ok` is posted on its head and it does not wait forever on
-    a ruleset that requires the check (`enqueue` answers ok for a PR already queued)."""
+    a ruleset that requires the check (`enqueue` answers ok for a PR already queued). A release asked for is always
+    asked."""
+    if effect["action"] == RELEASE:
+        return False
     metadata = pr(conn, *_pr_of(effect))
     return metadata is not None and metadata["state"] == "merged"
 
@@ -1091,7 +1103,9 @@ def carry_out(github: "GitHub", effect: Row) -> Row:
     Queueing posts `tico/merge-ok` = success on exactly the pinned head first, the one `enqueue` is about to queue;
     a post that fails raises, so nothing is queued and the call is tried again like any failed call (then the owner's,
     `gave_up`). Taking it out posts failure on that head after the dequeue, so neither a bot nor GitHub queues it
-    again with Tico's success."""
+    again with Tico's success. A release asked for: github_release.carry_out."""
+    if effect["action"] == RELEASE:
+        return GR.carry_out(github, effect)
     repo, number = _pr_of(effect)
     head = str(effect.get("pinned") or "")
     if effect["kind"] == SA.ACT:
@@ -1106,7 +1120,11 @@ def carry_out(github: "GitHub", effect: Row) -> Row:
 
 
 def gave_up(conn: "sqlite3.Connection", effect: Row, reason: str) -> None:
-    """A `queue` failed for good: "PR merged" says GitHub refused, on the stage owner, told once."""
+    """A `queue` failed for good: "PR merged" says GitHub refused, on the stage owner, told once. A release refused:
+    github_release.gave_up."""
+    if effect["action"] == RELEASE:
+        GR.gave_up(conn, effect, reason)
+        return
     if effect["kind"] != SA.ACT:
         return
     E = _engine()
@@ -1126,7 +1144,10 @@ def gave_up(conn: "sqlite3.Connection", effect: Row, reason: str) -> None:
 
 def recorded(conn: "sqlite3.Connection", effect: Row, said: Row, state: str, version: int) -> bool:
     """Save what GitHub said to an action it carried out as the PR's metadata. True when the PR went in the queue
-    (source_actions takes it out again when the action was moot by then)."""
+    (source_actions takes it out again when the action was moot by then). A release asked: github_release.recorded."""
+    if effect["action"] == RELEASE:
+        GR.recorded(conn, effect)
+        return False
     E = _engine()
     repo, number = _pr_of(effect)
     ref: str = pr_ref(repo, number)
@@ -1377,7 +1398,7 @@ def pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: R
     )
 
 
-def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Standing:
+def _release_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
     metadata = link["metadata"]
     if not metadata:
         return _reading(requirement)
@@ -1393,7 +1414,7 @@ def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Sta
     for release in reversed(releases(conn, repo, prereleases=bool(settings.get("prereleases")))):
         if included(conn, release["id"], str(metadata["merged_sha"])):
             return Standing(requirement, MET, line=f"In {release['tag']}")
-    return Standing(requirement, WAITING, SOURCE, f"Waiting for a release of {repo}")
+    return GR.standing(conn, task, requirement, repo, metadata)  # who cuts it, and what became of the ask
 
 
 def in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | None) -> Standing:
@@ -1406,7 +1427,7 @@ def in_release(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: 
 def _release_silent(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
     """In a release for one PR, with `_silent`: a merged PR is not read again, so once it merged GitHub's word is the
     read of the release repo's releases (never read yet: since it merged)."""
-    found = _release_one(conn, requirement, link)
+    found = _release_one(conn, task, requirement, link)
     metadata: Row = link.get("metadata") or {}
     if metadata.get("state") != "merged":
         return _silent(task, requirement, link, found)
@@ -1421,8 +1442,14 @@ CONDITIONS = {
     "checks_pass": Condition("checks_pass", "Checks pass", PR, checks_pass),
     "pr_merged": Condition("pr_merged", "PR merged", PR, pr_merged, can_push_past="never"),
     # `release_repo` ("owner/name"; empty means the server's release repo, else each PR's own repo) and `prereleases`
-    # (a pre-release counts, D3; off by default).
+    # (a pre-release counts, D3; off by default); `release_with`, how Tico cuts a release when the Release Owner asks
+    # (`workflow:<file>`, `tag`, or empty: the repo releases on its own; github_release.py).
     "in_release": Condition(
-        "in_release", "In a release", PR, in_release, ("release_repo", "prereleases"), can_push_past="never"
+        "in_release",
+        "In a release",
+        PR,
+        in_release,
+        ("release_repo", "prereleases", "release_with"),
+        can_push_past="never",
     ),
 }

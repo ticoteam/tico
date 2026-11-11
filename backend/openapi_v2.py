@@ -1078,6 +1078,18 @@ STABLE = [
         "TaskResult",
     ),
     (
+        "/api/v2/tasks/{tid}/release",
+        "post",
+        "Tasks",
+        "releaseTask",
+        "Cut the release the task waits for, the way its In a release names (`release_with`: run the release "
+        "workflow, or create the tag `tag`), through Tico's GitHub App on the next Heartbeat. The stage owner, the "
+        "pipeline's manager or any person; a bot only once a person signed off before release. 409 task_stage off a "
+        "stage that waits for a release, task_needs_person with no person's sign-off, task_requirement with no way set, "
+        "no tag named, nothing merged, already released, or an earlier ask still waiting",
+        "TaskResult",
+    ),
+    (
         "/api/v2/tasks/{tid}/restore",
         "post",
         "Tasks",

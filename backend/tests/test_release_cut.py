@@ -1,0 +1,288 @@
+"""The Release stage cuts its release without a person (docs/pipelines-v3.md "GitHub", Release;
+backend/item_sources/github_release.py): the Release Owner is woken on entering Release, asks with ONE Tico tool
+(`tico task release`), and Tico carries it out through its GitHub App on the Heartbeat. GitHub is
+backend/tests/helpers/fake_github.py; nothing here reaches the real one."""
+
+import pytest
+
+from backend import never_stuck as NS
+from backend import task_engine as E
+from backend import task_requirements as R
+from backend import waiting_on as W
+from backend.item_sources import github as F
+from backend.item_sources import github_release as GR
+from backend.store import H
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.fake_github import FakeGitHub
+
+REPO = "acme/app"
+B, RM, EM, ANA = "bot:builder", "bot:release", "bot:eng-manager", X.ANA
+WORKFLOW = {"release_with": "workflow:release.yml"}
+
+
+def engineering(c, release=WORKFLOW, sign_off=True):
+    """Build -> Sign off (a person's OK, the pre-release sign-off) -> Merge (queues PRs) -> Release (In a release)."""
+    for slug in ("builder", "release", "eng-manager"):
+        X.bot(c, slug)
+    stages = [
+        {"name": "Build", "owner": B, "requirements": [X.github("pr_open"), X.github("checks_pass")]},
+        {
+            "name": "Sign off",
+            "owner": B,
+            "requirements": [{"kind": "ok", "person": ANA, "who_oks": "people_only", "can_push_past": 0}],
+        },
+        {"name": "Merge", "owner": RM, "on_enter": {"act": "github.queue"}, "requirements": [X.github("pr_merged")]},
+        {"name": "Release", "owner": RM, "requirements": [X.github("in_release", settings=release)]},
+    ]
+    if not sign_off:
+        stages.pop(1)
+    return X.pipeline(c, "eng", "Engineering", stages=tuple(stages), manager=EM)
+
+
+def new(c, number):
+    task = X.new_task(c, ANA, f"Ship {number}", "eng")
+    H.task_link(c, ANA, task["id"], f"https://github.com/{REPO}/pull/{number}")
+    return task["id"]
+
+
+def seen(c, gh, number):
+    return F.save_and_settle(c, REPO, number, F.read_pr(gh, REPO, number), F.version_now())
+
+
+def stage(c, task_id):
+    return E.task(c, task_id)["stage"]["name"]
+
+
+def line(c, task_id):
+    row = E.task(c, task_id)
+    found = next(s for s in R.standings(c, row) if s.requirement["condition"] == "in_release")
+    return (found.state, found.on, found.line)
+
+
+def wakes(c, task_id, who=RM):
+    return [
+        (str(key), str(body or ""))
+        for key, body in c.execute(
+            "SELECT wake_key, body FROM messages WHERE wake_key LIKE ? AND recipient_id=? ORDER BY created_at, rowid",
+            (task_id + ":%", who),
+        ).fetchall()
+    ]
+
+
+def version(c, task_id):
+    return E.task(c, task_id)["version"]
+
+
+def refused(fn, rule):
+    with pytest.raises(H.Refused) as raised:
+        fn()
+    assert raised.value.rule == rule, raised.value
+    return raised.value.detail
+
+
+def to_release(company, gh, number=1, sign_off=True, **settings):
+    """A task whose PR merged, now in Release; the repo publishes releases and none holds the merge yet."""
+    with company.transaction() as c:
+        if not c.execute("SELECT 1 FROM pipelines WHERE id='eng'").fetchone():
+            engineering(c, settings.get("release", WORKFLOW), sign_off)
+            for release in gh.published[REPO]:  # Tico has read the repo's releases before
+                F.save_release(c, REPO, release, F.version_now())
+            F.saw_releases(c, REPO, F.version_now())
+        task_id = new(c, number)
+        gh.set_checks(REPO, gh.open_pr(REPO, number), "success")
+        seen(c, gh, number)
+        if sign_off:
+            assert stage(c, task_id) == "Sign off"
+            row = E.task(c, task_id)
+            rid = c.execute("SELECT id FROM requirements WHERE stage_id='eng-sign-off'").fetchone()[0]
+            X.answer(c, row, rid, "ok", ANA)
+            E.advance(c, task_id)
+        assert stage(c, task_id) == "Merge"
+    F.run(company, gh)
+    gh.merge(REPO, number)
+    F.refresh(company, gh, H.shift(H.now(), minutes=10))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release"
+    return task_id
+
+
+@pytest.fixture
+def gh():
+    found = FakeGitHub()
+    found.history[REPO] = [found.sha()]
+    found.publish(REPO, "v0.9.0")  # the repo publishes releases
+    return found
+
+
+def age(c, task_id, hours=2):
+    """The task's release asks were carried out `hours` ago."""
+    at = H.shift(H.now(), hours=-hours)
+    c.execute(
+        "UPDATE effects SET updated_at=?, created_at=? WHERE action='release' AND visit_id IN "
+        "(SELECT id FROM visits WHERE task_id=?)",
+        (at, at, task_id),
+    )
+
+
+# ----------------------------------------------------------------------------- the path with nobody
+def test_entering_release_wakes_the_release_owner_whose_one_ask_brings_the_release_and_done(company, gh):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        expected = f"No release of {REPO} asked for yet: cut one with `tico task release {task_id}`"
+        assert line(c, task_id) == (R.NOT_MET, RM, expected)
+        told = [body for key, body in wakes(c, task_id) if expected in body]
+        assert told, wakes(c, task_id)  # woken on entering Release, with what is missing
+        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
+        assert line(c, task_id) == (
+            R.WAITING,
+            "github",
+            f"Asking GitHub for a release of {REPO} (workflow release.yml)",
+        )
+        assert "release_asked" in X.events(c, task_id)
+        before = wakes(c, task_id)
+    F.run(company, gh)  # the Heartbeat runs the workflow through the App
+    assert gh.cuts == [(REPO, "workflow", "release.yml", "")]
+    with company.transaction() as c:
+        state, on, said = line(c, task_id)
+        assert (state, on) == (R.WAITING, "github") and said.startswith(f"Waiting for a release of {REPO}: workflow")
+        assert "release_cut" in X.events(c, task_id)
+        for seconds in (10, 150, 600):  # waiting on GitHub wakes nobody
+            NS.check(c, H.shift(H.now(), seconds=seconds))
+        assert wakes(c, task_id) == before
+    gh.publish(REPO, "v1.0.0")  # the release workflow published it
+    F.refresh(company, gh, H.shift(H.now(), minutes=20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Done"
+
+
+def test_one_workflow_run_covers_every_task_merged_before_it(company, gh):
+    first = to_release(company, gh, 1)
+    second = to_release(company, gh, 2)
+    with company.transaction() as c:
+        GR.cut(c, first, RM, seen_version=version(c, first))
+        assert line(c, second)[:2] == (R.WAITING, "github")  # the first task's ask covers this merge too
+        detail = refused(lambda: GR.cut(c, second, RM, seen_version=version(c, second)), "task_requirement")
+        assert "Tico waits for it" in detail
+    gh.release_on_cut = "v1.1.0"
+    F.run(company, gh)
+    F.refresh(company, gh, H.shift(H.now(), minutes=20))
+    with company.transaction() as c:
+        assert stage(c, first) == stage(c, second) == "Done"
+    assert len(gh.cuts) == 1
+
+
+def test_a_tag_repo_takes_the_tag_the_release_owner_names_at_the_merge_commit(company, gh):
+    task_id = to_release(company, gh, release={"release_with": "tag"})
+    with company.transaction() as c:
+        assert line(c, task_id)[2].endswith(f"`tico task release {task_id} --tag <name>`")
+        assert "--tag" in refused(lambda: GR.cut(c, task_id, RM, seen_version=version(c, task_id)), "task_requirement")
+        GR.cut(c, task_id, RM, "v1.2.0", seen_version=version(c, task_id))
+        merged = F.pr(c, REPO, 1)["merged_sha"]
+    F.run(company, gh)
+    assert gh.cuts == [(REPO, "tag", "v1.2.0", merged)]
+    F.refresh(company, gh, H.shift(H.now(), minutes=20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Done"
+
+
+# ----------------------------------------------------------------------------- refused
+def test_the_tool_is_refused_off_release_without_a_sign_off_or_a_way(company, gh):
+    with company.transaction() as c:
+        engineering(c)
+        building = new(c, 9)
+        assert "doesn't wait for a release" in refused(
+            lambda: GR.cut(c, building, RM, seen_version=version(c, building)), "task_stage"
+        )
+        assert refused(lambda: GR.cut(c, building, B, seen_version=version(c, building)), "task_stage")
+    signed = to_release(company, gh, 1)
+    with company.transaction() as c:
+        assert "Only the stage owner" in refused(
+            lambda: GR.cut(c, signed, B, seen_version=version(c, signed)), "task_requirement"
+        )
+        # The sign-off was taken back: a bot may not cut it, a person still may.
+        c.execute("UPDATE answers SET answer='no' WHERE by_id=?", (ANA,))
+        detail = refused(lambda: GR.cut(c, signed, RM, seen_version=version(c, signed)), "task_needs_person")
+        assert "Sign off" in detail
+        assert GR.cut(c, signed, ANA)
+
+
+def test_with_no_sign_off_stage_a_bot_is_refused_and_with_no_way_set_everyone_is(company, gh):
+    task_id = to_release(company, gh, sign_off=False)
+    with company.transaction() as c:
+        refused(lambda: GR.cut(c, task_id, RM, seen_version=version(c, task_id)), "task_needs_person")
+        c.execute("UPDATE requirements SET settings='{}' WHERE condition='in_release'")
+        assert "no way set" in refused(lambda: GR.cut(c, task_id, ANA), "task_requirement")
+
+
+# ----------------------------------------------------------------------------- failures never wait silently
+def test_a_missing_permission_is_one_clear_item_for_a_person_and_a_health_warning(company, gh):
+    from backend import health
+
+    task_id = to_release(company, gh)
+    gh.withheld = {"actions"}
+    with company.transaction() as c:
+        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
+    F.run(company, gh)
+    assert gh.cuts == []
+    with company.transaction() as c:
+        state, on, said = line(c, task_id)
+        assert state == R.WAITING and on is None
+        assert said.startswith("Tico's GitHub App lacks Actions: write") and f"tico task release {task_id}" in said
+        waits = W.of(c, E.task(c, task_id))
+        assert [w.state for w in waits] == [W.PERSON] and waits[0].who == ANA  # one item, a person's
+        assert "release_refused" in X.events(c, task_id)
+        told = [key for key, _ in wakes(c, task_id) if ":release_refused:" in key]
+        assert len(told) == 1  # the Release Owner hears why, once
+
+        class App:
+            def row(self, _c):
+                return {"slug": "acme-tico", "org": "acme", "account_type": None}
+
+        warned = health._github_release_cut(c, App())
+        assert warned and warned["label"] == "Tico can't cut releases" and "Actions: write" in warned["summary"]
+    gh.withheld = set()  # a person accepted the permission; a person asks again
+    with company.transaction() as c:
+        GR.cut(c, task_id, ANA)
+    F.run(company, gh)
+    with company.transaction() as c:
+        assert health._github_release_cut(c, App()) is None
+
+
+def test_no_release_after_an_ask_is_the_owner_s_then_a_person_s(company, gh):
+    task_id = to_release(company, gh)
+    with company.transaction() as c:
+        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
+    F.run(company, gh)
+    with company.transaction() as c:
+        age(c, task_id)
+        state, on, said = line(c, task_id)
+        assert (state, on) == (R.NOT_MET, RM) and said.startswith(f"No release of {REPO} an hour after Tico ran")
+        GR.cut(c, task_id, RM, seen_version=version(c, task_id))  # it may ask again
+    gh.fail_next("cut_release", "Workflow does not have 'workflow_dispatch' trigger")
+    F.run(company, gh)  # a failed call is tried again later, not given up at once
+    with company.transaction() as c:
+        assert line(c, task_id)[0] == R.WAITING
+        c.execute("UPDATE effects SET next_try_at=NULL")
+    F.run(company, gh)
+    with company.transaction() as c:
+        age(c, task_id)
+        state, on, said = line(c, task_id)
+        assert (state, on) == (R.WAITING, None)  # the second failure since the merge: a person's
+        assert [w.state for w in W.of(c, E.task(c, task_id))] == [W.PERSON]
+
+
+def test_a_repo_with_no_way_set_waits_half_an_hour_then_it_is_the_owner_s_turn(company, gh):
+    task_id = to_release(company, gh, release={})
+    with company.transaction() as c:
+        assert line(c, task_id) == (R.WAITING, "github", f"Waiting for a release of {REPO}")
+        at = H.shift(H.now(), minutes=-45)
+        c.execute("UPDATE visits SET entered_at=? WHERE task_id=? AND left_at IS NULL", (at, task_id))
+        state, on, said = line(c, task_id)
+        assert (state, on) == (R.NOT_MET, RM) and "Tico has no way set" in said
+
+
+def test_release_with_is_checked_when_the_pipeline_is_saved():
+    assert GR.valid("") and GR.valid("tag") and GR.valid("workflow:release.yml") and GR.valid("workflow:ci-cd.yaml")
+    assert (
+        not GR.valid("workflow:") and not GR.valid("workflow:../x.yml") and not GR.valid("dispatch") and not GR.valid(1)
+    )

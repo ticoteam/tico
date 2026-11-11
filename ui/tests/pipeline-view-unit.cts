@@ -155,6 +155,7 @@ const factories = (async () => {
   assert.match(kinds, /data-pe-rs="with_release"[^>]*> With its release/);
   const release = ctx.peReqHTML(state, state.draft.stages[1]!.requirements[0]!, 1, 0);
   assert.match(release, /data-pe-rf="release_repo"/);
+  assert.match(release, /data-pe-rf="release_with"[^>]*placeholder="workflow:release.yml or tag"/);
   assert.match(release, /data-pe-rs="prereleases"[^>]*> Pre-releases count/);
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
 
@@ -163,8 +164,10 @@ const factories = (async () => {
   ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', true));
   ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRs: 'prereleases'}, 'on', true));
   ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRf: 'release_repo'}, ' ticoteam/tico '));
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRf: 'release_with'}, ' workflow:release.yml '));
   assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {at_head: true});
-  assert.deepEqual(plain(state.draft.stages[1]!.requirements[0]!.settings), {prereleases: true, release_repo: 'ticoteam/tico'});
+  assert.deepEqual(plain(state.draft.stages[1]!.requirements[0]!.settings),
+    {prereleases: true, release_repo: 'ticoteam/tico', release_with: 'workflow:release.yml'});
   ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', false));
   assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {}, 'a switch off is not saved');
 

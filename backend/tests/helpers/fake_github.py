@@ -1,7 +1,7 @@
 """A GitHub in memory that answers `item_sources.github.GitHub` (backend/item_sources/github.py), for unit tests and the fault rig.
 
 It holds PRs, the checks on each commit, a linear main history per repo (a merge appends its commit) and the published
-releases. Calls are recorded in `calls`. `fail_next(call, reason)` makes the next call of that name raise with the
+releases, and the releases asked for (`cuts`). Calls are recorded in `calls`. `fail_next(call, reason)` makes the next call of that name raise with the
 reason, as a GitHub error would. As on GitHub, enqueue refuses a draft and a PR the base branch's rules refuse
 (`rule`), and, on a repo whose ruleset requires Tico's `tico/merge-ok` check (`require_merge_ok`), a PR whose head has
 no successful one: what a bot's own `gh pr merge` meets. `group` makes a merge group and its `merge_group` webhook.
@@ -28,6 +28,9 @@ class FakeGitHub:
         self.merge_ok = {}  # (repo, sha) -> [(ok, summary)] Tico posted, oldest first; the newest one counts
         self.checks_write = True  # the App has Checks: write; without it post_check posts nothing
         self.groups = {}  # (repo, merge group head sha) -> [PR numbers], first in the queue first
+        self.cuts = []  # the releases asked for: (repo, kind, name, sha)
+        self.withheld = set()  # permissions Tico's App lacks here ("actions", "contents"): cut_release answers no
+        self.release_on_cut = None  # a tag: asking for a release publishes it at once, as a release workflow does
         self._fail = {}
         self._shas = (f"{n:040x}" for n in itertools.count(1))
         self._run_ids = itertools.count(1)  # check run ids only grow, as GitHub's do
@@ -190,6 +193,25 @@ class FakeGitHub:
         pr["queue_state"] = "queued" if self.queue else "auto_merge"
         pr.update(removed_reason=None, failing_check=None, failing_check_url=None)
         return {"ok": True, "how": pr["queue_state"], "reason": ""}
+
+    def cut_release(self, repo, kind, name, sha):
+        """Run the release workflow, or create the tag; with `release_on_cut` (or a tag) the release is published at
+        once. A permission in `withheld` is a not-ok answer with the reason Tico's App gives."""
+        from backend.item_sources import github_release as GR
+
+        self._call("cut_release", repo, kind, name, sha)
+        needed = "actions" if kind == "workflow" else "contents"
+        if needed in self.withheld:
+            return {
+                "ok": False,
+                "how": None,
+                "reason": GR.MISSING_ACTIONS if kind == "workflow" else GR.MISSING_CONTENTS,
+            }
+        self.cuts.append((repo, kind, name, sha))
+        tag = name if kind == "tag" else self.release_on_cut
+        if tag:
+            self.publish(repo, tag)
+        return {"ok": True, "how": f"{kind} {name}", "reason": ""}
 
     def dequeue(self, repo, number):
         self._call("dequeue", repo, number)

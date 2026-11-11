@@ -724,7 +724,8 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
   back to Fixes 2 when the fault needs the Builder. A commit pushed in Merge does not send the task back through Review:
   the merge queue's checks are the gate.
-- **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day.
+- **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day. The Release
+  Owner cuts the release with `tico task release` (see "GitHub", Release).
 
 Also:
 
@@ -965,6 +966,18 @@ late. Nothing depends on the exact 10 seconds.
 - **In a release** means the merge commit is in the commit history of a published release of the release repo: not a
   draft, and no dash in the tag unless the In a release setting "Pre-releases count" is on (off by default). Time
   plays no part. A repo that publishes no releases: met once merged (C31). Checked when a release publishes and on the 5-minute read.
+- **Release.** In a release's setting **Release with** says how Tico cuts one: `workflow:<file>` (Tico runs that
+  workflow on the default branch; the App's Actions: write), `tag` (Tico creates the tag the Release Owner names at the
+  merge commit, and the repo's workflow publishes it; Contents: write), or empty (the repo releases by itself). With a
+  way set and nothing asked yet, it is the Release Owner's turn: "No release of <repo> asked for yet". It asks with
+  `tico task release <task>` (MCP `tico_task_release`, `POST /api/v2/tasks/{tid}/release`), and the Heartbeat carries it
+  out through the App, never a bot's token: the Release Owner's raw `gh workflow run`, tag and `gh release` stay
+  denied. Allowed for the stage owner, the pipeline's manager or a person, only on a stage with In a release, and for
+  a bot only when a person's OK stands on the people-only sign-off before it (Fixes 2). History: `release_asked`,
+  `release_cut`, `release_refused`. One workflow run asked after a task's merge covers every task waiting on that repo.
+  GitHub refusing, or no release an hour after the ask, is the Release Owner's turn with why (it asks again or says why
+  not); a second failure since the merge, or a permission the App lacks, is a person's, and health warns "Tico can't cut
+  releases". With no way set, the task waits on GitHub for 30 minutes, then it is the Release Owner's turn.
 
 ### What gets deleted
 

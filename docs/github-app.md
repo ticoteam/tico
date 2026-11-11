@@ -13,7 +13,7 @@ changes; bots keep using whatever git access their computer already has.
 | Pull requests | write | a bot opens pull requests for its work. A read grant reads them (`gh pr view`, `gh pr diff`) and cannot change them |
 | Issues | write | a bot files and comments on issues. A read grant reads issues and pull request comments and cannot write them |
 | Metadata | read | required by GitHub for every app |
-| Actions | read (read and write to run workflows) | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. With read alone it cannot start, rerun or cancel them; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
+| Actions | read and write | Tico itself runs a repository's release workflow when the Release Owner asks (`tico task release`; see [Cutting a release](#cutting-a-release)). A bot's run token carries Actions read only: it reads workflow runs, such as whether a deploy succeeded, and cannot start, rerun or cancel them unless an Owner lets it; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
 | Workflows | none (read and write to edit workflow files) | not in the manifest. Add it only for a bot that must create or change `.github/workflows` files; see [Letting a bot edit workflow files](#letting-a-bot-edit-workflow-files) |
 | Checks | read and write | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. Write is the server's alone: Tico posts its `tico/merge-ok` check with it ([Require Tico's merge check](#require-ticos-merge-check)). No bot's run token carries Checks or Commit statuses write, whatever its grant |
 | Commit statuses | read | a bot reads a pull request's commit statuses. It cannot create or change them |
@@ -30,6 +30,17 @@ Commit statuses, Pull requests, Issues and Deployments read for whichever of the
 grant keeps its write on pull requests and issues). An App made before one of these was in its
 manifest keeps working without it: add it as **Read-only** on the App's GitHub settings page and accept the updated
 permissions on the installation, and the next run's token carries it (at once when the App's webhook is active, otherwise within six hours). Mixed grants use separate tokens; see [Repositories](repositories.md). Tico checks the bot's own repository and effective grants, and refuses a bot the caller does not run or a repository outside the connected organization.
+
+### Cutting a release
+
+The Engineering pipeline's Release stage waits for a published release that holds the merge. When its In a release
+requirement names **Release with** `workflow:<file>` (for example `workflow:release.yml`), the Release Owner asks with
+`tico task release <task>` and the server runs that workflow on the default branch with a token naming Actions: write
+alone; with `tag`, it creates the named tag with Contents: write. No bot's token carries either for this. An App made
+before Actions: write was in its manifest needs it once: on the App's GitHub settings page set **Actions** to **Read
+and write**, save, then accept the updated permissions on the installation. Until then the task says "Tico's GitHub
+App lacks Actions: write", it is a person's turn, and health warns "Tico can't cut releases". Then ask again with
+`tico task release <task>`.
 
 ### Letting a bot run workflows
 

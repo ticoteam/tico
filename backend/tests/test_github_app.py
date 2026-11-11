@@ -187,13 +187,18 @@ def test_jwt_claims_and_repo_scoped_token(api, gh):
 
 
 def test_turn_token_reads_workflow_runs_once_the_installation_allows_it(api, gh):
-    assert manifest(api)["manifest"]["default_permissions"]["actions"] == "read"
+    # The App asks for Actions: write, for Tico's own release dispatch; a bot's turn token only ever reads Actions.
+    assert manifest(api)["manifest"]["default_permissions"]["actions"] == "write"
     connect(api)
     runner_token(api, "cpo")
     # An installation that has not accepted Actions yet still gets its token, without it.
     assert turn_token(api).status_code == 200
     assert "actions" not in gh.of("/access_tokens")[-1][2]["permissions"]
     gh.permissions = {"actions": "read"}
+    assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
+    assert turn_token(api).status_code == 200
+    assert gh.of("/access_tokens")[-1][2]["permissions"]["actions"] == "read"
+    gh.permissions = {"actions": "write"}  # accepted for the release dispatch: a turn still only reads
     assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
     assert turn_token(api).status_code == 200
     assert gh.of("/access_tokens")[-1][2]["permissions"]["actions"] == "read"

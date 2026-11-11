@@ -133,6 +133,16 @@ COMMANDS = [
         ("POST", "tasks/T1/queue", {"version": 3}),
     ),
     (
+        ["task", "release", "T1", "--version", "3"],
+        ("tico_task_release", {"id": "T1", "version": 3}),
+        ("POST", "tasks/T1/release", {"version": 3}),
+    ),
+    (
+        ["task", "release", "T1", "--tag", "v1.2.0", "--version", "3"],
+        ("tico_task_release", {"id": "T1", "tag": "v1.2.0", "version": 3}),
+        ("POST", "tasks/T1/release", {"version": 3, "tag": "v1.2.0"}),
+    ),
+    (
         ["task", "unlink", "T1", "L7"],
         ("tico_task_unlink", {"id": "T1", "link": "L7"}),
         ("DELETE", "tasks/T1/links/L7", {}),

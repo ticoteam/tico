@@ -1836,6 +1836,33 @@ def _github_workflows(c, github):
     return None
 
 
+def _github_release_cut(c, github):
+    """Tico cuts a release when the Release Owner asks (item_sources/github_release.py), with a token naming Actions:
+    write (a release workflow) or Contents: write (a tag). When the newest ask failed because the installation has not
+    accepted that permission, say so plainly: only a person can grant it. Reads the asks Tico recorded, no network."""
+    from .github_app import links
+    from .item_sources import github_release as GR
+
+    row = github.row(c) if github else None
+    newest = c.execute(
+        "SELECT state, last_error, item_key FROM effects WHERE source=? AND action=? AND kind='act' "
+        "AND state IN ('done', 'failed') ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+        (GR.SOURCE, GR.RELEASE),
+    ).fetchone()
+    if not row or not newest or newest[0] != "failed" or not str(newest[1] or "").startswith(GR.MISSING):
+        return None
+    return _check(
+        "github_release_cut",
+        "Tico can't cut releases",
+        "warn",
+        f"{newest[1]}. Tasks in Release wait for a release of {newest[2]} until then.",
+        [
+            _fix("Change the App's permissions", links(row)["permissions_url"]),
+            _fix("Open GitHub settings", "#/tools/github"),
+        ],
+    )
+
+
 def _github_workflow_edits(c, github):
     """`_github_workflows` for write grants an Owner or admin let edit workflow files: their token carries Workflows:
     write only once the installation has accepted it."""
@@ -3752,6 +3779,8 @@ def view(c, who, settings, auth, github, config):
             checks.append(repo_create)
         if workflows := _github_workflows(c, github):
             checks.append(workflows)
+        if release_cut := _github_release_cut(c, github):
+            checks.append(release_cut)
         if edits := _github_workflow_edits(c, github):
             checks.append(edits)
         slack = _slack(c)

@@ -1934,6 +1934,25 @@ def task_queue(api, args):
     return _asked(api, args).post(f"tasks/{args['id']}/queue", {"version": _seen(args)}, key=_key(args))
 
 
+@tool(
+    "tico_task_release",
+    "Cut the release a task in Release waits for: Tico runs the repository's release workflow, or creates the tag you "
+    "name where it releases from a tag, through its GitHub App. One release covers every task waiting on that "
+    "repository. Refused before a person signed the task off, and while an earlier ask still waits for its release.",
+    {
+        "id": TASK_ID,
+        "tag": {"type": "string", "description": "The release's tag, where the repository releases from a tag"},
+        "version": VERSION,
+        "on_behalf_of": ASKED,
+    },
+    required=("id",),
+    writes=True,
+)
+def task_release(api, args):
+    body = {"version": _seen(args), **({"tag": args["tag"]} if args.get("tag") else {})}
+    return _asked(api, args).post(f"tasks/{args['id']}/release", body, key=_key(args))
+
+
 READERS = {
     "type": "array",
     "items": {"type": "string"},
@@ -12969,6 +12988,7 @@ ASSISTANT_WRITES = {
     "tico_task_link",
     "tico_task_unlink",
     "tico_task_queue",
+    "tico_task_release",
     "tico_task_answer",
     "tico_task_give",
     "tico_update_mark_read",

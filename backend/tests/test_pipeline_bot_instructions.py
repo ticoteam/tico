@@ -72,7 +72,11 @@ def test_no_pipeline_template_teaches_the_old_words(template):
             ["Late", "No owner", "On ice", "Changed after OK", "Merged anyway"],
             ["tico task reassign"],
         ),
-        ("release-owner", ["Merge", "Release"], ["tico task queue", '"Fixes 2"', "--force-with-lease"]),
+        (
+            "release-owner",
+            ["Merge", "Release"],
+            ["tico task queue", "tico task release", '"Fixes 2"', "--force-with-lease"],
+        ),
     ],
 )
 def test_each_template_names_its_stages_and_how_to_leave_them(template, stages, commands):

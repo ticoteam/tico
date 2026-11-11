@@ -8122,6 +8122,7 @@ from .task_calls import (
     task_move as task_move,
     task_page_attach as task_page_attach,
     task_reassign as task_reassign,
+    task_release as task_release,
     task_requeue as task_requeue,
     task_snooze as task_snooze,
     task_thumbs as task_thumbs,

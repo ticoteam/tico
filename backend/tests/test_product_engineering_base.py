@@ -49,6 +49,7 @@ def test_every_kind_is_built_and_has_its_settings():
     assert R.settings_of({"kind": "item", "source": "github", "condition": "in_release"}) == (
         "release_repo",
         "prereleases",
+        "release_with",
     )
 
 
