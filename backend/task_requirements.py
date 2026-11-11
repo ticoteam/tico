@@ -690,8 +690,9 @@ def standings(conn: "sqlite3.Connection", task: Row) -> list[Standing]:
     out = [standing(conn, task, r, answers.get(r["id"])) for r in for_visit(conn, visit)]
     from . import pr_conflicts
 
-    # A PR that conflicts with its base branch before Merge: the bot that built it rebases it first (pr_conflicts).
-    conflict = pr_conflicts.standing(conn, task)
+    # A PR that conflicts with its base branch before Merge: the bot that built it rebases it first, or after a
+    # person's answer the stage waits on (pr_conflicts).
+    conflict = pr_conflicts.standing(conn, task, out)
     return [conflict, *out] if conflict else out
 
 

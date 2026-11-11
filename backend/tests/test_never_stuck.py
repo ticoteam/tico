@@ -379,11 +379,74 @@ def test_a_late_task_that_waits_on_a_person_gets_one_look_from_the_manager_bot(c
     assert _states(c, task_id) == [("person", ANA)]
     assert later(hours=23) == {}  # a person's turn: no bot is woken
     assert later(hours=1) == {"late": 1, "woken": 1} and _ladder(c, task_id) == ("owner", 0)
-    assert _said(c, task_id, MANAGER)[0].startswith("Late: 24 hours in To do, expected 24 hours. It waits on: Card or")
+    said = _said(c, task_id, MANAGER)[0]
+    assert said.startswith("Late: 24 hours in To do, expected 24 hours. It waits on: Card or")
+    # Its one move is to push past an ask it may push past: never a snooze that would set the ask aside.
+    assert "It stays in Ana's list." in said and "push past it with a reason" in said and "snooze" not in said
     assert later(days=5) == {}  # already a person's turn: nothing is added
     assert [(n["kind"], n["line"]) for n in W.needs(c, ANA)] == [("ask", "Card or invoice?")]
     mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)["id"]
     assert later(days=30) == {} and _visit(c, mine)["late_told_at"] is None  # the day is for bots only
+
+
+SIGN_OFF = (
+    {
+        "name": "Sign off",
+        "owner": "assignee",
+        "expected_minutes": 1440,
+        "expected_bots_only": 1,
+        "requirements": [{"kind": "ok", "who_oks": "people_only", "person": ANA, "line": "OK to ship"}],
+    },
+)
+
+
+def test_a_late_task_that_waits_only_on_a_people_only_ok_wakes_no_manager_bot(c, general, later):
+    """Acme rc.5 (Nov 11): a Late wake offered the manager bot "snooze it" on a task that waited only on a person's
+    people-only OK, and its snooze took the OK out of the person's list. A bot may not push past that OK, so the
+    manager bot has no move: Late is the label only, and the OK stays in her list."""
+    X.pipeline(c, "ship", "Ship", SIGN_OFF, manager=MANAGER)
+    task_id = X.new_task(c, ANA, "Ship the launch note", "ship", assignee=BUILDER)["id"]
+    assert _states(c, task_id) == [("person", ANA)]
+    assert later(hours=24) == {"late": 1}
+    assert _visit(c, task_id)["late_told_at"] and X.wakes(c, task_id, MANAGER) == []
+    assert later(days=5) == {}  # 3 times the time: already her turn, nothing is added
+    assert [(n["kind"], n["line"]) for n in W.needs(c, ANA)] == [("ask", "OK to ship")]
+
+
+def test_a_bots_snooze_never_hides_an_ask_and_the_answer_ends_it(c, general, later):
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    task_id = row["id"]
+    X.ran(c, task_id, BUILDER)
+    asked = E.add_requirement(c, task_id, BUILDER, "answer", ANA, "Card or invoice?", seen_version=row["version"])
+    E.snooze(c, task_id, MANAGER, "Waiting on Ana", until=H.shift(H.now(), days=2), seen_version=asked["version"])
+    assert _states(c, task_id) == [("snoozed", MANAGER), ("person", ANA)]
+    assert [(n["kind"], n["line"]) for n in W.needs(c, ANA)] == [("ask", "Card or invoice?")]
+    assert later(hours=1) == {} and _queued(c, task_id) == []  # set aside: no wake, and the rules hold (rule 3)
+    # Her answer is what the snooze waited for: it ends, and the task goes on now, not in two days.
+    A.answer(c, task_id, asked["requirement_id"], ANA, "Card")
+    assert not E.task(c, task_id).get("snooze") and _states(c, task_id) == [("bot", BUILDER)]
+    assert _said(c, task_id, BUILDER)[-1] == 'Ana answered "Card or invoice?": Card'
+    # A person's own snooze still sets the task aside, asks and all.
+    other = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)
+    X.ran(c, other["id"], BUILDER)
+    E.add_requirement(c, other["id"], BUILDER, "answer", ANA, "Which footer?", seen_version=other["version"])
+    E.snooze(c, other["id"], ANA, until=H.shift(H.now(), days=2))
+    assert [n["task_id"] for n in W.needs(c, ANA)] == []
+    assert later(hours=1) == {}
+
+
+def test_a_bot_takes_back_only_an_ask_a_bot_added(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    mine = E.add_requirement(c, task_id, ANA, "ok", "human:ben", "OK the launch date")
+    for bot in (BUILDER, MANAGER):
+        with pytest.raises(H.Refused, match="task_needs_person"):
+            E.withdraw_requirement(c, mine["requirement_id"], bot, "Not needed")
+    asked = E.add_requirement(
+        c, task_id, BUILDER, "answer", ANA, "Card or invoice?", seen_version=E.task(c, task_id)["version"]
+    )
+    E.withdraw_requirement(c, asked["requirement_id"], MANAGER, "Found it in the docs")  # a bot's ask: a bot may
+    E.withdraw_requirement(c, mine["requirement_id"], ANA)
+    assert [n["kind"] for n in W.needs(c, ANA)] == []
 
 
 def test_a_persons_task_is_late_only_past_its_due_date_and_nobody_is_chased(c, general, later):

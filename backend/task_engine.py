@@ -1570,7 +1570,9 @@ def _replace_open(conn: "sqlite3.Connection", task_id: str, visit_id: str, by: s
 def withdraw_requirement(
     conn: "sqlite3.Connection", requirement_id: str, by: str, why: str | None = None
 ) -> Row | None:
-    """Take back a requirement that was added to one task. The task moves on if that was all it waited for."""
+    """Take back a requirement that was added to one task. The task moves on if that was all it waited for. A bot takes
+    back only what a bot asked: an ask a person added stays in the Needs you of whom it names until a person takes it
+    back or it is answered."""
     H = _h()
     requirement = R.get(conn, requirement_id)
     if not requirement or not requirement.get("visit_id"):
@@ -1578,6 +1580,8 @@ def withdraw_requirement(
     visit = H._one(conn, "SELECT * FROM visits WHERE id=?", (requirement["visit_id"],))
     if requirement.get("withdrawn_at") or not visit or visit.get("left_at"):
         return task(conn, visit["task_id"]) if visit else None
+    if is_bot(by) and not requirement.get("by_bot"):
+        _refuse(conn, by, "task_needs_person", "A person asked this: only a person takes it back", visit["task_id"])
     ts = H.now()
     conn.execute("UPDATE requirements SET withdrawn_at=? WHERE id=?", (ts, requirement_id))
     _reset_ladder(conn, visit, ts, by)

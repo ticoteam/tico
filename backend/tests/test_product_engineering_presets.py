@@ -534,13 +534,14 @@ def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_perso
             A.answer(c, row["id"], rid, bot, "ok", seen_version=E.task(c, row["id"])["version"])
         with pytest.raises(H.Refused, match="task_needs_person"):
             E.move(c, row["id"], E.NEXT, bot, "The person is away", seen_version=E.task(c, row["id"])["version"])
-    # Late: the manager bot is told once, and still cannot push past. The task stays the person's, whom it reads.
+    # Late: no bot is woken, since none can give or push past a people-only OK, and the manager still cannot push
+    # past. The task stays the person's, whom it reads.
     minutes = row["stage"]["expected_minutes"]
     X.settled(c)
     time_machine.shift(timedelta(minutes=minutes + 1))
     assert N.check(c)["late"] == 1
     late = E.task(c, row["id"])
-    assert [who for key, who in X.wakes(c, row["id"]) if key.endswith(":late")] == [manager]
+    assert [who for key, who in X.wakes(c, row["id"]) if key.endswith(":late")] == []
     with pytest.raises(H.Refused, match="task_needs_person"):
         E.move(c, row["id"], E.NEXT, manager, "Late: pushing past", seen_version=late["version"])
     time_machine.shift(timedelta(minutes=3 * minutes))

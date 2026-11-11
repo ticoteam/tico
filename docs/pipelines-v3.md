@@ -240,6 +240,7 @@ quarantining a bot: not a requirement, room, a cap or a rule.
   reason.
 - A bot can have one open per task. Asking again replaces it (C15).
 - Moving back or closing ends it. Nothing is left behind.
+- A bot takes back only an ask a bot added. An ask a person added is taken back by a person.
 - Only an OK or an answer can name a person (C29). To hand it to someone else, put their name on it.
 
 The three ways to reach a person are in [Reaching a person](#reaching-a-person).
@@ -394,6 +395,8 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
 - Anyone who can work the task can snooze it. A bot gives a reason. A person doesn't have to (C24).
 - It ends on its date, or when anyone unsnoozes it. The owner is then woken once.
 - While snoozed: no wakes, no Late, no slot held, and it leaves Needs you.
+- A bot's snooze never hides a person's open ask: that ask stays in the person's Needs you, and their answer ends the
+  snooze. Only the person's own snooze takes it out of their list.
 - Finishing or closing a task ends its snooze.
 - A bot should give an end date. With none, the task shows "On ice" and the manager bot is told once (C1).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
@@ -455,6 +458,8 @@ is.
 
 - A task is Late once it has been in a stage longer than the stage's expected time. Snoozed time doesn't count.
 - Late is a label on the task. It also hands the task to the manager bot, once per visit, on the same 3 tries.
+- A task that waits only on people's answers stays in their lists. The manager bot is woken only when a bot may push
+  past one of those asks, and it is not offered a snooze. When every ask is people only, no bot is woken.
 - Still there at 3 times the expected time: it lands in one person's list, once (C5). If it is already a person's turn,
   nothing is added.
 - This is the backstop for work that keeps changing but never finishes, and for waits on the outside world.
@@ -486,7 +491,8 @@ cases.
 - It sits in your list. Nothing runs and nothing reminds you.
 - Everyone else sees an amber "!" with your picture on the row, and "Waiting on Ana" on the task.
 - Past the stage's expected time it is Late. The manager bot looks once. It can push past with a reason if the
-  requirement allows that.
+  requirement allows that. If no bot may push past it (people only), no bot is woken. A bot's snooze never takes it
+  out of your list.
 
 #### Where "what is missing" shows
 
@@ -961,6 +967,10 @@ late. Nothing depends on the exact 10 seconds.
   rebase on the default branch, keep both sides' work, push and say so; the task stays in its stage. A bot holding
   the stage (a reviewer) gets one quiet line that it is not its to fix. The ladder tries the Builder, then the manager
   bot. With no Builder bot it is the stage owner's, as before. In Merge, the merge queue's drop says it.
+  While the stage waits on a person's OK or answer, the conflict is held: it stays not met, the person's ask adds one
+  line ("The PR has a merge conflict: Builder fixes it after your OK."), and the Builder is not woken. When the person
+  answers, the Builder is woken once to rebase, told to leave the OK'd page as it is. A rebase does not ask the person
+  again: their OK stands unless a new page is attached.
 - **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new

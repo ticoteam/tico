@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+from backend import answers as A
 from backend import github as G
 from backend import pr_conflicts as PC
 from backend import task_engine as E
@@ -159,3 +160,92 @@ def test_with_no_bot_that_built_it_the_conflict_is_the_owners(c):
     standing = PC.standing(c, row)
     assert standing and standing.on == "bot:rev-b"  # the task's owner in Review 2
     assert [to for _, to in _conflict_wakes(c, eng)] == ["bot:rev-b"]
+
+
+def _met_page(c, eng, file_id, item_versions):
+    """The open stage's page, attached with the PR heads it was for, and Jev's met verdict on it."""
+    row = E.task(c, eng)
+    rid = c.execute(
+        "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
+    ).fetchone()[0]
+    c.execute(
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
+        "rubric_hash, created_at) VALUES (?,?,?,?,1,?,?,'',?)",
+        (H.new_id(), row["visit"]["id"], rid, file_id, json.dumps(item_versions), "bot:builder", H.now()),
+    )
+    c.execute(
+        "INSERT INTO page_verdicts (id, file_id, version, rubric_hash, verdict, reasons, created_at, updated_at) "
+        "VALUES (?,?,1,'','met','',?,?)",
+        (H.new_id(), file_id, H.now(), H.now()),
+    )
+    return rid
+
+
+def _checks_pass(c, head):
+    from backend import item_metadata as IM
+
+    key = f"{T.REPO}#12"
+    old = IM.get(c, "github", "pr", key)["fields"]
+    IM.save(c, "github", "pr", key, {**old, "head_sha": head, "checks_state": "success"}, 1)
+
+
+def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_goes_to_the_builder_once(c):
+    """Acme rc.5 (Nov 11): PR #41 waited a day on its pre-release OK and the Builder rebased it after every merge to
+    main, each push unreviewed. While Fixes 2 waits on the person, the conflict is held: not met, nobody's turn, and
+    the person's ask says so. Their OK hands it to the Builder once; the rebase does not ask them again."""
+    _product, eng = T._filed_engineering(c)
+    T._move(c, eng, "engineering-build")
+    T._link_pr(c, eng, 12, "aaa")
+    _github(c, "aaa", None, action="opened")
+    T._move(c, eng, "engineering-review-2")
+    _met_page(c, eng, "f-rev2", {PR: "aaa"})  # the review was of aaa
+    T._move(c, eng, "engineering-fixes-2")
+    T._push(c, 12, "bbb")  # the Builder's fix after the review
+    _github(c, "bbb", None)
+    _checks_pass(c, "bbb")
+    rid = _met_page(c, eng, "f-pre", {})
+    row = E.task(c, eng)
+    assert row["stage"]["name"] == "Fixes 2"
+    assert [(w.state, w.who, w.ask) for w in W.of(c, row)] == [(W.PERSON, X.ANA, True)]
+    visit = row["visit"]["id"]
+
+    # Main moves and the PR conflicts, twice: nobody is woken, the task stays, the conflict is not met.
+    _github(c, "bbb", False)
+    _github(c, "bbb", False, action="refresh")
+    row = E.task(c, eng)
+    assert _conflict_wakes(c, eng) == []
+    conflict = PC.standing(c, row, R.standings(c, row)[1:])
+    assert conflict and PC.held(conflict) and not conflict.met
+    assert conflict.line == f"{PR} conflicts with its base branch: builder rebases it after Ana answers"
+    assert [(w.state, w.who) for w in W.of(c, row)] == [(W.PERSON, X.ANA)]
+    assert W.turn(c, row) is None and W.turns(c, row) == set()
+    assert not E.advance(c, eng)
+    [ask] = [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
+    assert ask["kind"] == "ask" and ask["requirement_id"] == rid
+    assert ask["line"].endswith("OK Ana (version 1). The PR has a merge conflict: builder fixes it after your OK.")
+    assert "New commits since the reviews (now at bbb)" in ask["line"]
+
+    # Ana OKs: the conflict is the Builder's now, one wake, and the page stays OK'd.
+    A.answer(c, eng, rid, X.ANA, "ok")
+    row = E.task(c, eng)
+    assert row["stage"]["name"] == "Fixes 2"
+    key = f"{eng}:{visit}:conflict:{PR}@bbb"
+    assert _conflict_wakes(c, eng) == [(key, "bot:builder")]
+    wake = c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
+    assert "Its page is OK'd: leave it as it is." in wake
+    assert "Say so on the page the person OKs" not in wake  # no nudge to attach a new version
+    assert [(w.state, w.who) for w in W.of(c, row)] == [(W.BOT, "bot:builder")]
+    assert not [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
+    _github(c, "bbb", False, action="refresh")  # the hourly read again: no second wake
+    assert len(_conflict_wakes(c, eng)) == 1
+
+    # The Builder pushes the rebase: the OK stands, nobody is asked again, and the task goes on to Merge once the
+    # checks pass at the new commit.
+    T._push(c, 12, "ccc")
+    _github(c, "ccc", None)
+    row = E.task(c, eng)
+    assert PC.standing(c, row) is None and row["stage"]["name"] == "Fixes 2"
+    assert not [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
+    _checks_pass(c, "ccc")
+    E.advance(c, eng)
+    assert E.task(c, eng)["stage"]["name"] == "Merge"
