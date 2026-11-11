@@ -6,11 +6,11 @@ running this.
 
 - HUB_PATHS: every path the CLI parses, its aliases and its top-level renames (hubcli.RENAMED) included.
 - HUB_READ_PATHS: the leaf paths that only read, which the runner may run without asking. A command built from a spec
-  (clients/cli_spec.py) is one when none of the tools it can run writes (`writes` on the tool). The commands the hand
-  parser still builds are listed in HAND_READ_PATHS, which shrinks as they move to specs. Left out on purpose: reads
-  that mark something (`inbox`, `message list`, `update read`, `changelog list`), reads with a writing flag (`rules
-  read --from`), paid lookups (`gateway search`, `doc fetch`), checks, and every group or alias of a group (`status`,
-  `org`, `docs`).
+  (clients/cli_spec.py) is one when none of the tools it can run writes (`writes` on the tool) or runs on this computer
+  (`local`: it saves files), and it is not a paid lookup (PAID). The commands the hand parser still builds are listed in
+  HAND_READ_PATHS, which shrinks as they move to specs. Left out on purpose: reads that mark something (`inbox`,
+  `message list`, `update read`, `changelog list`), reads with a writing flag (`rules read --from`), paid lookups
+  (`gateway search`, `doc fetch`), checks, and every group or alias of a group (`status`, `org`, `docs`).
 """
 
 import argparse
@@ -94,11 +94,6 @@ HAND_READ_PATHS = (
     "gtm summary",
     "history",
     "integrations",
-    "kpi list",
-    "kpi show",
-    "lens list",
-    "lens runs",
-    "lens show",
     "listening item list",
     "listening runs",
     "listening show",
@@ -119,7 +114,6 @@ HAND_READ_PATHS = (
     "origin show",
     "page list",
     "page show",
-    "proposal list",
     "recent",
     "replay show",
     "repo list",
@@ -197,10 +191,15 @@ def spec_paths():
     return out
 
 
+# Spec'd commands whose tools neither write nor run on this computer, but spend from the company's Gateway cap.
+PAID = ("gateway search", "gateway fetch", "gateway digest")
+
+
 def read_paths():
     reads = set(HAND_READ_PATHS)
     for path, command in spec_paths().items():
-        if not any(hubtools.BY_NAME[tool]["writes"] for tool in (command.tool, *command.tools)):
+        tools = [hubtools.BY_NAME[name] for name in (command.tool, *command.tools)]
+        if path not in PAID and not any(tool["writes"] or tool["local"] for tool in tools):
             reads.add(path)
     return sorted(reads)
 

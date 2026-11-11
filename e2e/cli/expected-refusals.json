@@ -49,7 +49,7 @@
  "file review": "forbidden",
  "file touch": "not_found",
  "finance action": "not_found",
- "gateway digest": "JSONDecodeError: Expecting value: line 1 column 1 (char 0)",
+ "gateway digest": "validation",
  "gateway fetch": "gateway_not_connected",
  "gateway image": "gateway_not_connected",
  "gateway search": "gateway_not_connected",

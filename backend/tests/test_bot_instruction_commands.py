@@ -36,9 +36,11 @@ RUN_GROUPS = ("task", "tasks", "ok", "needs-you")
 SPAN = re.compile(r"`((?:tico|hub) [^`]+)`")
 PATH = re.compile(r"[\w./-]+")
 # A value the text leaves for the bot to fill in (`--kind <kind>`, `--content JSON`, `NUMBER`, `--period-start D`)
-# gets a sample that a choice, a number or a JSON flag may refuse; the bot puts in a real one.
+# gets a sample that a choice, a number or a JSON flag may refuse; the bot puts in a real one. A file the text names
+# (`--items-file items.json`) is one the bot writes first, so here it is missing.
 FILLED = re.compile(
     r"invalid choice: '(1|\.\.\.)'|invalid int value: '[A-Z_]+'|must be a JSON object|is JSON, for example"
+    r"|cannot read \S+ \(No such file or directory\)"
 )
 
 

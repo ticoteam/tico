@@ -183,6 +183,8 @@ def argument_value(action, command):
         return "0" if "wait" in dest else "1"
     if action.type is hubcli.json_value:
         return '{"project": "acme-smoke"}'
+    if action.metavar == "FILE" and action.type is not None:
+        return "JSONFILE"  # a flag whose type reads the file as it parses (`--items-file`)
     if dest in (
         "id",
         "task",
@@ -238,14 +240,18 @@ def argv_for(path, leaf, file_path):
             skip.update(id(action) for action in group._group_actions[1:])
     argv = list(path)
     trailing = []
+
+    def value_of(action):
+        value = argument_value(action, path)
+        return {"FILE": str(file_path), "JSONFILE": str(file_path.with_suffix(".json"))}.get(value, value)
+
     for action in leaf._actions:
         if isinstance(action, (argparse._HelpAction, argparse._SubParsersAction)) or id(action) in skip:
             continue
         if not action.option_strings:
             # An optional positional is left out, unless it is the one choice of a required group (`approve <id>|--all`).
             if action.nargs not in ("?", "*") or id(action) in first_of_required:
-                value = argument_value(action, path)
-                argv.append(str(file_path) if value == "FILE" else value)
+                argv.append(value_of(action))
             continue
         if "--dry-run" in action.option_strings:
             trailing.append(action.option_strings[0])
@@ -254,8 +260,7 @@ def argv_for(path, leaf, file_path):
             if action.nargs == 0:
                 trailing.append(action.option_strings[0])
             else:
-                value = argument_value(action, path)
-                trailing += [action.option_strings[0], str(file_path) if value == "FILE" else value]
+                trailing += [action.option_strings[0], value_of(action)]
     return argv + EXTRA.get(" ".join(path), []) + trailing
 
 
@@ -344,6 +349,7 @@ def seeded_ids(api, tmp_path):
     )
     file_path = tmp_path / "acme-smoke.txt"
     file_path.write_text("Acme smoke file\n")
+    file_path.with_suffix(".json").write_text("{}\n")  # beside it, for a flag that reads JSON (`argument_value`)
     yield file_path
     SEEDS.clear()
     SEEDS["default"] = "acme-smoke-id"

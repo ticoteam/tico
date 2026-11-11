@@ -1027,6 +1027,7 @@ pub(super) const HUB_READ_PATHS: &[&str] = &[
     "finance metric",
     "finance report",
     "finance search",
+    "gateway catalog",
     "goal checkin list",
     "goal list",
     "goal show",

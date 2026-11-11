@@ -9,10 +9,11 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from clients.tico import APIError
-
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
+from clients.commands._shared import json_file
+from clients.tico import APIError
 
 
 @tool(
@@ -450,10 +451,21 @@ VIDEO_JOB = re.compile(r"gv_[0-9a-f]{24}")
     "cap, held until the job ends.",
     {
         "prompt": _s("What the video shows"),
-        "seconds": {"type": "integer", "minimum": 3, "maximum": 15, "default": 8},
-        "resolution": {"type": "string", "enum": list(VIDEO_RESOLUTIONS), "default": "720p"},
-        "aspect": {"type": "string", "enum": list(VIDEO_ASPECTS), "default": "16:9"},
-        "audio": {"type": "boolean", "default": True},
+        "seconds": {
+            "type": "integer",
+            "minimum": 3,
+            "maximum": 15,
+            "default": 8,
+            "description": "3 to 15 (8 by default)",
+        },
+        "resolution": {
+            "type": "string",
+            "enum": list(VIDEO_RESOLUTIONS),
+            "default": "720p",
+            "description": "720p by default",
+        },
+        "aspect": {"type": "string", "enum": list(VIDEO_ASPECTS), "default": "16:9", "description": "16:9 by default"},
+        "audio": {"type": "boolean", "default": True, "description": "With sound (the default)"},
         "first_frame": _s("A PNG or JPEG file on this computer that the video starts from"),
         "last_frame": _s("A PNG or JPEG file on this computer that the video ends on"),
     },
@@ -488,7 +500,7 @@ def gateway_video(api, args):
     "is done, pass `out` (a new .mp4 file on this computer, never overwritten): the MP4 is saved there with a sidecar "
     "`<file>.json`, and the answer says where it is, its seconds and its cost. A video that fails costs nothing.",
     {
-        "id": _s("The job id from tico_gateway_video"),
+        "id": _s("The job id `gateway video` printed"),
         "out": _s("The .mp4 file to save a finished video to, e.g. clips/intro.mp4"),
     },
     required=("id",),
@@ -533,3 +545,57 @@ def gateway_video_status(api, args):
         "resolution": job.get("resolution"),
         "cost_usd": job.get("cost_usd"),
     }
+
+
+# ----------------------------------------------------------------------------- the `tico gateway` commands
+GATEWAY = (
+    Group("gateway", "the Tico AI Gateway: its lineup, web search and page reading"),
+    Command(
+        "gateway catalog",
+        "models, decision levels and services, with when to use each",
+        args=(Arg("query", positional=True, nargs="?"),),
+        example="tico gateway catalog 'engineering high'",
+    ),
+    Command(
+        "gateway search",
+        "search the web through the Gateway",
+        args=(Arg("max_results", "--max"),),
+        example="tico gateway search 'best crm for plumbers' --max 3",
+    ),
+    Command(
+        "gateway fetch", "read a web page or PDF through the Gateway", example="tico gateway fetch https://example.com"
+    ),
+    Command(
+        "gateway digest",
+        "group many items into one digest through the Gateway (Low prices)",
+        args=(Arg("items", "--items-file", action="store", type=json_file, metavar="FILE"),),
+        example="tico gateway digest --items-file items.json --style full",
+    ),
+    Command(
+        "gateway image",
+        "make an image through the Gateway and save it to a file",
+        args=(
+            Arg("category", choices=IMAGE_CATEGORIES),
+            Arg("refs", "--ref", metavar="FILE"),
+            Arg("out", "--out", metavar="PATH"),
+        ),
+        example="tico gateway image 'a red door' --model high --category photo --out shots/door.png",
+    ),
+    Command(
+        "gateway video",
+        "start a video through the Gateway: its job id, checked with video-status",
+        args=(
+            Arg("audio", "--audio", action="store_const", const=True),
+            Arg("audio", "--no-audio", action="store_const", const=False),
+            Arg("first_frame", metavar="FILE"),
+            Arg("last_frame", metavar="FILE"),
+        ),
+        example="tico gateway video 'waves at dawn' --seconds 5 --no-audio",
+    ),
+    Command(
+        "gateway video-status",
+        "check a video job; once done, save its MP4 to --out",
+        args=(Arg("out", metavar="PATH.mp4"),),
+        example="tico gateway video-status gv_0123456789abcdef01234567 --out clips/intro.mp4",
+    ),
+)
