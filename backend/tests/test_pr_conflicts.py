@@ -162,21 +162,27 @@ def test_with_no_bot_that_built_it_the_conflict_is_the_owners(c):
     assert [to for _, to in _conflict_wakes(c, eng)] == ["bot:rev-b"]
 
 
-def _met_page(c, eng, file_id, item_versions):
+def _met_page(c, eng, file_id, item_versions, version=1):
     """The open stage's page, attached with the PR heads it was for, and Jev's met verdict on it."""
     row = E.task(c, eng)
     rid = c.execute(
         "SELECT id FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL", (row["stage_id"],)
     ).fetchone()[0]
-    c.execute(
-        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
-        "rubric_hash, created_at) VALUES (?,?,?,?,1,?,?,'',?)",
-        (H.new_id(), row["visit"]["id"], rid, file_id, json.dumps(item_versions), "bot:builder", H.now()),
-    )
+    if version > 1:  # one page per visit and requirement: a new version replaces the one attached
+        c.execute(
+            "UPDATE requirement_pages SET file_id=?, version=?, item_versions=? WHERE visit_id=? AND requirement_id=?",
+            (file_id, version, json.dumps(item_versions), row["visit"]["id"], rid),
+        )
+    else:
+        c.execute(
+            "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, "
+            "attached_by_id, rubric_hash, created_at) VALUES (?,?,?,?,?,?,?,'',?)",
+            (H.new_id(), row["visit"]["id"], rid, file_id, version, json.dumps(item_versions), "bot:builder", H.now()),
+        )
     c.execute(
         "INSERT INTO page_verdicts (id, file_id, version, rubric_hash, verdict, reasons, created_at, updated_at) "
-        "VALUES (?,?,1,'','met','',?,?)",
-        (H.new_id(), file_id, H.now(), H.now()),
+        "VALUES (?,?,?,'','met','',?,?)",
+        (H.new_id(), file_id, version, H.now(), H.now()),
     )
     return rid
 
@@ -249,3 +255,93 @@ def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_
     _checks_pass(c, "ccc")
     E.advance(c, eng)
     assert E.task(c, eng)["stage"]["name"] == "Merge"
+
+
+def _waiting_on_the_pre_release_ok(c):
+    """Acme rc.5 run G, before the conflict: Engineering task in Fixes 2, PR 12 at aaa (the commit both reviews
+    read), checks green, the pre-release page met by Jev and waiting on Ana's OK."""
+    _product, eng = T._filed_engineering(c)
+    T._move(c, eng, "engineering-build")
+    T._link_pr(c, eng, 12, "aaa")
+    _github(c, "aaa", None, action="opened")
+    T._move(c, eng, "engineering-review-2")
+    _met_page(c, eng, "f-rev2", {PR: "aaa"})
+    T._move(c, eng, "engineering-fixes-2")
+    _checks_pass(c, "aaa")
+    rid = _met_page(c, eng, "f-pre", {})
+    return eng, rid
+
+
+def _ana_ask(c, eng):
+    return [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
+
+
+def test_run_g_order_the_ask_does_not_change_under_the_person_and_the_rebase_is_not_asked_again(c):
+    """Acme rc.5 run G (Nov 11, 13:28-13:36): the ask for the pre-release OK was open when another PR merged and this
+    one conflicted. Tico woke the Builder at once; while it rebased, the ask stayed in Needs you and changed under the
+    person (an unreviewed-commit line, then a new page). Now, in this order: ask open, base moves, conflict, the ask
+    keeps pointing at the same page and commit with one added line, the person OKs, the Builder rebases once, Merge
+    takes the new commit, and the person is not asked again."""
+    eng, rid = _waiting_on_the_pre_release_ok(c)
+    visit = E.task(c, eng)["visit"]["id"]
+    [before] = _ana_ask(c, eng)
+    assert before["requirement_id"] == rid and "merge conflict" not in before["line"]
+
+    # The base moves and GitHub says the PR conflicts: nothing changes under Ana but one line, nobody else runs.
+    _github(c, "aaa", False, action="refresh")
+    [held] = _ana_ask(c, eng)
+    assert (held["requirement_id"], held.get("since")) == (rid, before.get("since"))
+    assert held["line"] == R.sentences(before["line"], "The PR has a merge conflict: builder fixes it after your OK.")
+    assert "New commits since the reviews" not in held["line"]
+    assert _conflict_wakes(c, eng) == [] and W.turns(c, E.task(c, eng)) == set()
+    assert F.heads(c, eng) == {PR: "aaa"}
+
+    # Ana OKs the page she read: the conflict goes to the Builder, once.
+    A.answer(c, eng, rid, X.ANA, "ok")
+    assert E.task(c, eng)["stage"]["name"] == "Fixes 2"
+    assert _conflict_wakes(c, eng) == [(f"{eng}:{visit}:conflict:{PR}@aaa", "bot:builder")]
+    assert not _ana_ask(c, eng)
+
+    # The Builder rebases (a new commit, no new page): the OK stands, the task goes to Merge at the new commit, and
+    # Ana is never asked again.
+    T._push(c, 12, "ccc")
+    _github(c, "ccc", True)
+    assert not _ana_ask(c, eng)
+    _checks_pass(c, "ccc")
+    E.advance(c, eng)
+    row = E.task(c, eng)
+    assert row["stage"]["name"] == "Merge" and F.heads(c, eng) == {PR: "ccc"}
+    assert not _ana_ask(c, eng) and len(_conflict_wakes(c, eng)) == 1
+    answers = c.execute("SELECT COUNT(*) FROM answers WHERE requirement_id=? AND by_id=?", (rid, X.ANA)).fetchone()[0]
+    assert answers == 1  # one OK from Ana, for the whole run
+
+
+def test_a_send_back_while_the_conflict_is_held_goes_to_the_builder_with_the_conflict(c):
+    """Same start, but Ana sends the page back: the send back goes to the Builder as it does today, and the conflict
+    is the Builder's in that same hand-off, so one turn can fix both. Ana is asked again only for the new page."""
+    eng, rid = _waiting_on_the_pre_release_ok(c)
+    visit = E.task(c, eng)["visit"]["id"]
+    _github(c, "aaa", False, action="refresh")
+    assert _conflict_wakes(c, eng) == []
+    earlier = set(X.wakes(c, eng))
+
+    A.answer(c, eng, rid, X.ANA, "no", "Say what sign(0) returns")
+    row = E.task(c, eng)
+    assert row["stage"]["name"] == "Fixes 2"
+    after = [(k, who) for k, who in X.wakes(c, eng) if (k, who) not in earlier]
+    assert {who for _k, who in after} == {"bot:builder"}  # the send back and the conflict, both the Builder's
+    assert len(after) == 2 and (f"{eng}:{visit}:conflict:{PR}@aaa", "bot:builder") in after
+    conflict = PC.standing(c, row, R.standings(c, row))
+    assert conflict and not PC.held(conflict) and W.turns(c, row) == {"bot:builder"}
+    assert not _ana_ask(c, eng)
+
+    # The Builder rebases and attaches page v2: Ana is asked for v2 (her send back), not for the rebase.
+    T._push(c, 12, "ccc")
+    _github(c, "ccc", True)
+    _met_page(c, eng, "f-pre", {}, version=2)
+    [ask] = _ana_ask(c, eng)
+    assert ask["requirement_id"] == rid and "merge conflict" not in ask["line"]
+    _checks_pass(c, "ccc")
+    A.answer(c, eng, rid, X.ANA, "ok")
+    assert E.task(c, eng)["stage"]["name"] == "Merge" and F.heads(c, eng) == {PR: "ccc"}
+    assert len(_conflict_wakes(c, eng)) == 1

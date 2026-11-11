@@ -968,9 +968,10 @@ late. Nothing depends on the exact 10 seconds.
   the stage (a reviewer) gets one quiet line that it is not its to fix. The ladder tries the Builder, then the manager
   bot. With no Builder bot it is the stage owner's, as before. In Merge, the merge queue's drop says it.
   While the stage waits on a person's OK or answer, the conflict is held: it stays not met, the person's ask adds one
-  line ("The PR has a merge conflict: Builder fixes it after your OK."), and the Builder is not woken. When the person
-  answers, the Builder is woken once to rebase, told to leave the OK'd page as it is. A rebase does not ask the person
-  again: their OK stands unless a new page is attached.
+  line ("The PR has a merge conflict: Builder fixes it after your OK."), and the Builder is not woken, so the ask does
+  not change under the person. When the person answers, the Builder is woken once to rebase: after an OK it is told to
+  leave the OK'd page as it is, and a send back reaches it with the conflict, so one turn can fix both. A rebase does
+  not ask the person again: their OK stands unless a new page is attached.
 - **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
