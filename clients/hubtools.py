@@ -13333,10 +13333,11 @@ UNLISTED = frozenset({"tico_finance_card_fill"})
 
 def listing(local=False, kind=None):
     """`tools/list` payload: the public fields of every tool this server may offer this kind of caller (all of them
-    when the kind is not known), never an UNLISTED one."""
+    when the kind is not known), never an UNLISTED one. Sorted by name, so the order never depends on where a tool is
+    defined (and `tico_<noun>_<verb>` names keep a noun's tools together)."""
     return [
         {"name": t["name"], "description": t["description"], "inputSchema": t["inputSchema"]}
-        for t in TOOLS
+        for t in sorted(TOOLS, key=lambda t: t["name"])
         if t["name"] not in UNLISTED and (local or not t.get("local")) and (kind is None or kind in offered_to(t))
     ]
 
