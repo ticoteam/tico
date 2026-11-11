@@ -156,7 +156,7 @@ const pipelineRailFor = (rec: PipelineRec | null | undefined): boolean =>
 /** Mounts the rail into the page's host for a pipeline with a manager, or draws it again with the tasks now held; a
     pipeline with no manager, or a phone, has no rail. */
 function pipelineRailSync(host: HTMLElement, rec: PipelineRec): void {
-  if (!pipelineRailFor(rec)) {
+  if (!rec.manager_id || !pipelineRailFor(rec)) {
     if (PR?.host === host) pipelineRailLeave();
     prPlace(host, false);
     return;
