@@ -119,7 +119,9 @@ The train validates a head in one of two ways. A **full** validation is the whol
   next commit, incrementally from the anchor (a full validation waits for a person, see above). A red run at main's
   head waits for a push.
 - **Limits.** Only full validations run every test: a changed file's slow tests run in an incremental one only through the
-  contracts lane, and `alone` tests never do. A UI script runs when its own files change or a `UI_MAP` entry selects it:
+  contracts lane (which also runs the content sweeps a change reaches, see the selection rules below), and `alone` tests
+  never do. A UI script runs when its own files or helpers change, its name matches the changed UI file, or a `UI_MAP`
+  entry selects it:
   `ui/tests/task-code.cts` has no entry for the UI files it covers, so a change to them does not select it. The measured
   UI test map (#2897, `ci/ui-test-map`) closes that gap; until it lands, the next full validation is the check.
 - **Not changed.** Hotfixes, approval, promotion, the `release-train` issue and the concurrency group.
@@ -376,7 +378,15 @@ a workflow change also builds the Caddy image. Conftest, `pytest.ini`, dependenc
 run the tests that name or read them and the smoke set (`scripts/queue-smoke.json`). A conftest runs the tests below it
 while there are at most 25; a test that reaches a changed file only through a conftest fixture adds the smoke set. Runner/harness changes also run slow conformance on
 the Rust runner and all its fake harnesses; UI changes select their browser scripts, including imported-history for chat
-changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. The Rust and desktop checks run on a ready pull request and in the queue when a
+changes, or the core browser scripts plus the smoke set when the UI mapping is uncertain. Browser scripts the release
+check runs are picked by path too (rule 6, `browser_direct`), on a ready pull request and in the queue: a changed
+`ui/tests/*.cts` script, every script that uses a changed `ui/tests/support/` helper (through other helpers too), and,
+for UI source with no `UI_MAP` entry, the scripts named after the file (`ui/app/tools.ts` runs `tools`, `bot-tools`,
+`redesign-e2e-tools` and the rest). More than 40 picked runs every script the release check runs, in shards. A change to
+what a slow content sweep reads runs that sweep in the contracts job (rule 7, `CONTENT_SWEEPS`): `templates/`, `skills/`,
+`clients/commands/`, `clients/cli_spec.py`, the CLI code or `e2e/cli/` run `test_e2e_cli.py` with every command
+(`TICO_E2E_CLI_ALL=1`, as the release gate runs it), and `templates/` or `clients/catalog.py` run `test_e2e_templates.py`.
+The Rust and desktop checks run on a ready pull request and in the queue when a
 crate or `app/` changed, and the macOS recorder tests when `recorder/` changed. A draft pull request runs no checks
 (every job is skipped); marking it ready for review runs the lint checks and the selected tests. A skipped run is not a pass, so the
 ready-for-review run's `checks` must show passing, not skipped. Main has no check run of its own: the queue tests each

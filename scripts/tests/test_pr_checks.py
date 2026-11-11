@@ -404,6 +404,126 @@ def test_a_route_change_selects_the_contract_tests(repo_map):
         assert "backend/tests/test_openapi_v2.py" in light["python"], changed
 
 
+# Release-only tests a change can break run before it merges (selection rules 6 and 7): #3301 taught a command in a
+# playbook whose refusal was not recorded, which only the release gate's every-command CLI sweep compares; #3265 renamed a
+# seat that a browser script outside CORE asserted, and only the release check runs those scripts.
+CLI_SWEEP, TEMPLATES_SWEEP = "backend/tests/test_e2e_cli.py", "backend/tests/test_e2e_templates.py"
+
+
+def test_a_content_change_turns_on_the_slow_sweep_that_reads_it_on_a_pull_request_and_in_the_queue(repo_map):
+    for changed, sweeps in (
+        (["templates/catalog/seo-owner/playbooks/find-ideas.md"], [CLI_SWEEP, TEMPLATES_SWEEP]),
+        (["skills/tico-tickets/SKILL.md"], [CLI_SWEEP]),
+        (["clients/cli_spec.py"], [CLI_SWEEP]),
+        (["clients/commands/tasks.py"], [CLI_SWEEP]),
+        (["e2e/cli/expected-refusals.json"], [CLI_SWEEP]),
+        (["clients/catalog.py"], [TEMPLATES_SWEEP]),
+        (["backend/health.py"], []),
+        (["ui/app/tools.ts"], []),
+    ):
+        for event in ("pull_request", "merge_group"):
+            picked = checks.narrow(checks.selection(changed, event, graph=repo_map), changed, event, graph=repo_map)
+            assert picked["sweeps"] == sweeps, (changed, event)
+            # A sweep runs in the contracts job; a path the contracts already follow keeps them as before.
+            assert picked["contracts"] == (bool(sweeps) or changed[0].startswith(checks.CONTRACT_INPUTS)), changed
+
+
+def test_each_content_sweep_is_a_slow_test_that_runs_as_the_release_gate_runs_it():
+    release_gate = (ROOT / "scripts/release_checks.py").read_text()
+    for test, (paths, env) in checks.CONTENT_SWEEPS.items():
+        text = (ROOT / test).read_text()
+        assert "@pytest.mark.slow" in text, f"{test} has no slow test: the default run already has it"
+        assert paths and all(p.endswith("/") or (ROOT / p).exists() or any(ROOT.glob(p + "*")) for p in paths), test
+        for key, value in env.items():
+            assert key in text, f"{test} does not read {key}"
+            assert re.search(rf"""['"]{key}['"]\s*:\s*['"]{value}['"]""", release_gate), f"the release gate sets {key}"
+
+
+def test_the_contracts_job_carries_a_sweeps_environment_and_an_unswept_change_keeps_todays_job(tmp_path, monkeypatch):
+    picked = {"python": [], "browser": [], "caddy": True, "conformance": False, "rust": [], "contracts": True}
+    monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
+    monkeypatch.setattr(checks, "collect", Counter)
+    target = tmp_path / "plan.json"
+    for sweeps, job in (
+        ([], {"suite": "contracts", "files": list(checks.CONTRACT_TESTS)}),
+        ([TEMPLATES_SWEEP], {"suite": "contracts", "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP]}),
+        (
+            [CLI_SWEEP, TEMPLATES_SWEEP],
+            {
+                "suite": "contracts",
+                "files": [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP],
+                "env": {"TICO_E2E_CLI_ALL": "1"},
+            },
+        ),
+    ):
+        monkeypatch.setattr(checks, "selection", lambda *a, sweeps=sweeps, **kw: {**picked, "sweeps": sweeps})
+        assert checks.prepare("pull_request", "base", target)["matrix"]["include"] == [job], sweeps
+    # run() hands the job's environment to pytest; an incremental release plan's `sweeps` do the same for its lane.
+    for name in [*checks.CONTRACT_TESTS, TEMPLATES_SWEEP]:
+        source(tmp_path, name, "")
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    monkeypatch.delenv("TICO_E2E_CLI_ALL", raising=False)
+    envs = []
+    monkeypatch.setattr(
+        checks.subprocess, "run", lambda command, **kw: envs.append(kw.get("env")) or SimpleNamespace(returncode=1)
+    )
+    assert checks.run(target, "contracts") == 1
+    increment = tmp_path / "increment.json"
+    for sweeps in ([CLI_SWEEP], []):
+        increment.write_text(
+            json.dumps({"jobs": [{"name": "contracts", "files": list(checks.CONTRACT_TESTS)}], "sweeps": sweeps})
+        )
+        assert checks.run(increment, "contracts") == 1
+    assert [(env or {}).get("TICO_E2E_CLI_ALL") for env in envs] == ["1", "1", None]
+
+
+def test_a_ui_change_runs_the_release_only_browser_scripts_it_picks_before_it_merges(repo_map):
+    every = set(checks.runnable_scripts(ROOT))
+    assert len(every) > checks.BROWSER_ALL_OVER and "redesign-e2e-tools" in every
+
+    def light(changed, event="pull_request"):
+        return checks.narrow(checks.selection(changed, event, graph=repo_map), changed, event, graph=repo_map)
+
+    for event in ("pull_request", "merge_group"):
+        # A changed script runs itself.
+        picked = light(["ui/tests/redesign-e2e-tools.cts"], event)
+        assert picked["browser_direct"] == ["redesign-e2e-tools"] and "redesign-e2e-tools" in picked["browser"]
+        # A helper runs every script that uses it, through other helpers: real-hub.cts <- redesign-e2e.cts <- the script.
+        picked = light(["ui/tests/support/real-hub.cts"], event)
+        assert {"redesign-e2e-tools", "real-hub-smoke"} <= set(picked["browser"]) < every
+        # A helper most scripts use runs every script the release check runs.
+        assert set(light(["ui/tests/support/page.cts"], event)["browser"]) >= every
+        # UI source outside UI_MAP runs the scripts named after it, beside the smoke set.
+        assert {"tools", "bot-tools", "redesign-e2e-tools"} <= set(light(["ui/app/tools.ts"], event)["browser_direct"])
+        # A change outside ui/ picks none: its plan is what it was.
+        assert light(["backend/health.py"], event)["browser_direct"] == []
+    assert light(["backend/health.py"])["browser"] == []
+
+
+def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_limit(tmp_path):
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/tests/a.cts", "const x = require('./support/x.cts');\n")
+    source(tmp_path, "ui/tests/b.cts", "const p = require('./support/p.cts');\n")
+    source(tmp_path, "ui/tests/support/x.cts", "const y = require('./y.cts');\nconst gone = require('./gone.cts');\n")
+    source(tmp_path, "ui/tests/support/y.cts", "spawn(PYTHON, ['ui/tests/support/hub_server.py']);\n")
+    source(tmp_path, "ui/tests/support/hub_server.py", "")
+    source(tmp_path, "ui/tests/support/p.cts", "")
+    files = checks.git_files(tmp_path)
+    for helper in ("x.cts", "y.cts", "hub_server.py", "gone.cts"):
+        assert checks.support_scripts(tmp_path, files, "ui/tests/support/" + helper) == {"a"}, helper
+    scripts = ["settings", "settings-bots-search-bulk", "bot-settings", "tools", "redesign-e2e-tools"]
+    assert checks.named_after("ui/app/settings-bots.ts", scripts) == {"settings-bots-search-bulk"}
+    assert checks.named_after("ui/styles/tools.css", scripts) == {"tools", "redesign-e2e-tools"}
+    assert checks.named_after("ui/index.html", scripts) == set()
+    for name in range(checks.BROWSER_ALL_OVER + 1):
+        source(tmp_path, f"ui/tests/s{name}.cts", "")
+    changed = [f"ui/tests/s{name}.cts" for name in range(checks.BROWSER_ALL_OVER)]
+    picked = checks.selection(changed, root=tmp_path, core=[])
+    assert set(picked["browser_direct"]) == {Path(n).stem for n in changed} and "a" not in picked["browser"]
+    picked = checks.selection([*changed, f"ui/tests/s{checks.BROWSER_ALL_OVER}.cts"], root=tmp_path, core=[])
+    assert {"a", "b"} <= set(picked["browser"]) and any("rule 6" in u for u in picked["uncertain"])
+
+
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
     # CHANGELOG.md and docs/openapi/v2.json are gone; pytest.ini is a tracked file a test reads.
     for read, reader in (("pytest.ini", "backend/tests/test_ddl_guard.py"),):

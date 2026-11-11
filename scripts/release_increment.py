@@ -329,6 +329,9 @@ def plan_for(
         "conformance": conformance,
         "product": product,
         "desktop": desktop,
+        # The content sweeps the diff turned on (pr_checks.CONTENT_SWEEPS): the contracts lane runs them as the full
+        # gate does (pr_checks.run reads `sweeps` for their environment).
+        "sweeps": sorted(selected.get("sweeps") or []),
         "carried": sorted(carried),
         "dropped": dropped,
         "reason": selected.get("reason", ""),

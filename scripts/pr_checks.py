@@ -57,6 +57,48 @@ CONTRACT_INPUTS = (
     "employees.yaml",
     "roles.yaml",
 )
+# Slow tests that sweep repository content: release-only by their marker, so a change to what one reads turns it on in
+# the contracts job (-m slow), on a pull request and in its queue group, with the environment the release gate gives it.
+# {test file: (path prefixes that turn it on, environment)}. The CLI sweep samples the commands it runs and compares
+# refusals only when it runs every one, as the release gate does (scripts/release_checks.py TICO_E2E_CLI_ALL): a playbook
+# that teaches a command whose refusal is not recorded (#3301) passes the sample and fails the release. Recorded release
+# seconds: CLI 74 with every command (34 sampled), core templates 7.
+CONTENT_SWEEPS = {
+    "backend/tests/test_e2e_cli.py": (
+        (
+            "templates/",
+            "skills/",
+            "clients/commands/",
+            "clients/cli_spec.py",
+            "clients/hub",
+            "clients/remotecli.py",
+            "e2e/cli/",
+        ),
+        {"TICO_E2E_CLI_ALL": "1"},
+    ),
+    "backend/tests/test_e2e_templates.py": (("templates/", "clients/catalog.py"), {}),
+}
+
+
+def content_sweeps(names):
+    """The CONTENT_SWEEPS test files the changed (or gone) paths turn on."""
+    return sorted(test for test, (paths, _) in CONTENT_SWEEPS.items() if any(n.startswith(paths) for n in names))
+
+
+def contract_files(sweeps=()):
+    """The contracts job's files: CONTRACT_TESTS, then the content sweeps a change turned on."""
+    return [*CONTRACT_TESTS, *(s for s in sorted(sweeps) if s not in CONTRACT_TESTS)]
+
+
+def sweep_env(files, sweeps):
+    """The environment the turned-on sweeps among `files` run with (release_checks.py gives the release gate the same)."""
+    env = {}
+    for name in files:
+        if name in sweeps and name in CONTENT_SWEEPS:
+            env.update(CONTENT_SWEEPS[name][1])
+    return env
+
+
 # Each crate's `cargo test --locked` runs in the conformance job when any of its test inputs change:
 # runner-rs tests read runner_support/ and runner/ (the Python helpers they compare against: source_id, the redactor)
 # and the backend's gateway enroll contract fixture, which gateway_relay's tests check the runner against, and the runner wire
@@ -804,6 +846,68 @@ CONFTEST_BELOW_LIMIT = 25
 CADDY_INPUTS = ("Dockerfile", ".dockerignore", "compose.yaml", "compose.screen-relay.yaml", "docker/", "relay-rs/")
 CADDY_ROOTS = ("backend/caddy_assets.py", "backend/tests/test_caddy_container.py")
 UI_RUNNER = "scripts/ui-tests.cts"
+# Browser scripts that only the release check runs (outside CORE) can break with a ui/ change. Rule 6 picks, for each
+# changed ui/ path: a changed script itself; for a shared helper (ui/tests/support/), every script that runs it, directly
+# or through other helpers; for UI source outside UI_MAP, the scripts named after it (ui/app/tools.ts: tools, bot-tools,
+# redesign-e2e-tools; its stem as whole words of the script's name). The page loads every UI file, so no map from a
+# source file to the scripts that can see it is sound: the name match is a cheap best effort beside the smoke set, and
+# the release check still runs the rest. When rule 6 picks more than BROWSER_ALL_OVER scripts (a rename across many
+# scripts, a helper most scripts run), the change runs every script the release check runs, about four VMs.
+SUPPORT = "ui/tests/support/"
+BROWSER_ALL_OVER = 40
+
+
+def runnable_scripts(root=ROOT):
+    """Every script `ui-tests.cts --all` runs (the release check's list), or, without the runner, every script file."""
+    try:
+        return browser_scripts(["--all"], root)
+    except (OSError, subprocess.CalledProcessError, RuntimeError):
+        folder = root / "ui/tests"
+        return sorted(p.name.rsplit(".", 1)[0] for p in folder.glob("*.c[jt]s") if is_script_name(p.name))
+
+
+def support_scripts(root, files, name):
+    """The browser scripts that use a ui/tests/support file, directly or through other support files: a file uses a
+    helper whose file name it names (`require('./support/page.cts')`, `'ui/tests/support/real_hub_server.py'`). The
+    dependency map scans no .cts file, so this reads ui/tests itself. `files` are the tracked files; a gone helper is
+    found by the files that still name it."""
+    folder = [f for f in files if f.startswith("ui/tests/")]
+    helpers = defaultdict(set)  # file name -> the support files with that name
+    for path in [*(f for f in folder if f.startswith(SUPPORT)), name]:
+        helpers[Path(path).name].add(path)
+    users = defaultdict(set)  # support file -> the ui/tests files that name it
+    for path in folder:
+        try:
+            text = (root / path).read_text(errors="replace")
+        except OSError:
+            continue
+        for token in set(TOKEN.findall(text)):
+            for helper in helpers.get(token.rsplit("/", 1)[-1], ()):
+                if helper != path:
+                    users[helper].add(path)
+    pending, seen, scripts = [name], {name}, set()
+    while pending:
+        for user in users.get(pending.pop(), ()):
+            if user in seen:
+                continue
+            seen.add(user)
+            if is_browser(user):
+                scripts.add(Path(user).stem)
+            elif user.startswith(SUPPORT):
+                pending.append(user)
+    return scripts
+
+
+def named_after(name, scripts):
+    """The scripts whose name holds a UI source file's stem as whole words: ui/app/settings-bots.ts names
+    settings-bots-search-bulk, not settings."""
+    words = Path(name).name.split(".")[0].split("-")
+    found = set()
+    for script in scripts:
+        parts = script.split("-")
+        if any(parts[i : i + len(words)] == words for i in range(len(parts) - len(words) + 1)):
+            found.add(script)
+    return found
 
 
 # Data folders that one tool owns. A changed, added or deleted file under one of these folders runs exactly the tests
@@ -953,6 +1057,11 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        runs), and the smoke set's browser scripts. A changed browser script runs itself. A UI_MAP file runs its scripts;
        a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
+    6. A ui/ path picks browser scripts the release check runs (see SUPPORT): a changed script, every script that runs a
+       changed or gone helper under ui/tests/support/, and the scripts named after UI source outside UI_MAP. More than
+       BROWSER_ALL_OVER picked runs every script `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull
+       request keeps them.
+    7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -969,21 +1078,26 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
             "browser": None,
             "caddy": True,
             "contracts": True,
+            "sweeps": sorted(CONTENT_SWEEPS),
+            "browser_direct": [],
             "rust": rust,
             "conformance": runner,
             "reason": "main runs the full default suite",
             "uncertain": [],
         }
     notes, uncertain = [], []
+    sweeps = content_sweeps(changed)
 
-    def plan(python=(), browser=(), caddy=False, contracts=False, reason=None):
+    def plan(python=(), browser=(), caddy=False, contracts=False, reason=None, direct=()):
         return {
             "python": sorted(p for p in python if is_test(p) and not p.startswith("ui/")),
             "browser": sorted(browser),
             "conformance": runner,
             "rust": rust,
             "caddy": caddy,
-            "contracts": contracts,
+            "contracts": contracts or bool(sweeps),
+            "sweeps": sweeps,
+            "browser_direct": sorted(direct),
             "reason": reason or "; ".join(dict.fromkeys(["measured dependency map", *notes])),
             "uncertain": uncertain,
         }
@@ -1078,6 +1192,26 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         smoke_browser = True
         uncertain.append(f"rule 4: {name} is not in UI_MAP: the scripts that name it, its readers and the smoke set")
         notes.append("rule 4: ui outside UI_MAP")
+    direct = set()
+    if any(n.startswith("ui/") for n in names):  # rule 6
+        runnable = set(runnable_scripts(root))
+        for name in names:
+            if is_browser(name) and name in live:
+                direct.add(Path(name).stem)
+            elif name.startswith(SUPPORT):
+                direct |= support_scripts(root, graph.files, name) & runnable
+            elif (
+                name.startswith("ui/")
+                and not name.startswith(("ui/tests/", "ui/vendor/"))
+                and ui_map_key(name) not in UI_MAP
+            ):
+                direct |= named_after(name, runnable)
+        if len(direct) > BROWSER_ALL_OVER:
+            uncertain.append(f"rule 6: {len(direct)} browser scripts picked: every script the release check runs")
+            direct |= runnable
+        if direct:
+            notes.append("rule 6: browser scripts the release check runs")
+        browser |= direct
     touched |= graph.affected(sorted(seeds), added, via)
     if data:
         touched |= graph.read_by_tests(data, added, via)
@@ -1115,7 +1249,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
     contracts = any(n.startswith(CONTRACT_INPUTS) for n in names) or bool((touched | python) & set(CONTRACT_TESTS))
-    return plan(python, browser, caddy=caddy, contracts=contracts)
+    return plan(python, browser, caddy=caddy, contracts=contracts, direct=direct)
 
 
 def changed_files(base, head="HEAD", root=ROOT, only=None):
@@ -1444,6 +1578,7 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     if event == "pull_request":
         direct = {Path(p).stem for p in level if is_browser(p)}
         direct |= {s for n in names if ui_map_key(n) in UI_MAP for s in UI_MAP[ui_map_key(n)]}
+        direct |= set(picked.get("browser_direct", ()))
         if any(n.startswith("ui/") or n == UI_RUNNER or pinned(n) for n in names):
             direct |= set(smoke_scripts)
         browser = set(picked["browser"]) & direct
@@ -1592,15 +1727,18 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     if picked["conformance"]:
         jobs.append({"suite": "conformance", "files": [CONFORMANCE], "crates": picked["rust"]})
     if picked["contracts"]:
-        # The three release contracts run their slow tests (-m slow); packed by measured seconds like the python VMs.
-        contract_split, contract_loads = groups(Counter(dict.fromkeys(CONTRACT_TESTS, 1)), timings, target=target)
+        # The release contracts, and the content sweeps the change turned on, run their slow tests (-m slow); packed by
+        # measured seconds like the python VMs. A job holding a sweep names the environment it runs with (sweep_env).
+        sweeps = picked.get("sweeps") or []
+        files = contract_files(sweeps)
+        contract_split, contract_loads = groups(Counter(dict.fromkeys(files, 1)), timings, target=target)
         for line in overrun_warnings(contract_loads, SETUP_SECONDS["python"], target, "contracts"):
             print(line)
-        packed = [files for files in contract_split if files]
-        if len(packed) == 1:
-            jobs.append({"suite": "contracts", "files": list(CONTRACT_TESTS)})
-        else:
-            jobs += [{"suite": f"contracts-{i}", "files": files} for i, files in enumerate(packed, 1)]
+        packed = [group for group in contract_split if group]
+        named = [("contracts", files)] if len(packed) == 1 else [(f"contracts-{i}", g) for i, g in enumerate(packed, 1)]
+        for suite, group in named:
+            env = sweep_env(group, sweeps)
+            jobs.append({"suite": suite, "files": list(group), **({"env": env} if env else {})})
     # Actions rejects an empty matrix. Keep an explicit successful selection job
     # for documented no-test changes, without invoking bare pytest.
     if not jobs:
@@ -1688,6 +1826,12 @@ def run(plan_path, suite, root=None, quarantine=False):
         ]
         if suite == "conformance" or suite.split("-")[0] == "contracts":
             command += ["-m", "slow"]
+            # A content sweep runs as the release gate runs it (CONTENT_SWEEPS): the job names its environment, or, in an
+            # incremental release plan, the plan's `sweeps` do.
+            extra = job.get("env") or sweep_env(files, plan.get("sweeps") or ())
+            if extra:
+                env = {**os.environ, **extra}
+                print("Environment: " + " ".join(f"{k}={v}" for k, v in sorted(extra.items())), flush=True)
         if quarantine:
             command.append("--quarantine")
         command += files
@@ -1913,13 +2057,16 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
     remote = os.environ.get("TICO_HEAVY_REMOTE") == "1"
     interpreter = "python3" if remote else sys.executable
 
-    legs = []
+    legs, leg_env = [], {}
     if python:
         legs.append(
             (f"{len(python)} test file{'s' * (len(python) != 1)}", pytest_leg(interpreter, jobs, "python", python))
         )
     if picked["contracts"]:
-        legs.append(("the contract tests", pytest_leg(interpreter, jobs, "contracts", ["-m", "slow", *CONTRACT_TESTS])))
+        sweeps = picked.get("sweeps") or []
+        files = contract_files(sweeps)
+        legs.append(("the contract tests", pytest_leg(interpreter, jobs, "contracts", ["-m", "slow", *files])))
+        leg_env["the contract tests"] = sweep_env(files, sweeps)
     if browser:
         legs.append(
             (
@@ -1933,8 +2080,9 @@ def local(base=LOCAL_BASE, jobs=LOCAL_JOBS, ready=False, root=ROOT, execute=subp
     env = {k: v for k, v in os.environ.items() if k != "PYTEST_ADDOPTS"}
     failed = None
     for name, command in legs:
-        print("$ " + shlex.join(command), flush=True)
-        code = execute(["bash", str(HEAVY), *command], cwd=root, env=env).returncode
+        extra = leg_env.get(name) or {}
+        print("$ " + "".join(f"{k}={v} " for k, v in sorted(extra.items())) + shlex.join(command), flush=True)
+        code = execute(["bash", str(HEAVY), *command], cwd=root, env={**env, **extra}).returncode
         if code in (75, 76):
             # scripts/remote.py (TICO_HEAVY_REMOTE=1) never ran it or lost its result: no result, so no receipt.
             return stop(f"{name} gave no result (exit {code}): a remote run needs this head pushed; run this again")

@@ -3,7 +3,9 @@
 # Two tiers. Each push to a pull request runs the cheap checks (plan, static). A ready pull request from this repository
 # also runs a light plan's tests (scripts/pr_checks.py NARROW, `plan --light`): the Python tests its change reaches
 # directly, the smoke set when that drops any, capped at ten VMs; the browser scripts and the Caddy job only when it
-# touches their own inputs. Its `checks` passes only when they pass. The merge queue group is the
+# touches their own inputs. A change to a release-only browser script, its helpers or the UI file it is named after
+# runs that script, and a template, skill or CLI change runs the slow CLI and template sweeps (pr_checks.py rules 6
+# and 7). Its `checks` passes only when they pass. The merge queue group is the
 # gate: its plan goes one level further (two, at most nineteen Python VMs) and keeps every other job's condition. A fork's
 # pull request keeps the cheap checks only, and a draft runs nothing.
 # A ready pull request from this repository also runs every other job a queue group runs, under the same conditions, so
