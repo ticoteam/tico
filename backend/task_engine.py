@@ -1501,9 +1501,10 @@ def add_requirement(
 def _people_page(
     conn: "sqlite3.Connection", row: Row, kind: str, shows: object, choices: list[str] | None
 ) -> str | None:
-    """The name of the stage's people-only page requirement a bot's ask would duplicate, or None: an OK, or a yes/no
-    question, that shows that page or shows nothing, while the stage has one. A person OKs that page already, every
-    version, so the bot's ask adds a second one and nothing passes on it."""
+    """The name of the stage's people-only page requirement a bot's ask would duplicate, or None: an OK that shows that
+    page or shows nothing, or a yes/no question that shows that page, while the stage has one. A person OKs that page
+    already, every version, so the bot's ask adds a second one and nothing passes on it. A yes/no that shows nothing is
+    a plain question (a Spec stage's clarifying question) and is allowed."""
     yes_no = kind == "answer" and sorted(str(c).strip().lower() for c in (choices or [])) == ["no", "yes"]
     if kind != "ok" and not yes_no:
         return None
@@ -1515,7 +1516,7 @@ def _people_page(
             continue
         attached = P.current(conn, row["visit"]["id"], requirement["id"])
         named = bool(attached) and any(str(attached["file_id"]) in ref for ref in refs)
-        if named or not refs:
+        if named or (kind == "ok" and not refs):
             return R.name_of(requirement)
     return None
 

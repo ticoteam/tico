@@ -575,7 +575,11 @@ person). Tests and the rig use `backend/tests/helpers/fake_github.py`.
 page          no page attached                          not_met  owner   No page attached
               at_head and a linked PR's head moved      not_met  owner   New commits since the review
               verdict owed                               waiting  jev     Jev is checking
-              verdict failed (3 tries)                   waiting  person  Jev couldn't check this: <error>
+              verdict failed (3 tries), a bot holds it,  waiting  manager Decide if it meets the check: OK it or send it
+                manager bot set (not the holder)                          back, and say why. Jev couldn't check this:
+                                                                          <error> [The check: <rubric>]
+              verdict failed otherwise (people only:     waiting  person  Jev couldn't check this: <error> (once per
+                every version)                                            visit, then not_met on the owner)
               not_met                                    not_met  owner   Jev sent it back: <reasons>
               unsure, a person OKs it anyway             waiting  person  [Version <n>, after the send back: "<notes>". ]
                 (people only or naming one: every version)               Jev is unsure: <reasons>
