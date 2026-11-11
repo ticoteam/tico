@@ -25,6 +25,7 @@ SHIPPED = {"github", "slack", "mail", "aside", "close-crm", "postgres", "mysql",
 def test_the_release_ships_only_built_in_services_and_every_page_parses():
     pages, _ = I.load(ROOT / "integrations")
     assert set(pages) == SHIPPED
+    assert pages["github"]["writes"] == "allowed"  # nothing gates GitHub writes, so the page must not say approval
     with pytest.raises(I.Problem, match='No tool named missing'):
         I.Catalog(ROOT / "integrations").resolve('missing')
 
