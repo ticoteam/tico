@@ -1367,7 +1367,9 @@ def github_repository(client, slug, path):
     holding the build, so the bot's first placement is here, and this computer's runner publishes the history into it. No GitHub connected (or a rehearsal) leaves the bot on its computer, as before. When the GitHub App may not
     create repositories, the build is not finished: the command fails (non-zero) and says a person must act. The
     server has put one Needs-you task in front of the owner and finishes the repository on its own once they do; the
-    bot stays planned with its files here."""
+    bot stays planned with its files here. When the App is installed on chosen repositories only, or the name is
+    already taken on GitHub by a repository this company did not make, no repository is made or adopted: the bot
+    works from this computer and its history is not backed up to GitHub; nobody needs to act."""
     try:
         return client.post("github/repos", {"slug": slug, "empty": True})
     except APIError as exc:
@@ -1376,8 +1378,8 @@ def github_repository(client, slug, path):
         if exc.code in ("forbidden", "not_found"):
             # A bot the server has not registered stays on this computer, as before.
             return {"skipped": exc.detail, "note": f"register the bot, then tico bot repo-create {slug} --empty"}
-        if exc.code == "github_repo_exists":
-            return {"repository": path.name, "existing": True, "note": exc.detail}
+        if exc.code in ("github_selected_repos", "github_repo_taken", "github_repo_exists"):
+            return {"skipped": exc.detail}  # never adopt a repository this company may not have made
         if exc.code == "github_permission_missing":
             raise APIError(
                 exc.code,

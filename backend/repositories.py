@@ -5,6 +5,7 @@ import json
 import time
 import threading
 import logging
+import sqlite3
 import uuid
 from typing import Literal
 
@@ -157,6 +158,110 @@ def mark_reachable(store, names):
         return False
     with store.transaction() as c:
         return reachable(c, names)
+
+
+# A bot's own repository on GitHub is its history's backup: the bot works from its checkout on its computer either way.
+# Tico uses a repository as a bot's own only when this company may: the App reaches it, and nothing says another
+# company made it. These remember what GitHub told us.
+SELECTION = 'installation-selection'  # {"selection": "all" | "selected"}: what the App is installed on
+CREATED_ON_GITHUB = 'repositories-created'  # {owner/name lowercased: GitHub's created_at}, from the listing
+MADE = 'bot-repositories-made'  # {owner/name lowercased: when}: bot repositories this company's App created
+CHOSEN = 'bot-repositories-chosen'  # {owner/name lowercased: when}: a person pointed a bot at it
+TAKEN = 'bot-repositories-taken'  # {owner/name lowercased: when}: GitHub already had it when Tico went to create it
+# Why a bot's repository is not used: the App is on chosen repositories only and not this one; or another company has it.
+CHOSEN_ONLY, NOT_OURS = 'chosen_only', 'not_ours'
+HOME_WORDS = {
+    CHOSEN_ONLY: 'Bot history is not backed up to GitHub: the App is installed on chosen repositories only',
+    NOT_OURS: "Bot history is not backed up to GitHub: a repository with the bot's name was already there, "
+    'made by someone else, so Tico leaves it alone',
+}
+# GitHub's clock and ours may differ a little, and a person may make a repository just before the bot.
+MADE_BEFORE_SLACK = 600
+
+
+def note_repository(c, key, repository):
+    """Remember `repository` under `key` (MADE, CHOSEN or TAKEN). Made or chosen clears an earlier taken mark."""
+    name = str(repository or '').strip().lower()
+    if '/' not in name:
+        return
+    marks = metadata(c, key)
+    marks[name] = H.now()
+    save_metadata(c, key, marks)
+    if key in (MADE, CHOSEN):
+        taken = metadata(c, TAKEN)
+        if taken.pop(name, None) is not None:
+            save_metadata(c, TAKEN, taken)
+
+
+def note_chosen(c, repo, default_owner=''):
+    """A person pointed a bot at `repo` (a stored bot repo: name, owner/name or URL): Tico uses it from now on,
+    even if someone else made it (home)."""
+    from .github_app import repo_of
+
+    try:
+        row = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    note_repository(c, CHOSEN, repo_of(repo, (row['org'] if row else '') or default_owner))
+
+
+def made_here(c, repository):
+    name = str(repository or '').lower()
+    return name in metadata(c, MADE) or name in metadata(c, CHOSEN)
+
+
+def selection(c):
+    """'all', 'selected', or '' when GitHub has not said yet."""
+    return str(metadata(c, SELECTION).get('selection') or '')
+
+
+def save_selection(c, value):
+    if value in ('all', 'selected') and selection(c) != value:
+        save_metadata(c, SELECTION, {'selection': value})
+
+
+class Homes:
+    """Why Tico does not use a repository as a bot's own on GitHub (`why`), or "" when it does. What it reads, it
+    reads once for every bot asked about, so a page or an assignment list costs the same however many bots it has.
+
+    CHOSEN_ONLY: the App is installed on chosen repositories and this is not one of them. The bot keeps working from
+    its computer; nothing is fetched from or pushed to GitHub for it until a person adds the repository to the App.
+    NOT_OURS: another company made it. Tico's own create found the name taken, or GitHub made it before the bot
+    existed. A repository this company's App made, or one a person pointed the bot at, is always its own."""
+
+    def __init__(self, c):
+        self.c, self.selection = c, selection(c)
+        self.ours = {**metadata(c, MADE), **metadata(c, CHOSEN)}
+        self.taken, self.created = metadata(c, TAKEN), metadata(c, CREATED_ON_GITHUB)
+        self.reach = self.born = None
+
+    def why(self, bot, repository):
+        name = str(repository or '').strip().lower()
+        if '/' not in name:
+            return ''
+        if self.selection == 'selected':
+            if self.reach is None:
+                self.reach = {
+                    r[0].lower() for r in self.c.execute('SELECT full_name FROM repositories WHERE reachable=1')
+                }
+            if name not in self.reach:
+                return CHOSEN_ONLY
+        if name in self.ours:
+            return ''
+        if name in self.taken:
+            return NOT_OURS
+        made = H.parse_ts(self.created.get(name))
+        if not made:
+            return ''
+        if self.born is None:
+            self.born = {r[0]: r[1] for r in self.c.execute('SELECT id,created_at FROM bots')}
+        born = H.parse_ts(self.born.get(bot))
+        return NOT_OURS if born and (born - made).total_seconds() > MADE_BEFORE_SLACK else ''
+
+
+def bot_home(c, bot, repository):
+    """Homes.why for one bot (id) whose own repository `repository` is: the bot's age is its own."""
+    return Homes(c).why(bot, repository)
 
 
 def _botops():
@@ -744,7 +849,7 @@ def _sync(service):
         return 'stopped'
     token, _ = service.mint(None, {'contents': 'read', 'metadata': 'read'})
     headers = {'Authorization': 'Bearer ' + token}
-    repos, page = [], 1
+    repos, page, chosen = [], 1, ''
     while True:
         if service.repository_stop.is_set():
             return 'stopped'
@@ -753,7 +858,9 @@ def _sync(service):
         )
         if response.status_code >= 300:
             raise Problem('github_repositories', 'GitHub could not list repositories; retry Refresh', 502)
-        batch = response.json()['repositories']
+        listing = response.json()
+        batch = listing['repositories']
+        chosen = chosen or str(listing.get('repository_selection') or '')
         repos.extend(r for r in batch if r['full_name'].split('/')[0].lower() == row['org'].lower())
         if len(batch) < 100:
             break
@@ -840,6 +947,10 @@ def _sync(service):
         save_metadata(
             c, 'repositories-sizes', {r['full_name'].lower(): r.get('size', 0) for r in repos if r.get('size')}
         )
+        save_metadata(
+            c, CREATED_ON_GITHUB, {r['full_name'].lower(): r['created_at'] for r in repos if r.get('created_at')}
+        )
+        save_selection(c, chosen)
         save_metadata(c, 'repositories-synced', {'day': H.now()[:10]})
     repository_health(service)
     return 'synced'

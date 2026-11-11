@@ -1139,6 +1139,10 @@ class SettingsAdmin:
             c.execute("UPDATE bot_control SET draining=0 WHERE bot=?", (bot,))
             H.status_set(c, who.actor, bot, state="active", focus="", reason="Resumed in Settings")
             H.event(c, who.actor, "bot.resume", bot, {"via": "definition"})
+        if values["repo"] and values["repo"] != before.get("repo"):
+            from .repositories import note_chosen
+
+            note_chosen(c, values["repo"], self.settings.github_owner)  # a person's choice: Tico uses it
         BS.write(c, bot, declared)
         c.execute(
             "UPDATE bot_config SET description=?,reports_to=?,repo=?,thread_mode=?,"

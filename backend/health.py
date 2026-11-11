@@ -397,9 +397,47 @@ GITHUB_WRITES = (
 WRITE_VERBS = {"write", "pull_requests", "issues"}
 
 
-def _unpublished(c):
-    """Bots whose local history the runner could not give a GitHub repository (runner-rs/src/execute.rs `publish`)."""
-    return _reported(c, PUBLISH_WARNING)
+def _unpublished(c, withheld=()):
+    """Bots whose local history the runner could not give a GitHub repository (runner-rs/src/execute.rs `publish`),
+    leaving out those whose repository Tico does not use (`withheld`): a computer may still report its last failure."""
+    return [(bot, why) for bot, why in _reported(c, PUBLISH_WARNING) if bot not in withheld]
+
+
+def _withheld(c, settings):
+    """{bot: why} for each bot whose history Tico does not back up to GitHub (repositories.home): the App is installed
+    on chosen repositories and not the bot's, or another company made a repository with the bot's name."""
+    from .execution import _github_app, _repository_of
+    from .repositories import Homes
+
+    configs = {
+        r["bot"]: r
+        for r in c.execute(f"SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN}")  # read once
+    }
+    bots = [r["id"] for r in c.execute("SELECT id FROM bots WHERE state<>'archived' ORDER BY id")]
+    app, homes, out = (_github_app(c),), Homes(c), {}
+    for bot in bots:
+        repository, owner = _repository_of(c, settings, bot, configs.get, app)
+        why = homes.why(owner, repository) if repository else ""
+        if why:
+            out[bot] = why
+    return out
+
+
+def _history_check(c, withheld):
+    """One plain line for every bot whose history is kept on its computer only: never a line per bot, never an item
+    for a person. Bots work as usual; only the backup is off."""
+    from .repositories import CHOSEN_ONLY, HOME_WORDS
+
+    said = [HOME_WORDS[CHOSEN_ONLY]] if CHOSEN_ONLY in withheld.values() else []
+    taken = sorted(_bot_name(c, bot) for bot, why in withheld.items() if why != CHOSEN_ONLY)
+    if taken:
+        said.append(
+            "Bot history is not backed up to GitHub for "
+            + ", ".join(taken[:3])
+            + (f" and {len(taken) - 3} more" if len(taken) > 3 else "")
+            + ": a repository with the bot's name was already there, made by someone else, so Tico leaves it alone"
+        )
+    return _check("bot_history", "Bot history", "info", ". ".join(said) + ".")
 
 
 def _reported(c, prefix, limit=200):
@@ -2958,7 +2996,10 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open bots", "#/settings", "bots")],
             )
         )
-    unpublished = _unpublished(c) if full else []
+    withheld = _withheld(c, settings) if full else {}
+    if withheld:
+        checks.append(_history_check(c, withheld))
+    unpublished = _unpublished(c, withheld) if full else []
     if unpublished:
         checks.append(
             _check(

@@ -99,8 +99,9 @@ goes away once the app is connected and installed.
 3. On the install page, choose **All repositories** (recommended). Bots then get new repositories
    automatically, with nothing to add each time a bot is created. This does not widen what a bot can
    touch: each bot's token names its own repository plus its repository access (below), and
-   nothing else. Choosing selected repositories works too, but every new bot repository, and every
-   extra repository, must be added to the installation by hand. Settings then shows the app as installed.
+   nothing else. Choosing selected repositories works too, but Tico then makes no bot repositories
+   (GitHub would not let the App reach them): bots work from their computers as usual, their history is
+   not backed up to GitHub, and Health says so in one line. Settings then shows the app as installed.
 
 If the organization also holds sensitive code, create a separate GitHub organization just for bot
 repositories and connect that one. "All repositories" then covers only what bots should reach, and a
@@ -340,8 +341,22 @@ broaden the bot’s normal repository access. A bot without it should ask BotOps
 repository, rather than changing its own permissions. It is limited to the name `bot-<slug>` for a bot that exists (planned or
 active, not archived), always private, in the connected organization, from the default template or
 one in that organization. Every creation is audited (`github.repo_created`) with the acting bot.
-Anyone else gets 403 with the reason. If the app is installed on selected repositories only, add the
-new repository to the installation.
+Anyone else gets 403 with the reason.
+
+A bot's own repository is only its history's backup: the bot works from its checkout on its computer
+either way. Tico makes and uses one only when it is this company's to use:
+
+- **App on chosen repositories only.** Nothing is made (`github_selected_repos`; `tico bot create`
+  still succeeds and keeps the bot on the computer that built it). A bot whose repository the App
+  does not reach gets no token, fetch or push for it, and its turns run as usual. Health shows one
+  info line, *Bot history is not backed up to GitHub: the App is installed on chosen repositories
+  only*, and nobody gets a task. To turn the backup on, install the App on all repositories, or make
+  the repository and add it to the App's repositories.
+- **Name already taken.** If `<org>/bot-<slug>` already exists and this company's App did not make it
+  (another company connected to the same organization, say), Tico never adopts it or pushes there
+  (`github_repo_taken`); a repository GitHub made well before the bot existed is treated the same.
+  The bot keeps working from its computer. If the repository is this company's after all, point the
+  bot at it in Settings → Bots (or `manage set-repo`): a person's choice is always used.
 
 ### When the app cannot create repositories
 
