@@ -56,7 +56,10 @@ copy and its sources in `knowledge/copy.md`.
   rule. Record it in `knowledge/changes.md` as "proposed".
 - **For upkeep:** make the change within a granted Tool, or file it for the person who puts changes live:
 
-      tico task create --owner <person id> --label channel:search-ads --title "Apply: <the change>" --body-file <body file>
+      tico task create --owner <your manager> --label channel:search-ads --title "Apply: <the change>" --body-file <body file>
+
+  The first owner is your Manager, the bot your line in `tico team show` reports to: it checks the task once and
+  passes it to the person. A task filed straight to the person is refused.
 
   The body file's first paragraph is one or two plain sentences, under 40 words, with no links, ids or file paths.
   Below it, after a blank line: exactly what to change, where, and why. If it is refused, nothing was filed: fix it

@@ -435,7 +435,7 @@ APPLY_FILL = {
     "<the fix>": "put the pricing table back on the plans page",
     "<piece>": "the pricing post",
     "<date>": "Monday",
-    "<person id>": "human:ana",
+    "<your manager>": "cpo",  # the filing bot's Manager, who passes the task to the person
     "<your channel tag>": "channel:seo",
 }
 APPLY_BODY = (

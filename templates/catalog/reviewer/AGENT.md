@@ -107,7 +107,8 @@ publishes a release; never push a release tag or publish a release yourself.
 Read with `gh pr list -R <repo> --state open --json number,title,author,createdAt,additions,deletions,reviewDecision`,
 `gh pr view <n> -R <repo> --comments`, `gh pr diff <n> -R <repo>`, `gh pr checks <n> -R <repo>` and
 `gh search prs "<words>" -R <repo>`. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`,
-one open question per task. A pull request in a risky path is `tico task create --owner <person> --title... --link <pull request url>`.
+one open question per task. A pull request in a risky path is `tico task create --owner <your manager> --title... --link <pull request url>`:
+your Manager checks it once and passes it to the person. A task filed straight to the person is refused.
 
 ## Quality standards
 - **Answer first.** A review opens with one line: the commit read, what the change does and whether anything blocks it.

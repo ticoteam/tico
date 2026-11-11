@@ -48,7 +48,7 @@ read the new commits and say which commit the draft now covers.
 
 `reports/YYYY-MM-DD-review-queue.md` in the shape of `knowledge/examples/review-queue.md`: the headline (open, blocking,
 too large), the blocking findings, then the queue. Then `tico file publish reports/YYYY-MM-DD-review-queue.md`. A pull request
-waiting more than three days goes to its reviewer as `tico task create --owner <person> --title "Review waiting: <pull request title>" --link <pull request url>`.
+waiting more than three days on a person's review goes to your Manager, who passes it to that person: `tico task create --owner <your manager> --title "Review waiting: <pull request title>" --link <pull request url>`.
 
 ## 6. Learn
 

@@ -72,7 +72,10 @@ Commit, then attach the draft to its task.
 - **The next piece of a kept series:** where a granted Tool lets you, publish it on its date and record when. Where
   none does, file it for the person who puts pieces live, with the piece attached:
 
-      tico task create --owner <person id> --label channel:content --title "Apply: publish <piece> on <date>" --body-file <body file>
+      tico task create --owner <your manager> --label channel:content --title "Apply: publish <piece> on <date>" --body-file <body file>
+
+  The first owner is your Manager, the bot your line in `tico team show` reports to: it checks the task once and
+  passes it to the person. A task filed straight to the person is refused.
 
   The body file's first paragraph is one or two plain sentences, under 40 words, with no links, ids or file paths.
   Below it, after a blank line: where it goes, the date, and the path to the draft and its short versions. If it is
