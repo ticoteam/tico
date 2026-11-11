@@ -342,9 +342,9 @@ def run(args, who=None):
     if fn in ORG_COMMANDS:  # people, bots, the org chart, usage, billing and reach (clients/hubtools_org.py)
         return via_tool(client, args)
 
-    from clients import hubtools_connections
+    from clients import hubtools_computers, hubtools_connections
 
-    if fn in hubtools_connections.COMMANDS:
+    if fn in hubtools_connections.COMMANDS or fn in hubtools_computers.COMMANDS:
         return hubtools_connections.run_command(client, args)
     if args.cmd == "inbound":
         return via_tool(client, args)
