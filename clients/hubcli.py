@@ -85,6 +85,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     tico task ask <id> --withdraw [--requirement R] [-m "why"]   take your open ask back
     tico task answer <id> <requirement> ok|no|again|<answer> [-m "note"] --version N
                                            a bot named on an OK or a question answers it (no needs a note)
+    tico task answer <id> <name> <value> --version N   a stage's answer by its name: tico task answer E-12 confidence 80
     tico task give <id> <requirement> --to <person> --version N   hand what you are asked to another person
     tico task thumbs <id> <requirement> up|down [--note "what was wrong"]   was this ask worth asking (the person asked)
     tico task file --parent <id> [--pipeline general] [--owner X] "title" [--body "..."]
@@ -2119,7 +2120,7 @@ def parser():
     s.set_defaults(fn="task thumbs")
     s = task.add_parser("answer", help="answer what you are asked on a task: ok, no, again or your answer")
     s.add_argument("id")
-    s.add_argument("requirement", help="the requirement's id, from tico task show")
+    s.add_argument("requirement", help="the requirement's id from tico task show, or a stage's answer by its name")
     s.add_argument("value", help="ok, no (send back, with -m), again (look again), or your answer")
     s.add_argument("-m", "--note", help="what they read with it; required with no")
     s.add_argument("--version", type=int, help=version_help)

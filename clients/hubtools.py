@@ -1486,10 +1486,11 @@ def ok_use(api, args):
 @tool(
     "tico_task_answer",
     "Answer what you are asked on a task (a bot named on an OK or a question): ok, no (send it back, with a note), "
-    "again (look again), or your answer. The requirement id is in tico_task_show's To leave.",
+    "again (look again), or your answer. The requirement id is in tico_task_show's To leave. A stage's answer is "
+    "named there (confidence): give the name instead, and a whole number in its range, one of its choices, or text.",
     {
         "id": TASK_ID,
-        "requirement": _s("The requirement's id"),
+        "requirement": _s("The requirement's id, or a stage's answer by its name"),
         "value": _s("ok, no, again, or your answer: one of its choices or your own words"),
         "note": _s("What they read with it, word for word; required with no"),
         "version": VERSION,
