@@ -101,6 +101,7 @@ class Standing:
     on: str | None = None
     line: str = ""
     about: str | None = None
+    since: str | None = None  # when it was asked of whom it waits on, when that is later than the visit began
 
     @property
     def met(self) -> bool:
@@ -117,6 +118,23 @@ def name_of(requirement: Row) -> str:
     found = condition_of(requirement)
     named = found.name if found else KIND_NAMES.get(requirement["kind"])
     return (requirement.get("line") or "").strip() or named or requirement["kind"]
+
+
+ENDS = (".", "!", "?", "…")
+
+
+def sentence(text: str) -> str:
+    """`text` as one sentence: a period added only when it has no end mark of its own, inside a closing quote or
+    bracket too, so a person's note that ends with one is never followed by a second ("criterion.." was)."""
+    text = text.strip()
+    if not text or text.rstrip("\"')]”’").endswith(ENDS):
+        return text
+    return f"{text}."
+
+
+def sentences(*parts: str) -> str:
+    """Sentences joined into one line, each ended once (`sentence`). Empty parts are left out."""
+    return " ".join(sentence(part) for part in parts if part and part.strip())
 
 
 def condition_of(requirement: Row) -> Any:
@@ -332,6 +350,22 @@ UNSURE_BEFORE_SQL = (
 # What Jev's unsure says to the bot that holds the stage, and then to the pipeline's manager bot (`_unsure_to_bots`).
 FIX_OR_EXPLAIN = "Not yet met: fix it or explain it on the page."
 DECIDE = "Decide if it meets the check: OK it or send it back, and say why."
+
+
+def decide_commands(task_id: str, requirement_id: str) -> str:
+    """The two answers a bot asked to DECIDE gives, as commands: its decision is an answer on the requirement."""
+    answer = f"tico task answer {task_id} {requirement_id}"
+    return (
+        f'Give it as an answer, not a move. OK it: {answer} ok -m "<why it meets the check>" --version N. '
+        f'Send it back: {answer} no -m "<what to change>" --version N.'
+    )
+
+
+def asked_to_decide(standing: Standing, by: object) -> bool:
+    """Whether this standing asks `by`, a bot, to decide a page Jev was unsure of (`_unsure_to_bots`)."""
+    return standing.state == WAITING and bool(by) and standing.on == by and standing.line.startswith(DECIDE)
+
+
 # What a bot does to get a page a person OKs looked at again, instead of an ask of its own (task_engine._people_page).
 PAGE_OK_HINT = "Attach the new version; Tico asks the person."
 
@@ -364,7 +398,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         notes = (answer.get("notes") or "").strip()
         line = f"Sent back: {notes}" if notes else "Sent back"
         if requirement.get("person_id") or people_only(requirement):
-            line = f"{line}. {PAGE_OK_HINT}"
+            line = sentences(line, PAGE_OK_HINT)
         return Standing(requirement, NOT_MET, owner, line)
     verdict = V.get(conn, page["file_id"], page["version"], page.get("rubric_hash") or "")
     said = (verdict or {}).get("verdict")
@@ -378,7 +412,13 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     back = _sent_back(conn, visit_id, requirement["id"]) if oks_anyway else None
     if back and not requirement.get("person_id"):
         person = person or str(back["by_id"])  # the person who sent it back is asked again, by Tico, not by the bot
-    after = f'Version {page["version"]}, after the send back: "{back["said"]}". ' if back else ""
+    after = sentence(f'Version {page["version"]}, after the send back: "{back["said"]}"') + " " if back else ""
+    if oks_anyway and not settings.get("at_head"):
+        # Said before the OK: the person decides knowing the newest commit had no bot's review.
+        fresh = unreviewed(conn, task)
+        after += f"{fresh} " if fresh else ""
+    # This version was asked of someone once Jev had looked: its wait counts from then, not from the stage's start.
+    asked = max(str(page["created_at"]), str((verdict or {}).get("updated_at") or ""))
     if said in ("unsure", "failed"):
         # A failed verdict's reason is why the calls failed (last_error): it was Jev, not the page.
         failure = " ".join(str((verdict or {}).get("last_error") or "").split())
@@ -390,20 +430,21 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         if oks_anyway:
             # A person OKs this page whatever Jev says: they are asked at once, every version, with Jev's reason. A bot
             # round trip adds nothing (Acme, Nov 11: after a send back, v2 went to nobody and the Builder improvised asks).
-            return Standing(requirement, WAITING, person, after + line)
+            return Standing(requirement, WAITING, person, after + line, since=asked)
         routed = _unsure_to_bots(conn, task, requirement, line, failed=said == "failed")
         if routed:
+            routed.since = asked if routed.state == WAITING else None
             return routed
         if conn.execute(ASKED_ONCE_SQL, (visit_id, requirement["id"])).fetchone():
             return Standing(requirement, NOT_MET, owner, line)
-        return Standing(requirement, WAITING, person, line)
+        return Standing(requirement, WAITING, person, line, since=asked)
     if oks_anyway:
         # A people-only page that names nobody (or whose person left) is any person's: Jev passing it is never enough.
         from . import hubdb
 
         H: Any = hubdb
         name = H.actor_name(conn, person) if person else "someone"
-        return Standing(requirement, WAITING, person, f"{after}OK {name} (version {page['version']})")
+        return Standing(requirement, WAITING, person, f"{after}OK {name} (version {page['version']})", since=asked)
     return Standing(requirement, MET, line="Jev passed it")
 
 
@@ -418,6 +459,50 @@ def _sent_back(conn: "sqlite3.Connection", visit_id: str, requirement_id: str) -
     if not found or not str(found[0] or "").startswith("human:") or not active_person(conn, found[0]):
         return None
     return {"by_id": str(found[0]), "said": " ".join(str(found[1] or "").split())}
+
+
+# The heads each met Review page was for: a page `at_head` keeps the linked PRs' newest commits as they were when it was
+# attached (`item_versions`), and it counts where Jev passed it or someone OK'd that version. The last page of each
+# visit only: a replaced one was never the review.
+REVIEWED_SQL = (
+    "SELECT p.item_versions FROM requirement_pages p JOIN visits v ON v.id = p.visit_id "
+    "JOIN requirements r ON r.id = p.requirement_id WHERE v.task_id=? AND p.replaced_at IS NULL "
+    "AND json_valid(r.settings) AND json_extract(r.settings, '$.at_head') "
+    "AND (EXISTS (SELECT 1 FROM page_verdicts j WHERE j.file_id = p.file_id AND j.version = p.version "
+    "AND j.rubric_hash = p.rubric_hash AND j.verdict = 'met') "
+    "OR EXISTS (SELECT 1 FROM answers a WHERE a.visit_id = p.visit_id AND a.requirement_id = p.requirement_id "
+    "AND a.page_version = p.version AND a.answer = 'ok' AND a.undone_at IS NULL))"
+)
+NOT_REVIEWED = "not reviewed by a bot."
+
+
+def unreviewed(conn: "sqlite3.Connection", task: Row) -> str | None:
+    """One line when a linked PR's newest commit is not one a met Review page was for: "New commits since the reviews
+    (now at eace67e): not reviewed by a bot." None when every newest commit was reviewed, or the task had no Review page.
+    It reads what Tico keeps (the PR's head, each Review page's `item_versions`), never a page's words. Tico keeps no
+    commit count, so the line names the newest commit, not how many came after the review."""
+    from .item_sources import github as F
+
+    heads = {ref: sha for ref, sha in F.heads(conn, task["id"]).items() if sha}
+    if not heads:
+        return None
+    reviewed: list[dict[str, object]] = []
+    for found in conn.execute(REVIEWED_SQL, (task["id"],)).fetchall():
+        try:
+            versions = json.loads(found[0] or "{}")
+        except ValueError:
+            continue
+        if isinstance(versions, dict):
+            reviewed.append(cast("dict[str, object]", versions))
+    if not reviewed:
+        return None
+    new = [(ref, sha) for ref, sha in sorted(heads.items()) if not any(each.get(ref) == sha for each in reviewed)]
+    if not new:
+        return None
+    if len(heads) == 1:
+        return f"New commits since the reviews (now at {new[0][1][:7]}): {NOT_REVIEWED}"
+    named = ", ".join(f"{ref} at {sha[:7]}" for ref, sha in new)
+    return f"New commits since the reviews ({named}): {NOT_REVIEWED}"
 
 
 def _unsure_to_bots(
@@ -438,7 +523,7 @@ def _unsure_to_bots(
         return None
     settings: Row = requirement.get("settings") or {}
     check = " ".join(str(settings.get("rubric") or "").split()) or name_of(requirement)
-    said = line if check in line else f"{line.rstrip('.')}. The check: {check}"
+    said = line if check in line else f"{sentence(line)} The check: {check}"
     if not failed and not conn.execute(UNSURE_BEFORE_SQL, (task["visit"]["id"], requirement["id"])).fetchone():
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"{FIX_OR_EXPLAIN} {said}")
     pipeline: Row = task.get("pipeline") or {}

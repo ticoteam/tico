@@ -475,6 +475,84 @@ def test_after_a_send_back_a_met_page_a_person_oks_is_asked_of_the_same_person(c
     assert standing.line.startswith('Version 2, after the send back: "Add the rounding". OK '), standing.line
 
 
+def test_a_note_that_ends_a_sentence_is_quoted_with_one_end_mark(c, store):
+    """Acme rc.4: "...criterion.. Attach the new version" on the line and "..person.." in the wake."""
+    from backend import task_wakes as TW
+
+    rid = _pipeline(c, who_oks="people_only")
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid), "met")
+    A.answer(c, row["id"], rid, BEN, "no", "Rename it everywhere.")
+    assert _standing(c, row).line == f"Sent back: Rename it everywhere. {R.PAGE_OK_HINT}"
+    told = TW.body(c, E.task(c, row["id"]), to=WRITER)
+    assert f"- Spec page: Sent back: Rename it everywhere. {R.PAGE_OK_HINT}\n" in told, told
+    assert ".." not in told
+    _again(c, store, row, fid, verdict="met")
+    assert _standing(c, row).line == 'Version 2, after the send back: "Rename it everywhere." OK Ben (version 2)'
+    A.answer(c, row["id"], rid, BEN, "no", "Is it absolute_value?")
+    _again(c, store, row, fid, verdict="met", text="<p>v3</p>")
+    assert _standing(c, row).line.startswith('Version 3, after the send back: "Is it absolute_value?" OK Ben')
+
+
+def test_a_new_version_asked_of_a_person_waits_from_when_it_was_asked_not_the_stage_start(c, store):
+    """Acme rc.4: both version-2 asks showed `since` as stage entry. The wait counts from Jev's verdict on that version
+    (when it was asked), so Needs you ages it from then."""
+    from backend import waiting_on as W
+
+    rid = _pipeline(c, who_oks="people_only")
+    row = _task(c)
+    long_ago = H.shift(H.now(), hours=-5)
+    c.execute("UPDATE visits SET entered_at=? WHERE id=?", (long_ago, row["visit"]["id"]))
+    fid, _ = _page(c, store)
+    first = _say(c, _attach(c, row, "page:" + fid), "met")
+    (wait,) = [w for w in W.of(c, E.task(c, row["id"])) if w.requirement_id == rid]
+    assert wait.since == first["updated_at"] and wait.since > long_ago
+    A.answer(c, row["id"], rid, BEN, "no", "Add the rounding")
+    c.execute("UPDATE page_verdicts SET updated_at=? WHERE id=?", (H.shift(H.now(), hours=-4), first["id"]))
+    second = _again(c, store, row, fid, verdict="met")
+    (item,) = [i for i in W.needs(c, BEN) if i.get("requirement_id") == rid]
+    assert item["since"] == second["updated_at"], "the version-2 ask counts from when it was asked"
+
+
+def test_the_manager_asked_to_decide_is_told_both_answers_and_its_move_on_is_its_ok(c, store):
+    """Acme rc.4: the Product Pipeline Manager, asked to decide, moved the task on with a reason; it was kept as a push
+    past with no answer. Its wake names the two answers, and its move with a reason is kept as its OK of that version."""
+    from backend import task_wakes as TW
+
+    rid = _pipeline(c, page_settings={"rubric": "Says what done looks like"})
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell")
+    _again(c, store, row, fid)
+    assert R.asked_to_decide(_standing(c, row), "bot:manager")
+    told = TW.body(c, E.task(c, row["id"]), to="bot:manager")
+    assert f'tico task answer {row["id"]} {rid} ok -m "<why it meets the check>" --version N' in told, told
+    assert f'tico task answer {row["id"]} {rid} no -m "<what to change>" --version N' in told
+    assert "tico task answer" not in TW.body(c, E.task(c, row["id"]), to=WRITER), "only the one asked to decide"
+    visit = E.task(c, row["id"])["visit"]["id"]
+    moved = E.move(c, row["id"], E.NEXT, "bot:manager", "Scope is in its second section", seen_version=_v(c, row))
+    assert moved["stage"]["name"] == "Done"
+    kept = [
+        tuple(a) for a in c.execute("SELECT by_id, answer, notes, page_version FROM answers WHERE visit_id=?", (visit,))
+    ]
+    assert kept == [("bot:manager", "ok", "Scope is in its second section", 2)], "its decision, not a push past"
+    how = c.execute("SELECT how FROM visits WHERE id=?", (visit,)).fetchone()[0]
+    assert how == "met"
+
+
+def test_a_bot_not_asked_to_decide_still_pushes_past_with_a_reason(c, store):
+    _pipeline(c)
+    row = _task(c)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid), "unsure", "Can't tell")
+    _again(c, store, row, fid)
+    visit = E.task(c, row["id"])["visit"]["id"]
+    E.move(c, row["id"], E.NEXT, WRITER, "Shipping it", seen_version=_v(c, row))
+    kept = [tuple(a) for a in c.execute("SELECT by_id, answer FROM answers WHERE visit_id=?", (visit,))]
+    assert kept == [(WRITER, "pushed_past")]
+
+
 def test_a_failed_check_on_a_bots_stage_is_the_pipelines_managers_to_decide_at_once(c, store):
     """Nov 11 (two sign-offs rule): Jev could not check, after its retries, on a stage a bot holds. The page may be
     fine and only Jev was down, so there is no bot round: the manager bot decides it, with why. No person."""
@@ -578,6 +656,63 @@ def test_a_review_page_counts_only_for_the_newest_commit(c, store):
     again = _attach(c, row, "page:" + fid, requirement="review")
     assert again["rubric_hash"] != made["rubric_hash"], "the same page for a new commit is a new verdict"
     assert _standing(c, row).line == "Jev is checking"
+
+
+def test_the_pre_release_ask_says_when_the_newest_commit_had_no_bots_review(c, store):
+    """Acme rc.4 C1: after the person sent the pre-release page back, the Builder pushed a new commit; nobody reviewed
+    it and the PR merged on the person's OK. The route stays (a product decision); the ask says it, before the OK, from
+    the Review page's recorded head, and so does the Builder's wake."""
+    from backend import task_wakes as TW
+
+    made = X.pipeline(
+        c,
+        "eng",
+        "Engineering",
+        (
+            {
+                "name": "Review",
+                "owner": REVIEWER,
+                "requirements": [{"kind": "page", "line": "Review", "settings": {"at_head": True}}],
+            },
+            {
+                "name": "Fixes 2",
+                "owner": WRITER,
+                "requirements": [{"kind": "page", "line": "Pre-release", "who_oks": "people_only"}],
+            },
+        ),
+        manager="bot:manager",
+    )
+    (rid,) = made["requirements"]["Fixes 2"]
+    row = X.new_task(c, ANA, "Absolute value", "eng", assignee=REVIEWER)
+    _link_pr(c, row["id"], "acme/app", 45, "62de57f623fc")
+    review, _ = _page(c, store, "<p>Reviewed 62de57f</p>")
+    _say(c, _attach(c, row, "page:" + review, by=REVIEWER, requirement="Review"), "met")
+    assert E.advance(c, row["id"])["stage"]["name"] == "Fixes 2"
+    assert R.unreviewed(c, E.task(c, row["id"])) is None, "the head is the reviewed one"
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid, requirement="Pre-release"), "unsure", "Can't tell")
+    assert _f2(c, row).line == "Jev is unsure: Can't tell", "everything was reviewed: no line"
+    A.answer(c, row["id"], rid, BEN, "no", "Rename it to absolute_value.")
+    _push(c, "acme/app", 45, "eace67e94458")
+    line = "New commits since the reviews (now at eace67e): not reviewed by a bot."
+    told = TW.body(c, E.task(c, row["id"]), to=WRITER)
+    assert f"{line} Say so on the page the person OKs." in told, told
+    _page(c, store, "<p>v2 at eace67e</p>", fid=fid)
+    _say(c, _attach(c, row, "page:" + fid, requirement="Pre-release"), "unsure", "Still can't tell")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, BEN)
+    assert standing.line == (
+        f'Version 2, after the send back: "Rename it to absolute_value." {line} Jev is unsure: Still can\'t tell'
+    )
+    (ask,) = [r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == rid]
+    assert line in json.dumps(ask), "the task view shows it where the ask is"
+    assert told.count(R.NOT_REVIEWED) == 1
+    assert TW.body(c, E.task(c, row["id"]), to=WRITER).count(R.NOT_REVIEWED) == 1, "said once, on the ask"
+
+
+def _f2(c, row):
+    (standing,) = [s for s in R.standings(c, E.task(c, row["id"])) if s.name == "Pre-release"]
+    return standing
 
 
 def test_a_validate_page_is_judged_against_the_release_its_filed_work_went_out_in(c, store):

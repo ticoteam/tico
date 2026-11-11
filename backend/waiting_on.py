@@ -382,7 +382,8 @@ def of(
     shut = unreadable(conn, row, unmet)  # asked, and may not open it
     for standing in unmet:
         requirement = standing.requirement
-        since = requirement["created_at"] if requirement.get("visit_id") else entered
+        # An ask's wait counts from when it was asked (a page's version, once Jev looked), else when the stage began.
+        since = standing.since or (requirement["created_at"] if requirement.get("visit_id") else entered)
         line = standing.line or standing.name
         if requirement["kind"] == "ok" and requirement.get("visit_id") and _bound(conn, requirement["id"]):
             # A bound OK's line may name what it is for: what the task waits on goes to everyone who reads the task,
