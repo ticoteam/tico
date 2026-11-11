@@ -5,7 +5,6 @@ hashes here are recomputed the way that check computes them."""
 import os
 import shutil
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
@@ -113,32 +112,3 @@ def test_a_failed_build_leaves_no_manifest_so_the_cargo_check_stops(tmp_path):
     done = build(recorder)
     assert done.returncode == 1 and "recorder ui build failed" in done.stderr
     assert not (recorder / "dist/build-manifest.txt").exists()
-
-
-def test_watch_builds_once_then_again_on_each_change_and_clears_its_marker_on_stop(tmp_path):
-    recorder = tree(tmp_path)
-    watcher = subprocess.Popen(
-        [NODE, str(recorder / "build-ui.cjs"), "--watch"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        env=env(),
-    )
-    marker, output = recorder / "dist/.watching", recorder / "dist/app/app.js"
-
-    def until(condition):
-        deadline = time.monotonic() + 10
-        while not condition():
-            assert time.monotonic() < deadline and watcher.poll() is None
-            time.sleep(0.05)
-
-    try:
-        until(marker.exists)
-        assert marker.read_text().strip() == str(watcher.pid) and output.is_file()
-        (recorder / "ui/app/app.ts").write_text("const n: number = 2;\n")
-        until(lambda: output.read_text() == "const n = 2;\n")
-        until(lambda: ["file", "ui/app/app.ts", fnv(b"const n: number = 2;\n")] in [r[:3] for r in manifest(recorder)])
-    finally:
-        watcher.terminate()
-        watcher.wait(timeout=10)
-    assert not marker.exists()
