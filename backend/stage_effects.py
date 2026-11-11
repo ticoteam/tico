@@ -134,7 +134,7 @@ def merged_work(conn: "sqlite3.Connection", task_id: str) -> bool:
     (docs/pipelines-v3.md scenario 24) to reach a release or be closed by its owner."""
     from .item_sources import github as GS
 
-    return any(link["fact"] and link["fact"]["state"] == "merged" for link in GS.prs_of(conn, task_id))
+    return any(link["metadata"] and link["metadata"]["state"] == "merged" for link in GS.prs_of(conn, task_id))
 
 
 def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:

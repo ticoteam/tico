@@ -1,13 +1,15 @@
 # pyright: strict
-"""PR and release facts: Tico's saved copies of GitHub (docs/pipelines-v3.md "Facts", "GitHub").
+"""PR and release metadata: Tico's saved copies of GitHub (docs/pipelines-v3.md "Metadata", "GitHub").
 
-Requirements read facts only (`pr_open`, `checks_pass`, `pr_merged`, `in_release` in task_requirements, `at_head` pages
-in task_pages). Nothing here calls GitHub while a task is moved or checked. Two ways a fact comes in: a webhook
-(backend/github.py hands it to `save_pr` / `save_release`) and the 5-minute re-read (`refresh`), through `GitHub`.
+Requirements read metadata only (the conditions `pr_open`, `checks_pass`, `pr_merged`, `in_release` at the end of this
+file, `at_head` pages in task_pages). Nothing here calls GitHub while a task is moved or checked. Two ways metadata
+comes in: a webhook (backend/github.py hands it to `save_pr` / `save_release`) and the 5-minute re-read (`refresh`),
+through `GitHub`.
 
-- One `pr_facts` row per PR. A task reaches its PRs through its `task_links` rows of kind `pr` (repo, number).
-- Newest wins. `fact_version` is when the read or webhook that saw the fact began, in ms (`version_now`). A save with an
-  older version than the row's changes nothing, so a slow read can't undo a webhook that came after it began.
+- One `item_metadata` row per PR (source github, item type pr, key `owner/name#number`). A task reaches its PRs through
+  its `task_links` rows for those items.
+- Newest wins. `metadata_version` is when the read or webhook that saw the metadata began, in ms (`version_now`). A save
+  with an older version than the row's changes nothing, so a slow read can't undo a webhook that came after it began.
 - `head_seen_at` is when Tico first saw the PR's newest commit, `checks_started_at` when its checks were first seen
   running there. C13's 10 minutes and the 2 hours of running checks are measured from them.
 - `queued_at` is when Tico first saw the PR queued; `removed_at` when it first saw GitHub take it out without merging.
@@ -40,14 +42,14 @@ QUEUED = ("queued", "auto_merge")  # in GitHub's merge queue, or auto-merge on w
 NO_CHECKS_AFTER_S = 600  # C13: no checks for a commit 10 minutes after Tico saw it, and Checks pass is met
 CHECKS_TOO_LONG_S = 7200  # checks still running after 2 hours: the owner's turn
 SILENT_S = 7200  # a wait on GitHub with no word from GitHub for 2 hours (down, refusing, no such PR): the owner's turn
-REREAD_S = 300  # a PR a task waits on is read again when its fact is older than this
+REREAD_S = 300  # a PR a task waits on is read again when its metadata is older than this
 REREAD_BATCH = 50  # at most this many PRs per re-read call
 DELIVERY_DAYS = 7  # how long a webhook delivery id is kept for de-dup
-LOG = logging.getLogger("tico.task_facts")
+LOG = logging.getLogger("tico.github_source")
 
 
 class GitHub(Protocol):
-    """The calls to GitHub that facts and the merge queue make. The server's is backend/github.py's app client; tests
+    """The calls to GitHub that metadata and the merge queue make. The server's is backend/github.py's app client; tests
     and the fault rig use backend/tests/helpers/fake_github.py `FakeGitHub`. Each raises on a failed call, with GitHub's
     reason as the message."""
 
@@ -89,14 +91,14 @@ class GitHub(Protocol):
 
 
 def version_now() -> int:
-    """A fact version for a read or webhook that begins now: the time in ms."""
+    """Metadata version for a read or webhook that begins now: the time in ms."""
     return time.time_ns() // 1_000_000
 
 
 def sent_version(payload: Row, arrived: int) -> int:
     """A `pull_request` webhook's version: when GitHub last changed the PR (`pull_request.updated_at`), never later than
-    it arrived. GitHub promises no order, so a late webhook carries an older state than the fact may already hold; its
-    arrival time would make it newer. Without a readable time it is when it arrived."""
+    it arrived. GitHub promises no order, so a late webhook carries an older state than the metadata may already hold;
+    its arrival time would make it newer. Without a readable time it is when it arrived."""
     stamp = str(_obj(payload.get("pull_request")).get("updated_at") or "")
     try:
         at = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
@@ -170,24 +172,26 @@ def _flat(found: Row | None) -> Row | None:
     return {**found["fields"], "repo": repo, "number": number, **{key: found[key] for key in envelope}}
 
 
-def save_pr(conn: "sqlite3.Connection", repo: str, number: int, fact: Row, version: int) -> bool:
-    """Save what GitHub said of a PR, as seen by a read or webhook that began at `version`. `fact` has the keys
+def save_pr(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, version: int) -> bool:
+    """Save what GitHub said of a PR, as seen by a read or webhook that began at `version`. `metadata` has the keys
     `GitHub.read_pr` gives, and `checks` (`GitHub.read_checks` at its head) when they were read; a key left out keeps
-    the saved value. False, and nothing written, when the saved fact is newer. A merged PR stays merged. `checks_state`
-    is worked out here from `checks`, leaving out Tico's own."""
+    the saved value. False, and nothing written, when the saved metadata is newer. A merged PR stays merged.
+    `checks_state` is worked out here from `checks`, leaving out Tico's own."""
     H = _h()
     now = H.now()
     old = pr(conn, repo, number)
     if old and int(old["metadata_version"]) > version:
         return False
-    merged: Row = {**(old or {}), **{k: v for k, v in fact.items() if k != "checks"}}
+    merged: Row = {**(old or {}), **{k: v for k, v in metadata.items() if k != "checks"}}
     if old and old.get("state") == "merged" and merged.get("state") != "merged":
         # Merged is for good. A webhook that comes late (a `dequeued` whose snapshot still says open) changes nothing
         # of it: GitHub promises no order, and its version is only when it arrived.
         merged.update({k: old.get(k) for k in ("state", "head_sha", "merged_sha", "merged_at", "queue_state")})
     head = merged.get("head_sha")
     moved = not old or old.get("head_sha") != head
-    checks: list[Row] = fact["checks"] if "checks" in fact else ([] if moved else list((old or {}).get("checks") or []))
+    checks: list[Row] = (
+        metadata["checks"] if "checks" in metadata else ([] if moved else list((old or {}).get("checks") or []))
+    )
     state = _checks_state(checks)
     was_running = bool(old) and not moved and (old or {}).get("checks_state") == "pending"
     queue = str(merged.get("queue_state") or "none")
@@ -230,8 +234,8 @@ def _checks_state(checks: list[Row]) -> str:
 
 
 def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
-    """The PRs linked to a task, oldest link first: [{repo, number, url, created_at, fact}] where `fact` is `pr()` or
-    None."""
+    """The PRs linked to a task, oldest link first: [{repo, number, url, created_at, metadata}] where `metadata` is
+    `pr()` or None."""
     out: list[Row] = []
     for link in IM.of_task(conn, task_id, SOURCE, PR):
         repo, number = split_key(str(link["item_key"]))
@@ -241,7 +245,7 @@ def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
                 "number": number,
                 "url": link["url"],
                 "created_at": link["created_at"],
-                "fact": _flat(link["metadata"]),
+                "metadata": _flat(link["metadata"]),
             }
         )
     return out
@@ -249,13 +253,13 @@ def prs_of(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
 
 def heads(conn: "sqlite3.Connection", task_id: str) -> dict[str, str | None]:
     """{pr_ref: its newest commit} for every PR linked to the task that was not closed without merging. A page `at_head`
-    saves this when it is attached and is for the newest commit while it still equals this. None: no fact yet."""
+    saves this when it is attached and is for the newest commit while it still equals this. None: no metadata yet."""
     out: dict[str, str | None] = {}
     for link in prs_of(conn, task_id):
-        fact = link["fact"]
-        if fact and fact["state"] == "closed":
+        metadata = link["metadata"]
+        if metadata and metadata["state"] == "closed":
             continue
-        out[pr_ref(str(link["repo"]), int(link["number"]))] = fact["head_sha"] if fact else None
+        out[pr_ref(str(link["repo"]), int(link["number"]))] = metadata["head_sha"] if metadata else None
     return out
 
 
@@ -265,15 +269,15 @@ def linked_tasks(conn: "sqlite3.Connection", repo: str, number: int) -> list[str
 
 
 def _nudge(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
-    """A fact came in: move each task on if it now has all it needs (item_metadata.nudge)."""
+    """Metadata came in: move each task on if it now has all it needs (item_metadata.nudge)."""
     IM.nudge(conn, task_ids)
 
 
-def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, fact: Row, version: int) -> int:
-    """`save_pr`, then what a changed fact causes: a queue removal's one wake, the Merge stage's own reactions
-    (merge_queue.fact_changed) and a nudge of every open task that links the PR. 1 when the fact was saved, else 0."""
+def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, version: int) -> int:
+    """`save_pr`, then what changed metadata causes: a queue removal's one wake, the Merge stage's own reactions
+    (metadata_changed) and a nudge of every open task that links the PR. 1 when the metadata was saved, else 0."""
     before = pr(conn, repo, number)
-    if not save_pr(conn, repo, number, fact, version):
+    if not save_pr(conn, repo, number, metadata, version):
         return 0
     after = pr(conn, repo, number)
     if not after:
@@ -281,7 +285,7 @@ def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, fact: Ro
     if after["queue_state"] == "removed" and (not before or before.get("removed_at") != after["removed_at"]):
         removed(conn, after)
     tasks = linked_tasks(conn, repo, number)
-    fact_changed(conn, tasks, after, before)
+    metadata_changed(conn, tasks, after, before)
     _nudge(conn, tasks)
     return 1
 
@@ -315,7 +319,7 @@ def removal_words(reason: object) -> str:
 
 
 def check_state(status: object, conclusion: object) -> str:
-    """A check run's or status's state as a fact keeps it: pending, success or failure."""
+    """A check run's or status's state as metadata keeps it: pending, success or failure."""
     if str(status or "completed") not in ("completed", "success", "failure", "error"):
         return "pending"
     result = str(conclusion or status or "")
@@ -326,30 +330,30 @@ def check_state(status: object, conclusion: object) -> str:
     return "failure"
 
 
-def _pr_fact_of(payload: Row) -> tuple[Row, bool]:
-    """A `pull_request` webhook as a fact, and whether it took the PR out of the merge queue (or its auto-merge off)
+def _pr_metadata_of(payload: Row) -> tuple[Row, bool]:
+    """A `pull_request` webhook as metadata, and whether it took the PR out of the merge queue (or its auto-merge off)
     for a reason other than a merge. That removal is not saved from the webhook: its failing check is not in it, so the
     PR is read in full on the next pass (`refresh`), and the one wake carries the check."""
     found: Row = payload.get("pull_request") or {}
     action = str(payload.get("action") or "")
     merged = bool(found.get("merged") or found.get("merged_at"))
-    fact: Row = {
+    metadata: Row = {
         "state": "merged" if merged else "closed" if found.get("state") == "closed" else "open",
         "draft": bool(found.get("draft")),
         "head_sha": _obj(found.get("head")).get("sha"),
     }
     if merged:
-        fact.update(merged_sha=found.get("merge_commit_sha"), merged_at=found.get("merged_at"), queue_state="none")
+        metadata.update(merged_sha=found.get("merge_commit_sha"), merged_at=found.get("merged_at"), queue_state="none")
     elif action == "enqueued":
-        fact["queue_state"] = "queued"
+        metadata["queue_state"] = "queued"
     elif action == "auto_merge_enabled":
-        fact["queue_state"] = "auto_merge"
+        metadata["queue_state"] = "auto_merge"
     elif action in ("dequeued", "auto_merge_disabled"):
         if str(payload.get("reason") or "").lower() in MERGED_REASONS:
-            fact["queue_state"] = "none"
+            metadata["queue_state"] = "none"
         else:
-            return fact, True
-    return fact, False
+            return metadata, True
+    return metadata, False
 
 
 def _obj(value: Any) -> Row:
@@ -358,10 +362,10 @@ def _obj(value: Any) -> Row:
 
 
 def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str | None = None) -> list[str]:
-    """Save what a GitHub webhook says as facts, in the webhook's transaction (backend/github.py dropped a repeated
+    """Save what a GitHub webhook says as metadata, in the webhook's transaction (backend/github.py dropped a repeated
     delivery first: `seen_delivery`). Only PRs a task links are kept. A check run or status changes that one check in
-    the fact of each open PR whose newest commit it is on. A published release is saved. Returns the refs of the PRs
-    whose fact changed."""
+    the metadata of each open PR whose newest commit it is on. A published release is saved. Returns the refs of the PRs
+    whose metadata changed."""
     repo = str(_obj(payload.get("repository")).get("full_name") or "")
     if not repo:
         return []
@@ -371,14 +375,14 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
         number = int(_obj(payload.get("pull_request")).get("number") or payload.get("number") or 0)
         if not number or not IM.linked(conn, SOURCE, PR, pr_key(repo, number)):
             return []
-        fact, removal = _pr_fact_of(payload)
+        metadata, removal = _pr_metadata_of(payload)
         sent = sent_version(payload, version)
         saved = pr(conn, repo, number)
         if saved and int(saved["metadata_version"]) > sent:
             # Older than what is saved (a late webhook, or one beaten by a check that came first): not saved; an open
             # PR is read in full on the next pass, so what it said is never lost.
             removal = saved["state"] == "open"
-        elif save_and_settle(conn, repo, number, fact, sent):
+        elif save_and_settle(conn, repo, number, metadata, sent):
             out.append(pr_ref(repo, number))
         if removal:
             IM.mark_due(conn, SOURCE, PR, pr_key(repo, number))
@@ -405,8 +409,8 @@ def webhook(conn: "sqlite3.Connection", event: str, payload: Row, app_slug: str 
             }
         numbers = _open_at_head(conn, repo, sha)
         if event == "check_run":
-            # A check run on a commit no fact has yet came before its `synchronize`: the PRs it names are read in full
-            # on the next pass, which brings the new head and its checks.
+            # A check run on a commit no metadata has yet came before its `synchronize`: the PRs it names are read in
+            # full on the next pass, which brings the new head and its checks.
             named: list[Any] = _obj(payload.get("check_run")).get("pull_requests") or []
             for entry in named:
                 number = int(_obj(entry).get("number") or 0)
@@ -451,31 +455,33 @@ def _open_at_head(conn: "sqlite3.Connection", repo: str, sha: str) -> list[int]:
 
 
 def due_reads(conn: "sqlite3.Connection", now: str, limit: int = REREAD_BATCH) -> list[tuple[str, int]]:
-    """The PRs an open task waits on whose fact is missing or older than REREAD_S, oldest read first, at most `limit`.
+    """The PRs an open task waits on whose metadata is missing or older than REREAD_S, oldest read first, at most
+    `limit`.
     A merged or closed PR is final for what a task waits on, so it is not read again (a webhook still brings a reopen).
     An open PR marked for a full read (`read_at` '') is read once more whatever links it: a task closed while GitHub
-    merged its PR anyway (Tico's dequeue said merged) so leaves no fact saying "open, queued" for ever.
+    merged its PR anyway (Tico's dequeue said merged) so leaves no metadata saying "open, queued" for ever.
     """
     return [split_key(key) for key in IM.due_reads(conn, SOURCE, PR, now, limit)]
 
 
 def read_pr(github: GitHub, repo: str, number: int) -> Row | None:
-    """What GitHub says of one PR now, with the checks at its head while it is open: a `save_pr` fact. None when the PR
-    is gone. Raises when GitHub could not be asked."""
+    """What GitHub says of one PR now, with the checks at its head while it is open: metadata for `save_pr`. None when
+    the PR is gone. Raises when GitHub could not be asked."""
     found = github.read_pr(repo, number)
     if found is None:
         return None
-    fact = dict(found)
-    if fact.get("state") == "open" and fact.get("head_sha"):
-        fact["checks"] = github.read_checks(repo, str(fact["head_sha"]))
-    return fact
+    metadata = dict(found)
+    if metadata.get("state") == "open" and metadata.get("head_sha"):
+        metadata["checks"] = github.read_checks(repo, str(metadata["head_sha"]))
+    return metadata
 
 
 def refresh(store: Any, github: GitHub, now: str | None = None) -> int:
     """The 5-minute re-read: each of `due_reads` read through `github` with no transaction held, then saved with the
     version taken before its read. Also re-reads the releases of every release repo an open task waits on, and asks
     GitHub whether each waiting merge is in each newer release. A call GitHub fails is logged and left for the next
-    pass: the fact stays as it was, so what waits on it keeps waiting on GitHub. Returns how many facts changed."""
+    pass: the metadata stays as it was, so what waits on it keeps waiting on GitHub. Returns how many PRs' metadata
+    changed."""
     H = _h()
     at: str = now or H.now()
     with store.transaction() as conn:
@@ -486,25 +492,30 @@ def refresh(store: Any, github: GitHub, now: str | None = None) -> int:
     for repo, number in due:
         version = version_now()
         try:
-            fact = read_pr(github, repo, number)
-        except Exception as exc:  # noqa: BLE001 - GitHub down or refusing: the fact waits for the next pass
+            metadata = read_pr(github, repo, number)
+        except Exception as exc:  # noqa: BLE001 - GitHub down or refusing: the metadata waits for the next pass
             LOG.warning("Reading %s from GitHub failed: %s", pr_ref(repo, number), exc)
             continue
-        if fact is None:
+        if metadata is None:
             continue
         with store.transaction() as conn:
-            changed += save_and_settle(conn, repo, number, vanished(pr(conn, repo, number), fact), version)
+            changed += save_and_settle(conn, repo, number, vanished(pr(conn, repo, number), metadata), version)
     changed += _refresh_releases(store, github, at)
     return changed
 
 
-def vanished(old: Row | None, fact: Row) -> Row:
+def vanished(old: Row | None, metadata: Row) -> Row:
     """A re-read that finds an open PR Tico saw queued now neither queued nor removed: it left the merge queue and no
     webhook or timeline event said so. That is a removal, with no reason, so the Merge stage's owner hears of it at
     once (merge_queue.removed) instead of "In the merge queue" waiting for ever."""
-    if old and old.get("queue_state") in QUEUED and fact.get("state") == "open" and fact.get("queue_state") == "none":
-        return {**fact, "queue_state": "removed", "removed_reason": removal_words(None)}
-    return fact
+    if (
+        old
+        and old.get("queue_state") in QUEUED
+        and metadata.get("state") == "open"
+        and metadata.get("queue_state") == "none"
+    ):
+        return {**metadata, "queue_state": "removed", "removed_reason": removal_words(None)}
+    return metadata
 
 
 def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
@@ -521,14 +532,14 @@ def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
         except ValueError:
             setting = {}
         for link in prs_of(conn, str(task_id)):
-            fact = link["fact"]
-            if fact and fact["state"] == "merged" and fact.get("merged_sha"):
+            metadata = link["metadata"]
+            if metadata and metadata["state"] == "merged" and metadata.get("merged_sha"):
                 out.append(
                     {
                         "task": str(task_id),
                         "repo": release_repo(setting, str(link["repo"])),
-                        "sha": str(fact["merged_sha"]),
-                        "at": fact.get("merged_at"),
+                        "sha": str(metadata["merged_sha"]),
+                        "at": metadata.get("merged_at"),
                         "prereleases": bool(setting.get("prereleases")),
                     }
                 )
@@ -703,10 +714,10 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   (backend/source_actions.py, `act`) per open linked PR, pinned to its head (`queue`). The Heartbeat's
 #   `source_actions` step carries it out with GitHub's GraphQL `enqueuePullRequest` (auto-merge where the repo has no
 #   queue). No bot runs a merge command. Key: `act:github.queue:<visit>:<ref>@<head sha>`; a second owe of the same key
-#   is nothing. A PR whose metadata comes in after the task entered is owed then (`fact_changed`).
+#   is nothing. A PR whose metadata comes in after the task entered is owed then (`metadata_changed`).
 # - A failed GitHub call is tried again after source_actions.RETRY_S; after its TRIES failed calls, or when GitHub
 #   answers no, the action is `failed`: "PR merged" stands NOT_MET on the owner with "GitHub refused the merge: <reason>".
-# - GitHub removes a PR from the queue without merging it: the fact is saved (task_facts.save_pr: `queue_state` removed,
+# - GitHub removes a PR from the queue without merging it: the metadata is saved (save_pr: `queue_state` removed,
 #   `removed_at`, `removed_reason`, `failing_check`, `failing_check_url`). "PR merged" stands NOT_MET on the stage owner
 #   with "Dropped from the merge queue: <reason>", and the owner gets ONE wake (`removed`), keyed
 #   `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself. The third removal in one
@@ -769,16 +780,16 @@ def newest(conn: "sqlite3.Connection", visit_id: str, ref: str) -> Row | None:
 
 
 def _owe_queue(conn: "sqlite3.Connection", visit_id: str, link: Row) -> Row | None:
-    fact = link["fact"]
-    if not fact or fact["state"] != "open" or not fact.get("head_sha"):
+    metadata = link["metadata"]
+    if not metadata or metadata["state"] != "open" or not metadata.get("head_sha"):
         return None
     key = pr_key(str(link["repo"]), int(link["number"]))
-    return SA.owe(conn, visit_id, SA.ACT, SOURCE, QUEUE, PR, key, str(fact["head_sha"]))
+    return SA.owe(conn, visit_id, SA.ACT, SOURCE, QUEUE, PR, key, str(metadata["head_sha"]))
 
 
 def queue(conn: "sqlite3.Connection", task: Row, by: str) -> list[Row]:
     """Owe a `queue` action for each open linked PR of the task at its saved head (`stage_effects.enter`). Returns
-    the actions owed now. A PR whose fact is not read yet is owed when it comes in (`fact_changed`)."""
+    the actions owed now. A PR whose metadata is not read yet is owed when it comes in (`metadata_changed`)."""
     visit = task.get("visit")
     if not visit or not queues_prs(task.get("stage")):
         return []
@@ -786,9 +797,9 @@ def queue(conn: "sqlite3.Connection", task: Row, by: str) -> list[Row]:
     return [e for e in owed if e]
 
 
-def failing_names(fact: Row) -> str:
+def failing_names(metadata: Row) -> str:
     """The names of the checks that failed on a PR's newest commit, Tico's own left out."""
-    checks: list[Row] = fact.get("checks") or []
+    checks: list[Row] = metadata.get("checks") or []
     names = [str(c.get("name")) for c in checks if c.get("state") == "failure" and not c.get("tico")]
     return ", ".join(names) or "a check"
 
@@ -821,27 +832,27 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     visit_id = str(row["visit"]["id"])
     again: list[Row] = []
     for link in prs_of(conn, task_id):
-        fact = link["fact"]
-        if not fact or fact["state"] != "open":
+        metadata = link["metadata"]
+        if not metadata or metadata["state"] != "open":
             continue
         ref = pr_ref(str(link["repo"]), int(link["number"]))
         last = newest(conn, visit_id, ref)
         if last and last["state"] == "owed":
             continue  # already queuing again
-        if fact["queue_state"] == "removed" or (last and last["state"] == "failed"):
+        if metadata["queue_state"] == "removed" or (last and last["state"] == "failed"):
             again.append({**link, "ref": ref})
     if not again:
         refuse("task_requirement", "Nothing was taken out of the merge queue")
     for link in again:
-        fact, ref = link["fact"], link["ref"]
-        if fact["checks_state"] == "pending":
+        metadata, ref = link["metadata"], link["ref"]
+        if metadata["checks_state"] == "pending":
             refuse("task_requirement", f"The checks on {ref} are still running")
-        if fact["checks_state"] == "failure":
-            refuse("task_requirement", f"Checks failed on {ref}: {failing_names(fact)}")
+        if metadata["checks_state"] == "failure":
+            refuse("task_requirement", f"Checks failed on {ref}: {failing_names(metadata)}")
     ts = _h().now()
     owed: list[Row] = []
     for link in again:
-        ref, head = link["ref"], str(link["fact"]["head_sha"])
+        ref, head = link["ref"], str(link["metadata"]["head_sha"])
         key = pr_key(str(link["repo"]), int(link["number"]))
         owed.append(SA.owe_again(conn, visit_id, SOURCE, QUEUE, PR, key, head))
         E._event(conn, task_id, by, "pr_queued", None, ref, "Queue again", {"ref": ref, "head": head, "again": True})
@@ -869,26 +880,26 @@ def _on_queueing_stage(conn: "sqlite3.Connection", task_ids: list[str]) -> list[
     return out
 
 
-def removed_line(fact: Row) -> str:
+def removed_line(metadata: Row) -> str:
     """Why a PR left the merge queue, with the check that failed there when one did."""
-    reason = str(fact.get("removed_reason") or "GitHub gave no reason")
-    check = fact.get("failing_check")
+    reason = str(metadata.get("removed_reason") or "GitHub gave no reason")
+    check = metadata.get("failing_check")
     return f"Dropped from the merge queue: {reason} ({check})" if check else f"Dropped from the merge queue: {reason}"
 
 
-def removed(conn: "sqlite3.Connection", fact: Row) -> int:
-    """After a saved fact shows a PR removed from the queue: give each task on a queueing stage that links it the one
+def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
+    """After saved metadata shows a PR removed from the queue: give each task on a queueing stage that links it the one
     `queue_removed` wake for this `removed_at`, and a `pr_queue_removed` history row. Returns how many wakes were
     added. Tico never queues it again by itself."""
     from .. import task_wakes
 
     E = _engine()
-    repo, number = str(fact["repo"]), int(fact["number"])
+    repo, number = str(metadata["repo"]), int(metadata["number"])
     ref = pr_ref(repo, number)
     added = 0
     for row in _on_queueing_stage(conn, linked_tasks(conn, repo, number)):
         task_id, visit = str(row["id"]), row["visit"]
-        key = removed_wake_key(task_id, str(visit["id"]), ref, str(fact["removed_at"]))
+        key = removed_wake_key(task_id, str(visit["id"]), ref, str(metadata["removed_at"]))
         if conn.execute(
             "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' "
             "AND json_valid(data) AND json_extract(data, '$.key')=?",
@@ -899,11 +910,11 @@ def removed(conn: "sqlite3.Connection", fact: Row) -> int:
             "key": key,
             "visit": visit["id"],
             "ref": ref,
-            "reason": fact.get("removed_reason"),
-            "check": fact.get("failing_check"),
-            "url": fact.get("failing_check_url"),
+            "reason": metadata.get("removed_reason"),
+            "check": metadata.get("failing_check"),
+            "url": metadata.get("failing_check_url"),
         }
-        E._event(conn, task_id, E.SYSTEM, "pr_queue_removed", None, ref, removed_line(fact), data)
+        E._event(conn, task_id, E.SYSTEM, "pr_queue_removed", None, ref, removed_line(metadata), data)
         E.changed(conn, task_id, E.SYSTEM)
         owner = row.get("owner_id")
         if not E.is_bot(owner):
@@ -914,9 +925,9 @@ def removed(conn: "sqlite3.Connection", fact: Row) -> int:
                 conn, task_id, drops, f"GitHub took {ref} out of the merge queue {drops} times in this stage."
             )
             continue
-        link = f" {fact['failing_check_url']}" if fact.get("failing_check_url") else ""
+        link = f" {metadata['failing_check_url']}" if metadata.get("failing_check_url") else ""
         lead = (
-            f"GitHub took {ref} out of the merge queue. {removed_line(fact)}.{link} Queue it again with "
+            f"GitHub took {ref} out of the merge queue. {removed_line(metadata)}.{link} Queue it again with "
             f"`tico task queue {task_id}`, push a fix to the PR branch and then queue it again, or move it back."
         )
         fresh: Row = E.task(conn, task_id) or row
@@ -959,9 +970,9 @@ def _never_stuck() -> Any:
     return never_stuck
 
 
-def fact_changed(conn: "sqlite3.Connection", task_ids: list[str], after: Row, before: Row | None) -> None:
-    """What a changed PR fact means on the Merge stage, for the open tasks that link it: a PR whose fact came in after
-    the task entered is owed its `queue` now (never once one was owed for it in this visit: Tico never queues a PR
+def metadata_changed(conn: "sqlite3.Connection", task_ids: list[str], after: Row, before: Row | None) -> None:
+    """What changed PR metadata means on the Merge stage, for the open tasks that link it: a PR whose metadata came in
+    after the task entered is owed its `queue` now (never once one was owed for it in this visit: Tico never queues a PR
     again by itself), and a new commit tells the pipeline's manager once ("Changed after OK", C22)."""
     E = _engine()
     repo, number = str(after["repo"]), int(after["number"])
@@ -969,7 +980,7 @@ def fact_changed(conn: "sqlite3.Connection", task_ids: list[str], after: Row, be
     for row in _on_queueing_stage(conn, task_ids):
         visit_id = str(row["visit"]["id"])
         if not effects(conn, visit_id, ref):
-            _owe_queue(conn, visit_id, {"repo": repo, "number": number, "fact": after})
+            _owe_queue(conn, visit_id, {"repo": repo, "number": number, "metadata": after})
         head = after.get("head_sha")
         if before and before.get("head_sha") and head and head != before["head_sha"] and after["state"] == "open":
             E._tell_manager(conn, row, f"Changed after OK: {ref} has a new commit", f"{WAKE_CHANGED}:{head}")
@@ -987,8 +998,8 @@ def _pr_of(effect: Row) -> tuple[str, int]:
 
 def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
     """Someone else queued the PR (or GitHub merged it) before Tico's owed `queue` ran: it is done, with no call."""
-    fact = pr(conn, *_pr_of(effect))
-    return fact is not None and (fact["queue_state"] in QUEUED or fact["state"] == "merged")
+    metadata = pr(conn, *_pr_of(effect))
+    return metadata is not None and (metadata["queue_state"] in QUEUED or metadata["state"] == "merged")
 
 
 def carry_out(github: "GitHub", effect: Row) -> Row:
@@ -1090,13 +1101,13 @@ def _now() -> Any:
 
 
 def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[Row], Standing | None]:
-    """The PRs a GitHub kind reads, each with `ref` and `fact`, or the standing when there are none to read."""
+    """The PRs a GitHub condition reads, each with `ref` and `metadata`, or the standing when there are none to read."""
     links: list[Row] = [
         {**link, "ref": pr_ref(str(link["repo"]), int(link["number"]))} for link in prs_of(conn, task["id"])
     ]
     if not links:
         return [], Standing(requirement, NOT_MET, task.get("owner_id"), "No PR linked")
-    live = [link for link in links if not (link["fact"] and link["fact"]["state"] == "closed")]
+    live = [link for link in links if not (link["metadata"] and link["metadata"]["state"] == "closed")]
     if not live:
         return [], Standing(requirement, NOT_MET, task.get("owner_id"), f"{links[0]['ref']} was closed without merging")
     return live, None
@@ -1120,13 +1131,13 @@ def _seconds_since(ts: object) -> float | None:
 def _silent(task: Row, requirement: Row, link: Row, found: Standing, heard: object = None) -> Standing:
     """A wait on GitHub about one PR becomes the owner's turn once GitHub has said nothing for SILENT_S: no webhook and
     no read of the PR got through (GitHub down or refusing, or the PR gone). `heard` is when GitHub last answered, when
-    the caller knows better than the PR's fact (its releases' read); else the fact's last read, else when it was
+    the caller knows better than the PR's metadata (its releases' read); else the metadata's last read, else when it was
     linked. Every wait on GitHub so ends in a bot's turn, whatever the stage's expected time."""
     if found.state != WAITING or found.on != SOURCE:
         return found
-    fact: Row = link.get("fact") or {}
-    read = None if fact.get("due_at") else fact.get("read_at")  # marked for a full read: heard of when saved
-    quiet = _seconds_since(heard or read or fact.get("updated_at") or link.get("created_at"))
+    metadata: Row = link.get("metadata") or {}
+    read = None if metadata.get("due_at") else metadata.get("read_at")  # marked for a full read: heard of when saved
+    quiet = _seconds_since(heard or read or metadata.get("updated_at") or link.get("created_at"))
     if quiet is None or quiet < SILENT_S:
         return found
     return Standing(
@@ -1145,29 +1156,31 @@ def _open_one(task: Row, requirement: Row, link: Row) -> Standing:
     """Met once GitHub said the PR exists. An open PR is re-read every few minutes; one GitHub stopped answering about
     (a deleted PR reads as gone, which saves nothing) is the owner's after the 2-hour silence rule, not met for ever."""
     quiet = _silent(task, requirement, link, _reading(requirement))
-    fact: Row | None = link["fact"]
-    if not fact or (fact["state"] == "open" and quiet.state == NOT_MET):
+    metadata: Row | None = link["metadata"]
+    if not metadata or (metadata["state"] == "open" and quiet.state == NOT_MET):
         return quiet
     return Standing(requirement, MET, line="PR open")
 
 
 def _checks_one(task: Row, requirement: Row, link: Row) -> Standing:
 
-    fact, ref = link["fact"], link["ref"]
-    if not fact:
+    metadata, ref = link["metadata"], link["ref"]
+    if not metadata:
         return _reading(requirement)
-    if fact["state"] == "merged":
+    if metadata["state"] == "merged":
         return Standing(requirement, MET, line="Checks pass")
-    state = fact["checks_state"]
+    state = metadata["checks_state"]
     if state == "failure":
-        return Standing(requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {failing_names(fact)}")
+        return Standing(
+            requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {failing_names(metadata)}"
+        )
     if state == "pending":
-        running = _seconds_since(fact.get("checks_started_at"))
+        running = _seconds_since(metadata.get("checks_started_at"))
         if running is not None and running >= CHECKS_TOO_LONG_S:
             return Standing(requirement, NOT_MET, task.get("owner_id"), "Checks still running after 2 hours")
         return Standing(requirement, WAITING, SOURCE, "Checks running")
     if state == "none":
-        seen = _seconds_since(fact.get("head_seen_at"))
+        seen = _seconds_since(metadata.get("head_seen_at"))
         if seen is None or seen < NO_CHECKS_AFTER_S:
             return Standing(requirement, WAITING, SOURCE, "Waiting for checks")
         return Standing(requirement, MET, line="No checks on this repo")  # C13
@@ -1185,22 +1198,22 @@ def checks_pass(conn: "sqlite3.Connection", task: Row, requirement: Row, answer:
 
 
 def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: Row) -> Standing:
-    fact, ref = link["fact"], link["ref"]
-    if not fact:
+    metadata, ref = link["metadata"], link["ref"]
+    if not metadata:
         return _reading(requirement)
-    if fact["state"] == "merged":
+    if metadata["state"] == "merged":
         return Standing(requirement, MET, line="Merged")
     owner = task.get("owner_id")
     queues = queues_prs(task.get("stage"))
     effect = newest(conn, task["visit"]["id"], ref) if queues else None
-    if fact["queue_state"] in ("queued", "auto_merge"):  # queued, by Tico or anyone: an owed queue_pr is then done
+    if metadata["queue_state"] in ("queued", "auto_merge"):  # queued, by Tico or anyone: an owed queue_pr is then done
         return Standing(requirement, WAITING, SOURCE, "In the merge queue")
     if effect and effect["state"] == "owed":
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")
     if effect and effect["state"] == "failed":
         return Standing(requirement, NOT_MET, owner, f"GitHub refused the merge: {effect.get('last_error') or ref}")
-    if fact["queue_state"] == "removed":
-        return Standing(requirement, NOT_MET, owner, removed_line(fact))
+    if metadata["queue_state"] == "removed":
+        return Standing(requirement, NOT_MET, owner, removed_line(metadata))
     if effect:
         return Standing(requirement, WAITING, SOURCE, "In the merge queue")
     if queues:
@@ -1218,10 +1231,10 @@ def pr_merged(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: R
 
 
 def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Standing:
-    fact = link["fact"]
-    if not fact:
+    metadata = link["metadata"]
+    if not metadata:
         return _reading(requirement)
-    if fact["state"] != "merged" or not fact.get("merged_sha"):
+    if metadata["state"] != "merged" or not metadata.get("merged_sha"):
         return Standing(requirement, WAITING, SOURCE, "Not merged yet")
     settings: Row = requirement.get("settings") or {}
     repo = release_repo(settings, str(link["repo"]))
@@ -1231,7 +1244,7 @@ def _release_one(conn: "sqlite3.Connection", requirement: Row, link: Row) -> Sta
     if not publishes:
         return Standing(requirement, MET, line="This repo doesn't publish releases")  # C31
     for release in reversed(releases(conn, repo, prereleases=bool(settings.get("prereleases")))):
-        if included(conn, release["id"], str(fact["merged_sha"])):
+        if included(conn, release["id"], str(metadata["merged_sha"])):
             return Standing(requirement, MET, line=f"In {release['tag']}")
     return Standing(requirement, WAITING, SOURCE, f"Waiting for a release of {repo}")
 
@@ -1247,11 +1260,11 @@ def _release_silent(conn: "sqlite3.Connection", task: Row, requirement: Row, lin
     """In a release for one PR, with `_silent`: a merged PR is not read again, so once it merged GitHub's word is the
     read of the release repo's releases (never read yet: since it merged)."""
     found = _release_one(conn, requirement, link)
-    fact: Row = link.get("fact") or {}
-    if fact.get("state") != "merged":
+    metadata: Row = link.get("metadata") or {}
+    if metadata.get("state") != "merged":
         return _silent(task, requirement, link, found)
     repo = release_repo(requirement.get("settings") or {}, str(link["repo"]))
-    return _silent(task, requirement, link, found, releases_read_at(conn, repo) or fact.get("updated_at"))
+    return _silent(task, requirement, link, found, releases_read_at(conn, repo) or metadata.get("updated_at"))
 
 
 NAME = "GitHub"

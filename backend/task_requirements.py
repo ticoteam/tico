@@ -376,7 +376,7 @@ KINDS: dict[str, Callable[["sqlite3.Connection", Row, Row, "Row | None"], Standi
 # The keys a requirement's `settings` may hold, by kind. Anything else is refused at save (pipeline_settings).
 # - page: `rubric` (Jev's "what to check"; empty means the requirement's line), `at_head` (the page is for the newest
 #   commit of every linked PR: a new commit puts it back to the owner), `with_release` (Jev is also shown the release
-#   of the tasks this task filed, so "production is older than the release" is judged against a fact).
+#   of the tasks this task filed, so "production is older than the release" is judged against what GitHub says).
 # - item: its condition's (item_sources.Condition.settings, `settings_of`).
 SETTINGS: dict[str, tuple[str, ...]] = {
     "owner_done": (),

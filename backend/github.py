@@ -473,7 +473,7 @@ def _engine_speaks(c, task_id):
     open, checks, a merge, a release) or queues
     its PRs (backend/item_sources/github.py). There the engine tells the stage's owner of a removal from the queue, a merge
     (the move on) and a close (the standing it leaves unmet): this module's wakes for those would be a second message
-    about the same event, in other words. The webhook saves the engine's facts first (`_task_facts`), so a merge
+    about the same event, in other words. The webhook saves the engine's metadata first (`_item_metadata`), so a merge
     has already moved the task on to the stage after Merge when this is asked."""
     from . import task_engine
     from .item_sources import github as GS
@@ -1539,7 +1539,7 @@ def reconcile_worktree_prs(service):
                                     pr["html_url"] = link["url"]
                                 match = PR_LINK.match(str(pr.get("html_url") or "").split("?")[0].rstrip("/"))
                                 # A webhook that wrote or registered this pull request while it was being read holds
-                                # newer facts, for every task it is linked to.
+                                # newer metadata, for every task it is linked to.
                                 if (
                                     match
                                     and c.execute(
@@ -1900,22 +1900,22 @@ def ship_deployed(c, settings, *, ancestry=None):
     return shipped
 
 
-def _task_facts(c, github_app, event, payload):
-    """The engine's PR and release facts from a webhook (backend/item_sources/github.py), in a savepoint: a fault there is
-    logged and the 5-minute re-read brings the fact, and what else the webhook does still happens."""
+def _item_metadata(c, github_app, event, payload):
+    """The engine's PR and release metadata from a webhook (backend/item_sources/github.py), in a savepoint: a fault there is
+    logged and the 5-minute re-read brings it, and what else the webhook does still happens."""
     from .item_sources import github as GS
 
     if event not in ("pull_request", "check_run", "status", "release"):
         return []
     app = github_app.row(c) if github_app is not None else None
-    c.execute("SAVEPOINT task_facts")
+    c.execute("SAVEPOINT item_metadata")
     try:
         found = GS.webhook(c, event, payload, (app["slug"] if app else None) or None)
     except Exception:
-        c.execute("ROLLBACK TO task_facts")
-        logging.getLogger("tico.github").exception("Saving the facts of a %s webhook failed", event)
+        c.execute("ROLLBACK TO item_metadata")
+        logging.getLogger("tico.github").exception("Saving the metadata of a %s webhook failed", event)
         found = []
-    c.execute("RELEASE task_facts")
+    c.execute("RELEASE item_metadata")
     return found
 
 
@@ -1951,7 +1951,7 @@ def install_github(app, settings, store):
             # A delivery GitHub sends again (a retry, a redelivery) is taken once (docs/pipelines-v3.md "GitHub").
             if GS.seen_delivery(c, headers.get("x-github-delivery"), event):
                 return {"ok": True, "repeat": True}
-            facts = _task_facts(c, app.state.github_app, event, payload)
+            metadata = _item_metadata(c, app.state.github_app, event, payload)
             if event == "pull_request":
                 result = pull_request(
                     c, payload, review_role=settings.github_review_role, release_repo=settings.release_repo
@@ -1970,11 +1970,11 @@ def install_github(app, settings, store):
                 result["shipped"] = ship_deployed(c, settings)
             elif event == "release":
                 result = release(c, payload, release_repo=settings.release_repo)
-            elif facts:
+            elif metadata:
                 result = {}
             else:
                 return Response(status_code=204)
-        return {"ok": True, **result, **({"facts": facts} if facts else {})}
+        return {"ok": True, **result, **({"metadata": metadata} if metadata else {})}
 
 
 # ----------------------------------------------------------------------------- the engine's GitHub (item_sources.github.GitHub)
@@ -2004,8 +2004,8 @@ class GitHubRefused(RuntimeError):
 
 class AppGitHub:
     """`item_sources.github.GitHub` through the company's GitHub App (backend/github_app.py `GitHubApp`): what the PR and release
-    facts read, and the merge queue's enqueue and dequeue (GraphQL). Each call mints a token for the one repo. A failed
-    call raises `GitHubRefused` (or the app's Problem) with GitHub's reason; the caller keeps the fact as it was."""
+    metadata reads, and the merge queue's enqueue and dequeue (GraphQL). Each call mints a token for the one repo. A failed
+    call raises `GitHubRefused` (or the app's Problem) with GitHub's reason; the caller keeps the metadata as it was."""
 
     def __init__(self, service):
         self.service = service
@@ -2054,7 +2054,7 @@ class AppGitHub:
             return None
         merged = bool(found.get("merged"))
         state = "merged" if merged else "open" if found.get("state") == "OPEN" else "closed"
-        fact = {
+        meta = {
             "state": state,
             "draft": bool(found.get("isDraft")),
             "head_sha": str(found.get("headRefOid") or "").lower() or None,
@@ -2066,11 +2066,11 @@ class AppGitHub:
             "failing_check_url": None,
         }
         if merged or state != "open":
-            return fact
+            return meta
         if found.get("isInMergeQueue"):
-            fact["queue_state"] = "queued"
+            meta["queue_state"] = "queued"
         elif found.get("autoMergeRequest"):
-            fact["queue_state"] = "auto_merge"
+            meta["queue_state"] = "auto_merge"
         else:
             last = ((found.get("timelineItems") or {}).get("nodes") or [None])[-1] or {}
             kind = last.get("__typename")
@@ -2078,13 +2078,13 @@ class AppGitHub:
             if kind in ("RemovedFromMergeQueueEvent", "AutoMergeDisabledEvent") and (
                 reason.lower() not in GS.MERGED_REASONS
             ):
-                fact["queue_state"] = "removed"
-                fact["removed_reason"] = GS.removal_words(reason)
+                meta["queue_state"] = "removed"
+                meta["removed_reason"] = GS.removal_words(reason)
                 if kind == "RemovedFromMergeQueueEvent":
                     failed = self._queue_failure(repo, number, str(last.get("createdAt") or ""))
                     if failed:
-                        fact["failing_check"], fact["failing_check_url"] = failed
-        return fact
+                        meta["failing_check"], meta["failing_check_url"] = failed
+        return meta
 
     def _queue_failure(self, repo, number, before):
         """(name, url) of the first failed job of the PR's newest merge-queue run (GitHub Actions `merge_group`, on its

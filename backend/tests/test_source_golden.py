@@ -169,7 +169,7 @@ class Seam:
         """The task's GitHub rows, normalised: {prs, releases, effects, due}."""
         prs = []
         for link in F.prs_of(c, task_id):
-            fact = link["fact"]
+            fact = link["metadata"]
             prs.append(
                 {
                     "ref": F.pr_ref(link["repo"], link["number"]),
