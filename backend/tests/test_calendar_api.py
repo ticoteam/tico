@@ -287,6 +287,8 @@ def test_a_bot_changes_and_cancels_only_the_event_it_added_to_a_persons_calendar
     other, _ = bot(api, "helper")
     made = create(api, {"calendar": "human:ben", "title": "1:1", "start": at(9), "end": at(10)}, token)
     path = "/api/v2/calendar/events/" + made["occurrence_id"]
+    seen = {t: events(api, WINDOW + "&who=human:ben", t)["occurrences"][0]["can"]["edit"] for t in (token, other)}
+    assert seen == {token: True, other: False}
     moved = api.patch(path, json={"title": "1:1 moved"}, headers=headers(other))
     assert moved.status_code == 403 and moved.json()["error"]["code"] == "forbidden", moved.text
     assert "Only the bot that added it" in moved.json()["error"]["detail"]

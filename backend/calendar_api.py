@@ -751,6 +751,22 @@ def _decorate(c: Any, auth: Any, who: Any, caller: Row, occurrences: list[Row]) 
             )
         }
 
+    bot_made: set[str] = set()
+    if caller["kind"] == "bot":
+        ids = [o["event_id"] for o in occurrences if o.get("home") == "tico" and o.get("event_id")]
+        for i in range(0, len(ids), 500):
+            chunk = ids[i : i + 500]
+            bot_made |= {
+                r["id"]
+                for r in c.execute(
+                    f"SELECT id FROM calendar_events WHERE created_by=? AND id IN ({','.join('?' * len(chunk))})",
+                    (caller["actor"], *chunk),
+                )
+            }
+
+    def cal_rows(cal: Row) -> Row:
+        return cast(Row, _cal_of_ref(c, cal["ref"]))
+
     def writable(cal: Row) -> bool:
         if cal["ref"] not in may:
             try:
@@ -780,6 +796,9 @@ def _decorate(c: Any, auth: Any, who: Any, caller: Row, occurrences: list[Row]) 
                 )
             occ.setdefault("response", None)
             edit = not occ.get("busy_only") and writable(cal)
+            if edit and caller["kind"] == "bot" and str(cal.get("ref", "")).startswith("human:"):
+                # Same rule as _tico_target: on a person's calendar a bot changes only what it added, or with Read and write.
+                edit = occ.get("event_id") in bot_made or _granted(c, caller, _tico_id(c, cal_rows(cal)))
         elif home == "derived":
             if occ.get("visibility") == "private" and not mine:
                 _hide(occ, "Private")
