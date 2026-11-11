@@ -1,6 +1,7 @@
 """clients/cli_spec.py: what a spec may say that the trigger and rules fixtures (test_cli_fixtures.py) do not reach."""
 
 import argparse
+import json
 import shlex
 
 import pytest
@@ -13,6 +14,7 @@ SCHEMA = {
     "properties": {
         "id": {"type": "string"},
         "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        "days": {"type": ["integer", "null"]},
         "scope": {"type": "object", "properties": {"names": {"type": "array", "description": "Who it is for"}}},
         "operation_id": {"type": "string"},
     },
@@ -83,6 +85,25 @@ def test_help_is_the_schema_description_and_the_example_follows_the_flags(calls,
     assert "Who it is for (repeatable)" in out  # the folded flag's own key inside `scope`
     assert "1-50" in out  # no description: the range
     assert out.rstrip().endswith("Example: tico fake show x --name Ada")
+
+
+def test_several_flags_may_set_one_property_and_an_object_is_given_whole_as_json(calls, capsys):
+    show = Command(
+        "fake show",
+        args=(
+            Arg("limit", "--few", action="store_const", const=5),
+            Arg("limit", "--none", action="store_const", const=NULL),
+            Arg("scope", type=json.loads, metavar="JSON"),
+        ),
+    )
+    specs = (Group("fake"), show)
+    args = parse(specs, ["fake", "show", "x", "--few", "--scope", '{"names": ["Ada"]}'])
+    assert show.prepare(args)[1] == {"id": "x", "limit": 5, "scope": {"names": ["Ada"]}, "operation_id": None}
+    assert show.prepare(parse(specs, ["fake", "show", "x", "--few", "--none"]))[1]["limit"] is None
+    assert show.prepare(parse(specs, ["fake", "show", "x", "--days", "14"]))[1]["days"] == 14  # ["integer", "null"]
+    with pytest.raises(SystemExit):
+        parse(specs, ["fake", "show", "-h"])
+    assert "(sends null)" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(

@@ -69,8 +69,8 @@
    [
     "tico_trigger_create",
     {
-     "name": "Stripe events",
      "id": "stripe",
+     "name": "Stripe events",
      "operation_id": null
     }
    ]
@@ -169,12 +169,12 @@
    [
     "tico_trigger_update",
     {
+     "hourly": 10,
      "id": "stripe",
      "name": "Stripe",
+     "operation_id": null,
      "preset": "github",
-     "type_from": "/type",
-     "hourly": 10,
-     "operation_id": null
+     "type_from": "/type"
     }
    ]
   ],
@@ -216,10 +216,10 @@
     "tico_trigger_update",
     {
      "id": "stripe",
-     "type_from": "",
      "keep_days": 3,
-     "unheard": "note",
-     "operation_id": null
+     "operation_id": null,
+     "type_from": "",
+     "unheard": "note"
     }
    ]
   ],
@@ -360,10 +360,10 @@
     "tico_trigger_sign",
     {
      "id": "stripe",
-     "preset": "stripe",
-     "secret": "0123456789abcdef",
      "off": false,
-     "operation_id": null
+     "operation_id": null,
+     "preset": "stripe",
+     "secret": "0123456789abcdef"
     }
    ]
   ],
@@ -503,8 +503,8 @@
    [
     "tico_trigger_delivery",
     {
-     "id": "stripe",
      "delivery": "d1",
+     "id": "stripe",
      "operation_id": null
     }
    ]
@@ -533,10 +533,10 @@
    [
     "tico_trigger_delivery",
     {
-     "id": "stripe",
      "delivery": "d1",
-     "part": 2,
-     "operation_id": null
+     "id": "stripe",
+     "operation_id": null,
+     "part": 2
     }
    ]
   ],
@@ -562,8 +562,8 @@
    [
     "tico_trigger_replay",
     {
-     "id": "stripe",
      "delivery": "d1",
+     "id": "stripe",
      "operation_id": null
     }
    ]
@@ -595,8 +595,8 @@
     "tico_trigger_recover",
     {
      "id": "stripe",
-     "since": 24,
-     "operation_id": null
+     "operation_id": null,
+     "since": 24
     }
    ]
   ],
@@ -631,8 +631,8 @@
     "tico_trigger_recover",
     {
      "id": "stripe",
-     "since": 48,
-     "operation_id": null
+     "operation_id": null,
+     "since": 48
     }
    ]
   ],
@@ -665,8 +665,8 @@
    [
     "tico_trigger_relay_create",
     {
-     "trigger": "stripe",
-     "operation_id": null
+     "operation_id": null,
+     "trigger": "stripe"
     }
    ]
   ],
@@ -697,8 +697,8 @@
    [
     "tico_trigger_relay_rotate",
     {
-     "trigger": "stripe",
-     "operation_id": null
+     "operation_id": null,
+     "trigger": "stripe"
     }
    ]
   ],
@@ -729,8 +729,8 @@
    [
     "tico_trigger_relay_delete",
     {
-     "trigger": "stripe",
-     "operation_id": null
+     "operation_id": null,
+     "trigger": "stripe"
     }
    ]
   ],

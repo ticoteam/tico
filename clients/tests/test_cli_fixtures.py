@@ -7,8 +7,11 @@ from the spec has to give the same answers. argparse's usage lines are left out 
 parser's own order, which a generated parser need not keep. The error line after them stays, as Python 3.12 words it
 (Python 3.14 quotes the choices and adds its own guess at a typo).
 
-A deliberate change regenerates the files, to be read in the diff before it is committed:
+Each file lists its cases; a new case is a line `{"argv": [...]}` added to its file, then recorded. A deliberate change
+regenerates the files, to be read in the diff before it is committed:
     TICO_CLI_FIXTURES_RECORD=1 python3 -m pytest -q clients/tests/test_cli_fixtures.py
+backend/tests/test_bot_instruction_commands.py fails when a command line a bot is taught is not a case in its noun's
+file.
 """
 
 import contextlib
@@ -26,10 +29,24 @@ from clients.tico import APIError, Client
 
 HERE = Path(__file__).parent / "cli_fixtures"
 RECORD = os.environ.get("TICO_CLI_FIXTURES_RECORD") == "1"
+ROOT_HELP = hubcli.parser().description
 
 # What the fake API answers, by "METHOD path" with the query left off; anything else answers {"ok": true}.
 _TRIGGER = {"id": "stripe", "name": "Stripe events", "event": "webhook.stripe", "preset": "stripe", "hourly": 60}
 _RELAY = {"trigger": "stripe", "address": "https://gateway.example/r/stripe"}
+_MAIL = {
+    "mailbox": "ops@acme.test",
+    "msg_id": "m1",
+    "thread_id": "t1",
+    "subject": "Statement",
+    "from_header": "Bank <bank@example.com>",
+    "to": ["ops@acme.test"],
+    "date": "2026-11-01",
+    "labels": ["INBOX"],
+    "snippet": "Your statement",
+}
+_FILE = {"name": "statement.pdf", "type": "application/pdf", "size": 2048}
+_CHANNEL = {"slug": "google-search", "name": "Google search", "stage": "testing", "track": "performance"}
 ANSWERS = {
     "GET triggers": {"triggers": [_TRIGGER]},
     "POST triggers": {"trigger": _TRIGGER | {"url": "https://tico.example/hooks/stripe"}},
@@ -49,187 +66,38 @@ ANSWERS = {
     "POST triggers/stripe/relay/delete": {"relay": {"trigger": "stripe", "deleted": True}},
     "GET rules": {"rules": [{"id": "r1", "text": "Reply within a day", "version": 2}], "next_cursor": None},
     "GET rules/missing": APIError("not_found", "No rule missing", 404),
+    "GET me": {"ok": True, "actor": "bot:ana"},
+    "GET mail/mailboxes": {"mailboxes": [{"address": "ops@acme.test"}, {"address": "billing@acme.test"}]},
+    "GET mail/messages": {"messages": [_MAIL], "next_cursor": "c2"},
+    "GET mail/threads/id-1": {"messages": [_MAIL | {"body": "Your statement is ready."}]},
+    "GET mail/messages/id-1": _MAIL | {"body": "Your statement is ready.", "attachments": [_FILE]},
+    "POST mail/messages/organize": {
+        "count": 2,
+        "mailbox": "ops@acme.test",
+        "ids": ["m1", "m2"],
+        "undo": {"action": "unlabel", "label": "Receipts", "ids": ["m1", "m2"]},
+    },
+    "GET growth/channels": {"channels": [_CHANNEL]},
+    "GET growth/sources": {
+        "sources": [
+            {"id": "s1", "truth_for": "ad spend", "system": "Google Ads", "reach_kind": "mcp", "reach_ref": "ads"}
+        ],
+        "conflicts": [{"truth_for": "bookings", "sources": ["s2", "s3"]}],
+    },
+    "GET growth/cohorts": {"cohorts": [{"month": "2026-10", "channel": None, "spend": 900, "new_customers": 3}]},
+    "GET growth/economics": {
+        "month": "2026-10",
+        "rows": [{"name": "Google search", "spend": 900, "new_customers": 3, "cac": 300, "ltv": 1200, "ltv_cac": 4}],
+        "total": {"name": "total", "spend": 900, "new_customers": 3, "cac": 300},
+    },
+    "GET growth/kpis": {"kpis": [{"id": "k1", "name": "Bookings", "role": "north_star"}]},
 }
-
-TRIGGER = [
-    ["trigger", "list"],
-    ["trigger", "create", "Stripe events"],
-    ["trigger", "create", "Stripe events", "--id", "stripe"],
-    ["trigger", "show", "stripe"],
-    ["trigger", "update", "stripe"],
-    ["trigger", "update", "stripe", "--name", "Stripe", "--preset", "github", "--type-from", "/type", "--hourly", "10"],
-    ["trigger", "update", "stripe", "--keep-days", "3", "--unheard", "note", "--type-from", ""],
-    ["trigger", "update", "stripe", "--preset", "bogus"],
-    ["trigger", "update", "stripe", "--hourly", "ten"],
-    ["trigger", "update"],
-    ["trigger", "rotate", "stripe"],
-    ["trigger", "sign", "stripe"],
-    ["trigger", "sign", "stripe", "--preset", "stripe", "--secret", "0123456789abcdef"],
-    ["trigger", "sign", "stripe", "--off"],
-    ["trigger", "sign", "stripe", "--preset", "none"],
-    ["trigger", "delete", "stripe"],
-    ["trigger", "deliveries", "stripe"],
-    ["trigger", "delivery", "stripe", "d1"],
-    ["trigger", "delivery", "stripe", "d1", "--part", "2"],
-    ["trigger", "replay", "stripe", "d1"],
-    ["trigger", "recover", "stripe"],
-    ["trigger", "recover", "stripe", "--since", "48"],
-    ["trigger", "relay", "create", "stripe"],
-    ["trigger", "relay", "rotate", "stripe"],
-    ["trigger", "relay", "delete", "stripe"],
-    ["trigger", "relay", "delete"],
-    ["trigger", "show", "stripe", "--json"],
-    ["trigger", "shwo", "stripe"],
-    ["trigger", "list", "--bogus"],
-]
-
-RULES = [
-    ["rules", "list"],
-    ["rule", "list"],
-    ["rules", "list", "--kind", "internal", "--status", "active", "--who", "Ops", "--with", "Ada", "--source", "Acme"],
-    ["rules", "list", "--bot", "writer", "--mine", "--cursor", "c1", "--limit", "5"],
-    ["rules", "list", "--kind", "both"],
-    ["rules", "read", "r1"],
-    ["rules", "read", "missing"],
-    ["rules", "read", "f1", "--from", "Acme", "--kind", "vendor", "--note", "the MSA"],
-    ["rules", "read", "https://acme.example/terms", "--from", "Acme"],
-    ["rules", "ask", "Can I share the deck with Acme?"],
-    ["rules", "ask", "Can I share the deck with Acme?", "--on-behalf-of", "turn"],
-    ["rules", "suggested"],
-    ["rules", "suggested", "--cursor", "c1", "--limit", "2"],
-    ["rules", "add", "--kind", "internal", "--text", "Reply within a day"],
-    [
-        "rules",
-        "add",
-        "--kind",
-        "internal",
-        "--text",
-        "Reply within a day",
-        "--description",
-        "why",
-        "--who",
-        "Ops",
-        "--who",
-        "writer",
-        "--everyone",
-        "--all-bots",
-        "--outside-editions",
-        "--with",
-        "Ada",
-        "--where",
-        "thread:t1",
-        "--where",
-        "kind:dm",
-        "--if-broken",
-        "warn",
-        "--reviewer",
-        "Ada",
-    ],  # fmt: skip
-    [
-        "rules",
-        "add",
-        "--kind",
-        "external",
-        "--text",
-        "Pay in 30 days",
-        "--from",
-        "Acme",
-        "--file",
-        "f1",
-        "--section",
-        "4.2",
-        "--quote",
-        "within thirty days",
-        "--version",
-        "3",
-    ],  # fmt: skip
-    ["rules", "add", "--kind", "external", "--text", "Pay", "--from", "Acme", "--file", "f1", "--quote", "thirty"],
-    ["rules", "add", "--kind", "external", "--text", "Pay", "--quote", "thirty"],
-    ["rules", "add", "--kind", "external", "--text", "Pay", "--file", "f1", "--version", "3"],
-    ["rules", "add", "--text", "Pay"],
-    ["rules", "add", "--kind", "internal", "--text", "Pay", "--if-broken", "explode"],
-    ["rules", "edit", "r1", "--version", "2"],
-    [
-        "rules",
-        "edit",
-        "r1",
-        "--version",
-        "2",
-        "--text",
-        "Reply in a day",
-        "--description",
-        "d",
-        "--who",
-        "Ops",
-        "--everyone",
-        "--all-bots",
-        "--outside-editions",
-        "--with",
-        "Ada",
-        "--where",
-        "team:Ops",
-        "--from",
-        "Acme",
-        "--if-broken",
-        "block",
-        "--reviewer",
-        "Ada",
-    ],  # fmt: skip
-    ["rules", "edit", "r1"],
-    ["rules", "edit", "r1", "--version", "two"],
-    ["rules", "accept", "r1"],
-    ["rules", "accept", "r1", "--version", "2", "--who", "Ops", "--who", "writer", "--everyone"],
-    ["rules", "accept", "r1", "--all-bots", "--outside-editions"],
-    ["rules", "skip", "r1"],
-    ["rules", "skip", "r1", "--version", "2"],
-    ["rules", "retire", "r1", "--version", "2"],
-    ["rules", "due"],
-    ["rules", "due", "--next", "30d", "--status", "overdue", "--cursor", "c1", "--limit", "3"],
-    ["rules", "due", "list"],
-    ["rules", "due", "list", "--next", "30d", "--status", "due_soon"],
-    ["rules", "due", "--next", "10d", "list", "--status", "upcoming"],
-    ["rules", "due", "--status", "late"],
-    ["rules", "due", "add", "r1", "--first", "2026-12-01", "--repeats", "monthly", "--owner", "Ada"],
-    [
-        "rules",
-        "due",
-        "add",
-        "r1",
-        "--first",
-        "2026-12-01",
-        "--repeats",
-        "yearly",
-        "--owner",
-        "writer",
-        "--timezone",
-        "Europe/Lisbon",
-        "--task-days",
-        "3",
-    ],  # fmt: skip
-    ["rules", "due", "add", "r1", "--first", "2026-12-01", "--owner", "Ada"],
-    ["rules", "due", "edit", "d1"],
-    ["rules", "due", "edit", "d1", "--first", "2027-01-01", "--repeats", "once", "--owner", "Ada", "--timezone", "UTC"],
-    ["rules", "due", "edit", "d1", "--task-days", "2"],
-    ["rules", "due", "edit", "d1", "--no-routine"],
-    ["rules", "due", "edit", "d1", "--task-days", "2", "--no-routine"],
-    ["rules", "due", "satisfied", "d1"],
-    ["rules", "due", "satisfied", "d1", "--on", "2026-12-01"],
-    ["rules", "check", "Sending the deck now", "--to", "Ada"],
-    ["rules", "check", "Done", "--to", "Ada", "--as", "comment"],
-    ["rules", "check", "Done"],
-    ["rules", "appeal", "h1"],
-    ["rules", "appeal", "h1", "the rule is about invoices"],
-    ["rules", "withdraw", "h1"],
-    ["rules", "withdraw"],
-    ["rules", "red", "r1"],
-]
-
-SLICES = {"trigger": TRIGGER, "rules": RULES}
 
 
 def portable(text):
     """`text` without argparse's usage block (the `usage:` line and the lines indented under it), and its error line as
-    Python 3.12 words it on every version."""
+    Python 3.12 words it on every version. The top-level help (a group typed with no command, `tico email`) is kept to
+    its first line: the rest lists every command, which a slice's fixtures must not freeze."""
     text = re.sub(r", maybe you meant '[^']*'\?", "", text)
     text = re.sub(r"\(choose from ([^)]*)\)", lambda m: "(choose from " + m.group(1).replace("'", "") + ")", text)
     kept, in_usage = [], False
@@ -241,7 +109,8 @@ def portable(text):
             continue
         in_usage = False
         kept.append(line)
-    return "\n".join(kept)
+    text = "\n".join(kept)
+    return ROOT_HELP if text.lstrip().startswith(ROOT_HELP) else text
 
 
 def run_line(argv, monkeypatch):
@@ -255,16 +124,19 @@ def run_line(argv, monkeypatch):
             raise answer
         return json.loads(json.dumps(answer))
 
-    def recording(name, fn):
+    def recording(name, fn, properties):
         def call(api, args):
-            tools.append([name, json.loads(json.dumps(args, default=str))])
+            # Only the arguments the tool's schema names: what else a command line passes (the hand parser's `json`)
+            # the tool never reads, and a read of one would show in `http`.
+            given = {k: v for k, v in args.items() if k in properties or k == "operation_id"}
+            tools.append([name, json.loads(json.dumps(given, default=str, sort_keys=True))])  # order is noise
             return fn(api, args)
 
         return call
 
     monkeypatch.setattr(Client, "request", request)
     for name, entry in hubtools.BY_NAME.items():
-        monkeypatch.setitem(entry, "fn", recording(name, entry["fn"]))
+        monkeypatch.setitem(entry, "fn", recording(name, entry["fn"], entry["inputSchema"]["properties"]))
     for key in ("HUB_BOT", "HUB_EMPLOYEE", "HUB_OPERATION_ID", "HUB_WORKSPACE", "TICO_PROFILE", "HUB_HUMAN"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("HUB_API_URL", "http://127.0.0.1:9")
@@ -287,18 +159,25 @@ def run_line(argv, monkeypatch):
     }
 
 
-@pytest.mark.parametrize("slice_name", sorted(SLICES))
+def slices():
+    """{noun: [case, ...]} from the files in cli_fixtures/."""
+    return {path.stem: json.loads(path.read_text(encoding="utf-8")) for path in sorted(HERE.glob("*.json"))}
+
+
+@pytest.mark.parametrize("slice_name", sorted(slices()))
 def test_the_command_line_does_what_its_fixtures_froze(slice_name, monkeypatch):
     path = HERE / f"{slice_name}.json"
+    frozen = slices()[slice_name]
+    argvs = [case["argv"] for case in frozen]
+    assert len({tuple(argv) for argv in argvs}) == len(argvs), f"{path.name}: a case is listed twice"
     observed = []
-    for argv in SLICES[slice_name]:
+    for argv in argvs:
         with monkeypatch.context() as m:
             observed.append(run_line(argv, m))
     if RECORD:
-        HERE.mkdir(exist_ok=True)
         path.write_text(json.dumps(observed, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         return
-    frozen = {tuple(case["argv"]): case for case in json.loads(path.read_text(encoding="utf-8"))}
-    assert set(frozen) == {tuple(case["argv"]) for case in observed}, f"{path.name}: the case list changed; record it"
-    for case in observed:
-        assert case == frozen[tuple(case["argv"])], " ".join(case["argv"])
+    for case, seen in zip(frozen, observed, strict=True):
+        assert case == seen, f"{path.name}: tico {' '.join(case['argv'])}" + (
+            "" if "exit" in case else " is not recorded"
+        )

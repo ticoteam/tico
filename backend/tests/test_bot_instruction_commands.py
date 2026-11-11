@@ -13,6 +13,7 @@ passes, since argparse names what is missing), a command the CLI took away or re
 and Needs-you line is run through the real CLI (hubcli.main, remotecli, hubtools) against a stand-in server, so a
 refusal the CLI makes on its own (its "usage" answers) fails here. Nothing is sent to a server."""
 
+import argparse
 import contextlib
 import io
 import json
@@ -125,6 +126,37 @@ def test_every_command_a_bot_is_taught_parses():
                 continue
             failures.append(f"{where}:{number}: `{' '.join(option)}` does not parse: {error}")
     assert not failures, "\n".join(failures)
+
+
+FIXTURES = ROOT / "clients" / "tests" / "cli_fixtures"
+
+
+def taught_cases_missing_from_fixtures():
+    """{noun: [argv, ...]}: the lines a bot is taught that are not cases in clients/tests/cli_fixtures/<noun>.json."""
+    nouns = next(a.choices for a in hubcli.parser()._actions if isinstance(a, argparse._SubParsersAction))
+    frozen = {
+        path.stem: {tuple(case["argv"]) for case in json.loads(path.read_text(encoding="utf-8"))}
+        for path in sorted(FIXTURES.glob("*.json"))
+    }
+    missing = {}
+    for _where, _number, _text, argv in cases():
+        argv, _renamed = hubcli.rename_argv(argv)
+        noun = next((n for n in frozen if argv[0] in nouns and nouns.get(n) is nouns[argv[0]]), None)
+        for option in variants(argv) if noun else ():
+            if tuple(option) not in frozen[noun] and option not in missing.setdefault(noun, []):
+                missing[noun].append(option)
+    return {noun: argvs for noun, argvs in missing.items() if argvs}
+
+
+def test_every_line_a_bot_is_taught_is_a_case_in_its_nouns_fixtures():
+    """A noun whose command line is frozen in clients/tests/cli_fixtures/<noun>.json has every line a bot is taught (its
+    alternatives expanded, placeholders filled as above) among the cases, so a change to how a taught line parses or
+    what it sends shows in that file's diff. Add each missing line as `{"argv": [...]}` and record (the file's
+    docstring says how)."""
+    missing = taught_cases_missing_from_fixtures()
+    assert not missing, "\n".join(
+        f"{noun}.json: {json.dumps(argv)}" for noun, argvs in missing.items() for argv in argvs
+    )
 
 
 class Any(dict):
