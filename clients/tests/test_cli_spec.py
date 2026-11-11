@@ -106,10 +106,63 @@ def test_several_flags_may_set_one_property_and_an_object_is_given_whole_as_json
     assert "(sends null)" in capsys.readouterr().out
 
 
+def test_a_fixed_property_is_sent_and_an_omitted_one_is_not_and_neither_takes_an_argument(calls):
+    few = Command("fake few", tool="tico_fake_list", fixed=(("limit", 5),), omit=("days",))
+    specs = (Group("fake"), few)
+    args = parse(specs, ["fake", "few", "x"])
+    assert args.fn == "fake list"  # the tool's words, as for any leaf named otherwise
+    assert few.prepare(args)[1] == {"id": "x", "limit": 5, "operation_id": None}
+    for flag in ("--limit", "--days"):
+        with pytest.raises(SystemExit):
+            parse(specs, ["fake", "few", "x", flag, "9"])
+
+
+def test_exactly_one_of_an_id_or_a_local_flag_and_the_local_flag_is_not_sent(calls, capsys):
+    every = Arg("all", local=True, action="store_true", help="every one of them")
+    show = Command("fake list", args=(Arg("id", nargs="?"), every), one_of=(("id", "all"),))
+    specs = (Group("fake"), show)
+    args = parse(specs, ["fake", "list", "--all"])
+    assert args.all is True and show.prepare(args)[1] == {"operation_id": None}
+    assert show.prepare(parse(specs, ["fake", "list", "x"]))[1] == {"id": "x", "operation_id": None}
+    for argv, says in (
+        (["fake", "list"], "one of the arguments id --all is required"),
+        (["fake", "list", "x", "--all"], "not allowed with"),
+    ):
+        with pytest.raises(SystemExit):
+            parse(specs, argv)
+        assert says in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        parse(specs, ["fake", "list", "-h"])
+    assert "every one of them" in capsys.readouterr().out
+
+
+def test_exactly_one_of_the_flags_that_set_a_required_property(calls, capsys):
+    few = Command(
+        "fake few",
+        tool="tico_fake_list",
+        args=(Arg("id", "--id"), Arg("id", "--first", action="store_const", const="1")),
+        one_of=(("id",),),
+    )
+    specs = (Group("fake"), few)
+    assert few.prepare(parse(specs, ["fake", "few", "--first"]))[1]["id"] == "1"
+    assert few.prepare(parse(specs, ["fake", "few", "--id", "x"]))[1]["id"] == "x"
+    for argv in (["fake", "few"], ["fake", "few", "--first", "--id", "x"]):
+        with pytest.raises(SystemExit):
+            parse(specs, argv)
+    capsys.readouterr()
+
+
 @pytest.mark.parametrize(
     ("command", "says"),
     [
         (Command("fake show", args=(Arg("nope"),)), "not properties"),
+        (Command("fake list", args=(Arg("limit", help="how many"),)), "its help is its description there"),
+        (Command("fake list", args=(Arg("limit", local=True),)), "is local"),
+        (Command("fake list", one_of=(("nope",),)), "are not its arguments"),
+        (Command("fake list", one_of=(("id", "limit"),)), "takes nargs"),
+        (Command("fake show", fixed=(("nope", 1),)), "not properties"),
+        (Command("fake list", args=(Arg("limit"),), fixed=(("limit", 1),)), "are fixed or omitted"),
+        (Command("fake list", omit=("nope",)), "not properties"),
         (Command("fake show", args=(Arg("x", into="nope"),)), "folds into nope"),
         (Command("fake show", args=(Arg("limit"),)), "scope is an object"),
     ],
@@ -136,14 +189,14 @@ def spec_leaves(p=None, path=()):
 
 
 def test_every_spec_command_has_an_example_that_runs_it(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # a JSON file an example names is read as it parses (`pipeline save --file x.json`)
+    monkeypatch.chdir(tmp_path)  # a file an example names is read as it parses (`pipeline save --file x.json`)
     wrong = []
     for path, _p, command in spec_leaves():
         if " ".join(path) != command.path:
             continue  # a group run bare (`tico rules due`): its default leaf has its own example
         words = shlex.split(command.example)
         for word in words:
-            if word.endswith(".json"):
+            if word.endswith((".json", ".md")):
                 (tmp_path / word).write_text("{}")
         if words[:1] != ["tico"] or cli_spec.of(hubcli.parser().parse_args(words[1:])) is not command:
             wrong.append(f"{command.path}: {command.example!r}")
