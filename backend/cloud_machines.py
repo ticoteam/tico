@@ -587,6 +587,15 @@ def home(c, bot, current=None):
     return row(c, SHARED) if current["placement"] == "shared" else current
 
 
+def asked_again(c, bot):
+    """A person asked for `bot`'s waiting work again (Run now on a task whose run is already queued): the wake its
+    stopped machine spent on that work is forgotten, so the next look starts it once more. Nothing changes for a
+    machine that is up, was never woken, or is held for another reason (out of credit, never connected, a refusal)."""
+    machine = home(c, bot)
+    if machine and machine["wake_key"] and machine["state"] not in ON and machine["problem"] in ("", "stuck"):
+        save(c, machine["bot"], wake_key=None, problem="", problem_at=None)
+
+
 def cloud_runners(c, but=None):
     """Computer ids that are a cloud machine (other than `but`'s own): never offered as a computer to choose. A bot
     goes on the shared one by choosing it as its cloud machine."""
@@ -1048,14 +1057,17 @@ def facts(c, settings, current, at):
         out["retry_now"] = bool(
             said.get("checked") and current["problem_at"] and said["checked"] > current["problem_at"]
         )
-    best = None
+    ranked = []
     for bot in bots:
         active, want, rank, since = bot_want(c, settings, bot, runner_id, at)
         out["active"] = out["active"] or active
         out["want_at"] = max(out["want_at"], since)
-        if want and (best is None or rank > best[0]):
-            best = (rank, want)
-    out["want"] = best[1] if best else None
+        if want:
+            ranked.append((rank, want))
+    # Every bot's want, first one first: a list, so one bot's want that a wake was already spent on never hides
+    # another's (`wake_for`), and a want of another kind can join it.
+    out["wants"] = [want for _, want in sorted(ranked, key=lambda found: found[0], reverse=True)]
+    out["want"] = out["wants"][0] if out["wants"] else None
     if (
         out["active"]
         and runner_id
@@ -1118,12 +1130,18 @@ def wake_for(current, found):
         return "always_on", False
     fresh = (found["activity"] or 0) > (current["woke_at"] or 0)
     spent = lambda k: covers(current["wake_key"], k) and current["state"] not in DEAD and not fresh
-    want, update = found["want"], found.get("update")
-    if want and not spent(want):
-        return want, False
+    update = found.get("update")
+    wants = found.get("wants") or ([found["want"]] if found["want"] else [])
+    # The key names the want it wakes for first, then every other bot's queued work waiting at this moment: all of it
+    # is woken for now, so none of it is woken for again if nothing runs, and work that turns up later still is.
+    also = [w for w in wants if w.startswith("job:") or w == wants[0]]
+    rest = lambda first: " ".join([first] + [w for w in also if w != first])
+    for want in wants:
+        if not spent(want):
+            return rest(want), False
     if update and not spent(update):
-        return (update + " " + want) if want else update, False
-    return None, bool(want)
+        return rest(update), False
+    return None, bool(wants)
 
 
 def runner_updating(c, runner_id, at):
@@ -1708,7 +1726,7 @@ class Manager:
             problem is None
             and not action
             and current["problem"] == "stuck"
-            and not covers(current["wake_key"], found["want"])
+            and not any(covers(current["wake_key"], want) for want in found["wants"])
         ):
             with self.store.transaction() as c:
                 save(c, key, problem="", problem_at=None)
