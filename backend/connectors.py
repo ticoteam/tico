@@ -67,9 +67,14 @@ class CalendarEvent(M.Contract):
         return self
 
 
+SNAPSHOT_DAYS = 14  # a personal connection's calendar on the Calendar page (the company key reads Google live)
+SNAPSHOT_EVENTS = 500
+
+
 class CalendarSnapshot(M.Contract):
     email: str = Field(min_length=3, max_length=320)
-    events: list[CalendarEvent] = Field(default_factory=list, max_length=200)
+    # The start of today plus SNAPSHOT_DAYS (an older computer sends its next 24 hours, which still fits).
+    events: list[CalendarEvent] = Field(default_factory=list, max_length=SNAPSHOT_EVENTS)
 
     @field_validator("email")
     @classmethod
@@ -390,7 +395,8 @@ def install_connectors(app, store, execution, mutate):
                 for box in google_rights.visible(c, runner["id"], named, owned=owned)
                 if box["person_id"]
             ]
-        return {"people": people, "hours": 24, "refresh_seconds": 45}
+        # `hours` is what a computer from before `days` reads; a newer one reads from the start of today for `days`.
+        return {"people": people, "hours": 24, "days": SNAPSHOT_DAYS, "refresh_seconds": 45}
 
     @app.post("/api/v2/connectors/calendar/snapshots")
     def publish(request: Request, body: CalendarPublish):
