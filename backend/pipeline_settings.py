@@ -173,7 +173,7 @@ PRESETS["engineering"] = {
             "engineering-fixes-2",
             "Fixes 2",
             "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
-            "newest commit and both reviewers' verdicts.",
+            "newest commit and what both reviewers found.",
             240,
             [
                 github("checks_pass"),
@@ -181,7 +181,7 @@ PRESETS["engineering"] = {
                     _page(
                         "Review page",
                         "Shows what was built, with screenshots or output, and how it was checked; that the checks "
-                        "pass at the newest commit; and Reviewer 1's and Reviewer 2's verdicts. Enough for a person "
+                        "pass at the newest commit; and what Reviewer 1 and Reviewer 2 found. Enough for a person "
                         "to OK it without opening the code.",
                     )
                 ),

@@ -674,7 +674,7 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **Review 2.** Owner: Reviewer 2, a different model: Codex if the company has it, else a different Claude model. To leave: a Review page for the newest commit. Expected time: 2
   hours.
 - **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built, that the checks pass at
-  the newest commit, and both reviewers' verdicts. Jev checks it, then **a person OKs it** (people only). Expected time: 4 hours.
+  the newest commit, and what both reviewers found. Jev checks it, then **a person OKs it** (people only). Expected time: 4 hours.
 - **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
