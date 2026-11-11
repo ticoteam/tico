@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 # Corporate. Every other built-in stays in the Built-in group whatever team a file names.
 IN_TEAM_BUILT_INS = ("finance-owner",)
 SOFTWARE_DEPARTMENTS = ("product", "engineering")  # the default chart's seats a company that makes no software skips
-SOFTWARE_TEAMS = ("Product", "Engineering")  # and its teams: their Pipeline Managers are in Operations
+SOFTWARE_TEAMS = ("Product", "Engineering")  # and its teams
 
 
 def plan(onboarding, c, who, text):

@@ -240,7 +240,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       const tag = 'small desktop';
       const {page, errors, writes, usage} = await open(browser);
       assert.deepEqual(await keys(page), ['company', 'group:eng', 'group:web', 'bot:web-dev', 'bot:eng-lead', 'bot:builder', 'bot:reviewer',
-        'person:cara', 'group:sales', 'bot:growth-team-manager', 'bot:sdr', 'person:ben', 'group:outbound', 'person:ana', 'bot:release', 'bot:assistant',
+        'person:cara', 'group:sales', 'bot:growth-manager', 'bot:sdr', 'person:ben', 'group:outbound', 'person:ana', 'bot:release', 'bot:assistant',
         'bot:strategy-owner', 'bot:botops', 'bot:librarian', 'bot:mail-sorter'], tag + ': under each row, its rows by spend; helpers (the Strategy Owner too) in their branch');
       assert.ok(await bySpend(page), tag + ': most spend first');
       assert.equal(await page.locator('.bt-r:has([data-bt-fold="helpers"]) .bt-name').innerText(), 'Helpers', tag + ': helpers in a branch of their own');
@@ -286,7 +286,7 @@ const editorFits = (page: Page) => page.locator('dialog.bt-panel[open]').evaluat
       // Search keeps what a match sits in; Near limit keeps what is near or over, paused, or with a full cap.
       await page.fill('#bt-q', 'sdr');
       await page.waitForFunction(() => document.querySelectorAll('[data-bt-open]').length < 10);
-      assert.deepEqual(await keys(page), ['company', 'group:sales', 'bot:growth-team-manager', 'bot:sdr'], tag + ': search keeps the ancestors');
+      assert.deepEqual(await keys(page), ['company', 'group:sales', 'bot:growth-manager', 'bot:sdr'], tag + ': search keeps the ancestors');
       await page.fill('#bt-q', 'zz');
       await page.locator('#bt-body .bt-note').waitFor();
       assert.equal(await page.locator('#bt-body .bt-note').innerText(), 'No matches', tag + ': no matches');

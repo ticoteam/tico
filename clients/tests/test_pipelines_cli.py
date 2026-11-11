@@ -74,7 +74,7 @@ PIPELINES = {
     "actors": {
         PRODUCT_OWNER: "Product Owner",
         BUILDER: "Builder",
-        "bot:01a-pm": "Product Pipeline Manager",
+        "bot:01a-pm": "Product Manager",
         "human:ana": "Ana",
     },
 }
@@ -642,14 +642,14 @@ def test_a_new_pipeline_names_its_holders_and_is_never_made_over_one_that_is_the
         {
             "id": "support",
             "name": "Support",
-            "manager": "success-team-manager",
+            "manager": "success-manager",
             "prefix": "S",
             "stages": ["Triage", "Doing:me", "Check:bot:x1"],
         },
     )
     path, body = saved(api)
     assert path == "pipelines/support" and "settings_version" not in body
-    assert body["manager_id"] == "bot:success-team-manager" and body["prefix"] == "S"
+    assert body["manager_id"] == "bot:success-manager" and body["prefix"] == "S"
     assert [(s["name"], s["owner"]) for s in body["stages"]] == [
         ("Triage", "assignee"),
         ("Doing", "human:ana"),

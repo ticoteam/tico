@@ -27,17 +27,17 @@ Chief of Staff is no longer a default.
 
 | Group | Icon | Head | Templates | Goal |
 |---|---|---|---|---|
-| Sales | `handshake` | Sales Manager (`growth-team-manager`) | 11 | Turn interest into revenue |
-| Marketing | `campaign` | Head of Marketing (`growth-team-manager`) | 21 | Be known by the customers you want |
-| Customer Support | `support_agent` | Head of Customer Support (`success-team-manager`) | 10 | Every customer helped and kept |
+| Sales | `handshake` | Sales Manager (`growth-manager`) | 11 | Turn interest into revenue |
+| Marketing | `campaign` | Head of Marketing (`growth-manager`) | 21 | Be known by the customers you want |
+| Customer Support | `support_agent` | Head of Customer Support (`success-manager`) | 10 | Every customer helped and kept |
 | Finance | `account_balance` | Head of Finance (`finance-owner`) | 13 | Know where the money is |
 | Operations | `settings_suggest` | Operations Manager (`operations-manager`) | 13 | Run smoothly, nothing dropped |
 | Legal | `gavel` | General Counsel (`general-counsel`) | 8 | Sign with eyes open |
 | HR | `groups` | Head of People (`head-of-people`) | 11 | Hire well, keep good people |
 | Product | `category` | Product Lead (`product-lead`) | 10 | Build what customers need |
-| Engineering | `code` | Head of Engineering (`engineering-team-manager`) | 18 | Ship reliable software, steadily |
-| Success | `sentiment_satisfied` | Success Team Manager (`success-team-manager`) | 3 | Customers who renew and grow |
-| Corporate | `contract` | Corporate Team Manager (`corporate-team-manager`) | 3 | Every deadline kept, every deal read first |
+| Engineering | `code` | Head of Engineering (`engineering-manager`) | 18 | Ship reliable software, steadily |
+| Success | `sentiment_satisfied` | Success Manager (`success-manager`) | 3 | Customers who renew and grow |
+| Corporate | `contract` | Corporate Manager (`corporate-manager`) | 3 | Every deadline kept, every deal read first |
 | Leadership | `star` | Chief of Staff (`chief-of-staff`) | 3 | Keep the leaders focused |
 
 Every group has a head, the template its row names (`lead: true`): it writes the group's weekly summary from what its bots and humans
@@ -46,7 +46,7 @@ covered, it proposes a specific worker template from its `team_templates` with t
 and only after the owner confirms asks BotOps to set it up (`tico task create --owner botops`). Heads never create bots
 themselves and never do their team's work.
 
-Five Team Managers (Product, Engineering, Growth, Success and Corporate) are also `lead: true`. Each runs its team's week and routes the team's work to its owners and pipeline managers; Product, Engineering and Growth take no group's head seat.
+Five Managers (Product, Engineering, Growth, Success and Corporate) are also `lead: true`. Each has its team's bots under it, runs its team's week, routes the team's work to its owners and manages its team's pipelines: when a task stops, the Manager decides what happens to it. Product and Growth take no group's head seat.
 
 Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner) and message bots (Inbox Manager) have plain
 function names and live outside it.
@@ -100,7 +100,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `manage_search` | `search-ads-owner` | Search Ads Owner | A growth pack: files search ads ideas into Growth Experiments, builds each bet until a person OKs it to go live, measures it, and watches each kept campaign in Growth Monitoring (routines Watch, daily with wasted search terms excluded on Mondays, and Find ideas); KPI cost per new customer from search ads; the Search Ads playbook page with its cutoff to set in Rules | common | An ads account with spend; a person makes changes until a Tool lets it |
 | `link` | `affiliates-owner` | Affiliates Owner | The self-serve affiliate and referral program: applications checked, each affiliate's referrals and commissions followed, every payout recomputed from the published terms, and likely fraud flagged; a person pays and decides | niche | Affiliate, referral and commission exports on a task |
 | `download` | `app-store-owner` | App Store Owner | The app's listings on the iOS App Store and Google Play: listing conversion, copy and screenshot drafts, keyword checks, the rating trend and a draft reply to each store review; changes stay drafts until a person publishes them in the console | niche | Store console exports for the last 28 days on a task |
-| `campaign` | `growth-team-manager` | Growth Team Manager (team lead) | A weekly growth page: marketing and pipeline movement, the blocked work, the six-week calendar and the forecast call pack, with routing and hiring proposals. Channel owners and pipeline managers do the work; it routes each piece of it to them | default | Tico; CRM, calendar and meetings optional |
+| `campaign` | `growth-manager` | Growth Manager (team lead) | A weekly growth page: marketing and pipeline movement, the blocked work, the six-week calendar and the forecast call pack, with routing and hiring proposals. Channel owners do the work; it routes each piece of it to them; decides each stopped task in its pipelines (reassign, move back, move on, snooze to a date or close) with one reason, and never does a stage's work or changes its settings | default | Tico; CRM, calendar and meetings optional |
 | `travel_explore` | `seo-owner` | SEO Owner | A growth pack: files SEO ideas into Growth Experiments, builds each bet until a person OKs it to go live, measures it, and watches what worked in Growth Monitoring (routines Watch, weekly, and Find ideas); KPI organic clicks, brand terms left out; the SEO playbook page | common | A public website; Search Console and the site's repository optional |
 
 ### Customer Support
@@ -194,7 +194,7 @@ up.
 | `text_fields` | `ux-writer` | UX Writer | Copy tables for each spec (labels, errors, empty states), the product glossary, and a weekly review of pull requests that change user-facing text, for an engineer to post | niche | GitHub connected (read) |
 | `sell` | `pricing-analyst` | Pricing Analyst | A monthly pricing review (competitor price changes, discounts given, plan mix) and impact notes for a price change being weighed | niche | Public web; a CRM optional |
 | `target` | `segment-product-owner` | Product Owner | Owns the Product pipeline's Ideas, Spec, In development and Validate stages for a segment (or all customers): a one-page Spec page with acceptance criteria for each change, the Engineering task filed, a "Checked in production" page, and each week the segment's activation and retention with its problems ranked | default | Tico only; GitHub (read), meetings and a CRM optional |
-| `lightbulb` | `product-team-manager` | Product Team Manager (team lead) | A weekly product summary: the roadmap, the decisions waiting on a person, what each Product Owner and the product pipeline found, and scored proposals for what to build next; routes each piece of product work to its owner | default | Tico; GitHub, docs and meetings optional |
+| `lightbulb` | `product-manager` | Product Manager (team lead) | A weekly product summary: the roadmap, the decisions waiting on a person, what each Product Owner and the product pipeline found, and scored proposals for what to build next; routes each piece of product work to its owner; decides each stopped task in its pipelines (reassign, move back, move on, snooze to a date or close) with one reason, and never does a stage's work or changes its settings | default | Tico; GitHub, docs and meetings optional |
 
 ### Engineering
 
@@ -209,11 +209,10 @@ up.
 | `deployed_code` | `devops-engineer` | DevOps Engineer | A weekly CI health report: flaky tests with failure rates, slowest jobs and their trend, red-main streaks, deploy frequency and three fix plans | niche | GitHub connected (Actions) |
 | `podium` | `developer-advocate` | Developer Advocate | A weekly developer pulse: a ready answer for each public question (drafted until sending is on), the friction log with counts, and runnable samples and tutorials | niche | Public web; GitHub and a community channel optional |
 | `architecture` | `software-architect` | Software Architect | Design doc and RFC review notes, proposed ADRs for decisions made without one, the system map and a ranked technical debt register | niche | GitHub connected; docs and meetings optional |
-| `account_tree` | `pipeline-manager` | Pipeline Manager | Manages one pipeline: decides each stopped task (reassign, move back, move on, snooze to a date or close) with one reason, and a weekly pipeline report; never does a stage's work or changes its settings | niche | Tico only; GitHub (read) optional for Engineering |
 
 To run these bots as one team that builds, reviews, tests and releases software, see
 [The software factory](software-factory.md): the roles in order and which model each runs on.
-| `developer_board` | `engineering-team-manager` | Engineering Team Manager (team lead) | Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, and routes tests, security, CI and releases to their owners | common | GitHub connected |
+| `developer_board` | `engineering-manager` | Engineering Manager (team lead) | Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, and routes tests, security, CI and releases to their owners; decides each stopped task in its pipelines (reassign, move back, move on, snooze to a date or close) with one reason, and never does a stage's work or changes its settings | default | GitHub connected |
 | `bug_report` | `qa-owner` | QA Owner | Owns every automated test, unit to end to end: a flaky test register with a fix or quarantine decision for each, a weekly suite health report, and product bugs filed into the Engineering pipeline | niche | GitHub connected; chat optional |
 | `security` | `security-owner` | Security Owner | A weekly dependency and advisory report ranked by real exposure, a patch plan in merge order, and a private report of any committed credential, by location only | common | GitHub and public web connected; chat optional |
 | `deployed_code` | `infrastructure-owner` | Infrastructure Owner | A weekly CI health report: slow jobs, red-main streaks, runner and workflow faults, and deploy frequency, each with a fix plan; flaky tests go to the QA Owner | niche | GitHub connected; chat optional |
@@ -223,7 +222,7 @@ To run these bots as one team that builds, reviews, tests and releases software,
 
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
-| `headset_mic` | `success-team-manager` | Success Team Manager (head) | A weekly success summary: support and customer health against target, the oldest waiting customers, repeats and the decisions needed; it proposes routing and hires and never answers a customer or assigns a person | common | Tico only |
+| `headset_mic` | `success-manager` | Success Manager (head) | A weekly success summary: support and customer health against target, the oldest waiting customers, repeats and the decisions needed; it proposes routing and hires and never answers a customer or assigns a person; decides each stopped task in its pipelines (reassign, move back, move on, snooze to a date or close) with one reason, and never does a stage's work or changes its settings | default | Tico only |
 | `support_agent` | `support-owner` | Support Owner | The support queue from sorting to a reply ready to send: each answer found in your docs, a draft reply, what needs a person routed to them, and open tickets chased; customers hear from it only once a person turns on mail sending | default | A support mailbox or ticket tool on a task; the written policy and docs optional |
 | `sentiment_satisfied` | `success-owner` | Success Owner | A weekly brief of renewals due in 120 days, the accounts at risk and why, and a drafted next touch for each; customer messages stay drafts until a person turns sending on, and price and contract stay with the Account Manager | common | Customer list and health signals on a task |
 
@@ -231,7 +230,7 @@ To run these bots as one team that builds, reviews, tests and releases software,
 
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
-| `account_tree` | `corporate-team-manager` | Corporate Team Manager (head) | A weekly corporate summary: legal, the books and partnerships against their own targets, the deadlines in the next 30 days and the decisions needed; it proposes routing and hires and never signs, pays, files or sends anything itself | common | Tico only |
+| `account_tree` | `corporate-manager` | Corporate Manager (head) | A weekly corporate summary: legal, the books and partnerships against their own targets, the deadlines in the next 30 days and the decisions needed; it proposes routing and hires and never signs, pays, files or sends anything itself | common | Tico only |
 | `balance` | `legal-owner` | Legal Owner | The one queue for every legal request in the private Legal pipeline, reviews of the contracts that matter, a watch on every legal deadline and policy drafts for a human to adopt; summaries for a human, not legal advice, and it sends or signs only what a task asks and a granted Tool allows | default | Tico only; the written policies and licence list on a task |
 | `partner_exchange` | `partnerships-owner` | Partnerships Owner | The partner register, every deal registration checked against the rules of engagement, partner-sourced deals followed to close and referral fees owed each month; payouts use Tools, and outside messages stay drafts until a person turns mail sending on | niche | The partner list and rules of engagement on a task |
 

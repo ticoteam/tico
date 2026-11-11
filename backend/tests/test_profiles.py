@@ -19,7 +19,7 @@ from backend.tests.helpers.profiles import add_bot, profile_of, put
 
 def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api):
     slugs = {
-        "engineering-team-manager": P.LEAD,
+        "engineering-manager": P.LEAD,
         "cmo": P.LEAD,
         "release-manager": P.LEAD,
         "sentry-triage": P.MONITOR,
@@ -52,7 +52,7 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         )
         assert told > 12
         notes = [m for m in H.notices(c, "human:ana") if "gave each of your bots a profile" in m["body"]]
-        assert len(notes) == 1 and "engineering-team-manager" in notes[0]["body"] and "Lead" in notes[0]["body"]
+        assert len(notes) == 1 and "engineering-manager" in notes[0]["body"] and "Lead" in notes[0]["body"]
         # Run again: nothing changes and nobody is told twice.
         revision = c.execute("SELECT sum(revision) FROM bot_config").fetchone()[0]
         assert P.migrate(c) == 0 and c.execute("SELECT sum(revision) FROM bot_config").fetchone()[0] == revision

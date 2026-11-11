@@ -84,9 +84,9 @@ CONTENT = {
         "source_id": "gateway-usage",
         "memo": "Gateway usage, {month}",
         "by_teammate": [
-            ("bot:growth-team-manager", 21460),
-            ("bot:success-team-manager", 9640),
-            ("bot:growth-team-manager", 18825),
+            ("bot:growth-manager", 21460),
+            ("bot:success-manager", 9640),
+            ("bot:growth-manager", 18825),
             ("bot:product-manager", 31210),
         ],
     },
@@ -278,7 +278,7 @@ CONTENT = {
         {
             "name": "Paid advertising",
             "account": "6300",
-            "owner": "bot:growth-team-manager",
+            "owner": "bot:growth-manager",
             "amount": 300000,
             "by": OWNER,
         },

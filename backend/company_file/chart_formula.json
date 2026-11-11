@@ -115,22 +115,13 @@
       "team": "Product",
       "seats": [
         {
-          "key": "product-team-manager",
-          "id": "product-team-manager",
-          "title": "Product Team Manager",
-          "template": "product-team-manager",
+          "key": "product-manager",
+          "id": "product-manager",
+          "title": "Product Manager",
+          "template": "product-manager",
           "department": "product",
           "reports_to": null,
-          "reason": "Leads the product team and its owners."
-        },
-        {
-          "key": "product-pipeline-manager",
-          "id": "product-pipeline-manager",
-          "title": "Product Pipeline Manager",
-          "template": "pipeline-manager",
-          "department": "operations",
-          "reports_to": "product-team-manager",
-          "reason": "Manages the Product pipeline: keeps each task moving from idea to checked in production, and never does a stage's work.",
+          "reason": "Leads the product team and manages the Product pipeline: keeps each task moving from idea to checked in production, and never does a stage's work.",
           "live": true
         },
         {
@@ -141,7 +132,7 @@
           "title": "{label} Product Owner",
           "template": "segment-product-owner",
           "department": "product",
-          "reports_to": "product-team-manager",
+          "reports_to": "product-manager",
           "reason": "Owns the {label} segment's product{initiatives}.",
           "live": "first"
         },
@@ -151,7 +142,7 @@
           "title": "Product Owner",
           "template": "segment-product-owner",
           "department": "product",
-          "reports_to": "product-team-manager",
+          "reports_to": "product-manager",
           "reason": "Owns the product: the Product pipeline's ideas, the spec for each change and its check in production.",
           "unless": "segment",
           "live": true
@@ -162,22 +153,13 @@
       "team": "Engineering",
       "seats": [
         {
-          "key": "engineering-team-manager",
-          "id": "engineering-team-manager",
-          "title": "Engineering Team Manager",
-          "template": "engineering-team-manager",
+          "key": "engineering-manager",
+          "id": "engineering-manager",
+          "title": "Engineering Manager",
+          "template": "engineering-manager",
           "department": "engineering",
           "reports_to": null,
-          "reason": "Leads engineering: builds, reviews, tests, security, infrastructure and releases."
-        },
-        {
-          "key": "engineering-pipeline-manager",
-          "id": "engineering-pipeline-manager",
-          "title": "Engineering Pipeline Manager",
-          "template": "pipeline-manager",
-          "department": "operations",
-          "reports_to": "engineering-team-manager",
-          "reason": "Manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
+          "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
           "live": true
         },
         {
@@ -186,7 +168,7 @@
           "title": "Builder",
           "template": "builder",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Builds the product: writes the code for each change.",
           "live": true
         },
@@ -196,7 +178,7 @@
           "title": "Reviewer 1",
           "template": "reviewer",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Reviews each code change before it ships, as the first reviewer.",
           "live": true
         },
@@ -206,7 +188,7 @@
           "title": "Reviewer 2",
           "template": "reviewer",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Reviews each code change before it ships, as the second reviewer.",
           "live": true
         },
@@ -216,7 +198,7 @@
           "title": "QA Owner",
           "template": "qa-owner",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
           "live": true
         },
@@ -226,7 +208,7 @@
           "title": "Security Owner",
           "template": "security-owner",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Owns security: keeping the product and its data safe."
         },
         {
@@ -235,7 +217,7 @@
           "title": "Infrastructure Owner",
           "template": "infrastructure-owner",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Owns infrastructure: the servers and systems the product runs on."
         },
         {
@@ -244,7 +226,7 @@
           "title": "Release Owner",
           "template": "release-owner",
           "department": "engineering",
-          "reports_to": "engineering-team-manager",
+          "reports_to": "engineering-manager",
           "reason": "Owns the Merge and Release stages: gets each change through the merge queue and into a published release.",
           "live": true
         }
@@ -254,42 +236,13 @@
       "team": "Growth",
       "seats": [
         {
-          "key": "growth-team-manager",
-          "id": "growth-team-manager",
-          "title": "Growth Team Manager",
-          "template": "growth-team-manager",
+          "key": "growth-manager",
+          "id": "growth-manager",
+          "title": "Growth Manager",
+          "template": "growth-manager",
           "department": "marketing",
           "reports_to": null,
-          "reason": "Leads growth: from first contact to customer, and its owners."
-        },
-        {
-          "key": "growth-experiments-pipeline-manager",
-          "id": "growth-experiments-pipeline-manager",
-          "title": "Growth Experiments Pipeline Manager",
-          "template": "pipeline-manager",
-          "department": "operations",
-          "reports_to": "growth-team-manager",
-          "reason": "Runs the growth experiments: one idea at a time, measured and kept or dropped.",
-          "live": true
-        },
-        {
-          "key": "lead-pipeline-manager",
-          "id": "lead-pipeline-manager",
-          "title": "Lead Pipeline Manager",
-          "template": "pipeline-manager",
-          "department": "operations",
-          "reports_to": "growth-team-manager",
-          "reason": "Moves leads from targets to qualified, and hands qualified ones on.",
-          "live": true
-        },
-        {
-          "key": "opportunity-pipeline-manager",
-          "id": "opportunity-pipeline-manager",
-          "title": "Opportunity Pipeline Manager",
-          "template": "pipeline-manager",
-          "department": "operations",
-          "reports_to": "growth-team-manager",
-          "reason": "Moves each opportunity from first talk to a signed deal or a loss.",
+          "reason": "Leads growth and manages its pipelines: experiments, leads and opportunities, from first contact to customer.",
           "live": true
         },
         {
@@ -300,13 +253,13 @@
           "title": "{label} Marketing Owner",
           "template": "segment-marketing-owner",
           "department": "marketing",
-          "reports_to": "growth-team-manager",
+          "reports_to": "growth-manager",
           "reason": "Owns the {label} segment's marketing."
         },
         {
           "key": "channel",
           "per": "channel",
-          "reports_to": "growth-team-manager"
+          "reports_to": "growth-manager"
         },
         {
           "key": "lead-generation",
@@ -314,7 +267,7 @@
           "title": "Lead Generation Owner",
           "template": "lead-generation-owner",
           "department": "sales",
-          "reports_to": "growth-team-manager",
+          "reports_to": "growth-manager",
           "reason": "Owns finding new leads."
         },
         {
@@ -323,7 +276,7 @@
           "title": "Inbound Sales Owner",
           "template": "inbound-sales-owner",
           "department": "sales",
-          "reports_to": "growth-team-manager",
+          "reports_to": "growth-manager",
           "reason": "Owns inbound leads: answering, qualifying and closing them."
         },
         {
@@ -332,7 +285,7 @@
           "title": "Outbound Sales Owner",
           "template": "outbound-sales-owner",
           "department": "sales",
-          "reports_to": "growth-team-manager",
+          "reports_to": "growth-manager",
           "reason": "Owns outbound prospecting: finding and reaching out to buyers."
         }
       ]
@@ -341,32 +294,13 @@
       "team": "Success",
       "seats": [
         {
-          "key": "success-team-manager",
-          "id": "success-team-manager",
-          "title": "Success Team Manager",
-          "template": "success-team-manager",
+          "key": "success-manager",
+          "id": "success-manager",
+          "title": "Success Manager",
+          "template": "success-manager",
           "department": "success",
           "reports_to": null,
-          "reason": "Leads success: support, onboarding and renewals, and its owners."
-        },
-        {
-          "key": "success-experiments-pipeline-manager",
-          "id": "success-experiments-pipeline-manager",
-          "title": "Success Experiments Pipeline Manager",
-          "template": "pipeline-manager",
-          "department": "operations",
-          "reports_to": "success-team-manager",
-          "reason": "Runs the success experiments: one idea at a time, measured and kept or dropped.",
-          "live": true
-        },
-        {
-          "key": "customer-pipeline-manager",
-          "id": "customer-pipeline-manager",
-          "title": "Customer Pipeline Manager",
-          "template": "pipeline-manager",
-          "department": "operations",
-          "reports_to": "success-team-manager",
-          "reason": "Moves each new customer from onboarding to active, referred or closed.",
+          "reason": "Leads success and manages its pipelines: new customers and the success experiments.",
           "live": true
         },
         {
@@ -375,7 +309,7 @@
           "title": "Support Owner",
           "template": "support-owner",
           "department": "success",
-          "reports_to": "success-team-manager",
+          "reports_to": "success-manager",
           "reason": "Owns customer support: answering and resolving customer issues."
         },
         {
@@ -384,7 +318,7 @@
           "title": "Success Owner",
           "template": "success-owner",
           "department": "success",
-          "reports_to": "success-team-manager",
+          "reports_to": "success-manager",
           "reason": "Owns customer success: onboarding, adoption and renewals."
         }
       ]
@@ -393,10 +327,10 @@
       "team": "Corporate",
       "seats": [
         {
-          "key": "corporate-team-manager",
-          "id": "corporate-team-manager",
-          "title": "Corporate Team Manager",
-          "template": "corporate-team-manager",
+          "key": "corporate-manager",
+          "id": "corporate-manager",
+          "title": "Corporate Manager",
+          "template": "corporate-manager",
           "department": "corporate",
           "reports_to": null,
           "reason": "Leads the corporate team: legal, finance and partnerships, and its owners."
@@ -407,7 +341,7 @@
           "title": "Legal Owner",
           "template": "legal-owner",
           "department": "corporate",
-          "reports_to": "corporate-team-manager",
+          "reports_to": "corporate-manager",
           "reason": "Owns legal: contracts, terms and compliance.",
           "live": true
         },
@@ -417,7 +351,7 @@
           "title": "Finance Owner",
           "template": "finance-owner",
           "department": "finance",
-          "reports_to": "corporate-team-manager",
+          "reports_to": "corporate-manager",
           "reason": "Owns finance: the books, bills, cash and the monthly close.",
           "live": true
         },
@@ -427,7 +361,7 @@
           "title": "Partnerships Owner",
           "template": "partnerships-owner",
           "department": "corporate",
-          "reports_to": "corporate-team-manager",
+          "reports_to": "corporate-manager",
           "reason": "Owns partnerships with other companies."
         }
       ]
@@ -456,11 +390,11 @@
   ],
   "coverage": [
     {
-      "seat": "growth-team-manager",
+      "seat": "growth-manager",
       "name": "Growth"
     },
     {
-      "seat": "engineering-team-manager",
+      "seat": "engineering-manager",
       "name": "Engineering"
     },
     {
@@ -476,7 +410,7 @@
       "name": "Release"
     },
     {
-      "seat": "success-team-manager",
+      "seat": "success-manager",
       "name": "Success"
     },
     {

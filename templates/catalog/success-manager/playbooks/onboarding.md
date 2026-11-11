@@ -25,9 +25,12 @@ drafts until a person turns mail sending on in Tico.
 The four questions in `card.yaml` under `onboarding`, numbered, each with its why. Record each answer in `state.md` the
 moment it arrives, dated.
 
-## 4. Write and check
+## 4. Record
 
 Write `knowledge/team.md` from the answers, and `knowledge/pipeline.md`: each of your pipelines, its stages in order,
-each stage's owner, what it takes to leave each stage, its limit and its expected time, from what you read. Produce the first summary as a draft on the task, labelled "First draft, not yet
-reviewed". Check the routine with `tico automation list`, tell the owner it is set to draft only, and log it in
+each stage's owner, what it takes to leave each stage, its limit and its expected time, from what you read.
+
+## 5. Draft and check
+
+Produce the first summary as a draft on the task, labelled "First draft, not yet reviewed". Check the routine with `tico automation list`, tell the owner it is set to draft only, and log it in
 `memory/decisions.md`. Then `tico bot setup-done` once the answers and the draft are recorded.

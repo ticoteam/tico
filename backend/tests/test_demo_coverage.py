@@ -117,7 +117,7 @@ def _page_has_demo_data(api, name):
 
 
 def _full_page_audience_editor_has_a_restricted_example(api):
-    pages = api.get('/api/v2/pages?bot=growth-team-manager').json()['pages']
+    pages = api.get('/api/v2/pages?bot=growth-manager').json()['pages']
     assert pages
     shown = api.get('/api/v2/pages/' + pages[0]['file_id']).json()
     assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
@@ -161,7 +161,7 @@ def _demo_task_has_an_editor_for_the_live_task_page(api):
 
 
 def _task_pages_have_demo_data(api):
-    pages = api.get("/api/v2/pages?bot=growth-team-manager").json()["pages"]
+    pages = api.get("/api/v2/pages?bot=growth-manager").json()["pages"]
     shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()
     task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
     pins = api.get("/api/v2/places/" + task_place).json()["pins"]

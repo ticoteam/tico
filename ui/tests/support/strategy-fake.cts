@@ -131,7 +131,7 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
   const goals: Goal[] = [
     {id: 'g-co', title: 'Reach 100 paying customers', owner_id: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 1,
       kpis: [{id: 'k-cust', name: 'Paying customers', status: 'green', link: {kind: 'improve', baseline: 20, baseline_at: '2026-09-01', target: 100, deadline: '2026-12-31'}}]},
-    {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:growth-team-manager', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
+    {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:growth-manager', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
   ];
   const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals};
   const writes: StrategyWrite[] = [];

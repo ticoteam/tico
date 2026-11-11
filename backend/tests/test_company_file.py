@@ -100,10 +100,10 @@ def test_the_first_chart_comes_from_the_model_the_company_s_signals_pick():
     assert {b["reason"] for b in draft["bots"] if b["title"] in model} == {"Part of the Services firm model."}
     # Services has no Support, Legal or Leadership head of its own: Everything's are added. No Product or Engineering.
     added = [b["title"] for b in draft["bots"] if b["reason"] == "Every chart has a head for each department."]
-    assert added == ["Success Team Manager", "General Counsel"]
+    assert added == ["Success Manager", "General Counsel"]
     assert line == (
         "This looks like a services firm, so we started from the Services firm model and added the "
-        "Success Team Manager and General Counsel."
+        "Success Manager and General Counsel."
     )
     assert not {"product", "engineering"} & set(depts(draft))
     assert "undo" not in draft, "the model is where the chart starts, not a change to undo"
@@ -780,7 +780,7 @@ BAD = [
     ("bot_remove", {"bot": "ghost"}),
     ("bot_rename", {"bot": "builder", "title": "Reviewer 1"}),
     ("bot_rename", {"bot": "builder", "title": " "}),
-    ("bot_set_reports_to", {"bot": "engineering-team-manager", "to": "builder"}),
+    ("bot_set_reports_to", {"bot": "engineering-manager", "to": "builder"}),
     ("bot_set_reports_to", {"bot": "builder", "to": "builder"}),
     ("bot_set_reports_to", {"bot": "builder", "to": "Dispatcher"}),
     ("bot_set_reports_to", {"bot": "builder", "to": "Nobody Here"}),
@@ -998,7 +998,7 @@ def test_a_reports_to_whose_target_left_the_chart_falls_back_to_the_line_the_fil
     out = C.Turn(sent, TODAY).finish()
     assert not any(b.get("reports_to") for b in out["bots"] if b["title"] in ("Builder", "Reviewer 1"))
     doc = yaml.safe_load(C.to_yaml(out, CREATED))
-    assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Builder"] == "engineering-team-manager"
+    assert {e["title"]: e["reports_to"] for e in doc["employees"]}["Builder"] == "engineering-manager"
     assert C.to_yaml(C.from_yaml(C.to_yaml(out, CREATED)), CREATED) == C.to_yaml(out, CREATED)
 
 

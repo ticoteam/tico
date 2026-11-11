@@ -73,9 +73,9 @@ CONTENT = {
     },
     "threads": {
         "ops": {"home": "bot:operations-manager", "follow": True},
-        "care": {"home": "bot:success-team-manager", "follow": True},
+        "care": {"home": "bot:success-manager", "follow": True},
         "eng": {"home": "bot:product-manager", "follow": True},
-        "growth": {"home": "bot:growth-team-manager", "follow": True},
+        "growth": {"home": "bot:growth-manager", "follow": True},
         "finance": {"home": "bot:finance-owner", "follow": True},
         "all": {"title": "This week", "by": "human:ana"},
         "adapter": {"title": "Urgent: Home Pro adapter overheated", "by": "bot:escalations-manager"},
@@ -169,7 +169,7 @@ CONTENT = {
         {
             "in": "care",
             "ago": 10,
-            "by": "bot:success-team-manager",
+            "by": "bot:success-manager",
             "say": "The cracked-lens draft is held for @ben. It promises a refund over $100, so the decision is his.",
         },
         {

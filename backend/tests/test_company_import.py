@@ -74,7 +74,7 @@ TWELVE = (
     "fpa-analyst",
     "inbound-sales-owner",
     "outbound-sales-owner",
-    "growth-team-manager",
+    "growth-manager",
     "content-owner",
     "seo-owner",
     "project-coordinator",
@@ -831,6 +831,67 @@ def test_hqs_starting_chart_from_an_older_release_imports_at_first_start_on_its_
         assert not {r["template"] for r in seats.values()} & {"pr-reviewer", "bookkeeper", "finance-lead"}
 
 
+def started_tree(api):
+    """What a start left: each bot's template and the slug it reports to, each open seat's template, each pipeline's
+    manager by slug, and how many bots and seats there are."""
+    bots = rows(
+        api,
+        "SELECT b.id, b.slug, s.template, bc.reports_to FROM bots b JOIN bot_config bc ON bc.bot=b.id "
+        "JOIN bot_settings s ON s.bot_id=b.id WHERE b.state<>'archived'",
+    )
+    slugs = {"bot:" + r["id"]: r["slug"] for r in bots} | {r["id"]: r["slug"] for r in bots}
+    return {
+        "bots": {r["slug"]: (r["template"], slugs.get(r["reports_to"], r["reports_to"])) for r in bots},
+        "seats": sorted(r["template"] for r in rows(api, "SELECT template FROM seats WHERE closed_at IS NULL")),
+        "pipelines": {
+            r["id"]: slugs.get(r["manager_id"], r["manager_id"])
+            for r in rows(api, "SELECT id, manager_id FROM pipelines WHERE retired_at IS NULL")
+        },
+        "count": (len(bots), rows(api, "SELECT count(*) AS n FROM seats")[0]["n"]),
+    }
+
+
+def test_hqs_chart_with_pipeline_managers_starts_one_manager_per_team_running_its_teams_pipelines(tmp_path):
+    """HQ still plans a 0.6 company with the chart that had a Team Manager seat and a Pipeline Manager per pipeline. A
+    server started on it has one Manager bot per team, who manages every pipeline of that team (none is left with the
+    General Manager standing in); a second start makes nothing; and it is the company a chart drawn in today's shape
+    starts."""
+    from backend import pipeline_presets_more as more
+    from backend.tests.helpers.template_renames import CHARTS, employees_file
+
+    golden = json.loads((Path(__file__).parent / "fixtures" / "chart_formula_golden.json").read_text())
+    todays = next(case for case in golden["cases"] if case["name"] == "hotmic")["expected"]["employees"]
+    theirs = CHARTS["0.6 hotmic"]
+    assert sum(row["template"] == "pipeline-manager" for row in theirs) == 7
+    trees = []
+    for name, chart in (("theirs", theirs), ("todays", todays)):
+        (tmp_path / name).mkdir()
+        start, failed = starts(tmp_path / name)
+        packed = starter.pack(employees_file(chart), starter.MAX_PACKED)
+        with start(packed) as api:
+            assert failed(api) is None
+            first = started_tree(api)
+        with start(packed) as api:
+            assert started_tree(api) == first, name  # a later start makes no bot or seat and moves no line
+        managers = {slug: row for slug, row in first["bots"].items() if slug.endswith("-manager")}
+        assert managers == {
+            "general-manager": ("general-manager", managers["general-manager"][1]),
+            "product-manager": ("product-manager", "human:owner"),
+            "engineering-manager": ("engineering-manager", "human:owner"),
+            "growth-manager": ("growth-manager", "human:owner"),
+            "success-manager": ("success-manager", "human:owner"),
+        }
+        assert not [slug for slug in first["bots"] if "pipeline-manager" in slug or "team-manager" in slug]
+        assert "pipeline-manager" not in first["seats"] and first["seats"].count("corporate-manager") == 1
+        expected = {"product": "product-manager", "engineering": "engineering-manager", **more.MANAGERS}
+        assert {pid: first["pipelines"][pid] for pid in expected} == expected
+        lines = {template: above for template, above in first["bots"].values()}
+        assert lines["segment-product-owner"] == "product-manager"
+        assert first["bots"]["builder"][1] == "engineering-manager"
+        trees.append(first)
+    assert trees[0] == trees[1]
+
+
 def test_every_way_out_of_a_failed_setup_import_clears_it(tmp_path):
     """Reverse state of the kept start failure, before setup is complete: the file setting removed and the owner's
     Dismiss each end it; a start with the same broken file shows it again."""
@@ -1553,13 +1614,13 @@ def test_the_places_a_company_serves_reach_botops_and_the_librarian_only_when_gi
 
 # ----------------------------------------------------------------------------- live seats and teams
 # (title, template, the title of the seat it reports to or "" for the owner, live, team). A live seat is made as a bot
-# that fills it; the Engineering Pipeline Manager is a live seat, and the Growth one a plain seat.
+# that fills it; the QA Owner is a live seat, and the Growth Manager a plain one.
 LIVE_SEATS = (
-    ("Engineering Team Manager", "engineering-team-manager", "", False, "Engineering"),
-    ("Lead Builder", "builder", "Engineering Team Manager", True, "Engineering"),
+    ("Engineering Manager", "engineering-manager", "", False, "Engineering"),
+    ("Lead Builder", "builder", "Engineering Manager", True, "Engineering"),
     ("Code Reviewer", "reviewer", "Lead Builder", True, "Engineering"),
-    ("Engineering Pipeline Manager", "pipeline-manager", "Engineering Team Manager", True, "Engineering"),
-    ("Growth Experiments Pipeline Manager", "pipeline-manager", "", False, "Growth"),
+    ("QA Owner", "qa-owner", "Engineering Manager", True, "Engineering"),
+    ("Growth Manager", "growth-manager", "", False, "Growth"),
 )
 
 
@@ -1624,7 +1685,7 @@ def test_a_live_seat_is_made_as_a_bot_that_fills_its_seat_and_reports_where_its_
     seats = {r["title"]: r for r in rows(api, "SELECT title,filled_by,closed_at FROM seats")}
     assert seats["Lead Builder"]["filled_by"] == ids["lead-builder"] and seats["Lead Builder"]["closed_at"]
     assert seats["Code Reviewer"]["filled_by"] == ids["code-reviewer"] and seats["Code Reviewer"]["closed_at"]
-    assert seats["Growth Experiments Pipeline Manager"]["closed_at"] is None  # a plain seat stays open
+    assert seats["Growth Manager"]["closed_at"] is None  # a plain seat stays open
     tasks = {r["title"] for r in rows(api, "SELECT title FROM tasks WHERE title LIKE 'Set up %'")}
     assert {
         "Set up Lead Builder from the builder template",
@@ -1638,7 +1699,7 @@ def test_live_bots_and_the_finance_owner_sit_in_their_teams_and_the_built_ins_in
     names = {g["id"]: g["name"] for g in api.get("/api/v2/groups", headers=signed_in()).json()}
     slugs = {r["id"]: r["slug"] for r in rows(api, "SELECT id,slug FROM bots")}
     teams = {slugs[r["bot"]]: names.get(r["team"], "") for r in rows(api, "SELECT bot,team FROM bot_config")}
-    assert teams["lead-builder"] == teams["code-reviewer"] == teams["engineering-pipeline-manager"] == "Engineering"
+    assert teams["lead-builder"] == teams["code-reviewer"] == teams["qa-owner"] == "Engineering"
     assert teams["finance-owner"] == "Corporate"  # the Finance Owner is on the chart, not in the Built-in group
     assert teams["assistant"] == teams["botops"] == "Built-in"
     assert names["built-in"] == "Built-in"
@@ -1662,22 +1723,19 @@ def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environ
 
 
 # ------------------------------------------------------------------ the default chart, on every way a company starts
-# The bots a new company starts with: every default pipeline's manager, the Product and Engineering stage owners, the
-# QA Owner, and the Legal Owner, who runs Legal.
+# The bots a new company starts with: each team's Manager, who runs its pipelines, the Product and Engineering stage
+# owners, the QA Owner, and the Legal Owner, who runs Legal.
 LIVE_DEFAULT = (
-    "product-pipeline-manager",
+    "product-manager",
     "product-owner",
-    "engineering-pipeline-manager",
+    "engineering-manager",
     "builder",
     "reviewer-1",
     "reviewer-2",
     "qa-owner",
     "release-owner",
-    "growth-experiments-pipeline-manager",
-    "lead-pipeline-manager",
-    "opportunity-pipeline-manager",
-    "success-experiments-pipeline-manager",
-    "customer-pipeline-manager",
+    "growth-manager",
+    "success-manager",
     "legal-owner",
 )
 
@@ -1728,9 +1786,17 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
         ("Product Owner", "product-owner"),
     ):
         assert seats[title]["filled_by"] == ids[slug], title
-    # The Team Managers are seats to fill; nothing is a Product or Engineering Manager.
-    assert seats["Product Team Manager"]["closed_at"] is None and not seats["Product Team Manager"]["filled_by"]
-    assert not {"Product Manager", "Engineering Manager", "Release Manager"} & set(seats)
+    # Each team has one Manager, a bot from the start except Corporate's, which is a seat to fill. Every live seat
+    # of a team reports to its Manager.
+    for title, slug in (("Product Manager", "product-manager"), ("Growth Manager", "growth-manager")):
+        assert seats[title]["filled_by"] == ids[slug], title
+    assert seats["Corporate Manager"]["closed_at"] is None and not seats["Corporate Manager"]["filled_by"]
+    assert not [title for title in seats if title.endswith(("Team Manager", "Pipeline Manager"))]
+    assert stored_line(api, "product-owner") == ids["product-manager"]
+    assert {stored_line(api, slug) for slug in ("builder", "reviewer-1", "qa-owner", "release-owner")} == {
+        ids["engineering-manager"]
+    }
+    assert {stored_line(api, slug) for slug in LIVE_DEFAULT if slug.endswith("-manager")} == {"human:owner"}
     before = (len(rows(api, "SELECT id FROM seats")), len(ids))
     again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text
@@ -1825,7 +1891,7 @@ def test_setup_leaves_a_company_whose_work_is_already_set_up_alone(environment):
 
 
 def test_the_finance_owner_keeps_its_corporate_seat_and_moves_under_the_corporate_manager_once_hired(environment):
-    """Review finding 7: the Bookkeeper is the Finance Owner on the default chart, under the Corporate Team Manager seat.
+    """Review finding 7: the Bookkeeper is the Finance Owner on the default chart, under the Corporate Manager seat.
     Its seat is filled by the built-in bot (no second bot), and hiring the manager moves the Bookkeeper under it."""
     api = environment()
     preview = preview_and_import(api, default_chart_text())
@@ -1835,12 +1901,12 @@ def test_the_finance_owner_keeps_its_corporate_seat_and_moves_under_the_corporat
     seats = {r["title"]: r for r in rows(api, "SELECT id,title,filled_by,reports_to FROM seats")}
     finance = seats["Finance Owner"]
     assert finance["filled_by"] == ids["finance-owner"]
-    assert finance["reports_to"] == "seat:" + seats["Corporate Team Manager"]["id"]
+    assert finance["reports_to"] == "seat:" + seats["Corporate Manager"]["id"]
     assert stored_line(api, "finance-owner") == stored_config(api, "finance-owner")["placed_under"] == "human:owner"
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up Finance Owner%'")
     hired = api.post(
-        "/api/v2/seats/%s/hire" % seats["Corporate Team Manager"]["id"],
-        json={"template": "corporate-team-manager"},
+        "/api/v2/seats/%s/hire" % seats["Corporate Manager"]["id"],
+        json={"template": "corporate-manager"},
         headers=signed_in(),
     )
     assert hired.status_code == 200, hired.text

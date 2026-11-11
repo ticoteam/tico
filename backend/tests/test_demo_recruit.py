@@ -40,7 +40,7 @@ def _open_seats_sit_under_their_managers(built):
     with owner_api(built) as api:
         seats = open_seats(api)
         assert seats["Install Crew Coordinator"]["reports_to"] == "operations-manager"
-        assert seats["Warranty Claims"]["reports_to"] == "success-team-manager"
+        assert seats["Warranty Claims"]["reports_to"] == "success-manager"
         assert seats["Install Crew Coordinator"]["request_state"] == ""
         assert seats["Devin"]["reports_to"] == "product-manager"
 

@@ -31,7 +31,7 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     software = next(model for model in models if model["model"] == "software")
     assert software["name"] == "Software company"
     assert {seat["team"] for seat in software["seats"]} >= {"engineering", "product"}
-    assert any(seat["template"] == "engineering-team-manager" for seat in software["seats"])
+    assert any(seat["template"] == "engineering-manager" for seat in software["seats"])
     assert all(set(model) == {"model", "name", "about", "seats"} for model in models)
     assert all("bots" not in model and "people" not in model and "tasks" not in model for model in models)
     from clients import hubtools
@@ -127,15 +127,15 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
         ("Developer Advocates", "developer-advocate"),
         ("Head of HR", "head-of-people"),
         ("HR generalist", "hr-generalist"),
-        ("Head of engineering", "engineering-team-manager"),
-        ("Director of marketing", "growth-team-manager"),
+        ("Head of engineering", "engineering-manager"),
+        ("Director of marketing", "growth-manager"),
         ("Head of Human Resources", "head-of-people"),
         ("Head of Legal Operations", "legal-operations-manager"),
         ("Developer relations", "developer-advocate"),
         ("PR manager", "pr-manager"),
-        ("VP Engineering", "engineering-team-manager"),
+        ("VP Engineering", "engineering-manager"),
         ("Head of Compliance", "compliance-manager"),
-        ("Head of Customer Success", "success-team-manager"),
+        ("Head of Customer Success", "success-manager"),
         ("Account Director", "account-manager"),
         ("Human Resources Generalist", "hr-generalist"),
         ("Financial Planning Analyst", "fpa-analyst"),
@@ -147,13 +147,13 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
         ("Senior Software Developer", "builder"),
         ("QA engineer (contract)", "qa-owner"),
         ("Security engineer - remote", "security-engineer"),
-        ("Manager, Engineering", "engineering-team-manager"),
+        ("Manager, Engineering", "engineering-manager"),
         ("Engineer, Security", "security-engineer"),
         ("Manager, Customer Success", "success-owner"),
-        ("VP, Product Marketing", "growth-team-manager"),
+        ("VP, Product Marketing", "growth-manager"),
         ("Sr. Security Engineer", "security-engineer"),
-        ("Vice President, Product Marketing", "growth-team-manager"),
-        ("Manager (Engineering)", "engineering-team-manager"),
+        ("Vice President, Product Marketing", "growth-manager"),
+        ("Manager (Engineering)", "engineering-manager"),
         ("Analyst (Pricing)", "pricing-analyst"),
         ("Software Engineer, Security", "security-engineer"),
         ("Software Engineer (Security)", "security-engineer"),
@@ -207,10 +207,10 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
     Partner); a job of a kind may be a template named by rank on the work ("Release Engineer" is the Release Owner)."""
     _, cards = recruiting._recruitable(api.app.state.onboarding)
     for title, template in (
-        ("CMO", "growth-team-manager"),
-        ("Chief Marketing Officer", "growth-team-manager"),
-        ("CTO", "engineering-team-manager"),
-        ("Head of Growth", "growth-team-manager"),
+        ("CMO", "growth-manager"),
+        ("Chief Marketing Officer", "growth-manager"),
+        ("CTO", "engineering-manager"),
+        ("Head of Growth", "growth-manager"),
         ("PMM", "segment-marketing-owner"),
         ("Senior Product Marketer", "segment-marketing-owner"),
         ("Content Writer", "content-owner"),
@@ -275,14 +275,14 @@ def test_strong_is_the_template_that_is_the_job_and_a_coding_job_has_the_cloud_a
         return post(api, f"seats/{seat['id']}/recruit", {})
 
     sales = found("Head of Sales")
-    assert [c["template"] for c in sales["candidates"] if c["match"] == "strong"] == ["growth-team-manager"]
+    assert [c["template"] for c in sales["candidates"] if c["match"] == "strong"] == ["growth-manager"]
     assert sales["agents"] == [] and sales["agents_at"] == 1
 
     rust = found("Rust engineer")
     assert [a["id"] for a in rust["agents"]] == ["claude", "codex"] and rust["agents_at"] == 0
     assert {a["match"] for a in rust["agents"]} == {"strong"} and {a["source"] for a in rust["agents"]} == {"cloud"}
     assert rust["candidates"][0]["department_id"] == "engineering"
-    assert rust["candidates"][0]["template"] != "engineering-team-manager"
+    assert rust["candidates"][0]["template"] != "engineering-manager"
     assert all(c["match"] != "strong" for c in rust["candidates"])
 
     security = found("Security engineer")
@@ -855,9 +855,7 @@ def test_a_seat_set_up_with_a_template_hires_only_that_template_and_a_removed_on
     # Another Recruit template is refused, plainly, and nothing is created.
     with api.app.state.store.read() as c:
         before = {r["slug"] for r in c.execute("SELECT slug FROM bots")}
-    refused = api.post(
-        f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": "engineering-team-manager"}
-    )
+    refused = api.post(f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": "engineering-manager"})
     assert refused.status_code == 422 and "set up with" in refused.text, refused.text
     with api.app.state.store.read() as c:
         assert {r["slug"] for r in c.execute("SELECT slug FROM bots")} == before
@@ -890,6 +888,6 @@ def test_a_seat_set_up_with_a_template_is_that_job_and_a_coding_one_in_engineeri
     assert [(a["id"], a["match"]) for a in rust["agents"]] == [("claude", "good"), ("codex", "good")]
 
     # The title says engineer, but the template is Marketing's: the seat is Marketing's, so no agents.
-    marketing = pinned("Rust engineer", "growth-team-manager")
-    assert [c["template"] for c in marketing["candidates"]] == ["growth-team-manager"]
+    marketing = pinned("Rust engineer", "growth-manager")
+    assert [c["template"] for c in marketing["candidates"]] == ["growth-manager"]
     assert marketing["department"] == "marketing" and marketing["agents"] == []

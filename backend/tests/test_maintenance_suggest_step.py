@@ -756,5 +756,5 @@ def test_migration_is_idempotent_and_preserves_receipts():
 
 def test_engineering_lead_role_goes_to_a_new_org_engineering_team_manager(install, api):
     with install.transaction() as c:
-        BS.update(c, "ops", {"template": "engineering-team-manager"})
+        BS.update(c, "ops", {"template": "engineering-manager"})
         assert suggestions.owner(c, "engineering_lead") == "ops"

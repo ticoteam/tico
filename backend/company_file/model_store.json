@@ -7,7 +7,7 @@
  "reason": "Part of the Online store model.",
  "core": [{"template": "assistant"}, {"template": "botops"}],
  "seats": [
-  {"team": "marketing", "template": "growth-team-manager"},
+  {"team": "marketing", "template": "growth-manager"},
   {"team": "marketing", "template": "search-ads-owner"},
   {"team": "marketing", "template": "email-owner"},
   {"team": "marketing", "template": "social-media-manager"},
@@ -17,7 +17,7 @@
   {"team": "marketing", "template": "reputation-manager"},
   {"team": "marketing", "template": "community-manager"},
   {"team": "marketing", "template": "marketing-operations-manager"},
-  {"team": "success", "template": "success-team-manager"},
+  {"team": "success", "template": "success-manager"},
   {"team": "success", "template": "support-owner"},
   {"team": "support", "template": "returns-and-refunds-specialist"},
   {"team": "support", "template": "retention-specialist"},

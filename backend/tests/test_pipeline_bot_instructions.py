@@ -41,7 +41,7 @@ def card(template):
 
 
 def test_the_six_seats_have_templates():
-    assert len(SIX) == 5 and set(SIX) <= {p.name for p in CATALOG.iterdir()}
+    assert len(SIX) == 6 and set(SIX) <= {p.name for p in CATALOG.iterdir()}
 
 
 @pytest.mark.parametrize("template", SIX)
@@ -67,8 +67,9 @@ def test_no_pipeline_template_teaches_the_old_words(template):
             ["Ideas", "Spec", "In development", "Validate"],
             ["tico task attach", "--pipeline engineering"],
         ),
+        ("product-manager", ["Late", "No owner", "On ice"], ["tico task reassign"]),
         (
-            "pipeline-manager",
+            "engineering-manager",
             ["Late", "No owner", "On ice", "Changed after OK", "Merged anyway"],
             ["tico task reassign"],
         ),

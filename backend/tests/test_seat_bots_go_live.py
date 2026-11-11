@@ -67,7 +67,7 @@ def _company(environment):
         "JOIN bot_settings s ON s.bot_id=b.id WHERE json_extract(s.extra,'$.goes_live_on_setup')",
     )
     seats = {row["id"]: (row["slug"], row["task"]) for row in found}
-    assert {"builder", "product-owner", "customer-pipeline-manager"} <= {slug for slug, _ in seats.values()}
+    assert {"builder", "product-owner", "product-manager", "success-manager"} <= {slug for slug, _ in seats.values()}
     assert all(task for _, task in seats.values())  # each one is BotOps' "Set up" task
     _report(api, computer)
     return api, computer, seats
@@ -273,7 +273,21 @@ def test_a_bot_held_by_onboarding_says_so_and_claims_the_moment_it_is_marked_com
 
 # What each default-org seat's template setup writes (its `playbooks/onboarding.md`, "## 4. Record").
 SETUP_FILES = {
-    "pipeline-manager": ["knowledge/pipeline.md"],
+    "product-manager": [
+        "knowledge/roadmap.md",
+        "knowledge/team.md",
+        "knowledge/decision-log.md",
+        "knowledge/pipeline.md",
+    ],
+    "engineering-manager": ["knowledge/delivery.md", "knowledge/pipeline.md"],
+    "growth-manager": [
+        "knowledge/workstreams.md",
+        "knowledge/team.md",
+        "knowledge/pipeline-rules.md",
+        "knowledge/routing.md",
+        "knowledge/pipeline.md",
+    ],
+    "success-manager": ["knowledge/team.md", "knowledge/pipeline.md"],
     "segment-product-owner": [
         "knowledge/segment.md",
         "knowledge/spec-format.md",

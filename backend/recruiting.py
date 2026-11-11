@@ -65,7 +65,7 @@ TOOL_LABELS = {
 }
 BUILT_IN_TOOLS = frozenset({"hub", "docs", "web"})
 # Words of rank, not of the work: "Support lead" and "Engineering lead" share no job. The catalog names a job by what
-# it owns ("QA Owner") and a head by the team it runs ("Engineering Team Manager"), so "owner" and "team" are rank too.
+# it owns ("QA Owner") and a head by the team it runs ("Engineering Manager"), so "owner" and "team" are rank too.
 RANKS = frozenset(
     stem
     for word in (
@@ -401,7 +401,7 @@ def _ranked(card):
 
 
 # A department whose cards are also the jobs of another pinned department: Corporate's Legal Owner is a legal job, so
-# "Legal Owner" finds it and not the Legal Operations Manager. The Growth Team Manager runs marketing and sales as one
+# "Legal Owner" finds it and not the Legal Operations Manager. The Growth Manager runs marketing and sales as one
 # team, so "Head of Sales" is Marketing's head.
 UMBRELLA = {"corporate": {"legal", "finance"}, "marketing": {"sales"}}
 
@@ -453,11 +453,12 @@ def _best_card(cards, title, team=""):
 
 
 def _ranked_fits(cards, title, team=""):
-    """Every card that is the job the title names, best first, as (key, card); the key's first six are how well the
+    """Every card that is the job the title names, best first, as (key, card); the key's first seven are how well the
     name fits (see _best_card), on which a tie is as good a fit."""
     t = _title(title)
     common = R._common(cards)
     group = str(team or "").strip().lower()
+    titled = [stem for stem, _ in _name_words(title)]
     out = []
     for card in cards:
         shared = _fit(card, t)
@@ -487,8 +488,11 @@ def _ranked_fits(cards, title, team=""):
         # "Manager" is the rank of every kind of job ("Customer Success Manager" is the Success Owner), so it settles
         # nothing.
         same_rank = len(name & t["ranks"] - MANAGER)
+        # A template's own name is that template before any other reading of it: "Product Manager" is the Product
+        # Manager, though "Manager" alone would give the Product Owner the seat.
+        own = [stem for stem, _ in _name_words(card["name"])] == titled
         key = (
-            (same_kind, exact, shared, plain, same_rank, role, len(name & t["stems"]), score),
+            (own, same_kind, exact, shared, plain, same_rank, role, len(name & t["stems"]), score),
             card["department"] == group,
             -len(card["name"]),
             card["template"],
@@ -852,7 +856,7 @@ def candidates(auth, onboarding, c, who, seat_id):
     best = fits[0][1] if fits else None
     # Strong: as good a fit by name as the template the description is drafted from ("Head of Sales" is the Sales
     # Manager's job, not the Sales Engineer's, though both say "Sales").
-    strong = {card["template"] for key, card in fits if key[0][:6] == fits[0][0][0][:6]}
+    strong = {card["template"] for key, card in fits if key[0][:7] == fits[0][0][0][:7]}
     # The department the job is in: the pinned template's, else the template that is the job's, else the one the
     # title's words point to.
     department = pinned["department"] if pinned else best["department"] if best else _department_hint(row["title"])

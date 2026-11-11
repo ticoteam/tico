@@ -7,7 +7,7 @@ lead: true
 group: engineering
 pack: engineering
 icon: developer_board
-suggest: common
+suggest: default
 team_templates: [builder, reviewer, qa-owner, security-owner, infrastructure-owner, release-owner]
 tags:
 - github

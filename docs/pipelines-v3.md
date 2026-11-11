@@ -716,8 +716,8 @@ Stages: To do → Done · Closed
   with no assignee, the General Manager is woken to pick one.
 - **Done.** When the bot says done, it is Done. Nobody checks it. You can reopen it with a note.
 
-Roles are found by the seat's template, never by a name: the Product and Engineering Pipeline Managers
-(`pipeline-manager`, each by its chart id), the Product Owner, Builder, Reviewer 1, Reviewer 2 and Release Owner. A
+Roles are found by the seat's template, never by a name: the Product Manager (`product-manager`), the Engineering
+Manager (`engineering-manager`), the Product Owner, Builder, Reviewer 1, Reviewer 2 and Release Owner. A
 software company has all of them live, with the QA Owner; a role nobody fills goes up to the pipeline's manager, and a
 manager nobody fills to the General Manager, until the role's bot appears. The person on a people OK is the first person
 above the pipeline's manager bot on the org chart, else the org owner. Product and Engineering are made for a company
@@ -725,7 +725,7 @@ that answers yes to "Do you build software?" (a blank answer is yes); an untouch
 
 ### Product
 
-From an idea to something checked in production. Manager: the Product Pipeline Manager bot.
+From an idea to something checked in production. Manager: the Product Manager bot.
 
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
@@ -742,7 +742,7 @@ Stages: Ideas → Spec → In development → Validate → Done · Closed
 
 ### Engineering
 
-From a task to a published release. Manager: the Engineering Pipeline Manager bot. Builder is one bot, working each task in its
+From a task to a published release. Manager: the Engineering Manager bot. Builder is one bot, working each task in its
 own thread.
 
 Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → Merge → Release → Done · Closed
@@ -775,8 +775,9 @@ Also:
 
 ### Growth and Success
 
-Each pipeline's manager is its own Pipeline Manager (`<pipeline>-pipeline-manager`); a Monitoring pipeline's is its
-Experiments pipeline's, so one seat manages both. A stage's owner is found by its role's template; until that bot exists, the stage is the manager's, and a manager nobody fills is the General Manager
+Each pipeline's manager is its team's Manager: the Growth Manager (`growth-manager`) for Growth Experiments, Growth
+Monitoring, Lead and Opportunity, and the Success Manager (`success-manager`) for Customer, Success Experiments and
+Success Monitoring. Who manages a pipeline is that pipeline's setting, and a person can point it at any bot. A stage's owner is found by its role's template; until that bot exists, the stage is the manager's, and a manager nobody fills is the General Manager
 (the ladder above). Built in `backend/pipeline_presets_more.py`.
 
 - **Growth Experiments** (GX) and **Success Experiments** (SX). Test ideas, keep what works, drop the rest. Every

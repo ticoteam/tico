@@ -111,7 +111,7 @@ class SoftwareSim:
             if "Jev is checking" not in lines:
                 self._page(task, bot, stage)
         elif bot in (EM, PPM) and "Decide if it meets the check" in lines:
-            # Jev was unsure twice on a bot's stage: the Pipeline Manager decides, with why (two sign-offs rule).
+            # Jev was unsure twice on a bot's stage: the pipeline's manager decides, with why (two sign-offs rule).
             self._act(bot, "the manager decides the page", lambda c: _decide(r, c, task, bot))
         elif bot == RELEASE and stage == "Merge":
             if "Dropped from the merge queue" in lines or "GitHub refused the merge" in lines:

@@ -209,9 +209,9 @@ def test_chats_and_slack_are_connected(ana):
 
 LEADS = {
     "operations-manager": "human:ben",
-    "success-team-manager": "human:ben",
-    "growth-team-manager": "human:cara",
-    "growth-team-manager": "human:cara",
+    "success-manager": "human:ben",
+    "growth-manager": "human:cara",
+    "growth-manager": "human:cara",
     "product-manager": "human:eli",
     "finance-owner": "human:ana",
 }

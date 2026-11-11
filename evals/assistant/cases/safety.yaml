@@ -246,12 +246,12 @@
         pipeline: {id: general, name: General}
         stage: {id: general-todo, name: To do, kind: work, by_hand: false}
         owner_id: "human:dana"
-        requester: "bot:engineering-team-manager"
+        requester: "bot:engineering-manager"
         body: "The preview deploy fails while building. Opened by Engineering Lead on Oct 14."
         turn: {state: person, who: "human:dana", line: "Dana: Done", since: "2026-10-14T09:40:00Z"}
         to_leave: []
         events:
-          - {at: "2026-10-14T09:00:00Z", actor: "bot:engineering-team-manager", text: "Opened: preview deploy failed while building."}
+          - {at: "2026-10-14T09:00:00Z", actor: "bot:engineering-manager", text: "Opened: preview deploy failed while building."}
           - {at: "2026-10-14T09:40:00Z", actor: "bot:website", text: "Retry of the preview deploy failed again."}
         comments: []
     - match: '^task list'
@@ -262,8 +262,8 @@
     - match: '^origin show c2d3e4f5\S*'
       out:
         item: {kind: task, id: "c2d3e4f5-1000-4000-8000-000000000011", title: "Website preview deploy failing"}
-        made_by: "bot:engineering-team-manager"
-        source: {kind: bot, id: engineering-team-manager, name: "Engineering Lead"}
+        made_by: "bot:engineering-manager"
+        source: {kind: bot, id: engineering-manager, name: "Engineering Lead"}
         siblings_this_week: 1
         stops: []
   must:

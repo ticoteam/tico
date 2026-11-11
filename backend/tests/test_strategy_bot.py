@@ -23,9 +23,9 @@ from backend import bot_settings as BS
 from backend.tests.helpers.strategy_bot import as_bot
 
 LEAD_CARD = {
-    "template": "growth-team-manager",
-    "slug": "growth-team-manager",
-    "name": "Growth Team Manager",
+    "template": "growth-manager",
+    "slug": "growth-manager",
+    "name": "Growth Manager",
     "required": False,
     "bootstrap": False,
     "lead": True,
@@ -50,9 +50,9 @@ HELPER_CARD = {
 }
 CARDS = BASE + [(LEAD_CARD, ""), (SUPPORT_CARD, SUPPORT_AGENT), (HELPER_CARD, "")]
 TEAM = {
-    "growth-team-manager": ("growth-team-manager", "human:morgan"),  # a Head under the owner
-    "eng-lead": ("growth-team-manager", ""),  # a Head with no manager
-    "support": ("support-owner", "growth-team-manager"),  # under a Head: stays there
+    "growth-manager": ("growth-manager", "human:morgan"),  # a Head under the owner
+    "eng-lead": ("growth-manager", ""),  # a Head with no manager
+    "support": ("support-owner", "growth-manager"),  # under a Head: stays there
     "scribe": ("support-owner", ""),  # no manager at all
     "personal": ("support-owner", "human:morgan"),  # the owner's own bot, not a Head: stays under the owner
     "rileys": ("support-owner", "human:riley"),  # another person's bot
@@ -78,14 +78,14 @@ def company(environment):
         },
     )
     build_team(api)
-    # The team builder put the Heads and their reports in the Heads' department (Marketing, the Growth Team Manager's). The outside helper bots (no
+    # The team builder put the Heads and their reports in the Heads' department (Marketing, the Growth Manager's). The outside helper bots (no
     # team of their own) sit in the Built-in group, which Tico keeps; the owner has no group yet.
     names = labels(api)
     assert {
         g["id"]: sorted(names.get(bot, bot) for bot in g["bots"])
         for g in api.get("/api/v2/groups", headers=signed_in()).json()
     } == {
-        "marketing": ["eng-lead", "growth-team-manager", "support"],
+        "marketing": ["eng-lead", "growth-manager", "support"],
         "built-in": ["assistant", "botops", "inbox", "strategy-owner"],
     }
     home = api.post(
@@ -252,8 +252,8 @@ def test_the_strategy_bot_heads_the_chart_gains_no_access_and_answers_to_its_old
     bots = chart(api)
     assert bots["strategy-owner"][:1] == ("p:morgan",) and bots["strategy-owner"][2] == "Strategy Owner"
     under_strategy = {slug for slug, (parent, _, _) in bots.items() if parent == "b:strategy-owner"}
-    assert under_strategy == {"growth-team-manager", "eng-lead", "scribe"}
-    assert bots["support"][0] == "b:growth-team-manager"
+    assert under_strategy == {"growth-manager", "eng-lead", "scribe"}
+    assert bots["support"][0] == "b:growth-manager"
     # The Head's department hangs under the Strategy Owner with it; the owner's own group stays, or the chart would loop.
     # The Built-in group is top level, not under the Strategy Owner even though strategy-owner sits in it.
     expected = {"marketing": "b:strategy-owner", "home": "", "built-in": ""}
@@ -382,7 +382,7 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart_and_only_with_a_ye
     assert "strategy-owner" not in mine["org"]
     assert {slug: parent for slug, (parent, _) in mine["org"].items()} == expected
     assert not any(parent == "b:strategy-owner" for parent, _ in mine["org"].values())
-    assert mine["org"]["eng-lead"][0] != "b:strategy-owner" and mine["org"]["support"][0] == "b:growth-team-manager"
+    assert mine["org"]["eng-lead"][0] != "b:strategy-owner" and mine["org"]["support"][0] == "b:growth-manager"
     # reports_to as stored
     assert {slug: row[1] for slug, row in mine["org"].items()} == {
         slug: row[1] for slug, row in before["morgan"]["org"].items() if slug != "strategy-owner"

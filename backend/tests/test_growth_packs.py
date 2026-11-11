@@ -113,7 +113,7 @@ def test_setup_offers_the_six_packs_in_marketing_and_checks_none_by_itself():
     built = R.build(yaml.safe_load(GROUPS.read_text()), catalog.cards())
     cards = {card["template"]: card for card in built["cards"]}
     assert all(cards[t]["department"] == "marketing" and cards[t]["suggest"] == "common" for t in PACKS)
-    assert set(PACKS) <= set(catalog.card("growth-team-manager")["team_templates"])
+    assert set(PACKS) <= set(catalog.card("growth-manager")["team_templates"])
     answer = "Search and our blog, a monthly newsletter, Google search ads and Meta ads; the signup page loses people"
     offered = R.rank(built, "marketing", answer)
     assert set(PACKS) <= {row["template_id"] for row in offered["bots"]}

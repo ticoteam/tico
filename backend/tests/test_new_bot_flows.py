@@ -211,8 +211,8 @@ def test_automations_and_routines_owned_by_the_bot_store_its_id(api, sales):
 def test_goals_chart_groups_and_caps_name_the_bot_by_slug_and_store_its_id(api, sales):
     goal = tool(api, "ana-test", "tico_goal_create", {"owner": "sales-helper", "title": "Close ten deals this month"})
     assert goal.get("owner_id") in ("bot:" + sales, sales), goal
-    lead = create_bot(api, "growth-team-manager")
-    tool(api, "ana-test", "tico_org_reports_to", {"teammate": "bot:sales-helper", "reports_to": "growth-team-manager"})
+    lead = create_bot(api, "growth-manager")
+    tool(api, "ana-test", "tico_org_reports_to", {"teammate": "bot:sales-helper", "reports_to": "growth-manager"})
     assert column(api, "SELECT reports_to FROM bot_config WHERE bot=?", sales) == [lead]
     org = {b["id"]: b for b in get(api, "org")["bots"]}
     assert org[sales]["reports_to"] == lead and org[sales]["org_parent"] == "b:" + lead
@@ -224,7 +224,7 @@ def test_goals_chart_groups_and_caps_name_the_bot_by_slug_and_store_its_id(api, 
         api,
         "ana-test",
         "tico_task_cap_set",
-        {"sender": "bot:sales-helper", "receiver": "bot:growth-team-manager", "per_day": 5},
+        {"sender": "bot:sales-helper", "receiver": "bot:growth-manager", "per_day": 5},
     )
     caps = json.dumps(tool(api, "ana-test", "tico_task_caps", {}))
     assert "bot:" + sales in caps and "bot:sales-helper" not in caps
@@ -280,7 +280,7 @@ def test_no_bot_takes_a_slug_that_is_another_bots_id(api, sales):
         "/api/v2/bots", json={"slug": sales, "display_name": "Imposter", "status": "planned"}, headers=headers()
     )
     assert r.status_code == 409, r.text
-    other = create_bot(api, "growth-team-manager")
+    other = create_bot(api, "growth-manager")
     rename(api, other, sales, expected=409)
     rename(api, other, "sales-helper", expected=409)  # nor another bot's slug
 
@@ -372,7 +372,7 @@ def test_me_names_an_attempt_run_id_and_never_attempt_id(api):
 
 
 def test_onboarding_names_a_managers_slug_for_a_bot_whose_id_is_not_its_slug_and_follows_a_rename(api, sales):
-    manager = create_bot(api, "growth-team-manager")
+    manager = create_bot(api, "growth-manager")
     revision = column(api, "SELECT revision FROM bot_config WHERE bot=?", sales)[0]
     r = api.post(
         f"/api/v2/bots/{sales}/definition",
@@ -384,6 +384,6 @@ def test_onboarding_names_a_managers_slug_for_a_bot_whose_id_is_not_its_slug_and
     def line():
         return next(b for b in get(api, "onboarding")["bots"] if b["id"] == sales)
 
-    assert (line()["reports_to"], line()["reports_to_slug"]) == (manager, "growth-team-manager")
+    assert (line()["reports_to"], line()["reports_to_slug"]) == (manager, "growth-manager")
     rename(api, manager, "sales-director")
     assert line()["reports_to_slug"] == "sales-director"

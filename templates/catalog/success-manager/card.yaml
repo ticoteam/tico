@@ -6,7 +6,7 @@ bootstrap: false
 group: success
 lead: true
 icon: headset_mic
-suggest: common
+suggest: default
 tags: [success, customers, renewals, retention, health, support]
 team_templates: [support-owner, success-owner]
 summary: "Manages the Customer, Success Experiments and Success Monitoring pipelines and leads the success team. When a task in one of them stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Runs the success team's weekly review: support and customer health against target, the oldest waiting customers, repeats and the decisions needed. It proposes routing and hires, and never answers a customer, does a stage's work or changes a stage's settings."

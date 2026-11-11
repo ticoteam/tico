@@ -20,11 +20,11 @@ ORDER = ("founder", "support", "sales", "blank")
 # can take it (_pick), so a bot that cannot is skipped, not failed.
 ROLES = {
     "legal_lead": ("general-counsel", "legal-owner"),
-    "engineering_manager": ("engineering-manager", "engineering-team-manager"),
+    "engineering_manager": ("engineering-manager", "engineering-manager"),
     "finance_lead": ("finance-owner",),
-    "marketing_lead": ("growth-team-manager",),
-    "support_lead": ("success-team-manager", "support-owner"),
-    "sales_lead": ("growth-team-manager",),
+    "marketing_lead": ("growth-manager",),
+    "support_lead": ("success-manager", "support-owner"),
+    "sales_lead": ("growth-manager",),
 }
 # The actions that act as someone: a task is opened as the owner's actor, a reply is drafted as it (automation_actions
 # _create_task and _actor). A group with no lead to act as cannot run them.

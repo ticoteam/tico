@@ -2541,7 +2541,7 @@ def _message_writer(conn, actor, msg, conv):
 def resolve_actor(conn: object, value: object) -> "str | None":
     """`cmo`, `bot:cmo`, `ana`, `human:ana`, `keeper` -> the actor string, or None.
 
-    A bare name no bot or person answers to is the one live bot built from that template (`growth-team-manager`), if there is
+    A bare name no bot or person answers to is the one live bot built from that template (`growth-manager`), if there is
     exactly one and no open seat is set up from that template (`_template_owner`).
 
     None is what rule 2 refuses on: an address that is not a bot, a human or the keeper.
@@ -2564,7 +2564,7 @@ def resolve_actor(conn: object, value: object) -> "str | None":
 
 
 def _template_owner(conn, name):
-    """The one live bot built from the template `name` (a template's own `--owner growth-team-manager`), as its actor.
+    """The one live bot built from the template `name` (a template's own `--owner growth-manager`), as its actor.
     None when no live bot is, or two are: an ambiguous name is still refused. An archived bot is not live. An open seat
     set up from the template (lifecycle.py: its `template`, closed once a bot fills it) is one more claim on the name."""
     if not _has_table(conn, "bot_settings"):

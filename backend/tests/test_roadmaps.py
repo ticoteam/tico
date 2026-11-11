@@ -479,7 +479,7 @@ def test_who_may_choose_the_suggestions_bot_and_which_bot_receives_them(api):
 def test_suggestions_receiver_is_a_new_org_product_bot_after_the_old_roles(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','cmo')")
-        BS.update(c, 'cpo', {'template': 'product-team-manager'})
+        BS.update(c, 'cpo', {'template': 'product-manager'})
         assert R.suggestions_receiver(c) == ('cpo', 'automatic')
         BS.update(c, 'cpo', {'template': 'segment-product-owner'})
         BS.update(c, 'cmo', {'template': 'product-lead'})

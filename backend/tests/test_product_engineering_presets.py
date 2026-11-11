@@ -55,9 +55,9 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     assert S.resolve(c) == dict.fromkeys(S.ROLES)
     _team(c)
     assert S.resolve(c) == {
-        S.PRODUCT_PIPELINE_MANAGER: "bot:" + PPM,
+        S.PRODUCT_MANAGER: "bot:" + PPM,
         S.PRODUCT_OWNER: "bot:pm",
-        S.ENGINEERING_PIPELINE_MANAGER: "bot:" + EPM,
+        S.ENGINEERING_MANAGER: "bot:" + EPM,
         S.BUILDER: "bot:builder",
         S.REVIEWER_1: "bot:rev-a",  # its seat's title sorts first
         S.REVIEWER_2: "bot:rev-b",
@@ -70,11 +70,11 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     # A bot named like a role but from another template is not that role.
     _role_bot(c, "product-owner-ish", "assistant")
     assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
-    # Every pipeline's manager shares one template: each is the one whose slug is its chart id.
-    _role_bot(c, "growth-experiments-pipeline-manager", "pipeline-manager")
+    # Each team's Manager has its own template: another team's Manager is not this one's.
+    _role_bot(c, "growth-manager", "growth-manager")
     c.execute("UPDATE bots SET state='archived' WHERE id=?", (PPM,))
-    assert S.resolve(c)[S.PRODUCT_PIPELINE_MANAGER] is None
-    assert S.resolve(c)[S.ENGINEERING_PIPELINE_MANAGER] == "bot:" + EPM
+    assert S.resolve(c)[S.PRODUCT_MANAGER] is None
+    assert S.resolve(c)[S.ENGINEERING_MANAGER] == "bot:" + EPM
 
 
 def test_the_ok_person_is_the_first_person_above_the_manager_else_the_owner(c):
@@ -763,17 +763,16 @@ def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_the
 
 def test_the_software_factory_guide_names_the_seats_templates():
     """The guide sends work to the seats the presets place (TEMPLATES), not to the 0.5 chart's Head of Product, Head of
-    Engineering, a Product or Engineering Manager, or a release-notes Release Owner. (The Engineering Lead template and
-    its routing playbook are gone: the Engineering Team Manager took its slug.)"""
+    Engineering or leads, or to a Pipeline Manager apart from the team's Manager."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
     guide = (root / "docs/software-factory.md").read_text()
-    for old in ("Head of Product", "Head of Engineering", "Product Manager", "Engineering Manager"):
+    for old in ("Head of Product", "Head of Engineering", "Pipeline Manager", "Team Manager"):
         assert old not in guide
-    for old in ("`product-lead`", "`engineering-lead`", "`product-manager`", "`engineering-manager`"):
+    for old in ("`product-lead`", "`engineering-lead`", "`pipeline-manager`"):
         assert old not in guide
-    for role in (S.PRODUCT_PIPELINE_MANAGER, S.PRODUCT_OWNER, S.RELEASE_MANAGER):
+    for role in (S.PRODUCT_MANAGER, S.ENGINEERING_MANAGER, S.PRODUCT_OWNER, S.RELEASE_MANAGER):
         assert f"`{S.TEMPLATES[role]}`" in guide
 
 

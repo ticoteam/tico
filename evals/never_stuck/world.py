@@ -56,13 +56,13 @@ BUILDER, WRITER, REVIEWER, MANAGER = "bot:builder", "bot:writer", "bot:reviewer"
 BOTS = (BUILDER, WRITER, REVIEWER, MANAGER)
 # A software company's world (World(seed, software=True)) also has the bots the Product and Engineering presets name,
 # each found by its template (backend/pipeline_seats.py): the Builder is the Builder above.
-# PM is the Product Owner; the two Pipeline Managers share one template and are found by their chart ids.
+# PM is the Product Owner; PPM and EM are the Product Manager and the Engineering Manager.
 PM, REVIEWER_1, REVIEWER_2, RELEASE = "bot:pm", "bot:rev1", "bot:rev2", "bot:rm"
-PPM, EM = "bot:product-pipeline-manager", "bot:engineering-pipeline-manager"
+PPM, EM = "bot:product-manager", "bot:engineering-manager"
 ROLE_TEMPLATES = {
     PM: "segment-product-owner",
-    PPM: "pipeline-manager",
-    EM: "pipeline-manager",
+    PPM: "product-manager",
+    EM: "engineering-manager",
     BUILDER: "builder",
     REVIEWER_1: "reviewer",
     REVIEWER_2: "reviewer",
@@ -76,8 +76,8 @@ BOT_OWNERS = {
     "reviewer": "ana",
     "manager": "ana",
     "pm": "ana",
-    "product-pipeline-manager": "ana",
-    "engineering-pipeline-manager": "ben",
+    "product-manager": "ana",
+    "engineering-manager": "ben",
     "rev1": "ben",
     "rev2": "ben",
     "rm": "ana",

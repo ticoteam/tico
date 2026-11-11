@@ -44,7 +44,7 @@ const ready = (page: Page) => page.waitForFunction(() => {
 }, null, {timeout: t(20000)});
 const go = async (page: Page, hash: string) => { await page.evaluate(h => { location.hash = h; }, hash); };
 const hashParam = async (page: Page, k: string) => new URLSearchParams((await page.evaluate(() => location.hash)).split('?')[1]).get(k)!;
-const LEAD = '#/rules?party=' + encodeURIComponent('bot:engineering-team-manager');
+const LEAD = '#/rules?party=' + encodeURIComponent('bot:engineering-manager');
 const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); return d.toISOString().slice(0, 10); };
 
 (async () => {
@@ -54,10 +54,10 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
 
     // The Engineering Lead suggests three rules from a vendor: a bot's rule always waits in Suggested.
-    const bot = await pageAs(browser, hub, 'engineering-team-manager');
+    const bot = await pageAs(browser, hub, 'engineering-manager');
     const source = (await ok<{source: Source}>(bot, 'POST', '/v2/rule-sources', {name: 'Northwind Supply', kind: 'vendor'})).source;
     for (const text of ['Send invoices within 30 days', 'Keep delivery records for 2 years', 'Report outages within 24 hours']) {
-      const made = await ok<Rule>(bot, 'POST', '/v2/rules', {kind: 'external', text, who: {bots: ['engineering-team-manager']}, source_id: source.id});
+      const made = await ok<Rule>(bot, 'POST', '/v2/rules', {kind: 'external', text, who: {bots: ['engineering-manager']}, source_id: source.id});
       assert.equal(made.status, 'suggested');
     }
 
@@ -68,7 +68,7 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     // Add an internal rule from the Engineering Lead's Reach panel: Who is the Engineering Lead already; With Engineering.
     // Saving it opens its panel over the party's.
     await go(page, LEAD);
-    await page.locator('.rr-panel[data-party="bot:engineering-team-manager"] [data-rr-add-rule]').click({timeout: t(15000)});
+    await page.locator('.rr-panel[data-party="bot:engineering-manager"] [data-rr-add-rule]').click({timeout: t(15000)});
     const modal = page.locator('#ru-add');
     await modal.locator('textarea[name=text]').fill('Ask before a production deploy');
     await modal.locator('[data-ru-adv]').click();
@@ -76,11 +76,11 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     await modal.locator('[data-scope="with"] [data-seg="groups"]').click();
     await modal.locator('[data-scope="with"] .ru-addsel').selectOption({label: 'Engineering'});
     await modal.locator('button[type=submit]').click();
-    await page.waitForFunction(() => /[?&]rule=/.test(location.hash) && /party=bot%3Aengineering-team-manager/.test(location.hash), null, {timeout: t(10000)});
+    await page.waitForFunction(() => /[?&]rule=/.test(location.hash) && /party=bot%3Aengineering-manager/.test(location.hash), null, {timeout: t(10000)});
     const ruleId = await hashParam(page, 'rule');
     let rule = await ok<Rule>(page, 'GET', '/v2/rules/' + ruleId);
     assert.equal(rule.status, 'active');
-    assert.deepEqual(rule.who.bots.map(b => b.id), ['engineering-team-manager']);
+    assert.deepEqual(rule.who.bots.map(b => b.id), ['engineering-manager']);
     assert.equal(rule.with.groups.length, 1);
     assert.ok(rule.can_edit);
     assert.deepEqual(await page.locator('.ru-tabs a').allInnerTexts(), ['Internal', 'External', 'Due', 'Suggested'], 'tabs carry no counts');
@@ -99,25 +99,25 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
 
     // A teammate named @slug in a rule's text is a mention chip; in a party's rules (all bots' rules, folded until
     // opened) it opens the teammate, not the rule.
-    const named = await ok<Rule>(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Ask @engineering-team-manager before you merge.', who: {all_bots: true}});
+    const named = await ok<Rule>(page, 'POST', '/v2/rules', {kind: 'internal', text: 'Ask @engineering-manager before you merge.', who: {all_bots: true}});
     await go(page, '#/overview');
     await page.locator('#ru-root').waitFor({state: 'detached', timeout: t(10000)});   // so Rules reads them again
     await go(page, LEAD);
     await page.locator('.rr-panel [data-rr-inh="all_bots"][aria-expanded="true"]').waitFor({timeout: t(15000)});
     const chip = page.locator(`.rr-panel a.rr-rule[data-rule="${named.id}"] .ru-at`);
     await chip.waitFor({timeout: t(10000)});
-    assert.equal(await chip.getAttribute('data-href'), '#/bot/engineering-team-manager');
+    assert.equal(await chip.getAttribute('data-href'), '#/bot/engineering-manager');
     assert.ok((await chip.textContent())!.startsWith('@'));
     await chip.click();
-    await page.waitForFunction(() => location.hash.startsWith('#/bot/engineering-team-manager'), null, {timeout: t(10000)});
+    await page.waitForFunction(() => location.hash.startsWith('#/bot/engineering-manager'), null, {timeout: t(10000)});
     await go(page, '#/rules?rule=' + named.id);
-    await page.locator('#ru-side .ru-read a.ru-at[href="#/bot/engineering-team-manager"]').waitFor({timeout: t(10000)});
+    await page.locator('#ru-side .ru-read a.ru-at[href="#/bot/engineering-manager"]').waitFor({timeout: t(10000)});
     await ok(page, 'POST', `/v2/rules/${named.id}/retire`, {version: named.version});
     await go(page, '#/rules');
 
     // Add rule from a bot's panel: no Where (rules cover every internal and external action).
     await go(page, LEAD);
-    await page.locator('.rr-panel[data-party="bot:engineering-team-manager"] [data-rr-add-rule]').click({timeout: t(15000)});
+    await page.locator('.rr-panel[data-party="bot:engineering-manager"] [data-rr-add-rule]').click({timeout: t(15000)});
     const threaded = page.locator('#ru-add');
     await threaded.locator('textarea[name=text]').fill('Post deploy notes in the thread');
     await threaded.locator('[data-ru-adv]').click();
@@ -229,25 +229,25 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
 
     // The Engineering Lead's Rules tab: the rule, then its settings as sentences, each opening its own editor; the
     // hub's fixed limits have none.
-    await go(page, '#/bot/engineering-team-manager/rules');
+    await go(page, '#/bot/engineering-manager/rules');
     await page.locator(`#bot-rules .ru-row[data-rule="${ruleId}"]`).waitFor({timeout: t(15000)});
     assert.ok(await page.locator('#bot-rules .ru-setting').count() > 0, 'its settings are listed');
-    assert.equal(await page.locator('#bot-rules [data-ru-setting="mail"]').getAttribute('href'), '#/bot/engineering-team-manager/settings');
+    assert.equal(await page.locator('#bot-rules [data-ru-setting="mail"]').getAttribute('href'), '#/bot/engineering-manager/settings');
     assert.ok(await page.locator('#bot-rules .ru-setting > .ru-c:last-child > .ru-none').count() > 0, 'a fixed limit has no link');
 
     // Its reach, as the Rules panel has it: a cap it sets has no source, a default is shown as its value with one, and
     // an exception it sends or receives is listed; each row's link opens the Rules panel.
-    await ok(page, 'PUT', '/v2/reach/settings/' + encodeURIComponent('bot:engineering-team-manager'), {chats_per_day: 40});
-    await ok(page, 'POST', '/v2/reach/lines', {sender: 'bot:engineering-team-manager', receiver: 'human:priya', per_day: 3});
+    await ok(page, 'PUT', '/v2/reach/settings/' + encodeURIComponent('bot:engineering-manager'), {chats_per_day: 40});
+    await ok(page, 'POST', '/v2/reach/lines', {sender: 'bot:engineering-manager', receiver: 'human:priya', per_day: 3});
     await go(page, '#/overview');
-    await go(page, '#/bot/engineering-team-manager/rules');
+    await go(page, '#/bot/engineering-manager/rules');
     const reachRow = (text: string) => page.locator('#bot-rules .ru-setting', {has: page.locator('.ru-txt', {hasText: text})});
     await reachRow('Up to 40 chats a day').locator('.ru-txt').waitFor({timeout: t(15000)});
     assert.doesNotMatch(await reachRow('Up to 40 chats a day').locator('.ru-txt').innerText(), /default/, 'its own cap has no source');
     assert.match(await reachRow('Up to 999 tasks a day').locator('.ru-txt').innerText(), /Up to 999 tasks a day.*default/s);
     assert.match(await reachRow('Reach:').locator('.ru-txt').innerText(), /^Reach: (anyone|nearby|only who's listed)/);
     assert.match(await reachRow('3 a day').locator('.ru-txt').innerText(), /^To .+ · 3 a day/);
-    assert.equal(await reachRow('Up to 40 chats a day').locator('a.ru-set').getAttribute('href'), '#/rules?party=bot%3Aengineering-team-manager');
+    assert.equal(await reachRow('Up to 40 chats a day').locator('a.ru-set').getAttribute('href'), '#/rules?party=bot%3Aengineering-manager');
 
     // Priya manages nothing about the Engineering Lead: the panel is read only, and the bot's Rules tab opens by link.
     const priya = await pageAs(browser, hub, 'priya');
@@ -257,7 +257,7 @@ const day = (n: number) => { const d = new Date(Date.now() + n * 86400000); retu
     assert.equal(await priya.locator('#ru-side button[type=submit]').count(), 0);
     assert.equal(await priya.locator('#ru-side [data-ru-retire]').count(), 0);
     assert.equal(await priya.locator('#ru-side .ru-duebox').count(), 2);
-    await go(priya, '#/bot/engineering-team-manager/rules');
+    await go(priya, '#/bot/engineering-manager/rules');
     await priya.locator(`#bot-rules .ru-row[data-rule="${ruleId}"]`).waitFor({timeout: t(15000)});
     assert.equal(await priya.locator('[data-bot-detail-tab=rules]').getAttribute('aria-selected'), 'true');
     await priya.context().close();
@@ -295,13 +295,13 @@ async function shots(browser: Browser, hub: RealHubSupport.Hub, bot: Page, {rule
   for (const text of ['Ship orders within 2 business days', 'Use the customer portal for returns'])
     await ok(bot, 'POST', '/v2/rules', {kind: 'external', text, who: {all_bots: true}, source_id: customer.id});
   const screens: [string, string, string, ((page: Page) => Promise<void>)?][] = [
-    ['reach', LEAD, '.rr-panel[data-party="bot:engineering-team-manager"]'],
+    ['reach', LEAD, '.rr-panel[data-party="bot:engineering-manager"]'],
     ['internal', `${LEAD}&rule=${ruleId}`, `#ru-side form[data-rule="${ruleId}"]`],
     ['external', '#/rules/external', '.ru-ext a.ru-row'],
     ['due', `#/rules/due?due=${dueId}`, '#ru-side .ru-mark'],
     ['suggested', '#/rules/suggested', '.ru-sg .ru-prop'],
     ['add-rule', LEAD, '#ru-add[open]', async page => { await page.locator('.rr-panel [data-rr-add-rule]').click(); }],
-    ['bot-rules', '#/bot/engineering-team-manager/rules', '#bot-rules .ru-setting'],
+    ['bot-rules', '#/bot/engineering-manager/rules', '#bot-rules .ru-setting'],
   ];
   for (const theme of ['light', 'dark']) {
     for (const phone of [false, true]) {

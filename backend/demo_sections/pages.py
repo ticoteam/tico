@@ -6,7 +6,7 @@ from ..store import H, digest
 def seed(b):
     b.at(hours=2)
     task = b.tasks["paid-budget"]
-    pages = b.call("GET", "pages?bot=growth-team-manager")["pages"]
+    pages = b.call("GET", "pages?bot=growth-manager")["pages"]
     b.call("PATCH", "pages/" + pages[0]["file_id"], {"audience": {"people": ["ana"]}})
     b.call("POST", "pins", {"place": "task:" + task, "item": "page:" + pages[0]["file_id"]})
     sent = b.call("POST", f"tasks/{task}/make-page", {"text": "Make a page for the holiday ad-budget review."})[

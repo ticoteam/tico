@@ -12,7 +12,7 @@
   {"team": "sales", "template": "outbound-sales-owner"},
   {"team": "sales", "template": "account-manager"},
   {"team": "corporate", "template": "partnerships-owner"},
-  {"team": "marketing", "template": "growth-team-manager"},
+  {"team": "marketing", "template": "growth-manager"},
   {"team": "marketing", "template": "content-owner"},
   {"team": "marketing", "template": "seo-owner"},
   {"team": "marketing", "template": "social-media-manager"},

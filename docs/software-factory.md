@@ -15,7 +15,7 @@ those stages.
 | # | Role | Starter template | What it does |
 |---|---|---|---|
 | 1 | Product Owner | `segment-product-owner` | Owns Product's stages: writes the Spec page, files the Engineering task, checks it in production |
-| 2 | Product and Engineering Pipeline Managers | `pipeline-manager` | Each manages one pipeline: picks up what is late or stuck and decides what happens next |
+| 2 | Product Manager and Engineering Manager | `product-manager`, `engineering-manager` | Each leads its team and manages its pipeline: picks up what is late or stuck and decides what happens next |
 | 3 | Builder | `builder` | Owns Build and the Fixes stages: opens the PR, makes every fix, shows what was built |
 | 4 | Reviewer 1 | `reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
 | 5 | Reviewer 2 | `reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
@@ -25,9 +25,9 @@ those stages.
 | 9 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
 The **Product Owner** (`segment-product-owner`) decides *what* to build: it triages feature ideas, writes the spec and
-acceptance tests, and keeps the roadmap. Each pipeline's **Pipeline Manager** (`pipeline-manager`) keeps its tasks
-moving: when one stops, it reassigns, moves back, moves on, snoozes or closes it, and never does a stage's work. The
-Product and Engineering Team Managers lead the people and bots of each team. A small team can
+acceptance tests, and keeps the roadmap. The **Product Manager** (`product-manager`) and the **Engineering Manager**
+(`engineering-manager`) each lead their team's bots and keep their pipeline's tasks moving: when one stops, the Manager
+reassigns, moves back, moves on, snoozes or closes it, and never does a stage's work. A small team can
 let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and Reviewer 2, and add the
 rest as your release pace grows.
 
@@ -94,7 +94,7 @@ Security holds a release only for:
 - an exploitable injection or similar hole
 - a new dependency with a known critical flaw
 
-Everything else becomes a follow-up task. The Engineering Team Manager may release anyway, with a written reason on the
+Everything else becomes a follow-up task. The Engineering Manager may release anyway, with a written reason on the
 release.
 
 ## What each release carries

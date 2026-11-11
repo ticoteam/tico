@@ -23,9 +23,9 @@ STAFF = {
     "assistant": "general-counsel",
     "cpo": "engineering-manager",
     "finance": "finance-owner",
-    "product-design": "growth-team-manager",
-    "ops": "success-team-manager",
-    # Marketing and sales are one template now (the Growth Team Manager): product-design holds both roles, and
+    "product-design": "growth-manager",
+    "ops": "success-manager",
+    # Marketing and sales are one template now (the Growth Manager): product-design holds both roles, and
     # doc-updater takes a template only where a test gives it one.
     "doc-updater": None,
 }
@@ -237,7 +237,7 @@ def test_the_answers_match_the_published_contract(api):
 
 
 def test_an_active_bot_still_onboarding_is_passed_over_for_the_next_one(api):
-    set_templates(api, {**STAFF, "doc-updater": "engineering-team-manager"})
+    set_templates(api, {**STAFF, "doc-updater": "engineering-manager"})
     onboarding(api, "cpo")  # active on the chart, but it learns and takes no task yet
     flow = fill(api, "founder", "person:ana", "ana@acme.example")
     assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
@@ -245,14 +245,14 @@ def test_an_active_bot_still_onboarding_is_passed_over_for_the_next_one(api):
 
 
 def test_a_bot_whose_profile_takes_no_tasks_is_passed_over_for_the_next_one(api):
-    set_templates(api, {**STAFF, "doc-updater": "engineering-team-manager"})
+    set_templates(api, {**STAFF, "doc-updater": "engineering-manager"})
     set_config(api, "cpo", "profile", "responder")  # answers in chat and takes no tasks
     flow = fill(api, "founder", "person:ana", "ana@acme.example")
     assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
 
 
 def test_a_bot_on_a_synced_harness_is_passed_over_for_the_next_one(api):
-    set_templates(api, {**STAFF, "doc-updater": "engineering-team-manager"})
+    set_templates(api, {**STAFF, "doc-updater": "engineering-manager"})
     set_config(api, "cpo", "harness", "dots")  # works on another platform and only syncs its chat here
     flow = fill(api, "founder", "person:ana", "ana@acme.example")
     assert by_id(flow["destinations"])["engineering"]["then"][0]["args"]["owner"] == "bot:doc-updater"
@@ -260,7 +260,7 @@ def test_a_bot_on_a_synced_harness_is_passed_over_for_the_next_one(api):
 
 def test_a_wake_that_becomes_a_task_goes_to_the_next_bot_that_takes_one(api):
     # Marketing's first candidate is onboarding, and Ana may tell neither of Ben's bots: the task goes to the second.
-    set_templates(api, {**STAFF, "cpo": "growth-team-manager", "doc-updater": "engineering-team-manager"})
+    set_templates(api, {**STAFF, "cpo": "growth-manager", "doc-updater": "engineering-manager"})
     onboarding(api, "cpo")
     marketing = by_id(fill(api, "founder", "person:ana", "ana@acme.example")["destinations"])["marketing"]
     assert [a["do"] for a in marketing["then"]] == ["create_task"]
@@ -451,7 +451,7 @@ def test_a_reviewer_owner_keeps_its_mail_draft_since_no_task_is_filed(api):
 
 def test_a_group_whose_bot_lead_cannot_file_a_draft_is_sorted_without_drafts(api):
     set_templates(api, STAFF)
-    # Built-in bots and helpers (the Assistant, the Finance Owner) stay outside groups: the Success Team Manager leads.
+    # Built-in bots and helpers (the Assistant, the Finance Owner) stay outside groups: the Success Manager leads.
     set_config(api, "ops", "profile", "reviewer")
     gid = post(api, "groups", {"name": "Support Desk", "add": {"bots": ["ops"]}, "lead": "bot:ops"})["id"]
     listed(api, "general")
@@ -473,8 +473,8 @@ def test_a_person_owner_in_slack_keeps_its_drafts(api):
     "role, old, new",
     [
         ("legal_lead", "general-counsel", "legal-owner"),
-        ("engineering_manager", "engineering-manager", "engineering-team-manager"),
-        ("support_lead", "success-team-manager", "support-owner"),
+        ("engineering_manager", "engineering-manager", "engineering-manager"),
+        ("support_lead", "success-manager", "support-owner"),
     ],
 )
 def test_a_role_two_templates_hold_is_filled_from_the_first_template_first(role, old, new):

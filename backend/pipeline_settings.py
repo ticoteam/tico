@@ -331,7 +331,7 @@ FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to somethin
 # Who fills each preset's manager, its stage owners, and which stages' page requirement a person OKs (D5, D9).
 ROLES: dict[str, Row] = {
     "engineering": {
-        "manager": S.ENGINEERING_PIPELINE_MANAGER,
+        "manager": S.ENGINEERING_MANAGER,
         "stages": {
             "engineering-on-deck": S.BUILDER,
             "engineering-build": S.BUILDER,
@@ -345,7 +345,7 @@ ROLES: dict[str, Row] = {
         "ok": ("engineering-fixes-2",),
     },
     "product": {
-        "manager": S.PRODUCT_PIPELINE_MANAGER,
+        "manager": S.PRODUCT_MANAGER,
         "stages": {
             "product-ideas": S.PRODUCT_OWNER,
             "product-spec": S.PRODUCT_OWNER,

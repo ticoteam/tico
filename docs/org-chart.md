@@ -152,8 +152,8 @@ profile image stored on the roster.
 
 | Group | Bots |
 |---|---|
-| marketing | The Head of Marketing (`growth-team-manager`), and under it the six channel Owners of the growth packs (SEO, Content, Email, CRO, Search Ads, Social Ads; docs/pipelines-v3.md "Growth and Success") and the Video Owner, which reports to the built-in Design Owner. |
-| product | The Product Team Manager bot and everything under it. |
+| marketing | The Head of Marketing (`growth-manager`), and under it the six channel Owners of the growth packs (SEO, Content, Email, CRO, Search Ads, Social Ads; docs/pipelines-v3.md "Growth and Success") and the Video Owner, which reports to the built-in Design Owner. |
+| product | The Product Manager bot and everything under it. |
 | sales | Sales operations and the sales-process bots. |
 | engineering | The CTO bot, which monitors CI, deploys, alerts, security and cost. |
 

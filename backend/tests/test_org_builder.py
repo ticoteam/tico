@@ -141,12 +141,12 @@ def test_a_why_is_never_a_single_word_a_word_of_a_name_or_a_phrase_most_of_the_g
 def test_a_department_keeps_the_head_groups_yaml_names_when_a_team_manager_is_a_lead_too():
     """A Team Manager is a lead as well, so the head that groups.yaml names keeps its department's seat, and the lead that
     comes first by name does not take it."""
-    departments = [{"id": "marketing", "name": "Marketing", "head": "growth-team-manager", "icon": "campaign"}]
+    departments = [{"id": "marketing", "name": "Marketing", "head": "growth-manager", "icon": "campaign"}]
     cards = [
-        card("growth-team-manager", "marketing", lead=True, suggest="default", icon="campaign"),
-        card("growth-team-manager", "marketing", lead=True, suggest="default", icon="campaign"),
+        card("growth-manager", "marketing", lead=True, suggest="default", icon="campaign"),
+        card("growth-manager", "marketing", lead=True, suggest="default", icon="campaign"),
     ]
-    assert R.head_of(R.build({"departments": departments}, cards), "marketing") == "growth-team-manager"
+    assert R.head_of(R.build({"departments": departments}, cards), "marketing") == "growth-manager"
 
 
 def test_the_shipped_catalog_has_a_head_for_every_department_and_the_setup_page_role_list_is_current():
