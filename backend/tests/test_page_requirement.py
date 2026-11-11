@@ -555,6 +555,35 @@ def test_the_route_attaches_a_readable_page_and_the_task_read_shows_it(api):
     assert ok.json()["task"]["stage"]["name"] == "Done"
 
 
+def test_a_refused_attach_on_a_private_task_keeps_none_of_its_words(api):
+    """The company owner reads refusals and events but not a private task: a refusal of a write on one is kept as
+    "Private task write refused", never with the PR it was about."""
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as conn:
+        for slug in ("writer", "manager"):
+            X.bot(conn, slug)
+        _pipeline(conn, page_settings={"at_head": True, "rubric": "Reviewed"}, line="Review")
+        row = _task(conn)
+        conn.execute("UPDATE tasks SET private=1 WHERE id=?", (row["id"],))
+        conn.execute(
+            "INSERT INTO task_links (id, task_id, kind, url, repo, number, created_at) VALUES (?,?,?,?,?,?,?)",
+            (H.new_id(), row["id"], "pr", "https://github.com/acme/secret/pull/12", "acme/secret", 12, H.now()),
+        )
+        fid, _ = _page(conn, store)
+    r = api.post(
+        f"/api/v2/tasks/{row['id']}/pages",
+        json={"requirement": "Review", "page": "page:" + fid},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code == 409 and r.json()["error"] == "task_requirement", r.text
+    with store.read() as conn:
+        refusals = [str(x[0]) for x in conn.execute("SELECT detail FROM refusals").fetchall()]
+        events = [" ".join(map(str, x)) for x in conn.execute("SELECT * FROM events").fetchall()]
+    assert any("Private task write refused" in d for d in refusals), refusals
+    assert not [line for line in refusals + events if "acme/secret" in line]
+
+
 # ----------------------------------------------------------------------------- the CLI and the bot tool
 def test_tico_task_attach_with_req_attaches_a_page_through_the_pages_route(monkeypatch):
     from clients import hubcli, hubtools, remotecli
