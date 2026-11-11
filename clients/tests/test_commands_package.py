@@ -20,7 +20,7 @@ from clients import hubtools
 ROOT = Path(__file__).absolute().parents[2]  # not resolve(): split_commands runs this file in a linked copy
 PACKAGE = ROOT / "clients" / "commands"
 MAX_LINES = 1200
-MOVED = PACKAGE.is_dir()
+MOVED = (PACKAGE / "__init__.py").is_file()
 
 # Each entry point, imported first in a fresh process, must load the whole table: BY_NAME is built once every tool
 # module has registered, whichever module a process happens to import first.
@@ -146,12 +146,12 @@ def test_local_files_reach_the_api_through_the_lazily_imported_helpers(tmp_path,
 def test_the_facade_hands_out_the_package_objects():
     """`hubtools.X` is the package's own X: a change through the facade (TOOLS, AUDIENCE, BY_NAME) is a change to
     the table, and every name in `__all__` is there."""
-    source = {}  # name -> the clients.commands module the facade imports it from
+    source = {}  # name -> the module the facade imports it from (a clients.commands module, or a library's)
     for node in ast.parse(Path(hubtools.__file__).read_text()).body:
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("clients.commands."):
+        if isinstance(node, ast.ImportFrom) and node.module:
             source.update({a.asname or a.name: node.module for a in node.names})
     for name in hubtools.__all__:
-        assert name in source, f"hubtools.{name} is in __all__ but not imported from clients.commands"
+        assert name in source, f"hubtools.{name} is in __all__ but the facade does not import it"
         assert getattr(hubtools, name) is getattr(importlib.import_module(source[name]), name), name
     for name in ("TOOLS", "BY_NAME", "AUDIENCE", "SHELL_ONLY", "UNLISTED", "CLI_TOOL_ALIASES"):
         assert name in hubtools.__all__, f"hubtools.{name} is not re-exported"

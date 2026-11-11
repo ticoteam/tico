@@ -83,7 +83,8 @@ SIBLINGS = {
     "hubtools_org": "org",
     "hubtools_pipelines": "pipelines",
     "hubtools_connections": "connections",
-    "hubtools_computers": "machines",
+    # Beside computers.py (the computer list, health, maintenance, support), not a synonym of it.
+    "hubtools_computers": "computer_upkeep",
 }
 
 
@@ -235,7 +236,7 @@ def identity(root, only=None):
 
     if only == "versions":
         return {"versions": versions(hubtools, hubcli)}
-    moved = os.path.isdir(os.path.join(root, "clients", "commands"))
+    moved = os.path.isfile(os.path.join(root, "clients", "commands", "__init__.py"))
     tools = sorted(hubtools.TOOLS, key=lambda t: t["name"])
     registry = [
         {
