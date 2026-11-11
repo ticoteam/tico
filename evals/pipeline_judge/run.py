@@ -1,12 +1,12 @@
 """Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
-cases.json holds 39 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
+cases.json holds 41 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
 text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
-unsure. 22 are Dev (tests pass, screenshots match spec, review done) and 17 Marketing (lead has company and contact, campaign
+unsure. 24 are Dev (tests pass, screenshots match spec, review done, pre-release page) and 17 Marketing (lead has company and contact, campaign
 brief approved, landing page live). The five `acme-*` cases are real pages from the Acme test company (Nov 11), built as
 the page step builds them (attachment kind "page", backend/page_verdicts.py `job_of`) with the stage's shipped rubric.
 `--only acme-*` runs just those. Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a
-draft, a placeholder page, a self-review. No customer data belongs in cases.json.
+draft, a placeholder page, a self-review, a pre-release page without the reviews or without the checks. No customer data belongs in cases.json.
 
 Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.8 or more,
 not_met at 0.2 or less, and unsure between (the engine's rule: unsure passes the call up to a person and never passes the

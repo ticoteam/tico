@@ -141,6 +141,14 @@ REVIEW_RUBRIC = (
     "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what "
     "to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
 )
+# The pre-release page a person OKs. The checks themselves are the stage's `checks_pass`; the page shows them. "With
+# screenshots or output, and how it was checked" read as two things to show, and a clean pair of reviews as nothing found
+# (Acme, Nov 11: a good page unsure, p 0.34); pages missing the reviews or the checks stay not met (p under 0.1).
+FIXES_2_RUBRIC = (
+    "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what "
+    "Reviewer 1 and Reviewer 2 found, or that they found nothing to fix. Enough for a person to OK it without opening "
+    "the code."
+)
 # The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines"). Made only for a company that builds
 # software (a blank answer is yes), once its setup is finished (ensure_presets).
 PRESETS["engineering"] = {
@@ -192,14 +200,7 @@ PRESETS["engineering"] = {
             240,
             [
                 github("checks_pass"),
-                _people_only(
-                    _page(
-                        "Review page",
-                        "Shows what was built, with screenshots or output, and how it was checked; that the checks "
-                        "pass at the newest commit; and what Reviewer 1 and Reviewer 2 found. Enough for a person "
-                        "to OK it without opening the code.",
-                    )
-                ),
+                _people_only(_page("Review page", FIXES_2_RUBRIC)),
             ],
         ),
         _stage(
