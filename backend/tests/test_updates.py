@@ -526,14 +526,14 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
 
 
 def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
-    """BotOps, the Strategy Bot, the Librarian and the Task Manager get no node (so no empty "No update yet" row) in
+    """BotOps, the Strategy Owner, the Librarian and the Task Manager get no node (so no empty "No update yet" row) in
     either kind or scope; a bot below one hangs from the next node up, and an update one posted stays in the feed."""
     from backend.tests.helpers.bot_contact import bot
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (
         ("botops", "BotOps"),
-        ("goal-manager", "Strategy Bot"),
+        ("goal-manager", "Strategy Owner"),
         ("librarian", "Librarian"),
         ("task-manager", "Task Manager"),
     ):

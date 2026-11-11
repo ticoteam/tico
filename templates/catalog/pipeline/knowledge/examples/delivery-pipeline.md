@@ -48,7 +48,7 @@ and the red gate `test-unit` stalled merges for 5 hours on 2026-10-24, its cause
 - DevOps Engineer: the `test-unit` red run on main and its flaky runs, with the run ids and the test name. Task opened 2026-11-02.
 - Release notes (this bot's own weekly draft): the rollback on 2026-10-27 and the cadence, so the notes record what reached users.
   No version decision is made here.
-- Engineering Manager: none this week.
+- Product Owner: none this week.
 - Owner, for decision: `e2e-smoke` is not required. Keep it out of the gate, or require it? The owner decides.
 
 ## Could not read

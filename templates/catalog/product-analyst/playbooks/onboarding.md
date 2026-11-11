@@ -27,7 +27,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 2. What counts as active and as activated here? Every funnel and cohort is built on these.
 3. Which recent launches should I track, and when did each ship? The first readout covers what people ask about.
 4. Are experiments running now, and what metric was each meant to move? Results are judged against the plan.
-5. When should the readout land, and who reads it? (Default: Wednesdays at 09:00, the Head of Product.) Sets the routine.
+5. When should the readout land, and who reads it? (Default: Wednesdays at 09:00, your manager.) Sets the routine.
 
 ## 4. Record
 

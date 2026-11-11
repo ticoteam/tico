@@ -700,7 +700,7 @@ def opening(background=False):
         f"You act as {OWNER}, with their rights, on what they ask in this chat. Decline any approval addressed to them when "
         "they ask; approve only after `tico approval read-back` and their plain yes, and only with their setting on "
         "(AGENT.md, Approvals).",
-        "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Bot: "
+        "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: "
         "`tico task create --owner goal-manager --request-id turn`.",
         "For research, Market and Docs setup or library work ask the Librarian: "
         "`tico task create --owner librarian --request-id turn`.",

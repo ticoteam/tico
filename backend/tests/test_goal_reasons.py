@@ -1,5 +1,5 @@
-"""An optional reason after turning down a Strategy Bot suggestion (spec "Clear Strategy Bot suggestion cards", follow-up:
-criteria 12 and 14): "No, leave it" rejects at once; the person who rejected it may then tell the Strategy Bot why, in one
+"""An optional reason after turning down a Strategy Owner suggestion (spec "Clear Strategy Owner suggestion cards", follow-up:
+criteria 12 and 14): "No, leave it" rejects at once; the person who rejected it may then tell the Strategy Owner why, in one
 line, once (POST /api/v2/goal-proposals/{pid}/note), and a reader who may not read a bot the suggestion is about
 never reads that reason."""
 

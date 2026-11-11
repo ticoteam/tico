@@ -2,7 +2,7 @@
 
 The first time the owner opens a new environment, the app is a wizard at `#/welcome`: say what the team is building
 and confirm its first bets (a strategy draft), name the team, say what it does, build its team chart group by group, add a computer (a Linux Docker runner or a Mac), optionally connect your own
-external agent, and press **Create my team**. Every team gets the assistant, BotOps, the Librarian and the Strategy Bot, and none of them can be archived.
+external agent, and press **Create my team**. Every team gets the assistant, BotOps, the Librarian and the Strategy Owner, and none of them can be archived.
 **Setup picks the chart, not the bots:** the built-ins and any seat a company file marks `live` are the bots on day one, and they work at once. Every other role
 you picked is laid out as a **Recruiting** seat with its job description and reporting line: no bot, repository, computer slot
 or BotOps task until someone picks a bot for it ([A bot's stages](#a-bots-stages)).
@@ -188,7 +188,7 @@ bets, `bet` is null and the answer is as before.
 **Create my team** (`POST /api/v2/setup/complete`) writes to the server only, in one request (a chart of 25 bots takes a fraction of a
 second). It reaches no computer.
 
-- BotOps, the assistant, the Librarian and the Strategy Bot, so they exist before anything is addressed to them, each `planned`
+- BotOps, the assistant, the Librarian and the Strategy Owner, so they exist before anything is addressed to them, each `planned`
   with the card's summary as its description, `bot-<slug>` as its repository, the card's runtime, model and reasoning effort, the human
   it reports to, and the owner as its owner. A model a deployment does not offer falls back to the product default. They are
   Active on day one.
@@ -285,8 +285,8 @@ before, and no Active bot changes stage.
 
 ### Re-org suggestions
 
-Ask the Strategy Bot to compare the company chart with one of Tico's published starter charts. It uses the bundled public models
-only; its suggestions do not read another company's bots or data. The Strategy Bot can propose adding Recruiting seats as one
+Ask the Strategy Owner to compare the company chart with one of Tico's published starter charts. It uses the bundled public models
+only; its suggestions do not read another company's bots or data. The Strategy Owner can propose adding Recruiting seats as one
 confirmation card. No seat is added until the owner confirms, and the server checks the owner's authority when it applies the
 whole change. Members can add seats under themselves or someone below them; only the owner can add seats elsewhere.
 
@@ -415,7 +415,7 @@ An unattended setup task prepares and checks the repository, then reports readin
 path and any missing Tool or Credential to the owner. It leaves activation to the owner in that case.
 An existing repository is checked and updated for the requested work, rather than overwritten.
 
-## The assistant, BotOps, the Librarian and the Strategy Bot are built in
+## The assistant, BotOps, the Librarian and the Strategy Owner are built in
 
 Every team gets all four, and none is a choice: their cards are `required: true` in the wizard, so the wizard
 builds them whatever else is ticked, and they become active once a computer is enrolled ([Activating](#activating)).
@@ -432,11 +432,11 @@ whatever it says.
 The third, the [Librarian](librarian.md#built-in), answers questions from the team's docs. A team from before it existed gets it on
 update, without a click, once a model is chosen and a computer is enrolled; until then its owner gets **Turn on the Librarian** in Ask the Librarian.
 
-The fourth, the [Strategy Bot](goals-and-kpis.md#the-strategy-bot), keeps the KPIs and sets goals' automatic colours. It is
+The fourth, the [Strategy Owner](goals-and-kpis.md#the-strategy-bot), keeps the KPIs and sets goals' automatic colours. It is
 built the same way (a required, bootstrap card; a team from before it existed gets it on update once a model is chosen
 and a computer is enrolled). Its routines start paused: the server arms the daily KPI pass once the first KPI exists, and the
 weekly goals review (the Monday note) is started too, since every install starts at **Suggests actions**; choosing
-**Passive** pauses it ([Your Strategy Bot](strategy-bot.md)).
+**Passive** pauses it ([Your Strategy Owner](strategy-bot.md)).
 
 The Brand Owner (`brand`) keeps the brand book and the Brand card. It is built the same way (a required, bootstrap card; a
 team from before it existed gets it on update once a model is chosen and a computer is enrolled) and sits outside the chart
@@ -504,7 +504,7 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
   the template's name shares a word of the work with the title (not "Engineer" alone), `good` when it fits at all, else empty; strong ones come
   first. Each carries a one-line summary, tags, what it owns and never does, its onboarding questions, what it needs (each
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
-  of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. A
+  of those models to choose another. Built-in bots (BotOps, the Strategy Owner, the message bot) are never applicants. A
   seat placed with a template (`seats.template`) has that template as its one, strong applicant; hiring it with a
   different template is refused, and retitling the seat clears the pin. Each
   applicant has its own page (`#/seat/<id>/<template>`) with a **Hire** box: name, reports to, computer and model.
@@ -564,7 +564,7 @@ Tico ships 125 role templates, by group, each with a card. `templates/catalog/` 
   text file before the first commit, and in the card's own words wherever a human reads it.
 - `required: true` means the wizard always includes it. `bootstrap: true` means the computer
   materializes it itself and no BotOps task is filed for it. Both are true for all four Built-in bots:
-  Assistant, BotOps, Librarian and Strategy Bot.
+  Assistant, BotOps, Librarian and Strategy Owner.
 - `recommend_when` says who a card is for. The team builder reads only `sells_to_businesses` and `sells_to_consumers` (a business-only card is suggested last to a team that sells only to consumers); the rest
   (`publishes_content`, `has_pipeline`, `uses_github`, ...) are descriptive and harmless. The `inbox` card (the message bot) needs a
   human's mailbox chosen whenever it is switched on.

@@ -82,7 +82,7 @@ def bot(api, slug):
 
 
 def with_strategy_bot(api, level=1):
-    """The Strategy Bot at `level` (the owner's choice; Passive unless asked otherwise; None leaves it as built, at the
+    """The Strategy Owner at `level` (the owner's choice; Passive unless asked otherwise; None leaves it as built, at the
     default level), as its own agent credential."""
     from backend.tests.helpers.goal_asks import goal_manager
 

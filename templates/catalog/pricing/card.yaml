@@ -44,7 +44,7 @@ onboarding:
     why: "The discount analysis reads what was really charged, and the rules it is compared with."
   - ask: "Is a price or packaging change being considered now? What would you need to know to decide?"
     why: "The first impact note serves the decision you actually have."
-  - ask: "When should the monthly pricing review land? (Default: the 1st of each month at 09:00, to the Head of Product.)"
+  - ask: "When should the monthly pricing review land? (Default: the 1st of each month at 09:00, to my manager.)"
     why: "Sets the routine's schedule and recipient."
 first_routine:
   title: "Monthly pricing review"

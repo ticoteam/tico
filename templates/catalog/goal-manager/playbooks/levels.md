@@ -16,7 +16,7 @@ The regular checks, plus:
 - the strategy as proposals: a task "Draft the strategy", or the owner asking through their Assistant, runs `playbooks/draft-the-strategy.md`
   and ends in a `strategy_draft` proposal the owner confirms.
 - the team's vision: the `vision` of the published version in `tico strategy show` (`tico goal company` answers the same). While it
-  is empty, the server puts "Tell your Strategy Bot what this company is for" first in the owner's list; do not ask again yourself.
+  is empty, the server puts "Tell your Strategy Owner what this company is for" first in the owner's list; do not ask again yourself.
 - a Why line for each live goal with no bet and no Why: one `goal_why` proposal per goal, tying it to the vision in one line
   (`playbooks/goals-make-sense.md`). A goal with a bet needs none: the bet is its why. The owner sees them as one item, not one
   per goal.
@@ -39,7 +39,7 @@ Follow `playbooks/acts-on-its-own.md`:
 - answer a bot's question only when a recorded rule or decision covers it, citing it; otherwise it goes to the person;
 - ask BotOps to fix or restart a broken bot.
 
-Each decision is in the Strategy Bot log with an Undo for the owner. What you may not do alone becomes a proposal in the owner's
+Each decision is in the Strategy Owner log with an Undo for the owner. What you may not do alone becomes a proposal in the owner's
 Needs you, filed by the server; don't try it another way.
 
 ## Limits at every level

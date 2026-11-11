@@ -13,6 +13,7 @@ import pytest
 from backend import bot_settings as BS
 from backend import company_import
 from backend import never_stuck as N
+from backend import pipeline_presets_more as more
 from backend import pipeline_seats as S
 from backend import pipeline_settings as PS
 from backend import task_engine as E
@@ -20,10 +21,18 @@ from backend import task_requirements as R
 from backend.store import H
 from backend.tests.helpers import engine as X
 
+
+def _made(c):
+    """What ensure_presets made, leaving out the Growth and Success pipelines (test_default_pipelines_more.py)."""
+    return [p for p in PS.ensure_presets(c) if p not in more.PRESETS]
+
+
 ANA, BEN = X.ANA, "human:ben"
+PPM, EPM = "product-pipeline-manager", "engineering-pipeline-manager"  # the chart ids pipeline_seats finds them by
 ROLE_BOTS = {
-    "pm": "product-manager",
-    "em": "engineering-manager",
+    PPM: "pipeline-manager",
+    "pm": "segment-product-owner",  # the Product Owner
+    EPM: "pipeline-manager",
     "builder": "builder",
     "rev-b": "pr-reviewer",
     "rev-a": "pr-reviewer",
@@ -62,11 +71,12 @@ def _seat(c, title, template, filled_by="", at=None):
 
 
 def _team(c):
-    """The six role bots, each seated as setup seats them. The reviewer seats are titled so `rev-a` is Reviewer 1."""
+    """The role bots, each seated as setup seats them. The reviewer seats are titled so `rev-a` is Reviewer 1."""
     for slug, template in ROLE_BOTS.items():
         _role_bot(c, slug, template)
-    _seat(c, "Product Manager", "product-manager", "pm")
-    _seat(c, "Engineering Manager", "engineering-manager", "em")
+    _seat(c, "Product Pipeline Manager", "pipeline-manager", PPM)
+    _seat(c, "Product Owner", "segment-product-owner", "pm")
+    _seat(c, "Engineering Pipeline Manager", "pipeline-manager", EPM)
     _seat(c, "Builder", "builder", "builder")
     _seat(c, "Reviewer 2", "pr-reviewer", "rev-b")
     _seat(c, "Reviewer 1", "pr-reviewer", "rev-a")
@@ -77,7 +87,7 @@ def _owners(record):
 
 
 def _kinds(record):
-    return {s["id"]: [r["kind"] for r in s["requirements"]] for s in record["stages"]}
+    return {s["id"]: [r["condition"] or r["kind"] for r in s["requirements"]] for s in record["stages"]}
 
 
 # ----------------------------------------------------------------------------- seats
@@ -85,8 +95,9 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     assert S.resolve(c) == dict.fromkeys(S.ROLES)
     _team(c)
     assert S.resolve(c) == {
-        S.PRODUCT_MANAGER: "bot:pm",
-        S.ENGINEERING_MANAGER: "bot:em",
+        S.PRODUCT_PIPELINE_MANAGER: "bot:" + PPM,
+        S.PRODUCT_OWNER: "bot:pm",
+        S.ENGINEERING_PIPELINE_MANAGER: "bot:" + EPM,
         S.BUILDER: "bot:builder",
         S.REVIEWER_1: "bot:rev-a",  # its seat's title sorts first
         S.REVIEWER_2: "bot:rev-b",
@@ -94,37 +105,42 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     }
     # An archived bot fills no role; another bot from the template does, even with no seat.
     c.execute("UPDATE bots SET state='archived' WHERE id='pm'")
-    _role_bot(c, "zz-product", "product-manager")
-    assert S.resolve(c)[S.PRODUCT_MANAGER] == "bot:zz-product"
+    _role_bot(c, "zz-product", "segment-product-owner")
+    assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
     # A bot named like a role but from another template is not that role.
-    _role_bot(c, "product-manager-ish", "coo")
-    assert S.resolve(c)[S.PRODUCT_MANAGER] == "bot:zz-product"
+    _role_bot(c, "product-owner-ish", "coo")
+    assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
+    # Every pipeline's manager shares one template: each is the one whose slug is its chart id.
+    _role_bot(c, "growth-experiments-pipeline-manager", "pipeline-manager")
+    c.execute("UPDATE bots SET state='archived' WHERE id=?", (PPM,))
+    assert S.resolve(c)[S.PRODUCT_PIPELINE_MANAGER] is None
+    assert S.resolve(c)[S.ENGINEERING_PIPELINE_MANAGER] == "bot:" + EPM
 
 
 def test_the_ok_person_is_the_first_person_above_the_manager_else_the_owner(c):
     _team(c)
-    assert S.ok_person(c, "bot:pm") == ANA  # nobody above it: the company's owner
+    assert S.ok_person(c, "bot:" + PPM) == ANA  # nobody above it: the company's owner
     assert S.ok_person(c, None) == ANA
-    c.execute("UPDATE bot_config SET reports_to=? WHERE bot='pm'", (BEN,))
-    assert S.ok_person(c, "bot:pm") == BEN
+    c.execute("UPDATE bot_config SET reports_to=? WHERE bot=?", (BEN, PPM))
+    assert S.ok_person(c, "bot:" + PPM) == BEN
     X.left(c, BEN)
-    assert S.ok_person(c, "bot:pm") == ANA
+    assert S.ok_person(c, "bot:" + PPM) == ANA
 
 
 # ----------------------------------------------------------------------------- the presets
 def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles(c):
     _team(c)
     _answers(c, software="")  # a blank answer is yes (D7)
-    assert PS.ensure_presets(c) == ["engineering", "product"]
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == ["engineering", "product"]
+    assert _made(c) == []
     product, engineering = PS.read(c, "product"), PS.read(c, "engineering")
     assert (product["name"], product["prefix"], product["manager_id"], product["factory_id"]) == (
         "Product",
         "P",
-        "bot:pm",
+        "bot:" + PPM,
         "product",
     )
-    assert (engineering["name"], engineering["prefix"], engineering["manager_id"]) == ("Engineering", "E", "bot:em")
+    assert (engineering["name"], engineering["prefix"], engineering["manager_id"]) == ("Engineering", "E", "bot:" + EPM)
     assert c.execute("SELECT name FROM factories WHERE id='product'").fetchone()[0] == "Product"
     assert _owners(product) == {
         "product-ideas": "bot:pm",
@@ -172,7 +188,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         for s in ("engineering-build", "engineering-review-1", "engineering-fixes-2", "engineering-merge")
     ] == [1440, 120, 240, 120]
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
-    assert stages["engineering-merge"]["on_enter"] == {"queue_prs": True}
+    assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
     assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_with_exceptions")
     assert spec["settings"]["rubric"] == "Covers goal, scope, what done looks like"
@@ -185,20 +201,20 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         for s in ("engineering-review-1", "engineering-review-2")
         for r in stages[s]["requirements"]
     )
-    never = [r for s in stages.values() for r in s["requirements"] if r["kind"] in ("pr_merged", "in_release")]
+    never = [r for s in stages.values() for r in s["requirements"] if r["condition"] in ("pr_merged", "in_release")]
     assert len(never) == 2 and not any(r["can_push_past"] for r in never)
 
 
 def test_presets_wait_for_setup_and_a_company_that_builds_no_software_gets_neither(c):
     _team(c)
     _answers(c, software="", completed=False)
-    assert PS.ensure_presets(c) == []  # setup not finished: only General, as every start makes it
+    assert _made(c) == []  # setup not finished: only General, as every start makes it
     _answers(c, software="no")
-    assert PS.ensure_presets(c) == []
-    assert [r[0] for r in c.execute("SELECT id FROM pipelines")] == ["general"]
+    assert _made(c) == []
+    assert [r[0] for r in c.execute("SELECT id FROM pipelines") if r[0] not in more.PRESETS] == ["general"]
     assert not c.execute("SELECT 1 FROM factories WHERE id='product'").fetchone()
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]
+    assert _made(c) == ["engineering", "product"]
 
 
 def test_an_rc1_company_with_general_only_gets_the_pair_and_nothing_else_changes(c):
@@ -209,10 +225,12 @@ def test_an_rc1_company_with_general_only_gets_the_pair_and_nothing_else_changes
     before = PS.read(c, "general")
     events = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]
+    assert _made(c) == ["engineering", "product"]
     assert PS.read(c, "general") == before
     after = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
-    assert after == events + 2
+    assert after == events + 2 + len(more.PRESETS) - len(
+        more.PRIVATE
+    )  # Growth and Success; no Legal Owner or Bookkeeper
 
 
 def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
@@ -220,11 +238,11 @@ def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
     _answers(c, software="yes")
     PS.ensure_presets(c)
     _answers(c, software="no")
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     assert PS.read(c, "product")["retired_at"] and PS.read(c, "engineering")["retired_at"]
     assert company_import.new_company(c)
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     assert not PS.read(c, "product")["retired_at"] and not PS.read(c, "engineering")["retired_at"]
     # A pair someone changed stays when the answer is no: Product as changed, and Engineering, which it files into.
     product = PS.read(c, "product")
@@ -237,7 +255,7 @@ def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
 
 def test_an_untouched_preset_gets_its_roles_once_their_bots_appear_and_a_changed_one_does_not(c):
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]  # setup finished before any role was hired
+    assert _made(c) == ["engineering", "product"]  # setup finished before any role was hired
     assert set(_owners(PS.read(c, "engineering")).values()) == {None}
     _role_bot(c, "builder", "builder")
     _seat(c, "Builder", "builder", "builder")
@@ -286,12 +304,12 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
             },
             {
                 "name": "Ship",
-                "on_enter": {"queue_prs": True},
+                "on_enter": {"act": "github.queue"},
                 "requirements": [
-                    {"kind": "pr_open"},
-                    {"kind": "checks_pass"},
-                    {"kind": "pr_merged"},
-                    {"kind": "in_release", "settings": {"release_repo": "acme/app", "prereleases": True}},
+                    PS.github("pr_open"),
+                    PS.github("checks_pass"),
+                    PS.github("pr_merged"),
+                    PS.github("in_release", release_repo="acme/app", prereleases=True),
                 ],
             },
         ],
@@ -308,7 +326,7 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
         "The release repo on Ship is owner/name, or empty for the server's.",
     ]
     saved = PS.save(c, ANA, record)
-    assert saved["stages"][1]["on_enter"] == {"queue_prs": True}
+    assert saved["stages"][1]["on_enter"] == {"act": "github.queue"}
 
 
 # ----------------------------------------------------------------------------- the handoff
@@ -316,7 +334,7 @@ def _spec_page(c, task, version=3):
     """The Spec page that counted on the task's visit to Spec, as task_pages.attach leaves it (track B)."""
     rid = c.execute("SELECT id FROM requirements WHERE stage_id='product-spec' AND kind='page'").fetchone()[0]
     c.execute(
-        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, heads, attached_by_id, "
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",
         (H.new_id(), task["visit"]["id"], rid, "f-spec", version, "{}", "bot:pm", H.now()),
     )
@@ -366,7 +384,7 @@ def test_in_development_files_one_engineering_task_with_the_product_text_and_the
     assert len(_filed(c, row["id"])) == 2
 
 
-def test_a_handoff_the_product_manager_cannot_file_is_filed_by_the_engine(c):
+def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
     row = _product_task(c)
     c.execute("UPDATE bots SET state='paused' WHERE id='pm'")
     E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
@@ -468,16 +486,19 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
 
 def test_the_software_factory_guide_and_routing_playbook_name_the_seats_templates():
     """The guide and Engineering's route-a-request playbook send work to the seats the presets place (TEMPLATES),
-    not to the 0.5 chart's Head of Product, Head of Engineering or a release-notes Release Manager."""
+    not to the 0.5 chart's Head of Product, Head of Engineering, a Product or Engineering Manager, or a release-notes
+    Release Owner."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
     guide = (root / "docs/software-factory.md").read_text()
     playbook = (root / "templates/catalog/engineering-lead/playbooks/route-a-request.md").read_text()
     for text in (guide, playbook):
-        assert "Head of Product" not in text and "Head of Engineering" not in text
-        assert "`product-lead`" not in text and "`engineering-lead`" not in text
-    for role in (S.PRODUCT_MANAGER, S.ENGINEERING_MANAGER, S.RELEASE_MANAGER):
+        for old in ("Head of Product", "Head of Engineering", "Product Manager", "Engineering Manager"):
+            assert old not in text
+        for old in ("`product-lead`", "`engineering-lead`", "`product-manager`", "`engineering-manager`"):
+            assert old not in text
+    for role in (S.PRODUCT_PIPELINE_MANAGER, S.PRODUCT_OWNER, S.RELEASE_MANAGER):
         assert f"`{S.TEMPLATES[role]}`" in guide
-    assert f"`{S.TEMPLATES[S.RELEASE_MANAGER]}` (Release Manager)" in playbook
-    assert f"`{S.TEMPLATES[S.PRODUCT_MANAGER]}` (Product Manager)" in playbook
+    assert f"`{S.TEMPLATES[S.RELEASE_MANAGER]}` (Release Owner)" in playbook
+    assert f"`{S.TEMPLATES[S.PRODUCT_OWNER]}` (Product Owner)" in playbook

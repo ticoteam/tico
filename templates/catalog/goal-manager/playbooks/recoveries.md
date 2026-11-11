@@ -1,4 +1,4 @@
-# Recoveries and merged asks (the Strategy Bot, level 2)
+# Recoveries and merged asks (the Strategy Owner, level 2)
 
 Only where `tico goal strategy-bot` says `on` and `level` 2 or 3. Below that, the server refuses both; at level 1 a red
 goal

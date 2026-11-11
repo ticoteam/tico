@@ -8,11 +8,11 @@ from backend import bot_settings as BS
 
 
 def strategy_bot(api):
-    """The Strategy Bot every set-up install has."""
+    """The Strategy Owner every set-up install has."""
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)",
+            "VALUES('goal-manager','goal-manager','Strategy Owner','','active',?)",
             (H.now(),),
         )
         c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")

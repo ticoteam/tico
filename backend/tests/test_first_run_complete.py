@@ -5,6 +5,7 @@ General had no manager and BotOps no "Sweep stuck tasks" routine until the serve
 import pytest
 
 from backend import company_file as C
+from backend import pipeline_presets_more as more
 from backend import routines
 from backend.tests.helpers.sample_company import (  # noqa: F401
     booted,
@@ -66,11 +67,12 @@ def sample(api):
     assert done.status_code == 200, done.text
 
 
-# Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps).
+# Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps). With no
+# Pipeline Manager, the Task Manager stands in (pipeline_settings.preset: the ladder).
 MANAGERS = {
-    "onboarding": {"product": "product-manager", "engineering": "engineering-manager"},
-    "company_file": {"product": None, "engineering": None},
-    "sample": {"product": None, "engineering": None},
+    "onboarding": {"product": "product-pipeline-manager", "engineering": "engineering-pipeline-manager"},
+    "company_file": {"product": "task-manager", "engineering": "task-manager"},
+    "sample": {"product": "task-manager", "engineering": "task-manager"},
 }
 
 
@@ -82,10 +84,28 @@ def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_no
     first_run(api)
     after_setup = whole(api)
     # No answer to "Software is the product" is yes: Product and Engineering come too. Their managers are the default
-    # chart's Product Manager and Engineering Manager where setup started them (pipeline_settings.ensure_presets).
+    # chart's Product and Engineering Pipeline Managers where setup started them (pipeline_settings.ensure_presets).
     slugs = {f"bot:{r['id']}": r["slug"] for r in rows(api, "SELECT id, slug FROM bots")}
     managers = {r["id"]: slugs.get(r["manager_id"], r["manager_id"]) for r in after_setup["managers"]}
-    assert managers == {"general": "task-manager", **MANAGERS[first_run.__name__]}
+    # The Growth and Success pipelines' managers: each its own Pipeline Manager once the chart has it, else the
+    # Task Manager (pipeline_presets_more).
+    others = {
+        p: more.manager_role(p) if more.manager_role(p) in slugs.values() else "task-manager"
+        for p in more.PRESETS
+        if p not in more.PRIVATE
+    }
+    # Legal and Finance (private): made only with their owner bot as manager, never the Task Manager.
+    by_template = {
+        r["template"]: r["slug"]
+        for r in rows(
+            api, "SELECT b.slug, s.template FROM bots b JOIN bot_settings s ON s.bot_id = b.id ORDER BY b.slug DESC"
+        )
+    }
+    for p in more.PRIVATE:
+        owner = by_template.get(more.ROLES[p]["manager"])
+        if owner:
+            others[p] = owner
+    assert managers == {"general": "task-manager", **MANAGERS[first_run.__name__], **others}
     assert {"bot": "botops", "routine_key": routines.SWEEP_KEY} in after_setup["routines"]
     restarted = environment(seed_roster=False)
     assert whole(restarted) == after_setup

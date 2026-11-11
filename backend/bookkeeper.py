@@ -169,7 +169,35 @@ def ensure(c, onboarding, auth):
 
     FT.seed_dues(c, H.now())
     ask_for_view(c, _owner(c, auth))
+    from . import pipeline_settings
+
+    pipeline_settings.ensure_private(c)  # the Finance pipeline, once the Bookkeeper is here
     return made
+
+
+FINANCE = "finance"  # the Finance pipeline's preset (backend/pipeline_presets_more.py)
+
+
+def filing(c, owner):
+    """Where a task for `owner` goes, as (pipeline, stage): the private Finance pipeline when the owner is the
+    Bookkeeper and Finance's last work stage is its own, else (None, None) (General). Its own checks, digests and routine turns
+    are filed already taken in and done, so they enter at that last stage (Review) and one "done" finishes them, as in
+    General. A person's task (the view ask, Finance's own Needs-you tasks) never goes there."""
+    if owner != ACTOR:
+        return None, None
+    found = c.execute(
+        "SELECT p.id FROM pipelines p WHERE (p.id=? OR p.preset=?) AND p.retired_at IS NULL AND p.private=1 "
+        "ORDER BY p.id=? DESC LIMIT 1",
+        (FINANCE, FINANCE, FINANCE),
+    ).fetchone()
+    if not found:
+        return None, None
+    last = c.execute(
+        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND retired_at IS NULL "
+        "ORDER BY position DESC LIMIT 1",
+        (found[0],),
+    ).fetchone()
+    return (str(found[0]), str(last[0])) if last and last[1] == ACTOR else (None, None)
 
 
 # ----------------------------------------------------------------------------- the check
@@ -311,6 +339,7 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
             source=event,
         )
         return open_task["id"], "updated"
+    into, start = filing(c, ACTOR)
     made = H.task_create(
         c,
         H.KEEPER,
@@ -320,6 +349,8 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
         deduplicate=False,
         lint=False,
         private=True,
+        pipeline=into,
+        stage=start,
         wake_refs={"wake": event},
         trigger="schedule",
         trigger_source=event,
@@ -523,6 +554,7 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
         state = "on" if rule["active"] else "off"
         lines.append(f"  - {rule['id']}  {rule['name'][:120]}  (by {rule['created_by'] or 'unknown'}, {state})")
     body = "\n".join(lines).encode()[:BODY_BYTES].decode(errors="ignore")
+    into, start = filing(c, ACTOR)
     made = H.task_create(
         c,
         H.KEEPER,
@@ -532,6 +564,8 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
         deduplicate=False,
         lint=False,
         private=True,
+        pipeline=into,
+        stage=start,
         wake_refs={"wake": DIGEST_EVENT},
         trigger="schedule",
         trigger_source=DIGEST_EVENT,

@@ -103,7 +103,7 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   Close. Bots can close tasks that bots asked for.
 - **C9.** General has one stage, To do. *No Doing, Waiting or Review stages. The line under the title says what is going
   on.*
-- **C10.** Ideas: the Product Manager bot gets one wake when Spec has room. It is not chased after that.
+- **C10.** Ideas: the Product Owner bot gets one wake when Spec has room. It is not chased after that.
 - **C11.** Held actions (send this email, spend, publish) become an Approve ask on the task the bot is working on. If
   there is no task, Tico files one for you in General.
 - **C12.** Stale checks are dropped. *Today a model flags tasks that look forgotten and lists them for you.* Bot tasks
@@ -157,7 +157,8 @@ Sign-off A: the parts, the moves, whose turn it is, the never-stuck check, asks,
 
 ## The model: six parts
 
-Customers and manager bots can edit all of it. General, Product and Engineering are presets built from these parts.
+Customers and manager bots can edit all of it. General, Product, Engineering and the Growth and Success pipelines are
+presets built from these parts.
 
 - **Pipeline.** A line of stages with a name, a one-line goal and a manager bot. It ends in two built-in stages: Done and
   Closed.
@@ -166,7 +167,7 @@ Customers and manager bots can edit all of it. General, Product and Engineering 
 - **Requirement.** One thing a task needs before it leaves a stage. Nine kinds, listed below. It is set on the stage, or
   added to one task. It can name a person.
 - **Task.** One pipeline, one stage, one owner right now. Stored: stage, owner, version. Everything else you see is
-  worked out from those and the facts.
+  worked out from those and the metadata.
 - **Link.** Ties a task to a task it filed: a sub-task, or a handoff into another pipeline. A task waits on the tasks it
   filed. At most 5 deep.
 - **Snooze.** Sets a task aside until a date, or with no end. Nothing chases it and it holds no slot.
@@ -189,19 +190,21 @@ That gives three kinds of stage, and no others:
 - **No requirements:** Tasks move on by themselves when the next stage has room. Engineering's On deck is one.
 - **By hand:** tasks leave when someone moves them. Product's Ideas is one.
 
-### The nine requirement kinds
+### The six requirement kinds
 
 1. **Owner says done.** The owner marks the stage's work finished. This is the whole of General.
 2. **OK from someone.** A named person or bot approves. Nothing is attached.
 3. **A page.** The owner attaches a page or file. Jev checks it against a "what to check" line. Optionally a person then
    OKs it.
-4. **PR open.** At least one PR is linked, and none was closed without merging.
-5. **Checks pass.** Every linked PR is green at its newest commit. Tico's own check runs are ignored.
-6. **PR merged.** Every linked PR has merged.
-7. **In a release.** Every merge is inside a published release.
-8. **Linked work done.** Every task filed during this visit to the stage ended Done, not Closed. Zero tasks filed means
+4. **An item.** Something a source keeps, read through one of the source's conditions. A source is a Python module
+   under `backend/item_sources/`; GitHub is the only one. Its item is a PR and its conditions are:
+   - **PR open.** At least one PR is linked, and none was closed without merging.
+   - **Checks pass.** Every linked PR is green at its newest commit. Tico's own check runs are ignored.
+   - **PR merged.** Every linked PR has merged.
+   - **In a release.** Every merge is inside a published release.
+5. **Linked work done.** Every task filed during this visit to the stage ended Done, not Closed. Zero tasks filed means
    not met.
-9. **Answer from someone.** A question with choices, for a named person. Added to one task, never set on a stage.
+6. **Answer from someone.** A question with choices, for a named person. Added to one task, never set on a stage.
 
 Two switches sit on a requirement:
 
@@ -295,7 +298,7 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - If not: Retried 3 times, then a person.
 6. **GitHub**
    - Starts: Checks are running, the PR is in the merge queue, or it merged and waits for a release.
-   - Ends: The fact arrives, by webhook or by the 5-minute read.
+   - Ends: The metadata arrives, by webhook or by the 5-minute read.
    - If not: After 2 hours of checks it is the bot's turn; a drop from the merge queue is the owner's turn at once. A
      release that never comes turns Late.
 7. **Other tasks**
@@ -347,7 +350,7 @@ Anything else is "stopped early", and the never-stuck check wakes it again.
 
 - Entering In development files one Engineering task, linked. The owner may file more.
 - The filed task has the Product task's title and body, and a link to the Spec page at the version that was OK'd
-  (`page:<file id>@<version>`). Its requester is the Product Manager. It starts in On deck.
+  (`page:<file id>@<version>`). Its requester is the Product Owner. It starts in On deck.
 - The Product task leaves when every task filed in this visit ended Done.
 - If one ends Closed, the Product task stays and it is its owner's turn, with the reason shown.
 - **Not validated:** the owner moves the task back to In development with a reason. That is a new visit, so a new
@@ -584,7 +587,38 @@ are chat, not asks. The setup checklist is onboarding and is not touched.
 
 ## Default pipelines
 
-Three presets built from the same parts. A new org gets all three. Customers and manager bots can change any of it.
+Ten presets built from the same parts, in four factories. Customers and manager bots can change any of it.
+
+| Factory | Pipelines |
+|---|---|
+| Product | Product → Engineering |
+| Growth | Growth Experiments; Lead → Opportunity |
+| Success | Customer; Success Experiments |
+| Corporate | Legal; Finance (both private) |
+| none | General |
+
+A new org gets General at its first start, and the rest once its setup finishes (Product and Engineering only if it
+builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
+renamed is never made again. Legal and Finance are made only once their owner bot exists (the Legal Owner, the
+Bookkeeper as Finance Owner), the moment it is made; never with the Task Manager standing in.
+
+### Private pipelines
+
+Every task in a private pipeline is a private task. When a task enters one (filed, filed by a stage, or restored) it is
+made private whatever was asked, and its manager and the company's owner go on its reader list. Its requester and owner
+read it as any private task's do. Nobody else: not the manager's group, not an Admin. It can't be made public while it is
+there. The pipeline itself (name, goal, stages, manager, counts) is seen by everyone, so anyone can file into it.
+
+- Private is set as a pipeline is made (a preset, or a new one), or while it holds no task; never changed on one that
+  holds tasks. Only a person turns it off.
+- Its manager reads its tasks, so it is never the Task Manager (which reads no private task) and never empty. The
+  never-stuck ladder stops at the manager, then a person who reads the task (the company's owner).
+- Its stages have no limit (a limit counts tasks a reader can't see) and no OK from a person.
+- Legal: prefix LG, "Contracts and compliance questions answered before they hold up the business". Intake → Review →
+  Rules check. Manager and every stage: the Legal Owner.
+- Finance: prefix F, "Money in, money out, and the books that show both". Intake → Doing → Review. Manager and every
+  stage: the Finance Owner (Bookkeeper). The Bookkeeper's own tasks (its checks, digests and routines) are filed here,
+  at Review: they are filed already taken in and done, so one done finishes each, as in General.
 
 ### General
 
@@ -596,29 +630,31 @@ Stages: To do → Done · Closed
   with no assignee, the Task Manager is woken to pick one.
 - **Done.** When the bot says done, it is Done. Nobody checks it. You can reopen it with a note.
 
-Roles are found by the seat's template, never by a name: Product Manager, Engineering Manager, Builder, Reviewer 1,
-Reviewer 2 and Release Manager. A software company has all six live. The person on a people OK is the first person
+Roles are found by the seat's template, never by a name: the Product and Engineering Pipeline Managers
+(`pipeline-manager`, each by its chart id), the Product Owner, Builder, Reviewer 1, Reviewer 2 and Release Owner. A
+software company has all of them live, with the QA Owner; a role nobody fills goes up to the pipeline's manager, and a
+manager nobody fills to the Task Manager, until the role's bot appears. The person on a people OK is the first person
 above the pipeline's manager bot on the org chart, else the org owner. Product and Engineering are made for a company
 that answers yes to "Do you build software?" (a blank answer is yes); an untouched pair is retired when it answers no.
 
 ### Product
 
-From an idea to something checked in production. Manager: the Product Manager bot.
+From an idea to something checked in production. Manager: the Product Pipeline Manager bot.
 
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
-- **Ideas.** Owner: Product Manager. Tasks leave by hand. The Product Manager is woken once when Spec has room. To park an idea, snooze it with
+- **Ideas.** Owner: Product Owner. Tasks leave by hand. The Product Owner is woken once when Spec has room. To park an idea, snooze it with
   no end date.
-- **Spec.** Owner: Product Manager. To leave: a Spec page. Jev checks it, then **a person OKs it**. Limit 2. Expected
+- **Spec.** Owner: Product Owner. To leave: a Spec page. Jev checks it, then **a person OKs it**. Limit 2. Expected
   time: 2 days.
-- **In development.** On enter: file an Engineering task. To leave: Linked work done. Owner: Product Manager. Expected
+- **In development.** On enter: file an Engineering task. To leave: Linked work done. Owner: Product Owner. Expected
   time: 5 days.
-- **Validate.** Owner: Product Manager. To leave: a "Checked in production" page that names the version production runs.
+- **Validate.** Owner: Product Owner. To leave: a "Checked in production" page that names the version production runs.
   Jev checks it. No person. Expected time: 1 day.
 
 ### Engineering
 
-From a task to a published release. Manager: the Engineering Manager bot. Builder is one bot, working each task in its
+From a task to a published release. Manager: the Engineering Pipeline Manager bot. Builder is one bot, working each task in its
 own thread.
 
 Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → Merge → Release → Done · Closed
@@ -632,12 +668,12 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   hours.
 - **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built. Jev checks it, then **a
   person OKs it**. Expected time: 4 hours.
-- **Merge.** Owner: Release Manager. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
+- **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
   back to Fixes 2 when the fault needs the Builder. A commit pushed in Merge does not send the task back through Review:
   the merge queue's checks are the gate.
-- **Release.** Owner: Release Manager. To leave: In a release. Can't be pushed past. Expected time: 1 day.
+- **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day.
 
 Also:
 
@@ -646,9 +682,35 @@ Also:
 - One Builder is a single point of failure. If it can't run, every task it owns says Paused and one row lands in a
   person's list.
 
+### Growth and Success
+
+Each pipeline's manager is its own Pipeline Manager (`<pipeline>-pipeline-manager`). A stage's owner is found by its
+role's template; until that bot exists, the stage is the manager's, and a manager nobody fills is the Task Manager
+(the ladder above). Built in `backend/pipeline_presets_more.py`.
+
+- **Growth Experiments** (GX) and **Success Experiments** (SX). Test ideas, keep what works, drop the rest. Every
+  stage belongs to the task's assignee, the teammate running that experiment; with nobody assigned, the manager is
+  woken to pick one.
+  Stages: Ideas → On deck → Running → Measuring → Done · Closed
+  - **Ideas.** Tasks leave by hand. Snooze one to park it.
+  - **On deck.** Plan it. To leave: Owner says done. If it spends money or publishes, the owner adds an OK from a
+    person to that task first, so only those wait on a person. Expected time: 1 day.
+  - **Running.** To leave: Owner says done. Limit 3. Expected time: 7 days.
+  - **Measuring.** To leave: a Results page (the number before and after, keep or drop). Jev checks it. Expected time:
+    2 days. Done is a measured experiment, kept or dropped; Closed is one stopped before it was measured.
+- **Lead** (L). Find leads and bring the qualified ones to Opportunity.
+  Stages: Targets (Lead Generation Owner) → Outreach → Replies → Qualified (Outbound Sales Owner) → Done · Closed.
+  Each of the first three: Owner says done. **Qualified** files an Opportunity on enter; to leave: Linked work done,
+  so a lead is Done when its deal is won.
+- **Opportunity** (O). Turn leads into customers. Stages, all the Inbound Sales Owner's: Talking → Proposal →
+  Closing → Done (won) · Closed (lost). **Proposal:** a Proposal page, Jev checks it, then **a person OKs it**.
+  The others: Owner says done. Nothing is filed on Won.
+- **Customer** (C). Customers reach their goals; referrals are the main result. Stages, all the Success Owner's:
+  Onboarding → Active → Referral asked → Done (referred) · Closed. Each: Owner says done.
+
 ## B. The architecture
 
-Sign-off B: one writer, one read, one check. Events are hints. Facts are saved copies of the outside. The database
+Sign-off B: one writer, one read, one check. Events are hints. Metadata is a saved copy of the outside. The database
 refuses everything else.
 
 ### The picture in words
@@ -656,7 +718,7 @@ refuses everything else.
 - **What happens (hints)** comes in from four places: a person or bot acts (app, tico CLI, MCP); a GitHub webhook (may be
   lost, late or doubled); a Jev verdict, a run ending, a release published; the Heartbeat (every 10 s, no matter what).
 - **The task engine** holds three parts: `move()`, the only writer of stage, owner, status; the never-stuck check, which
-  looks at state, wakes, and calls `move()`; and facts, saved copies of the outside: PRs, checks, releases, Jev verdicts,
+  looks at state, wakes, and calls `move()`; and metadata, saved copies of the outside: PRs, checks, releases, Jev verdicts,
   can a bot run.
 - Under the engine, a **database trigger** refuses any other write.
 - Out of the engine, **`waiting_on()`** is the only read of "whose turn". It is read by: task row, task page, Needs you,
@@ -670,14 +732,14 @@ refuses everything else.
    opened the guard in the same transaction. A lint test also fails the build on any other write.
 3. **One read.** Nothing else works out who has the turn. Screens don't have their own logic for it.
 4. **Events are hints.** A webhook or a button press only makes the check run sooner. The check works from stored state,
-   so a lost event costs at most 10 seconds, or 5 minutes for a GitHub fact.
+   so a lost event costs at most 10 seconds, or 5 minutes for GitHub metadata.
 5. **Effects travel with the move.** The on-enter action and the owner's wake are written in the same transaction as the
    move. Requirements added to the old visit end in it too. Each has a key made from the visit, so running twice does
    nothing.
 
-### Facts
+### Metadata
 
-A fact is Tico's saved copy of something that lives outside the task tables. Requirements read facts. Nothing calls
+Metadata is Tico's saved copy of something that lives outside the task tables. Requirements read metadata. Nothing calls
 GitHub, Jev or a computer while a task is being moved.
 
 - **A PR:** its newest commit, its checks, whether it is in the merge queue, whether it merged. From GitHub.
@@ -688,24 +750,27 @@ GitHub, Jev or a computer while a task is being moved.
 
 Three rules keep them honest:
 
-1. **Two ways in.** An event brings a fact fast: a webhook, Jev finishing. A re-read on a timer brings it for sure: every
+1. **Two ways in.** An event brings metadata fast: a webhook, Jev finishing. A re-read on a timer brings it for sure: every
    5 minutes for any PR a task waits on.
-2. **Newest wins.** Every fact carries a version and the time it was read. An older read can't replace a newer one.
+2. **Newest wins.** All metadata carries a version and the time it was read. An older read can't replace a newer one.
 3. **Read from the database only.** `move()` and `waiting_on()` never wait on the outside. A slow GitHub can't stall a
    move or the check.
 
-Example, Checks pass: GitHub says the checks finished. The fact is saved. The event nudges the check. `waiting_on()`
-reads the fact and finds Checks pass met. `move()` moves the task. If the webhook is lost, the 5-minute read saves the
-same fact and the rest is identical.
+Example, Checks pass: GitHub says the checks finished. The metadata is saved. The event nudges the check. `waiting_on()`
+reads the metadata and finds Checks pass met. `move()` moves the task. If the webhook is lost, the 5-minute read saves the
+same metadata and the rest is identical.
 
 ### Modules
 
 - `task_engine.py`: `move()` and the guard. Also the only writer of snoozes and of requirements added to a task.
-- `requirements.py`: the nine kinds, on a stage or added to one task. Each one answers met, waiting on what, or not met
+- `requirements.py`: the six kinds, on a stage or added to one task. Each one answers met, waiting on what, or not met
   and why.
 - `waiting_on.py`: the one read. Batched for lists and pipeline views.
 - `never_stuck.py`: the check, the ladder, Late, filling open slots.
-- `task_facts.py`: PR and release facts, the 5-minute GitHub read, webhook intake.
+- `item_sources/github.py`: the GitHub source. PR and release metadata, the 5-minute GitHub read, webhook
+  intake, its conditions and its one action, queue.
+- `item_metadata.py`: the saved metadata of every source's items, and what waits on it.
+- `source_actions.py`: a source's actions on entering a stage (act), their undo, and the retries.
 - `stage_effects.py`: file a linked task, queue and dequeue PRs, undo.
 - `answers.py`: a person's answer, Give to…, and the 👎 with its rule. Needs you itself is a read of `waiting_on()`.
 - `pipeline_settings.py`: one record for a pipeline, its stages and requirements. One schema for the editor, the API, hub
@@ -717,7 +782,7 @@ same fact and the rest is identical.
 pipelines     name, goal, manager, private, factory, settings_version
 stages        pipeline, position, kind (work | done | closed), name, purpose,
               owner (a bot | a person | 'assignee'), by_hand, limit, expected_minutes, on_enter
-requirements  stage or visit, kind, settings, can_push_past, who_oks (none | people_only | people_with_exceptions),
+requirements  stage or visit, kind, source, condition (on an item), settings, can_push_past, who_oks (none | people_only | people_with_exceptions),
               person, added_by, line, shows (page + version | email | PR | action), choices, withdrawn_at
               on a stage: every task. on a visit: this task, this time. unique (visit, added_by) for a bot
 tasks         pipeline, stage, owner, assignee, version, status (open | done | closed; written by move() only)
@@ -728,9 +793,9 @@ answers       visit, requirement, by, answer, notes, page_version, at
 feedbacks     exists today: person, subject, rating, reason, rule. Asks become a subject.
 snoozes       task, by, why, until (empty = no end), ended_at
 links         from_task, to_task, visit, kind (sub-task | handoff)
-pr_facts      task, repo, pr, head, checks, merged_commit, queue_state, fact_version, read_at
+item_metadata source, item type, item key, title, fields, metadata_version, read_at
 releases      repo, tag, commit, published_at
-effects       visit, kind (queue_pr | dequeue_pr), key (unique), state, tries, last_error
+effects       visit, kind (act | undo), source, action, item, key (unique), state, tries, last_error
 wakes         existing messages table + wake_key (unique: task, visit, level, try)
 ```
 
@@ -763,7 +828,7 @@ def move(task, to, by, why=None, seen_version=None):
     guard.close()
     v = open_visit(t)
     if to.on_enter.file_into:  file_linked_task(v)       # same transaction
-    if to.on_enter.queue_prs:  add_effect(v, queue_pr)   # row now; the GitHub call is made by the check
+    if to.on_enter.act:        add_effect(v, act)        # row now; the source's call is made by the check
     add_wake(t.owner, v)                             # row now, keyed by visit
     COMMIT
     fill_open_slots(); push to screens
@@ -799,9 +864,9 @@ late. Nothing depends on the exact 10 seconds.
 
 - **Many PRs.** A task links any number of PRs. PR open, Checks pass, PR merged and In a release each look at all of
   them.
-- **Facts are read, not trusted to arrive.** Webhooks are dropped if their delivery id was seen before. Any PR a task
+- **Metadata is read, not trusted to arrive.** Webhooks are dropped if their delivery id was seen before. Any PR a task
   waits on is re-read every 5 minutes, at most 50 PRs per call.
-- **No stale writes.** Each PR fact has a version, compared inside the transaction. An old read can't overwrite a newer
+- **No stale writes.** Each PR's metadata has a version, compared inside the transaction. An old read can't overwrite a newer
   one.
 - **Checks pass** ignores Tico's own check runs. No checks at all after 10 minutes counts as met (C13).
 - **A new commit during Review** puts the review back to Waiting on the reviewer.
@@ -809,7 +874,7 @@ late. Nothing depends on the exact 10 seconds.
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
   commit), Tico saves why and which check failed, PR merged says "Dropped from the merge queue: <reason>", and the
-  owner is told once. Tico never queues it again by itself. The owner (the Release Manager, who may push to PR
+  owner is told once. Tico never queues it again by itself. The owner (the Release Owner, who may push to PR
   branches) queues it again (`tico task queue`), after pushing its own fix if one is needed, or sends the task back to
   Fixes 2. Queuing again is refused while the PR's own checks on its newest commit are running or failing, with the
   reason. A commit pushed in Merge keeps the task in Merge: the reviews of the earlier commit stand for this visit.
@@ -918,7 +983,7 @@ Rules:
 ### S3. The ask screen
 
 Today: the requirement review queue. Today the page to review is a link. New: the page is on the screen. Today: Approve,
-Mark met, Message Product Manager twice. New: Approve and Send back.
+Mark met, Message Product Owner twice. New: Approve and Send back.
 
 **New, desktop.** An approval of a page:
 
@@ -926,7 +991,7 @@ Mark met, Message Product Manager twice. New: Approve and Send back.
 - **Left, the page itself,** shown in full: the heading "Checkout flow: spec", then "Guests can pay without making an
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
-- **Right:** the sentence "Approve the spec for Checkout flow" as the heading; under it "Product Manager · version 2"; a
+- **Right:** the sentence "Approve the spec for Checkout flow" as the heading; under it "Product Owner · version 2"; a
   "Notes" box; buttons "Approve" (main) and "Send back".
 
 The phone view is in [S17](#s17-on-a-phone). What changed since the version you last saw is highlighted in the page.
@@ -1129,13 +1194,13 @@ Today: the pipeline editor.
 **New** (the Product pipeline):
 
 - **Heading:** "Product".
-- **Pipeline fields,** name then value: Goal "Discerning, high-quality specs that ship"; Manager "Product Manager ▾";
-  Factory "Product ▾"; Prefix "P". (No Private switch in 0.6.0-rc.1: saving a private pipeline is refused. Tasks can
-  still be private one by one.)
+- **Pipeline fields,** name then value: Goal "Discerning, high-quality specs that ship"; Manager "Product Owner ▾";
+  Factory "Product ▾"; Prefix "P". (No Private switch in 0.6.0-rc.3: a pipeline is private from its preset, or as it
+  is made through the API. See "Private pipelines".)
 - **Stages,** one panel each, closed (▸) until clicked:
   - "▸ Ideas"
   - "▾ Spec", open, with buttons "↑", "↓" and "Remove" at the right. Its fields: Purpose "A spec a builder can build
-    from"; Owner "Product Manager ▾"; Tasks leave "When requirements are met ▾"; Limit "2"; Expected time "2 days"; On
+    from"; Owner "Product Owner ▾"; Tasks leave "When requirements are met ▾"; Limit "2"; Expected time "2 days"; On
     enter "Nothing ▾". Then the label "To leave", with one requirement row: "▸ Spec page", and at the right, dimmed,
     "Jev, then Ana". Then a button "+ Requirement".
   - "▸ In development"
@@ -1327,7 +1392,7 @@ into a test in phase 1.
   closes. One question per bot per task, so no copies. "Reconnect" rows are read from the bot's state, one per cause, and
   go when the cause goes. A 👎 with a rule stops the repeat.
 - **F7. The Writer woken on every release.** Tightened. In the engine a bot is woken once per visit. A release updates
-  facts and wakes nobody. New: the docs automation (D46) keeps one open task and adds later releases to it.
+  metadata and wakes nobody. New: the docs automation (D46) keeps one open task and adds later releases to it.
 - **F8. The review gate refuses moves, and a second mover retries.** Prevented. One mover. Nothing retries a refused
   move. The bot finishes its work, and the engine moves the task when Checks pass is met.
 
@@ -1349,7 +1414,7 @@ into a test in phase 1.
   be in the release's history. Time plays no part.
 - **F17. Closed in Merge, and the PR still merges.** Tightened. Closing takes the PRs out of the queue in the same step.
   New: if GitHub merges one first, the task shows "PR merged anyway" and the manager bot is told once.
-- **F18. A stale GitHub read overwrites a newer one.** Prevented. Every fact has a version. An older read can't replace a
+- **F18. A stale GitHub read overwrites a newer one.** Prevented. All metadata has a version. An older read can't replace a
   newer one.
 - **F19. Person-owned PRs take a different path.** Prevented. Merging is the Merge stage's on-enter action, done by the
   engine. Who owns the task makes no difference.
@@ -1405,7 +1470,8 @@ How each one works on the engine.
 - **Action items from a meeting.** General tasks.
 - **Moving a task to another pipeline.** It lands in that pipeline's first stage.
 - **Goals.** Not tasks. A goal links to the tasks that serve it.
-- **Private tasks.** Same engine. Who can see them doesn't change.
+- **Private tasks.** Same engine. Who can see them doesn't change, except that entering a private pipeline adds its
+  manager and the company's owner.
 - **Work that needs no code but was filed in Engineering.** Closed with a reason, or moved to General.
 - **An idea you don't want yet.** Snooze it with no end date. It leaves the stage's count.
 
@@ -1430,7 +1496,7 @@ Each feature that exists today, and where it goes.
 - **D10.** GitHub check runs that mirror a task's requirements on its PR.
 - **D11.** Factories and their output counts.
 - **D12.** Waiting for a free worktree. It shows as Paused, with that reason.
-- **D13.** The daily release hour and Release now. A routine on the Release Manager.
+- **D13.** The daily release hour and Release now. A routine on the Release Owner.
 
 ### Folded in: the engine or the check does it
 
@@ -1483,7 +1549,7 @@ Each feature that exists today, and where it goes.
 - **Verdict routing on pass or fail** (verdict_moves): Review is a stage that leaves when the review is attached.
 - **After green: next check or merge wake:** the Checks pass requirement and the check.
 - **PR merged moves the task to the merge step from anywhere:** PR merged is a requirement on Merge. An early merge is
-  just a met fact when the task gets there.
+  just met when the task gets there.
 - **Check timeout passes with no verdict:** dropped.
 - **Timeout refiles to a free pool bot:** Late, then the manager.
 - **Check filed per commit, superseded on a new one** (check_pools): a review page is tied to a commit. A new commit puts
@@ -1492,7 +1558,7 @@ Each feature that exists today, and where it goes.
 - **Conflict or queue failure files a manager task:** the Builder's turn, with the reason. Late goes to the manager.
 - **Merged catch-up over 14 days:** the 5-minute read.
 - **Release found by the name "pending release"** (release_flow): In a release, checked by commit.
-- **Release publish moves tasks on:** the check does, when the fact arrives.
+- **Release publish moves tasks on:** the check does, when the metadata arrives.
 - **Wake rules on entering a step** (rules): `move()` wakes the owner once.
 - **Direct writers** (pipeline_setup, task_blocked, hubdb retire_held_steps, shared_bots, settings_admin): through
   `move()`, or deleted.
@@ -1527,7 +1593,7 @@ A, B and C are approved. This page is the build spec in the repo, and the checks
 
 ### Phase 3: Engineering
 
-- **Builds:** PR and release facts, the 5-minute read, webhook de-duplication. PR open, Checks pass, PR merged, In a
+- **Builds:** PR and release metadata, the 5-minute read, webhook de-duplication. PR open, Checks pass, PR merged, In a
   release. Many PRs per task. Merge with queue and dequeue. The Engineering preset. Product hands off into Engineering.
 - **Done when:** the rig passes with a fake GitHub that loses, delays and repeats webhooks and drops PRs from the queue.
   One real PR goes through Merge and Release. **0.6.0 is published.**
@@ -1582,18 +1648,18 @@ Numbered in order so they can be cited (scenario 1 to 52).
 18. A task is dragged two stages ahead: every skipped requirement is recorded as pushed past, with one reason.
 19. A new org gets the presets: every work stage has an owner and at least one requirement. On deck has none. Tasks leave
     Ideas by hand.
-20. Spec empties while Ideas holds tasks: the Product Manager is woken once.
+20. Spec empties while Ideas holds tasks: the Product Owner is woken once.
 21. Close a Product task in Spec with the spec unmet: it closes at once with the reason.
 22. Close a Product task in a factory: the Done count doesn't change.
 23. Close the Engineering task of a Product task in In development: Product shows it closed with the reason, and it is
-    the Product Manager's turn.
+    the Product Owner's turn.
 24. Close a Product task that has an open Engineering task: that task closes with a note. One whose PR merged stays open.
 25. Save a pipeline where A files into B and B into A: refused with "would loop".
 26. Not validated four times in a row: four new Engineering tasks. Nothing stops a fifth.
 27. Production runs an older version than the release: Jev says "not yet". Nothing is filed.
 28. A new commit lands during Review: the review goes back to Waiting on the reviewer.
 29. A task has two PRs and one merges: it stays in Merge. Both merge: it moves.
-30. The merge queue drops a PR: the task stays in Merge, and it is the Release Manager's turn with the reason.
+30. The merge queue drops a PR: the task stays in Merge, and it is the Release Owner's turn with the reason.
 31. Close an Engineering task in Merge: its PRs leave the queue and never merge.
 32. A stale PR read arrives after a newer one: the recorded commit doesn't change.
 33. A PR merges after a release is cut: the task stays in Release until a release that contains the merge.

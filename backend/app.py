@@ -3269,10 +3269,10 @@ def create_app(settings=None):
         reach.check(c, who, owner, "task", task_id=parent_id)
         asked_botops = None
         if request_id and who.via == "assistant":
-            # The Assistant handing a helper (BotOps, the Strategy Bot, the Librarian; assistant.HELPERS) what the
+            # The Assistant handing a helper (BotOps, the Strategy Owner, the Librarian; assistant.HELPERS) what the
             # person asked for in their own Assistant chat, citing that message (`--request-id turn`), only while the
             # owner lets the Assistant act without asking. BotOps then acts with the person's rights
-            # (delegated_identity, `assistant`); the Strategy Bot and the Librarian work it with their own rights, so
+            # (delegated_identity, `assistant`); the Strategy Owner and the Librarian work it with their own rights, so
             # what only the owner may change (strategy, goals) still reaches the owner as a proposal or a card.
             if H.actor_id(owner) not in assistant_mod.HELPERS or not H.is_bot(owner):
                 raise Problem(

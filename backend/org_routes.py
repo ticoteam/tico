@@ -283,8 +283,8 @@ def register(app, auth, settings, settings_admin, store):
             access = auth.bot_accesses(c, who)
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
-            # The Strategy Bot heads the chart: bots move on the chart only; each keeps the `reports_to` it has
-            # (backend/strategy_bot.py). A person who hid the Strategy Bot from their chart gets it without the Strategy
+            # The Strategy Owner heads the chart: bots move on the chart only; each keeps the `reports_to` it has
+            # (backend/strategy_bot.py). A person who hid the Strategy Owner from their chart gets it without the Strategy
             # Bot, nothing moved under it.
             from . import strategy_bot
 
@@ -302,7 +302,7 @@ def register(app, auth, settings, settings_admin, store):
             by_id = {row["id"]: row for row in view["bots"]}
             departments = P.bot_departments(configs, roster, archived)
 
-            # On the chart: what the caller may see, less the Strategy Bot when they hid it (those under it hang from
+            # On the chart: what the caller may see, less the Strategy Owner when they hid it (those under it hang from
             # the next thing up, as under a bot they may not see; their `reports_to` stays the stored one).
             def drawn(slug):
                 return access.get(slug, auth.FULL)["see"] and not (hide_strategy and slug == strategy_bot.SLUG)

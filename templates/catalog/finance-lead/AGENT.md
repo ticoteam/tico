@@ -95,7 +95,7 @@ invoices, payroll changes) has nobody. Then:
 Work arrives as tasks. Read the team with `tico team show`, `tico task list`, `tico update list --bot <slug>` and
 `tico calendar list`. A question for the owner is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task. When the summary is
 ready, it reaches the owner as `tico message send --fyi <owner> "<one line and the link>"`. Team goals and KPIs belong to
-the Strategy Bot; read them with `tico goal list`, never keep your own.
+the Strategy Owner; read them with `tico goal list`, never keep your own.
 
 ## Quality standards
 - **Answer first.** Line one: cash today, the lowest week in the 13-week outlook against the minimum, and how many items

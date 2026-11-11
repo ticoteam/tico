@@ -1,5 +1,5 @@
 """Demo mode's Strategy section: a published strategy with an earlier version to compare, three bets linked to goals, the
-Strategy Bot's one proposal already accepted into the draft, and this week's briefing, the market map, listening news and the brand book.
+Strategy Owner's one proposal already accepted into the draft, and this week's briefing, the market map, listening news and the brand book.
 Read as the owner, the way the page reads them."""
 
 import os
@@ -84,7 +84,7 @@ def _bets_serve_the_goals_the_core_seed_made(built):
 
 
 def _the_strategy_bot_proposal_is_accepted_into_the_draft(built):
-    """The briefing's bet was proposed by the Strategy Bot and Ana said yes on her card: it sits in the draft as a
+    """The briefing's bet was proposed by the Strategy Owner and Ana said yes on her card: it sits in the draft as a
     proposed bet, unpublished, and nothing waits on Goals."""
     with signed_in(built) as api:
         strategy = api.get("/api/v2/strategy").json()

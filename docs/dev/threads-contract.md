@@ -390,7 +390,7 @@ post's transaction, plus outside destinations linked to the thread (`slack:<chan
   are notified as their level says. A deferred `to_actor` the list leaves out (a task's owner bot, on a task filed into
   a shared chat) is deferred all the same, with its deadline, and the bot a message is written to (a DM's, a Home's)
   takes a Defer never as a Defer: only the other bots it addresses are queued. A person's answer to an ask reaches
-  the bot that asked once, and the Strategy Bot's relayed answer goes to the bot that asked. On a task's own thread the
+  the bot that asked once, and the Strategy Owner's relayed answer goes to the bot that asked. On a task's own thread the
   first bot given a turn is the message's `to_actor` (its job, ride-along and
   `task_delegations` key off it); every other woken bot gets a carrier (§4.4).
 - `GET /api/v2/threads/{thread_id}/reach` (`threads.reaches`) answers the same list for a message not yet sent, given

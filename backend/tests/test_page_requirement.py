@@ -11,6 +11,7 @@ import uuid
 import pytest
 
 from backend import answers as A
+from backend import item_metadata as IM
 from backend import page_verdicts as V
 from backend import pipeline_judges as PJ
 from backend import task_engine as E
@@ -299,35 +300,33 @@ def test_a_failed_check_is_a_persons_to_decide_and_their_ok_meets_it(c, store):
 def _link_pr(c, task_id, repo, number, head):
     now = H.now()
     c.execute(
-        "INSERT INTO task_links (id, task_id, kind, url, repo, number, created_at) VALUES (?,?,?,?,?,?,?)",
-        (H.new_id(), task_id, "pr", f"https://github.com/{repo}/pull/{number}", repo, number, now),
+        "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
+        "VALUES (?,?,?,?,?,?,'github','pr',?,?)",
+        (H.new_id(), task_id, "pr", f"https://github.com/{repo}/pull/{number}", repo, number, f"{repo}#{number}", now),
     )
     _push(c, repo, number, head)
 
 
 def _push(c, repo, number, head, state="open", merged_sha=None):
-    now = H.now()
-    c.execute(
-        "INSERT INTO pr_facts (id, repo, number, state, head_sha, merged_sha, fact_version, read_at, created_at, "
-        "updated_at) VALUES (?,?,?,?,?,?,1,?,?,?) ON CONFLICT(repo, number) DO UPDATE SET head_sha=excluded.head_sha, "
-        "state=excluded.state, merged_sha=excluded.merged_sha",
-        (H.new_id(), repo, number, state, head, merged_sha, now, now, now),
-    )
+    key = f"{repo}#{number}"
+    old = (IM.get(c, "github", "pr", key) or {}).get("fields") or {}
+    IM.save(c, "github", "pr", key, {**old, "state": state, "head_sha": head, "merged_sha": merged_sha}, 1)
 
 
 def test_a_review_page_counts_only_for_the_newest_commit(c, store):
     _pipeline(c, page_settings={"at_head": True, "rubric": "Reviewed"}, line="Review")
     row = _task(c)
     c.execute(
-        "INSERT INTO task_links (id, task_id, kind, url, repo, number, created_at) VALUES (?,?,?,?,?,?,?)",
-        (H.new_id(), row["id"], "pr", "https://github.com/acme/app/pull/12", "acme/app", 12, H.now()),
+        "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
+        "VALUES (?,?,?,?,?,?,'github','pr',?,?)",
+        (H.new_id(), row["id"], "pr", "https://github.com/acme/app/pull/12", "acme/app", 12, "acme/app#12", H.now()),
     )
     fid, _ = _page(c, store)
     with _refused("Tico is still reading acme/app#12"):
         _attach(c, row, "page:" + fid, requirement="review")
     _push(c, "acme/app", 12, "aaa")
     made = _attach(c, row, "page:" + fid, requirement="review")
-    assert json.loads(made["heads"]) == {"acme/app#12": "aaa"}
+    assert json.loads(made["item_versions"]) == {"acme/app#12": "aaa"}
     assert json.loads(made["judged_against"])["context"] == {"task": row["id"], "heads": {"acme/app#12": "aaa"}}
     _say(c, made, "met")
     assert _standing(c, row).met
@@ -352,12 +351,12 @@ def test_a_validate_page_is_judged_against_the_release_its_filed_work_went_out_i
     for tag, at in (("v1.1.0", "2026-11-01T00:00:00Z"), ("v1.2.0", "2026-11-05T00:00:00Z")):
         rid = H.new_id()
         c.execute(
-            "INSERT INTO releases (id, repo, tag, commit_sha, published_at, fact_version, read_at, created_at) "
+            "INSERT INTO github_releases (id, repo, tag, commit_sha, published_at, metadata_version, read_at, created_at) "
             "VALUES (?,?,?,?,?,1,?,?)",
             (rid, "acme/app", tag, "x", at, at, at),
         )
         c.execute(
-            "INSERT INTO release_commits (release_id, commit_sha, included, checked_at) VALUES (?,?,1,?)",
+            "INSERT INTO github_release_commits (release_id, commit_sha, included, checked_at) VALUES (?,?,1,?)",
             (rid, "m1", at),
         )
     made = _attach(c, row, "page:" + _page(c, store)[0])
@@ -567,8 +566,20 @@ def test_a_refused_attach_on_a_private_task_keeps_none_of_its_words(api):
         row = _task(conn)
         conn.execute("UPDATE tasks SET private=1 WHERE id=?", (row["id"],))
         conn.execute(
-            "INSERT INTO task_links (id, task_id, kind, url, repo, number, created_at) VALUES (?,?,?,?,?,?,?)",
-            (H.new_id(), row["id"], "pr", "https://github.com/acme/secret/pull/12", "acme/secret", 12, H.now()),
+            "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                H.new_id(),
+                row["id"],
+                "pr",
+                "https://github.com/acme/secret/pull/12",
+                "acme/secret",
+                12,
+                "github",
+                "pr",
+                "acme/secret#12",
+                H.now(),
+            ),
         )
         fid, _ = _page(conn, store)
     r = api.post(

@@ -18,7 +18,7 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)",
+            "VALUES('goal-manager','goal-manager','Strategy Owner','','active',?)",
             (H.now(),),
         )
         if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('goal-manager','ana')").rowcount:
@@ -147,13 +147,13 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
         ("Senior Software Developer", "pr-reviewer"),
         ("QA engineer (contract)", "issue-triage"),
         ("Security engineer - remote", "security-engineer"),
-        ("Manager, Engineering", "engineering-manager"),
+        ("Manager, Engineering", "engineering-lead"),
         ("Engineer, Security", "security-engineer"),
         ("Manager, Customer Success", "customer-success"),
         ("VP, Product Marketing", "product-marketing"),
         ("Sr. Security Engineer", "security-engineer"),
         ("Vice President, Product Marketing", "product-marketing"),
-        ("Manager (Engineering)", "engineering-manager"),
+        ("Manager (Engineering)", "engineering-lead"),
         ("Analyst (Pricing)", "pricing"),
         ("Software Engineer, Security", "security-engineer"),
         ("Software Engineer (Security)", "security-engineer"),
@@ -204,7 +204,7 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
 def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_job_by_any_of_its_names(api):
     """A job's other names are the job ("CMO", "SDET", "PPC Specialist", "Content Writer"); a word of a whole field is
     not ("Influencer Marketing Manager" is not the Head of Marketing, "Partner Marketing Manager" not the HR Business
-    Partner); a job of a kind may be a template named by rank on the work ("Release Engineer" is the Release Manager)."""
+    Partner); a job of a kind may be a template named by rank on the work ("Release Engineer" is the Release Owner)."""
     _, cards = recruiting._recruitable(api.app.state.onboarding)
     for title, template in (
         ("CMO", "marketing-lead"),

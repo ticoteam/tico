@@ -21,7 +21,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `check-ins.md`: when a KPI slips, ask the goal's owner and record the answer.
 - `goals-make-sense.md`: flag vague or duplicate goals; suggest a measure once or clearer words. Missing optional measures are not a problem.
 - `weekly-goals-review.md`: the short review for the owner.
-- `recoveries.md`: where the Strategy Bot is on at level 2, recoveries for red or stalled goals and merged asks.
+- `recoveries.md`: where the Strategy Owner is on at level 2, recoveries for red or stalled goals and merged asks.
 - `acts-on-its-own.md`: at level 3, decisions on bot tasks for red or stalled goals and clashes between Heads,
   answering bots' questions from recorded rules and decisions, and BotOps asks for broken bots.
 - `owner-chat.md`: a task the owner's Assistant hands you, quoting their words: advice, or the change they asked for.
@@ -37,8 +37,8 @@ to a file, then `tico proposal create --kind <kind> [--goal ID] [--kpi ID] --pay
 | `goal_wording` | `--goal` | `{"title": "...", "body": "...", "bet_id": "..."}` (any of them; `bet_id` links the goal to a bet) |
 | `goal_kpi` | `--goal` | `{"kpi_id": "..."}` to link an existing KPI, or `{"kpi": {"name", "definition", "unit", "direction", "cadence", "source_note"}, "owner": "...", "target": {...}}` for a new one |
 | `kpi_definition` | `--kpi` | any of `{"name", "definition", "unit", "direction", "cadence", "source_note"}` |
-| `goal_why` | `--goal` | `{"why": "one line tying the goal to the vision"}` (only where the Strategy Bot is on, and only for a goal with no bet) |
-| `recovery` | `--goal` | `{"evidence": "...", "options": [{"label": "...", "actions": [...]}], "pick": 0}` (the Strategy Bot at level 2; `playbooks/recoveries.md`) |
+| `goal_why` | `--goal` | `{"why": "one line tying the goal to the vision"}` (only where the Strategy Owner is on, and only for a goal with no bet) |
+| `recovery` | `--goal` | `{"evidence": "...", "options": [{"label": "...", "actions": [...]}], "pick": 0}` (the Strategy Owner at level 2; `playbooks/recoveries.md`) |
 | `kpi_target` | `--kpi` and `--goal` | `{"kind": "improve", "baseline": 40, "target": 65, "deadline": "2026-12-31"}` or `{"kind": "maintain", "min": 40, "max": 60}` |
 | `strategy_draft` | nothing | any of `{"summary", "vision", "sections": {"serve", "sell", "proof", "now", "know", "how", "not", "extra": {key: {"title", "body"}}}, "bets": [{"id"?, "statement", "why"?, "rules_out"?, "wrong_if"?, "cites"?, "status"?}]}`, where `wrong_if` is `{"kind": "kpi", "kpi_id", "direction": "above" \| "below", "threshold", "check_by"}`, `{"kind": "thesis", "market_id", "check_by"}` or `{"kind": "text", "text", "check_by"}`. An optional `"source"` says what prompted it (`bet_tripped`, `lens`, `briefing`). Partial: only the fields you send change. The owner confirms, and confirming writes the draft and the bets as them, at every level (`playbooks/draft-the-strategy.md`, `playbooks/bet-tripped.md`). Publishing stays a separate click of theirs |
 

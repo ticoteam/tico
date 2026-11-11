@@ -29,7 +29,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 1. Which repositories and workflows matter most, and which one gates merging to main? Why: the report starts with the pipeline that blocks people.
 2. How do you deploy today: on merge, on a tag, by hand, and from which workflow? Why: deploy frequency is read from it.
 3. What is too slow for the merge check? (Default: over 15 minutes.) Why: becomes knowledge/thresholds.md.
-4. Who owns the CI configuration and the runners, and who should get a task when the main branch stays red? (Default: the Engineering Manager.) Why: red-main tasks and fix plans go to a named owner.
+4. Who owns the CI configuration and the runners, and who should get a task when the main branch stays red? (Default: the Engineering Team Manager.) Why: red-main tasks and fix plans go to a named owner.
 5. Which day and hour should the report land, and who reads it? (Default: Tuesdays at 09:00, you.) Why: sets the routine.
 
 ## 4. Record

@@ -124,7 +124,7 @@ def advance_to_next_run(org, facts):
 
 def bot_moves(org, facts):
     """The Engineering Lead tries to move the OpenAI builder into Release itself. An org change is no bot's to make and
-    no OK a bot can ask for (backend/proposals.py: the Strategy Bot suggests it in words), so the hub refuses it."""
+    no OK a bot can ask for (backend/proposals.py: the Strategy Owner suggests it in words), so the hub refuses it."""
     return org.api(
         "patch", f"/api/v2/groups/{got(facts, 'release')}", {"add": {"bots": [OPENAI_ID]}}, who=LEAD, wave=W2
     )

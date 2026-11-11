@@ -221,7 +221,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            company day is refused
     tico assistant learn "<line>" [--company]
                                            in a person's own chat: save what they taught you, in their own
-                                           layer (--company: the Strategy Bot, about the company, owner's chat only)
+                                           layer (--company: the Strategy Owner, about the company, owner's chat only)
     tico assistant learned                  what a person's chat bot has learned (What it has learned)
     tico assistant proposals [--proposer botops] [--owner human:ana]
                                            the Confirm cards still waiting for their owner, with their ids
@@ -247,23 +247,23 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            set a goal; a parent is optional. With one, it supports that goal
     tico goal status <id> red|yellow|green|done|dropped "<one sentence>"
                                            set the colour by hand: it sticks (with your name) until handed back
-    tico goal status <id> auto              let the Strategy Bot set the colour again (ends a colour set by hand)
-    tico goal refresh [--goal ID ...]       the Strategy Bot's status pass: work automatic colours out again
+    tico goal status <id> auto              let the Strategy Owner set the colour again (ends a colour set by hand)
+    tico goal refresh [--goal ID ...]       the Strategy Owner's status pass: work automatic colours out again
     tico goal checkin <id> "<words>" [--signal on_track|at_risk|off_track] [--from X] [--kpi ID]
                                            how the owner says it is going, in their words (colours a goal with no KPI)
     tico goal checkin-list <id>             a goal's check-ins, newest first
     tico goal needs-you                     red KPIs on your goals, stale KPIs you own, proposals to confirm
     tico goal company                       the company's Vision and Description (read-only)
-    tico goal strategy-bot                       the Strategy Bot: its level (1 Passive to 3), regular checks and today's
+    tico goal strategy-bot                       the Strategy Owner: its level (1 Passive to 3), regular checks and today's
                                                 Needs you count
     tico goal strategy-bot-merge <person> "<title>" "<question>" <task-id> <task-id>...
-                                           the Strategy Bot at level 2+: one item for several bots' same ask of a person
-    tico goal strategy-bot-level3-offer          the Strategy Bot: record the level-3 offer its Monday note made (when
+                                           the Strategy Owner at level 2+: one item for several bots' same ask of a person
+    tico goal strategy-bot-level3-offer          the Strategy Owner: record the level-3 offer its Monday note made (when
                                                 is due)
     tico goal strategy-bot-decide "<reason>" '<changes json>' [--goal-id ID]
-                                           the Strategy Bot at level 3: one decision alone on bot tasks, logged with
+                                           the Strategy Owner at level 3: one decision alone on bot tasks, logged with
                                            Undo
-    tico goal strategy-bot-log [--before CURSOR] the Strategy Bot log (the owner only): what it decided alone, proposed
+    tico goal strategy-bot-log [--before CURSOR] the Strategy Owner log (the owner only): what it decided alone, proposed
                                                 instead
     tico goal update <id> [--title ...] [--body ...|--body-file f] [--parent ID|--parent ""] [--owner X]
                     [--rank N|--top] [--bet ID|--bet ""]
@@ -324,7 +324,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     tico strategy summary                   the text every run carries
     tico strategy versions [N]              published versions, newest first; N: that version whole
     tico strategy diff --from N --to N      what changed between two versions
-    tico strategy guides                    deprecated: the Strategy Bot's drafting questions; the exercises are lenses
+    tico strategy guides                    deprecated: the Strategy Owner's drafting questions; the exercises are lenses
     tico strategy draft [--summary ...] [--vision ...] [--section KEY=TEXT ...] [--revision N]
     tico strategy publish [--note "..."] [--revision N]
     tico strategy bet add --statement "..." [--why ...] [--rules-out ...] [--status proposed|active] [--rank N]
@@ -347,7 +347,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     tico growth economics [--month M] | numbers [--months N] | kpis | settings [--set KEY=VALUE]
     tico lens list [--market]               the lenses: thought exercises run against the strategy or the market
     tico lens run <id> [--answers-file f.json] [--draft] [--no-wait]
-                                           run one (the owner, the Strategy Bot; a market lens also the Librarian);
+                                           run one (the owner, the Strategy Owner; a market lens also the Librarian);
                                            waits up to 60 s and prints the run with its summary; --draft: the owner's
                                            draft
     tico lens show <run-id>                 one run: answers, result, changes
@@ -445,7 +445,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            change it as yourself (BotOps, the Assistant: as the person who asked; a
                                            confirm one is their Confirm card, a person-only one says why and links the
                                            card; the Assistant cites their words for a direct one)
-    tico release now [--note "..."]         ask the Release Manager to release what waits for a release now
+    tico release now [--note "..."]         ask the Release Owner to release what waits for a release now
     tico release schedule [--on|--off] [--time HH:MM ...] [--manager BOT] [--writer BOT]
                                            show or change the daily release (company time; an owner or admin)
     tico bot status set "<focus>" [--state waiting_human|blocked|...] [--task ID] [--bot X]
@@ -581,7 +581,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     tico group list                         the groups (they nest), with their humans and bots
     tico group update [<group>] [--name N] [--parent G|''] [--lead bot:B|person:P|''] [--add-human H ...]
                      [--add-bot B ...] [--remove-human H ...] [--remove-bot B ...] [--on-behalf-of turn]
-                                           an owner or admin (a lead in its groups), or BotOps / the Strategy Bot as
+                                           an owner or admin (a lead in its groups), or BotOps / the Strategy Owner as
                                            the person who asked: with no <group>, create one from --name; else
                                            rename, move, lead or fill it. A teammate is in one group at a time
     tico group delete <group> [--on-behalf-of turn]
@@ -658,7 +658,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     tico service-key create --label "Billing backend"
                                            the owner or an admin: a key another system uses to file, update and close
                                            tasks (POST /api/v2/inbound/tasks, docs/service-keys.md); shown once
-    tico service-key create --label "Release Manager" --scope update
+    tico service-key create --label "Release Owner" --scope update
                                            the owner: a key a release bot on another install uses to check for,
                                            start and follow an update of this one (/api/v2/system/update), and nothing else
     tico service-key list | revoke <id>     every service key, never its secret; stop one at once
@@ -1910,7 +1910,7 @@ def parser():
         action="store_const",
         const="company",
         default="personal",
-        help="the Strategy Bot in the owner's chat: about the company, not how they like things",
+        help="the Strategy Owner in the owner's chat: about the company, not how they like things",
     )
     s.set_defaults(fn="assistant learn")
     assistant.add_parser(
@@ -2415,7 +2415,7 @@ def parser():
     goal = sub.add_parser(
         "goal",
         help="goals: list, read-back, create and edit",
-        description="Read back goal changes in the owner's Strategy Bot chat. "
+        description="Read back goal changes in the owner's Strategy Owner chat. "
         "Saves nothing without a plain yes; "
         "cite that yes with --on-behalf-of turn (or its message id) on each save.",
     ).add_subparsers(dest="sub")
@@ -2493,7 +2493,7 @@ def parser():
         help="turn or the message id of the owner's plain yes to a goal read-back",
     )
     s.set_defaults(fn="goal update")
-    s = goal.add_parser("refresh", help="the Strategy Bot's status pass: work automatic colours out again")
+    s = goal.add_parser("refresh", help="the Strategy Owner's status pass: work automatic colours out again")
     s.add_argument("--goal", action="append", dest="goal_ids", help="only this goal; repeatable")
     s.set_defaults(fn="goal refresh")
     s = goal.add_parser("checkin", help="how the owner says the goal is going, in their words")
@@ -2511,11 +2511,11 @@ def parser():
     s = goal.add_parser("company", help="the company's Vision and Description (read-only)")
     s.set_defaults(fn="goal company")
     s = goal.add_parser(
-        "strategy-bot", help="the Strategy Bot: its level, regular checks and today's Needs you count per person"
+        "strategy-bot", help="the Strategy Owner: its level, regular checks and today's Needs you count per person"
     )
     s.set_defaults(fn="goal strategy-bot")
     s = goal.add_parser(
-        "strategy-bot-merge", help="the Strategy Bot at level 2+: one item for several bots' same ask of a person"
+        "strategy-bot-merge", help="the Strategy Owner at level 2+: one item for several bots' same ask of a person"
     )
     s.add_argument("person", help="the person they all wait on (a person id)")
     s.add_argument("title")
@@ -2523,11 +2523,11 @@ def parser():
     s.add_argument("tasks", nargs="+", help="2 to 10 task ids waiting on that person")
     s.set_defaults(fn="goal strategy-bot-merge")
     s = goal.add_parser(
-        "strategy-bot-level3-offer", help="the Strategy Bot: record the level-3 offer its Monday note made"
+        "strategy-bot-level3-offer", help="the Strategy Owner: record the level-3 offer its Monday note made"
     )
     s.set_defaults(fn="goal strategy-bot-level3-offer")
     s = goal.add_parser(
-        "strategy-bot-decide", help="the Strategy Bot at level 3: one decision alone on bot tasks, with Undo"
+        "strategy-bot-decide", help="the Strategy Owner at level 3: one decision alone on bot tasks, with Undo"
     )
     s.add_argument("reason", help="why, in one sentence the owner reads in the log")
     s.add_argument(
@@ -2540,7 +2540,7 @@ def parser():
     s.set_defaults(fn="goal strategy-bot-decide")
     s = goal.add_parser(
         "strategy-bot-log",
-        help="the Strategy Bot log (the owner only): what it decided alone and what it proposed instead",
+        help="the Strategy Owner log (the owner only): what it decided alone and what it proposed instead",
     )
     s.add_argument("--before", help="next_before from the previous page")
     s.set_defaults(fn="goal strategy-bot-log")
@@ -2906,7 +2906,7 @@ def parser():
     s.add_argument("--to", dest="to_n", type=int, required=True)
     s.set_defaults(fn="strategy diff")
     s = strategy.add_parser(
-        "guides", help="deprecated: the Strategy Bot's drafting questions; the exercises are lenses"
+        "guides", help="deprecated: the Strategy Owner's drafting questions; the exercises are lenses"
     )
     s.set_defaults(fn="strategy guides")
     bet = strategy.add_parser("bet", help="owner only: add, change or retire a bet").add_subparsers(dest="subsub")
@@ -3753,7 +3753,7 @@ def parser():
     ).add_subparsers(dest="sub")
     s = release.add_parser(
         "now",
-        help="ask the Release Manager to release what waits for a release now (hotfix, "
+        help="ask the Release Owner to release what waits for a release now (hotfix, "
         "midday release); one task listing the tasks",
     )
     s.add_argument("--note", help="why now; goes in the task; a person's note asks even with nothing waiting")
@@ -3769,7 +3769,7 @@ def parser():
         metavar="HH:MM",
         help="a release time in company time; give it twice for two (replaces the times)",
     )
-    s.add_argument("--manager", dest="bot", help="the Release Manager's bot slug; empty finds it by starter template")
+    s.add_argument("--manager", dest="bot", help="the Release Owner's bot slug; empty finds it by starter template")
     s.add_argument("--writer", help="the Technical Writer's bot slug; empty finds it by starter template")
     s.set_defaults(fn="release schedule")
 
@@ -5136,7 +5136,7 @@ def parser():
     who.add_argument(
         "--automatic",
         action="store_true",
-        help="suggestions go to the Automatic bot (Product Manager, then Head of Product)",
+        help="suggestions go to the Automatic bot (the Product Owner, then the Product Lead)",
     )
     s.set_defaults(fn="roadmap settings")
     keys = sub.add_parser(

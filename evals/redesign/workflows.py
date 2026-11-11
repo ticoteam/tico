@@ -1580,7 +1580,7 @@ def publish_release(org, tag):
 
 
 def release_sending(org):
-    """The owner turns on the Release Manager's outbound sending: a bot's webhook to an outside address needs that
+    """The owner turns on the Release Owner's outbound sending: a bot's webhook to an outside address needs that
     switch (backend/webhooks.py), and a bot may not set it itself (as billing_sending does for Billing)."""
     reply = org.api("post", f"/api/v2/bots/{RELEASE_ID}/mail-settings", {"outbound_send": True}, wave=W3)
     if reply.status >= 300:
@@ -1675,14 +1675,14 @@ def wf6_dup(f):
 
 
 def wf6_qa_turn(f):
-    """The QA Bot turn runs on the Release Manager, about v1.4.0."""
+    """The QA Bot turn runs on the Release Owner, about v1.4.0."""
     setup(f, "qa")
     found = runs(f, "qa_runs_2")
     origin = turn_of(found[-1]) if found else None
     turns = got(f, "qa_turns")
     return (origin or {}).get("bot") == RELEASE_ID and len(
         turns
-    ) >= 1, f"turn origin {origin}; Release Manager turns {len(turns)}"
+    ) >= 1, f"turn origin {origin}; Release Owner turns {len(turns)}"
 
 
 def wf6_told(f):
@@ -2148,7 +2148,7 @@ WORKFLOWS = [
         [
             Check("v1.4.0 runs each automation once", W3, wf6_first),
             Check("the repeated v1.4.0 event runs nothing more", W3, wf6_dup),
-            Check("the QA turn runs on the Release Manager", W3, wf6_qa_turn),
+            Check("the QA turn runs on the Release Owner", W3, wf6_qa_turn),
             Check("Updates names v1.4.0 and the feed gets it once", W3, wf6_told),
             Check("v1.4.1 the next day runs both again", W3, wf6_next),
         ],

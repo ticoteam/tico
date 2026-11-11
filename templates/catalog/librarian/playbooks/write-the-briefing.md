@@ -27,7 +27,7 @@ groups them: order the bullets by its groups and leave out its `dropped` ids; ea
 Group the bullets by what they touch (pricing, product, people, customers). When a bullet's entity is one an active bet
 cites, name the bet in the bullet ("touches the bet on <bet id>").
 
-Write down what happened, never what the team should do about it. The bets are the owner's and the Strategy Bot's to
+Write down what happened, never what the team should do about it. The bets are the owner's and the Strategy Owner's to
 weigh.
 
 ## 3. Tag the items and answer the questions, then reply with the page
@@ -62,7 +62,7 @@ as the week's briefing and keeps the items you tagged. A person who asks for a b
 
 ## 4. Finish
 
-Do not message the Strategy Bot about the briefing: the server opens its task when the items touch a bet.
+Do not message the Strategy Owner about the briefing: the server opens its task when the items touch a bet.
 
 Done when: the reply is the page (or the one line when nothing changed), every bullet about a market entity was
 posted as a tagged item first, and the answers were posted with them.

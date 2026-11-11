@@ -46,6 +46,7 @@ FAILED_KEY = "onboarding.company_import_failed"
 # Corporate. Every other built-in stays in the Built-in group whatever team a file names.
 IN_TEAM_BUILT_INS = ("bookkeeper",)
 SOFTWARE_DEPARTMENTS = ("product", "engineering")  # the default chart's seats a company that makes no software skips
+SOFTWARE_TEAMS = ("Product", "Engineering")  # and its teams: their Pipeline Managers are in Operations
 
 
 def plan(onboarding, c, who, text):
@@ -808,7 +809,8 @@ def default_chart(onboarding, c, home):
     rows = [
         row
         for row in F.build({})["employees"]
-        if row["template"] in cards and not (no_software and row["department"] in SOFTWARE_DEPARTMENTS)
+        if row["template"] in cards
+        and not (no_software and (row["department"] in SOFTWARE_DEPARTMENTS or row["team"] in SOFTWARE_TEAMS))
     ]
     keys = {row["id"] for row in rows}
     seats = {}

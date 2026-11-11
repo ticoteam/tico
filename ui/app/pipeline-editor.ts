@@ -30,7 +30,8 @@ interface PeState {
 
 let PE: PeState | null = null;
 
-/** The kinds a stage's requirement can be. An answer is asked on one task, never set on a stage. */
+/** What a stage's requirement can need: a kind, or one of GitHub's conditions (kind `item`, source `github`). An answer
+    is asked on one task, never set on a stage. */
 const PE_KINDS: [string, string][] = [
   ['owner_done', 'Owner says done'],
   ['ok', 'OK from someone'],
@@ -50,6 +51,11 @@ const PE_SWITCHES: Record<string, [string, string][]> = {
 const PE_OK_KINDS = ['ok', 'page'];
 /** Kinds that can never be pushed past (C3). */
 const PE_NEVER_PUSHED = ['pr_merged', 'in_release'];
+/** GitHub's conditions: a requirement of kind `item` on the task's PRs. */
+const PE_GITHUB = ['pr_open', 'checks_pass', 'pr_merged', 'in_release'];
+
+/** What a requirement needs, as the Needs list names it: its kind, or its condition for an item. */
+const peNeeds = (req: PipelineReqRec): string => req.kind === 'item' ? req.condition ?? '' : req.kind;
 const PE_WHO_OKS: [string, string][] = [['people_with_exceptions', 'People, with exceptions'], ['people_only', 'People only']];
 const PE_UNITS: [string, number][] = [['minutes', 1], ['hours', 60], ['days', 1440]];
 const PE_ASSIGNEE = 'assignee';
@@ -86,22 +92,23 @@ const peRow = (fields: string): string => `<div class="pe-row">${fields}</div>`;
 
 function peReqHTML(req: PipelineReqRec, si: number, ri: number): string {
   const at = `data-pe-si="${si}" data-pe-ri="${ri}"`;
-  const okKind = PE_OK_KINDS.includes(req.kind), never = PE_NEVER_PUSHED.includes(req.kind);
-  const kinds = PE_KINDS.map(([k, name]) => `<option value="${k}"${k === req.kind ? ' selected' : ''}>${esc(name)}</option>`).join('');
-  const page = req.kind === 'page';
+  const needs = peNeeds(req);
+  const okKind = PE_OK_KINDS.includes(needs), never = PE_NEVER_PUSHED.includes(needs);
+  const kinds = PE_KINDS.map(([k, name]) => `<option value="${k}"${k === needs ? ' selected' : ''}>${esc(name)}</option>`).join('');
+  const page = needs === 'page';
   const person = req.person_id ? actorLabel(req.person_id) : '';
   // S11: a page's row says who checks it, "Jev, then Ana"; any other kind names its person.
   const who = page ? (person ? `Jev, then ${person}` : 'Jev') : person;
-  return `<details class="pe-req"${req.id ? '' : ' open'}><summary><span class="pe-req-name">${esc(req.line || peKindName(req.kind))}</span>`
+  return `<details class="pe-req"${req.id ? '' : ' open'}><summary><span class="pe-req-name">${esc(req.line || peKindName(needs))}</span>`
     + `<span class="pe-req-who muted">${esc(who)}</span></summary><div class="pe-req-body"><div class="pe-row">`
     + peF('Needs', `<select data-pe-rf="kind" ${at}${req.id ? ' disabled' : ''}>${kinds}</select>`)
     // A page's line is what Jev checks (S11); on any other kind it is the requirement's name.
-    + peF(req.kind === 'page' ? 'Jev checks' : 'Name', `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" placeholder="${esc(peKindName(req.kind))}" autocomplete="off">`) + '</div>'
+    + peF(needs === 'page' ? 'Jev checks' : 'Name', `<input data-pe-rf="line" ${at} maxlength="200" value="${esc(req.line)}" placeholder="${esc(peKindName(needs))}" autocomplete="off">`) + '</div>'
     // A page's person is optional: Jev checks, then that person OKs the version Jev passed.
     + (okKind ? '<div class="pe-row">' + peF(page ? 'Then OK from' : 'From', `<select data-pe-rf="person_id" ${at}>${peChoice([...pePeople(), ...peBots()], req.person_id, page ? 'Nobody' : 'Choose')}</select>`)
       + peF('Who OKs', `<select data-pe-rf="who_oks" ${at}>${PE_WHO_OKS.map(([v, l]) => `<option value="${v}"${v === req.who_oks ? ' selected' : ''}>${l}</option>`).join('')}</select>`) + '</div>' : '')
-    + (req.kind === 'in_release' ? peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`) : '')
-    + '<div class="pe-req-foot">' + (PE_SWITCHES[req.kind] ?? []).map(([key, label]) =>
+    + (needs === 'in_release' ? peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`) : '')
+    + '<div class="pe-req-foot">' + (PE_SWITCHES[needs] ?? []).map(([key, label]) =>
       `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${req.settings[key] === true ? ' checked' : ''}> ${esc(label)}</label>`).join('')
     + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`
     + `<button type="button" class="ghost pe-req-x" data-pe-req-x ${at}>Remove</button></div></div></details>`;
@@ -111,12 +118,12 @@ function peReqHTML(req: PipelineReqRec, si: number, ri: number): string {
     stays chosen under its id. */
 function peOnEnterOptions(state: PeState, stage: PipelineStageRec): string {
   const into = typeof stage.on_enter['file_into'] === 'string' ? stage.on_enter['file_into'] : '';
-  const queue = stage.on_enter['queue_prs'] === true;
+  const queue = stage.on_enter['act'] === 'github.queue';
   const targets = into && !state.pipelines.some(p => p.id === into) ? [...state.pipelines, {id: into, name: into}] : state.pipelines;
   const opt = (value: string, label: string, on: boolean): string => `<option value="${esc(value)}"${on ? ' selected' : ''}>${esc(label)}</option>`;
   return opt('', 'Nothing', !into && !queue)
     + targets.filter(p => p.id !== state.id || p.id === into).map(p => opt('file_into:' + p.id, 'File into ' + p.name, p.id === into)).join('')
-    + opt('queue_prs', 'Queue PRs', queue);
+    + opt('act:github.queue', 'Queue PRs', queue);
 }
 
 function peStageHTML(state: PeState, stage: PipelineStageRec, si: number, count: number): string {
@@ -229,7 +236,10 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
   else if (rf === 'who_oks') req.who_oks = value as PipelineReqRec['who_oks'];
   else if (rf === 'can_push_past') req.can_push_past = checked;
   else if (rf === 'kind') {
-    req.kind = value;
+    const github = PE_GITHUB.includes(value);
+    req.kind = github ? 'item' : value;
+    req.source = github ? 'github' : null;
+    req.condition = github ? value : null;
     req.settings = {};
     const ok = PE_OK_KINDS.includes(value);
     req.who_oks = ok ? 'people_with_exceptions' : 'none';
@@ -241,7 +251,7 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
 
 /** The On enter choice as the record stores it. */
 function peOnEnter(value: string): Record<string, unknown> {
-  if (value === 'queue_prs') return {queue_prs: true};
+  if (value.startsWith('act:')) return {act: value.slice('act:'.length)};
   if (value.startsWith('file_into:')) return {file_into: value.slice('file_into:'.length)};
   return {};
 }
@@ -287,7 +297,7 @@ function peClick(state: PeState, target: Element): void {
   else if (el.hasAttribute('data-pe-down')) swap(1);
   else if (el.hasAttribute('data-pe-stage-x')) { if (d.stages.length > 1) { d.stages.splice(si, 1); peDraw(state); } }
   else if (el.hasAttribute('data-pe-req-add')) {
-    stage.requirements.push({kind: 'owner_done', settings: {}, can_push_past: true, who_oks: 'none', person_id: null, line: ''});
+    stage.requirements.push({kind: 'owner_done', source: null, condition: null, settings: {}, can_push_past: true, who_oks: 'none', person_id: null, line: ''});
     peDraw(state);
   } else if (el.hasAttribute('data-pe-req-x')) { stage.requirements.splice(ri, 1); peDraw(state); }
 }

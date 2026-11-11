@@ -377,7 +377,7 @@ would also pass credentials that belong to other services (such as `CLOUDFLARE_T
 ### Updating from another install
 
 Besides the owner's **Update now**, an [update key](service-keys.md#update-keys) made by the owner can check for, start and
-follow an update through the same routes and the same updater, and do nothing else. A Release Manager on one install uses
+follow an update through the same routes and the same updater, and do nothing else. A Release Owner on one install uses
 one key per install to roll a release out to all of them, canary first ([Releasing](releasing.md#the-release-managers-rollout)).
 `GET /api/v2/system/update` answers with `computers`, the online computers counted by state, so the caller can see them
 follow the server.
@@ -494,7 +494,7 @@ Automatic rollback covers a release that does not come up. To go back by choice:
 
 ## The built-in bots' instructions
 
-The Assistant, BotOps, the Librarian and the Strategy Bot keep their instructions and playbooks in a repository on the computer that
+The Assistant, BotOps, the Librarian and the Strategy Owner keep their instructions and playbooks in a repository on the computer that
 runs them. When a release changes one of those files in its template (`AGENT.md`, `playbooks/`, `skills/`), the computer brings that file up
 before the bot's next run, once per start of the runner; a file the release did not change keeps whatever the bot improved since. What the
 bot had before is kept in the repository's history. The bot's own notes, knowledge, state and playbooks it wrote are never touched

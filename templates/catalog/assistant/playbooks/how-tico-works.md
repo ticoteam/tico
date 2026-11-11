@@ -11,7 +11,7 @@ Read this when a person asks why something is on their queue, or how to make it 
 - **An @mention** from a person, until they reply.
 
 ## Who files what, by default
-- **Release Manager**: one OK to publish per release, and a release-notes task.
+- **Release Owner**: one OK to publish per release, and a release-notes task.
 - **Technical Writer**: one "Docs for vX" task per release, from an automation. Releases can go out several times a day, so these
   pile up. The fix is the automation, not the tasks.
 - **Health Monitor**: findings about bots and computers, including test pings. Repeated test pings are a source to stop.

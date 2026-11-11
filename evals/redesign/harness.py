@@ -146,7 +146,7 @@ def task_id_of(reply):
 class Org(World):
     """The World (world.py: clock, server, runner) with the scenario org on it, in Acme names: Dana (owner) at the top;
     Omar and Priya, people, under her; Engineering Lead under her too (so Omar is a peer of the lead); two builders
-    under the lead; and the Release Manager under Dana. Emails are @acme.example."""
+    under the lead; and the Release Owner under Dana. Emails are @acme.example."""
 
     def __init__(self, extra_bots=None):
         """`extra_bots` adds bots to the org (BotOps, Health, the Librarian...), as {slug: (role, harness)} in the

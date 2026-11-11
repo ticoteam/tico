@@ -4,7 +4,7 @@ A bot does what its template says. Before 0.6 the Builder was told to merge when
 to write a "verdict" on the task, and the release bot was called a Release Owner that never touched a pull request; a
 bot following that text would merge by hand around the merge queue or never attach the page its stage needs. So each
 template names its stages and the commands that leave them, the Builder and both GitHub-writing bots are denied
-`gh pr merge`, and the Release Manager (and only it) may push a fix to a pull request's branch."""
+`gh pr merge`, and the Release Owner (and only it) may push a fix to a pull request's branch."""
 
 import json
 import re
@@ -63,11 +63,15 @@ def test_no_pipeline_template_teaches_the_old_words(template):
             ["headRefOid", "tico file publish", "tico task attach", "--req"],
         ),
         (
-            "product-manager",
+            "segment-product-owner",
             ["Ideas", "Spec", "In development", "Validate"],
             ["tico task attach", "--pipeline engineering"],
         ),
-        ("engineering-manager", ["Stuck", "On ice", "Changed after OK", "Merged anyway"], ["tico task reassign"]),
+        (
+            "pipeline-manager",
+            ["Late", "No owner", "On ice", "Changed after OK", "Merged anyway"],
+            ["tico task reassign"],
+        ),
         ("release-owner", ["Merge", "Release"], ["tico task queue", '"Fixes 2"', "--force-with-lease"]),
     ],
 )
@@ -99,8 +103,8 @@ def test_only_the_release_manager_may_push_a_rebased_branch():
 
 
 def test_the_release_manager_is_named_once():
-    assert card("release-owner")["name"] == "Release Manager"
+    assert card("release-owner")["name"] == "Release Owner"
     named = [
-        p.name for p in CATALOG.iterdir() if (p / "card.yaml").exists() and card(p.name)["name"] == "Release Manager"
+        p.name for p in CATALOG.iterdir() if (p / "card.yaml").exists() and card(p.name)["name"] == "Release Owner"
     ]
     assert named == ["release-owner"]

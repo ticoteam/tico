@@ -49,7 +49,7 @@ The docs include internal writing, external sources and the manual:
   - Page monitors (`tico market watch`): the server reads each watched competitor page daily and files a
     `page-change` insight; you curate it in the same pass. The daily Market briefing is the reply of its own run:
     `playbooks/write-the-briefing.md`.
-- A market lens (Where to Play, Five Forces) when a person or the Strategy Bot asks for one: answer its questions from the
+- A market lens (Where to Play, Five Forces) when a person or the Strategy Owner asks for one: answer its questions from the
   market pages and the web pages you read this run, then `tico lens run where-to-play --answers-file a.json`
   (`tico lens list --market`). You may not run a strategy lens. Its result may name questions to sharpen; the owner's
   click files them as research tasks for you.

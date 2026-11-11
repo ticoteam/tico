@@ -55,7 +55,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Pages | HTML pages bots publish and keep current ([guide](pages.md)): a file with a cadence, a data date and a status line. |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |
 | Assistant | The signed-in person's own private Assistant chat ([guide](assistant.md)): ask, and confirm what it proposes. |
-| Goals | What every person and bot is for ([guide](goals-and-kpis.md)): goals with a colour the Strategy Bot works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms. |
+| Goals | What every person and bot is for ([guide](goals-and-kpis.md)): goals with a colour the Strategy Owner works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms. |
 | KPIs | Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, evidence and a quality, never edited; a correction supersedes the old one. |
 | Usage | Estimated model spend per bot ([guide](usage.md)): tokens counted by each run's computer, priced at list price. |
 | Health | Whether the installation is working. |

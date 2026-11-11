@@ -2,6 +2,7 @@
 
 import difflib
 import json
+import logging
 from types import SimpleNamespace
 
 from clients.catalog import free_slug, slug_from_name
@@ -504,6 +505,20 @@ class SettingsAdmin:
         H.event(c, who.actor, report_managers.EVENT, bot, {"op": op, "manager": H.actor_id(who.actor)})
         return result
 
+    @staticmethod
+    def _private_pipelines(c):
+        """Legal and Finance are made the moment their owner bot is (pipeline_settings.ensure_private). Best effort in
+        its own savepoint: making a bot never fails on it, and the next start tries again."""
+        from . import pipeline_settings
+
+        c.execute("SAVEPOINT private_pipelines")
+        try:
+            pipeline_settings.ensure_private(c)
+        except Exception:
+            c.execute("ROLLBACK TO private_pipelines")
+            logging.getLogger(__name__).exception("private pipelines")
+        c.execute("RELEASE private_pipelines")
+
     def create_bot(self, c, who, body):
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
@@ -668,6 +683,8 @@ class SettingsAdmin:
         from .finance import actions as FA
 
         FA.revalidate_org(c)  # a new bot joins the org chart Finance's grants follow (spec 7.5)
+        if body.template:
+            self._private_pipelines(c)
         if not body.model and config.get("gateway"):
             self._template_gateway_model(c, bot_id, config)
         from .report_order import arrive
@@ -853,7 +870,7 @@ class SettingsAdmin:
 
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
-        # The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, the Brand Owner, the Updates
+        # The assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Bookkeeper, the Brand Owner, the Updates
         # Owner and the Automations Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,

@@ -49,7 +49,7 @@ onboarding:
     why: "Hygiene flags and calendar questions go to a named owner."
   - ask: "When a request ships, who tells the customers who asked, and how?"
     why: "Sets who the ship notice list goes to. I prepare it; a human sends it."
-  - ask: "When should the weekly product ops review land? (Default: Wednesdays at 09:00, to the Head of Product.)"
+  - ask: "When should the weekly product ops review land? (Default: Wednesdays at 09:00, to my manager.)"
     why: "Sets the routine's schedule and recipient."
 first_routine:
   title: "Weekly product ops review"

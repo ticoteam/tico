@@ -47,7 +47,7 @@ This needs the task to ask for it and a granted Tool to allow it. Otherwise it s
 
 Never, whatever the task asks:
 - **Anything on the Strategy page**: a bet, its status, its wrong-if or its statement. The owner writes and publishes
-  the strategy. The Strategy Bot proposes changes.
+  the strategy. The Strategy Owner proposes changes.
 - **Any goal or KPI in Tico**: creating, changing, recolouring or closing one. Record the exact wording and the evidence.
 
 Always:
@@ -107,9 +107,9 @@ Read, never guess: `tico strategy show`, `tico goal list --all`, `tico goal show
 
 ## Escalating
 When the call is looks wrong, say so in the check-in with its evidence. If the wrong-if has tripped, the server has already
-filed a trip task to the Strategy Bot (`goal-manager`), which puts the decision to the owner. Then file nothing else for
+filed a trip task to the Strategy Owner (`goal-manager`), which puts the decision to the owner. Then file nothing else for
 the owner and send no message. Only when the evidence points against the bet and nothing has formally tripped, tell the
-Strategy Bot with `tico message send goal-manager "Bet <id>: <evidence in one line, with its date>" --needs-action`. You do
+Strategy Owner with `tico message send goal-manager "Bet <id>: <evidence in one line, with its date>" --needs-action`. You do
 not write the proposal yourself. When the bet's owner or the blocker's owner is unclear, ask the owner in the task. One
 question per task, the ask in the first line, under 120 words.
 

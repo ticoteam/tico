@@ -539,7 +539,7 @@ def instruction(c, who, ref):
         refuse("That message was edited after it was posted, so it does not say what they asked")
     room = H.conversation(c, msg["conversation_id"]) if msg else None
     refs = (msg or {}).get("refs") or {}
-    # Only the person's own Assistant room: the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`) is history.
+    # Only the person's own Assistant room: the owner's earlier Strategy Owner chat (`rooms.STRATEGY_ROOM`) is history.
     if (
         not msg
         or msg["sender_id"] != who.actor
@@ -1120,15 +1120,15 @@ def describe(c, method, path, body, viewer=None, admins=()):
         (
             r"/api/v2/strategy-bot/checks",
             lambda g: (
-                "Turn the Strategy Bot's regular checks on"
+                "Turn the Strategy Owner's regular checks on"
                 if body.get("on")
-                else "Turn the Strategy Bot's regular checks off"
+                else "Turn the Strategy Owner's regular checks off"
             ),
         ),
         (
             r"/api/v2/strategy-bot/level",
             lambda g: (
-                "Set how much the Strategy Bot does: "
+                "Set how much the Strategy Owner does: "
                 + {1: "passive", 2: "suggests actions", 3: "acts on its own"}.get(body.get("level"), "a level")
             ),
         ),
@@ -1528,8 +1528,8 @@ def create_proposal(
 
 # ------------------------------------------------------------------ the room
 def room_bot(settings, room):
-    """The bot that talks in this person's own room: the Assistant, and the Strategy Bot in the owner's earlier
-    Strategy Bot chat (its old cards and their results)."""
+    """The bot that talks in this person's own room: the Assistant, and the Strategy Owner in the owner's earlier
+    Strategy Owner chat (its old cards and their results)."""
     return strategy_bot.SLUG if (room or {}).get("room_key") == rooms.STRATEGY_ROOM else settings.assistant_bot
 
 
@@ -1573,8 +1573,8 @@ def ensure_room(c, actor, bot):
 
 
 # ------------------------------------------------------------------ one Assistant for everyone (docs/assistant.md)
-# Every person, the owner included, has one chat: their Assistant. The Strategy Bot, the Librarian and BotOps are
-# helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Bot
+# Every person, the owner included, has one chat: their Assistant. The Strategy Owner, the Librarian and BotOps are
+# helpers it hands work to (`HELPERS`, backend/app.py task_create). The owner's earlier chat with the Strategy Owner
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
 # (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
@@ -1582,7 +1582,7 @@ HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.COUNSEL)
 
 
 def strategy_on(c):
-    """Whether this install has its Strategy Bot (every install does once it is set up)."""
+    """Whether this install has its Strategy Owner (every install does once it is set up)."""
     row = H.bot(c, strategy_bot.SLUG)
     return bool(row) and row["state"] not in ("archived", "planned")
 
@@ -1597,7 +1597,7 @@ def chat_name(c, settings, bot):
 
 
 def find_strategy_room(c, actor=None):
-    """The owner's earlier Strategy Bot chat: the owner seat's one room. With `actor`, only while it is theirs."""
+    """The owner's earlier Strategy Owner chat: the owner seat's one room. With `actor`, only while it is theirs."""
     row = c.execute(
         "SELECT id FROM conversations WHERE scope='personal' AND room_key=? AND closed_at IS NULL "
         "ORDER BY created_at LIMIT 1",
@@ -1608,7 +1608,7 @@ def find_strategy_room(c, actor=None):
 
 
 def move_strategy_room(c, actor, to):
-    """The earlier Strategy Bot chat goes with the owner seat to `to`, the new owner, as history. A card still in it
+    """The earlier Strategy Owner chat goes with the owner seat to `to`, the new owner, as history. A card still in it
     is withdrawn: it ran as the old owner, who is no longer the owner."""
     room = find_strategy_room(c)
     if not room or room.get("owner_id") == to:
@@ -1628,7 +1628,7 @@ def move_strategy_room(c, actor, to):
 
 
 def migrate(c, settings):
-    """Every start (backend/store.py), idempotent: a card still waiting in the owner's earlier Strategy Bot chat moves
+    """Every start (backend/store.py), idempotent: a card still waiting in the owner's earlier Strategy Owner chat moves
     to its owner's Assistant room, with its card posted there, so it stays where they look and its result lands there.
     Moving is safe: a card runs only on its owner's own click, as them, whichever room it sits in, and a card of an
     earlier owner was already withdrawn when the seat moved on (`move_strategy_room`). Each card moves once: after the
@@ -1661,7 +1661,7 @@ def migrate(c, settings):
 
 
 def earlier_chat(c, settings, who):
-    """ "Earlier chats" on the owner's Assistant page: their earlier Strategy Bot chat, read-only (GET
+    """ "Earlier chats" on the owner's Assistant page: their earlier Strategy Owner chat, read-only (GET
     /api/v2/conversations/<id>/messages), once it has a message. None for anyone else."""
     if who.role != "owner":
         return None
@@ -1729,7 +1729,7 @@ def action_view(row, c=None):
         "result": result,
     }
     if c is not None and view["proposer"] == "assistant" and view["conversation_id"]:
-        # A card the Strategy Bot put in the owner's earlier chat with it says it is the Strategy Bot's, by its name.
+        # A card the Strategy Owner put in the owner's earlier chat with it says it is the Strategy Owner's, by its name.
         if (H.conversation(c, view["conversation_id"]) or {}).get("room_key") == rooms.STRATEGY_ROOM:
             view["by_name"] = strategy_bot.name(c)
     m = re.fullmatch(r"/api/v2/bots/([^/]+)/repositories", view["path"] or "")

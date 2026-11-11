@@ -20,13 +20,13 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
-    # The /api/v2/ceo-bot path is the Strategy Bot's old one: clients built before the rename still call it, so it
+    # The /api/v2/ceo-bot path is the Strategy Owner's old one: clients built before the rename still call it, so it
     # stays a hidden alias of the route under it.
     @app.get("/api/v2/ceo-bot", include_in_schema=False)
     @app.get("/api/v2/strategy-bot")
     def strategy_bot_settings(request: Request):
-        """The Strategy Bot's name, level and regular checks (backend/strategy_bot.py). How many items it put in each
-        person's Needs you today is the owner's, an admin's and the Strategy Bot's to read; anyone else sees only their
+        """The Strategy Owner's name, level and regular checks (backend/strategy_bot.py). How many items it put in each
+        person's Needs you today is the owner's, an admin's and the Strategy Owner's to read; anyone else sees only their
         own count."""
         who = request.state.identity
         auth.domain(who)

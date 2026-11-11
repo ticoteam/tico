@@ -9,10 +9,10 @@ import json
 import pytest
 
 from backend import heartbeat as HB
-from backend import merge_queue as MQ
+from backend.item_sources import github as MQ
 from backend import never_stuck as NS
 from backend import task_engine as E
-from backend import task_facts as F
+from backend.item_sources import github as F
 from backend import task_requirements as R
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -40,9 +40,14 @@ def engineering(c, release=None):
         "eng",
         "Engineering",
         stages=(
-            {"name": "Build", "owner": B, "requirements": [{"kind": "pr_open"}, {"kind": "checks_pass"}]},
-            {"name": "Merge", "owner": RM, "on_enter": {"queue_prs": True}, "requirements": [{"kind": "pr_merged"}]},
-            {"name": "Release", "owner": RM, "requirements": [{"kind": "in_release", "settings": release or {}}]},
+            {"name": "Build", "owner": B, "requirements": [X.github("pr_open"), X.github("checks_pass")]},
+            {
+                "name": "Merge",
+                "owner": RM,
+                "on_enter": {"act": "github.queue"},
+                "requirements": [X.github("pr_merged")],
+            },
+            {"name": "Release", "owner": RM, "requirements": [X.github("in_release", settings=release or {})]},
         ),
         manager=EM,
     )
@@ -62,7 +67,7 @@ def seen(c, gh, number=1):
 
 def stand(c, task_id, kind):
     row = E.task(c, task_id)
-    return next(s for s in R.standings(c, row) if s.requirement["kind"] == kind)
+    return next(s for s in R.standings(c, row) if (s.requirement["condition"] or s.requirement["kind"]) == kind)
 
 
 def line(c, task_id, kind):
@@ -105,6 +110,17 @@ def back(c, task_id):
     assert MQ.pull(c, merge, X.ANA) == [] and effects(c, task_id) == owed
 
 
+def age(c, field, at, number=None):
+    """Move one time of the saved PR metadata back (every PR, or one): `read_at` and `updated_at` are the item's,
+    the others its fields."""
+    where = "source='github' AND item_type='pr'" + (" AND item_key LIKE ?" if number else "")
+    args = (f"%#{number}",) if number else ()
+    if field in ("read_at", "updated_at"):
+        c.execute(f"UPDATE item_metadata SET {field}=? WHERE {where}", (at, *args))
+    else:
+        c.execute(f"UPDATE item_metadata SET fields=json_set(fields, '$.{field}', ?) WHERE {where}", (at, *args))
+
+
 def later(minutes=10):
     return H.shift(H.now(), minutes=minutes)
 
@@ -122,7 +138,7 @@ def test_pr_open_says_what_is_missing_and_a_closed_pr_counts_only_alone(c):
     task_id = new(c)
     assert line(c, task_id, "pr_open") == (R.NOT_MET, B, "No PR linked")
     H.task_link(c, X.ANA, task_id, f"https://github.com/{REPO}/pull/1")
-    assert line(c, task_id, "pr_open") == (R.WAITING, R.GITHUB, "Reading the PR from GitHub")
+    assert line(c, task_id, "pr_open") == (R.WAITING, "github", "Reading the PR from GitHub")
     F.save_pr(c, REPO, 1, {"state": "closed", "head_sha": "a"}, 1)
     assert line(c, task_id, "pr_open") == (R.NOT_MET, B, "acme/app#1 was closed without merging")
     H.task_link(c, X.ANA, task_id, f"https://github.com/{REPO}/pull/2")
@@ -137,12 +153,12 @@ def test_checks_pass_reads_the_checks_at_the_newest_commit(c):
     F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": checks}, 1)
     assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#1: unit")
     F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "pending"}]}, 2)
-    assert line(c, task_id, "checks_pass") == (R.WAITING, R.GITHUB, "Checks running")
-    c.execute("UPDATE pr_facts SET checks_started_at=?", (H.shift(H.now(), hours=-3),))
+    assert line(c, task_id, "checks_pass") == (R.WAITING, "github", "Checks running")
+    age(c, "checks_started_at", H.shift(H.now(), hours=-3))
     assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks still running after 2 hours")
     F.save_pr(c, REPO, 1, {"head_sha": "b"}, 3)  # a new commit: no checks known on it yet
-    assert line(c, task_id, "checks_pass") == (R.WAITING, R.GITHUB, "Waiting for checks")
-    c.execute("UPDATE pr_facts SET head_seen_at=?", (H.shift(H.now(), minutes=-11),))
+    assert line(c, task_id, "checks_pass") == (R.WAITING, "github", "Waiting for checks")
+    age(c, "head_seen_at", H.shift(H.now(), minutes=-11))
     assert line(c, task_id, "checks_pass") == (R.MET, None, "No checks on this repo")  # C13
     F.save_pr(
         c,
@@ -166,26 +182,26 @@ def test_in_release_waits_for_a_release_that_holds_the_merge(c):
     engineering(c)
     task_id = new(c, 1)
     row = E.task(c, task_id)
-    requirement = c.execute("SELECT * FROM requirements WHERE kind='in_release'").fetchone()
+    requirement = c.execute("SELECT * FROM requirements WHERE condition='in_release'").fetchone()
     req = R.get(c, requirement[0])
-    assert R.KINDS["in_release"](c, row, req, None).line == "Reading the PR from GitHub"
+    assert R.KINDS["item"](c, row, req, None).line == "Reading the PR from GitHub"
     F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a"}, 1)
-    assert (R.KINDS["in_release"](c, row, req, None).state, R.KINDS["in_release"](c, row, req, None).line) == (
+    assert (R.KINDS["item"](c, row, req, None).state, R.KINDS["item"](c, row, req, None).line) == (
         R.WAITING,
         "Not merged yet",
     )
     F.save_pr(c, REPO, 1, {"state": "merged", "merged_sha": "m", "merged_at": H.now()}, 2)
-    assert R.KINDS["in_release"](c, row, req, None).line == "Reading releases"
+    assert R.KINDS["item"](c, row, req, None).line == "Reading releases"
     F.saw_releases(c, REPO, 3)
-    found = R.KINDS["in_release"](c, row, req, None)
+    found = R.KINDS["item"](c, row, req, None)
     assert (found.state, found.line) == (R.MET, "This repo doesn't publish releases")  # C31
     F.save_release(c, REPO, {"tag": "v2.0.0-rc.1", "commit_sha": "r1", "published_at": H.now()}, 4)
     rc = F.releases(c, REPO, prereleases=True)[0]
     F.save_included(c, rc["id"], "m", True)
-    assert R.KINDS["in_release"](c, row, req, None).line == "Waiting for a release of acme/app"  # a dash: pre-release
-    found = R.KINDS["in_release"](c, row, {**req, "settings": {"prereleases": True}}, None)
+    assert R.KINDS["item"](c, row, req, None).line == "Waiting for a release of acme/app"  # a dash: pre-release
+    found = R.KINDS["item"](c, row, {**req, "settings": {"prereleases": True}}, None)
     assert (found.state, found.line) == (R.MET, "In v2.0.0-rc.1")
-    found = R.KINDS["in_release"](c, row, {**req, "settings": {"release_repo": "acme/server"}}, None)
+    found = R.KINDS["item"](c, row, {**req, "settings": {"release_repo": "acme/server"}}, None)
     assert found.line == "Reading releases"  # the release repo's own releases, not the PR's
 
 
@@ -194,8 +210,8 @@ def test_pr_merged_off_the_merge_stage_is_the_owner_s(c):
     task_id = new(c, 1)
     F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a"}, 1)
     row = E.task(c, task_id)
-    req = R.get(c, c.execute("SELECT id FROM requirements WHERE kind='pr_merged'").fetchone()[0])
-    found = R.KINDS["pr_merged"](c, row, req, None)
+    req = R.get(c, c.execute("SELECT id FROM requirements WHERE condition='pr_merged'").fetchone()[0])
+    found = R.KINDS["item"](c, row, req, None)
     assert (found.state, found.on, found.line) == (R.NOT_MET, B, "Not merged yet")
 
 
@@ -204,16 +220,16 @@ def test_entering_merge_owes_one_queue_per_pr_and_github_queues_it(company):
     gh = FakeGitHub()
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
-        assert effects(c, task_id) == [("queue_pr", "owed")]
+        assert effects(c, task_id) == [("act", "owed")]
         assert MQ.queue(c, E.task(c, task_id), E.SYSTEM) == []  # owed once per key
-        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "Queuing the PR")
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "Queuing the PR")
     assert MQ.run(company, gh) == 1
     assert MQ.run(company, gh) == 0
     assert [call[0] for call in gh.calls].count("enqueue") == 1
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "done")]
+        assert effects(c, task_id) == [("act", "done")]
         assert F.pr(c, REPO, 1)["queue_state"] == "queued"
-        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
         assert "pr_queued" in X.events(c, task_id)
     gh.merge(REPO, 1)
     gh.publish(REPO, "v1.0.0")
@@ -232,7 +248,7 @@ def test_a_pr_whose_fact_comes_late_is_queued_when_it_comes(c):
     gh = FakeGitHub()
     gh.open_pr(REPO, 1)
     seen(c, gh)
-    assert effects(c, task_id) == [("queue_pr", "owed")]
+    assert effects(c, task_id) == [("act", "owed")]
 
 
 def test_a_draft_that_reaches_merge_is_marked_ready_and_queued(company):
@@ -247,7 +263,7 @@ def test_a_draft_that_reaches_merge_is_marked_ready_and_queued(company):
     assert [call[0] for call in gh.calls if call[0] in ("ready", "enqueue")] == ["ready", "enqueue"]
     assert gh.prs[(REPO, 1)]["draft"] is False and gh.prs[(REPO, 1)]["queue_state"] == "queued"
     with company.transaction() as c:
-        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
 
 
 def test_failed_calls_are_tried_three_times_then_github_refused_is_the_owner_s(company):
@@ -264,7 +280,7 @@ def test_failed_calls_are_tried_three_times_then_github_refused_is_the_owner_s(c
     gh.fail_next("enqueue")
     assert MQ.run(company, gh, H.shift(now, seconds=400)) == 1
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "failed")]
+        assert effects(c, task_id) == [("act", "failed")]
         assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, "GitHub refused the merge: GitHub is unavailable")
         assert any(":queue_refused:" in key for key, _ in X.wakes(c, task_id, RM))
 
@@ -291,7 +307,7 @@ def test_a_merge_the_branch_rules_refuse_is_told_once_and_not_tried_again(compan
     assert [call[0] for call in gh.calls].count("enqueue") == 1  # a permanent refusal is not retried
     reason = "At least 1 approving review is required by reviewers with write access."
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "failed")]
+        assert effects(c, task_id) == [("act", "failed")]
         assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, f"GitHub refused the merge: {reason}")
         assert len([key for key, _ in X.wakes(c, task_id, RM) if ":queue_refused:" in key]) == 1
 
@@ -315,11 +331,11 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (woken[0],)).fetchone()[0]
         assert "e2e" in body and "https://ci/9" in body and f"tico task queue {task_id}" in body
         assert X.events(c, task_id).count("pr_queue_removed") == 1
-        assert effects(c, task_id) == [("queue_pr", "done")]
+        assert effects(c, task_id) == [("act", "done")]
     gh.push(REPO, 1)  # a fix pushed in Merge: the task stays in Merge and nothing queues it by itself
     F.refresh(company, gh, later(30))
     with company.transaction() as c:
-        assert stage(c, task_id) == "Merge" and effects(c, task_id) == [("queue_pr", "done")]
+        assert stage(c, task_id) == "Merge" and effects(c, task_id) == [("act", "done")]
         assert any(":changed_after_ok:" in key for key, _ in X.wakes(c, task_id, EM))
 
 
@@ -343,7 +359,7 @@ def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_perso
 
     assert drop(1) == ("owner", 1, 1)
     assert drop(2) == ("owner", 2, 2)
-    assert drop(3, by=EM) == ("manager", 2, 3)  # the Release Manager is not told a third time: its manager has it
+    assert drop(3, by=EM) == ("manager", 2, 3)  # the Release Owner is not told a third time: its manager has it
     with company.transaction() as c:
         assert any(":manager:1:" in key for key, _ in X.wakes(c, task_id, EM))
         assert stage(c, task_id) == "Merge" and F.pr(c, REPO, 1)["queue_state"] == "queued"  # EM queued it again
@@ -379,21 +395,21 @@ def test_a_wait_on_github_with_no_word_for_two_hours_is_the_owner_s(company):
         assert line(c, building, "pr_open") == (R.NOT_MET, B, "GitHub hasn't answered about acme/app#1 for 2 hours")
     MQ.run(company, gh)
     with company.transaction() as c:
-        assert line(c, merging, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
-        c.execute("UPDATE pr_facts SET read_at=? WHERE number=2", (hours_ago,))  # every read since failed
+        assert line(c, merging, "pr_merged") == (R.WAITING, "github", "In the merge queue")
+        age(c, "read_at", hours_ago, 2)  # every read since failed
         assert line(c, merging, "pr_merged") == (R.NOT_MET, RM, "GitHub hasn't answered about acme/app#2 for 2 hours")
     gh.merge(REPO, 2)
     with company.transaction() as c:
         seen(c, gh, 2)
         assert stage(c, merging) == "Release"
-        assert line(c, merging, "in_release") == (R.WAITING, R.GITHUB, "Reading releases")
-        c.execute("UPDATE pr_facts SET updated_at=? WHERE number=2", (hours_ago,))  # merged 3 hours ago, never read
+        assert line(c, merging, "in_release") == (R.WAITING, "github", "Reading releases")
+        age(c, "updated_at", hours_ago, 2)  # merged 3 hours ago, never read
         assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
         release = {"tag": "v1.0.0", "commit_sha": "0" * 40, "prerelease": False, "published_at": H.now()}
         F.save_release(c, REPO, release, F.version_now())
         F.saw_releases(c, REPO, F.version_now())  # the releases were read just now: GitHub answers again
-        assert line(c, merging, "in_release") == (R.WAITING, R.GITHUB, "Waiting for a release of acme/app")
-        c.execute("UPDATE release_reads SET read_at=?", (hours_ago,))
+        assert line(c, merging, "in_release") == (R.WAITING, "github", "Waiting for a release of acme/app")
+        c.execute("UPDATE github_release_reads SET read_at=?", (hours_ago,))
         assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
 
 
@@ -461,7 +477,7 @@ def test_one_message_per_removal_merge_and_close_on_a_queueing_pipeline(company)
         hooked(c, "closed", gh, 2)
         assert stage(c, merged) == "Release"
         added = [m for m in told(c, merged) if m not in before]
-        # The Release Manager owns Release too and waits on GitHub there: no "carry this task on" wake on top.
+        # The Release Owner owns Release too and waits on GitHub there: no "carry this task on" wake on top.
         assert len(added) <= 1 and not any("Carry this task on" in m for m in added), added
 
     with company.transaction() as c:
@@ -506,7 +522,7 @@ def test_a_pr_closed_by_hand_is_the_stage_owner_s_turn_and_wakes_them_once(compa
         X.ran(c, task_id, owner)  # the Builder's entry wake had its run: it opened the PR, and checks are running
         NS.check(c, now)
         waiting = "pr_merged" if where == "Merge" else "checks_pass"
-        assert stage(c, task_id) == where and line(c, task_id, waiting)[:2] == (R.WAITING, R.GITHUB)
+        assert stage(c, task_id) == where and line(c, task_id, waiting)[:2] == (R.WAITING, "github")
         before = owner_wakes(c, task_id, owner)
     gh.close(REPO, 1)
     F.refresh(company, gh, later())
@@ -540,7 +556,7 @@ def test_a_merge_moves_the_task_to_release_where_github_s_wait_wakes_nobody(comp
     F.refresh(company, gh, later())
     with company.transaction() as c:
         assert stage(c, task_id) == "Release"
-        assert line(c, task_id, "in_release")[:2] == (R.WAITING, R.GITHUB)
+        assert line(c, task_id, "in_release")[:2] == (R.WAITING, "github")
         for seconds in (10, 150, 600):
             NS.check(c, H.shift(now, seconds=seconds))
         assert stage(c, task_id) == "Release"
@@ -577,14 +593,14 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
         refused(lambda: go(v=version - 1), "task_changed")
         refused(lambda: go(by=B), "task_requirement")  # not the owner, the manager or a person
         owed = go()
-        assert [(e["state"], e["head_sha"]) for e in owed] == [("owed", head)]
-        assert effects(c, task_id) == [("queue_pr", "moot"), ("queue_pr", "owed")]
-        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "Queuing the PR")
+        assert [(e["state"], e["pinned"]) for e in owed] == [("owed", head)]
+        assert effects(c, task_id) == [("act", "moot"), ("act", "owed")]
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "Queuing the PR")
         assert E.task(c, task_id)["version"] == version + 1
     MQ.run(company, gh)
     with company.transaction() as c:
         assert F.pr(c, REPO, 1)["queue_state"] == "queued"
-        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
 
 
 def test_queue_again_only_on_a_stage_that_queues_and_an_open_task(c):
@@ -602,10 +618,10 @@ def test_moving_back_takes_the_pr_out_of_the_queue_once(company):
     MQ.run(company, gh)
     with company.transaction() as c:
         back(c, task_id)
-        assert effects(c, task_id) == [("queue_pr", "done"), ("dequeue_pr", "owed")]
+        assert effects(c, task_id) == [("act", "done"), ("undo", "owed")]
     assert MQ.run(company, gh) == 1
     with company.transaction() as c:
-        assert effects(c, task_id)[-1] == ("dequeue_pr", "done")
+        assert effects(c, task_id)[-1] == ("undo", "done")
         assert F.pr(c, REPO, 1)["queue_state"] == "none"
         assert "pr_dequeued" in X.events(c, task_id)
         assert not [b for b in NS.rules_hold(c) if b.startswith("5:")]
@@ -615,7 +631,7 @@ def test_closing_before_github_queued_it_makes_the_queue_moot(c):
     gh = FakeGitHub()
     task_id = in_merge(c, gh, 1)
     E.move(c, task_id, "closed", X.ANA, "Not needed")
-    assert effects(c, task_id) == [("queue_pr", "moot")]
+    assert effects(c, task_id) == [("act", "moot")]
     assert not [b for b in NS.rules_hold(c) if b.startswith("5:")]
 
 
@@ -638,13 +654,13 @@ def test_a_pr_someone_else_queued_first_settles_the_owed_queue_without_a_call(co
         task_id = in_merge(c, gh, 1)
         gh.enqueue(REPO, 1, gh.prs[(REPO, 1)]["head_sha"])  # a person queues it on GitHub before Tico's pass
         hooked(c, "enqueued", gh)
-        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
     gh.calls.clear()
     assert MQ.run(company, gh) == 1
     assert [call[0] for call in gh.calls] == []
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "done")]
-        assert line(c, task_id, "pr_merged") == (R.WAITING, R.GITHUB, "In the merge queue")
+        assert effects(c, task_id) == [("act", "done")]
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
 
 
 def test_a_pr_merged_anyway_after_its_task_closed_is_read_once_more(company):
@@ -676,7 +692,7 @@ def test_a_pr_deleted_after_it_was_read_is_the_owner_s_after_two_hours(company):
     F.refresh(company, gh, later())
     with company.transaction() as c:
         assert line(c, task_id, "pr_open") == (R.MET, None, "PR open")  # within the 2 hours
-        c.execute("UPDATE pr_facts SET read_at=?", (H.shift(H.now(), hours=-3),))  # every read since found it gone
+        age(c, "read_at", H.shift(H.now(), hours=-3))  # every read since found it gone
         assert line(c, task_id, "pr_open") == (R.NOT_MET, B, "GitHub hasn't answered about acme/app#1 for 2 hours")
 
 
@@ -703,7 +719,7 @@ def test_leaving_while_github_queues_it_takes_it_out_again(company):
     gh.enqueue = slow
     MQ.run(company, gh)
     with company.transaction() as c:
-        assert effects(c, task_id) == [("queue_pr", "moot"), ("dequeue_pr", "owed")]
+        assert effects(c, task_id) == [("act", "moot"), ("undo", "owed")]
     MQ.run(company, gh)
     assert gh.prs[(REPO, 1)]["queue_state"] == "none"
 
@@ -719,7 +735,7 @@ def test_a_github_outage_keeps_the_fact_and_waits_on_github(company):
     assert F.refresh(company, gh) == 0
     with company.transaction() as c:
         assert F.pr(c, REPO, 1) is None
-        assert line(c, task_id, "pr_open") == (R.WAITING, R.GITHUB, "Reading the PR from GitHub")
+        assert line(c, task_id, "pr_open") == (R.WAITING, "github", "Reading the PR from GitHub")
     assert F.refresh(company, gh) == 1
     assert F.refresh(company, gh) == 0  # read: not due again for 5 minutes
     with company.transaction() as c:
@@ -738,7 +754,7 @@ def test_webhooks_keep_only_linked_prs_and_each_check_on_the_head(c):
     assert F.webhook(c, "pull_request", {"action": "opened", "pull_request": pr, "repository": repo}) == [REF]
     run = {"head_sha": "a", "name": "unit", "status": "in_progress", "app": {"slug": "ci"}}
     F.webhook(c, "check_run", {"check_run": run, "repository": repo})
-    assert line(c, task_id, "checks_pass") == (R.WAITING, R.GITHUB, "Checks running")
+    assert line(c, task_id, "checks_pass") == (R.WAITING, "github", "Checks running")
     F.webhook(
         c, "check_run", {"check_run": {**run, "status": "completed", "conclusion": "success"}, "repository": repo}
     )
@@ -749,7 +765,7 @@ def test_webhooks_keep_only_linked_prs_and_each_check_on_the_head(c):
     assert stage(c, task_id) == "Merge"  # checks pass (Tico's own check doesn't count)
     gone = {"action": "dequeued", "reason": "CI_FAILURE", "pull_request": pr, "repository": repo}
     F.webhook(c, "pull_request", gone)  # read in full on the next pass, with the check that failed
-    assert F.pr(c, REPO, 1)["read_at"] == "" and F.pr(c, REPO, 1)["queue_state"] == "none"
+    assert F.pr(c, REPO, 1)["due_at"] is not None and F.pr(c, REPO, 1)["queue_state"] == "none"
     F.webhook(c, "release", {"action": "published", "release": {"tag_name": "v1.2.0"}, "repository": repo})
     assert [r["tag"] for r in F.releases(c, REPO)] == ["v1.2.0"]
 
@@ -763,7 +779,7 @@ def test_webhooks_out_of_order_never_unmerge_and_an_early_check_reads_the_pr(c):
     # The check run on the new head b comes before its `synchronize`: the PR is read in full on the next pass.
     run = {"head_sha": "b", "name": "unit", "status": "completed", "conclusion": "success", "app": {"slug": "ci"}}
     F.webhook(c, "check_run", {"check_run": {**run, "pull_requests": [{"number": 1}]}, "repository": repo})
-    assert F.pr(c, REPO, 1)["read_at"] == ""
+    assert F.pr(c, REPO, 1)["due_at"] is not None
     landed = {**pr, "state": "closed", "merged": True, "merge_commit_sha": "m", "merged_at": "2026-11-10T00:00:00Z"}
     F.webhook(c, "pull_request", {"action": "closed", "pull_request": landed, "repository": repo})
     # GitHub's `dequeued` for the merge comes after `closed`, with a snapshot taken while the PR was still open.
@@ -783,7 +799,7 @@ def test_a_pull_request_webhook_is_as_new_as_github_s_updated_at(c):
     F.webhook(c, "pull_request", {"action": "synchronize", "pull_request": pushed, "repository": repo})
     F.webhook(c, "pull_request", {"action": "opened", "pull_request": old, "repository": repo})  # arrives late
     fact = F.pr(c, REPO, 1)
-    assert fact["head_sha"] == "b" and fact["read_at"] == ""  # kept, and read in full on the next pass
+    assert fact["head_sha"] == "b" and fact["due_at"] is not None  # kept, and read in full on the next pass
 
 
 def test_a_webhook_delivered_twice_is_taken_once(hook_api):
@@ -840,5 +856,5 @@ def test_the_heartbeat_steps_are_quiet_without_a_github_app():
     class Ctx:
         github_app = None
 
-    assert HB.pr_facts(Ctx()) == ("No GitHub app", True)
-    assert HB.merge_queue_effects(Ctx()) == ("No GitHub app", True)
+    assert HB.item_metadata(Ctx()) == ("No GitHub app", True)
+    assert HB.source_actions(Ctx()) == ("No GitHub app", True)

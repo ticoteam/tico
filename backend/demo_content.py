@@ -127,7 +127,7 @@ BOTS = [
     ("compliance", "compliance", "ops-manager"),
     ("returns", "returns", "ops-manager"),
     # Engineering: calibration cloud, player, phone app
-    ("product-manager", "product-manager", "human:eli"),
+    ("product-manager", "segment-product-owner", "human:eli"),
     ("pr-reviewer", "pr-reviewer", "product-manager"),
     ("issue-triage", "issue-triage", "product-manager"),
     ("devops", "devops-engineer", "product-manager"),
@@ -3919,7 +3919,7 @@ MARKET_CONTEXT = {
     "channels": "Holiday light forums and online marketplaces",
 }
 
-# key, title, owner, parent key, colour a person set (None: the Strategy Bot's colour from the KPIs), why,
+# key, title, owner, parent key, colour a person set (None: the Strategy Owner's colour from the KPIs), why,
 # [(kpi name, unit, target, readings oldest first, days until the target is due)]
 GOALS = [
     (

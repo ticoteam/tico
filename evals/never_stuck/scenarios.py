@@ -73,6 +73,16 @@ class Rig:
 
         return self.w.read(lambda c: W.needs(c, person))
 
+    def needs_you(self, person: str) -> list[dict[str, Any]]:
+        """The person's Needs you as `GET /api/v2/needs-you` gives it (views.needs_items): `needs` plus every @ of them by
+        a person they have not replied to (C28), only what they may read."""
+        from backend import views
+        from backend.auth import Auth, Identity
+
+        auth = Auth(self.w.store)
+        who = Identity(person, "human")
+        return self.w.read(lambda c: views.needs_items(c, auth, who, count_only=True))
+
     def needs_tasks(self, person: str) -> list[tuple[str, str | None]]:
         return [(str(n["kind"]), n.get("task_id")) for n in self.needs(person)]
 
@@ -321,15 +331,13 @@ BUGS: dict[str, Scenario] = {}
 CHECKS: dict[str, Scenario] = {}
 
 # Scenarios that fail on this branch because of an engine bug, by the bug's name (README.md).
-FAILING: dict[int, str] = {
-    43: "mention-not-in-needs",
-}
+FAILING: dict[int, str] = {}
 
 # Scenarios this branch cannot express yet: (phase, why).
 LATER: dict[int, tuple[str, str]] = {
     14: ("2", "pages and their OK (send back, version 2) arrive with Product"),
     19: ("2 and 3", "only the General preset exists; Product and Engineering presets arrive with their phases"),
-    20: ("2", "waking the Product Manager when Spec empties (C10) arrives with Product"),
+    20: ("2", "waking the Product Owner when Spec empties (C10) arrives with Product"),
     22: ("2", "factories and the Done count arrive with Product"),
     26: ("2", "on-enter filing into a pipeline arrives with Product (pipeline_settings refuses it until then)"),
     27: ("2", "Jev and the production version check arrive with Product"),
@@ -1066,7 +1074,10 @@ def s43(r: Rig) -> None:
     task = r.task(ANA, "Choose the venue", assignee=BUILDER)
     r.ok(ANA, lambda c: H.task_comment(c, ANA, task, "@ben can you check the dates?"), "Ana @s Ben")
     expect(r.waits(task)[0] == ("bot", BUILDER), f"the task's turn changed: {r.waits(task)}")
-    expect(any(n.get("task_id") == task for n in r.needs(BEN)), "the @ is not in Ben's Needs you (C28)")
+    expect(
+        any(n["kind"] == "mention" and n.get("task_id") == task for n in r.needs_you(BEN)),
+        "the @ is not in Ben's Needs you (C28)",
+    )
 
 
 @scenario(45, "A person adds an OK from someone to one task")

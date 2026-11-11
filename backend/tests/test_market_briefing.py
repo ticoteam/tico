@@ -1,4 +1,4 @@
-"""The weekly briefing: who posts, one row a week, which bets an item touches, and the event the Strategy Bot waits
+"""The weekly briefing: who posts, one row a week, which bets an item touches, and the event the Strategy Owner waits
 on."""
 
 import json
@@ -45,10 +45,10 @@ def events(monkeypatch):
     """The `market.briefing` events the automations hear (H.hook), with their payloads."""
     seen, heard = [], automations.on_event
 
-    def listen(c, type_, subject, data, actor):
+    def listen(c, type_, subject, data, actor, access=None):
         if type_ == "market.briefing":
             seen.append((type_, subject, data() if callable(data) else data))
-        return heard(c, type_, subject, data, actor)
+        return heard(c, type_, subject, data, actor, access=access)
 
     monkeypatch.setattr(automations, "on_event", listen)
     return seen

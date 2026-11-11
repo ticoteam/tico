@@ -8,8 +8,8 @@ and bots, with the groups inside it below them. A group's name opens its team pa
 one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
 row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
 human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
-Librarian, the Strategy Bot) sit in a Built-in group under the chart, folded until someone opens it, and stay out of the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
-the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
+Librarian, the Strategy Owner) sit in a Built-in group under the chart, folded until someone opens it, and stay out of the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
+the Librarian is reached from Docs and Market, the Strategy Owner from its panel beside the Strategy tabs. Settings > Bots lists all four.
 
 Your unread messages in a one-to-one DM with a teammate show as a count on that teammate's row, for people as well as bots.
 
@@ -22,7 +22,7 @@ and a **Recruiting** mark where its reporting line puts it: under its bot or hum
 chart lays out roles under roles, `reports_to: seat:<id>`). Hover it for its job description. It is not dragged and nothing
 is dropped on it; under a bot you may not see it hangs from the next row up, and it is left out of the recently-opened list.
 The sidebar reads seats from `seats` on `GET /api/humans`, the same rows as `seats` on `GET /api/v2/org`.
-The built-in **Strategy Bot** ([Your Strategy Bot](strategy-bot.md)) is on every install. The server hangs the Heads, each in its department's group, and the bots that report to no one under it; since it is not on the chart, the app shows them under the owner.
+The built-in **Strategy Owner** ([Your Strategy Owner](strategy-bot.md)) is on every install. The server hangs the Heads, each in its department's group, and the bots that report to no one under it; since it is not on the chart, the app shows them under the owner.
 Explicitly marked helper bots stay apart; the built-in bots are in the Built-in group. Only the chart moves: nobody's `reports_to` and
 nobody's access changes, and `tico team show` still gives each bot the `reports_to` it has.
 Assigning a mailbox to a bot does not make it a helper: it stays on Team and Goals under its manager, or at the top
@@ -117,7 +117,7 @@ Owners and admins change groups; everyone else reads them.
   [--remove-bot]` and `tico group delete <group>` (`tico_group_list`, `tico_group_update`, `tico_group_delete`); with no group given, `update`
   creates one from `--name`. `tico org reports-to <bot:slug|human:id> <manager>` (`tico_org_reports_to`) changes who a teammate reports to.
   BotOps does the same as the person who asked it, with their own rights: a member is refused, an owner or an admin is not.
-- **With the Strategy Bot**: it suggests org changes in plain words in its chat and changes nothing on its own. When the person tells it
+- **With the Strategy Owner**: it suggests org changes in plain words in its chat and changes nothing on its own. When the person tells it
   to make one, it runs the tools above citing their message (`--on-behalf-of turn`), with exactly that person's rights.
 
 Naming a group in an access list (`group:legal`, [permissions.md](permissions.md)) or in a human's `primary_for` names everyone in that
@@ -153,7 +153,7 @@ profile image stored on the roster.
 | Group | Bots |
 |---|---|
 | marketing | The CMO bot and the SEO, analytics, listening and content bots. |
-| product | The Product Manager bot and everything under it. |
+| product | The Product Team Manager bot and everything under it. |
 | sales | Sales operations and the sales-process bots. |
 | engineering | The CTO bot, which monitors CI, deploys, alerts, security and cost. |
 

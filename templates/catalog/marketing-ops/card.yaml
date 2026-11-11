@@ -24,7 +24,7 @@ owns:
 never:
   - "Change a CRM field, lifecycle stage, owner, scoring rule, form or workflow unless the task asks for it and a granted Tool allows it"
   - "Put a person's name or email address in a tracking parameter"
-  - "Own or restate team KPIs; targets live with the Strategy Bot"
+  - "Own or restate team KPIs; targets live with the Strategy Owner"
   - "Blame a human for a handoff delay; the report is about the process"
 prerequisites:
   - tool: hub

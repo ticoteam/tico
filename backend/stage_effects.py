@@ -1,21 +1,23 @@
 # pyright: strict
 """What entering a stage does, and how leaving it backwards undoes that (docs/pipelines-v3.md, "Entering a stage").
 
-A stage's on-enter action is nothing, "file a linked task into pipeline X", or "queue the PRs to merge". It happens once
+A stage's on-enter action is nothing, "file a linked task into pipeline X", or a source's action ("queue the PRs to
+merge"). It happens once
 per visit, in the move's transaction. Moving back or closing undoes it: tasks filed in that visit close with a note, and
 PRs leave the merge queue.
 
 Filing (`{"file_into": "<pipeline id>"}`, Product's In development into Engineering) files ONE task per visit,
 linked (`links.kind = handoff`). It has the filing task's title and body, and a line `Spec: page:<file id>@<version>` naming
 the page that counted on the nearest earlier stage with a page requirement (the Spec page as it was OK'd, D10). It is
-filed by the filing task's owner (the Product Manager), who is its requester. When that is refused (the Product
-Manager is paused or still onboarding) the engine files it itself; one refused even then (the target was retired)
+filed by the filing task's owner (the Product Owner), who is its requester. When that is refused (the Product
+Owner is paused or still onboarding) the engine files it itself; one refused even then (the target was retired)
 files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed yet"), the
 owner's turn, and the owner may file one by hand. The owner's one wake for the stage opens with why (a private task:
 the first stage's owner there cannot read it; the engine never adds a reader). History: `handoff_filed` on the
 filing task.
 
-Queueing (`{"queue_prs": true}`): merge_queue.queue on enter, merge_queue.pull on undo (track C).
+A source's action (`{"act": "github.queue"}`, Engineering's Merge queues the task's PRs): owed on enter, owed back on
+undo (backend/source_actions.py).
 """
 
 from typing import TYPE_CHECKING, Any, cast
@@ -58,7 +60,7 @@ def _spec_line(conn: "sqlite3.Connection", task: Row) -> str:
 
 
 def _filer(conn: "sqlite3.Connection", task: Row, by: str) -> str:
-    """Who files the handoff: the filing task's owner (the Product Manager), else its pipeline's manager, else whoever
+    """Who files the handoff: the filing task's owner (the Product Owner), else its pipeline's manager, else whoever
     moved it."""
     H = _h()
     pipeline: Row = task.get("pipeline") or {}
@@ -125,10 +127,9 @@ def enter(conn: "sqlite3.Connection", task: Row, by: str) -> str:
     lead = ""
     if isinstance(target, str) and target and task.get("visit"):
         _, lead = _file(conn, task, target, by)
-    if action.get("queue_prs") is True:
-        from . import merge_queue
+    from . import source_actions
 
-        merge_queue.queue(conn, task, by)
+    source_actions.enter(conn, task, by)
     return lead
 
 
@@ -147,9 +148,9 @@ def filed_open(conn: "sqlite3.Connection", visit_id: str) -> list[str]:
 def merged_work(conn: "sqlite3.Connection", task_id: str) -> bool:
     """Whether a filed task has a linked PR that merged: its work is in the code, so undoing the filing leaves it open
     (docs/pipelines-v3.md scenario 24) to reach a release or be closed by its owner."""
-    from . import task_facts
+    from .item_sources import github as GS
 
-    return any(link["fact"] and link["fact"]["state"] == "merged" for link in task_facts.prs_of(conn, task_id))
+    return any(link["metadata"] and link["metadata"]["state"] == "merged" for link in GS.prs_of(conn, task_id))
 
 
 def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
@@ -160,10 +161,9 @@ def undo(conn: "sqlite3.Connection", task: Row, by: str, note: str) -> None:
     visit = task.get("visit")
     if not visit:
         return
-    if _on_enter(task.get("stage")).get("queue_prs") is True:
-        from . import merge_queue
+    from . import source_actions
 
-        merge_queue.pull(conn, task, by)
+    source_actions.undo_stage(conn, task)
     for filed in filed_open(conn, visit["id"]):
         if merged_work(conn, filed):
             continue

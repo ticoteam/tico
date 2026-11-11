@@ -235,7 +235,7 @@ def test_a_routine_step_model_is_not_run_by_hand_by_someone_who_may_not_set_it_b
 
 @contextlib.contextmanager
 def acting_as_strategy_bot():
-    """Requests made inside it name the Strategy Bot as the bot acting (`H.VIA`, which `strategy_acts.is_strategy_bot`
+    """Requests made inside it name the Strategy Owner as the bot acting (`H.VIA`, which `strategy_acts.is_strategy_bot`
     reads)."""
     token = H.VIA.set(strategy_acts.STRATEGY_BOT)
     try:
@@ -249,7 +249,7 @@ def test_the_strategy_bot_acting_for_a_person_who_manages_the_bot_cannot_approve
     step = {"id": "audit", "type": "bot_turn", "bot": "ops", "prompt": "Run the audit.", **HAIKU}
     flow = {"name": "Haiku audit", "owner": "human:ben", "trigger": {"type": "event", "name": "x.y"}, "steps": [step]}
     with acting_as_strategy_bot():
-        # Ben manages ops, but the Strategy Bot never chooses a bot's model: the routine is saved off, its version
+        # Ben manages ops, but the Strategy Owner never chooses a bot's model: the routine is saved off, its version
         # pending.
         draft = post(api, "automations", flow, token="ben-test")
         aid = draft["id"]

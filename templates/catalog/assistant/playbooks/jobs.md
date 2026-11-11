@@ -117,7 +117,7 @@ tasks they own. The owned tasks are one kind of many.
 ## Where you stand
 
 50. **"Where do we stand?" / "what should I do next?" / "how are my goals?"**: follow `skills/where-we-stand/SKILL.md` and
-    reply in its shape. Read-only: change nothing and file no task, not even for the Strategy Bot.
+    reply in its shape. Read-only: change nothing and file no task, not even for the Strategy Owner.
 
 ## How Tico works
 

@@ -21,7 +21,7 @@ routines:
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
 # arrives in, never the value; declaring access here does not create it. Changing access is an
 # owner decision, so the bot files a task for the owner rather than editing this file.
-# Usage and ticket exports arrive as files attached to its tasks until an owner connects read-only reporting,
+# Usage and support exports arrive as files attached to its tasks until an owner connects read-only reporting,
 # so no access is declared: the bot never gets an account that can change the product.
 # Optional, uncomment when connected. Read only.
 # tools:
@@ -29,4 +29,8 @@ routines:
 #     identity: "the customer records the owner lists for this bot"
 #     can: [read]
 #     note: "reads which segment each account is in; never edits"
+#   - service: github
+#     identity: "the product repositories the owner lists for this bot"
+#     can: [read]
+#     note: "reads issues, pull requests and releases linked to specs; never edits, labels or comments"
 tools: []

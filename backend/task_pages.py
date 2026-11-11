@@ -7,7 +7,8 @@ or `POST /api/v2/tasks/{tid}/pages` {requirement, page, version}. With no versio
 
 - One page counts per requirement and visit: attaching again replaces the last one (`replaced_at`). A new version is a
   new attach, and it starts the verdict and any OK over.
-- A requirement `at_head` keeps `heads` (task_facts.heads) as they were when the page was attached.
+- A requirement `at_head` keeps the linked items' versions (`item_versions`: item_sources.github.heads) as they were
+  when the page was attached.
 - Attaching owes Jev a verdict (page_verdicts.owe) and counts as progress (C4).
 
 Every function takes the caller's open write transaction and never commits.
@@ -85,14 +86,15 @@ def requirement_of(conn: "sqlite3.Connection", row: Row, requirement: str) -> Ro
 
 def release_tags(conn: "sqlite3.Connection", task_id: str) -> list[str]:
     """The release each task this task filed went out in: for every merged PR of a filed task, the oldest saved release
-    whose history holds its merge commit (task_facts.included). Sorted, each once. What a Validate page is checked
+    whose history holds its merge commit (item_sources.github.included). Sorted, each once. What a Validate page is checked
     against (`with_release`)."""
     cursor = conn.execute(
         "SELECT r.tag, MIN(r.published_at) FROM links l "
-        "JOIN task_links tl ON tl.task_id = l.to_task_id AND tl.kind = 'pr' "
-        "JOIN pr_facts f ON f.repo = tl.repo AND f.number = tl.number AND f.merged_sha IS NOT NULL "
-        "JOIN release_commits rc ON rc.commit_sha = f.merged_sha AND rc.included = 1 "
-        "JOIN releases r ON r.id = rc.release_id WHERE l.from_task_id = ? GROUP BY f.merged_sha",
+        "JOIN task_links tl ON tl.task_id = l.to_task_id AND tl.source = 'github' AND tl.item_type = 'pr' "
+        "JOIN item_metadata f ON f.source = tl.source AND f.item_type = tl.item_type AND f.item_key = tl.item_key "
+        "JOIN github_release_commits rc ON rc.commit_sha = json_extract(f.fields, '$.merged_sha') AND rc.included = 1 "
+        "JOIN github_releases r ON r.id = rc.release_id WHERE l.from_task_id = ? "
+        "GROUP BY json_extract(f.fields, '$.merged_sha')",
         (task_id,),
     )
     return sorted({str(found[0]) for found in cursor.fetchall()})
@@ -102,7 +104,7 @@ def judged_against(conn: "sqlite3.Connection", row: Row, requirement: Row) -> tu
     """What a page attached now is judged against: the rubric (the requirement's `rubric`, else its line, else its
     kind's name) and the context Jev is shown beside it: `task` (Jev is shown this task's own title and spec, so the
     same page on another task is another verdict), `heads` (at_head), `release` (with_release)."""
-    from . import task_facts as F
+    from .item_sources import github as F
     from . import task_requirements as R
 
     settings: Row = requirement.get("settings") or {}
@@ -177,7 +179,7 @@ def attach(
         conn.execute("UPDATE requirement_pages SET replaced_at=? WHERE id=?", (now, was["id"]))
     page_id = H.new_id()
     conn.execute(
-        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, heads, attached_by_id, "
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "rubric_hash, judged_against, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
         (
             page_id,

@@ -44,7 +44,7 @@ TAGS = {
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
     "Assistant": "The signed-in person's own private Assistant chat (docs/assistant.md): ask, and confirm what it proposes.",
     "Goals": "What every person and bot is for (docs/goals-and-kpis.md): "
-    "goals with a colour the Strategy Bot works out from their KPIs, "
+    "goals with a colour the Strategy Owner works out from their KPIs, "
     "unless a person set one; check-ins in the owner's words; proposals the owner confirms.",
     "KPIs": "Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, "
     "evidence and a quality, never edited; a correction supersedes the old one.",
@@ -957,7 +957,7 @@ STABLE = [
         "get",
         "Pipelines",
         "getReleaseSchedule",
-        "The daily release: on or off, its hours, the Release Manager and Technical Writer, the next hour, how many "
+        "The daily release: on or off, its hours, the Release Owner and Technical Writer, the next hour, how many "
         "tasks you may read wait for a release, and what you may do",
         "ReleaseSchedule",
     ),
@@ -966,7 +966,7 @@ STABLE = [
         "patch",
         "Pipelines",
         "updateReleaseSchedule",
-        "Turn the daily release on or off, set its hours, or name the Release Manager and Technical Writer (owner, Admins)",
+        "Turn the daily release on or off, set its hours, or name the Release Owner and Technical Writer (owner, Admins)",
         "ReleaseSchedule",
     ),
     (
@@ -974,7 +974,7 @@ STABLE = [
         "post",
         "Pipelines",
         "releaseNow",
-        "Ask the Release Manager for a release now: one task, or the open one named, or why nothing was sent",
+        "Ask the Release Owner for a release now: one task, or the open one named, or why nothing was sent",
         "ReleaseNowResult",
     ),
     ("/api/v2/tasks/{tid}/files", "get", "Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList"),
@@ -1569,7 +1569,7 @@ STABLE = [
         "get",
         "Assistant",
         "getAssistant",
-        "The caller's Assistant (the Strategy Bot, for the owner): their private room id, "
+        "The caller's Assistant (the Strategy Owner, for the owner): their private room id, "
         "whether it is on, the recent messages "
         "and what waits for their OK",
         "Assistant",
@@ -1655,10 +1655,10 @@ STABLE = [
         "get",
         "Goals",
         "getStrategyBot",
-        "The Strategy Bot's name, whether its regular checks run, how much it does (its level, "
+        "The Strategy Owner's name, whether its regular checks run, how much it does (its level, "
         "with each level's sentence and "
         "who changed it when), and how many items it put in each person's Needs you today against its cap of 5 "
-        "(everyone's for the owner, admins and the Strategy Bot; your own for anyone else)",
+        "(everyone's for the owner, admins and the Strategy Owner; your own for anyone else)",
         "StrategyBotView",
     ),
     (
@@ -1666,9 +1666,9 @@ STABLE = [
         "post",
         "Goals",
         "setStrategyBotLevel",
-        "Settings > Strategy Bot, \"How much your Strategy Bot does\": the owner picks Passive (1), "
+        "Settings > Strategy Owner, \"How much your Strategy Owner does\": the owner picks Passive (1), "
         "Suggests actions (2) or Acts on "
-        "its own (3) on their own click, logged with who and when. No admin or bot may, the Strategy Bot included",
+        "its own (3) on their own click, logged with who and when. No admin or bot may, the Strategy Owner included",
         "StrategyBotView",
     ),
     (
@@ -1676,7 +1676,7 @@ STABLE = [
         "post",
         "Goals",
         "setStrategyBotChecks",
-        "Settings > Strategy Bot, \"Regular checks\": the owner turns the KPI pass and the "
+        "Settings > Strategy Owner, \"Regular checks\": the owner turns the KPI pass and the "
         "automatic goal colours on or off, "
         "on their own click. Off, neither runs until they are turned back on. No admin or bot may",
         "StrategyBotView",
@@ -1686,7 +1686,7 @@ STABLE = [
         "post",
         "Goals",
         "mergeStrategyBotAsks",
-        "The Strategy Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 "
+        "The Strategy Owner only, at level 2 or 3: one item in a person's Needs you for 2 to 10 "
         "tasks where bots ask them the "
         "same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, "
         "and an item that ends unanswered puts the originals back. Counts toward its 5 a day",
@@ -1697,7 +1697,7 @@ STABLE = [
         "post",
         "Goals",
         "recordStrategyBotLevel3Offer",
-        "The Strategy Bot only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 "
+        "The Strategy Owner only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 "
         "recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
         "StrategyBotLevel3OfferResult",
     ),
@@ -1706,9 +1706,9 @@ STABLE = [
         "post",
         "Goals",
         "makeStrategyBotDecision",
-        "The Strategy Bot only, at level 3: one decision made alone, with its reason: "
+        "The Strategy Owner only, at level 3: one decision made alone, with its reason: "
         "bot tasks created, moved to the top of "
-        "their queue, given to another bot or closed, under one action id in the Strategy Bot log. A person's task, a bot "
+        "their queue, given to another bot or closed, under one action id in the Strategy Owner log. A person's task, a bot "
         "offline or a refusal becomes one proposal in the owner's "
         "Needs you instead, never dropped",
         "StrategyBotLogEntry",
@@ -1718,7 +1718,7 @@ STABLE = [
         "get",
         "Goals",
         "listStrategyBotLog",
-        "The Strategy Bot log, newest first: each decision it made alone and each thing it proposed because it stays the "
+        "The Strategy Owner log, newest first: each decision it made alone and each thing it proposed because it stays the "
         "owner's (cost, publishing, outside sends, adding or removing bots, goal and KPI targets, the vision, a bot's "
         "instructions, a person's task), with the reason. The owner only; anyone else is refused (403)",
         "StrategyBotLog",
@@ -1728,7 +1728,7 @@ STABLE = [
         "post",
         "Goals",
         "undoStrategyBotDecision",
-        "The owner, on their own click, undoes one decision the Strategy Bot made alone: each task goes back where nobody "
+        "The owner, on their own click, undoes one decision the Strategy Owner made alone: each task goes back where nobody "
         "changed it since, a later change is kept and named, a task it made is closed, and each bot is told",
         "StrategyBotLogEntry",
     ),
@@ -1747,7 +1747,7 @@ STABLE = [
         "Goals",
         "updateCompany",
         "The owner, on their own click: change the Vision (written to the strategy draft) and/or the Description; never "
-        "an admin or a bot, the Strategy Bot included. Each change is kept with who and when",
+        "an admin or a bot, the Strategy Owner included. Each change is kept with who and when",
         "CompanyResult",
     ),
     (
@@ -1763,7 +1763,7 @@ STABLE = [
         "post",
         "Goals",
         "turnOnGoalManager",
-        "Owner only: add the Strategy Bot from the catalog or restore it, and activate it",
+        "Owner only: add the Strategy Owner from the catalog or restore it, and activate it",
         None,
     ),
     (
@@ -1798,7 +1798,7 @@ STABLE = [
         "Goals",
         "getGoalsNeedsYou",
         "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person "
-        "each is a Strategy Bot task (`task`), the one Tasks and Decide show",
+        "each is a Strategy Owner task (`task`), the one Tasks and Decide show",
         "GoalsNeedsYou",
     ),
     (
@@ -1806,7 +1806,7 @@ STABLE = [
         "post",
         "Goals",
         "refreshGoalStatuses",
-        "The Strategy Bot's status pass (or the owner's): work automatic colours out again. "
+        "The Strategy Owner's status pass (or the owner's): work automatic colours out again. "
         "A colour a person set only gets a suggestion",
         "GoalRefreshView",
     ),
@@ -1815,7 +1815,7 @@ STABLE = [
         "post",
         "Goals",
         "readBackGoalChanges",
-        "The Strategy Bot only, in the owner's own chat: Tico writes the read-back of up to 20 "
+        "The Strategy Owner only, in the owner's own chat: Tico writes the read-back of up to 20 "
         "changes to goals, measures and "
         "suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) "
         "within 30 minutes lets exactly those saves through (each step's method, path and body, sent as it is), cited "
@@ -1871,7 +1871,7 @@ STABLE = [
         "post",
         "Goals",
         "handBackGoalStatus",
-        "\"Let Strategy Bot set it\": end a colour set by hand; the automatic colour is worked out at once",
+        "\"Let Strategy Owner set it\": end a colour set by hand; the automatic colour is worked out at once",
         "GoalResult",
     ),
     (
@@ -1937,7 +1937,7 @@ STABLE = [
         "Goals",
         "createGoalProposal",
         "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag; "
-        "the Strategy Bot at level 2 or 3, a recovery for a red or stalled goal (evidence, "
+        "the Strategy Owner at level 2 or 3, a recovery for a red or stalled goal (evidence, "
         "options of bot-task changes, its pick)",
         "GoalProposalResult",
     ),
@@ -1948,8 +1948,8 @@ STABLE = [
         "decideGoalProposal",
         "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. "
         "An Add a KPI suggestion may be confirmed with a `target` for the link (as a goal's KPI target), used in place of its own. "
-        "A recovery applies exactly the chosen option (`option`, else the Strategy Bot's pick) in "
-        "the Strategy Bot's name; what "
+        "A recovery applies exactly the chosen option (`option`, else the Strategy Owner's pick) in "
+        "the Strategy Owner's name; what "
         "can't be done comes back as a new recovery saying why",
         "GoalProposalResult",
     ),
@@ -1960,7 +1960,7 @@ STABLE = [
         "addGoalProposalReason",
         "After a reject, the person who turned the suggestion down adds one line on why (at most 280 characters), once, "
         "while it has none; a pending or confirmed suggestion, anyone else, a second reason or an empty one is refused. "
-        "The Strategy Bot reads it before suggesting again",
+        "The Strategy Owner reads it before suggesting again",
         "GoalProposalResult",
     ),
     (
@@ -2628,7 +2628,7 @@ SCHEMAS = {
         {
             "state": {
                 "type": "string",
-                "enum": ["snoozed", "person", "paused", "bot", "jev", "github", "tasks", "room", "by_hand"],
+                "enum": ["snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "by_hand"],
             },
             "who": "n",
             "line": "s",
@@ -3917,7 +3917,7 @@ SCHEMAS = {
                     obj({"room_id": "s", "bot": "s", "name": "s"}, required=["room_id", "bot", "name"]),
                     {"type": "null"},
                 ],
-                "description": "The owner's earlier chat with the Strategy Bot, read-only (GET "
+                "description": "The owner's earlier chat with the Strategy Owner, read-only (GET "
                 "/api/v2/conversations/{room_id}/messages); null for everyone else, or none",
             },
         },
@@ -4015,11 +4015,11 @@ SCHEMAS = {
             "status_at": "n",
             "status_source": {
                 "type": ["string", "null"],
-                "description": "auto: worked out by the Strategy Bot; person: set by hand and kept until handed back",
+                "description": "auto: worked out by the Strategy Owner; person: set by hand and kept until handed back",
             },
             "suggest_status": {
                 "type": ["string", "null"],
-                "description": "On a colour set by hand: the colour the Strategy Bot would choose, when it differs",
+                "description": "On a colour set by hand: the colour the Strategy Owner would choose, when it differs",
             },
             "suggest_note": "n",
             "suggest_at": "n",
@@ -4287,7 +4287,7 @@ SCHEMAS = {
             "asked_today": {
                 "type": "object",
                 "additionalProperties": {"type": "integer"},
-                "description": "{person actor: items the Strategy Bot put in their Needs you today (UTC)}",
+                "description": "{person actor: items the Strategy Owner put in their Needs you today (UTC)}",
             },
             "level3_offer": ref("StrategyBotLevel3Offer"),
         },
@@ -4341,7 +4341,7 @@ SCHEMAS = {
         {
             "task": {
                 "type": "object",
-                "description": "The merged item: the Strategy Bot's task, waiting on the person",
+                "description": "The merged item: the Strategy Owner's task, waiting on the person",
             },
             "originals": items(
                 obj(
@@ -7365,7 +7365,7 @@ STABLE.extend(
             'get',
             'Strategy',
             'listStrategyGuides',
-            'The question guides the Strategy Bot drafts with',
+            'The question guides the Strategy Owner drafts with',
             None,
         ),
         (

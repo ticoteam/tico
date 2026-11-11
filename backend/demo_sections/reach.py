@@ -40,7 +40,7 @@ LINES = [
     ("bot:release-notes", "group:support", None, "Send notes the day before a release."),
     ("group:support", "group:product", 5, "Bugs need repro steps and the unit's log."),
     ("bot:support", "bot:firmware", None, "Calibration bugs only, with the unit's log."),
-    ("group:marketing", "bot:firmware", 0, "Ask the Product Manager instead."),
+    ("group:marketing", "bot:firmware", 0, "Ask the Product Owner instead."),
     # Marketing
     ("group:marketing", "bot:support", 0, "Customer quotes go to Sales."),
     ("bot:content", "bot:legal-review", 2, "Claims about brightness and safety."),

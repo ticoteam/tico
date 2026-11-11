@@ -293,7 +293,7 @@ class TaskMove(Contract):
 
 
 class TaskQueue(Contract):
-    """Queue a task's PRs again after GitHub took them out of the merge queue (merge_queue.requeue)."""
+    """Queue a task's PRs again after GitHub took them out of the merge queue (item_sources.github.requeue)."""
 
     version: Version | None = None
     on_behalf_of: ID | None = None
@@ -455,7 +455,7 @@ class PipelineRetire(Contract):
 
 class ReleaseScheduleUpdate(Contract):
     """The team's release schedule (backend/release_schedule_routes.py); only what is sent changes. `bot` and `writer`
-    name the Release Manager and Technical Writer ("" finds them by starter template)."""
+    name the Release Owner and Technical Writer ("" finds them by starter template)."""
 
     on: bool | None = None
     times: list[Annotated[str, Field(max_length=5)]] | None = Field(default=None, max_length=2)
@@ -464,7 +464,7 @@ class ReleaseScheduleUpdate(Contract):
 
 
 class ReleaseNow(Contract):
-    """Ask the Release Manager for a release now; `note` goes in its task."""
+    """Ask the Release Owner for a release now; `note` goes in its task."""
 
     note: str | None = Field(default=None, max_length=1000)
 
@@ -2301,7 +2301,7 @@ class StrategyBotLevel(Contract):
     level: Literal[1, 2, 3]
 
 
-# Several bots' asks waiting on one person, made one Strategy Bot item (backend/strategy_merge.py).
+# Several bots' asks waiting on one person, made one Strategy Owner item (backend/strategy_merge.py).
 class StrategyBotMerge(Contract):
     person: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=300)
@@ -2309,7 +2309,7 @@ class StrategyBotMerge(Contract):
     tasks: list[str] = Field(min_length=2, max_length=10)
 
 
-# One change in a decision the Strategy Bot makes alone at level 3 (backend/strategy_acts.py).
+# One change in a decision the Strategy Owner makes alone at level 3 (backend/strategy_acts.py).
 class StrategyBotChange(Contract):
     do: Literal["create", "reorder", "reassign", "close"]
     task_id: str | None = Field(default=None, max_length=100)

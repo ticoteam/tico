@@ -1,4 +1,4 @@
-"""A GitHub in memory that answers `task_facts.GitHub` (backend/task_facts.py), for unit tests and the fault rig.
+"""A GitHub in memory that answers `item_sources.github.GitHub` (backend/item_sources/github.py), for unit tests and the fault rig.
 
 It holds PRs, the checks on each commit, a linear main history per repo (a merge appends its commit) and the published
 releases. Calls are recorded in `calls`. `fail_next(call, reason)` makes the next call of that name raise with the
@@ -102,7 +102,7 @@ class FakeGitHub:
     def fail_next(self, call, reason="GitHub is unavailable"):
         self._fail[call] = reason
 
-    # ------------------------------------------------------------------ task_facts.GitHub
+    # ------------------------------------------------------------------ item_sources.github.GitHub
     def _call(self, name, *args):
         self.calls.append((name, *args))
         reason = self._fail.pop(name, None)

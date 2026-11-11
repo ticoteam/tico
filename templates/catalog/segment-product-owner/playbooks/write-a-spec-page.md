@@ -1,53 +1,64 @@
 # Write a spec page
 
-Triggered when your manager approves a brief, with a task for its spec. Budget 60 minutes. The outcome is one Spec page
-on the task, and a person's OK asked for it, that they can give from the page alone. You write it yourself: nobody else
-on this team writes one.
+Used in the Spec stage, for an idea you moved there when Spec had room, or one a person moved there. Budget 60 minutes
+for a first version. The outcome is one Spec page attached to the Spec page requirement, which Jev checks and a person
+then OKs from the page alone. You write it yourself: nobody else on this team writes one.
 
 ---
 
-## 1. Read the task
+## 1. Confirm it was chosen
 
     tico task show <id>
 
-Read the brief in its task and its evidence in `knowledge/briefs.md`. Work only from the approved brief: a comment after
-the approval that changes its scope goes back to your manager first.
+Read the brief in the task and its evidence in `knowledge/briefs.md`. Check `tico goal list` and your manager's decisions
+for the choice. If nobody chose it, say so on the task and ask who did; a spec is not a way to decide by stealth. Pull the
+repository, and if a spec for this problem already exists, extend it instead of starting a second file.
 
-## 2. Write the page
+## 2. Gather the evidence
 
-One HTML file, saved in `reports/`, plain words, with these sections in this order:
+Read your own ranked problem list, the latest feedback update, the UX Researcher's and Product Analyst's work for the
+area where the team has them, and `tico meeting search "<feature>"` for what customers and the team said. Quote sparingly,
+with source and date. Separate what was observed from what was inferred, and mark each inference.
 
-    What we are building: <the change, as the customer will see it>
-    Problem: <from the brief, in the customer's words>
-    Who has it: <accounts in the window, out of the segment's accounts in the cohort, with the window>
-    What done looks like: <what a customer can do, or sees, when it is done; something a stranger could check on an account>
-    How we will know: <measure, baseline and its date, target and its source, read date, guard measure>
-    How it gets validated: <the export or report that will carry each measure, and who reads it on the read date>
-    Not in this spec: <what is out of scope>
-    Open questions: <question, who owes the answer, by when>
+## 3. Set the appetite
 
-The page has no script and loads nothing from outside. Charts are inline SVG. Put the headline and the key numbers first.
+Follow `skills/shape-a-spec-to-an-appetite/SKILL.md`. Write the appetite (team-weeks, a small or big batch) before you
+draft the solution. If the problem needs more than a big batch, say so and stop there: it is two problems, or a bet for a
+later cycle.
+
+## 4. Write the core page
+
+In the order of `knowledge/spec-format.md`, in `specs/<slug>.md`:
+- **Problem**: who, trying to do what, what it costs them today. Two or three sentences, from the brief.
+- **Who has it**: accounts in the window, out of the segment's accounts in the cohort, with the window.
+- **Evidence**: three to five lines, each with its source and count.
+- **Appetite**: the time the problem is worth, and who set it.
+- **Goal** and **How we will know**: the goal in Tico it moves, with the measure, baseline, target, read date and guard
+  from `skills/write-how-we-will-know/SKILL.md`.
+- **Scope** and **Non-goals**: bullets. Every non-goal is something someone might reasonably assume.
+- **Acceptance criteria**: follow `skills/write-acceptance-criteria/SKILL.md`, each tagged before release or after launch.
+- **Open questions**: each with the human who owes the answer and a date.
+- **Risks**: what could make this the wrong bet, and the cheapest check.
+
 The spec says what the team builds and how it is judged; it does not pick the design. Where the team has not decided,
-write "open question" and name who decides.
+write "open question" and name who decides. No customer's name, email address or other personal detail: name an account
+by its id.
 
-## 3. Check the page against the Review rubric
+## 5. Check it with the builders' eyes
 
-- It says what we are building.
-- It says how we will know it worked, with its numbers, sources and read date.
-- It says how it gets validated.
-- No customer's name, email address or other personal detail appears. Name an account by its id.
+Read it as the engineer: can each criterion be tested? Is anything ambiguous ("quickly", "simple")? Is there a dependency
+on another team or another repository? Is every rabbit hole fixed, cut or time-boxed? Fix those before handing over.
 
-## 4. Attach it and ask for the OK
+## 6. Build the page and attach it
 
-    tico page publish reports/<name>.html --title "Spec: <problem, under ten words>" --cadence none --task <id>
-    tico task ask <id> --to <your manager or the person who OKs specs> "OK the spec for <problem>? It decides <one line>." --kind ok --show page:<page id> --version N
+Follow `skills/build-the-spec-page/SKILL.md` for the visual page, or publish the written spec as it is:
 
-`--task` files the page on the task. Publishing the same path again adds a version, so fix a page by publishing it again
-before you ask. Nothing starts in Engineering until that OK. When it comes, finish the task:
-`tico task done <id> -m "Spec OK'd: <page>" --version N`.
+    tico file publish specs/<slug>.md --task <id>
 
-## 5. After it ships
+Either prints the file id. Attach it to the requirement `tico task show` names:
 
-When the work has shipped, read the measures on the read date with the export named in the spec. Publish a page
-with each measure's number, its baseline, its window and the change, and attach it the same way (`--task <id>`). Say
-whether each measure held. Do not call a measure held from a cohort younger than its window.
+    tico task attach <id> page:<file id> --req "<requirement>" --version N
+
+Jev checks it, then a person OKs it, and the task moves to In development, where {{app_name}} files the Engineering task.
+Put the open questions and who owes them in a note on the task. If the person sends it back, their notes are on the task:
+change the spec, publish again and attach the new version.

@@ -202,6 +202,6 @@ merged work past the newest release and no candidate is in flight, GitHub Action
 first green candidate to Tico Team's install (the canary). Stable (TIDY) takes it once it is approved: automatically
 when its notes list no High risk item and `RELEASE_NEEDS_PERSON` is off (the default), otherwise by a person with write
 access on that release's `release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major
-production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The
+production issues only. The Release Owner bot no longer tags or rolls out Tico releases; it only monitors them. The
 details are in [docs/releasing.md](docs/releasing.md#the-release-train), and the approval steps are in
 [docs/releasing.md](docs/releasing.md#approval).

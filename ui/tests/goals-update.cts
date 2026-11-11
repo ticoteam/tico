@@ -20,7 +20,7 @@ interface PageWin { __sameLoad?: boolean }
 
 const bot = (name: string, display_name: string, org_parent: string, over?: object) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''})];
+  bot('goal-manager', 'Strategy Owner', 'p:ana', {reports_to: ''})];
 const people = [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana'},
   {id: 'cara', name: 'Cara Diaz', org_parent: 'p:ana'}];
 const SIGNAL_COLOUR = {on_track: 'green', at_risk: 'yellow', off_track: 'red'};
@@ -75,7 +75,7 @@ const judged = (g: Goal) => g.kpis.some(k => ['red', 'yellow', 'green'].includes
         posted.push({goal: add[1]!, body, key: req.headers()['idempotency-key']});
         if (hold) await hold;
         if (refuse === 'drop') return route.abort('failed');
-        if (refuse === 'forbidden') return json({error: {code: 'forbidden', detail: 'The goal\'s owner, the owner of the goal it serves, someone above them or the Strategy Bot records a check-in'}}, 403);
+        if (refuse === 'forbidden') return json({error: {code: 'forbidden', detail: 'The goal\'s owner, the owner of the goal it serves, someone above them or the Strategy Owner records a check-in'}}, 403);
         // The server's colour (backend/goals.py score): a judged measure wins, else the latest check-in that answered.
         const g = goals.find(x => x.id === add[1])!;
         const checkin = {id: 'c' + posted.length, goal_id: g.id, created_at: new Date().toISOString(), author: 'human:ben', sender_id: 'human:ben', body: body.body, signal: body.signal || null};

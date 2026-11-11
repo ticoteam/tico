@@ -957,34 +957,6 @@
    "default": true
   },
   {
-   "slug": "engineering-manager",
-   "template": "engineering-manager",
-   "name": "Engineering Manager",
-   "department": "engineering",
-   "lead": false,
-   "core": false,
-   "summary": "Manages the Engineering pipeline. Decides what happens to a task that is stuck, late or has no owner, splits outcomes that span repositories into Engineering tasks, and reports progress with links. Never merges.",
-   "when": "Offer when engineer bots work across several repositories.",
-   "tags": [
-    "github",
-    "delivery",
-    "developer-tools"
-   ],
-   "pains": [
-    "Changes across repositories need one delivery plan",
-    "Stuck child tasks and pull requests need follow-up",
-    "Delivery reports miss dependencies between engineer tasks"
-   ],
-   "recommend_when": [
-    "sells_software"
-   ],
-   "first_routine": "Daily delivery check · Daily at 09:00 team time",
-   "tools": [
-    "github"
-   ],
-   "default": false
-  },
-  {
    "slug": "engineering-team-manager",
    "template": "engineering-team-manager",
    "name": "Engineering Team Manager",
@@ -2546,6 +2518,41 @@
    "default": false
   },
   {
+   "slug": "pipeline-manager",
+   "template": "pipeline-manager",
+   "name": "Pipeline Manager",
+   "department": "operations",
+   "lead": false,
+   "core": false,
+   "summary": "Manages one pipeline. When a task stops (its owner couldn't move it, it is Late, or it has no owner), it decides what happens: reassign, move back, move on, snooze to a date or close, with one line of reason. It never does a stage's work and never changes a stage's settings.",
+   "when": "Any team whose work moves through a pipeline, such as product, engineering, growth, sales, customer success, legal or finance. Each pipeline gets its own Pipeline Manager.",
+   "tags": [
+    "pipeline",
+    "stages",
+    "tasks",
+    "handoffs",
+    "requirements",
+    "late",
+    "operations",
+    "saas"
+   ],
+   "pains": [
+    "tasks sit in one stage for weeks and nobody decides anything",
+    "a task waits on a seat that is not hired, or on nobody",
+    "work lands with the wrong owner and comes back",
+    "a task is snoozed with no date and forgotten",
+    "the same stage stops the same way every week and nobody proposes a fix"
+   ],
+   "recommend_when": [
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly pipeline report · Mondays at 09:00 team time",
+   "tools": [
+    "github"
+   ],
+   "default": true
+  },
+  {
    "slug": "pr",
    "template": "pr",
    "name": "PR Manager",
@@ -2766,7 +2773,7 @@
   {
    "slug": "product-lead",
    "template": "product-lead",
-   "name": "Head of Product",
+   "name": "Product Lead",
    "department": "product",
    "lead": true,
    "core": false,
@@ -2793,43 +2800,6 @@
     "uses_docs"
    ],
    "first_routine": "Weekly product summary · Mondays at 09:00 team time",
-   "tools": [
-    "docs",
-    "github",
-    "meetings"
-   ],
-   "default": true
-  },
-  {
-   "slug": "product-manager",
-   "template": "product-manager",
-   "name": "Product Manager",
-   "department": "product",
-   "lead": false,
-   "core": false,
-   "summary": "Runs the Product pipeline: turns an idea into a one-page Spec page engineers can build from (evidence, a time budget, non-goals, acceptance criteria that can be checked), hands it to Engineering once a person OKs it, and checks the result in production.",
-   "when": "A software team where work starts before the problem is written down, or where launches slip because nobody owns the checklist.",
-   "tags": [
-    "saas",
-    "software",
-    "specs",
-    "prd",
-    "launches",
-    "acceptance-criteria"
-   ],
-   "pains": [
-    "engineers start building before the problem is clear",
-    "specs are missing or out of date",
-    "launches slip because nobody owns the checklist",
-    "requirements live in someone's head",
-    "engineers find out what 'done' means after the build"
-   ],
-   "recommend_when": [
-    "sells_software",
-    "uses_github",
-    "uses_docs"
-   ],
-   "first_routine": "Weekly spec and launch review · Tuesdays at 10:00 team time",
    "tools": [
     "docs",
     "github",
@@ -3158,7 +3128,7 @@
   {
    "slug": "release-owner",
    "template": "release-owner",
-   "name": "Release Manager",
+   "name": "Release Owner",
    "department": "engineering",
    "lead": false,
    "core": false,
@@ -3805,8 +3775,8 @@
    "department": "product",
    "lead": false,
    "core": false,
-   "summary": "Owns one customer segment's activation and retention. Each week it ranks that segment's problems from tickets, feedback, calls and usage, and writes one-page product briefs for its manager to approve, then writes the Spec page for each approved one.",
-   "when": "A team with two or more customer segments where the product works for one group and the others drop off before they get value, and nobody answers for each group's problems.",
+   "summary": "Owns the Product pipeline's work for one customer segment, or for the whole product as plain Product Owner. Each week it reads activation and retention, ranks the problems from support requests, feedback, calls and usage, and files one-page briefs as ideas. For each chosen idea it writes the Spec page a person OKs, sees the Engineering work through, and checks the result in production.",
+   "when": "A software team whose work starts before the problem is written down, or where the product works for one group of customers and the others drop off before they get value. One per segment, or one for the whole product.",
    "tags": [
     "product",
     "activation",
@@ -3814,6 +3784,9 @@
     "segments",
     "customer-problems",
     "discovery",
+    "specs",
+    "acceptance-criteria",
+    "launches",
     "saas",
     "b2b",
     "b2c"
@@ -3823,12 +3796,14 @@
     "one loud customer's request fills the roadmap",
     "support, sales and calls each hold part of the problem and nobody adds them up",
     "retention falls and nobody can say which customers left or why",
-    "briefs go from idea to build without the evidence written down"
+    "briefs go from idea to build without the evidence written down",
+    "engineers find out what 'done' means after the build"
    ],
    "recommend_when": [
     "sells_software",
     "uses_tickets",
-    "uses_meetings"
+    "uses_meetings",
+    "uses_github"
    ],
    "first_routine": "Weekly segment product review · Mondays at 08:00 team time",
    "tools": [
@@ -3836,7 +3811,7 @@
     "github",
     "meetings"
    ],
-   "default": false
+   "default": true
   },
   {
    "slug": "seo-owner",

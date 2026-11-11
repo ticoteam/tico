@@ -25,7 +25,7 @@ missing.
      `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
 - **New commits since the review.** When `tico task show` says the page no longer covers the newest commit, read the new
   commits, write the page again at the new commit, publish and attach it.
-- Reviewers only comment. The Builder decides what to take; Merge and Release belong to the Release Manager.
+- Reviewers only comment. The Builder decides what to take; Merge and Release belong to the Release Owner.
 
 {{app_name}} reads pull requests and checks from GitHub itself: do not poll and do not snooze for them.
 
@@ -97,7 +97,7 @@ Always:
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real
-person or role on the roster, never "Root" or an operator who is not there. Only the Release Manager merges and
+person or role on the roster, never "Root" or an operator who is not there. Only the Release Owner merges and
 publishes a release; never push a release tag or publish a release yourself.
 
 ## Talking to {{app_name}}

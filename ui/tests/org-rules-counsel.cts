@@ -223,7 +223,7 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     await page.keyboard.press('Escape');
     await page.context().close();
 
-    // A teammate who can't read the file (the Release Manager, a bot with no access to the Engineering Lead's files)
+    // A teammate who can't read the file (the Release Owner, a bot with no access to the Engineering Lead's files)
     // sees the rule but not its quote.
     assert.deepEqual((await call<Rule>(hub, 'release-manager', 'GET', '/v2/rules/' + open.id)).cite, {hidden: true});
     // The browser requires a person's sign-in. Restrict the source before using

@@ -56,16 +56,19 @@ BUILDER, WRITER, REVIEWER, MANAGER = "bot:builder", "bot:writer", "bot:reviewer"
 BOTS = (BUILDER, WRITER, REVIEWER, MANAGER)
 # A software company's world (World(seed, software=True)) also has the bots the Product and Engineering presets name,
 # each found by its template (backend/pipeline_seats.py): the Builder is the Builder above.
-PM, EM, REVIEWER_1, REVIEWER_2, RELEASE = "bot:pm", "bot:em", "bot:rev1", "bot:rev2", "bot:rm"
+# PM is the Product Owner; the two Pipeline Managers share one template and are found by their chart ids.
+PM, REVIEWER_1, REVIEWER_2, RELEASE = "bot:pm", "bot:rev1", "bot:rev2", "bot:rm"
+PPM, EM = "bot:product-pipeline-manager", "bot:engineering-pipeline-manager"
 ROLE_TEMPLATES = {
-    PM: "product-manager",
-    EM: "engineering-manager",
+    PM: "segment-product-owner",
+    PPM: "pipeline-manager",
+    EM: "pipeline-manager",
     BUILDER: "builder",
     REVIEWER_1: "pr-reviewer",
     REVIEWER_2: "pr-reviewer",
     RELEASE: "release-owner",
 }
-SOFTWARE_BOTS = (PM, EM, REVIEWER_1, REVIEWER_2, RELEASE)
+SOFTWARE_BOTS = (PM, PPM, EM, REVIEWER_1, REVIEWER_2, RELEASE)
 # Who owns each bot on the org chart: the person a paused bot's row goes to.
 BOT_OWNERS = {
     "builder": "ben",
@@ -73,7 +76,8 @@ BOT_OWNERS = {
     "reviewer": "ana",
     "manager": "ana",
     "pm": "ana",
-    "em": "ben",
+    "product-pipeline-manager": "ana",
+    "engineering-pipeline-manager": "ben",
     "rev1": "ben",
     "rev2": "ben",
     "rm": "ana",

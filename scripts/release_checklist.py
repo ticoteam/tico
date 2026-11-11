@@ -288,7 +288,7 @@ def markdown(result):
         "",
         result["security"],
         "",
-        "Evidence snapshot only; gaps require resolution by the Release Manager.",
+        "Evidence snapshot only; gaps require resolution by the Release Owner.",
         "",
         "| PR | Ticket / step | Review 1 | Review 2 | Tests | QA | Docs | Gaps |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",

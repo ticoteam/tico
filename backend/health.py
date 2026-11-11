@@ -1682,15 +1682,17 @@ def token_failure(c):
 
 
 def _github(c, github, settings):
-    """Not connected is "info" while the team has no bot of its own (getting_started.own_bots), and "warn" once it has
-    one: the built-in bots come with every install, so the warning waits for a bot someone made."""
+    """Not connected is "info" while the team has no bot of its own (getting_started.own_bots) at work, and "warn" once
+    it has one: the built-in bots come with every install, so the warning waits for a bot someone made, and a planned
+    one (a new company's live seats, until BotOps sets them up) keeps nothing yet."""
     from .github_app import account_word
 
     row = github.row(c) if github else None
     failure = token_failure(c) if row else None
     fix = _fix("Open GitHub", "#/tools/github")
     if not row:
-        bots = own_bots(c, settings)
+        planned = {row[0] for row in c.execute("SELECT id FROM bots WHERE state='planned'")}
+        bots = [bot for bot in own_bots(c, settings) if bot not in planned]
         return _check(
             "github",
             "GitHub",

@@ -70,7 +70,7 @@ class SoftwareSim:
         return out
 
     def _numbers(self, task: str) -> list[int]:
-        from backend import task_facts as TF
+        from backend.item_sources import github as TF
 
         return [int(p["number"]) for p in self.r.w.read(lambda c: TF.prs_of(c, task))]
 
@@ -124,7 +124,7 @@ class SoftwareSim:
                 r.gh.publish(f"v1.{self.tag}.0")
 
     def release_hour(self) -> bool:
-        """The daily release hour (D13, a routine on the Release Manager): once a day from 10:00, the Release Manager
+        """The daily release hour (D13, a routine on the Release Owner): once a day from 10:00, the Release Owner
         publishes a release of what merged since the last one. While GitHub is down it cannot; the next step tries."""
         gh, now = self.r.gh, self.r.w.now()
         day = now[:10]
@@ -250,7 +250,7 @@ def _ok(r: SoftRig, c: Any, task: str, who: str) -> Any:
 
 
 def _requeue(c: Any, task: str, version: int) -> Any:
-    from backend import merge_queue as MQ
+    from backend.item_sources import github as MQ
 
     return MQ.requeue(c, task, RELEASE, seen_version=version)
 

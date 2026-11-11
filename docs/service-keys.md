@@ -72,12 +72,12 @@ curl -sS https://tico.acme.example/api/v2/inbound/tasks \
 
 ## Update keys
 
-An update key lets a release bot on another Tico install update this one, which is how one team's Release Manager rolls
+An update key lets a release bot on another Tico install update this one, which is how one team's Release Owner rolls
 a release out to several installs ([Releasing](releasing.md#the-release-managers-rollout)). Only the owner makes one,
 because only the owner updates the install:
 
 ```sh
-tico service-key create --label "Release Manager" --scope update
+tico service-key create --label "Release Owner" --scope update
 ```
 
 (`POST /api/v2/service-keys` with `{"label": "...", "scope": "update"}`.) It reaches these routes, the same ones the

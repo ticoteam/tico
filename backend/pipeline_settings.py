@@ -23,7 +23,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import access as Access
-from . import hubdb_core, pipeline_rights, task_engine
+from . import hubdb_core, pipeline_rights, source_actions, task_engine
+from . import pipeline_presets_more as more
 from . import pipeline_seats as S
 from . import task_requirements as R
 from .hubdb_core import KEEPER as SYSTEM
@@ -49,7 +50,7 @@ STAGE_FIELDS = (
     "expected_bots_only",
     "on_enter",
 )
-REQUIREMENT_FIELDS = ("kind", "settings", "can_push_past", "who_oks", "person_id", "line")
+REQUIREMENT_FIELDS = ("kind", "source", "condition", "settings", "can_push_past", "who_oks", "person_id", "line")
 WHO_OKS = ("none", "people_only", "people_with_exceptions")
 OK_KINDS = ("ok", "page")  # the kinds whose "Who OKs" switch means something on a stage (kinds 2 and 3)
 NAMES_PERSON = ("ok", "page")  # only a requirement met with a button names someone (C29): a person or a bot
@@ -106,6 +107,12 @@ def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements:
     }
 
 
+def github(condition: str, **settings: object) -> Row:
+    """A requirement of kind `item` on the task's GitHub PRs (backend/item_sources/github.py CONDITIONS)."""
+    out: Row = {"kind": "item", "source": "github", "condition": condition}
+    return {**out, "settings": settings} if settings else out
+
+
 def _page(line: str, rubric: str, **settings: bool) -> Row:
     return {"kind": "page", "line": line, "settings": {"rubric": rubric, **settings}}
 
@@ -133,7 +140,7 @@ PRESETS["engineering"] = {
             "Build",
             "Build it in its own thread, open a PR and link it, and get the checks green.",
             1440,
-            [{"kind": "pr_open"}, {"kind": "checks_pass"}],
+            [github("pr_open"), github("checks_pass")],
             task_limit=3,
         ),
         _stage(
@@ -148,7 +155,7 @@ PRESETS["engineering"] = {
             "Fixes 1",
             "Fix what the review found, push, and say done once the checks are green.",
             240,
-            [{"kind": "owner_done"}, {"kind": "checks_pass"}],
+            [{"kind": "owner_done"}, github("checks_pass")],
         ),
         _stage(
             "engineering-review-2",
@@ -163,7 +170,7 @@ PRESETS["engineering"] = {
             "Fix what the second review found and attach a Review page that shows what was built.",
             240,
             [
-                {"kind": "checks_pass"},
+                github("checks_pass"),
                 _page(
                     "Review page",
                     "Shows what was built, with screenshots or output, and how it was checked. Enough for a person "
@@ -177,15 +184,15 @@ PRESETS["engineering"] = {
             "The PRs are in the merge queue. If GitHub takes one out, queue it again, fix it on its branch, or send "
             "the task back to Fixes 2.",
             120,
-            [{"kind": "pr_merged"}],
-            on_enter={"queue_prs": True},
+            [github("pr_merged")],
+            on_enter={"act": "github.queue"},
         ),
         _stage(
             "engineering-release",
             "Release",
             "Waits for a published release that holds the merge.",
             1440,
-            [{"kind": "in_release"}],
+            [github("in_release")],
         ),
     ],
     "done": {"id": "engineering-done"},
@@ -249,7 +256,7 @@ FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to somethin
 # Who fills each preset's manager, its stage owners, and which stages' page requirement a person OKs (D5, D9).
 ROLES: dict[str, Row] = {
     "engineering": {
-        "manager": S.ENGINEERING_MANAGER,
+        "manager": S.ENGINEERING_PIPELINE_MANAGER,
         "stages": {
             "engineering-on-deck": S.BUILDER,
             "engineering-build": S.BUILDER,
@@ -263,16 +270,19 @@ ROLES: dict[str, Row] = {
         "ok": ("engineering-fixes-2",),
     },
     "product": {
-        "manager": S.PRODUCT_MANAGER,
+        "manager": S.PRODUCT_PIPELINE_MANAGER,
         "stages": {
-            "product-ideas": S.PRODUCT_MANAGER,
-            "product-spec": S.PRODUCT_MANAGER,
-            "product-in-development": S.PRODUCT_MANAGER,
-            "product-validate": S.PRODUCT_MANAGER,
+            "product-ideas": S.PRODUCT_OWNER,
+            "product-spec": S.PRODUCT_OWNER,
+            "product-in-development": S.PRODUCT_OWNER,
+            "product-validate": S.PRODUCT_OWNER,
         },
         "ok": ("product-spec",),
     },
 }
+# Growth Experiments, Lead, Opportunity, Customer and Success Experiments, with their Growth and Success factories.
+PRESETS.update(more.PRESETS)
+ROLES.update(more.ROLES)
 
 
 def _h() -> Any:
@@ -302,6 +312,8 @@ def _requirement_out(row: Row) -> Row:
     return {
         "id": row["id"],
         "kind": row["kind"],
+        "source": row.get("source"),
+        "condition": row.get("condition"),
         "settings": _loads(row.get("settings")) or {},
         "can_push_past": bool(row.get("can_push_past")),
         "who_oks": row.get("who_oks") or "none",
@@ -401,8 +413,10 @@ def _list(value: object, sentence: str, problems: list[str]) -> list[Any]:
 def _requirement_in(raw: object, stage_name: str, problems: list[str]) -> Row:
     item = _dict(raw, f"A requirement on {stage_name} is not a requirement.", problems)
     kind = _text(item.get("kind"), f"A requirement's kind on {stage_name}", problems)
+    source = _ref(item.get("source"), f"A requirement's source on {stage_name}", problems)
+    condition = _ref(item.get("condition"), f"A requirement's condition on {stage_name}", problems)
     ok_kind = kind in OK_KINDS
-    never = kind in R.NEVER_PUSHED_PAST
+    never = R.never_pushed_past({"kind": kind, "source": source, "condition": condition})
     push = _flag(item.get("can_push_past"), f"Can be pushed past on {stage_name}", problems, default=not never)
     who = _text(item.get("who_oks"), f"Who OKs on {stage_name}", problems) or (
         "people_with_exceptions" if ok_kind else "none"
@@ -410,6 +424,8 @@ def _requirement_in(raw: object, stage_name: str, problems: list[str]) -> Row:
     return {
         "id": _ref(item.get("id"), f"A requirement id on {stage_name}", problems),
         "kind": kind,
+        "source": source,
+        "condition": condition,
         "settings": _dict(item.get("settings"), f"A requirement's settings on {stage_name} are not a set.", problems),
         "can_push_past": push,
         "who_oks": who,
@@ -483,15 +499,17 @@ def _actor_exists(conn: "sqlite3.Connection", actor: str) -> bool:
     return False
 
 
-def _kind_name(kind: str) -> str:
-    return R.KIND_NAMES.get(kind, kind)
+def _kind_name(req: Row) -> str:
+    found = R.condition_of(req)
+    return found.name if found else str(R.KIND_NAMES.get(req["kind"], req["kind"]))
 
 
 def _check_settings(req: Row, label: str, problems: list[str]) -> None:
-    """A requirement's settings: only its kind's keys (task_requirements.SETTINGS), each of its type."""
-    name = _kind_name(req["kind"])
+    """A requirement's settings: only its kind's keys, or its condition's (task_requirements.settings_of), each of its
+    type."""
+    name = _kind_name(req)
     for key, value in req["settings"].items():
-        if key not in R.SETTINGS.get(req["kind"], ()):
+        if key not in R.settings_of(req):
             problems.append(f"{name} has no setting {key} (on {label}).")
         elif key in ("at_head", "with_release", "prereleases") and not isinstance(value, bool):
             problems.append(f"{key} on {label} is on or off.")
@@ -508,11 +526,17 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     if kind not in R.KINDS:
         problems.append(f"{kind or 'A blank kind'} is not a requirement kind (on {label}).")
         return
-    name = _kind_name(kind)
+    if kind == "item" and R.condition_of(req) is None:
+        what = f"{req['source']}.{req['condition']}" if req["source"] or req["condition"] else "A blank condition"
+        problems.append(f"{what} is not a source's condition (on {label}).")
+        return
+    if kind != "item" and (req["source"] or req["condition"]):
+        problems.append(f"Only an item requirement names a source and a condition (on {label}).")
+    name = _kind_name(req)
     if kind == "answer":
         problems.append(f"Answer from someone is never set on a stage (on {label}). Add it to one task instead.")
     _check_settings(req, label, problems)
-    if kind in R.NEVER_PUSHED_PAST and req["can_push_past"]:
+    if R.never_pushed_past(req) and req["can_push_past"]:
         problems.append(f"{name} can't be pushed past (C3), on {label}.")
     if req["who_oks"] not in WHO_OKS:
         problems.append(f"Who OKs on {label} is people only or people, with exceptions.")
@@ -528,10 +552,12 @@ def _check_requirement(conn: "sqlite3.Connection", stage: Row, req: Row, problem
     elif kind == "ok" and not person:
         problems.append(f"An OK from someone on {label} names the person or bot who OKs it.")
     if req["id"]:
-        found = _h()._one(conn, "SELECT stage_id, visit_id, kind FROM requirements WHERE id=?", (req["id"],))
+        found = _h()._one(
+            conn, "SELECT stage_id, visit_id, kind, source, condition FROM requirements WHERE id=?", (req["id"],)
+        )
         if found and (found.get("visit_id") or found.get("stage_id") != stage["id"]):
             problems.append(f"Requirement {req['id']} belongs to another stage, not {label}.")
-        elif found and found["kind"] != kind:
+        elif found and (found["kind"], found["source"], found["condition"]) != (kind, req["source"], req["condition"]):
             problems.append(f"A requirement's kind can't change on {label}: remove it and add a new one.")
 
 
@@ -539,8 +565,8 @@ def _check_on_enter(conn: "sqlite3.Connection", record: Row, stage: Row, label: 
     action = stage["on_enter"]
     if not action:
         return
-    if list(action) == ["queue_prs"] and action["queue_prs"] is True:
-        return
+    if list(action) == ["act"] and isinstance(action["act"], str) and source_actions.known(action["act"]):
+        return  # a source's action: `github.queue`
     target = action.get("file_into") if list(action) == ["file_into"] else None
     if not isinstance(target, str) or not target:
         problems.append(
@@ -610,11 +636,7 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
     existing = task_engine.pipeline(conn, pid) if pid else None
     if existing and existing.get("retired_at"):
         problems.append("This pipeline is retired.")
-    if record["private"]:
-        # docs/pipelines-v3.md lists `pipelines.private` and an editor switch but says nothing of who may then see the
-        # pipeline or its tasks, and nothing reads it: a private pipeline would promise privacy it does not give. Who
-        # reads a task is the task's own privacy (Who can see), whatever pipeline it is in.
-        problems.append("A pipeline can't be private yet. Make its tasks private instead, and choose who can see each.")
+    problems.extend(_private_problems(conn, record, existing))
     name = record["name"]
     if not name:
         problems.append("A pipeline needs a name.")
@@ -686,6 +708,38 @@ def _problems(conn: "sqlite3.Connection", record: Row) -> list[str]:
     loop = _loop(conn, record)
     if loop:
         problems.append(loop)
+    return problems
+
+
+def _has_tasks(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
+    """Whether any task, open or ended, is in the pipeline. A deleted one is not: a restore into a private pipeline
+    makes it private (task_engine.restore)."""
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM tasks WHERE pipeline_id IS NOT NULL AND pipeline_id=? LIMIT 1", (pipeline_id,)
+        ).fetchone()
+    )
+
+
+def _private_problems(conn: "sqlite3.Connection", record: Row, existing: Row | None) -> list[str]:
+    """A private pipeline (backend/private_pipelines.py) makes every task in it private, read by its manager and the
+    company's owner. So it is chosen as it is made (a preset, or a brand-new pipeline) or while it is still empty, never
+    changed on one that holds tasks, and its manager must be one who reads private tasks: never the Task Manager."""
+    problems: list[str] = []
+    was = bool(existing and existing.get("private"))
+    if existing and was != record["private"] and _has_tasks(conn, str(existing["id"])):
+        problems.append(
+            "A pipeline that holds tasks can't be made private or company-wide. Make a new pipeline instead."
+        )
+    if record["private"]:
+        manager = record["manager_id"]
+        if not manager:
+            problems.append("A private pipeline needs a manager. Its tasks are read by its manager and the owner.")
+        elif pipeline_rights.canonical(conn, manager) in {
+            pipeline_rights.canonical(conn, f"bot:{TASK_MANAGER}"),
+            pipeline_rights.canonical(conn, _task_manager(conn)),
+        }:
+            problems.append("The Task Manager can't manage a private pipeline: it reads no private task.")
     return problems
 
 
@@ -801,6 +855,8 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
     for position, req in enumerate(reqs):
         values = (
             req["kind"],
+            req["source"],
+            req["condition"],
             H._dump(req["settings"]),
             1 if req["can_push_past"] else 0,
             req["who_oks"],
@@ -811,7 +867,8 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
         found = req["id"] and conn.execute("SELECT 1 FROM requirements WHERE id=?", (req["id"],)).fetchone()
         if found:
             conn.execute(
-                "UPDATE requirements SET kind=?, settings=?, can_push_past=?, who_oks=?, person_id=?, line=?, "
+                "UPDATE requirements SET kind=?, source=?, condition=?, settings=?, can_push_past=?, who_oks=?, "
+                "person_id=?, line=?, "
                 "position=?, withdrawn_at=NULL WHERE id=?",
                 (*values, req["id"]),
             )
@@ -819,8 +876,8 @@ def _write_requirements(conn: "sqlite3.Connection", by: str, stage_id: str, reqs
             continue
         rid = req["id"] or H.new_id()
         conn.execute(
-            "INSERT INTO requirements (kind, settings, can_push_past, who_oks, person_id, line, position, id, "
-            "stage_id, added_by_id, by_bot, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO requirements (kind, source, condition, settings, can_push_past, who_oks, person_id, line, "
+            "position, id, stage_id, added_by_id, by_bot, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (*values, rid, stage_id, str(by), 1 if is_bot(by) else 0, ts),
         )
         kept.append(rid)
@@ -906,6 +963,8 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
     parsed, problems = _parse(record)
     existing = task_engine.pipeline(conn, parsed["id"]) if parsed["id"] else None
     _may_change(conn, by, existing, seen_version)
+    if existing and existing.get("private") and not parsed["private"] and is_bot(by):
+        _refuse(conn, by, "task_settings", "Only a person makes a private pipeline company-wide.")
     problems += _problems(conn, parsed)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
@@ -989,18 +1048,24 @@ def _set_up(conn: "sqlite3.Connection") -> bool:
 
 def preset(conn: "sqlite3.Connection", key: str) -> Row:
     """A preset's record for this org, ready to save: its manager, its stage owners and the person on its people OKs
-    filled in from the bots and people the org has (pipeline_seats). A role nobody fills is left empty."""
+    filled in from the bots and people the org has (pipeline_seats). No work stage is left without an owner: a role
+    nobody fills goes up the ladder, a stage's to the pipeline's manager and a manager's to the Task Manager, until the
+    role's bot appears (`_fill`). A private preset's ladder stops at its manager: never the Task Manager."""
     record = copy.deepcopy(PRESETS[key])
     if key == "general":
         record["manager_id"] = _task_manager(conn)
     roles = ROLES.get(key)
     if not roles:
         return record
-    who = S.resolve(conn)
-    record["manager_id"] = who.get(roles["manager"])
+    who = {**S.resolve(conn), **more.resolve(conn)}
+    # A private preset never falls to the Task Manager, which reads no private task: no bot, no manager (and then
+    # ensure_presets does not make it).
+    stand_in = None if record["private"] else _task_manager(conn)
+    record["manager_id"] = who.get(roles["manager"]) or stand_in
     person = S.ok_person(conn, record["manager_id"])
     for stage in record["stages"]:
-        stage["owner"] = who.get(roles["stages"].get(stage["id"], ""))
+        role = roles["stages"].get(stage["id"])
+        stage["owner"] = (who.get(role) or record["manager_id"]) if role else stage["owner"]
         if stage["id"] in roles["ok"]:
             for req in stage["requirements"]:
                 if req["kind"] == "page":
@@ -1017,19 +1082,25 @@ def _untouched(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
 def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
     """An untouched preset made before its roles' bots existed gets them once they do: an empty manager, an empty
     stage owner, an empty person on a stage's people OK. Nothing a person set is changed, and the settings version
-    stays 1, so the next bot that appears is filled in too."""
+    stays 1, so the next bot that appears is filled in too. A stand-in up the ladder (`preset`: the Task Manager for
+    a manager, the manager for a stage) gives way to the role's bot once it exists."""
     record = preset(conn, key)
     ts = _h().now()
+    found = conn.execute("SELECT manager_id, private FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
+    if found and found[1] and not record.get("manager_id"):
+        return  # a private pipeline whose owner bot is gone keeps its manager: nobody stands in
+    stand_ins = (found[0] if found else None, _task_manager(conn))
     if record.get("manager_id"):
         conn.execute(
-            "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND manager_id IS NULL",
-            (record["manager_id"], ts, pipeline_id),
+            "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND (manager_id IS NULL OR manager_id=?)",
+            (record["manager_id"], ts, pipeline_id, stand_ins[1]),
         )
     for stage in record["stages"] if key in ROLES else ():
         if stage.get("owner"):
             conn.execute(
-                "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? AND owner IS NULL",
-                (stage["owner"], ts, stage["id"], pipeline_id),
+                "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? "
+                "AND (owner IS NULL OR owner=? OR owner=?)",
+                (stage["owner"], ts, stage["id"], pipeline_id, *stand_ins),
             )
         for req in stage["requirements"]:
             if req.get("person_id"):
@@ -1104,6 +1175,12 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     - Product and Engineering are made for a company that builds software (`makes_software`: a blank answer is yes),
       once its setup finished, so their roles find the bots setup made. With them comes the Product factory. A company
       that says no gets its untouched pair retired; saying yes again brings that pair back.
+    - Growth Experiments, Lead, Opportunity, Customer and Success Experiments (pipeline_presets_more) are made for every
+      company once its setup finished, each with its Growth or Success factory. A company set up before they existed
+      gets them at its next start.
+    - Legal and Finance, private, in the Corporate factory, likewise, but only once their owner bot exists (the Legal
+      Owner, the Bookkeeper): never with the Task Manager standing in. `ensure_private` makes them when that bot is
+      made.
     - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with one exception:
       while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is
       filled in once the bot or person for it exists.
@@ -1126,11 +1203,25 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
             if not _set_up(conn):
                 continue
             _ensure_factory(conn)
+        elif key in more.PRESETS:
+            if not _set_up(conn):
+                continue
+            if key in more.PRIVATE and not preset(conn, key)["manager_id"]:
+                continue  # made once its owner bot exists (ensure_private), its factory with it
+            more.ensure_factory(conn, PRESETS[key]["factory_id"], _h().now())
         record = preset(conn, key)
         if check(conn, record):
             continue
         made.append(save(conn, SYSTEM, record)["id"])
     return made
+
+
+def ensure_private(conn: "sqlite3.Connection") -> list[str]:
+    """Legal and Finance (pipeline_presets_more.PRIVATE), made the moment their owner bot is: a bot made
+    (settings_admin.create_bot) and the Bookkeeper's ensure call this. It is the whole `ensure_presets` pass, the same
+    one every start runs, so the factories keep their order (Corporate after the others). Returns the private ids it
+    made."""
+    return [pid for pid in ensure_presets(conn) if pid in more.PRIVATE]
 
 
 def from_preset(conn: "sqlite3.Connection") -> list[str]:
