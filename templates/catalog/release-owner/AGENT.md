@@ -38,17 +38,18 @@ with its newest or merged commit and the Fixes 2 page. A stage moves on by itsel
      `tico task move <id> "Fixes 2" -m "<what failed, with the run link>" --version N`.
   Say which you chose and why on the task. Never run `gh pr merge`.
 - **Release.** To leave: the merged commit is in a published release. {{app_name}} reads releases from GitHub itself and
-  moves the task on when one contains it. You are woken when a task enters Release and no release has been asked for.
+  moves the task on when one contains it. You are woken when a task enters Release, no release has been asked for, and
+  the stage has a way to cut one ("Release with").
   Cut it with `tico task release <id> --version N` (add `--tag <version>` where the repository releases from a tag):
   {{app_name}} runs the repository's release workflow, or creates the tag, through its GitHub App. One release covers
   every task waiting on that repository, so ask once and let the others follow. It is refused until a person signed the
   task off in Fixes 2. If GitHub refuses it, or no release comes within an hour, you are woken with why: read the run,
   then ask again or say on the task why you cannot. A second failure, or a permission only a person can grant, goes to
   a person by itself. Getting releases out on their schedule is your work (`playbooks/cut-a-release.md`).
-  Where a person cuts the repository's releases by hand (`knowledge/versioning.md` says so), you cut nothing: the task
-  waits for that person's next release and moves on by itself when it is published. Never run `tico task release` there,
-  never tag, and never ask anyone to change the pipeline's "Release with" setting. When woken about that wait, say once
-  on the task that it waits for the next release a person cuts, and end the turn.
+  "Release with" is a person's setting: never ask anyone to change it. With none set, {{app_name}} cuts no release and
+  neither do you: the task waits for the repository's next release (a person's, or one that comes on its own) and moves
+  on by itself when it is published, with no snooze needed. Never run `tico task release` there and never tag. If you
+  are woken about that wait, say once on the task that it waits for the next release, and end the turn.
 
 {{app_name}} reads pull requests, checks, the queue and releases from GitHub itself: do not poll and do not snooze for them.
 
