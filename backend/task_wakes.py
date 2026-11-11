@@ -222,6 +222,11 @@ def ask(conn: "sqlite3.Connection", task: Row, requirement: Row | None, who: str
 # before it wakes anyone, and `waiting_on` shows the task as Paused with the cause. Every cause is a read of saved state:
 # nothing here asks a computer. The three in COMPANY_WIDE stop every bot they touch and are whole sentences.
 STATE_CAUSES = {"paused": "is paused", "quarantined": "is quarantined", "planned": "has not started yet"}
+# A planned bot BotOps is still setting up (its setup task is open, or its go-live waits for the repository): its
+# tasks start by themselves once it is live (backend/setup_live.py).
+BEING_SET_UP = "is still being set up"
+# An active bot whose onboarding a person has not marked complete takes no task (backend/lifecycle.py).
+ONBOARDING = "is still onboarding: a person above it marks its onboarding complete"
 REMOVED = "was removed"
 NO_COMPUTER = "has no computer"
 RUNS_FAILING = "keeps failing its runs"
@@ -255,12 +260,24 @@ def cannot_run(conn: "sqlite3.Connection", actor: str | None, seen: dict[str, st
 
 
 def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
-    from . import bot_settings, cloud_access, company_pause, gateway_connection, harnesses, reconnects, run_backoff
+    from . import (
+        bot_settings,
+        cloud_access,
+        company_pause,
+        gateway_connection,
+        harnesses,
+        reconnects,
+        run_backoff,
+        setup_live,
+        statuses,
+    )
 
     row = _read(conn, _BOT_STATE, (bot,))
     if not row:
         return REMOVED
     state = row[0] or "active"
+    if state == "planned" and cast("Any", setup_live).being_set_up(conn, bot):
+        return BEING_SET_UP
     if state != "active":
         return STATE_CAUSES.get(state, f"is {state}")
     if company_pause.record(conn) is not None:
@@ -279,6 +296,9 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
         placed = _read(conn, _PLACED, (bot,))
         if not placed or placed[0]:
             return NO_COMPUTER
+    onboarding = _read(conn, _ONBOARDING, (bot,))
+    if onboarding and cast("Any", statuses).is_parked(onboarding[0] or ""):
+        return ONBOARDING
     held: Row = cast("Any", run_backoff).get(conn, bot) or {}
     if held.get("held_at"):
         return RUNS_FAILING  # held until a person releases it (backend/run_backoff.py)
@@ -290,6 +310,7 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
 # `_cause`'s reads of one bot, kept for the snapshot (`_read`); `prime_bots` reads them for many bots at once.
 _BOT_STATE = "SELECT state FROM bots WHERE id=?"
 _PLACED = "SELECT r.revoked_at FROM assignments a JOIN runners r ON r.id = a.runner_id WHERE a.bot=?"
+_ONBOARDING = "SELECT onboarding_state FROM bot_config WHERE bot=?"
 
 
 def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> None:
@@ -322,6 +343,13 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
     ):
         placed.setdefault(str(r[0]), (r[1],))
     RC.prime(conn, _PLACED, {(b,): placed.get(b) for b in bots})
+    onboarding = {
+        str(r[0]): (r[1],)
+        for r in conn.execute(
+            "SELECT bot, onboarding_state FROM bot_config WHERE bot IN (SELECT value FROM json_each(?))", listed
+        )
+    }
+    RC.prime(conn, _ONBOARDING, {(b,): onboarding.get(b) for b in bots})
     cast("Any", reconnects).prime_open(conn, bots, "login:")
 
 

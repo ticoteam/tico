@@ -19,6 +19,7 @@ from . import ask_ingest as _ask_ingest
 from . import models as M
 from . import org_rule_check as _org_rule_check
 from . import reach as _reach
+from . import setup_live as _setup_live
 from . import strategy_merge as _strategy_merge
 from . import task_asks as _task_asks
 from . import task_caps as _task_caps
@@ -31,6 +32,7 @@ H: Any = _H
 ask_ingest: Any = _ask_ingest
 org_rule_check: Any = _org_rule_check
 reach: Any = _reach
+setup_live: Any = _setup_live
 strategy_merge: Any = _strategy_merge
 task_asks: Any = _task_asks
 task_caps: Any = _task_caps
@@ -234,6 +236,7 @@ def register(
 
     # ------------------------------------------------------------------ where it is
     def done_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        setup_live.require_live(c, task_id)  # a seat bot's "Set up" task is done once the bot is live
         note, version = carry(c, who, task_id, gate, body.note or "", body.version)
         H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None)
 
@@ -246,6 +249,8 @@ def register(
         return checked(request, tid, body, "task_done")
 
     def move_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        if str(body.to).strip().lower() == "done":
+            setup_live.require_live(c, task_id)
         why, version = carry(c, who, task_id, gate, body.why, body.version)
         H.task_move(c, who.actor, task_id, body.to, why, version, mover=mover(c, who) or None)
 

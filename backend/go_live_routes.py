@@ -215,7 +215,10 @@ def register(
                     declared = onboarding._declared(c, bot)
                     if settings_admin.computer_builds_repository(c, bot):
                         building = True
-                    elif github == "present":
+                    elif github == "present" or (declared.get("template") and declared.get("setup_task_id")):
+                        # GitHub has it, or BotOps has its build in hand (its setup task, often the very run asking):
+                        # the computer gets it and its report finishes this go-live. Attaching the template again
+                        # here would park a starter in Onboarding behind a person.
                         return wait_for_repository(c, who, bot, placed, body)
                     elif declared.get("template"):
                         if not H.bot(c, "botops"):
@@ -225,15 +228,16 @@ def register(
                         build = onboarding.attach_template(
                             c, who, bot, declared["template"], declared.get("instructions") or "", queue_build=True
                         )
-                        return {
-                            "bot": bot,
-                            "state": row["state"],
-                            **placed,
-                            **build,
-                            "building": True,
-                            "setup_started": False,
-                            "note": "BotOps is building its repository; watch setup_task_id",
-                        }
+                        if settings_admin.computer_builds_repository(c, bot):
+                            building = True  # a starter: its computer builds it from the template, so it goes live now
+                        else:
+                            # BotOps builds it on its setup task; the computer's report of it finishes this go-live.
+                            return {
+                                **wait_for_repository(c, who, bot, placed, body),
+                                **build,
+                                "building": True,
+                                "note": "BotOps is building its repository; it goes live by itself when it is built",
+                            }
                     elif missing is not None:
                         raise Problem(
                             "repository_missing",

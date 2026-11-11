@@ -482,6 +482,16 @@ def setup_body(slug, choice, answers):
             "- display name: " + choice["display_name"],
             "- requested description and limits: " + (choice.get("description") or "not specified"),
             "Use this request's scope. Do not inherit a previous bot's tools, repository or Routines.",
+            *(
+                [
+                    "",
+                    "This bot is a seat on the company chart: take it live yourself once its repository is committed "
+                    f"(`tico bot go-live {slug}`). If go-live says it is waiting for the repository, Tico finishes "
+                    "it by itself within a minute or two. This task is done only once the bot is active.",
+                ]
+                if choice.get("goes_live")
+                else []
+            ),
             "",
             "Instructions the owner reviewed, for AGENT.md:",
             "",

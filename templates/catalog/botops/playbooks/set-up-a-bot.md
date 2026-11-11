@@ -5,12 +5,13 @@ no schedule. Budget 30 minutes.
 
 The outcome is a repository in {{company_name}}'s workspace that passes its readiness check and holds
 instructions the owner recognises as what they asked for. When a human asked you in chat, you then
-take it live (`tico bot go-live <slug>`); for a task nobody chatted, the note tells the owner the one
-thing to read before they turn it on, and they do.
+take it live (`tico bot go-live <slug>`). A seat on the company chart (its task says so) you take live
+too, with no person step. For any other task nobody chatted, the note tells the owner the one thing to read
+before they turn it on, and they do.
 
 Inputs: the task (`tico task show <id>`): the bot's name, its template, its slug if it is already registered, and any reviewed instructions or setup answers.
 
-Done when: `tico bot check <slug>` passes or its warnings are explained in the note, and the note from section 6 is on the task. The bot stays off unless the human asked you to take it live.
+Done when: `tico bot check <slug>` passes or its warnings are explained in the note, and the note from section 6 is on the task. A chart seat is also active: Tico refuses its task's done until it is. Any other bot stays off unless the human asked you to take it live.
 
 ---
 
@@ -148,8 +149,13 @@ The note says, in this order:
 4. the one thing the owner should read before it goes live, usually the `## Boundaries`
    section or a gap the answers did not fill.
 
-Unless a human asked you in chat to take it live, the bot stays as it is
-(still being set up) until its owner turns it on.
+For a chart seat, take it live first: `tico bot go-live <slug>`. When it answers `waiting_for_repository`, the
+computer has not reported the repository yet and Tico finishes going live by itself: snooze the task a few minutes
+(`tico task snooze <id> --until <time> -m "waiting to go live" --version N`) and say done once `tico bot show <slug>` says active. If it is
+still waiting after 30 minutes, say so on the task once, naming what Health says, and leave it for the owner.
+
+Otherwise, unless a human asked you in chat to take it live, the bot stays as it is (still being set up) until its
+owner turns it on.
 
 ## When it goes sideways
 

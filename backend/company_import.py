@@ -31,6 +31,7 @@ from . import market_spend as MS
 from . import market_watch as MW
 from . import models as M
 from . import onboarding as O
+from . import setup_live
 from . import strategy as S
 from . import strategy_setup as SS
 from .company_file import draft as D
@@ -708,10 +709,14 @@ def _go_live(onboarding, c, who, seats, made, teams):
             "display_name": seat["title"],
             "instructions": instructions,
             "reports_to": under,
+            "goes_live": True,
         }
         bot_id = onboarding._define(c, who, key, choice, card, reports_to=under)
         declared = onboarding._declared(c, bot_id)
         declared["placed_under"] = under
+        # Its setup ends with it live and taking work, with no person step (backend/setup_live.py): BotOps takes it
+        # live on its "Set up" task, and nothing parks it in Onboarding.
+        declared[setup_live.GOES_LIVE] = True
         onboarding._write_config(c, bot_id, declared)
         onboarding._setup_task(c, who, bot_id, choice, card, record["answers"])
         if teams.get(key):

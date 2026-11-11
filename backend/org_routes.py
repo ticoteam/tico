@@ -219,6 +219,7 @@ def register(app, auth, settings, settings_admin, store):
             W.STATE_CAUSES["paused"]: "resume",
             W.STATE_CAUSES["quarantined"]: "release_quarantine",
             W.STATE_CAUSES["planned"]: "finish_setup",
+            W.ONBOARDING: "finish_setup",
             W.NO_COMPUTER: "assign_computer",
             W.RUNS_FAILING: "release_hold",
             W.LOGIN: "reconnect",
