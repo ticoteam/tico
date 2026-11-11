@@ -415,6 +415,18 @@ struct Inner {
     seen: usize,
 }
 
+/// Why a Connect failed, for the server (`Session::report`'s `trace`): the phases in order, the allowlisted category
+/// and the scrubbed last screen. A lock of its own: phases are noted while `inner` is held.
+#[derive(Default)]
+struct Diag {
+    phases: Vec<Value>,
+    category: String,
+    screen: String,
+    /// A server from before `trace` refuses a report that carries it: said again without.
+    refused: bool,
+}
+const MAX_PHASES: usize = 60;
+
 /// One login command, from start to a verdict.
 pub struct Session {
     id: String,
@@ -423,6 +435,7 @@ pub struct Session {
     runtime: String,
     profile: String,
     inner: Mutex<Inner>,
+    diag: Mutex<Diag>,
     canceled: AtomicBool,
     /// The server took this switch's `finishing` report: it can no longer be canceled, so the new login goes in.
     confirmed: AtomicBool,
@@ -443,6 +456,7 @@ impl Session {
                 dirty: true,
                 ..Default::default()
             }),
+            diag: Mutex::default(),
             canceled: AtomicBool::new(false),
             confirmed: AtomicBool::new(false),
             started: Instant::now(),
@@ -453,12 +467,50 @@ impl Session {
     /// identifiers are logged; never the CLI's text, account details, URL, code or captured value.
     fn trace(&self, phase: &'static str, exit_code: Option<i32>) {
         if self.kind == "connect" {
+            let elapsed_ms = self.started.elapsed().as_millis() as u64;
             log(&format!(
                 "Tico runner: model sign-in {}",
                 json!({"login_id": self.id, "runtime": self.runtime,
-                "phase": phase, "elapsed_ms": self.started.elapsed().as_millis(), "exit_code": exit_code})
+                "phase": phase, "elapsed_ms": elapsed_ms, "exit_code": exit_code})
             ));
+            let mut d = self.diag.lock().unwrap();
+            if d.phases.len() < MAX_PHASES {
+                d.phases.push(
+                    json!({"phase": phase, "elapsed_ms": elapsed_ms, "exit_code": exit_code}),
+                );
+            }
         }
+    }
+
+    /// A Connect that got no credential: the category of what its command last showed (`oauth_failure`) and that
+    /// screen, scrubbed (`screen_digest`), kept for the failure report and written to the log as a diagnostic line, so
+    /// the heartbeat's `recent_errors` has it too. `since` is how many of the command's last bytes to read.
+    fn why(&self, since: Option<usize>) -> &'static str {
+        let (reason, since, digest) = {
+            let i = self.inner.lock().unwrap();
+            let since = since.unwrap_or(i.seen);
+            let mut from = i.raw.len().saturating_sub(since);
+            while !i.raw.is_char_boundary(from) {
+                from += 1;
+            }
+            (
+                oauth_failure(&i.raw),
+                since,
+                screen_digest(&i.raw[from..], i.typed.as_deref().unwrap_or("")),
+            )
+        };
+        crate::util::diagnostic(&format!(
+            "Tico runner: model sign-in {}",
+            json!({"login_id": self.id, "runtime": self.runtime, "phase": "final_screen", "reason": reason,
+            "elapsed_ms": self.started.elapsed().as_millis() as u64, "bytes": since, "screen": digest})
+        ));
+        {
+            let mut d = self.diag.lock().unwrap();
+            d.category = reason.into();
+            d.screen = digest;
+        }
+        self.trace(reason, None);
+        reason
     }
 
     fn live(&self) -> bool {
@@ -482,6 +534,14 @@ impl Session {
         let mut body = json!({"state": i.state, "message": i.message, "url": i.url, "code": i.code, "lines": i.lines});
         if i.taken {
             body["code_taken"] = json!(true);
+        }
+        // A failed Connect says why, so the reason is on the server and not only in this computer's log.
+        if self.kind == "connect" && i.state == "failed" {
+            let d = self.diag.lock().unwrap();
+            if !d.refused {
+                body["trace"] =
+                    json!({"category": d.category, "phases": d.phases, "screen": d.screen});
+            }
         }
         Some(body)
     }
@@ -1261,8 +1321,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             ));
         }
         if connect && oauth_retry(&s.inner.lock().unwrap().raw) {
-            let reason = oauth_failure(&s.inner.lock().unwrap().raw);
-            s.trace(reason, None);
+            let reason = s.why(None);
             kill(&mut child);
             break Some(("failed".into(), failure_message(reason, true).into()));
         }
@@ -1351,29 +1410,11 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                     (String::new(), String::new())
                 }
                 None => {
-                    // Why: the last screen, scrubbed, and its category. The category line reaches the server in the
-                    // heartbeat's `recent_errors`.
-                    let (reason, since, digest) = {
-                        let i = s.inner.lock().unwrap();
-                        let since = watch
-                            .as_ref()
-                            .map_or(i.seen, |w| i.seen.saturating_sub(w.seen_at));
-                        let mut from = i.raw.len().saturating_sub(since);
-                        while !i.raw.is_char_boundary(from) {
-                            from += 1;
-                        }
-                        (
-                            oauth_failure(&i.raw),
-                            since,
-                            screen_digest(&i.raw[from..], i.typed.as_deref().unwrap_or("")),
-                        )
-                    };
-                    crate::util::diagnostic(&format!(
-                        "Tico runner: model sign-in {}",
-                        json!({"login_id": s.id, "runtime": s.runtime, "phase": "final_screen", "reason": reason,
-                        "elapsed_ms": s.started.elapsed().as_millis(), "bytes": since, "screen": digest})
-                    ));
-                    s.trace(reason, None);
+                    // Why: the last screen since the code went in, scrubbed, and its category.
+                    let since = watch
+                        .as_ref()
+                        .map(|w| s.inner.lock().unwrap().seen.saturating_sub(w.seen_at));
+                    let reason = s.why(since);
                     ("failed".into(), failure_message(reason, false).into())
                 }
             }
@@ -2542,7 +2583,10 @@ impl Logins {
                     .await
                 {
                     Ok(reply) => reply,
-                    Err(_) => {
+                    Err(e) => {
+                        if !e.retryable && e.status == 422 && body.get("trace").is_some() {
+                            s.diag.lock().unwrap().refused = true;
+                        }
                         s.inner.lock().unwrap().dirty = true; // said again on the next poll
                         continue;
                     }
@@ -3026,13 +3070,51 @@ esac
                 .any(|l| l.contains("final_screen") && l.contains("provider_refused")),
             "the heartbeat carries the category: {recent:?}"
         );
-        let shown = login.report().unwrap().to_string();
+        // What the server is told: the phases in order, the category and the scrubbed screen, with no link, typed
+        // code or token-shaped text, and the CLI's words nowhere a person reads them.
+        let body = login.report().unwrap();
+        let shown = body.to_string();
         assert!(
             !shown.contains("pasted-code")
                 && !shown.contains("sk-ant")
-                && !shown.contains("policy"),
+                && !shown.contains("abcdefghijklmnop")
+                && !shown.contains("https://"),
             "{shown}"
         );
+        assert!(!body["message"].as_str().unwrap().contains("policy"));
+        let trace = &body["trace"];
+        assert_eq!(trace["category"], "provider_refused");
+        assert!(
+            trace["screen"]
+                .as_str()
+                .unwrap()
+                .contains("this policy does not permit"),
+            "{trace}"
+        );
+        let phases: Vec<&str> = trace["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["phase"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            phases,
+            [
+                "cli_started",
+                "instructions_ready",
+                "code_received",
+                "code_written",
+                "enter_written",
+                "cli_exited",
+                "provider_refused",
+                "failed"
+            ]
+        );
+        assert_eq!(trace["phases"][5]["exit_code"], 0);
+        // A server from before `trace` refused it: the verdict is said again without.
+        login.diag.lock().unwrap().refused = true;
+        login.inner.lock().unwrap().dirty = true;
+        assert!(login.report().unwrap().get("trace").is_none());
         std::fs::remove_file(root.join("refuses")).unwrap();
 
         // Cancelled: nothing is captured.

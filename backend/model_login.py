@@ -143,6 +143,32 @@ def clean_lines(lines):
     return out
 
 
+_WORD = re.compile(r"[a-z][a-z0-9_]{0,39}")
+_LINK = re.compile(r"https?://\S*")
+MAX_PHASES = 60
+
+
+def clean_trace(trace, hide=""):
+    """A failed Connect's trace as it is kept (the `runner.login.failed` event): fixed words for the category and each
+    phase, numbers, and the last screen scrubbed here again (links, `hide` (a code still waiting), anything
+    token-shaped), at most MAX_LINE characters. None when the computer sent none."""
+    if trace is None:
+        return None
+    word = lambda text: text if _WORD.fullmatch(text or "") else ""
+    screen = _LINK.sub("[link]", trace.screen)
+    if hide:
+        screen = screen.replace(hide, "")
+    return {
+        "category": word(trace.category),
+        "phases": [
+            {"phase": word(p.phase), "elapsed_ms": min(p.elapsed_ms, 10**9), "exit_code": p.exit_code}
+            for p in trace.phases[:MAX_PHASES]
+            if word(p.phase)
+        ],
+        "screen": redact(screen),
+    }
+
+
 def clean_url(url):
     url = str(url or "").strip()
     if not url:
@@ -914,7 +940,12 @@ def report(c, runner_id, lid, body, settings=None):
         (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid),
     )
     if terminal:
-        H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], {"runtime": row["runtime"]})
+        detail = {"runtime": row["runtime"]}
+        # Why a Connect failed stays with its audit row, so nobody has to read the computer's own log for it.
+        trace = clean_trace(body.trace, row["pending_code"] or "") if state == "failed" else None
+        if trace and row["kind"] == "connect":
+            detail.update(login_id=lid, trace=trace)
+        H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], detail)
     # Switch to API key: only now is the key this computer's and the switch's marks lifted (confirm). Until the runner
     # says so the subscription is what the login runs on, so a failure after its commit point, which the runner undoes
     # on the computer, has nothing to undo here.

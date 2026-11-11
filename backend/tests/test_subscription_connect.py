@@ -257,6 +257,49 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     )
     seen = get(api, f"runners/{m['runner_id']}/logins/{login['id']}")
     assert seen["state"] == "failed" and seen["message"] == "It stopped" and seen["lines"] == []
+    # Why it failed is kept with the audit row: the phases, the category and the last screen, scrubbed here again
+    # whatever the computer sent (a token-shaped string, a link, the code still waiting, a made-up phase).
+    login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"})
+    post(
+        api,
+        f"runner-logins/{login['id']}/report",
+        {"state": "waiting", "url": "https://claude.example/authorize"},
+        m["token"],
+    )
+    post(api, f"runners/{m['runner_id']}/logins/{login['id']}/code", {"code": "typedcode#state"})
+    phases = [
+        {"phase": "cli_started", "elapsed_ms": 4, "exit_code": None},
+        {"phase": "cli_exited", "elapsed_ms": 9100, "exit_code": 0},
+        {"phase": f"Leaked {TOKEN}", "elapsed_ms": 9200},
+        {"phase": "provider_refused", "elapsed_ms": 9200},
+    ]
+    screen = f"typedcode#state https://claude.example/authorize?code=abc {TOKEN} this policy does not permit"
+    post(
+        api,
+        f"runner-logins/{login['id']}/report",
+        {
+            "state": "failed",
+            "message": "No token",
+            "trace": {"category": "provider_refused", "phases": phases, "screen": screen},
+        },
+        m["token"],
+    )
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT detail FROM events WHERE action='runner.login.failed' ORDER BY created_at").fetchall()
+        kept = json.loads(rows[-1][0])
+        everything = json.dumps([dict(r) for r in c.execute("SELECT * FROM events")]) + json.dumps(
+            [dict(r) for r in c.execute("SELECT * FROM model_logins")]
+        )
+    assert kept["login_id"] == login["id"] and kept["trace"]["category"] == "provider_refused"
+    assert [(p["phase"], p["elapsed_ms"], p["exit_code"]) for p in kept["trace"]["phases"]] == [
+        ("cli_started", 4, None),
+        ("cli_exited", 9100, 0),
+        ("provider_refused", 9200, None),
+    ]
+    assert kept["trace"]["screen"].endswith("this policy does not permit") and "[link]" in kept["trace"]["screen"]
+    for leak in (TOKEN, TOKEN[:20], "typedcode", "claude.example/authorize?code", "Leaked"):
+        assert leak not in everything, leak
+    assert "trace" not in json.loads(rows[-2][0])  # a report with no trace keeps none
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] == 0
 
