@@ -1354,7 +1354,7 @@ def test_a_declared_watcher_runs_without_a_model_and_its_event_opens_a_task(api,
     (repo / "software" / "watch.py").write_text(
         "import os\n"
         "print('tico-event {\"op\": \"task\", \"key\": \"acme:1\", \"title\": \"Acme ticket\", \"body\": \"From HQ\"}')\n"
-        "print('hub token: ' + ('yes' if os.environ.get('HUB_TOKEN') else 'no'))\n"
+        "print('HUB_TOKEN set: ' + ('yes' if os.environ.get('HUB_TOKEN') else 'no'))\n"
     )
     with (repo / "bot.yaml").open("a") as manifest:
         manifest.write("watchers:\n  - name: acme-hq\n    run: software/watch.py\n    every: 1m\n")
@@ -1367,7 +1367,7 @@ def test_a_declared_watcher_runs_without_a_model_and_its_event_opens_a_task(api,
             ).fetchone()
 
     exit_code, events, output = until(ran, "the watcher's report", timeout=60)
-    assert (exit_code, events, output) == (0, 1, "hub token: no")
+    assert (exit_code, events, output) == (0, 1, "HUB_TOKEN set: no")
     with api.app.state.store.read() as c:
         task = c.execute(
             "SELECT t.title FROM watcher_items w JOIN tasks t ON t.id=w.task_id WHERE w.bot='ops' AND w.key='acme:1'"

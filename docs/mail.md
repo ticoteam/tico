@@ -118,7 +118,7 @@ $HUB_DIR/scripts/mail.sh audit --since 24h            # everything mail did
 $HUB_DIR/scripts/mail.sh sent-log --since 7d          # what actually went out
 $HUB_DIR/scripts/mail.sh doctor                       # is mail set up at all
 $HUB_DIR/scripts/mail.sh sync --all-roster --backfill 90d   # persist mail locally (Mac)
-$HUB_DIR/scripts/mail.sh sync export --json           # unpushed batch; no hub token
+$HUB_DIR/scripts/mail.sh sync export --json           # unpushed batch; no Tico API token
 $HUB_DIR/scripts/mail.sh sync ack <id> ... --mailbox you@acme.example
 ```
 
