@@ -1,0 +1,1721 @@
+[
+ {
+  "argv": [
+   "kpi"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico kpi: error: argument sub: invalid choice: 'nope' (choose from list, show, archive, restore, create, update, link, target, unlink, log) Did you mean: tico kpi update, tico kpi log?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_kpi_list",
+    {
+     "include_archived": false,
+     "operation_id": null,
+     "unlinked": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "list",
+   "--goal",
+   "goal-id-1",
+   "--owner",
+   "me",
+   "--unlinked",
+   "--bot",
+   "ana",
+   "--archived"
+  ],
+  "tools": [
+   [
+    "tico_kpi_list",
+    {
+     "bot": "ana",
+     "goal_id": "goal-id-1",
+     "include_archived": true,
+     "operation_id": null,
+     "owner": "me",
+     "unlinked": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis?goal_id=goal-id-1&owner=bot%3Aana&unlinked=1&auto_for=ana&include_archived=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "show",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_show",
+    {
+     "effective": false,
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis/id-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "show",
+   "id-1",
+   "--effective"
+  ],
+  "tools": [
+   [
+    "tico_kpi_show",
+    {
+     "effective": true,
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis/id-1",
+    null
+   ],
+   [
+    "GET",
+    "kpis/id-1/readings?effective=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true,\n  \"readings\": {\n    \"ok\": true\n  }\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi show <id>\ntico kpi show: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "archive",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_archive",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/id-1/archive",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "archive"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi archive <id>\ntico kpi archive: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "restore",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_restore",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/id-1/restore",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "restore"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi restore <id>\ntico kpi restore: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "name-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "name": "name-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis",
+    {
+     "name": "name-1",
+     "goal_id": null,
+     "owner": null,
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "name-1",
+   "--goal",
+   "goal-id-1",
+   "--owner",
+   "me",
+   "--definition",
+   "definition-1",
+   "--unit",
+   "unit-1",
+   "--direction",
+   "up",
+   "--cadence",
+   "daily",
+   "--source-note",
+   "source-note-1",
+   "--baseline",
+   "2.5",
+   "--target",
+   "2.5",
+   "--deadline",
+   "deadline-1",
+   "--min",
+   "2.5",
+   "--max",
+   "2.5",
+   "--on-behalf-of",
+   "on-behalf-of-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "baseline": 2.5,
+     "cadence": "daily",
+     "deadline": "deadline-1",
+     "definition": "definition-1",
+     "direction": "up",
+     "goal_id": "goal-id-1",
+     "max": 2.5,
+     "min": 2.5,
+     "name": "name-1",
+     "on_behalf_of": "on-behalf-of-1",
+     "operation_id": null,
+     "owner": "me",
+     "source_note": "source-note-1",
+     "target": 2.5,
+     "unit": "unit-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/goal-id-1/kpis",
+    {
+     "name": "name-1",
+     "owner": "bot:ana",
+     "definition": "definition-1",
+     "unit": "unit-1",
+     "direction": "up",
+     "cadence": "daily",
+     "source_note": "source-note-1",
+     "baseline": 2.5,
+     "target": 2.5,
+     "deadline": "deadline-1",
+     "min": 2.5,
+     "max": 2.5,
+     "kind": "maintain"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "create"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi create <name>\ntico kpi create: error: the following arguments are required: name",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "update",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_update",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/id-1",
+    {
+     "name": null,
+     "definition": null,
+     "unit": null,
+     "direction": null,
+     "cadence": null,
+     "source_note": null,
+     "owner": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "update",
+   "id-1",
+   "--name",
+   "name-1",
+   "--owner",
+   "me",
+   "--definition",
+   "definition-1",
+   "--unit",
+   "unit-1",
+   "--direction",
+   "up",
+   "--cadence",
+   "daily",
+   "--source-note",
+   "source-note-1",
+   "--parent",
+   "parent-kpi-id-1",
+   "--role",
+   "north_star",
+   "--stage",
+   "reach",
+   "--loop",
+   "loop-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_update",
+    {
+     "cadence": "daily",
+     "definition": "definition-1",
+     "direction": "up",
+     "growth_role": "north_star",
+     "id": "id-1",
+     "loop": "loop-1",
+     "name": "name-1",
+     "operation_id": null,
+     "owner": "me",
+     "parent_kpi_id": "parent-kpi-id-1",
+     "source_note": "source-note-1",
+     "stage": "reach",
+     "unit": "unit-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"loop\",\n  \"detail\": \"--loop is NAME:STEP, for example referral:2; \\\"\\\" clears it\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "kpi",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi update <id>\ntico kpi update: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "link",
+   "goal-id-1",
+   "kpi-id-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_link",
+    {
+     "goal_id": "goal-id-1",
+     "kpi_id": "kpi-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/goal-id-1/kpis",
+    {
+     "kpi_id": "kpi-id-1",
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "link",
+   "goal-id-1",
+   "kpi-id-1",
+   "--baseline",
+   "2.5",
+   "--target",
+   "2.5",
+   "--deadline",
+   "deadline-1",
+   "--min",
+   "2.5",
+   "--max",
+   "2.5",
+   "--on-behalf-of",
+   "on-behalf-of-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_link",
+    {
+     "baseline": 2.5,
+     "deadline": "deadline-1",
+     "goal_id": "goal-id-1",
+     "kpi_id": "kpi-id-1",
+     "max": 2.5,
+     "min": 2.5,
+     "on_behalf_of": "on-behalf-of-1",
+     "operation_id": null,
+     "target": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/goal-id-1/kpis",
+    {
+     "kpi_id": "kpi-id-1",
+     "baseline": 2.5,
+     "target": 2.5,
+     "deadline": "deadline-1",
+     "min": 2.5,
+     "max": 2.5,
+     "kind": "maintain"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "link"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi link <goal_id> <kpi_id>\ntico kpi link: error: the following arguments are required: goal_id, kpi_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "target",
+   "goal-id-1",
+   "kpi-id-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_target",
+    {
+     "goal_id": "goal-id-1",
+     "kpi_id": "kpi-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/goal-id-1/kpis/kpi-id-1",
+    {
+     "kind": "none"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "target",
+   "goal-id-1",
+   "kpi-id-1",
+   "--baseline",
+   "2.5",
+   "--target",
+   "2.5",
+   "--deadline",
+   "deadline-1",
+   "--min",
+   "2.5",
+   "--max",
+   "2.5",
+   "--on-behalf-of",
+   "on-behalf-of-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_target",
+    {
+     "baseline": 2.5,
+     "deadline": "deadline-1",
+     "goal_id": "goal-id-1",
+     "kpi_id": "kpi-id-1",
+     "max": 2.5,
+     "min": 2.5,
+     "on_behalf_of": "on-behalf-of-1",
+     "operation_id": null,
+     "target": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/goal-id-1/kpis/kpi-id-1",
+    {
+     "baseline": 2.5,
+     "target": 2.5,
+     "deadline": "deadline-1",
+     "min": 2.5,
+     "max": 2.5,
+     "kind": "maintain"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "target"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi target <goal_id> <kpi_id>\ntico kpi target: error: the following arguments are required: goal_id, kpi_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "unlink",
+   "goal-id-1",
+   "kpi-id-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_unlink",
+    {
+     "goal_id": "goal-id-1",
+     "kpi_id": "kpi-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/goal-id-1/kpis/kpi-id-1/unlink",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'goal'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "unlink",
+   "goal-id-1",
+   "kpi-id-1",
+   "--on-behalf-of",
+   "on-behalf-of-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_unlink",
+    {
+     "goal_id": "goal-id-1",
+     "kpi_id": "kpi-id-1",
+     "on_behalf_of": "on-behalf-of-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/goal-id-1/kpis/kpi-id-1/unlink",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'goal'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "unlink"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi unlink <goal_id> <kpi_id>\ntico kpi unlink: error: the following arguments are required: goal_id, kpi_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "kpi-id-1",
+   "2.5"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "kpi_id": "kpi-id-1",
+     "note": "",
+     "operation_id": null,
+     "value": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/kpi-id-1/readings",
+    {
+     "value": 2.5,
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "kpi-id-1",
+   "2.5",
+   "note-1",
+   "--period-start",
+   "period-start-1",
+   "--period-end",
+   "period-end-1",
+   "--at",
+   "at-1",
+   "--collected-at",
+   "collected-at-1",
+   "--evidence",
+   "evidence-1",
+   "--quality",
+   "measured",
+   "--estimate",
+   "--source",
+   "spend=Google Ads",
+   "--definition-version",
+   "5",
+   "--supersedes",
+   "supersedes-1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "at": "at-1",
+     "collected_at": "collected-at-1",
+     "definition_version": 5,
+     "evidence": "evidence-1",
+     "kpi_id": "kpi-id-1",
+     "note": "note-1",
+     "operation_id": null,
+     "period_end": "period-end-1",
+     "period_start": "period-start-1",
+     "quality": "measured",
+     "source": "spend=Google Ads",
+     "supersedes": "supersedes-1",
+     "value": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/kpi-id-1/readings",
+    {
+     "period_start": "period-start-1",
+     "period_end": "period-end-1",
+     "at": "at-1",
+     "collected_at": "collected-at-1",
+     "evidence": "evidence-1",
+     "quality": "measured",
+     "source": "spend=Google Ads",
+     "definition_version": 5,
+     "supersedes": "supersedes-1",
+     "value": 2.5,
+     "note": "note-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico kpi log <kpi_id> <value> <note>\ntico kpi log: error: the following arguments are required: kpi_id, value",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "k1",
+   "12",
+   "from the CRM",
+   "--estimate"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "kpi_id": "k1",
+     "note": "from the CRM",
+     "operation_id": null,
+     "quality": "estimate",
+     "value": 12.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/k1/readings",
+    {
+     "quality": "estimate",
+     "value": 12.0,
+     "note": "from the CRM"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "k1",
+   "12",
+   "--estimate",
+   "--quality",
+   "partial"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "kpi_id": "k1",
+     "note": "",
+     "operation_id": null,
+     "quality": "partial",
+     "value": 12.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/k1/readings",
+    {
+     "quality": "partial",
+     "value": 12.0,
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "k1",
+   "twelve"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico kpi log: error: argument value: invalid float value: 'twelve'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "update",
+   "k1",
+   "--role",
+   "",
+   "--stage",
+   "",
+   "--loop",
+   "referral:2",
+   "--parent",
+   ""
+  ],
+  "tools": [
+   [
+    "tico_kpi_update",
+    {
+     "growth_role": "",
+     "id": "k1",
+     "loop": "referral:2",
+     "operation_id": null,
+     "parent_kpi_id": "",
+     "stage": ""
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/k1",
+    {
+     "name": null,
+     "definition": null,
+     "unit": null,
+     "direction": null,
+     "cadence": null,
+     "source_note": null,
+     "owner": null,
+     "parent_kpi_id": null,
+     "growth_role": null,
+     "stage": null,
+     "loop_name": "referral",
+     "loop_step": 2
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "update",
+   "k1",
+   "--loop",
+   "referral"
+  ],
+  "tools": [
+   [
+    "tico_kpi_update",
+    {
+     "id": "k1",
+     "loop": "referral",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"loop\",\n  \"detail\": \"--loop is NAME:STEP, for example referral:2; \\\"\\\" clears it\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "kpi",
+   "list",
+   "--archived",
+   "--unlinked"
+  ],
+  "tools": [
+   [
+    "tico_kpi_list",
+    {
+     "include_archived": true,
+     "operation_id": null,
+     "unlinked": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis?unlinked=1&include_archived=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "list",
+   "--bot",
+   "ana"
+  ],
+  "tools": [
+   [
+    "tico_kpi_list",
+    {
+     "bot": "ana",
+     "include_archived": false,
+     "operation_id": null,
+     "unlinked": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis?auto_for=ana",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "create",
+   "booked demos per two weeks",
+   "--goal",
+   "g1",
+   "--target",
+   "20",
+   "--deadline",
+   "2026-12-31",
+   "--on-behalf-of",
+   "turn"
+  ],
+  "tools": [
+   [
+    "tico_kpi_create",
+    {
+     "deadline": "2026-12-31",
+     "goal_id": "g1",
+     "name": "booked demos per two weeks",
+     "on_behalf_of": "turn",
+     "operation_id": null,
+     "target": 20.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/g1/kpis",
+    {
+     "name": "booked demos per two weeks",
+     "owner": null,
+     "target": 20.0,
+     "deadline": "2026-12-31",
+     "kind": "improve"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "link",
+   "g1",
+   "k1",
+   "--min",
+   "3",
+   "--max",
+   "9"
+  ],
+  "tools": [
+   [
+    "tico_kpi_link",
+    {
+     "goal_id": "g1",
+     "kpi_id": "k1",
+     "max": 9.0,
+     "min": 3.0,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals/g1/kpis",
+    {
+     "kpi_id": "k1",
+     "min": 3.0,
+     "max": 9.0,
+     "kind": "maintain"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'kpi'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "k1",
+   "12",
+   "--definition-version",
+   "x"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico kpi log: error: argument --definition-version: invalid int value: 'x'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "--period-start",
+   "1",
+   "--period-end",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "kpi_id": "1",
+     "note": "",
+     "operation_id": null,
+     "period_end": "1",
+     "period_start": "1",
+     "value": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_start": "1",
+     "period_end": "1",
+     "value": 1.0,
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "--period-start",
+   "1",
+   "--period-end",
+   "1",
+   "--evidence",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "evidence": "1",
+     "kpi_id": "1",
+     "note": "",
+     "operation_id": null,
+     "period_end": "1",
+     "period_start": "1",
+     "value": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_start": "1",
+     "period_end": "1",
+     "evidence": "1",
+     "value": 1.0,
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "show",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_show",
+    {
+     "effective": false,
+     "id": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis/1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "list",
+   "--owner",
+   "me"
+  ],
+  "tools": [
+   [
+    "tico_kpi_list",
+    {
+     "include_archived": false,
+     "operation_id": null,
+     "owner": "me",
+     "unlinked": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis?owner=bot%3Aana",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "1",
+   "--period-start",
+   "1",
+   "--period-end",
+   "1",
+   "--evidence",
+   "1",
+   "--quality",
+   "measured",
+   "--definition-version",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "definition_version": 1,
+     "evidence": "1",
+     "kpi_id": "1",
+     "note": "1",
+     "operation_id": null,
+     "period_end": "1",
+     "period_start": "1",
+     "quality": "measured",
+     "value": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_start": "1",
+     "period_end": "1",
+     "evidence": "1",
+     "quality": "measured",
+     "definition_version": 1,
+     "value": 1.0,
+     "note": "1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "1",
+   "--period-start",
+   "1",
+   "--period-end",
+   "1",
+   "--evidence",
+   "1",
+   "--quality",
+   "partial",
+   "--definition-version",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "definition_version": 1,
+     "evidence": "1",
+     "kpi_id": "1",
+     "note": "1",
+     "operation_id": null,
+     "period_end": "1",
+     "period_start": "1",
+     "quality": "partial",
+     "value": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_start": "1",
+     "period_end": "1",
+     "evidence": "1",
+     "quality": "partial",
+     "definition_version": 1,
+     "value": 1.0,
+     "note": "1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "1",
+   "--period-start",
+   "1",
+   "--period-end",
+   "1",
+   "--evidence",
+   "1",
+   "--quality",
+   "estimate",
+   "--definition-version",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "definition_version": 1,
+     "evidence": "1",
+     "kpi_id": "1",
+     "note": "1",
+     "operation_id": null,
+     "period_end": "1",
+     "period_start": "1",
+     "quality": "estimate",
+     "value": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_start": "1",
+     "period_end": "1",
+     "evidence": "1",
+     "quality": "estimate",
+     "definition_version": 1,
+     "value": 1.0,
+     "note": "1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "kpi",
+   "list",
+   "--unlinked"
+  ],
+  "tools": [
+   [
+    "tico_kpi_list",
+    {
+     "include_archived": false,
+     "operation_id": null,
+     "unlinked": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "kpis?unlinked=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "1",
+   "--period-start",
+   "D",
+   "--period-end",
+   "D",
+   "--evidence",
+   "1",
+   "--quality",
+   "measured",
+   "--definition-version",
+   "N"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico kpi log: error: argument --definition-version: invalid int value: 'N'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "kpi",
+   "log",
+   "1",
+   "1",
+   "--period-end",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_kpi_log",
+    {
+     "kpi_id": "1",
+     "note": "",
+     "operation_id": null,
+     "period_end": "1",
+     "value": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "kpis/1/readings",
+    {
+     "period_end": "1",
+     "value": 1.0,
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'reading'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ }
+]

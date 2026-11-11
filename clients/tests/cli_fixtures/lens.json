@@ -1,0 +1,372 @@
+[
+ {
+  "argv": [
+   "lens"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "lens",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico lens: error: argument sub: invalid choice: 'nope' (choose from list, run, show, runs) Did you mean: tico lens run, tico lens show?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "lens",
+   "list"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "lenses",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "list",
+   "--market"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "lenses?applies_to=market",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "run",
+   "id-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "lenses/id-1/runs",
+    {
+     "answers": {},
+     "on": "published"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "run",
+   "id-1",
+   "--answers-file",
+   "answers-file-1",
+   "--draft",
+   "--no-wait"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'answers-file-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "lens",
+   "run"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico lens run <id>\ntico lens run: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "lens",
+   "show",
+   "id-1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "lenses/runs/id-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico lens show <id>\ntico lens show: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "lens",
+   "runs"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "lenses/runs",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "runs",
+   "--lens",
+   "lens-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "lenses/runs?lens=lens-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "run",
+   "pre-mortem",
+   "--answers-file",
+   "missing-answers.json"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing-answers.json'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "lens",
+   "run",
+   "pre-mortem",
+   "--draft",
+   "--no-wait"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "lenses/pre-mortem/runs",
+    {
+     "answers": {},
+     "on": "draft"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "runs",
+   "--lens",
+   "pre-mortem",
+   "--limit",
+   "5"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "lenses/runs?lens=pre-mortem&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "run",
+   "where-to-play",
+   "--answers-file",
+   "a.json"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'a.json'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "lens",
+   "run",
+   "where-to-play",
+   "--answers-file",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "lens",
+   "run",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "lenses/1/runs",
+    {
+     "answers": {},
+     "on": "published"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "lens",
+   "show",
+   "1"
+  ],
+  "tools": [],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "lenses/runs/1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]
