@@ -8,6 +8,8 @@
 # setup from a template and created by BotOps, so it never belongs in this seed.
 # Both start `planned`; activate them once their repositories exist in the workspace and a
 # subscription profile is signed in.
+# BotOps is under the assistant only until setup finishes: its manager, the General Manager, is made
+# then, and setup puts BotOps and the other built-ins under it (backend/onboarding.py `ensure_general_team`).
 # Fields: name (slug, matches the repo bot-<name>), display_name, reports_to (slug or null),
 # status (planned|active|paused), repo, description. Runtime and model come from the team's provider choice.
 

@@ -741,6 +741,10 @@ class SettingsAdmin:
         default until the bot's owner picks one."""
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
+        if not body.slug and (asked := self._bot_being_set_up(c, body.template)):
+            # BotOps left the slug out while working a bot's own "Set up" task: that bot is the one asked for, so it
+            # answers (`created: false`, below) and no second one is made under a -2 slug.
+            body = body.model_copy(update={"slug": asked})
         if not body.slug:
             name = body.display_name or (self.template_name(body.template) if body.template else "")
             if not name.strip():
@@ -810,6 +814,21 @@ class SettingsAdmin:
             BS.write(c, bot_id, declared)
             MessageBots.link(c, who.actor, bot_id, who.actor)  # BotOps built it for them: it is their message bot
         return {**result, **self.definition(c, bot_id), "created": True}
+
+    @staticmethod
+    def _bot_being_set_up(c, template):
+        """The slug of the bot whose setup task this call is made for (the task BotOps cites, H.DELEGATION), when it is
+        still open, the bot is not archived and it is from this template; else None."""
+        from .setup_live import bot_of
+
+        cited = str((H.DELEGATION.get() or {}).get("cited") or "")
+        bot_id = bot_of(c, cited)[0] if cited else None
+        row = H.bot(c, bot_id) if bot_id else None
+        if not row or row["state"] == "archived" or (template and BS.read(c, bot_id).get("template") != template):
+            return None
+        if not c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (cited,)).fetchone():
+            return None
+        return row["slug"]
 
     def co_owners(self, c, who, bot, add=(), remove=()):
         """Add or remove co-owners of a bot. Any of its owners may; whoever it reports up to and the Admins
@@ -2289,6 +2308,15 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
             (row["id"],),
         )
     c.execute("UPDATE schedules SET deleted_at=COALESCE(deleted_at,?),updated_at=? WHERE bot=?", (ts, ts, bot))
+    # Its routines are automations it owns (a template's `routines:`, seeded as the bot is built): they go the same way,
+    # as a delete retires an automation, so none stays listed under a bot that is gone.
+    from . import automations
+
+    if H._has_table(c, "automations"):
+        for row in c.execute(
+            "SELECT * FROM automations WHERE owner_id=? AND deleted_at IS NULL AND builtin=0", ("bot:" + bot,)
+        ).fetchall():
+            automations.remove(c, actor, row, via="bot.archived")
 
     # The team it rooted passes to the successor, which now heads it.
     people = read_cache.metadata(c, "people")

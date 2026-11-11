@@ -127,6 +127,15 @@ def plan(onboarding, c, who, text):
             parent = ids.get(parent) or home
             if parent == slug:
                 parent = home
+            # A file that names no manager for one of the General Manager's built-ins (BotOps) leaves it on the
+            # built-ins' own line, as a company with no file has it (onboarding.ensure_general_team), not the owner's.
+            named = bot.get("reports_to")
+            if (
+                slug in Groups.GENERAL_TEAM
+                and Groups.GENERAL_MANAGER in required
+                and not (named and named != bot["id"] and named in D.chart_ids(draft))
+            ):
+                parent = Groups.GENERAL_MANAGER
             instructions = O.render(card, display, bot["title"])["instructions"]
             if bot["reason"]:
                 instructions += "\n\nWhy this role is on the company chart:\n" + bot["reason"]
@@ -655,6 +664,8 @@ def apply(onboarding, c, who, text, fingerprint):
         "imported_at": H.now(),
         "by": who.actor,
         "deferred": summary["deferred"],
+        # The seats the preview listed (summary["seats"]): a built-in's own seat (the Finance Owner's) is made too, and
+        # is counted with the built-ins (`bots` on the event), so this is one under the seats created for each.
         "seats": sum(1 for key in made if not seats[key].get("fills")),
         "people": people,
         **({"strategy": strategy} if strategy else {}),
