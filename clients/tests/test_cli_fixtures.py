@@ -216,6 +216,8 @@ RULES = [
     ["rules", "check", "Done"],
     ["rules", "appeal", "h1"],
     ["rules", "appeal", "h1", "the rule is about invoices"],
+    ["rules", "withdraw", "h1"],
+    ["rules", "withdraw"],
     ["rules", "red", "r1"],
 ]
 

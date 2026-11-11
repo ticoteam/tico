@@ -1787,6 +1787,43 @@
  {
   "argv": [
    "rules",
+   "withdraw",
+   "h1"
+  ],
+  "tools": [
+   [
+    "tico_rules_withdraw",
+    {
+     "id": "h1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "rule-holds/h1/withdraw",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "withdraw"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico rules withdraw <id>\ntico rules withdraw: error: the following arguments are required: id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "rules",
    "red",
    "r1"
   ],
