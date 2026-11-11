@@ -237,9 +237,7 @@ def check(
         result = rules_for(c, who, ref, action, contacts=contacts)
     except Exception as exc:  # noqa: BLE001  (fail closed: an error holds the action, it never lets it through)
         name = type(exc).__name__
-        reason = (
-            f"The Contacts rules could not be checked ({name}), so this {action} is held until a person checks it."
-        )
+        reason = f"The Contacts rules could not be checked ({name}), so this {action} is held until a person checks it."
         return {
             "outcome": "held",
             "error": name,

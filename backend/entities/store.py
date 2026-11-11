@@ -1763,8 +1763,8 @@ def _list_detail(c: sqlite3.Connection, r: V.Reader, rows: Sequence[Row], shown:
 
 
 def type_counts(c: sqlite3.Connection, who: str) -> list[Row]:
-    """How many entities of each type the reader sees, each stopping at COUNT_CAP and saying so: the Directory's tabs and
-    Settings › Directory's types read it."""
+    """How many entities of each contact type the reader sees, each stopping at COUNT_CAP and saying so: the Contacts
+    tabs and Settings › Contacts' types read it."""
     r = V.reader(c, who)
     cl, cparams = V.clause(r)
     out: list[Row] = []
@@ -1793,13 +1793,39 @@ def type_exists(c: sqlite3.Connection, key: str) -> bool:
     return _one(c, "SELECT 1 AS found FROM entity_types WHERE key = ? AND archived_at IS NULL", (key,)) is not None
 
 
+# Types that are not contacts. A document (a law, a contract, terms of service) is a file: it is never a Contacts tab,
+# count or list, for people or bots. Its entity stays, for the rules that walk party_to and issued_by to it, and a
+# contact's page links it to its file (document_files).
+NOT_CONTACTS = ("document",)
+
+
 def types(c: sqlite3.Connection) -> list[Row]:
-    """The entity types a reader can use: the built-in ones, then the ones bots and people added (who added each shows)."""
+    """The contact types a reader can list: the built-in ones, then the ones bots and people added (who added each
+    shows). NOT_CONTACTS are left out."""
     return _rows(
         c,
         "SELECT key, name, plural_name, description, icon, built_in, mode, created_by_type, created_by_id "
-        "FROM entity_types WHERE archived_at IS NULL ORDER BY built_in DESC, key",
+        "FROM entity_types WHERE archived_at IS NULL AND key NOT IN (SELECT value FROM json_each(?)) "
+        "ORDER BY built_in DESC, key",
+        (json.dumps(NOT_CONTACTS),),
     )
+
+
+def document_files(c: sqlite3.Connection, entity_ids: Sequence[str]) -> dict[str, str]:
+    """The file each document is, by entity id: its active external ref in Tico (system 'tico', external_type 'file',
+    external_id a bot_files id). A document with none has no file yet. Whether the reader may open the file is the
+    caller's check (backend/files.py file_visible)."""
+    if not entity_ids:
+        return {}
+    out: dict[str, str] = {}
+    for row in _rows(
+        c,
+        "SELECT entity_id, external_id FROM entity_external_refs WHERE entity_id IN (SELECT value FROM json_each(?)) "
+        "AND system = 'tico' AND external_type = 'file' AND status = 'active' ORDER BY entity_id, external_id",
+        (json.dumps(list(entity_ids)),),
+    ):
+        out.setdefault(str(row["entity_id"]), str(row["external_id"]))
+    return out
 
 
 def describe_type(c: sqlite3.Connection, key: str) -> dict[str, Any] | None:

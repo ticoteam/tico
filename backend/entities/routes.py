@@ -145,6 +145,32 @@ def install(
         if auth.company_role(who) not in ("owner", "admin"):  # pyright: ignore[reportUnknownMemberType]
             raise Problem("forbidden", "Only an owner or an admin changes where we operate", 403)
 
+    def with_document_files(c: sqlite3.Connection, request: Request, body: dict[str, Any]) -> None:
+        """A document is a file, not a contact: each linked document gets `file` ({id, title, page}) when it has a file
+        the caller may open, and None when it has none (or one the caller may not see)."""
+        from backend import files as F
+
+        links = cast("list[dict[str, Any]]", body.get("links") or [])
+        documents = [str(link["other_id"]) for link in links if link.get("other_type") in ES.NOT_CONTACTS]
+        found = ES.document_files(c, documents)
+        cache: dict[Any, Any] = {}
+        shown: dict[str, dict[str, Any] | None] = {}
+        for entity_id, file_id in found.items():
+            row = c.execute(
+                "SELECT f.*, p.file_id AS page_id FROM bot_files f LEFT JOIN pages p ON p.file_id = f.id "
+                "WHERE f.id = ? AND f.state <> 'deleted'",
+                (file_id,),
+            ).fetchone()
+            visible = bool(row) and F.file_visible(c, auth, request.state.identity, row, cache)  # pyright: ignore[reportUnknownMemberType]
+            shown[entity_id] = (
+                {"id": row["id"], "title": row["title"], "page": row["page_id"] is not None}
+                if row and visible
+                else None
+            )
+        for link in links:
+            if link.get("other_type") in ES.NOT_CONTACTS:
+                link["file"] = shown.get(str(link["other_id"]))
+
     def page_error(error: ValueError) -> Problem:
         return Problem("validation", str(error), 422)
 
@@ -161,7 +187,7 @@ def install(
 
     @app.get("/api/v2/entities/types")
     def directory_types(request: Request):
-        """The entity types: built-in and added, each with its description and who added it."""
+        """The contact types: built-in and added, each with its description and who added it. Documents are not contacts."""
         caller(request)
         with read() as c:
             return {"types": ES.types(c)}
@@ -195,11 +221,11 @@ def install(
         detail: bool = False,
     ):
         """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`.
-        `detail` adds each row's organization, owner and the sources you can see it is known from (the Directory list)."""
+        `detail` adds each row's organization, owner and the sources you can see it is known from (the Contacts list)."""
         actor = caller(request)
         with read() as c:
-            if not ES.type_exists(c, type_key):
-                raise Problem("not_found", f"No entity type {type_key}; see tico contacts types", 404)
+            if not ES.type_exists(c, type_key) or type_key in ES.NOT_CONTACTS:
+                raise Problem("not_found", f"No contact type {type_key}; see tico contacts types", 404)
             try:
                 return ES.find(
                     c,
@@ -227,6 +253,8 @@ def install(
             if len(found) > 1:
                 return ambiguous(ref, c, actor)
             body = ES.card(c, actor, found[0]["id"])
+            if body is not None:
+                with_document_files(c, request, body)
         if body is None:
             raise Problem("not_found", f"No entity {ref} that you can see", 404)
         trace(request, found[0]["id"])

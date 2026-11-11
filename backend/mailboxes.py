@@ -445,9 +445,9 @@ def install(app, store):
         with store.read() as c:
             return detail(c, who, mid)
 
-    @app.patch(PATH + "/{mid}/directory")
+    @app.patch(PATH + "/{mid}/contacts")
     def set_mailbox_directory(request: Request, mid: str, body: MailboxDirectoryUpdate):
-        """Switch whether this inbox's mail feeds the Directory. Its person decides (an admin, for a shared inbox). A bot's
+        """Switch whether this inbox's mail feeds Contacts. Its person decides (an admin, for a shared inbox). A bot's
         inbox always feeds it, whatever this says."""
         who = request.state.identity
         _person(who)

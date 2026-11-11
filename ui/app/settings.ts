@@ -122,7 +122,7 @@ let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
 // Health has no tab: General's Health line opens it (Details), and its address still works.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'directory', 'security', 'history',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'security', 'history',
   'health', 'billing'];
 // System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
 // subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
@@ -280,7 +280,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="directory" role="tab">Directory</button>
+      <button type="button" data-settings-tab="contacts" role="tab">Contacts</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="security" role="tab">Security</button>' : ''}
       <button type="button" data-settings-tab="history" role="tab">History</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
@@ -337,7 +337,7 @@ function pageSettings() {
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-security" role="tabpanel" hidden>
       <section class="card" id="set-screening-card"><header><h2>Screening</h2></header><div id="set-screening">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>` : ''}
-    <div class="settings-pane" id="settings-directory" role="tabpanel" hidden><div id="set-directory"></div></div>
+    <div class="settings-pane" id="settings-contacts" role="tabpanel" hidden><div id="set-contacts"></div></div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
       <section class="card" id="settings-roadmaps"></section>
@@ -490,8 +490,8 @@ function settingsShow(tab: string) {
   if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
-  const directoryPane = document.getElementById('settings-directory'), directoryBody = document.getElementById('set-directory');
-  if (directoryPane && directoryBody) { directoryPane.hidden = SETTINGS_TAB !== 'directory'; if (SETTINGS_TAB === 'directory') void directorySettingsShow(directoryBody); }
+  const directoryPane = document.getElementById('settings-contacts'), directoryBody = document.getElementById('set-contacts');
+  if (directoryPane && directoryBody) { directoryPane.hidden = SETTINGS_TAB !== 'contacts'; if (SETTINGS_TAB === 'contacts') void directorySettingsShow(directoryBody); }
   const securityPane = $('#settings-security');
   if (securityPane) { securityPane.hidden = SETTINGS_TAB !== 'security'; if (SETTINGS_TAB === 'security') void renderScreeningCard(); }
   // Once route() has put a newly opened page at its top, which would undo a scroll to a card already drawn.
