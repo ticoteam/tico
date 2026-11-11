@@ -15,12 +15,12 @@ acceptance criteria (and a long one with none). A case may be `allow_unsure` (me
 unsure answer on it is left out of the bar's counts (live-c-fixes-2-v2, a pre-release page whose reviews are of an
 earlier commit than its checks). No customer data belongs in cases.json.
 
-Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.8 or more,
-not_met at 0.2 or less, and unsure between (the engine's rule: unsure passes the call up to a person and never passes the
-work). A call that raises is retried once after RETRY_WAIT_S seconds; a call that fails twice is an error and fails the bar. Per
-model the report gives accuracy, false "met" count (a met verdict where the label says not_met or unsure: it must be 0 to
-pass), the unsure rate, the retries, cost, p50 and p95 latency; it is written as JSON and a markdown table into --out
-(evals/pipeline_judge/results by default).
+Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.75 or
+more, not_met at 0.2 or less (backend/pipeline_judges.py MET_AT, NOT_MET_AT), and unsure between (the engine's rule:
+unsure passes the call up to a person and never passes the work). A call that raises is retried once after RETRY_WAIT_S
+seconds; a call that fails twice is an error and fails the bar. Per model the report gives accuracy, false "met" count
+(a met verdict where the label says not_met or unsure: it must be 0 to pass), the unsure rate, the retries, cost, p50
+and p95 latency; it is written as JSON and a markdown table into --out (evals/pipeline_judge/results by default).
 
 This makes real model calls, so it is NOT a pytest and never runs in CI. --dry-run sends nothing: it checks the cases and runs
 two fake models through the same scoring (an oracle that must pass, and a sloppy one that must fail the bar).
@@ -35,6 +35,7 @@ import sys
 import time
 from pathlib import Path
 
+from backend.pipeline_judges import MET_AT, NOT_MET_AT
 from clients import judge as J
 
 from . import adapter
@@ -43,7 +44,6 @@ HERE = Path(__file__).parent
 CASES = HERE / "cases.json"
 DOMAINS = ("dev", "marketing")
 LABELS = ("met", "not_met", "unsure")
-MET_AT, NOT_MET_AT = 0.8, 0.2
 ACCURACY_BAR = 0.9
 UNSURE_SLACK = 0.10
 P95_BAR_MS = 30_000

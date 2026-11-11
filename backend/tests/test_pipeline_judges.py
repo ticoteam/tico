@@ -74,9 +74,9 @@ def test_the_bands_decide_met_not_met_or_unsure(tmp_path):
     def verdict(p):
         return P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(p))["verdict"]
 
-    assert verdict(0.8) == "met" and verdict(0.95) == "met"
+    assert verdict(0.75) == "met" and verdict(0.8) == "met" and verdict(0.95) == "met"
     assert verdict(0.2) == "not_met" and verdict(0.01) == "not_met"
-    assert verdict(0.5) == "unsure" and verdict(0.79) == "unsure" and verdict(0.21) == "unsure"
+    assert verdict(0.5) == "unsure" and verdict(0.74) == "unsure" and verdict(0.21) == "unsure"
     assert verdict(float("nan")) == "failed"  # an answer with no probability is a judge failure, not a pass
 
 
@@ -128,7 +128,7 @@ def test_every_pipeline_is_judged_by_jev_whatever_it_stored(tmp_path):
 def test_the_judge_model_is_jev_on_the_decide_low_gateway_id():
     assert P.MODELS == {"jev": "tico-decide-low"}
     assert P.DEFAULT_MODEL == "jev"
-    assert (P.MET_AT, P.NOT_MET_AT) == (0.8, 0.2)
+    assert (P.MET_AT, P.NOT_MET_AT) == (0.75, 0.2)
 
 
 def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp_path, monkeypatch):

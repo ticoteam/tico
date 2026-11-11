@@ -315,6 +315,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - If not: 3 tries, then the manager bot, then a person.
 5. **Jev is checking**
    - Starts: A page is attached.
+   - Bar: Jev answers a probability; 0.75 or more is met, 0.2 or less is not met, anything between is unsure. One
+     bar for every company and pipeline (backend/pipeline_judges.py `MET_AT`). (Changed Nov 11 from 0.8.)
    - Ends: Pass: met, or on to the person's OK. Fail: the bot's turn, with reasons. Unsure: on a page a person OKs
      anyway (people only, or naming someone), that person at once, every version, with Jev's reason; after a send
      back, the person who sent it back, with their words. On a stage a bot holds: back to that bot once, "not yet
