@@ -223,9 +223,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'items-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico gateway digest: error: argument --items-file: cannot read items-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -240,9 +240,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'items-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico gateway digest: error: argument --items-file: cannot read items-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -258,8 +258,7 @@
     {
      "operation_id": null,
      "out": "out-1",
-     "prompt": "prompt-1",
-     "refs": []
+     "prompt": "prompt-1"
     }
    ]
   ],
@@ -524,9 +523,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing-items.json'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico gateway digest: error: argument --items-file: cannot read missing-items.json (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -548,8 +547,7 @@
      "model": "high",
      "operation_id": null,
      "out": "door.png",
-     "prompt": "a red door",
-     "refs": []
+     "prompt": "a red door"
     }
    ]
   ],
@@ -683,9 +681,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico gateway digest: error: argument --items-file: cannot read 1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -797,7 +795,6 @@
      "operation_id": null,
      "out": "projects/1/storyboard/s01.png",
      "prompt": "1",
-     "refs": [],
      "size": "1280x720"
     }
    ]
@@ -917,8 +914,7 @@
      "model": "low",
      "operation_id": null,
      "out": "shots/frame-01.png",
-     "prompt": "what to draw",
-     "refs": []
+     "prompt": "what to draw"
     }
    ]
   ],
@@ -954,8 +950,7 @@
      "model": "high",
      "operation_id": null,
      "out": "shots/frame-01.png",
-     "prompt": "what to draw",
-     "refs": []
+     "prompt": "what to draw"
     }
    ]
   ],
@@ -992,8 +987,7 @@
      "model": "svg",
      "operation_id": null,
      "out": "shots/frame-01.png",
-     "prompt": "what to draw",
-     "refs": []
+     "prompt": "what to draw"
     }
    ]
   ],
@@ -1144,9 +1138,9 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'items.json'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "stdout": "",
+  "stderr": "tico gateway digest: error: argument --items-file: cannot read items.json (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [

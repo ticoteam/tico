@@ -2,6 +2,7 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import argparse
 import json
 from urllib.parse import quote
 import time
@@ -11,6 +12,7 @@ from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s, _target
 from clients.commands._requester import _as_person
+from clients.commands._shared import json_file
 
 
 # ----------------------------------------------------------------------------- strategy
@@ -722,7 +724,7 @@ def lens_list(api, args):
     "Librarian may run one. The Strategy Owner's run files its changes as one strategy_draft proposal; nobody's run "
     "publishes. Waits up to `wait` seconds (at most 60) for the result.",
     {
-        "lens": _s("Lens id, from tico_lens_list"),
+        "lens": _s("Lens id, from `lens list`"),
         "answers": {
             "type": "object",
             "description": "{step key: answer}. text: a string; list: an array of strings "
@@ -769,3 +771,34 @@ def lens_show(api, args):
 )
 def lens_runs(api, args):
     return api.get("lenses/runs", lens=args.get("lens"), limit=args.get("limit"))
+
+
+def _answers(path):
+    """`--answers-file`: a JSON object of {step key: answer}."""
+    value = json_file(path)
+    if not isinstance(value, dict):
+        raise argparse.ArgumentTypeError("is a JSON object of {step key: answer}")
+    return value
+
+
+LENS = (
+    Group("lens", "thought exercises run against the strategy or the market"),
+    Command(
+        "lens list",
+        "the lenses, with their steps",
+        args=(Arg("applies_to", "--market", action="store_const", const="market"),),
+        example="tico lens list --market",
+    ),
+    Command(
+        "lens run",
+        "run a lens; prints the run, waiting up to 60 seconds for its summary",
+        args=(
+            Arg("lens", metavar="id"),
+            Arg("answers", "--answers-file", type=_answers, metavar="FILE"),
+            Arg("wait", "--no-wait", action="store_const", const=0, default=LENS_WAIT_MAX),
+        ),
+        example="tico lens run pre-mortem --answers-file answers.json",
+    ),
+    Command("lens show", "one run: answers, result and changes", example="tico lens show lr_1"),
+    Command("lens runs", "runs, newest first", example="tico lens runs --lens pre-mortem --limit 5"),
+)

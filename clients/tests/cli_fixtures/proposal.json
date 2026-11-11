@@ -32,18 +32,11 @@
     "tico_proposal_create",
     {
      "kind": "goal_wording",
-     "operation_id": null,
-     "payload": {},
-     "reason": ""
+     "operation_id": null
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "proposals",
@@ -78,16 +71,10 @@
    "reason-1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'payload-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico proposal create: error: argument --payload: --payload must be JSON",
+  "exit": 64
  },
  {
   "argv": [
@@ -104,11 +91,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "proposals?status=pending",
@@ -144,11 +126,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "proposals?status=pending&goal_id=goal-id-1&kpi_id=kpi-id-1",
     null
    ]
@@ -170,17 +147,11 @@
     {
      "decision": "confirm",
      "id": "id-1",
-     "note": "",
      "operation_id": null
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "proposals/id-1/decide",
@@ -221,11 +192,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goal-proposals/id-1/decide",
@@ -280,11 +246,6 @@
   ],
   "http": [
    [
-    "GET",
-    "me",
-    null
-   ],
-   [
     "POST",
     "proposals",
     {
@@ -312,16 +273,10 @@
    "not json"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"payload\",\n  \"detail\": \"--payload must be JSON\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
-  "stderr": "",
-  "exit": 2
+  "http": [],
+  "stdout": "",
+  "stderr": "tico proposal create: error: argument --payload: --payload must be JSON",
+  "exit": 64
  },
  {
   "argv": [
@@ -333,16 +288,10 @@
    "missing-payload.json"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing-payload.json'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico proposal create: error: argument --payload-file: cannot read missing-payload.json (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -377,11 +326,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "proposals?status=all&kpi_id=k1",
@@ -419,11 +363,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "goal-proposals/p1/decide",
@@ -470,11 +409,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "proposals?status=rejected",
     null
    ]
@@ -505,11 +439,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "proposals?status=rejected&goal_id=1",
     null
    ]
@@ -530,18 +459,11 @@
     "tico_proposal_create",
     {
      "kind": "brand_draft",
-     "operation_id": null,
-     "payload": {},
-     "reason": ""
+     "operation_id": null
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "proposals",
@@ -605,11 +527,6 @@
   "http": [
    [
     "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
     "proposals?status=confirmed",
     null
    ]
@@ -649,16 +566,10 @@
    "..."
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'f.json'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico proposal create: error: argument --payload-file: cannot read f.json (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -678,11 +589,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "proposals?status=pending&goal_id=1",
@@ -707,16 +613,10 @@
    "1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'f.json'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico proposal create: error: argument --payload-file: cannot read f.json (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -738,11 +638,6 @@
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "GET",
     "proposals?status=pending&goal_id=1",
@@ -784,18 +679,11 @@
     "tico_proposal_create",
     {
      "kind": "strategy_draft",
-     "operation_id": null,
-     "payload": {},
-     "reason": ""
+     "operation_id": null
     }
    ]
   ],
   "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
    [
     "POST",
     "proposals",

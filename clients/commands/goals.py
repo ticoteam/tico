@@ -2,13 +2,16 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import argparse
 import json
 import re
-from clients.tico import APIError
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import GOAL_STATUSES, PROPOSAL_KINDS, _key, _s, _target
 from clients.commands._requester import _asked
+from clients.commands._shared import json_file
+from clients.tico import APIError
 
 
 # ----------------------------------------------------------------------------- goals
@@ -592,7 +595,7 @@ def kpi_unlink(api, args):
     "Strategy Owner, or the owner of a goal that uses it.",
     {
         "kpi_id": _s("KPI id"),
-        "value": {"type": "number"},
+        "value": {"type": "number", "description": "The value read"},
         "note": _s("Where the number came from", default=""),
         "period_start": _s(
             "Start of the period it describes, ISO date or date-time; default one cadence before the end"
@@ -683,7 +686,7 @@ def proposal_create(api, args):
     "tico_proposal_list",
     "Proposals waiting for a decision (or `status`: confirmed, rejected, all).",
     {
-        "status": _s("pending (default), confirmed, rejected or all"),
+        "status": _s("pending (default), confirmed, rejected or all", enum=["pending", "confirmed", "rejected", "all"]),
         "goal_id": _s("Only this goal's"),
         "kpi_id": _s("Only this KPI's"),
     },
@@ -717,3 +720,102 @@ def proposal_decide(api, args):
         body["option"] = int(args["option"])
     path = "goal-proposals" if args.get("on_behalf_of") else "proposals"
     return _asked(api, args).post(f"{path}/{args['id']}/decide", body, key=_key(args))["proposal"]
+
+
+# ----------------------------------------------------------------------------- the `tico kpi` and `tico proposal` commands
+def _json(text):
+    """`--payload`: the proposed change, as JSON."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("--payload must be JSON") from None
+
+
+_TO = Arg("goal_id", "--goal")
+_YES = Arg("on_behalf_of", metavar="MESSAGE_ID")
+
+KPI = (
+    Group("kpi", "a measure on its own that goals link to, and its readings"),
+    Command(
+        "kpi list",
+        "KPIs with latest reading and colour",
+        args=(_TO, Arg("include_archived", "--archived")),
+        example="tico kpi list --goal g_1",
+    ),
+    Command(
+        "kpi show",
+        "definition and versions, the goals using it, every reading, check-ins",
+        example="tico kpi show k_1 --effective",
+    ),
+    Command(
+        "kpi archive", "archive a KPI, keeping its definitions, links and readings", example="tico kpi archive k_1"
+    ),
+    Command("kpi restore", "restore an archived KPI", example="tico kpi restore k_1"),
+    Command(
+        "kpi create",
+        "make a KPI; with --goal it is linked, the target on the link",
+        args=(_TO, _YES),
+        example="tico kpi create 'booked demos per two weeks' --goal g_1 --target 20 --deadline 2026-12-31",
+    ),
+    Command(
+        "kpi update",
+        "a change to what it measures is a new definition version",
+        args=(
+            Arg("parent_kpi_id", "--parent", metavar="ID"),
+            Arg("growth_role", "--role"),
+            Arg("loop", metavar="NAME:STEP"),
+        ),
+        example="tico kpi update k_1 --role north_star",
+    ),
+    Command(
+        "kpi link",
+        "link a goal to a KPI, or change the target on the link",
+        args=(_YES,),
+        example="tico kpi link g_1 k_1 --min 3 --max 9",
+    ),
+    Command(
+        "kpi target",
+        "set or remove the target on a goal's measure",
+        args=(_YES,),
+        example="tico kpi target g_1 k_1 --target 20 --deadline 2026-12-31",
+    ),
+    Command("kpi unlink", "take a KPI off a goal", args=(_YES,), example="tico kpi unlink g_1 k_1"),
+    Command(
+        "kpi log",
+        "a reading: a fact with its period; to correct one, supersede it",
+        args=(
+            Arg("note", positional=True, nargs="?", default=""),
+            Arg("quality"),
+            Arg("quality", "--estimate", action="store_const", const="estimate"),
+        ),
+        example="tico kpi log k_1 12 'from the CRM' --period-end 2026-11-10",
+    ),
+)
+
+PROPOSAL = (
+    Group("proposal", "a change you may not make yourself, for the owner to confirm"),
+    Command(
+        "proposal create",
+        "propose a change for the owner to confirm",
+        args=(
+            Arg("kind", "--kind"),
+            _TO,
+            Arg("kpi_id", "--kpi"),
+            Arg("payload", "--payload", type=_json, metavar="JSON"),
+            Arg("payload", "--payload-file", type=json_file, metavar="FILE"),
+        ),
+        example="tico proposal create --kind goal_wording --goal g_1 --payload '{\"title\": \"Ship 0.6\"}'",
+    ),
+    Command(
+        "proposal list",
+        "proposals waiting for a decision",
+        args=(Arg("status", default="pending"), _TO, Arg("kpi_id", "--kpi")),
+        example="tico proposal list --status all",
+    ),
+    Command(
+        "proposal decide",
+        "a person's own decision; a bot is refused",
+        args=(_YES,),
+        example="tico proposal decide p_1 confirm --note 'clearer'",
+    ),
+)

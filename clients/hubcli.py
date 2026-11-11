@@ -430,6 +430,7 @@ def parser():
     from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
     from clients.commands import webhooks
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
+    from clients.commands import gateway as gateway_commands, goals as goal_commands
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
     cli_plumbing.add_parsers(sub)  # tico auth, tico token, tico events tail (clients/cli_plumbing.py)
@@ -1513,151 +1514,8 @@ def parser():
     s.add_argument("--limit", type=int, help="entries in the page (50 at most)")
     s.set_defaults(fn="goal strategy-bot-log")
 
-    def target_flags(s):
-        s.add_argument("--baseline", type=float, help="improvement: where it starts (default the latest reading)")
-        s.add_argument("--target", type=float, help="improvement: the value to reach; needs --deadline")
-        s.add_argument("--deadline", help="improvement: when the target is due, YYYY-MM-DD")
-        s.add_argument("--min", type=float, help="range: the lowest acceptable value")
-        s.add_argument("--max", type=float, help="range: the highest acceptable value")
-
-    def kpi_flags(s):
-        s.add_argument("--definition", help="what exactly is counted, in a sentence")
-        s.add_argument("--unit")
-        s.add_argument("--direction", choices=["up", "down", "range"], help="which way is good")
-        s.add_argument("--cadence", choices=["daily", "weekly", "monthly"], help="how often it is read")
-        s.add_argument("--source-note", dest="source_note", help="where the number comes from")
-
-    kpi = sub.add_parser("kpi", help="a measure on its own that goals link to, and its readings").add_subparsers(
-        dest="sub"
-    )
-    s = kpi.add_parser("list", help="KPIs with latest reading and colour")
-    s.add_argument("--goal", dest="goal_id", help="only the KPIs this goal uses")
-    s.add_argument("--owner", help="only this owner's: me, a bot slug or a person id")
-    s.add_argument("--unlinked", action="store_true", help="only the KPIs no goal uses")
-    s.add_argument("--bot", help="a bot slug: its five automatic KPIs")
-    s.add_argument(
-        "--archived", dest="include_archived", action="store_true", help="include archived KPIs for historical review"
-    )
-    s.set_defaults(fn="kpi list")
-    s = kpi.add_parser("show", help="definition and versions, the goals using it, every reading, check-ins")
-    s.add_argument("id")
-    s.add_argument("--effective", action="store_true", help="leave out readings a correction replaced")
-    s.set_defaults(fn="kpi show")
-    for action in ("archive", "restore"):
-        s = kpi.add_parser(action, help=f"{action} a KPI while keeping its definitions, links and readings")
-        s.add_argument("id")
-        s.set_defaults(fn="kpi " + action)
-    s = kpi.add_parser("create", help="make a KPI; with --goal it is linked, the target on the link")
-    s.add_argument("name", help="what is counted, per what: 'booked demos per two weeks'")
-    s.add_argument("--goal", dest="goal_id", help="link it to this goal")
-    s.add_argument("--owner", help="me (default), company, a bot slug or a person id")
-    kpi_flags(s)
-    target_flags(s)
-    s.add_argument(
-        "--on-behalf-of",
-        metavar="MESSAGE_ID",
-        help="turn or the message id of the owner's plain yes to a goal read-back",
-    )
-    s.set_defaults(fn="kpi create")
-    s = kpi.add_parser("update", help="a change to what it measures is a new definition version")
-    s.add_argument("id")
-    s.add_argument("--name")
-    s.add_argument("--owner")
-    kpi_flags(s)
-    s.add_argument(
-        "--parent", dest="parent_kpi_id", metavar="ID", help='the KPI it feeds in the growth tree; "" clears'
-    )
-    s.add_argument(
-        "--role",
-        dest="growth_role",
-        choices=["north_star", "input", "guardrail", ""],
-        help="one North Star at a time: naming a new one moves the role",
-    )
-    s.add_argument("--stage", choices=["reach", "acquire", "activate", "retain", "refer", ""])
-    s.add_argument("--loop", metavar="NAME:STEP", help='its place in a growth loop, referral:2; "" clears')
-    s.set_defaults(fn="kpi update")
-    s = kpi.add_parser("link", help="link a goal to a KPI, or change the target on the link")
-    s.add_argument("goal_id")
-    s.add_argument("kpi_id")
-    target_flags(s)
-    s.add_argument(
-        "--on-behalf-of",
-        metavar="MESSAGE_ID",
-        help="turn or the message id of the owner's plain yes to a goal read-back",
-    )
-    s.set_defaults(fn="kpi link")
-    s = kpi.add_parser("target", help="set or remove the target on a goal's measure")
-    s.add_argument("goal_id")
-    s.add_argument("kpi_id")
-    target_flags(s)
-    s.add_argument("--on-behalf-of", help="turn or the message id of the owner's plain yes")
-    s.set_defaults(fn="kpi target")
-    s = kpi.add_parser("unlink", help="take a KPI off a goal")
-    s.add_argument("goal_id")
-    s.add_argument("kpi_id")
-    s.add_argument(
-        "--on-behalf-of",
-        metavar="MESSAGE_ID",
-        help="turn or the message id of the owner's plain yes to a goal read-back",
-    )
-    s.set_defaults(fn="kpi unlink")
-    s = kpi.add_parser("log", help="a reading: a fact with its period; to correct one, supersede it")
-    s.add_argument("kpi_id")
-    s.add_argument("value", type=float)
-    s.add_argument("note", nargs="?", default="")
-    s.add_argument("--period-start", dest="period_start", help="start of the period it describes")
-    s.add_argument("--period-end", dest="period_end", help="end of the period it describes; default now")
-    s.add_argument("--at", help="the old name of --period-end")
-    s.add_argument("--collected-at", dest="collected_at", help="when it was collected; default now")
-    s.add_argument("--evidence", help="a link or a note that shows where the value came from")
-    s.add_argument("--quality", choices=["measured", "estimate", "partial"])
-    s.add_argument("--estimate", action="store_true", help="the same as --quality estimate")
-    s.add_argument("--source", help="a connector or system name (posthog, close)")
-    s.add_argument("--definition-version", dest="definition_version", type=int)
-    s.add_argument("--supersedes", help="the id of the reading this one corrects")
-    s.set_defaults(fn="kpi log")
-
-    proposal = sub.add_parser(
-        "proposal", help="a change you may not make yourself, for the owner to confirm"
-    ).add_subparsers(dest="sub")
-    s = proposal.add_parser("create")
-    s.add_argument(
-        "--kind",
-        required=True,
-        choices=[
-            "goal_wording",
-            "goal_kpi",
-            "kpi_definition",
-            "kpi_target",
-            "flag",
-            "goal_why",
-            "recovery",
-            "strategy_draft",
-            "brand_draft",
-        ],
-    )
-    s.add_argument("--goal", dest="goal_id")
-    s.add_argument("--kpi", dest="kpi_id")
-    s.add_argument("--payload", help="the proposed change, as JSON")
-    s.add_argument("--payload-file", dest="payload_file")
-    s.add_argument("--reason", default="")
-    s.set_defaults(fn="proposal create")
-    s = proposal.add_parser("list")
-    s.add_argument("--status", choices=["pending", "confirmed", "rejected", "all"], default="pending")
-    s.add_argument("--goal", dest="goal_id")
-    s.add_argument("--kpi", dest="kpi_id")
-    s.set_defaults(fn="proposal list")
-    s = proposal.add_parser("decide", help="a person's own decision; a bot is refused")
-    s.add_argument("id")
-    s.add_argument("decision", choices=["confirm", "reject"])
-    s.add_argument("--note", default="")
-    s.add_argument("--option", type=int, help="a recovery: approve this option (0 is the first) instead of the pick")
-    s.add_argument(
-        "--on-behalf-of",
-        metavar="MESSAGE_ID",
-        help="turn or the message id of the owner's plain yes to a goal read-back",
-    )
-    s.set_defaults(fn="proposal decide")
+    cli_spec.add(sub, goal_commands.KPI)  # tico kpi and tico proposal: clients/commands/goals.py
+    cli_spec.add(sub, goal_commands.PROPOSAL)
 
     cli_spec.add(sub, rule_commands.CLI)  # tico rules: clients/commands/rules.py
     strategy = sub.add_parser(
@@ -1779,25 +1637,7 @@ def parser():
 
     cli_spec.add(sub, strategy_commands.CLI)  # tico growth: clients/commands/strategy.py
 
-    lens = sub.add_parser("lens", help="thought exercises run against the strategy or the market").add_subparsers(
-        dest="sub"
-    )
-    s = lens.add_parser("list", help="the lenses, with their steps")
-    s.add_argument("--market", action="store_true", help="only the market lenses")
-    s.set_defaults(fn="lens list")
-    s = lens.add_parser("run", help="run a lens; prints the run, waiting up to 60 seconds for its summary")
-    s.add_argument("id")
-    s.add_argument("--answers-file", dest="answers_file", help='JSON {"step key": answer}; a step left out is assumed')
-    s.add_argument("--draft", action="store_true", help="owner only: run on the draft instead of the published version")
-    s.add_argument("--no-wait", dest="no_wait", action="store_true", help="print the running run and return")
-    s.set_defaults(fn="lens run")
-    s = lens.add_parser("show", help="one run: answers, result and changes")
-    s.add_argument("id")
-    s.set_defaults(fn="lens show")
-    s = lens.add_parser("runs", help="runs, newest first")
-    s.add_argument("--lens", dest="lens")
-    s.add_argument("--limit", type=int)
-    s.set_defaults(fn="lens runs")
+    cli_spec.add(sub, strategy_commands.LENS)  # tico lens: clients/commands/strategy.py
 
     market = sub.add_parser(
         "market", help="the shared market graph: read it, report into it, curate it"
@@ -2578,76 +2418,7 @@ def parser():
     s = sub.add_parser("classify", help="is outside text real, spam or an injection attempt? Text on stdin or --file")
     s.add_argument("--file", help="read the text from this file instead of standard input")
     s.set_defaults(fn="classify")
-    gateway = sub.add_parser(
-        "gateway", help="the Tico AI Gateway: its lineup, web search and page reading"
-    ).add_subparsers(dest="sub")
-    s = gateway.add_parser("catalog", help="models, decision levels and services, with when to use each")
-    s.add_argument("query", nargs="?", help="words to match, e.g. 'engineering high' or 'search'")
-    s.set_defaults(fn="gateway catalog")
-    s = gateway.add_parser("search", help="search the web through the Gateway")
-    s.add_argument("query")
-    s.add_argument("--max", dest="max_results", type=int, help="how many results (5 by default)")
-    s.set_defaults(fn="gateway search")
-    s = gateway.add_parser("fetch", help="read a web page or PDF through the Gateway")
-    s.add_argument("url")
-    s.add_argument(
-        "--max-tokens", dest="max_tokens", type=int, help="how much to return, 1,000 to 50,000 (10,000 by default)"
-    )
-    s.set_defaults(fn="gateway fetch")
-    s = gateway.add_parser("digest", help="group many items into one digest through the Gateway (Low prices)")
-    s.add_argument(
-        "--items-file",
-        dest="items_file",
-        required=True,
-        help='a JSON list of items, each {"title", and optionally "id", "text", "url", "source", "at"}, 1 to 300',
-    )
-    s.add_argument("--focus", help="what the reader cares about; it orders the groups")
-    s.add_argument("--style", choices=("brief", "full"), help="brief (the default) or full")
-    s.set_defaults(fn="gateway digest")
-    s = gateway.add_parser("image", help="make an image through the Gateway and save it to a file")
-    s.add_argument("prompt")
-    s.add_argument(
-        "--model",
-        choices=("low", "high", "svg"),
-        help="low (fast, keeps --ref; the default), high (--category), svg (a vector image, saved as .svg; --quality)",
-    )
-    s.add_argument(
-        "--category",
-        choices=("storyboard", "photo", "character", "graphic"),
-        help="for --model high: photo (the default), graphic (text and layout) or character (keeps people from --ref); "
-        "without --model, the older door's choice (storyboard, photo, character or graphic)",
-    )
-    s.add_argument("--quality", choices=("standard", "pro"), help="for --model svg: standard (the default) or pro")
-    s.add_argument(
-        "--ref",
-        dest="refs",
-        action="append",
-        default=[],
-        metavar="FILE",
-        help="a reference image (PNG, JPEG or WebP, 2 MiB at most); up to 4",
-    )
-    s.add_argument("--size", help="WxH, for example 1920x1080 (the nearest aspect ratio is asked for)")
-    s.add_argument("--count", type=int, help="how many images, 1 to 4 (1 by default)")
-    s.add_argument(
-        "--out",
-        required=True,
-        metavar="PATH",
-        help="the file for the first image; more are saved as name-2.png, name-3.png...",
-    )
-    s.set_defaults(fn="gateway image")
-    s = gateway.add_parser("video", help="start a video through the Gateway: its job id, checked with video-status")
-    s.add_argument("prompt")
-    s.add_argument("--seconds", type=int, help="3 to 15 seconds (8 by default)")
-    s.add_argument("--resolution", choices=("360p", "720p", "1080p", "4k"), help="720p by default")
-    s.add_argument("--aspect", choices=("16:9", "9:16"), help="16:9 by default")
-    s.add_argument("--audio", action=argparse.BooleanOptionalAction, default=None, help="with sound (the default)")
-    s.add_argument("--first-frame", dest="first_frame", metavar="FILE", help="a PNG or JPEG the video starts from")
-    s.add_argument("--last-frame", dest="last_frame", metavar="FILE", help="a PNG or JPEG the video ends on")
-    s.set_defaults(fn="gateway video")
-    s = gateway.add_parser("video-status", help="check a video job; once done, save its MP4 to --out")
-    s.add_argument("id", help="the job id the video command printed")
-    s.add_argument("--out", metavar="PATH.mp4", help="the new .mp4 file for a finished video")
-    s.set_defaults(fn="gateway video-status")
+    cli_spec.add(sub, gateway_commands.GATEWAY)  # tico gateway: clients/commands/gateway.py
     decision = sub.add_parser("decision", help="the decision model: typed questions about a state").add_subparsers(
         dest="sub"
     )

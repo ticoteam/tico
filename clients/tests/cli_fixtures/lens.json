@@ -25,13 +25,15 @@
    "lens",
    "list"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "lenses",
@@ -48,13 +50,16 @@
    "list",
    "--market"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_list",
+    {
+     "applies_to": "market",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "lenses?applies_to=market",
@@ -71,13 +76,18 @@
    "run",
    "id-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_run",
+    {
+     "draft": false,
+     "lens": "id-1",
+     "operation_id": null,
+     "wait": 60
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "lenses/id-1/runs",
@@ -102,16 +112,10 @@
    "--no-wait"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'answers-file-1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico lens run: error: argument --answers-file: cannot read answers-file-1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -130,13 +134,16 @@
    "show",
    "id-1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_show",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "lenses/runs/id-1",
@@ -163,13 +170,15 @@
    "lens",
    "runs"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_runs",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "lenses/runs",
@@ -189,13 +198,17 @@
    "--limit",
    "5"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_runs",
+    {
+     "lens": "lens-1",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "lenses/runs?lens=lens-1&limit=5",
@@ -215,16 +228,10 @@
    "missing-answers.json"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'missing-answers.json'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico lens run: error: argument --answers-file: cannot read missing-answers.json (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -234,13 +241,18 @@
    "--draft",
    "--no-wait"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_run",
+    {
+     "draft": true,
+     "lens": "pre-mortem",
+     "operation_id": null,
+     "wait": 0
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "lenses/pre-mortem/runs",
@@ -263,13 +275,17 @@
    "--limit",
    "5"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_runs",
+    {
+     "lens": "pre-mortem",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "lenses/runs?lens=pre-mortem&limit=5",
@@ -289,16 +305,10 @@
    "a.json"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: 'a.json'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico lens run: error: argument --answers-file: cannot read a.json (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -309,16 +319,10 @@
    "1"
   ],
   "tools": [],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"FileNotFoundError: [Errno 2] No such file or directory: '1'\"\n}\n",
-  "stderr": "",
-  "exit": 1
+  "http": [],
+  "stdout": "",
+  "stderr": "tico lens run: error: argument --answers-file: cannot read 1 (No such file or directory)",
+  "exit": 64
  },
  {
   "argv": [
@@ -326,13 +330,18 @@
    "run",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_run",
+    {
+     "draft": false,
+     "lens": "1",
+     "operation_id": null,
+     "wait": 60
+    }
+   ]
+  ],
+  "http": [
    [
     "POST",
     "lenses/1/runs",
@@ -352,13 +361,16 @@
    "show",
    "1"
   ],
-  "tools": [],
-  "http": [
+  "tools": [
    [
-    "GET",
-    "me",
-    null
-   ],
+    "tico_lens_show",
+    {
+     "id": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
     "lenses/runs/1",

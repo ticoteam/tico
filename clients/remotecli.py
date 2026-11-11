@@ -491,20 +491,8 @@ def run(args, who=None):
 
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["tico_classify"]["fn"](client, {"text": text})
-    if fn in (
-        "decision readout",
-        "decision outcome",
-        "gateway catalog",
-        "gateway search",
-        "gateway fetch",
-        "gateway image",
-        "gateway video",
-        "gateway video-status",
-    ):
+    if fn in ("decision readout", "decision outcome"):
         return via_tool(client, args)
-    if fn == "gateway digest":
-        items = json.loads(Path(args.items_file).read_text(encoding="utf-8"))
-        return via_tool(client, args, items=items)
     if args.cmd == "decision":
         return judge(client, args)
     if args.cmd == "meeting":
@@ -618,7 +606,7 @@ def run(args, who=None):
         return actor if value in ("me", "self") else value
 
     def tool(client, args):
-        """The goal, KPI and proposal commands run the MCP tool of the same name, so both say the same thing."""
+        """The goal, strategy and brand commands run the MCP tool of the same name, so both say the same thing."""
         from clients import hubtools
 
         fields = {
@@ -628,17 +616,6 @@ def run(args, who=None):
         if args.fn == "brand check":
             file = fields.pop("file")
             fields["text"] = sys.stdin.read() if file == "-" else Path(file).read_text()
-        if args.fn == "kpi log":
-            if fields.pop("estimate", False) and "quality" not in fields:
-                fields["quality"] = "estimate"
-        if args.fn == "proposal create":
-            file = fields.pop("payload_file", None)
-            text = Path(file).read_text() if file else fields.pop("payload", None)
-            fields.pop("payload", None)
-            try:
-                fields["payload"] = json.loads(text) if text else {}
-            except ValueError:
-                raise APIError("payload", "--payload must be JSON") from None
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
 
     def refs(values):
@@ -860,30 +837,8 @@ def run(args, who=None):
             if args.body_file:
                 args.body = Path(args.body_file).read_text()
         return tool(client, args)
-    if cmd in ("kpi", "proposal", "strategy", "brand"):
+    if cmd in ("strategy", "brand"):
         return tool(client, args)
-    if cmd == "lens":
-        from clients import hubtools
-
-        if sub == "list":
-            return hubtools.lens_list(client, {"applies_to": "market" if args.market else None})
-        if sub == "run":
-            answers = json.loads(Path(args.answers_file).read_text(encoding="utf-8-sig")) if args.answers_file else {}
-            if not isinstance(answers, dict):
-                raise APIError("answers", "--answers-file is a JSON object of {step key: answer}")
-            return hubtools.lens_run(
-                client,
-                {
-                    "lens": args.id,
-                    "answers": answers,
-                    "draft": args.draft,
-                    "wait": 0 if args.no_wait else hubtools.LENS_WAIT_MAX,
-                    "operation_id": key,
-                },
-            )
-        if sub == "show":
-            return hubtools.lens_show(client, {"id": args.id})
-        return hubtools.lens_runs(client, {"lens": args.lens, "limit": args.limit})
     if fn.startswith("market watch "):
         return via_tool(client, args)
     if fn == "market briefing latest":
