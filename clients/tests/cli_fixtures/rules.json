@@ -2091,5 +2091,159 @@
   "stdout": "",
   "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
   "exit": 64
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "internal",
+   "--text",
+   "Email pauses when the complaint rate passes 1.",
+   "--who",
+   "email-owner",
+   "--if-broken",
+   "block"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "if_broken": "block",
+     "kind": "internal",
+     "operation_id": null,
+     "text": "Email pauses when the complaint rate passes 1.",
+     "who": {
+      "names": [
+       "email-owner"
+      ]
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules",
+    {
+     "kind": "internal",
+     "text": "Email pauses when the complaint rate passes 1.",
+     "who": {
+      "names": [
+       "email-owner"
+      ]
+     },
+     "if_broken": "block"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "internal",
+   "--text",
+   "Search ads pause when cost per new customer passes 1 times its 30-day average.",
+   "--who",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "kind": "internal",
+     "operation_id": null,
+     "text": "Search ads pause when cost per new customer passes 1 times its 30-day average.",
+     "who": {
+      "names": [
+       "1"
+      ]
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules",
+    {
+     "kind": "internal",
+     "text": "Search ads pause when cost per new customer passes 1 times its 30-day average.",
+     "who": {
+      "names": [
+       "1"
+      ]
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "internal",
+   "--who",
+   "1",
+   "--text",
+   "Social ads pause when cost per new customer passes 1 times its 30-day average"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "kind": "internal",
+     "operation_id": null,
+     "text": "Social ads pause when cost per new customer passes 1 times its 30-day average",
+     "who": {
+      "names": [
+       "1"
+      ]
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules",
+    {
+     "kind": "internal",
+     "text": "Social ads pause when cost per new customer passes 1 times its 30-day average",
+     "who": {
+      "names": [
+       "1"
+      ]
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
  }
 ]

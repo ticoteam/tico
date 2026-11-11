@@ -1710,5 +1710,115 @@
   "stdout": "",
   "stderr": "Example: tico growth source add\ntico growth source add: error: the following arguments are required: --system, --reach-kind",
   "exit": 64
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "set",
+   "--channel",
+   "1",
+   "--month",
+   "1",
+   "--spend",
+   "1",
+   "--bot-cost",
+   "1",
+   "--new",
+   "1",
+   "--d30",
+   "1",
+   "--d90",
+   "1",
+   "--d180",
+   "1",
+   "--revenue",
+   "1",
+   "--margin",
+   "1",
+   "--quality",
+   "actual",
+   "--source",
+   "new=1",
+   "--source",
+   "spend=1"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_set",
+    {
+     "bot_cost": 1.0,
+     "channel": "1",
+     "kept_d180": 1.0,
+     "kept_d30": 1.0,
+     "kept_d90": 1.0,
+     "margin_pct": 1.0,
+     "month": "1",
+     "new_customers": 1,
+     "operation_id": null,
+     "quality": "actual",
+     "revenue_month": 1.0,
+     "source": [
+      "new=1",
+      "spend=1"
+     ],
+     "spend": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "growth/cohorts",
+    {
+     "channel": "1",
+     "month": "1",
+     "spend": 1.0,
+     "bot_cost": 1.0,
+     "new_customers": 1,
+     "kept_d30": 1.0,
+     "kept_d90": 1.0,
+     "kept_d180": 1.0,
+     "revenue_month": 1.0,
+     "margin_pct": 1.0,
+     "quality": "actual",
+     "sources": {
+      "new": "1",
+      "spend": "1"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list",
+   "--month",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "month": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/cohorts?month=1",
+    null
+   ]
+  ],
+  "stdout": "month    channel  spend  bot  new  d30  d90  d180  quality\n2026-10  unknown  900         3\n",
+  "stderr": "",
+  "exit": 0
  }
 ]
