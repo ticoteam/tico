@@ -343,10 +343,11 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
     ):
         placed.setdefault(str(r[0]), (r[1],))
     RC.prime(conn, _PLACED, {(b,): placed.get(b) for b in bots})
+    # Whole rows, onboarding_state first: hubdb reads the same statement by column name.
     onboarding = {
-        str(r[0]): (r[1],)
+        str(r["bot"]): r
         for r in conn.execute(
-            "SELECT bot, onboarding_state FROM bot_config WHERE bot IN (SELECT value FROM json_each(?))", listed
+            "SELECT onboarding_state, bot FROM bot_config WHERE bot IN (SELECT value FROM json_each(?))", listed
         )
     }
     RC.prime(conn, _ONBOARDING, {(b,): onboarding.get(b) for b in bots})
