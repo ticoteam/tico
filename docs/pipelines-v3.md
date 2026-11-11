@@ -376,6 +376,10 @@ stages"), lists them, oldest first (backend/stage_inputs.py):
   Validate) gets each OK or send back a person gave on a page or OK of an Engineering task it filed (Fixes 2's
   pre-release sign-off): who, which, the notes and the page version. Left out for a filed task the reader may not name.
 
+A wake that hands on a PR says to read its checks with `gh pr checks <its link>`. When every PR the task and the work it
+filed link is in one repository, the bot's turn also has `GH_REPO` set to it, so a bare `gh pr checks 46` reads that
+repository even from a copy with no git remote (stage_inputs.repository, runner-rs/src/env.rs).
+
 A bot that lacks an input it needs does not say done. It moves the task back to the stage the input comes from, saying
 what is missing; its wake says so. A done said with nothing changed is not refused (a review with no findings needs no
 change), but the note is handed on, so the next stage and the person who OKs Fixes 2 read what was and was not done.
