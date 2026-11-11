@@ -1656,3 +1656,291 @@ fn screen_controls_honor_local_pause_and_pending_discard() {
         assert!(super::screen::require_live(&app.context).is_err());
     }
 }
+
+// ---- `tico-recorder://record` from Join on a Tico calendar event ----
+
+const EVENT: &str = "google:team@example.com:abc123_20261110T150000Z";
+
+#[test]
+fn record_links_carry_a_call_or_a_title_and_event() {
+    let link = |query: &str| RecordLink::parse(&format!("tico-recorder://record?{query}"));
+    let server = "server=https://tico.example.com/";
+    // A Tico call, as `chris/meet-calls` sends it: the call wins over anything else the link carries.
+    let call = link(&format!(
+        "{server}&call=6F1C1A52-6A4E-4C39-9D43-6A1F0E3C2B10&title=Ignored"
+    ))
+    .unwrap();
+    assert_eq!(call.server, "https://tico.example.com");
+    assert_eq!(
+        call.call.as_deref(),
+        Some("6f1c1a52-6a4e-4c39-9d43-6a1f0e3c2b10")
+    );
+    assert_eq!((call.title, call.event), (None, None));
+    assert_eq!(
+        link(&format!("{server}&call=not-a-uuid&title=Standup")),
+        None
+    );
+    // A calendar event: its title, and the occurrence joined.
+    let event = link(&format!(
+        "{server}&title=%20Weekly%20sync%0A&event={}",
+        EVENT.replace('@', "%40")
+    ))
+    .unwrap();
+    assert_eq!(event.call, None);
+    assert_eq!(event.title.as_deref(), Some("Weekly sync"));
+    assert_eq!(event.event.as_deref(), Some(EVENT));
+    let untitled_event = link(&format!("{server}&title=Plan")).unwrap();
+    assert_eq!(untitled_event.event, None);
+    // A long title is cut; an event id that is not one is left out, and the event is still recorded.
+    let long = link(&format!("{server}&title={}", "é".repeat(500))).unwrap();
+    assert_eq!(long.title.unwrap().chars().count(), 200);
+    for bad in [
+        "has%20space".to_owned(),
+        "tab%09in".to_owned(),
+        "x".repeat(301),
+        String::new(),
+    ] {
+        let parsed = link(&format!("{server}&title=Plan&event={bad}")).unwrap();
+        assert_eq!(parsed.event, None, "{bad}");
+        assert_eq!(parsed.title.as_deref(), Some("Plan"));
+    }
+    // Refused: no safe server, nothing to record, another action or scheme.
+    for refused in [
+        "tico-recorder://record?title=Plan".to_owned(),
+        "tico-recorder://record?server=&title=Plan".to_owned(),
+        "tico-recorder://record?server=http://evil.example&title=Plan".to_owned(),
+        "tico-recorder://record?server=https://tico.example.com/?x=1&title=Plan".to_owned(),
+        format!("tico-recorder://record?{server}"),
+        format!("tico-recorder://record?{server}&title=%20%0A"),
+        format!("tico-recorder://open?{server}&title=Plan"),
+        format!("https://record?{server}&title=Plan"),
+    ] {
+        assert_eq!(RecordLink::parse(&refused), None, "{refused}");
+    }
+}
+
+/// A local Tico for the record-link tests: answers what opening a live meeting asks, and keeps each request as
+/// "METHOD path body".
+struct JoinTico {
+    url: String,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+impl JoinTico {
+    fn start() -> Self {
+        use std::io::{Read, Write};
+        use std::sync::{Arc, Mutex, atomic::AtomicBool, atomic::Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let seen = Arc::new(Mutex::new(vec![]));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (log, stopped) = (seen.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(5));
+                    continue;
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut head = vec![];
+                while !head.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    if stream.read_exact(&mut byte).is_err() {
+                        break;
+                    }
+                    head.push(byte[0]);
+                }
+                let head = String::from_utf8_lossy(&head).to_string();
+                let mut words = head.split_whitespace();
+                let (method, path) = (
+                    words.next().unwrap_or_default().to_owned(),
+                    words.next().unwrap_or_default().to_owned(),
+                );
+                let length = head
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|n| n.trim().parse::<usize>().unwrap_or(0))
+                    })
+                    .unwrap_or(0);
+                let mut body = vec![0; length];
+                let _ = stream.read_exact(&mut body);
+                log.lock().unwrap().push(format!(
+                    "{method} {path} {}",
+                    String::from_utf8_lossy(&body)
+                ));
+                let reply = match (method.as_str(), path.as_str()) {
+                    ("GET", "/api/v2/me") => json!({"actor":"human:1","name":"Ada"}),
+                    ("POST", "/api/v2/live-meetings") => json!({"id":"live-1","state":"live"}),
+                    ("GET", path) if path.starts_with("/api/v2/live-meetings/live-1") => {
+                        json!({"id":"live-1","state":"live","chat":[]})
+                    }
+                    _ => json!({}),
+                }
+                .to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        Self { url, seen, stop }
+    }
+    fn seen(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+impl Drop for JoinTico {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+fn join_tico(
+    config: &settings::Settings,
+    id: &str,
+) -> anyhow::Result<tico_recorder_native::network::Tico> {
+    let destination = config
+        .destinations
+        .iter()
+        .find(|row| row.id == id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Choose a Tico connection"))?;
+    tico_recorder_native::network::Tico::new(destination, "synthetic-token".into())
+}
+fn join_capture(
+    store: &Store,
+    id: &str,
+    _: Option<String>,
+    _: bool,
+) -> anyhow::Result<tico_recorder_native::engine::RecordingHandle> {
+    tico_recorder_native::engine::RecordingHandle::with_sources(store.clone(), id.into(), || {
+        Ok((vec![], String::new()))
+    })
+}
+fn join_app(directory: &std::path::Path) -> Recorder {
+    let mut app = app(Store::open(directory).unwrap(), directory);
+    app.tico_for = join_tico;
+    app.start_capture = join_capture;
+    app
+}
+fn acme(url: &str) -> Destination {
+    Destination {
+        id: "acme".into(),
+        name: "Acme".into(),
+        base_url: url.into(),
+        actor: "human:1".into(),
+    }
+}
+fn join_link(server: &str, title: &str) -> String {
+    format!(
+        "tico-recorder://record?server={server}&title={}&event={}",
+        title.replace(' ', "%20"),
+        EVENT.replace('@', "%40")
+    )
+}
+
+#[test]
+fn a_record_link_records_the_event_live_in_its_org_and_never_a_second_recording() {
+    let tico = JoinTico::start();
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = join_app(directory.path());
+    app.config.destinations = vec![connection("other", "other.example.com"), acme(&tico.url)];
+    app.destination = "other".into();
+    app.link(&join_link(&tico.url, "Weekly sync"));
+    let recording = app.status_view()["recording"]["id"]
+        .as_str()
+        .expect("recording started")
+        .to_owned();
+    assert_eq!(app.meeting.as_deref(), Some(recording.as_str()));
+    assert_eq!(app.store.get(&recording).unwrap().title, "Weekly sync");
+    assert_eq!(app.store.context(&recording).unwrap().calendar_event, EVENT);
+    assert_eq!(app.destination, "acme");
+    assert!(app.connect.is_none());
+    settle(&mut app, |app| {
+        !app.store.context(&recording).unwrap().live_id.is_empty()
+    });
+    let context = app.store.context(&recording).unwrap();
+    assert_eq!(
+        (context.live_id.as_str(), context.live_destination.as_str()),
+        ("live-1", "acme")
+    );
+    let created: Vec<Value> = tico
+        .seen()
+        .iter()
+        .filter_map(|seen| seen.strip_prefix("POST /api/v2/live-meetings "))
+        .map(|body| serde_json::from_str(body).unwrap())
+        .collect();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0]["title"], "Weekly sync");
+    assert_eq!(created[0]["calendar_event"], EVENT);
+    assert_eq!(created[0]["visibility"], "private");
+    // Join on another event while recording: the recording in progress stays the only one, and comes to the front.
+    let _ = app.open(&app.store.create("Older").unwrap().id);
+    app.link(&join_link(&tico.url, "Another meeting"));
+    assert_eq!(app.meeting.as_deref(), Some(recording.as_str()));
+    assert_eq!(app.status_view()["recording"]["id"], recording.as_str());
+    assert_eq!(app.store.summaries().unwrap().len(), 2);
+    app.shutdown();
+}
+
+#[test]
+fn a_record_link_for_an_org_not_signed_in_signs_in_first_then_records() {
+    let tico = JoinTico::start();
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = join_app(directory.path());
+    app.link(&join_link(&tico.url, "Weekly sync"));
+    assert_eq!(app.connect.as_deref(), Some(tico.url.as_str()));
+    assert!(app.status_view()["recording"].is_null());
+    assert!(app.store.summaries().unwrap().is_empty());
+    // Dismissing the sign-in drops the request: a later sign-in records nothing.
+    app.dismiss_connect();
+    app.config.destinations = vec![acme(&tico.url)];
+    app.continue_record();
+    assert!(app.status_view()["recording"].is_null());
+    // A request older than five minutes is dropped too.
+    app.config.destinations.clear();
+    app.link(&join_link(&tico.url, "Weekly sync"));
+    app.expire_pending_record();
+    app.config.destinations = vec![acme(&tico.url)];
+    app.continue_record();
+    assert!(app.status_view()["recording"].is_null());
+    // Signing in to that org goes on with the recording.
+    app.config.destinations.clear();
+    app.link(&join_link(&tico.url, "Weekly sync"));
+    app.config.destinations = vec![acme(&tico.url)];
+    app.continue_record();
+    let recording = app.status_view()["recording"]["id"]
+        .as_str()
+        .expect("recording started after sign-in")
+        .to_owned();
+    assert_eq!(app.store.get(&recording).unwrap().title, "Weekly sync");
+    assert_eq!(app.store.context(&recording).unwrap().calendar_event, EVENT);
+    settle(&mut app, |app| {
+        !app.store.context(&recording).unwrap().live_id.is_empty()
+    });
+    assert_eq!(app.store.context(&recording).unwrap().live_id, "live-1");
+    app.shutdown();
+}
+
+#[test]
+fn a_call_link_opens_its_org_and_records_nothing_until_calls_land() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = join_app(directory.path());
+    app.config.destinations = vec![
+        connection("first", "first.example.com"),
+        connection("second", "tico.example.com"),
+    ];
+    app.destination = "first".into();
+    app.link("tico-recorder://record?server=https://tico.example.com&call=6f1c1a52-6a4e-4c39-9d43-6a1f0e3c2b10");
+    assert_eq!(app.destination, "second");
+    assert!(app.status_view()["recording"].is_null());
+    app.link("tico-recorder://record?server=https://new.example.com&call=6f1c1a52-6a4e-4c39-9d43-6a1f0e3c2b10");
+    assert_eq!(app.connect.as_deref(), Some("https://new.example.com"));
+    assert!(app.store.summaries().unwrap().is_empty());
+}

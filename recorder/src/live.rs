@@ -213,27 +213,36 @@ impl Tico {
         if let Some(visibility) = visibility {
             body["visibility"] = json!(visibility);
         }
-        // Tico refuses unknown fields. Before v0.5.0 it has no `client` (the meeting is just not
-        // labelled "From Tico Recorder"); before v0.4.10 no `visibility`, so a private meeting is
-        // never opened to the team.
-        let reply = self
-            .call(
+        if !context.calendar_event.is_empty() {
+            body["calendar_event"] = json!(context.calendar_event);
+        }
+        // Tico refuses unknown fields. An older Tico has no `calendar_event` (the meeting is then not linked to
+        // its calendar event, and a refused event id is dropped the same way); before v0.5.0 no `client` (the
+        // meeting is just not labelled "From Tico Recorder"); before v0.4.10 no `visibility`, so a private meeting
+        // is never opened to the team.
+        let mut attempts = vec![(body.clone(), "")];
+        if body.get("calendar_event").is_some() {
+            let mut unlinked = body.clone();
+            unlinked
+                .as_object_mut()
+                .map(|fields| fields.remove("calendar_event"));
+            attempts.push((unlinked, ":unlinked"));
+        }
+        let mut older = attempts[attempts.len() - 1].0.clone();
+        older.as_object_mut().map(|fields| fields.remove("client"));
+        attempts.push((older, ":unlabelled"));
+        let mut answer = Err(anyhow::anyhow!("Tico was not asked"));
+        for (body, suffix) in attempts {
+            answer = self.call(
                 "/api/v2/live-meetings",
                 Some(&body),
-                &format!("recorder:{id}:live:connect"),
-            )
-            .or_else(|error| {
-                if !format!("{error:#}").contains("HTTP 422") {
-                    return Err(error);
-                }
-                let mut older = body.clone();
-                older.as_object_mut().map(|fields| fields.remove("client"));
-                self.call(
-                    "/api/v2/live-meetings",
-                    Some(&older),
-                    &format!("recorder:{id}:live:connect:unlabelled"),
-                )
-            })
+                &format!("recorder:{id}:live:connect{suffix}"),
+            );
+            if !matches!(&answer, Err(error) if format!("{error:#}").contains("HTTP 422")) {
+                break;
+            }
+        }
+        let reply = answer
             .map_err(|error| {
                 if visibility.is_some() && format!("{error:#}").contains("HTTP 422") {
                     anyhow::anyhow!(

@@ -70,6 +70,9 @@ pub struct Context {
     pub participants: Vec<String>,
     pub items: Vec<Item>,
     pub calendar: Value,
+    /// The Tico calendar occurrence this recording was started for (Join in Tico's calendar): sent as
+    /// `calendar_event` when its live meeting is created, so Tico links the meeting to the event.
+    pub calendar_event: String,
     pub live_id: String,
     pub live_destination: String,
     pub live_state: String,

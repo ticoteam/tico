@@ -1,8 +1,11 @@
 //! The recorder's state and actions. It owns the library, the recording in progress and the
 //! background jobs; the window only draws `view()` and calls the actions below. Nothing here
 //! knows about Tauri, so it is tested as plain Rust.
+#[path = "record_link.rs"]
+mod record_link;
 #[path = "task_links.rs"]
 mod task_links;
+pub use record_link::RecordLink;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -62,7 +65,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 11] = [
+const BACKGROUND: [&str; 12] = [
     "live",
     "calendar",
     "autodraft",
@@ -74,7 +77,10 @@ const BACKGROUND: [&str; 11] = [
     "more-links",
     "items",
     "presence",
+    "record-live",
 ];
+/// A record link waiting for sign-in to its org is dropped after this long.
+const PENDING_RECORD_FOR: Duration = Duration::from_secs(300);
 /// Drafting reads streamed text too, so it can follow speech closely; one model call per
 /// interval at most.
 pub const DRAFT_INTERVAL: Duration = Duration::from_secs(10);
@@ -101,6 +107,32 @@ pub struct Block {
 pub fn synthetic_input() -> bool {
     std::env::var_os("TICO_RECORDER_SYNTHETIC_INPUT").is_some()
         && std::env::var_os("TICO_RECORDER_DATA_DIR").is_some()
+}
+/// Capture for a new recording: the microphone and, when chosen, the meeting audio (a test tone with
+/// `synthetic_input`).
+fn start_capture(
+    store: &Store,
+    id: &str,
+    microphone: Option<String>,
+    meeting_audio: bool,
+) -> anyhow::Result<RecordingHandle> {
+    if synthetic_input() {
+        RecordingHandle::with_sources(store.clone(), id.to_owned(), || {
+            Ok((
+                vec![capture::start_synthetic(Channel::Microphone)],
+                String::new(),
+            ))
+        })
+    } else {
+        RecordingHandle::start(store.clone(), id.to_owned(), microphone, meeting_audio)
+    }
+}
+/// A new recording's name when nothing gives one.
+fn default_title() -> String {
+    format!(
+        "Meeting {}",
+        chrono::Local::now().format("%b %-d, %-I:%M %p")
+    )
 }
 /// Consecutive lines from one speaker are one block; each line is a paragraph, and a long line
 /// breaks into paragraphs at sentence ends.
@@ -400,6 +432,13 @@ pub struct Recorder {
     pub visible: bool,
     /// When the default Tico was last asked what speech it can handle, and which Tico it was.
     services_at: Option<(Instant, String)>,
+    /// A record link (Join on a calendar event) waiting for sign-in to its org, and when it came. It goes after
+    /// `PENDING_RECORD_FOR`, and when its sign-in card is dismissed or another org signs in.
+    pending_record: Option<(RecordLink, Instant)>,
+    /// Connects to a saved Tico (`Tico::saved`); tests point it at a local server.
+    pub tico_for: fn(&Settings, &str) -> anyhow::Result<Tico>,
+    /// Starts capture for a new recording (`start_capture`); tests use silent sources.
+    pub start_capture: fn(&Store, &str, Option<String>, bool) -> anyhow::Result<RecordingHandle>,
 }
 
 impl Recorder {
@@ -520,6 +559,9 @@ impl Recorder {
             notice_dismissed: String::new(),
             visible: true,
             services_at: None,
+            pending_record: None,
+            tico_for: Tico::saved,
+            start_capture,
         };
         if !demo {
             app.job("devices", || Ok(json!(capture::sources()?)));
@@ -682,49 +724,51 @@ impl Recorder {
             .as_ref()
             .and_then(|row| row["title"].as_str())
             .map(str::to_owned)
-            .unwrap_or_else(|| {
-                format!(
-                    "Meeting {}",
-                    chrono::Local::now().format("%b %-d, %-I:%M %p")
-                )
-            });
-        match self.store.create(&title) {
+            .unwrap_or_else(default_title);
+        self.begin_recording(&title, |store, id| match event {
+            Some(event) => store.update_context(id, |context| {
+                context.calendar = event;
+                Ok(())
+            }),
+            None => Ok(()),
+        })
+        .map(|(id, _)| id)
+    }
+    /// Creates a recording named `title`, lets `setup` prepare its context, then starts capture and opens it.
+    /// Answers its id and whether capture started.
+    fn begin_recording(
+        &mut self,
+        title: &str,
+        setup: impl FnOnce(&Store, &str) -> anyhow::Result<()>,
+    ) -> Option<(String, bool)> {
+        match self.store.create(title) {
             Ok(record) => {
-                if let Some(event) = event {
-                    let result = self.store.update_context(&record.id, |context| {
-                        context.calendar = event;
-                        Ok(())
-                    });
-                    self.report(result);
-                }
+                let result = setup(&self.store, &record.id);
+                self.report(result);
                 let mic = if self.config.microphone.is_empty() {
                     None
                 } else {
                     Some(self.config.microphone.clone())
                 };
-                let started = if synthetic_input() {
-                    RecordingHandle::with_sources(self.store.clone(), record.id.clone(), || {
-                        Ok((
-                            vec![capture::start_synthetic(Channel::Microphone)],
-                            String::new(),
-                        ))
-                    })
-                } else {
-                    RecordingHandle::start(
-                        self.store.clone(),
-                        record.id.clone(),
-                        mic,
-                        self.config.meeting_audio,
-                    )
-                };
-                match started {
-                    Ok(handle) => self.active = Some((record.id.clone(), handle)),
-                    Err(error) => self.error = error.to_string(),
+                let started = match (self.start_capture)(
+                    &self.store,
+                    &record.id,
+                    mic,
+                    self.config.meeting_audio,
+                ) {
+                    Ok(handle) => {
+                        self.active = Some((record.id.clone(), handle));
+                        true
+                    }
+                    Err(error) => {
+                        self.error = error.to_string();
+                        false
+                    }
                 };
                 self.recorded_here.insert(record.id.clone());
                 let _ = self.open(&record.id);
                 self.reload();
-                Some(record.id)
+                Some((record.id, started))
             }
             Err(error) => {
                 self.error = error.to_string();
@@ -1225,6 +1269,7 @@ impl Recorder {
                 self.reset_saved();
                 self.keep_destination();
                 self.services_at = None;
+                self.continue_record();
             }
             if reply.kind == "send" {
                 *self
@@ -1413,6 +1458,8 @@ impl Recorder {
                             }
                             self.last_sync = Instant::now() - Duration::from_secs(5);
                         }
+                        // The live meeting a record link asked for is open: the window syncs it now.
+                        "record-live" => self.last_sync = Instant::now() - Duration::from_secs(5),
                         "access" => {
                             self.live = value["view"].clone();
                             self.last_sync = Instant::now() - Duration::from_secs(5);
@@ -1492,6 +1539,13 @@ impl Recorder {
         }
         self.sync_presence();
         self.sync_saved();
+        if self
+            .pending_record
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() >= PENDING_RECORD_FOR)
+        {
+            self.pending_record = None;
+        }
         self.watch_inputs();
         let outside = self.outside_state();
         if outside != self.outside {
@@ -2649,6 +2703,7 @@ impl Recorder {
         let root = self.store.root().to_path_buf();
         self.signing_in = true;
         self.connect = None;
+        self.drop_pending_record_unless(&address);
         self.job("signin", move || {
             let name = sign_in_saving(&root, &address, |url| {
                 signin::open_browser(url);
@@ -2689,6 +2744,8 @@ impl Recorder {
         if orgs.is_empty() {
             return;
         }
+        // Signing in to the desktop app's orgs is not the record link's sign-in.
+        self.pending_record = None;
         let root = self.store.root().to_path_buf();
         self.signing_in = true;
         self.connect = None;
@@ -2796,35 +2853,134 @@ impl Recorder {
     }
     /// A link macOS delivered to the app: `connect` asks to sign in to that Tico; `open` (Record in the Tico desktop
     /// app) chooses that Tico for what comes next when the Recorder is signed in to it, and asks to sign in when not.
-    /// Neither starts a recording.
+    /// Neither starts a recording. `record` with a title (Join on a calendar event in Tico) starts a live recording
+    /// for that event (`record_event`); `record` with a call (a Tico call, `docs/dev/meet-calls-contract.md`) only
+    /// opens its org until this Recorder can claim calls.
     #[cfg(any(target_os = "macos", target_os = "ios", test))]
     pub fn link(&mut self, link: &str) {
-        if let Some(address) = link_address(link, "open") {
-            let connected = self
-                .config
-                .destinations
-                .iter()
-                .find(|row| desktop::matches(&address, row))
-                .map(|row| row.id.clone());
-            match connected {
-                Some(id) => {
-                    if self.context.live_destination.is_empty() {
-                        if self.destination != id {
-                            self.reset_saved();
-                        }
-                        self.destination = id;
-                        self.choosing_org = false;
-                        self.roster_for.clear();
-                    }
-                }
-                None if !self.signing_in => self.connect = Some(address),
-                None => {}
+        if let Some(record) = RecordLink::parse(link) {
+            match record.call {
+                Some(_) => self.open_org(&record.server),
+                None => self.record_event(record),
             }
             return;
         }
+        if let Some(address) = link_address(link, "open") {
+            self.open_org(&address);
+            return;
+        }
         match connect_address(link) {
-            Some(address) => self.connect = Some(address),
+            Some(address) => {
+                self.drop_pending_record_unless(&address);
+                self.connect = Some(address)
+            }
             None => self.error = "That link is not a Tico Recorder connect link".into(),
+        }
+    }
+    /// Chooses the org at `address` for what comes next when the Recorder is signed in to it, else asks to sign in.
+    #[cfg(any(target_os = "macos", target_os = "ios", test))]
+    fn open_org(&mut self, address: &str) {
+        match self.connection_for(address) {
+            Some(id) => self.choose_connection(&id),
+            None if !self.signing_in => {
+                self.drop_pending_record_unless(address);
+                self.connect = Some(address.to_owned())
+            }
+            None => {}
+        }
+    }
+    /// The saved connection for an org address.
+    fn connection_for(&self, address: &str) -> Option<String> {
+        self.config
+            .destinations
+            .iter()
+            .find(|row| desktop::matches(address, row))
+            .map(|row| row.id.clone())
+    }
+    /// Shows that Tico for what comes next, unless the open meeting lives in another one.
+    fn choose_connection(&mut self, id: &str) {
+        if self.context.live_destination.is_empty() {
+            if self.destination != id {
+                self.reset_saved();
+            }
+            self.destination = id.into();
+            self.choosing_org = false;
+            self.roster_for.clear();
+        }
+    }
+    /// A `tico-recorder://record?title=…` link: records the event being joined as a live meeting in its org, named
+    /// as the event and linked to it (`calendar_event`). A recording already running stays the only one: it comes
+    /// to the front instead. An org the Recorder has no sign-in for asks to sign in first, and the recording starts
+    /// once it is signed in (`continue_record`).
+    pub fn record_event(&mut self, link: RecordLink) {
+        if let Some((id, _)) = &self.active {
+            let id = id.clone();
+            let _ = self.open(&id);
+            return;
+        }
+        if self.updating {
+            self.error = UPDATING.into();
+            return;
+        }
+        let Some(title) = link.title.clone() else {
+            return;
+        };
+        match self.connection_for(&link.server) {
+            Some(destination) => {
+                let event = link.event.unwrap_or_default();
+                let begun = self.begin_recording(&title, move |store, id| {
+                    store.update_context(id, |context| {
+                        context.calendar_event = event;
+                        Ok(())
+                    })
+                });
+                if let Some((id, true)) = begun {
+                    self.choose_connection(&destination);
+                    self.go_live(&id, &destination);
+                }
+            }
+            None => {
+                let address = link.server.clone();
+                self.pending_record = Some((link, Instant::now()));
+                if !self.signing_in {
+                    self.connect = Some(address);
+                }
+            }
+        }
+    }
+    /// Opens the recording `id` as a private live meeting in `destination`, which links it to its calendar event.
+    fn go_live(&mut self, id: &str, destination: &str) {
+        let (config, connect, store) = (self.config.clone(), self.tico_for, self.store.clone());
+        let (destination, record) = (destination.to_owned(), id.to_owned());
+        self.job_for("record-live", Some(id.to_owned()), move || {
+            connect(&config, &destination)?.ensure_live(&store, &record, false)?;
+            Ok(json!({}))
+        });
+    }
+    /// After a sign-in: a record link that waited for it goes on when its org is signed in now.
+    pub fn continue_record(&mut self) {
+        if let Some((link, at)) = self.pending_record.take()
+            && at.elapsed() < PENDING_RECORD_FOR
+            && self.connection_for(&link.server).is_some()
+        {
+            self.record_event(link);
+        }
+    }
+    /// Drops the waiting record link unless it is for the org at `address`.
+    fn drop_pending_record_unless(&mut self, address: &str) {
+        let bare = |text: &str| text.trim().trim_end_matches('/').to_owned();
+        if self
+            .pending_record
+            .as_ref()
+            .is_some_and(|(waiting, _)| bare(&waiting.server) != bare(address))
+        {
+            self.pending_record = None;
+        }
+    }
+    #[cfg(test)]
+    pub fn expire_pending_record(&mut self) {
+        if let Some((_, at)) = &mut self.pending_record {
+            *at = Instant::now() - PENDING_RECORD_FOR;
         }
     }
     pub fn confirm_connect(&mut self) {
@@ -2834,6 +2990,7 @@ impl Recorder {
     }
     pub fn dismiss_connect(&mut self) {
         self.connect = None;
+        self.pending_record = None;
     }
     pub fn dismiss_error(&mut self) {
         self.screen.dismiss();
