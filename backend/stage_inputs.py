@@ -39,7 +39,12 @@ _DONE = (
 )
 _STAGE_PAGES = "SELECT * FROM requirements WHERE stage_id=? AND kind='page' AND withdrawn_at IS NULL"
 _FILER = "SELECT from_task_id, created_at FROM links WHERE to_task_id=?"
-_FILED = "SELECT to_task_id FROM links WHERE from_task_id=? ORDER BY created_at, id"
+# The tasks this one filed that link a PR, in one statement however many it filed (a read of a task with 30 sub-tasks
+# reads no more than one with 3: test_task_privacy_reads).
+_FILED = (
+    "SELECT l.to_task_id FROM links l WHERE l.from_task_id=? AND EXISTS (SELECT 1 FROM task_links tl "
+    "WHERE tl.task_id = l.to_task_id AND tl.source='github' AND tl.item_type='pr') ORDER BY l.created_at, l.id"
+)
 _RELEASES = (
     "SELECT r.tag FROM github_release_commits rc JOIN github_releases r ON r.id = rc.release_id "
     "WHERE rc.commit_sha=? AND rc.included=1 ORDER BY r.published_at, r.tag"

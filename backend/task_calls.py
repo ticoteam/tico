@@ -859,11 +859,18 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
 
 
 def task_view(
-    conn: "sqlite3.Connection", task_id: str, viewer: str | None = None, visible_sql: str | None = None
+    conn: "sqlite3.Connection",
+    task_id: str,
+    viewer: str | None = None,
+    visible_sql: str | None = None,
+    *,
+    inputs: bool = False,
 ) -> Row | None:
     """The engine's part of a task as JSON (docs/dev/pipelines-v3-cutover.md, "The task as JSON"): where it is, whose
     turn it is, everything it needs to leave its stage, and what `viewer` may do about each. None when there is no
-    such task. A read: it writes nothing, and it does not check that `viewer` may read the task (the caller did)."""
+    such task. A read: it writes nothing, and it does not check that `viewer` may read the task (the caller did).
+    `inputs`: also what earlier stages handed on (stage_inputs), for the task's own read; a list of many tasks
+    (Needs you) leaves it out."""
     from . import task_engine as E
     from . import task_requirements as R
     from . import waiting_on as W
@@ -946,9 +953,9 @@ def task_view(
 
     # What earlier stages handed on (the Spec page, the PR, each Review page), as far as `viewer` may read the task
     # that filed this one and the tasks this one filed.
-    inputs = (
+    handed = (
         stage_inputs.of(conn, row, shown, lambda filer: _readable(conn, viewer, filer["id"], visible_sql))
-        if live
+        if live and inputs
         else []
     )
     snooze: Row | None = row.get("snooze")
@@ -971,7 +978,7 @@ def task_view(
         "turn": waits[0] if waits else None,
         "waits": waits,
         "to_leave": to_leave,
-        "inputs": inputs,
+        "inputs": handed,
         "next": {"id": following["id"], "name": following["name"]} if following else None,
         "late": late,
         "snooze": {"until": snooze.get("until_at"), "by": snooze.get("by_id"), "why": snooze.get("why")}

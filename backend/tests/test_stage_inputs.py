@@ -231,7 +231,8 @@ def test_each_engineering_and_product_stage_is_handed_what_came_before(c):
         "INSERT INTO github_release_commits (release_id, commit_sha, included, checked_at) VALUES ('r1','ccc111',1,?)",
         (at,),
     )
-    view = H.task_view(c, product, ANA)
+    assert H.task_view(c, product, ANA)["inputs"] == []  # a list of many tasks (Needs you) leaves it out
+    view = H.task_view(c, product, ANA, inputs=True)
     assert view["inputs"][-1]["line"] == filed_pr + "; in release v1.2.0"
     assert view["inputs"][-1]["releases"] == ["v1.2.0"]
 
