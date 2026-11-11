@@ -14,7 +14,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import s3links
+from clients import hubcli_pipelines, s3links
 from clients.tico import APIError, Client
 
 
@@ -339,7 +339,7 @@ def run(args, who=None):
     fn = args.fn
     from clients.hubtools_org import COMMANDS as ORG_COMMANDS
 
-    if fn in ORG_COMMANDS:  # people, bots, the org chart, usage, billing and reach (clients/hubtools_org.py)
+    if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # clients/hubtools_org.py, clients/hubtools_pipelines.py
         return via_tool(client, args)
 
     from clients import hubtools_computers, hubtools_connections
