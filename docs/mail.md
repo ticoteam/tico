@@ -280,6 +280,24 @@ The schedule call queues one idempotent action for the private Mac calendar tool
 reading, drafting or sending. The equivalent shell commands are `tico calendar list`,
 `tico calendar schedule` and `tico calendar status`.
 
+Events on any Tico or Google calendar a caller may see use the event tools. Times are shown in the zone of the
+calendar they came from (UTC when none is given). Bots and the Assistant may book anyone unless the Who bots may book
+rule refuses it; a person may add only to their own Tico calendar, and only without Google connected:
+
+```text
+tico calendar list --who human:ana,bot:ops --from 2026-11-11 --to 2026-11-14 [--kinds event,run,due,away] [--json]
+tico calendar free --who human:ana,human:ben --minutes 30 --within 5d
+tico calendar add --title "Standup" --start 2026-11-11T09:30:00-08:00 --end 2026-11-11T10:00:00-08:00 \
+  --who human:ben --repeat "weekly on wed" [--calendar legal@acme.example] [--notes "..."] [--no-meet]
+tico calendar move <occurrence> --start 2026-11-11T10:00:00-08:00 [--end ...] [--scope this|following|all]
+tico calendar cancel <occurrence> [--scope this|following|all]
+tico calendar search "standup with:ben" [--who human:ana]
+```
+
+The MCP tools are `tico_calendar_events`, `tico_calendar_free`, `tico_calendar_add`, `tico_calendar_move`,
+`tico_calendar_cancel` and `tico_calendar_search`. `tico_calendar_list` with no `who` still reads the company calendar's
+appointments.
+
 The mail-local calendar commands have a broader registry-based grant: every bot can read or create
 an event on any address in `registry/people.yaml`; Gmail permissions, including `read_only`, do not
 change that calendar access. On a Docker runner with the two-user layout a bot gets calendar tokens only for the

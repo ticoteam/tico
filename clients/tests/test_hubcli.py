@@ -21,6 +21,7 @@ from unittest import mock
 import pytest
 
 from clients import hubcli
+from clients.tico import APIError, Client
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 ALIASES = {"automations", "bots", "rule", "tasks"}
@@ -2357,3 +2358,306 @@ def test_a_word_that_was_the_computers_says_where_it_went_to_a_person_only(argv,
     assert hubcli.main(argv) == 0
     note = f"this computer's own {word} is `tico-computer {word}`"
     assert (note in capsys.readouterr().err) == (not bot)
+
+
+# The Calendar commands and tools. The wire is the one place faked (clients/tico.Client.request): the client builds the
+# path and query as it does for real, and each request is recorded with its method, body and operation key.
+class _Wire(Client):
+    def __init__(self, answer=None, refusal=None):
+        super().__init__("https://tico.acme.example", "token")
+        self.answer, self.refusal, self.sent = answer, refusal, []
+
+    def request(self, method, path, body=None, key=None, **kwargs):
+        self.sent.append((method, path, body, key))
+        if self.refusal is not None:
+            raise self.refusal
+        return self.answer
+
+
+def _calendar_cli(argv, monkeypatch, answer=None, refusal=None, operation=None):
+    """`tico <argv>` through remotecli.main: the requests it sent, and the exit code."""
+    from clients import remotecli
+
+    wire = _Wire(answer, refusal)
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **k: wire)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    if operation:
+        monkeypatch.setenv("HUB_OPERATION_ID", operation)
+    else:
+        monkeypatch.delenv("HUB_OPERATION_ID", raising=False)
+    return remotecli.main(hubcli.parser().parse_args(argv)), wire.sent
+
+
+def _split(path):
+    """A request's path and its query, each name with its values as lists."""
+    from urllib.parse import parse_qs, urlsplit
+
+    split = urlsplit(path)
+    return split.path, parse_qs(split.query, keep_blank_values=True)
+
+
+CALENDAR_ANA = {"ref": "human:ana", "type": "human", "id": "ana", "name": "Ana", "time_zone": "America/Los_Angeles"}
+CALENDAR_EVENTS = {
+    "calendars": [CALENDAR_ANA],
+    "occurrences": [
+        {
+            "occurrence_id": "tico:evt_1:2026-11-11T17:30:00Z",
+            "title": "Standup",
+            "start": "2026-11-11T17:30:00Z",
+            "end": "2026-11-11T18:00:00Z",
+            "all_day": False,
+            "calendar": {"ref": "human:ana", "type": "human", "id": "ana", "name": "Ana"},
+        },
+        {
+            "occurrence_id": "due:task:t_9",
+            "title": "Ship the thing",
+            "start": "2026-11-11",
+            "end": "2026-11-12",
+            "all_day": True,
+            "calendar": {"ref": "human:ana", "type": "human", "id": "ana", "name": "Ana"},
+        },
+    ],
+    "errors": [{"ref": "human:ben", "reason": "gcal_refused"}],
+}
+
+
+def test_calendar_list_without_a_calendar_flag_still_reads_the_company_calendar(monkeypatch, capsys):
+    code, sent = _calendar_cli(["calendar", "list"], monkeypatch, answer={"appointments": []})
+    assert code == 0 and sent == [("GET", "/api/v2/calendar/appointments", None, None)]
+    assert json.loads(capsys.readouterr().out) == {"appointments": []}
+    code, sent = _calendar_cli(["calendar", "list", "--calendar", "legal@acme.example"], monkeypatch, answer={})
+    assert sent == [("GET", "/api/v2/calendar/appointments?calendar=legal%40acme.example", None, None)]
+
+
+def test_calendar_list_with_a_flag_reads_the_events_route_and_prints_one_line_per_occurrence(monkeypatch, capsys):
+    code, sent = _calendar_cli(
+        [
+            "calendar",
+            "list",
+            "--who",
+            "human:ana,bot:ops",
+            "--from",
+            "2026-11-11",
+            "--to",
+            "2026-11-14",
+            "--kinds",
+            "event,run",
+        ],
+        monkeypatch,
+        answer=CALENDAR_EVENTS,
+    )
+    assert code == 0
+    [(method, path, _body, _key)] = sent
+    assert method == "GET" and _split(path) == (
+        "/api/v2/calendar/events",
+        {"who": ["human:ana,bot:ops"], "from": ["2026-11-11"], "to": ["2026-11-14"], "kinds": ["event,run"]},
+    )
+    captured = capsys.readouterr()
+    # The first calendar's zone: 17:30Z is 09:30 in Los Angeles in November. An all-day line names no time.
+    assert captured.out == (
+        "Wed 11 Nov 09:30–10:00  Standup  (Ana)  [tico:evt_1:2026-11-11T17:30:00Z]\n"
+        "Wed 11 Nov all day  Ship the thing  (Ana)  [due:task:t_9]\n"
+    )
+    assert captured.err == "tico: could not read human:ben: gcal_refused\n"
+
+
+def test_calendar_list_json_prints_the_response_as_it_came(monkeypatch, capsys):
+    code, _sent = _calendar_cli(["calendar", "list", "--json"], monkeypatch, answer=CALENDAR_EVENTS)
+    assert code == 0 and json.loads(capsys.readouterr().out) == CALENDAR_EVENTS
+
+
+def test_calendar_free_sends_its_people_length_and_window_and_prints_the_slots(monkeypatch, capsys):
+    answer = {"slots": [{"start": "2026-11-11T17:30:00Z", "end": "2026-11-11T18:15:00Z"}]}
+    code, sent = _calendar_cli(
+        ["calendar", "free", "--who", "human:ana,human:ben", "--minutes", "45", "--within", "5d"],
+        monkeypatch,
+        answer=answer,
+    )
+    assert code == 0
+    assert sent == [("GET", "/api/v2/calendar/free?who=human%3Aana%2Chuman%3Aben&minutes=45&within=5d", None, None)]
+    assert capsys.readouterr().out == "Wed 11 Nov 17:30–18:15\n"  # no calendar gives a zone: the server's Z stays
+
+
+def test_calendar_add_posts_the_event_with_its_repeat_words_calendar_and_operation_key(monkeypatch, capsys):
+    answer = {
+        "occurrence_id": "tico:evt_2",
+        "title": "Standup",
+        "start": "2026-11-11T09:30:00-08:00",
+        "end": "2026-11-11T10:00:00-08:00",
+        "time_zone": "America/Los_Angeles",
+        "all_day": False,
+        "calendar": {"name": "Legal"},
+    }
+    code, sent = _calendar_cli(
+        [
+            "calendar",
+            "add",
+            "--title",
+            "Standup",
+            "--start",
+            "2026-11-11T09:30:00-08:00",
+            "--end",
+            "2026-11-11T10:00:00-08:00",
+            "--who",
+            "human:ben, bot:ops",
+            "--repeat",
+            "weekly on wed",
+            "--calendar",
+            "legal@acme.example",
+            "--notes",
+            "Bring numbers",
+            "--no-meet",
+        ],  # fmt: skip
+        monkeypatch,
+        answer=answer,
+        operation="op-7",
+    )
+    assert code == 0
+    assert sent == [
+        (
+            "POST",
+            "/api/v2/calendar/events",
+            {
+                "calendar": "legal@acme.example",
+                "title": "Standup",
+                "start": "2026-11-11T09:30:00-08:00",
+                "end": "2026-11-11T10:00:00-08:00",
+                "attendees": ["human:ben", "bot:ops"],
+                "repeat": "weekly on wed",
+                "notes": "Bring numbers",
+                "add_meet": False,
+            },
+            "op-7",
+        )
+    ]
+    assert capsys.readouterr().out == "Wed 11 Nov 09:30–10:00  Standup  (Legal)  [tico:evt_2]\n"
+
+
+def test_calendar_add_all_day_sends_dates_and_meet_on_by_default(monkeypatch):
+    code, sent = _calendar_cli(
+        ["calendar", "add", "--title", "Offsite", "--start", "2026-11-16", "--end", "2026-11-18", "--all-day"],
+        monkeypatch,
+        answer={},
+    )
+    assert code == 0
+    assert sent == [
+        ("POST", "/api/v2/calendar/events", {"title": "Offsite", "start": "2026-11-16", "end": "2026-11-18", "all_day": True, "add_meet": True}, None)
+    ]  # fmt: skip
+
+
+def test_calendar_move_patches_the_encoded_occurrence_with_its_scope(monkeypatch, capsys):
+    code, sent = _calendar_cli(
+        [
+            "calendar",
+            "move",
+            "tico:evt_1:2026-11-11T17:30:00Z",
+            "--start",
+            "2026-11-11T10:00:00-08:00",
+            "--end",
+            "2026-11-11T10:30:00-08:00",
+            "--scope",
+            "this",
+        ],  # fmt: skip
+        monkeypatch,
+        answer={},
+        operation="op-8",
+    )
+    assert code == 0
+    assert sent == [
+        (
+            "PATCH",
+            "/api/v2/calendar/events/tico%3Aevt_1%3A2026-11-11T17%3A30%3A00Z",
+            {"start": "2026-11-11T10:00:00-08:00", "end": "2026-11-11T10:30:00-08:00", "scope": "this"},
+            "op-8",
+        )
+    ]
+
+
+def test_calendar_cancel_deletes_the_encoded_occurrence_with_its_scope_and_says_so(monkeypatch, capsys):
+    code, sent = _calendar_cli(
+        ["calendar", "cancel", "google:chris@acme.example:evt_3", "--scope", "following"], monkeypatch, answer={}
+    )
+    assert code == 0
+    assert [(method, path) for method, path, _body, _key in sent] == [
+        ("DELETE", "/api/v2/calendar/events/google%3Achris%40acme.example%3Aevt_3?scope=following")
+    ]
+    assert capsys.readouterr().out == "cancelled google:chris@acme.example:evt_3 (following)\n"
+
+
+def test_calendar_search_sends_the_words_and_says_when_results_are_partial(monkeypatch, capsys):
+    answer = {"occurrences": [], "partial": True, "errors": []}
+    code, sent = _calendar_cli(
+        ["calendar", "search", "standup with:ben", "--who", "human:ana"], monkeypatch, answer=answer
+    )
+    assert code == 0
+    assert sent == [("GET", "/api/v2/calendar/search?q=standup+with%3Aben&who=human%3Aana", None, None)]
+    captured = capsys.readouterr()
+    assert captured.out == "No matches.\n"
+    assert captured.err == "tico: some results are missing: the search ran out of time\n"
+
+
+def test_a_refused_booking_prints_the_servers_reason_as_a_line_and_exits_two(monkeypatch, capsys):
+    refusal = APIError("book_rule", "Who bots may book: ops may book only people near it (rule: Nearby)", 403)
+    code, _sent = _calendar_cli(
+        ["calendar", "add", "--title", "x", "--start", "2026-11-11T09:00:00Z", "--end", "2026-11-11T09:30:00Z", "--who", "human:ben"],
+        monkeypatch,
+        refusal=refusal,
+    )  # fmt: skip
+    captured = capsys.readouterr()
+    assert code == 2 and captured.out == ""
+    assert captured.err == "tico: Who bots may book: ops may book only people near it (rule: Nearby)\n"
+
+
+def test_the_calendar_tools_send_their_arguments_as_the_requests(monkeypatch):
+    from clients import hubtools
+
+    wire = _Wire({"occurrences": []})
+    tools = hubtools.BY_NAME
+    tools["tico_calendar_events"]["fn"](
+        wire, {"who": "human:ana", "from": "2026-11-11", "to": "2026-11-14", "kinds": "event"}
+    )
+    tools["tico_calendar_free"]["fn"](wire, {"who": "human:ana,human:ben"})
+    tools["tico_calendar_search"]["fn"](wire, {"q": "standup", "who": "human:ana"})
+    tools["tico_calendar_add"]["fn"](
+        wire,
+        {
+            "title": "Hold",
+            "start": "2026-11-11",
+            "end": "2026-11-12",
+            "all_day": True,
+            "attendees": ["bot:ops"],
+            "operation_id": "op-1",
+        },
+    )
+    tools["tico_calendar_move"]["fn"](
+        wire,
+        {"occurrence": "tico:evt_1:2026-11-11T17:30:00Z", "start": "2026-11-11T10:00:00-08:00", "operation_id": "op-2"},
+    )
+    tools["tico_calendar_cancel"]["fn"](wire, {"occurrence": "tico:evt_1", "scope": "all", "operation_id": "op-3"})
+    assert wire.sent == [
+        ("GET", "/api/v2/calendar/events?who=human%3Aana&from=2026-11-11&to=2026-11-14&kinds=event", None, None),
+        ("GET", "/api/v2/calendar/free?who=human%3Aana%2Chuman%3Aben&minutes=30", None, None),
+        ("GET", "/api/v2/calendar/search?q=standup&who=human%3Aana", None, None),
+        (
+            "POST",
+            "/api/v2/calendar/events",
+            {"title": "Hold", "start": "2026-11-11", "end": "2026-11-12", "all_day": True, "attendees": ["bot:ops"], "add_meet": True},
+            "op-1",
+        ),
+        (
+            "PATCH",
+            "/api/v2/calendar/events/tico%3Aevt_1%3A2026-11-11T17%3A30%3A00Z",
+            {"start": "2026-11-11T10:00:00-08:00"},
+            "op-2",
+        ),
+        ("DELETE", "/api/v2/calendar/events/tico%3Aevt_1?scope=all", {}, "op-3"),
+    ]  # fmt: skip
+
+
+def test_bots_and_the_assistant_may_book_and_every_caller_may_read_the_calendar():
+    from clients import hubtools
+
+    for name in ("tico_calendar_add", "tico_calendar_move", "tico_calendar_cancel"):
+        assert {"bot", "assistant"} <= set(hubtools.offered_to(hubtools.BY_NAME[name])), name
+    for name in ("tico_calendar_events", "tico_calendar_free", "tico_calendar_search"):
+        assert {"owner", "member", "bot", "assistant"} <= set(hubtools.offered_to(hubtools.BY_NAME[name])), name
