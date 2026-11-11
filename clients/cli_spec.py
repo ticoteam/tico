@@ -8,15 +8,21 @@ A spec says only what differs:
 
 - `Command.path` is the words typed, `Group.aliases` another spelling of a group; `tool` defaults to `tico_` and the
   path's words.
-- `Arg` overrides one property: a flag where a positional would be, another spelling, arity, a default, help.
+- `Command.help` is the leaf's one-line summary and `Command.example` one command line, shown under its `--help`.
+- An argument's help is its property's description in the schema, the same text an MCP client reads; a help that
+  reads badly on a command line is fixed there, never overridden here.
+- `Arg` overrides one property: a flag where a positional would be, another spelling, arity, a default.
 - An `Arg` with `into=` is a flag of the command line alone that `Command.convert` folds into that property (`--who`
-  and `--everyone` into the Who scope object); it is not passed on itself.
+  and `--everyone` into the Who scope object); it is not passed on itself. Its help is the description of `part` (its
+  name by default) inside that object property.
 - A field is omitted when its flag is left out. `default=False` sends false; `NULL` as a flag's const sends null.
-- `Command.tool_for(fields)` picks another tool by the arguments (`rules read` without `--from` reads one rule).
+- `Command.tool_for(fields)` picks another tool by the arguments (`rules read` without `--from` reads one rule); every
+  tool it may pick is in `tools`, whose properties the command takes too.
 - `Command.render(args, result)` prints text in place of JSON; such a command also takes `--json`.
 - `Group.default` is the leaf a group runs when no word follows (`tico rules due` lists, as `tico rules due list`).
 
-clients/remotecli.py runs any parsed line that carries a spec through `Command.call`.
+clients/remotecli.py runs any parsed line that carries a spec through `Command.call`. scripts/hub_paths.py makes the
+runner's command lists from the parser: a spec'd leaf is read-only when none of its tools writes.
 """
 
 from __future__ import annotations
@@ -52,8 +58,8 @@ class Arg:
     action: str | None = None
     const: Any = None
     metavar: str | None = None
-    help: str | None = None
     into: str | None = None  # the property `convert` folds this flag into
+    part: str | None = None  # with `into`: the key inside it whose description is the help; the name by default
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,8 @@ class Command:
     path: str
     help: str | None = None
     tool: str = ""
+    example: str = ""  # one command line, `tico ...`, shown under the leaf's `--help`
+    tools: tuple[str, ...] = ()  # the other tools `tool_for` may pick; their properties are the command's too
     args: tuple[Arg, ...] = ()
     exclusive: tuple[tuple[str, ...], ...] = ()  # properties no two of which may be given together
     convert: Callable[[dict[str, Any]], dict[str, Any]] | None = None
@@ -84,14 +92,22 @@ class Command:
         """The command's name in `args.fn`, as the rest of the CLI reads it: the path, or for a leaf whose tool is
         named otherwise (`rules due add` runs tico_rules_due_set) the tool's own words."""
         own = "tico_" + self.path.replace(" ", "_").replace("-", "_")
-        return self.path if own == self.tool else self.tool.removeprefix("tico_").replace("_", " ")
+        return self.path if own in (self.tool, *self.tools) else self.tool.removeprefix("tico_").replace("_", " ")
 
-    def arguments(self, suppress=False):
-        """(option strings or the positional's name, add_argument keywords) for each argument, in schema order."""
+    def properties(self):
+        """(properties, required): the tool's, then those only the other `tools` have, which are never required."""
         from clients import hubtools
 
         schema = hubtools.BY_NAME[self.tool]["inputSchema"]
-        props, required = schema["properties"], set(schema.get("required", ()))
+        props = dict(schema["properties"])
+        for other in self.tools:
+            for name, prop in hubtools.BY_NAME[other]["inputSchema"]["properties"].items():
+                props.setdefault(name, prop)
+        return props, set(schema.get("required", ()))
+
+    def arguments(self, suppress=False):
+        """(option strings or the positional's name, add_argument keywords) for each argument, in schema order."""
+        props, required = self.properties()
         given = {a.name: a for a in self.args if not a.into}
         if unknown := set(given) - set(props):
             raise ValueError(f"{self.path}: {sorted(unknown)} are not properties of {self.tool}")
@@ -104,7 +120,8 @@ class Command:
         out = []
         for name, prop in props.items():
             if name in folded:
-                out += [_argument(a, {}, False, suppress) for a in folded[name]]
+                parts = prop.get("properties", {})
+                out += [_argument(a, parts.get(a.part or a.name, {}), False, suppress) for a in folded[name]]
             elif name != "operation_id" or name in given:
                 if prop.get("type") == "object":
                     raise ValueError(f"{self.path}: {name} is an object; give it flags with into={name!r}")
@@ -132,19 +149,24 @@ class Command:
         for a in self.args:
             if a.into:
                 fields.pop(a.name, None)
-        return (self.tool_for(fields) if self.tool_for else self.tool), fields
+        tool = self.tool_for(fields) if self.tool_for else self.tool
+        if tool not in (self.tool, *self.tools):
+            raise ValueError(f"{self.path}: tool_for picked {tool}, which is not in its tools")
+        return tool, fields
 
 
 def _argument(a, prop, schema_required, suppress):
     kind = prop.get("type")
     keywords = {}
-    help = a.help or prop.get("description") or _range(prop)
-    if help and help != a.metavar:
-        keywords["help"] = help.replace("%", "%%")
     if a.metavar:
         keywords["metavar"] = a.metavar
     if a.action or kind in ("boolean", "array"):
         keywords["action"] = a.action or ("store_true" if kind == "boolean" else "append")
+    help = prop.get("description") or _range(prop)
+    if help and keywords.get("action") == "append":
+        help += " (repeatable)"
+    if help and help != a.metavar:
+        keywords["help"] = help.replace("%", "%%")
     if a.const is not None:
         keywords["const"] = a.const
     takes_value = keywords.get("action") in (None, "store", "append")
@@ -202,7 +224,14 @@ def add(sub, specs: Iterable[Group | Command]):
             subs[words] = node.add_subparsers(dest=DESTS[len(words)])
             groups[spec.path] = (spec, node)
         else:
-            _fill(parent.add_parser(words[-1], help=spec.help), spec, suppress=_is_default(spec, specs))
+            leaf = parent.add_parser(
+                words[-1],
+                help=spec.help,
+                description=spec.help,
+                epilog=f"Example: {spec.example}" if spec.example else None,
+                formatter_class=argparse.RawDescriptionHelpFormatter,
+            )
+            _fill(leaf, spec, suppress=_is_default(spec, specs))
             commands[spec.path] = spec
     for group, node in groups.values():
         if group.default:
