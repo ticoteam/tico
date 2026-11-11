@@ -102,9 +102,10 @@ def test_the_manager_rails_log_names_each_push_past_by_task_title(api):
     post(api, f"tasks/{pushed['id']}/move", {"to": "build", "why": "The spec is in the PR"})
     seen = get(api, "pipelines/product/log")
     assert seen["learned"] == []
-    [line] = seen["log"]
+    [line] = [x for x in seen["log"] if x["task_id"]]
     assert line["task_id"] == pushed["id"] and line["why"] == "The spec is in the PR"
     assert "Guest checkout" in line["text"] and "past Spec" in line["text"]
+    assert [x["text"] for x in seen["log"] if not x["task_id"]] == ["Ana made the pipeline"]
     r = api.get("/api/v2/pipelines/nope/log", headers=headers())
     assert r.status_code == 404, r.text
 

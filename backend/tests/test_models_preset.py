@@ -712,7 +712,7 @@ def test_a_task_turn_on_the_gateway_before_sign_in_names_the_gateways_harness_on
 def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_bots_run_on(api, monkeypatch):
     """Acme rc.4 B4: on a cloud machine with no Claude or Codex sign-in every bot ran on Tico Medium, its runs said no
     fallback and Health's `on_fallback` stayed empty, so two reviewers set to different models were the same model."""
-    from backend import health
+    from backend import health, hubdb
     from backend.tests.helpers.api import get
     from backend.usage_records import ran_on
 
@@ -734,11 +734,31 @@ def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_
     [row] = found["on_fallback"]
     assert (row["bot"], row["harness"], row["waiting_for_sign_in"]) == ("ops", "pi", "claude")
     assert row["set_to"] == {"runtime": "claude", "model": CLAUDE["model"]}
+    # A turn recorded before the field existed (no `waiting_for_sign_in` in its result) says nothing either way: its bot
+    # does not carry the field, and it is not on the fallback.
+    with api.app.state.store.transaction() as c:
+        old = dict(c.execute("SELECT * FROM attempts WHERE id=?", (got["id"],)).fetchone())
+        stamp = hubdb.now()
+        old.update(
+            id="pre-upgrade",
+            token_hash="pre-upgrade",
+            job_id=None,
+            bot_id="cpo",
+            state="completed",
+            created_at=stamp,
+            started_at=stamp,
+            finished_at=stamp,
+            result=json.dumps({"model": "gpt-6-luna"}),
+        )
+        c.execute(f"INSERT INTO attempts({','.join(old)}) VALUES({','.join('?' * len(old))})", list(old.values()))
+    with api.app.state.store.read() as c:
+        on_now, _, carrying = health._fallbacks(c)
+    assert [r["bot"] for r in on_now] == ["ops"] and carrying == {"ops"}
     check = next(x for x in found["checks"] if x["id"] == "on_fallback")
     assert check["status"] == "info" and check["summary"] == row["line"]
     assert "claude-opus-5-5" in row["line"] and "no Claude subscription" in row["line"]
 
-    # Every bot that ran ran on the Gateway for want of a sign-in: one line, not one a bot.
+    # Every bot whose turns carry the field ran on the Gateway for want of a sign-in: one line, not one a bot.
     with api.app.state.store.transaction() as c:
         BS.write(c, "cpo", {**BS.read(c, "cpo"), "runtime": "codex", "harness": "codex", "model": "gpt-6-luna"})
     gateway = {"harness": "pi", "model": "tico-medium-1.0", "changed_at": None}
@@ -748,11 +768,24 @@ def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_
     ]
     settings = api.app.state.store.settings
     with api.app.state.store.read() as c:
-        one = health._fallback_lines(c, settings, [dict(r) for r in rows], 2)
-        each = health._fallback_lines(c, settings, listed := [dict(r) for r in rows], 3)
+        one = health._fallback_lines(c, settings, [dict(r) for r in rows], {"ops", "cpo"})
+        # A third bot whose turns carry the field but whose latest run is not on the Gateway blocks the one line.
+        each = health._fallback_lines(c, settings, listed := [dict(r) for r in rows], {"ops", "cpo", "pipe"})
     assert "Tico Medium" in one and "Claude or Codex" in one and "gpt-6-luna" not in one
     assert each == " ".join(row["line"] for row in listed) and "gpt-6-luna" in each
-    # A bot whose own hop ran it elsewhere keeps its own line, so the group is not claimed for it.
-    hop = [*rows, {"bot": "ops", "harness": "codex", "model": None, "waiting_for_sign_in": None, "changed_at": None}]
+    # A bot whose turns predate the field and whose own hop ran it elsewhere is not in the group, and keeps its line.
+    hop = [*rows, {"bot": "pipe", "harness": "codex", "model": None, "waiting_for_sign_in": None, "changed_at": None}]
     with api.app.state.store.read() as c:
-        assert "Every bot" not in health._fallback_lines(c, settings, [dict(r) for r in hop], 3)
+        text = health._fallback_lines(c, settings, listed := [dict(r) for r in hop], {"ops", "cpo"})
+    assert text.startswith("Every bot") and text.endswith(listed[-1]["line"])
+
+
+def test_health_names_five_bots_then_says_how_many_more_in_plain_words():
+    """Health names up to five bots, then says how many more there are in words a person reads: "And 1 more bot."""
+    from backend import health
+
+    lines = [f"Bot {n} runs on its fallback." for n in range(7)]
+    assert health._named_lines(lines[:1]) == lines[0]
+    assert health._named_lines(lines[:5]) == " ".join(lines[:5])
+    assert health._named_lines(lines[:6]) == " ".join(lines[:5]) + " And 1 more bot."
+    assert health._named_lines(lines) == " ".join(lines[:5]) + " And 2 more bots."

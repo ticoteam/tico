@@ -917,7 +917,7 @@ STABLE = [
         "get",
         "Pipelines",
         "getPipelineLog",
-        "The manager rail's Log: each push past, and each snooze a bot made with no end date, newest first",
+        "The manager rail's Log: each push past, each snooze with no end date, and each pipeline save, newest first",
         "PipelineLog",
     ),
     (
@@ -3230,7 +3230,7 @@ SCHEMAS = {
     ),
     "PipelineLog": obj(
         {
-            "log": items(obj({"at": "s", "text": "s", "task_id": "s", "by": "n", "why": "s"})),
+            "log": items(obj({"at": "s", "text": "s", "task_id": "n", "by": "n", "why": "s"})),
             "learned": items(obj({"at": "s", "text": "s"})),
         }
     ),

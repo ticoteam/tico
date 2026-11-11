@@ -2350,13 +2350,14 @@ def _failed(c):
 
 
 def _fallbacks(c, loads=None):
-    """(on fallback, limited, ran): bots whose latest run in the last day ran on something other than what the bot is
-    set to, with that harness, the model that did the work, the runtime it is set to when the claim moved it to the
+    """(on fallback, limited, carrying): bots whose latest run in the last day ran on something other than what the bot
+    is set to, with that harness, the model that did the work, the runtime it is set to when the claim moved it to the
     Gateway because that runtime is not signed in on its computer (`waiting_for_sign_in`, backend/models_preset.py),
-    and when the unbroken run of such turns began; bots a usage limit still holds; and how many bots ran at all."""
+    and when the unbroken run of such turns began; bots a usage limit still holds; and the bots with any turn in the
+    last day that carries `waiting_for_sign_in` (a turn recorded before the field existed says nothing either way)."""
     from .execution import cooling_off
 
-    since, latest = H.shift(H.now(), hours=-RECENT_HOURS), {}
+    since, latest, carrying = H.shift(H.now(), hours=-RECENT_HOURS), {}, set()
     for r in c.execute(
         "SELECT bot_id,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS hop,"
         "json_extract(result,'$.waiting_for_sign_in') AS unsigned,usage_model "
@@ -2364,6 +2365,8 @@ def _fallbacks(c, loads=None):
         "ORDER BY bot_id,finished_at DESC",
         (since,),
     ):
+        if r["unsigned"]:
+            carrying.add(r["bot_id"])
         # The runner's own hop names its harness; a turn the claim moved to the Gateway ran on the Gateway's.
         harness = r["hop"] or (models_preset.GATEWAY_RUNTIME if r["unsigned"] else None)
         row = latest.setdefault(
@@ -2390,7 +2393,7 @@ def _fallbacks(c, loads=None):
         for r in c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited' ORDER BY changed_at,bot")
         if cooling_off(c, r["bot"], loads)
     ]
-    return on, limited, len(latest)
+    return on, limited, carrying
 
 
 # What a person calls the subscription a runtime signs in with, in Health's line about what bots run on.
@@ -2415,10 +2418,18 @@ def _ran_on_words(row):
     return _model_words(row["harness"], row.get("model"))
 
 
-def _fallback_lines(c, settings, on, ran):
+def _named_lines(lines, most=5):
+    """The first `most` lines, then how many bots the rest are, in words a person reads."""
+    more = len(lines) - most
+    tail = [f"And {more} more bot{'s' if more != 1 else ''}."] if more > 0 else []
+    return " ".join(lines[:most] + tail)
+
+
+def _fallback_lines(c, settings, on, carrying):
     """One plain line per bot in `on` (from `_fallbacks`) saying what it is set to and what it runs on instead, set on
-    each row as `line`; and the summary for Health: those lines, or one line when every bot that ran in the last day
-    ran on the Gateway because its subscription is not signed in on its computer."""
+    each row as `line`; and the summary for Health: those lines, or one line when every bot whose turns carry
+    `waiting_for_sign_in` ran on the Gateway because its subscription is not signed in on its computer, with a line for
+    any other bot in `on`."""
     from .shared_bots import follow
 
     if not on:
@@ -2451,16 +2462,19 @@ def _fallback_lines(c, settings, on, ran):
                 f"{name} is set to {_model_words(runtime, model)} and runs on its fallback, {ran_on}: "
                 f"what it is set to was not available."
             )
-    unsigned = sorted({row["waiting_for_sign_in"] for row in on if row.get("waiting_for_sign_in")})
-    if len(on) > 1 and len(on) == ran and all(row.get("waiting_for_sign_in") for row in on):
-        models = sorted({_ran_on_words(row) for row in on})
+    signed = {row["bot"] for row in on if row.get("waiting_for_sign_in")}
+    if len(carrying) > 1 and signed == carrying:
+        group = [row for row in on if row["bot"] in carrying]
+        models = sorted({_ran_on_words(row) for row in group})
+        unsigned = sorted({row["waiting_for_sign_in"] for row in group})
         names = " or ".join(SUBSCRIPTION_NAMES.get(r, _harness_name(r)) for r in unsigned)
-        return (
+        summary = (
             f"Every bot runs on {' or '.join(models)}, not the model it is set to: its computer has no {names} "
             "subscription."
         )
-    lines = [row["line"] for row in on]
-    return " ".join(lines[:3]) + ("" if len(lines) <= 3 else f" And {len(lines) - 3} more bots.")
+        rest = _named_lines([row["line"] for row in on if row["bot"] not in carrying])
+        return f"{summary} {rest}" if rest else summary
+    return _named_lines([row["line"] for row in on])
 
 
 def _bot_computers(computers):
@@ -2937,7 +2951,7 @@ def view(c, who, settings, auth, github, config):
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
     blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
-    on_fallback, limited, ran = _fallbacks(c, loads) if kind != "bot" else ([], [], 0)
+    on_fallback, limited, carrying = _fallbacks(c, loads) if kind != "bot" else ([], [], set())
     if not full and (on_fallback or limited):  # the same rule as `stuck`: only bots the caller may read
         readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
         on_fallback = [row for row in on_fallback if readable.get(row["bot"], auth.FULL)["read"]]
@@ -2946,7 +2960,7 @@ def view(c, who, settings, auth, github, config):
     checks = []
     # What bots run on when it is not what they are set to: two reviewers set to different models that both run on
     # the Gateway are not independent, and a person reads that here.
-    if running_on := _fallback_lines(c, settings, on_fallback, ran):
+    if running_on := _fallback_lines(c, settings, on_fallback, carrying):
         checks.append(
             _check("on_fallback", "What bots run on", "info", running_on, [_fix("Open Models", "#/settings", "models")])
         )
