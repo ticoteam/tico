@@ -117,6 +117,12 @@ class Command:
         """Run the tool with the parsed line's arguments; the answer is the tool's."""
         from clients import hubtools
 
+        tool, fields = self.prepare(args)
+        return hubtools.BY_NAME[tool]["fn"](client, fields)
+
+    def prepare(self, args):
+        """(the tool to run, its arguments) for a parsed line: the flags given, converted, with the tool `tool_for`
+        picks."""
         dests = [kw.get("dest", names[0]) for names, kw in self.arguments() if names != ["--json"]]
         fields = {d: getattr(args, d) for d in dests if getattr(args, d, None) is not None}
         fields = {k: None if v is NULL else v for k, v in fields.items()}
@@ -126,8 +132,7 @@ class Command:
         for a in self.args:
             if a.into:
                 fields.pop(a.name, None)
-        tool = self.tool_for(fields) if self.tool_for else self.tool
-        return hubtools.BY_NAME[tool]["fn"](client, fields)
+        return (self.tool_for(fields) if self.tool_for else self.tool), fields
 
 
 def _argument(a, prop, schema_required, suppress):

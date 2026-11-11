@@ -1016,60 +1016,58 @@ def test_a_document_over_the_bound_is_marked_truncated_in_every_place(api, monke
 
 
 def test_the_cli_cites_the_version_it_names_after_a_newer_version_lands(api):
-    from clients import hubcli, remotecli
+    from clients import hubcli
 
     org(api)
     counsel_on(api)
     file_id, first = store_file(api, CONTRACT)
     read_document(api, file_id)
     new_version(api, file_id, CONTRACT + "\nAmendment.")
-    args = remotecli._rules_args(
-        hubcli.parser().parse_args(
-            [
-                "rules",
-                "add",
-                "--kind",
-                "external",
-                "--text",
-                "Keep a consent record for five years.",
-                "--who",
-                "ops",
-                "--from",
-                source(api),
-                "--file",
-                file_id,
-                "--version",
-                str(first),
-                "--section",
-                "4. Messaging",
-                "--quote",
-                CONSENT,
-            ]
-        )
+    line = hubcli.parser().parse_args(
+        [
+            "rules",
+            "add",
+            "--kind",
+            "external",
+            "--text",
+            "Keep a consent record for five years.",
+            "--who",
+            "ops",
+            "--from",
+            source(api),
+            "--file",
+            file_id,
+            "--version",
+            str(first),
+            "--section",
+            "4. Messaging",
+            "--quote",
+            CONSENT,
+        ]
     )
-    assert args.cite == {"file_id": file_id, "section": "4. Messaging", "quote": CONSENT, "version": first}
+    _, args = line.spec.prepare(line)
+    assert args["cite"] == {"file_id": file_id, "section": "4. Messaging", "quote": CONSENT, "version": first}
     r = api.post(
         "/api/v2/rules",
         headers=read_run(api),
-        json={"kind": args.kind, "text": args.text, "who": args.who, "source_id": args.source_id, "cite": args.cite},
+        json={k: args[k] for k in ("kind", "text", "who", "source_id", "cite")},
     )
     assert r.status_code == 200, r.text
     assert r.json()["cite"]["version"] == first
+    line = hubcli.parser().parse_args(
+        ["rules", "add", "--kind", "external", "--text", "x", "--from", "Acme", "--version", "1"]
+    )
     with pytest.raises(SystemExit):
-        remotecli._rules_args(
-            hubcli.parser().parse_args(
-                ["rules", "add", "--kind", "external", "--text", "x", "--from", "Acme", "--version", "1"]
-            )
-        )
+        line.spec.prepare(line)
 
 
 def test_rules_read_by_id_is_the_single_rule_and_with_from_a_document_read():
-    from clients import hubcli, remotecli
+    from clients import hubcli
 
-    single = remotecli._rules_args(hubcli.parser().parse_args(["rules", "read", "rule-1"]))
-    assert remotecli.tool_name(single.fn) == "tico_rules_get"
-    document = remotecli._rules_args(hubcli.parser().parse_args(["rules", "read", "file-1", "--from", "Acme"]))
-    assert remotecli.tool_name(document.fn) == "tico_rules_read"
+    single = hubcli.parser().parse_args(["rules", "read", "rule-1"])
+    assert single.spec.prepare(single)[0] == "tico_rules_get"
+    document = hubcli.parser().parse_args(["rules", "read", "file-1", "--from", "Acme"])
+    assert document.spec.prepare(document)[0] == "tico_rules_read"
 
 
 def test_the_assistant_is_offered_the_document_read_the_question_and_the_single_rule_read():
